@@ -9230,8 +9230,9 @@ git commit -m "feat(server,frontend): accept endpoint model ids in saved analyze
 - Modify: `server/src/analyzer/capabilities.ts` (3c Task 3c.3) — add `assertAnalyzerTargetUsable`; `server/src/analyzer/preflight.ts` (3c Task 3c.10) — `runAnalyzerPreflight`'s loop body calls it.
 - Modify: `server/src/analyzer/index.ts` — header comment `:1-10`; the user-settings import `:25-31`; the `local` branch's fallback block and its two comments (`:211-231`); Task 3d.4's `openai` branch; `FallbackAnalyzer` (`:251-397`): its comment, constructor and the eight `if (err instanceof AnalyzerUnreachableError)` blocks (W1's gates themselves stay); new `withFallback`, `fallbackSelectionFor`, `checkedTarget`, `fallbackNames`, `fallbackReasonFor`.
 - Modify: `server/src/workspace/analyzer-endpoints.ts` (3b Task 3b.5) — `MODEL_ID_CONFIG_KNOBS`; `server/src/workspace/analyzer-endpoints.test.ts` — the classification guard's knob filter.
+- Modify: `server/src/analyzer/errors.ts` — `AnalyzerTargetInputTooLargeError`; `server/src/routes/failure-taxonomy.ts` — its `classifyAnalysisFailure` branch (after `:526-534`) and `targetInputTooLargeFixes`; `server/src/routes/analysis.ts` — `nonStoryClassificationFailed` and the two non-story `catch` blocks (`:5831-5834`, `:7561-7564`). Tests: `server/src/routes/failure-taxonomy.test.ts`, `server/src/routes/failure-taxonomy-fixes.test.ts` (append), Create `server/src/routes/analysis.non-story-failure.test.ts`.
 - Modify: `server/src/routes/config.ts` — pass 1 of `configRouter.put('/')` (`:89-128`); the three `values: resolveAll()` responses (GET `:82`, PUT `:159`, reset `:218`), which build every value from `resolveKnob(knob).effective`; and its imports.
-- Modify: `server/src/config/types.ts` — `KnobValueState` gains `analyzerEngine?`; `src/lib/types.ts` — the frontend value-state type the same.
+- Modify: `server/src/config/types.ts` — `KnobValueState` gains `analyzerEngine?`; `src/lib/types.ts` — `KnobValue` (`:930-938`, the type `ConfigValues` maps to) the same.
 - Modify: `server/src/routes/user-settings.ts` — `userSettingsRouter.put('/')` (`:84-95`, after Task 3d.4a), and its imports.
 - Modify: `server/src/routes/script-review.ts` — the user-settings import (`:36`, after 3c.10); the warm-fail nudge (`:762-767`); the warm-fail reason (`:774`); Task 3d.1's run mark; a local-target review pin beside `pinnedLocal` (`:798`) and its release in the `finally` (`:1046-1047`). `:748`, `:798` and the `if (pinnedLocal)` blocks keep their text (PR 3d Must NOT change): the new lines sit beside them.
 - Modify: `server/src/routes/analysis.ts` — `AnalysisJob` (`:2646-2655`, a `fallbackMarked?` field); the phase-0 `onFallback` (`:4465-4475`) and phase-1 `onFallback` (`:5368-5371`); the phase-0 chunk budget (`:4496`, W2's `resolveCapacity(…)` argument) and the phase-1 `capacity` passed to `attributeChapterStage2WithEval` (`:5461`, W2); the phase-1 tick event; the subset job's `stage1Call` (`:7030`), stage-1 chunk budget (`:7065`), stage-2 `stageCall` (`:7363`) and capacity (`:7360`). Task 3d.1's run marks are **not** widened.
@@ -9249,8 +9250,11 @@ git commit -m "feat(server,frontend): accept endpoint model ids in saved analyze
   - Frontend `KnobDescriptor.type` includes `'analyzer-engine'` (`src/lib/types.ts`).
   - Knob `analyzer.fallback.target`: env `ANALYZER_FALLBACK_TARGET`, group `analyzer-models`, label `Analyzer fallback`, `type: 'analyzer-engine'`, `options: ['off', 'local', 'gemini']`, `pattern: /^(off|local|gemini|openai:[a-z0-9-]{1,40}::.+)$/`, `default: 'gemini'`, `apply: 'live'`, `risk: 'medium'`.
   - `server/src/analyzer/fallback-target.ts`: `resolveAnalyzerFallbackTarget(): 'off' | 'local' | 'gemini' | string`; `fallbackTargetSaveError(value: string, saved: { endpointIds: readonly string[]; geminiKey: boolean }): string | null`; `fallbackTargetValueState(base: KnobValueState): KnobValueState`.
-  - `KnobValueState.analyzerEngine?: { localModel: string; optionLabels: Record<string, string>; sourceNote?: string }` (server `config/types.ts` and frontend `src/lib/types.ts`), set only on `analyzer.fallback.target`.
-  - `server/src/analyzer/index.ts`: `fallbackSelectionFor(primary: AnalyzerSelection): AnalyzerSelection | null`; `fallbackNames(primary, target): { primary: string; target: string }`; `fallbackReasonFor(err: AnalyzerUnreachableError, names?: { primary: string; target: string }): string`; `new FallbackAnalyzer(primary, fallback, names?)`.
+  - `analyzerEngine?: { localModel: string; optionLabels: Record<string, string>; sourceNote?: string }` on the server's `KnobValueState` (`config/types.ts`) and the frontend's `KnobValue` (`src/lib/types.ts`), set only on `analyzer.fallback.target`.
+  - `server/src/analyzer/index.ts`: `fallbackSelectionFor(primary: AnalyzerSelection): AnalyzerSelection | null`; `fallbackNames(primary, target): { primary: string; target: string }`; `fallbackReasonFor(err: AnalyzerUnreachableError, names?: { primary: string; target: string }): string`; `type FallbackPass = 'stage1' | 'stage2' | 'script-review' | 'emotion' | 'stage3' | 'escalation' | 'non-story' | 'stage1-book'`; `type FallbackInputGuard = (pass: FallbackPass, prompt: string) => void`; `targetInputGuard(target: Pick<AnalyzerSelection, 'engine' | 'model'>): FallbackInputGuard`; `new FallbackAnalyzer(primary, fallback, names?, guard?)`.
+  - `server/src/analyzer/errors.ts`: `class AnalyzerTargetInputTooLargeError extends Error` — `(transport: TransportKind, model: string, targetLabel: string, limitTokens: number, family: 'context' | 'requestCap')`, all `readonly`, message `prompt is larger than the fallback target <label> can take (context N tokens)` / `(per-request cap N tokens)`.
+  - `server/src/routes/failure-taxonomy.ts`: `classifyAnalysisFailure` maps it to `analyzer-request-rejected` with its own copy; `targetInputTooLargeFixes(): AnalysisFailureFix[]`.
+  - `server/src/routes/analysis.ts`: `nonStoryClassificationFailed(err: unknown, manuscriptId: string, chapterId: number): false`.
   - `server/src/analyzer/capabilities.ts`: `assertAnalyzerTargetUsable(target: { modelId: string; source: 'env' | 'run-pick' | 'settings'; engine: AnalysisEngine }, settings: UserSettings, digest?: string): void`.
 
 Rules (P30):
@@ -9270,7 +9274,26 @@ Rules (P30):
   - **In-flight:** already activation-only. An endpoint target's `OpenAITransport.send` registers its call (Task 3d.1), and an Ollama target takes Ollama's slot, only when called.
   - **Run marks:** taken in the `onFallback` handler, at the first switch, and held until the run ends. Analysis: `markFallbackActive(job, fallbackModel)` adds the target's endpoint mark and chains its release into `job.releaseEndpointRun`, which `endJob` calls. Script review: `switchToFallback` takes the endpoint mark, and the Ollama review pin when the target is `local` and the primary is not; the `finally` releases both, with no `unloadResidentOllama`, since the primary never loaded Ollama. Annotate-emotion and instruct-annotation: an `onFallback` on the chapter loop's `StageCall`, released in the loop's `finally`.
   - **Unchanged:** the analysis job's `markAnalysisBusy(job.bookDir)` (`analysis.ts:3475`) is taken for every job, whatever the engine, at 46e62a34. It is not a fallback mark, and this task leaves it.
-- **Capacity after a switch.** From the first switch, the job records the active selection (`activeEngine` / `activeModelId` for phase 0, `phase1Engine` / `phase1ModelId` for phase 1, the subset job's equivalents) and sets `job.engine`, the persisted field the reverse local-analyzer guard reads. Every later chunk budget in that job resolves `resolveCapacity` from it, so the next chapter is sized for the target. Phase-0 and phase-1 events carry the target engine. The chunk that triggered the switch goes to the target as it is; a chunk too large for the target relies on the existing force-split-on-truncation net (#1660 part 4), with no new re-split.
+- **Capacity after a switch.** From the first switch, the job records the active selection (`activeEngine` / `activeModelId` for phase 0, `phase1Engine` / `phase1ModelId` for phase 1, the subset job's equivalents) and sets `job.engine`, the persisted field the reverse local-analyzer guard reads. Every later chunk budget in that job resolves `resolveCapacity` from it, so the next chapter is sized for the target. Phase-0 and phase-1 events carry the target engine.
+- **Chunks already sized for the primary are checked before they reach the target.** Phase 0 runs `Math.min(castConcurrency, …)` workers with `castConcurrency = analyzerPoolWidth()` (`analysis.ts:4312`, `:4740`), which reads `analyzer.ollama.concurrency` (default 2, `registry.ts:976-980`). Up to K chapters, and every in-flight chunk of phase 1 and script review, can therefore already be sized for the primary when a switch lands.
+  - **The check.** Before `FallbackAnalyzer` hands a call to the target, `targetInputGuard(target)` estimates the prompt's input tokens with `estimateInputTokens` (W1, `runner/prompt.ts`, moved from `gemini.ts:927`, which includes its +1,000 margin). It compares them with the target's input budget from `resolveCapacity(target)`: `contextTokens` for the context family, the hard limit Ollama would otherwise meet by silently truncating the input, or `perRequestInputCap` for the request-cap family.
+  - **Over budget.** It throws `AnalyzerTruncatedError(<target transport>, 'input-over-target-budget', 0)` for that call, before the target runs. The chunked runners already split on that error and retry each half, and each half goes to the target in turn. The primary is tried again first on each half; it is unreachable, so that costs one connect failure per half.
+  - **Every pass is checked; what an over-budget prompt throws depends on whether its caller splits.** Nothing that Ollama would silently cut on input is ever sent.
+    - **Callers that split** (checked at 46e62a34): stage 1 (`stage1-chunk.ts:175`, `:198`), stage 2 (`stage2-chunk.ts:428`, `:553`) and script review's force split (`script-review.ts:893`). The guard throws `AnalyzerTruncatedError`, and the caller splits and retries.
+    - **Callers that do not split** (coordinator ruling): `runEmotionChapter` (annotate-emotion), `runStage3Chapter` (instruct-annotation), `runAttributionEscalation`, `runNonStoryClassification` and whole-book `runStage1`. The guard throws `new AnalyzerTargetInputTooLargeError(<target transport>, <target model>, <label>, N, <family>)`, whose message is `prompt is larger than the fallback target <label> can take (context N tokens)` (`(per-request cap N tokens)` for a request-cap target). The call fails through its caller's existing per-call handling, and is never sent.
+    - **Why a new class.** `AnalyzerTruncatedError` would be wrong: only the three callers above recover from a truncation, and `analyzer-truncated`'s copy says the *response* was truncated. A synthetic `AnalyzerHttpError(…, 400, …)` would be wrong too: 3b's `requestRejected` copy reads "rejected the request (400)" for a request that was never sent, on exactly the failure that must be clear. So `AnalyzerTargetInputTooLargeError` (`server/src/analyzer/errors.ts`) is its own class. It is not an `AnalyzerTruncatedError`, so no splitting caller splits it; no retry classifier knows it, so it is never retried; and no status is faked anywhere.
+    - **Classification.** `classifyAnalysisFailure` maps it to the existing `analyzer-request-rejected` code, so there is no new FailureCode, but with its own copy:
+      - `userMessage` is the error's message, with no HTTP status;
+      - `remediation` says to lower the chunk size (the stage input fractions) or choose a fallback target with a larger window, then resume;
+      - `detail` holds transport, model, limit and family;
+      - `fixes` come from `targetInputTooLargeFixes()`: `analyzer.fallback.target`, `analyzer.stage1.localInputFraction` and `analyzer.stage2.localInputFraction` (2b's fix machinery; guard rows in `failure-taxonomy-fixes.test.ts`).
+    - **How each non-splitting caller surfaces it (46e62a34):**
+      - annotate-emotion and instruct-annotation: `chapter-failed` carrying the message (`annotate-emotion.ts:259`, `instruct-annotation.ts:258`), and the pass continues;
+      - escalation: `escalateFlaggedWindows` has no `try` around the call (`analysis.ts:2374`), so the error reaches phase 1's per-chapter failure, which classifies it as `analyzer-request-rejected` with the copy above;
+      - non-story classification: its `catch` returns `false` for every non-abort error (`analysis.ts:5833` main job, `:7563` subset job), so the chapter is treated as a story. That default stays, but both catches now call `nonStoryClassificationFailed(err, manuscriptId, ch.id)`. It keeps the abort rethrow and the `false`, and adds a `console.warn` naming the target and limit when the error is `AnalyzerTargetInputTooLargeError`, so the skip is never silent;
+      - whole-book `runStage1`: no caller at 46e62a34.
+    - **When this can happen.** Only after a switch to a smaller-context target, which the configurable fallback introduces (before 3d, fallback went local → Gemini only, a larger window). It is not a regression.
+  - **Why `contextTokens`, not the pass's chunk fraction.** A chunk sized for the target (body ≤ fraction × context × 2 chars) plus its instructions stays under the context. Checking the fraction would re-split correctly sized chunks.
 - **Save validation.** `fallbackTargetSaveError` refuses `gemini` with no Gemini key (env or saved) and an `openai:` id whose endpoint is not saved; each message names where to fix it. `PUT /api/config` runs it in pass 1, after coercion and before any write (400 `{ error }`). `PUT /api/user/settings` runs it when the body's `configOverrides['analyzer.fallback.target']` differs from the saved one (400 `{ error, issues: [{ path: ['configOverrides', 'analyzer.fallback.target'], message }] }`), so an unrelated save never fails on an older value. Both read `await readUserSettings()` first, so a cold cache after a restart never reports a saved endpoint or key as missing. `local` is never refused (Task 3d.4c warns instead).
   - **Runtime is authoritative.** The route reads settings outside `writeChain`, so an endpoint can be deleted between the check and the write (and an env value is never a save). `fallbackSelectionFor` therefore re-checks at every selection: a target naming an endpoint that is not saved is skipped with a warning and not wrapped (pinned by "a target naming an endpoint that is not saved is skipped, with a warning naming it").
 - **Advanced Settings shows the effective target.** `GET /api/config` (and the PUT and reset responses) build values from `resolveKnob(knob).effective` through `resolveAll()` (`routes/config.ts:82`, `:159`, `:218`), which does not know the legacy step. The route replaces this knob's entry with `fallbackTargetValueState(base)`:
@@ -9390,11 +9413,19 @@ Create `server/src/analyzer/select-analyzer.fallback-target.test.ts`:
 
 ```ts
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { selectAnalyzer, fallbackSelectionFor, fallbackNames, FallbackAnalyzer, type AnalyzerSelection } from './index.js';
+import { selectAnalyzer, fallbackSelectionFor, fallbackNames, targetInputGuard, FallbackAnalyzer, type AnalyzerSelection } from './index.js';
 import { OllamaAnalyzer } from './ollama.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { OpenAIAnalyzer } from './openai.js';
-import { AnalyzerCapabilityRejectedError, AnalyzerKeyOriginError, AnalyzerUnreachableError, LocalUnreachableError } from './errors.js';
+import { resolveCapacity } from './capacity.js';
+import {
+  AnalyzerCapabilityRejectedError,
+  AnalyzerKeyOriginError,
+  AnalyzerTargetInputTooLargeError,
+  AnalyzerTruncatedError,
+  AnalyzerUnreachableError,
+  LocalUnreachableError,
+} from './errors.js';
 
 /* The local target's first call reads the installed digest (fail-open); no daemon in unit tests. */
 vi.mock('./ollama-digest.js', () => ({ ollamaModelDigest: vi.fn().mockResolvedValue(undefined) }));
@@ -9485,6 +9516,26 @@ describe('selectAnalyzer — the configured fallback target (#3084 P30)', () => 
     await expect(s.analyzer.runStage1Chapter('m', 1, 'p', {} as never)).rejects.toBeInstanceOf(LocalUnreachableError);
     expect(primaryCall).toHaveBeenCalledTimes(1);
     expect(targetCall).toHaveBeenCalledTimes(1);
+  });
+
+  it('targetInputGuard refuses a prompt over the target context and lets one under it through', () => {
+    const context = resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }).contextTokens;
+    const guard = targetInputGuard({ engine: 'local', model: 'qwen3.5:4b' });
+    expect(() => guard('stage1', 'a'.repeat(context * 4 + 8_000))).toThrow(AnalyzerTruncatedError);
+    expect(() => guard('stage1', 'a'.repeat(4_000))).not.toThrow();
+    /* A pass whose caller cannot split gets the target-too-large refusal instead of a truncation. */
+    expect(() => guard('emotion', 'a'.repeat(context * 4 + 8_000))).toThrow(AnalyzerTargetInputTooLargeError);
+    expect(() => guard('emotion', 'a'.repeat(context * 4 + 8_000))).toThrow(`(context ${context} tokens)`);
+  });
+
+  it("selectAnalyzer's local target refuses a prompt over its context as a truncation, before the target runs", async () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab], analyzerEndpointKeys: {}, defaultAnalysisModel: 'qwen3.5:4b', ...target('local') });
+    vi.spyOn(OpenAIAnalyzer.prototype, 'runStage1Chapter').mockRejectedValue(new AnalyzerUnreachableError('connect ECONNREFUSED 127.0.0.1:8080', 'openai'));
+    const targetCall = vi.spyOn(OllamaAnalyzer.prototype, 'runStage1Chapter').mockResolvedValue({ characters: [] } as never);
+    const context = resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }).contextTokens;
+    const s = selectAnalyzer({ model: 'openai:lab::qwen3-30b' });
+    await expect(s.analyzer.runStage1Chapter('m', 1, 'a'.repeat(context * 4 + 8_000), {} as never)).rejects.toBeInstanceOf(AnalyzerTruncatedError);
+    expect(targetCall).not.toHaveBeenCalled();
   });
 
   it('a target whose key is bound to another host still selects; its first call fails with the key-origin error', async () => {
@@ -9606,6 +9657,143 @@ describe('FallbackAnalyzer names the primary and the target (#3084 P30)', () => 
     expect(second.message).toBe(
       'Ollama unreachable (qwen3.5:4b) — switched to endpoint Lab (qwen3-30b); the fallback is unreachable too: connect ECONNREFUSED 127.0.0.1:8080',
     );
+  });
+});
+
+describe('FallbackAnalyzer checks a prompt against the target before sending it (#3084 P30)', () => {
+  const HUGE = 'x'.repeat(5_000);
+  const guard = vi.fn((_pass: string, prompt: string) => {
+    if (prompt.length > 1_000) throw new AnalyzerTruncatedError('ollama', 'input-over-target-budget', 0);
+  });
+  const unreachable = () => Promise.reject(new LocalUnreachableError('down'));
+  const build = (target: Record<string, unknown>) =>
+    new FallbackAnalyzer(
+      Object.fromEntries(INVOKE.map(([name]) => [name, unreachable])) as unknown as Analyzer,
+      target as unknown as Analyzer,
+      { primary: 'qwen3.5:4b', target: 'Ollama (qwen3.5:4b)' },
+      guard,
+    );
+
+  it.each([
+    ['runStage1Chapter', 'stage1'],
+    ['runStage2Chapter', 'stage2'],
+    ['runScriptReviewChapter', 'script-review'],
+  ] as const)('%s: an oversized prompt throws AnalyzerTruncatedError and the target never runs', async (method, pass) => {
+    guard.mockClear();
+    const targetCall = vi.fn(() => Promise.resolve(null));
+    await expect((build({ [method]: targetCall }) as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]('m', 1, HUGE, {} as StageCall)).rejects.toBeInstanceOf(AnalyzerTruncatedError);
+    expect(guard).toHaveBeenCalledWith(pass, HUGE);
+    expect(targetCall).not.toHaveBeenCalled();
+  });
+
+  it('a prompt within budget reaches the target, for a splitting and a non-splitting pass alike', async () => {
+    guard.mockClear();
+    const stage1 = vi.fn(() => Promise.resolve({ characters: [] }));
+    const emotion = vi.fn(() => Promise.resolve({ sentences: [] }));
+    const fa = build({ runStage1Chapter: stage1, runEmotionChapter: emotion });
+    await fa.runStage1Chapter('m', 1, 'short', {} as StageCall);
+    await fa.runEmotionChapter('m', 1, 'short', {} as StageCall);
+    expect(stage1).toHaveBeenCalledTimes(1);
+    expect(emotion).toHaveBeenCalledTimes(1);
+    expect(guard.mock.calls).toEqual([['stage1', 'short'], ['emotion', 'short']]);
+  });
+});
+
+describe('non-splitting passes refuse an over-budget prompt with a coded failure naming the target, and send nothing (#3084 P30)', () => {
+  const context = () => resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }).contextTokens;
+  const tooBig = () => 'a'.repeat(context() * 4 + 8_000);
+  const PASSES: Array<[keyof Analyzer, (a: Analyzer, prompt: string, call: StageCall) => Promise<unknown>]> = [
+    ['runEmotionChapter', (a, p, call) => a.runEmotionChapter('m', 1, p, call)],
+    ['runStage3Chapter', (a, p, call) => a.runStage3Chapter('m', 1, p, call)],
+    ['runAttributionEscalation', (a, p, call) => a.runAttributionEscalation('m', 1, 0, p, call)],
+    ['runNonStoryClassification', (a, p, call) => a.runNonStoryClassification!('m', 1, p, call)],
+    ['runStage1', (a, p, call) => a.runStage1('m', p, call)],
+  ];
+
+  it.each(PASSES)('%s: AnalyzerTargetInputTooLargeError → analyzer-request-rejected, naming the target and its context, with no HTTP status; the target never runs', async (method, invoke) => {
+    const targetCall = vi.fn(() => Promise.resolve(null));
+    const primary = Object.fromEntries(
+      INVOKE.map(([name]) => [name, () => Promise.reject(new AnalyzerUnreachableError('connect ECONNREFUSED 127.0.0.1:8080', 'openai'))]),
+    ) as unknown as Analyzer;
+    const fa = new FallbackAnalyzer(primary, { [method]: targetCall } as unknown as Analyzer, { primary: 'Lab · qwen3-30b', target: 'Ollama (qwen3.5:4b)' }, targetInputGuard({ engine: 'local', model: 'qwen3.5:4b' }));
+    const err = await invoke(fa, tooBig(), {} as StageCall).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerTargetInputTooLargeError);
+    expect(err).not.toBeInstanceOf(AnalyzerTruncatedError);
+    expect(err).toMatchObject({ targetLabel: 'Ollama (qwen3.5:4b)', limitTokens: context(), family: 'context' });
+    expect((err as Error).message).toBe(`prompt is larger than the fallback target Ollama (qwen3.5:4b) can take (context ${context()} tokens)`);
+    const failure = classifyAnalysisFailure(err, 'Endpoint Lab (qwen3-30b)');
+    expect(failure).toMatchObject({
+      code: 'analyzer-request-rejected',
+      userMessage: `prompt is larger than the fallback target Ollama (qwen3.5:4b) can take (context ${context()} tokens)`,
+    });
+    expect(failure.userMessage).not.toMatch(/\(400\)|rejected the request/);
+    expect(targetCall).not.toHaveBeenCalled();
+  });
+});
+```
+
+(merge `AnalyzerTruncatedError` and `AnalyzerTargetInputTooLargeError` into the file's `./errors.js` import; import `targetInputGuard` beside `FallbackAnalyzer` from `./index.js`, `resolveCapacity` from `./capacity.js` and `classifyAnalysisFailure` from `../routes/failure-taxonomy.js`.)
+
+Append to `server/src/routes/failure-taxonomy.test.ts`:
+
+```ts
+describe('AnalyzerTargetInputTooLargeError (#3084 P30)', () => {
+  it('→ analyzer-request-rejected with its own copy: the message, no HTTP status, a chunk-size or larger-window remediation, and fixes', () => {
+    const r = classifyAnalysisFailure(new AnalyzerTargetInputTooLargeError('ollama', 'qwen3.5:4b', 'Ollama (qwen3.5:4b)', 8192, 'context'), 'Endpoint Lab (qwen3-30b)');
+    expect(r.code).toBe('analyzer-request-rejected');
+    expect(r.userMessage).toBe('prompt is larger than the fallback target Ollama (qwen3.5:4b) can take (context 8192 tokens)');
+    expect(r.userMessage).not.toMatch(/\(400\)|rejected the request/);
+    expect(r.remediation).toMatch(/Lower the chunk size/);
+    expect(r.remediation).toMatch(/fallback target with a larger window/);
+    expect(r.remediation).not.toMatch(/\(400\)/);
+    expect(r.fixes?.map((f) => f.settingKey)).toEqual(['analyzer.fallback.target', 'analyzer.stage1.localInputFraction', 'analyzer.stage2.localInputFraction']);
+  });
+
+  it('names a request-cap target by its per-request cap', () => {
+    expect(new AnalyzerTargetInputTooLargeError('gemini', 'gemini-3.5-flash-lite', 'Gemini (gemini-3.5-flash-lite)', 12000, 'requestCap').message).toBe(
+      'prompt is larger than the fallback target Gemini (gemini-3.5-flash-lite) can take (per-request cap 12000 tokens)',
+    );
+  });
+});
+```
+
+Append to `server/src/routes/failure-taxonomy-fixes.test.ts` (2b's guard; `getKnob` from `../config/registry.js` if it lacks it):
+
+```ts
+  it('targetInputTooLargeFixes names only registry keys (#3084 P30)', () => {
+    const fixes = targetInputTooLargeFixes();
+    expect(fixes.length).toBeGreaterThan(0);
+    for (const fix of fixes) {
+      expect(fix.settingKey, fix.label).toBeDefined();
+      expect(getKnob(fix.settingKey!), fix.settingKey).toBeDefined();
+    }
+  });
+```
+
+Create `server/src/routes/analysis.non-story-failure.test.ts`:
+
+```ts
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { nonStoryClassificationFailed } from './analysis.js';
+import { AnalysisAbortedError, AnalyzerTargetInputTooLargeError, AnalyzerHttpError } from '../analyzer/errors.js';
+
+afterEach(() => vi.restoreAllMocks());
+
+describe('nonStoryClassificationFailed (#3084 P30)', () => {
+  it('keeps the story default for a target-too-large refusal, and warns naming the target and limit', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const err = new AnalyzerTargetInputTooLargeError('ollama', 'qwen3.5:4b', 'Ollama (qwen3.5:4b)', 8192, 'context');
+    expect(nonStoryClassificationFailed(err, 'm1', 3)).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      '[analysis] m1: chapter 3 non-story check skipped: prompt is larger than the fallback target Ollama (qwen3.5:4b) can take (context 8192 tokens)',
+    );
+  });
+
+  it('stays quiet for any other error, and rethrows an abort', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(nonStoryClassificationFailed(new AnalyzerHttpError('openai', 500, 'boom', 'boom'), 'm1', 3)).toBe(false);
+    expect(warn).not.toHaveBeenCalled();
+    expect(() => nonStoryClassificationFailed(new AnalysisAbortedError('stop'), 'm1', 3)).toThrow(AnalysisAbortedError);
   });
 });
 ```
@@ -9860,10 +10048,10 @@ and append four cases beside Task 3d.1's review mark case (add `isAnyAnalyzerRun
 (`runReview.mockImplementation` persists across cases; restore the file's default in its `beforeEach` if it does not already reset `runReview`.)
 
 In Task 3d.1's `server/src/routes/analysis.endpoint-run.test.ts`:
-- the hoisted block becomes `const { marks, releases, runState } = vi.hoisted(() => ({ marks: [] as string[][], releases: { count: 0 }, runState: { fallbackModel: null as string | null, activate: false, onCall: undefined as undefined | (() => void) } }));`;
+- the hoisted block becomes `const { marks, releases, runState } = vi.hoisted(() => ({ marks: [] as string[][], releases: { count: 0 }, runState: { fallbackModel: null as string | null, activate: false, onCall: undefined as undefined | (() => void), lastCall: undefined as undefined | { onFallback?: (i: { reason: string }) => void } } }));`;
 - the `selectAnalyzerForPhase` mock returns `fallbackModel: runState.fallbackModel`;
-- the fake analyzer's `runStage1Chapter` becomes `(_m: string, _c: number, _p: string, call: StageCall) => { if (runState.activate) call.onFallback?.({ reason: 'switched' }); runState.onCall?.(); return stop(); }` (import `type StageCall` from `../analyzer/types.js`);
-- `afterEach` adds `runState.fallbackModel = null; runState.activate = false; runState.onCall = undefined;`.
+- the fake analyzer's `runStage1Chapter` becomes `(_m: string, _c: number, _p: string, call: StageCall) => { runState.lastCall = call; if (runState.activate) call.onFallback?.({ reason: 'switched' }); runState.onCall?.(); return stop(); }` (import `type StageCall` from `../analyzer/types.js`);
+- `afterEach` adds `runState.fallbackModel = null; runState.activate = false; runState.onCall = undefined; runState.lastCall = undefined;`.
 
 Append inside its `describe`:
 
@@ -9893,6 +10081,17 @@ Append inside its `describe`:
     expect(spareBusy).toBe(true);
     expect(releases.count).toBe(2);
     expect(isEndpointBusy('lab')).toBe(false);
+    expect(isEndpointBusy('spare')).toBe(false);
+  }, 20_000);
+
+  it('#3084 P30 — a switch that lands after the job ended (a P20 in-flight chapter) takes no mark', async () => {
+    seed();
+    runState.fallbackModel = 'openai:spare::m';
+    await request(makeApp()).post('/api/manuscripts/m_endpoint_run/analysis').send({ model: 'openai:lab::qwen3-30b' });
+    expect(marks).toEqual([['lab']]);
+    /* The job's endJob has run and released its marks; an in-flight chapter now switches. */
+    runState.lastCall!.onFallback?.({ reason: 'late switch' });
+    expect(marks).toEqual([['lab']]);
     expect(isEndpointBusy('spare')).toBe(false);
   }, 20_000);
 ```
@@ -9969,17 +10168,22 @@ Append to `server/src/routes/analysis.phase-model.test.ts`, inside the `phase ev
 and, in the same describe, two cases for what runs after a switch:
 
 ```ts
-  it('#3084 P30 — after a switch from a large-context endpoint to Ollama, the next chapter is chunked for Ollama', async () => {
+  it('#3084 P30 — two chapters sized for a large-context endpoint, dispatched together (analyzer.ollama.concurrency 2), reach the Ollama target split to its capacity, and none above it', async () => {
     const big = analyzerEndpointSchema.parse({ id: 'big', name: 'Big', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 262144 });
     const ceiling = getKnob('analyzer.stage1.chunkCharBudget')!.max!;
-    _setUserSettingsCacheForTest({ analyzerEndpoints: [big], configOverrides: { 'analyzer.stage1.chunkCharBudget': ceiling } });
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [big],
+      configOverrides: { 'analyzer.stage1.chunkCharBudget': ceiling, 'analyzer.ollama.concurrency': 2 },
+    });
+    const tokens = (text: string) => estimateInputTokens('', [{ role: 'user', parts: [{ text }] }]);
+    const localContext = resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }).contextTokens;
     const sentence = 'The lamp guttered and the room went quiet. ';
-    const localBudget = resolveStage1ChunkCharBudget(resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }), sentence.repeat(10), []);
-    const body = sentence.repeat(Math.ceil((localBudget * 2) / sentence.length));
+    /* About 1.2× Ollama's context in tokens: one split halves it well under the context. */
+    const body = sentence.repeat(Math.ceil(((localContext - 1_000) * 1.2 * 4) / sentence.length));
     const endpointBudget = resolveStage1ChunkCharBudget(resolveCapacity({ engine: 'openai', model: 'openai:big::qwen3-30b' }), body, []);
-    /* Preconditions: the endpoint takes each chapter in one chunk; Ollama needs at least two. */
+    /* Preconditions: the endpoint sizes each chapter as one chunk, and that chunk is over Ollama's context. */
     expect(endpointBudget).toBeGreaterThanOrEqual(body.length);
-    expect(localBudget).toBeLessThan(body.length);
+    expect(tokens(body)).toBeGreaterThan(localContext);
 
     const manuscriptId = `test-fallback-capacity-${Date.now()}`;
     putManuscript({
@@ -9990,32 +10194,104 @@ and, in the same describe, two cases for what runs after a switch:
     const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
     process.env.STAGE2_COVERAGE_RETRIES = '0';
     const primaryCalls: number[] = [];
-    const targetCalls: number[] = [];
+    const targetCalls: Array<{ chapterId: number; tokens: number }> = [];
+    /* Hold every primary call until both chapters have reached the primary, so both were sized for
+       the endpoint before any switch lands (what two workers do in production). */
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
     const spy = buildSpyPhase0Analyzer();
     const primary: Analyzer = {
       ...spy,
       async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
         primaryCalls.push(chapterId);
+        if (new Set(primaryCalls).size === 2) openGate();
+        await gate;
         throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
       },
     };
     const target: Analyzer = {
       ...spy,
       async runStage1Chapter(m: string, chapterId: number, p: string, call: StageCall): Promise<Stage1ChapterOutput> {
-        targetCalls.push(chapterId);
+        targetCalls.push({ chapterId, tokens: tokens(p) });
         return spy.runStage1Chapter(m, chapterId, p, call);
       },
     };
+    const selection: AnalyzerSelection = {
+      analyzer: new FallbackAnalyzer(primary, target, undefined, targetInputGuard({ engine: 'local', model: 'qwen3.5:4b' })),
+      engine: 'openai',
+      model: 'openai:big::qwen3-30b',
+      fallbackModel: 'qwen3.5:4b',
+    };
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
+    const job = buildStubJob(manuscriptId);
+    try {
+      await runMainAnalyzerJob(job, getManuscriptForTest(manuscriptId), selection, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      /* Both chapters reached the primary, sized for the endpoint, before the switch. */
+      expect(new Set(primaryCalls.slice(0, 2))).toEqual(new Set([1, 2]));
+      /* Nothing above the target's context reached it. */
+      expect(targetCalls.length).toBeGreaterThan(0);
+      expect(targetCalls.every((c) => c.tokens <= localContext)).toBe(true);
+      /* Both in-flight chapters were split for the target. */
+      expect(targetCalls.filter((c) => c.chapterId === 1).length).toBeGreaterThanOrEqual(2);
+      expect(targetCalls.filter((c) => c.chapterId === 2).length).toBeGreaterThanOrEqual(2);
+      expect(job.engine).toBe('local');
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
+
+  it('#3084 P30 — a chapter started after the switch is sized for the target by its chunk budget, with no pre-send check (concurrency 1)', async () => {
+    const big = analyzerEndpointSchema.parse({ id: 'big', name: 'Big', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 262144 });
+    const ceiling = getKnob('analyzer.stage1.chunkCharBudget')!.max!;
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [big],
+      configOverrides: { 'analyzer.stage1.chunkCharBudget': ceiling, 'analyzer.ollama.concurrency': 1 },
+    });
+    const tokens = (text: string) => estimateInputTokens('', [{ role: 'user', parts: [{ text }] }]);
+    const localContext = resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }).contextTokens;
+    const sentence = 'The lamp guttered and the room went quiet. ';
+    const body = sentence.repeat(Math.ceil(((localContext - 1_000) * 1.2 * 4) / sentence.length));
+    expect(resolveStage1ChunkCharBudget(resolveCapacity({ engine: 'openai', model: 'openai:big::qwen3-30b' }), body, [])).toBeGreaterThanOrEqual(body.length);
+    expect(tokens(body)).toBeGreaterThan(localContext);
+
+    const manuscriptId = `test-fallback-capacity-later-${Date.now()}`;
+    putManuscript({
+      manuscriptId, format: 'plaintext', title: 'Capacity later', wordCount: 1, byteSize: body.length * 2, uploadedAt: new Date().toISOString(),
+      sourceText: body + body,
+      chapterHints: [{ id: 1, title: 'One', body }, { id: 2, title: 'Two', body }] as unknown as ChapterHint[],
+    });
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const targetCalls: Array<{ chapterId: number; tokens: number }> = [];
+    const spy = buildSpyPhase0Analyzer();
+    const primary: Analyzer = {
+      ...spy,
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      },
+    };
+    const target: Analyzer = {
+      ...spy,
+      async runStage1Chapter(m: string, chapterId: number, p: string, call: StageCall): Promise<Stage1ChapterOutput> {
+        targetCalls.push({ chapterId, tokens: tokens(p) });
+        return spy.runStage1Chapter(m, chapterId, p, call);
+      },
+    };
+    /* No guard: chapter 1 reaches the target oversized (it was sized before the switch); chapter 2,
+       started after it, must be sized for Ollama by the chunk budget alone. */
     const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, target), engine: 'openai', model: 'openai:big::qwen3-30b', fallbackModel: 'qwen3.5:4b' };
     setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
     const job = buildStubJob(manuscriptId);
     try {
       await runMainAnalyzerJob(job, getManuscriptForTest(manuscriptId), selection, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
-      /* Chapter 1 went to the endpoint as one chunk and to the target as that same chunk. */
-      expect(primaryCalls.filter((c) => c === 1)).toHaveLength(1);
-      /* Chapter 2 was sized for Ollama: two or more chunks. */
-      expect(targetCalls.filter((c) => c === 2).length).toBeGreaterThanOrEqual(2);
-      expect(job.engine).toBe('local');
+      const chapter2 = targetCalls.filter((c) => c.chapterId === 2);
+      expect(chapter2.length).toBeGreaterThanOrEqual(2);
+      expect(chapter2.every((c) => c.tokens <= localContext)).toBe(true);
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
@@ -10051,7 +10327,7 @@ and, in the same describe, two cases for what runs after a switch:
   }, 60_000);
 ```
 
-(add `AnalyzerUnreachableError` to its `../analyzer/errors.js` import; import `getKnob` from `../config/registry.js`, `resolveCapacity` from `../analyzer/capacity.js`, `resolveStage1ChunkCharBudget` from `../analyzer/stage1-chunk.js`, `analyzerEndpointSchema` from `../workspace/analyzer-endpoints.js`, the user-settings test helpers, and `type StageCall` from `../analyzer/types.js`. `getManuscriptForTest(id)` is `(await import('../store/manuscripts.js')).getManuscript(id) as never`, as the file's existing cases inline it. If the phase-1 fake's `setPhase1Selection` shape differs, keep its builder and pass this selection through it.)
+(add `AnalyzerUnreachableError` to its `../analyzer/errors.js` import; import `targetInputGuard` beside `FallbackAnalyzer` from `../analyzer/index.js`, `estimateInputTokens` from `../analyzer/runner/prompt.js`, `getKnob` from `../config/registry.js`, `resolveCapacity` from `../analyzer/capacity.js`, `resolveStage1ChunkCharBudget` from `../analyzer/stage1-chunk.js`, `analyzerEndpointSchema` from `../workspace/analyzer-endpoints.js`, the user-settings test helpers, and `type StageCall` from `../analyzer/types.js`. `getManuscriptForTest(id)` is `(await import('../store/manuscripts.js')).getManuscript(id) as never`, as the file's existing cases inline it. If the phase-1 fake's `setPhase1Selection` shape differs, keep its builder and pass this selection through it.)
 
 - [ ] **Step 2: Run them and confirm they fail**
 Run: `npm --prefix server run test -- src/analyzer/fallback-target.test.ts src/config/registry.test.ts src/analyzer/select-analyzer.fallback-target.test.ts src/analyzer/fallback.endpoint-reason.test.ts src/routes/config.fallback-target.test.ts src/routes/user-settings.test.ts src/workspace/analyzer-endpoints.test.ts src/routes/script-review.test.ts src/routes/analysis.endpoint-run.test.ts src/routes/analysis.phase-model.test.ts src/routes/annotate-emotion.test.ts src/routes/instruct-annotation.test.ts`
@@ -10066,7 +10342,11 @@ Expected: FAIL.
 - `config.fallback-target.test.ts` GET cases: `values[KEY]` has no `analyzerEngine` (and, before the knob exists, no entry at all).
 - `script-review.test.ts`: Part 1.4's message says "turn on Cloud fallback"; the two activation cases receive `[['lab']]` and `false` (nothing marks at the switch). The two healthy cases **pass** already, because nothing marks the target at all yet; mutation rows 20 and 21 prove they can fail.
 - `analysis.endpoint-run.test.ts` and the emotion/instruct cases: the activation case receives `[['lab']]`; the healthy case passes already (row 22 is its proof).
-- `analysis.phase-model.test.ts`: the phase-0 switched events carry `engine: 'gemini'`; chapter 2 reaches the target as one chunk (`expected 1 to be greater than or equal to 2`) and `job.engine` stays `'openai'`; the phase-1 switched events carry no `engine: 'local'`.
+- `analysis.phase-model.test.ts`: the phase-0 switched events carry `engine: 'gemini'`; in the concurrency-2 case `targetInputGuard` is not exported yet (`does not provide an export named 'targetInputGuard'`), and once it is, each chapter reaches the target once, above its context (`expected false to be true` on `tokens <= localContext`); the concurrency-1 case's chapter 2 reaches the target as one oversized chunk; `job.engine` stays `'openai'`; the phase-1 switched events carry no `engine: 'local'`.
+- `fallback.endpoint-reason.test.ts` guard cases: the constructor ignores a fourth argument, so the three passes reach the target (`expected "spy" to not be called`), and `guard` is never called. The five non-splitting rows fail on the missing `targetInputGuard` export, and once it exists, on `expected "spy" to not be called` (the target runs with the oversized prompt).
+- `failure-taxonomy.test.ts` and `analysis.non-story-failure.test.ts`: `does not provide an export named 'AnalyzerTargetInputTooLargeError'` (then `targetInputTooLargeFixes`, `nonStoryClassificationFailed`). Against a classifier without the branch, the classify case receives `code: 'unknown'` and the raw message; against catch blocks without the helper, no warning is logged.
+- `select-analyzer.fallback-target.test.ts` guard cases: `targetInputGuard` is not exported; the selection case's oversized prompt reaches `OllamaAnalyzer.prototype.runStage1Chapter`.
+- `analysis.endpoint-run.test.ts` late-switch case: the late `onFallback` marks `['spare']` (`expected [ [ 'lab' ], [ 'spare' ] ] to equal [ [ 'lab' ] ]`) and `spare` stays busy.
 - `select-analyzer.fallback-target.test.ts`, once the exports exist: the endpoint-default case receives `'openai:lab::qwen3-30b'` only if `local` were read from the saved default (it passes against Step 3's `getResolvedOllamaModel()`; row 4a is its proof); the widened no-wrap row receives a `FallbackAnalyzer` against a same-model-only check (row 4b).
 
 - [ ] **Step 3: Implement**
@@ -10105,7 +10385,7 @@ and replace the `options` / `pattern` docs (`:27-35`; the `pattern?: RegExp;` li
   analyzerEngine?: { localModel: string; optionLabels: Record<string, string>; sourceNote?: string };
 ```
 
-and the same optional field on the frontend value-state type in `src/lib/types.ts` (the type `ConfigValues` maps to).
+and the same optional field on `KnobValue` in `src/lib/types.ts` (`:930-938`, after `staleReason?`).
 
 `server/src/config/registry.ts` — after the `analyzer.gemini.model` descriptor (`:1150-1169`):
 
@@ -10258,7 +10538,33 @@ export function assertAnalyzerTargetUsable(
 function withFallback(primary: AnalyzerSelection): AnalyzerSelection {
   const target = fallbackSelectionFor(primary);
   if (!target) return primary;
-  return { ...primary, analyzer: new FallbackAnalyzer(primary.analyzer, target.analyzer, fallbackNames(primary, target)), fallbackModel: target.model };
+  return {
+    ...primary,
+    analyzer: new FallbackAnalyzer(primary.analyzer, target.analyzer, fallbackNames(primary, target), targetInputGuard(target)),
+    fallbackModel: target.model,
+  };
+}
+
+export type FallbackPass = 'stage1' | 'stage2' | 'script-review' | 'emotion' | 'stage3' | 'escalation' | 'non-story' | 'stage1-book';
+export type FallbackInputGuard = (pass: FallbackPass, prompt: string) => void;
+
+/* Callers that split on AnalyzerTruncatedError (stage1-chunk.ts, stage2-chunk.ts, script-review.ts). */
+const SPLITTING_PASSES: ReadonlySet<FallbackPass> = new Set(['stage1', 'stage2', 'script-review']);
+
+/* #3084 P30 — a prompt sized for the primary may be too big for the target. Refuse it before the
+   target runs, never sending a prompt Ollama would silently truncate on input. A splitting pass gets
+   a truncation, which its runner splits; any other pass gets an AnalyzerTargetInputTooLargeError
+   naming the target and its limit (no HTTP status), through that caller's own failure handling. Budget: context, or per-request cap. */
+export function targetInputGuard(target: Pick<AnalyzerSelection, 'engine' | 'model'>): FallbackInputGuard {
+  return (pass, prompt) => {
+    const capacity = resolveCapacity({ engine: target.engine, model: target.model });
+    const requestCap = capacity.family === 'requestCap';
+    const budget = requestCap ? (capacity.perRequestInputCap ?? Number.POSITIVE_INFINITY) : capacity.contextTokens;
+    if (estimateInputTokens('', [{ role: 'user', parts: [{ text: prompt }] }]) <= budget) return;
+    const transport = target.engine === 'local' ? 'ollama' : target.engine; // TransportKind (W1 widened AnalyzerTruncatedError.engine)
+    if (SPLITTING_PASSES.has(pass)) throw new AnalyzerTruncatedError(transport, 'input-over-target-budget', 0);
+    throw new AnalyzerTargetInputTooLargeError(transport, target.model, fallbackNames(target, target).target, budget, requestCap ? 'requestCap' : 'context');
+  };
 }
 
 /** The target selection a primary falls back to, or null: a Gemini primary, `off`, a keyless
@@ -10353,13 +10659,21 @@ export function fallbackReasonFor(err: AnalyzerUnreachableError, names?: { prima
     private readonly primary: Analyzer,
     private readonly fallback: Analyzer,
     private readonly names?: { primary: string; target: string },
+    private readonly guard?: FallbackInputGuard,
   ) {}
 
   /* P30 — every switch is announced with both names; a target that is also unreachable fails
-     naming both. Same instance rethrown, so its class, transport, cause and classification stay. */
-  private async switchTo<T>(err: AnalyzerUnreachableError, call: StageCall, run: (fallback: Analyzer) => Promise<T>): Promise<T> {
+     naming both. Same instance rethrown, so its class, transport, cause and classification stay.
+     Every method passes `check`; the guard decides what an over-budget prompt throws. */
+  private async switchTo<T>(
+    err: AnalyzerUnreachableError,
+    call: StageCall,
+    run: (fallback: Analyzer) => Promise<T>,
+    check?: { pass: FallbackPass; prompt: string },
+  ): Promise<T> {
     const reason = fallbackReasonFor(err, this.names);
     call.onFallback?.({ reason });
+    if (check) this.guard?.(check.pass, check.prompt); // throws before the target runs when over its budget
     try {
       return await run(this.fallback);
     } catch (second) {
@@ -10377,7 +10691,75 @@ export function fallbackReasonFor(err: AnalyzerUnreachableError, names?: { prima
       }
 ```
 
-  and likewise `runStage1` → `(f) => f.runStage1(manuscriptId, promptMd, call)`, `runStage1Chapter`, `runEmotionChapter`, `runScriptReviewChapter`, `runStage3Chapter`, `runAttributionEscalation` → `(f) => f.runAttributionEscalation(manuscriptId, chapterId, windowIndex, prompt, call)`, `runNonStoryClassification` → `(f) => f.runNonStoryClassification!(manuscriptId, chapterId, promptMd, call)`. The `AnalysisAbortedError` rethrow above each gate stays.
+  and likewise `runStage1` → `(f) => f.runStage1(manuscriptId, promptMd, call)`, `runStage1Chapter`, `runEmotionChapter`, `runScriptReviewChapter`, `runStage3Chapter`, `runAttributionEscalation` → `(f) => f.runAttributionEscalation(manuscriptId, chapterId, windowIndex, prompt, call)`, `runNonStoryClassification` → `(f) => f.runNonStoryClassification!(manuscriptId, chapterId, promptMd, call)`. The `AnalysisAbortedError` rethrow above each gate stays. All eight pass the fourth `check` argument: `runStage1Chapter` → `{ pass: 'stage1', prompt: promptMd }`, `runStage2Chapter` → `'stage2'`, `runScriptReviewChapter` → `'script-review'`, `runEmotionChapter` → `'emotion'`, `runStage3Chapter` → `'stage3'`, `runAttributionEscalation` → `{ pass: 'escalation', prompt }`, `runNonStoryClassification` → `'non-story'`, `runStage1` → `'stage1-book'` (each with that method's prompt argument).
+
+  Imports in `index.ts`: `resolveCapacity` from `./capacity.js`, `estimateInputTokens` from `./runner/prompt.js`, `AnalyzerTruncatedError` and `AnalyzerTargetInputTooLargeError` from `./errors.js`.
+
+`server/src/analyzer/errors.ts` — after `AnalyzerTruncatedError`:
+
+```ts
+/* #3084 P30 — a prompt too large for the fallback target, refused before it was sent, so it is never
+   truncated on input. Thrown only for passes whose caller does not split; those that split get an
+   AnalyzerTruncatedError instead. Not a subclass of either, and never retried: nothing was sent. */
+export class AnalyzerTargetInputTooLargeError extends Error {
+  constructor(
+    readonly transport: TransportKind,
+    readonly model: string,
+    readonly targetLabel: string,
+    readonly limitTokens: number,
+    readonly family: 'context' | 'requestCap',
+  ) {
+    super(`prompt is larger than the fallback target ${targetLabel} can take (${family === 'context' ? 'context' : 'per-request cap'} ${limitTokens} tokens)`);
+    this.name = 'AnalyzerTargetInputTooLargeError';
+  }
+}
+```
+
+`server/src/routes/failure-taxonomy.ts` — import `AnalyzerTargetInputTooLargeError`; directly after the `if (err instanceof AnalyzerTruncatedError) { … }` branch of `classifyAnalysisFailure` (`:526-534`):
+
+```ts
+  /* #3084 P30 — a request never sent because the fallback target could not take it. Its own copy,
+     under the existing request-rejected code, with no HTTP status: nothing reached a server. */
+  if (err instanceof AnalyzerTargetInputTooLargeError) {
+    return {
+      code: 'analyzer-request-rejected',
+      userMessage: err.message,
+      remediation:
+        'Lower the chunk size (Advanced Settings → Analyzer chunking: the stage input fractions) or choose a fallback target with a larger window (Advanced Settings → Analyzer fallback), then resume — finished chapters are kept.',
+      detail: `transport=${err.transport} model=${err.model} limit=${err.limitTokens} family=${err.family}`,
+      fixes: targetInputTooLargeFixes(),
+    };
+  }
+```
+
+and beside `reasoningOverflowFixes`:
+
+```ts
+/** #3084 P30 — the settings that let a fallback target take the request. */
+export function targetInputTooLargeFixes(): AnalysisFailureFix[] {
+  return [
+    { label: 'Choose a fallback target with a larger window', settingKey: 'analyzer.fallback.target' },
+    { label: 'Lower the stage-1 local input fraction', settingKey: 'analyzer.stage1.localInputFraction' },
+    { label: 'Lower the stage-2 local input fraction', settingKey: 'analyzer.stage2.localInputFraction' },
+  ];
+}
+```
+
+`server/src/routes/analysis.ts` — beside `markFallbackActive`:
+
+```ts
+/* #3084 P30 — Signal-2 fails open: any error treats the chapter as a story. A prompt refused before
+   a fallback target could take it keeps that outcome but is logged, so the skip is never silent. */
+export function nonStoryClassificationFailed(err: unknown, manuscriptId: string, chapterId: number): false {
+  if (err instanceof AnalysisAbortedError) throw err;
+  if (err instanceof AnalyzerTargetInputTooLargeError) {
+    console.warn(`[analysis] ${manuscriptId}: chapter ${chapterId} non-story check skipped: ${err.message}`);
+  }
+  return false;
+}
+```
+
+Both non-story `catch` blocks (`:5831-5834` main job, `:7561-7564` subset job) become `} catch (err) { return nonStoryClassificationFailed(err, manuscriptId, ch.id); }`, which keeps their outcome. None of those modules imports `index.ts` (`check:cycles`).
 
 `server/src/workspace/analyzer-endpoints.ts` — `MODEL_ID_CONFIG_KNOBS` becomes `['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.personaGeneration.engine', 'analyzer.fallback.target']`, and its doc gains `The fallback target is listed from PR 3d (P30).`
 
@@ -10477,14 +10859,16 @@ userSettingsRouter.put('/', async (req: Request, res: Response) => {
   (`selection.engine`, not `pinnedLocal`: the warm-fail path calls `switchToFallback` at `:774`, before `pinnedLocal` is declared at `:798`.) In the review `try`'s `finally`, directly after Task 3d.1's `releaseEndpointRun();`: `releaseFallbackRun(); if (pinnedLocalFallback) clearReviewBusy(located.bookDir);`. `:798` and the `if (pinnedLocal)` blocks keep their text.
 
 `server/src/routes/analysis.ts` (import `inferEngineFromModelId` from `'../analyzer/model-id.js'` if absent):
-- `AnalysisJob`, after Task 3d.1's `releaseEndpointRun?`: `/** #3084 P30 — fallback targets already marked busy (each once, at its first switch). */ fallbackMarked?: Set<string>;`. `engine` widens to `AnalysisEngine` if 3a has not already.
+- `AnalysisJob`, after Task 3d.1's `releaseEndpointRun?`: `/** #3084 P30 — fallback targets already marked busy (each once, at its first switch). */ fallbackMarked?: Set<string>;` and `/** #3084 P30 — set by endJob once releaseEndpointRun has run; a later switch takes no mark. */ endpointRunReleased?: boolean;`. `engine` widens to `AnalysisEngine` if 3a has not already.
+- `endJob`: Task 3d.1's `job.releaseEndpointRun?.();` becomes `job.releaseEndpointRun?.(); job.endpointRunReleased = true;`.
 - Beside `endJob`:
 
 ```ts
 /* #3084 P30 — a fallback target is marked busy at its first switch, never at job start, and the
-   mark is released with the job's own (endJob calls releaseEndpointRun). */
+   mark is released with the job's own (endJob calls releaseEndpointRun). A switch that lands after
+   endJob (a P20 in-flight chapter finishing) takes no mark: nothing would ever release it. */
 function markFallbackActive(job: AnalysisJob, modelId: string | null): void {
-  if (!modelId || job.fallbackMarked?.has(modelId)) return;
+  if (!modelId || job.endpointRunReleased || job.fallbackMarked?.has(modelId)) return;
   (job.fallbackMarked ??= new Set()).add(modelId);
   const release = markEndpointRunActive(endpointIdsForModelIds([modelId]));
   const previous = job.releaseEndpointRun;
@@ -10576,7 +10960,7 @@ and change the `Gemini analyzer model` row's "What it does" to `Model used direc
 Run `npm run config:sync`, then `npm run config:check`.
 
 - [ ] **Step 4: Run and confirm they pass**
-Run: the Step 2 command, then `npm --prefix server run test -- src/analyzer/select-analyzer.test.ts src/analyzer/fallback.test.ts src/analyzer/fallback-analyzer.test.ts src/analyzer/preflight.test.ts src/routes/analysis.preflight.test.ts src/workspace/user-settings.test.ts src/routes/config.test.ts src/config`, then `npm run test:hooks` (`scripts/tests/knob-docs-sync.test.mjs` finds the `Analyzer fallback` row), `npm run check:cycles` (no new cycle: `index.ts` imports `capabilities.ts`, `fallback-target.ts` and `ollama-digest.ts`, none of which imports `index.ts` or `select-analyzer.ts`), `npm run config:check`, `npm run typecheck`. Expected: PASS.
+Run: the Step 2 command, then `npm --prefix server run test -- src/analyzer/select-analyzer.test.ts src/analyzer/fallback.test.ts src/analyzer/fallback-analyzer.test.ts src/analyzer/preflight.test.ts src/routes/analysis.preflight.test.ts src/workspace/user-settings.test.ts src/routes/config.test.ts src/config`, then `npm --prefix server run test -- src/routes/failure-taxonomy.test.ts src/routes/failure-taxonomy-fixes.test.ts src/routes/analysis.non-story-failure.test.ts`, then `git grep -n "Signal-2 hiccup" -- server/src/routes/analysis.ts` (must print nothing: both non-story `catch` blocks go through `nonStoryClassificationFailed`), then `npm run test:hooks` (`scripts/tests/knob-docs-sync.test.mjs` finds the `Analyzer fallback` row), `npm run check:cycles` (no new cycle: `index.ts` imports `capabilities.ts`, `fallback-target.ts` and `ollama-digest.ts`, none of which imports `index.ts` or `select-analyzer.ts`), `npm run config:check`, `npm run typecheck`. Expected: PASS.
 
 - [ ] **Step 5: Mutation proof** (restore after each)
 1. `index.ts` `local` branch: return the bare selection instead of `withFallback(…)` → red: `select-analyzer.test.ts` "local + Gemini key → FallbackAnalyzer wrapping Ollama with Gemini fallback" and "an Ollama primary falls back to an endpoint model". The same in the `openai` branch → red: "an endpoint primary falls back to gemini by default…" and "…the Ollama model a local selection resolves to when the target is local".
@@ -10604,16 +10988,21 @@ Run: the Step 2 command, then `npm --prefix server run test -- src/analyzer/sele
 20. `script-review.ts`: mark the fallback endpoint at review start (add `selection.fallbackModel` to Task 3d.1's mark) → red: "a healthy review holds no mark for its fallback endpoint on the same card". Delete the `markEndpointRunActive` line in `switchToFallback` instead → red: "once the review falls back, its endpoint target is marked until the review ends". Delete `releaseFallbackRun();` from the `finally` → red: the same case (`isEndpointBusy('spare')` stays true).
 21. `script-review.ts`: take the Ollama pin at review start for a local target → red: "a healthy endpoint review whose fallback target is local does not pin Ollama". Delete `markReviewBusy` in `switchToFallback` → red: "once an endpoint review falls back to local, the Ollama review pin holds…" (`busyAfterSwitch` false). Delete the `clearReviewBusy` line → red: the same case (`isAnyAnalyzerRunBusy()` stays true).
 22. `analysis.ts` main POST: add the fallback models to Task 3d.1's job-start mark → red: "a healthy run holds no mark for its fallback endpoint on the same card…". Delete `markFallbackActive(job, selection.fallbackModel)` from the phase-0 `onFallback` → red: "once the fallback activates, its endpoint is marked until the job ends…". In `markFallbackActive`, replace the chained release with `job.releaseEndpointRun = release;` → red: the same case (`isEndpointBusy('lab')` stays true).
+22a. `markFallbackActive`: drop `job.endpointRunReleased ||` → red: "a switch that lands after the job ended (a P20 in-flight chapter) takes no mark" (`marks` gains `['spare']`, and `spare` stays busy). Delete `job.endpointRunReleased = true;` from `endJob` instead → red: the same case.
 23. `analysis.ts` phase-0 `onFallback`: `engine: 'gemini'` → red: "after a switch to a local target, phase-0 events name the Ollama model with engine local, not gemini".
 24. `annotate-emotion.ts`: move the fallback mark to the top of the `try` → red: "an emotion pass marks its fallback endpoint only once the fallback activates" (first run). Delete it from `onFallback` → red: the same case (second run). Repeat for `instruct-annotation.ts`.
-25. `analysis.ts` phase-0 chunk budget: keep `resolveCapacity({ engine: selection.engine, model: selection.model })` → red: "after a switch from a large-context endpoint to Ollama, the next chapter is chunked for Ollama" (chapter 2 in one chunk). Delete `job.engine = activeEngine;` → red: the same case's `job.engine` assertion.
+25. `FallbackAnalyzer.switchTo`: delete `if (check) this.guard?.(check.pass, check.prompt);` → red: "two chapters sized for a large-context endpoint, dispatched together … none above it" (each chapter reaches the target once, above its context), and the guard unit cases "throws AnalyzerTruncatedError before the target runs…". In `runStage2Chapter`, pass no `check` → red: only that pass's unit row. In `withFallback`, pass no `targetInputGuard(target)` → red: "selectAnalyzer's local target refuses a prompt over its context as a truncation, before the target runs". In `targetInputGuard`, compare with `contextTokens * 2` → red: "targetInputGuard refuses a prompt over the target's context and lets one under it through" (and the job case). Delete `job.engine = activeEngine;` → red: the job case's `job.engine` assertion.
+25b. `targetInputGuard`: throw `AnalyzerTruncatedError` for every pass (drop the `SPLITTING_PASSES` test) → red: every row of "non-splitting passes refuse an over-budget prompt with a coded failure…" (`expected … to be an instance of AnalyzerTargetInputTooLargeError`), and the `emotion` assertions of "targetInputGuard refuses a prompt over the target context…". Throw `AnalyzerTargetInputTooLargeError` for every pass instead → red: "two chapters sized for a large-context endpoint…" (the chunk is refused, not split) and the `stage1` assertion. In `runEmotionChapter`, pass no `check` → red: only that table row (the target runs). Throw `new AnalyzerHttpError(transport, 400, msg, msg)` for non-splitting passes (the rejected design) → red: every table row (not an instance of the new class; `userMessage` contains `(400)`).
+25c. `failure-taxonomy.ts`: delete the `AnalyzerTargetInputTooLargeError` branch → red: "→ analyzer-request-rejected with its own copy…" (`unknown`) and every table row's `classifyAnalysisFailure` assertion. Return `userMessage: \`${modelLabel} rejected the request (400): ${err.message}\`` → red: the same case's `not.toMatch(/\(400\)|rejected the request/)`. Drop `fixes` → red: the same case's `fixes` assertion. Make a fix's `settingKey` `analyzer.fallback.targets` → red: "targetInputTooLargeFixes names only registry keys". Change the error's message to always say `context` → red: "names a request-cap target by its per-request cap".
+25d. `analysis.ts` `nonStoryClassificationFailed`: delete the `console.warn` → red: "keeps the story default for a target-too-large refusal, and warns…". Warn for every error → red: "stays quiet for any other error, and rethrows an abort". Return `true` → red: the first case. In either non-story `catch`, restore `return false;` without the helper → no unit red (the helper is tested alone); the grep `git grep -n "Signal-2 hiccup" -- server/src/routes/analysis.ts` must print nothing, which Step 4 runs.
+25a. `analysis.ts` phase-0 chunk budget: keep `resolveCapacity({ engine: selection.engine, model: selection.model })` → red: "a chapter started after the switch is sized for the target by its chunk budget, with no pre-send check (concurrency 1)" (chapter 2 reaches the target as one chunk above its context). That case builds `FallbackAnalyzer` without a guard, so only the budget line can make it pass; the concurrency-2 case, which carries the guard, stays green under this mutation.
 26. `analysis.ts` phase-1 tick event: drop `engine: phase1Engine` → red: "after a phase-1 switch, phase-1 events carry the target engine".
 27. `routes/config.ts`: return `resolveAll()` from GET instead of `clientValues()` → red: both GET cases (`effective` is `gemini` for the legacy case; no `analyzerEngine`). Do it in the PUT response only → red: "labels gemini with its model when a key is set, and the PUT response carries the same state".
 28. `fallbackTargetValueState`: label gemini with its model even with no key → red: "labels local with the model a local selection resolves to, and gemini with no key as inactive". Drop the `sourceNote` spread → red: "reports off, with a source note…".
 
 - [ ] **Step 6: Commit**
 ```bash
-git add server/src/config/types.ts server/src/config/registry.ts server/src/config/registry.test.ts src/lib/types.ts server/src/analyzer/fallback-target.ts server/src/analyzer/fallback-target.test.ts server/src/analyzer/capabilities.ts server/src/analyzer/preflight.ts server/src/analyzer/index.ts server/src/analyzer/select-analyzer.fallback-target.test.ts server/src/analyzer/fallback.endpoint-reason.test.ts server/src/workspace/analyzer-endpoints.ts server/src/workspace/analyzer-endpoints.test.ts server/src/routes/config.ts server/src/routes/config.fallback-target.test.ts server/src/routes/user-settings.ts server/src/routes/user-settings.test.ts server/src/routes/script-review.ts server/src/routes/script-review.test.ts server/src/routes/analysis.ts server/src/routes/analysis.endpoint-run.test.ts server/src/routes/analysis.phase-model.test.ts server/src/routes/annotate-emotion.ts server/src/routes/annotate-emotion.test.ts server/src/routes/instruct-annotation.ts server/src/routes/instruct-annotation.test.ts server/src/workspace/user-settings.ts openapi.yaml src/lib/api-types.ts server/.env.example docs/wiki/Advanced-Settings.md
+git add server/src/config/types.ts server/src/config/registry.ts server/src/config/registry.test.ts src/lib/types.ts server/src/analyzer/fallback-target.ts server/src/analyzer/fallback-target.test.ts server/src/analyzer/capabilities.ts server/src/analyzer/preflight.ts server/src/analyzer/index.ts server/src/analyzer/select-analyzer.fallback-target.test.ts server/src/analyzer/fallback.endpoint-reason.test.ts server/src/workspace/analyzer-endpoints.ts server/src/workspace/analyzer-endpoints.test.ts server/src/routes/config.ts server/src/routes/config.fallback-target.test.ts server/src/routes/user-settings.ts server/src/routes/user-settings.test.ts server/src/routes/script-review.ts server/src/routes/script-review.test.ts server/src/routes/analysis.ts server/src/routes/analysis.endpoint-run.test.ts server/src/routes/analysis.phase-model.test.ts server/src/routes/annotate-emotion.ts server/src/routes/annotate-emotion.test.ts server/src/routes/instruct-annotation.ts server/src/routes/instruct-annotation.test.ts server/src/workspace/user-settings.ts openapi.yaml src/lib/api-types.ts server/.env.example docs/wiki/Advanced-Settings.md server/src/analyzer/errors.ts server/src/routes/failure-taxonomy.ts server/src/routes/failure-taxonomy.test.ts server/src/routes/failure-taxonomy-fixes.test.ts server/src/routes/analysis.non-story-failure.test.ts
 git commit -m "feat(server): choose the analyzer fallback target in Advanced Settings"
 ```
 
@@ -10651,7 +11040,12 @@ Rules:
 - **Cloud fallback row.** Removed with all of its state. Save never sends `allowCloudFallback`. The field stays in `AccountState` defaults (`src/lib/account-defaults.ts:23`, `:62`) and in `api-types.ts`, read by nothing in this form.
 - **Sublabel** (`:493`): `Default — Local routes analysis through the Ollama daemon on this machine, so nothing leaves the box. If it is unreachable, analysis falls back to the target set in Advanced Settings → Analyzer fallback (Gemini by default, only with a Gemini API key; off keeps it strictly local). Gemini API sends every chapter straight to Google using your Gemini API key. Pick Gemini only if you want analysis to run in the cloud.` The `local` option (`:501`) becomes `Local Ollama (default — on-device)`.
 - **Switch note.** The server's `fallbackReason` (Task 3d.4b) names both. The review thunk stores it on the substage entry, and the popover note renders it; with `fallbackActive` and no reason (a prosody entry), the note reads `Switched to the fallback analyzer`.
-- **Help topics.** `is-my-data-private` (`help-topics.ts:336-338`) says the one thing that can leave the machine is the optional Gemini analyzer, with "a single switch in analyzer settings". From 3d a remote endpoint (OpenRouter, or a server on another machine) is selectable and is a valid fallback target, so both statements are false. The new text says: a remote endpoint receives the text of every chapter it analyses; a fallback target receives the chapters it takes over when it activates; and the fallback is set, or turned off, in Advanced Settings → Analyzer fallback. `does-it-work-offline` names Gemini as "the one part that wants a connection" and gets the same correction. The existing guards (`help-topics.test.ts:28-42`: "local model by default", "on by default", "turns it off", and none of the overclaims) stay green; a new case pins the endpoint and fallback sentences.
+- **Help topics.** `is-my-data-private` (`help-topics.ts:336-338`) says the one thing that can leave the machine is the optional Gemini analyzer, with "a single switch in analyzer settings"; `does-it-work-offline` says nothing is sent while Castwright synthesises and names Gemini analysis as "the one part that wants a connection". Both were already incomplete at 46e62a34, since the Gemini TTS provider (`server/src/tts/gemini.ts`, chosen per call by `selectTtsProvider`, `server/src/tts/index.ts:10`, `:165-166`) sends sentence text to Google. From 3d, remote endpoints and fallback targets add two more paths. The new text names every path text can leave the machine:
+  - Gemini analysis;
+  - a remote analyzer endpoint (another machine, or a hosted service such as OpenRouter);
+  - the analyzer fallback target, only when it takes over;
+  - a Gemini voice, when one is chosen.
+  It also says the fallback is set, or turned off, in Advanced Settings → Analyzer fallback. The existing guards (`help-topics.test.ts:28-42`: "local model by default", "on by default", "turns it off", and none of the overclaims) stay green; a new case pins the endpoint and fallback sentences.
 - No Playwright spec: the picker changes one control inside an existing Advanced Settings row and crosses no router, redux or layout seam; the RTL tests drive the real `AdvancedView` → `OverrideRow` render. The removed Model Manager row is pinned by `model-settings-form.test.tsx`.
 
 **Pinned strings this task changes:**
@@ -10857,15 +11251,19 @@ describe('AdvancedView — analyzer-engine picker', () => {
 Append to `src/data/help-topics.test.ts`, inside its describe:
 
 ```ts
-  it('says a remote OpenAI-compatible endpoint, and a fallback target when it activates, receive chapter text (#3084 P30)', () => {
+  it('names every path text can leave the machine: Gemini analysis, a remote endpoint, a fallback target when it takes over, and Gemini voices (#3084 P30)', () => {
     const privacy = byId('is-my-data-private')!.body;
+    expect(privacy).toMatch(/Gemini API/);
     expect(privacy).toMatch(/OpenAI-compatible endpoint/);
     expect(privacy).toMatch(/OpenRouter/);
     expect(privacy).toMatch(/fallback target .* when it takes over/);
+    expect(privacy).toMatch(/Gemini voice/);
     expect(privacy).toMatch(/Advanced Settings → Analyzer fallback/);
     expect(privacy).not.toMatch(/The one thing that can leave your machine is/);
     const offline = byId('does-it-work-offline')!.body;
     expect(offline).toMatch(/remote OpenAI-compatible endpoint/);
+    expect(offline).toMatch(/Gemini voices/);
+    expect(offline).not.toMatch(/nothing is sent anywhere while Castwright synthesises/);
     expect(offline).not.toMatch(/is the one part that wants a connection/);
   });
 ```
@@ -11066,30 +11464,31 @@ Switch note:
     body:
       'Your books, voices, library and rendered audio stay on your machine — nothing is uploaded to ' +
       'a Castwright server, and there is no account. Working out who speaks each line reads your ' +
-      'chapter text on a local model by default too. Chapter text leaves your machine only when you ' +
-      'point analysis at a server that is not on it: the Gemini API, or an OpenAI-compatible endpoint ' +
-      'on another machine or a hosted service such as OpenRouter, which receives the text of every ' +
-      "chapter it analyses. The same goes for the analyzer fallback: when your chosen analyzer can't " +
-      'be reached, the fallback target (Gemini by default, if you have set a key) receives the chapters ' +
-      'it takes over, only when it takes over. That fallback is on by default, and setting Advanced ' +
-      'Settings → Analyzer fallback to off turns it off for good — and whenever Castwright does fall ' +
-      'back it tells you, rather than switching behind your back.',
+      'chapter text on a local model by default too. Text leaves your machine only on these paths: ' +
+      'analysis on the Gemini API sends it the chapter text; an OpenAI-compatible endpoint on another ' +
+      'machine or a hosted service such as OpenRouter receives the text of every chapter it analyses; ' +
+      "when your chosen analyzer can't be reached, the analyzer fallback target (Gemini by default, if " +
+      'you have set a key) receives the chapters it takes over, only when it takes over; and a Gemini ' +
+      'voice, when you pick one, sends Google the text of each sentence it speaks. That fallback is on ' +
+      'by default, and setting Advanced Settings → Analyzer fallback to off turns it off for good — and ' +
+      'whenever Castwright does fall back it tells you, rather than switching behind your back.',
 ```
 
 and the `does-it-work-offline` body (`:348-354`) becomes:
 
 ```ts
     body:
-      'Yes, once the models are installed. Rendering the audio and playing it back are fully ' +
-      'offline — nothing is sent anywhere while Castwright synthesises — and working out who speaks ' +
-      'each line runs on a local Ollama model by default. Only a cloud analyzer wants a connection: ' +
-      'Gemini, or a remote OpenAI-compatible endpoint. Keep analysis on a local model or a server on ' +
-      'your own network, set Advanced Settings → Analyzer fallback to off or local, and the whole ' +
-      'pipeline works with no internet at all. Voice design follows the same analyzer engine, so a ' +
-      'no-key, fully-offline setup can still design a cast from scratch.',
+      'Yes, once the models are installed. Rendering the audio with a local voice engine and playing ' +
+      'it back are fully offline, and working out who speaks each line runs on a local Ollama model by ' +
+      'default. Three things want a connection: analysis on Gemini or on a remote OpenAI-compatible ' +
+      'endpoint, the analyzer fallback when it targets one of those, and Gemini voices. Keep analysis ' +
+      'on a local model or a server on your own network, set Advanced Settings → Analyzer fallback to ' +
+      'off or local, use local voices, and the whole pipeline works with no internet at all. Voice ' +
+      'design follows the same analyzer engine, so a no-key, fully-offline setup can still design a ' +
+      'cast from scratch.',
 ```
 
-(The new privacy case's `/fallback target .* when it takes over/` matches "the fallback target (Gemini by default, if you have set a key) receives the chapters it takes over, only when it takes over".)
+(Against these bodies the new case passes: `/fallback target .* when it takes over/` matches "the analyzer fallback target (Gemini by default, if you have set a key) receives the chapters it takes over, only when it takes over"; "Gemini API", "OpenAI-compatible endpoint", "OpenRouter", "Gemini voice" and "Advanced Settings → Analyzer fallback" each appear; the offline body has "remote OpenAI-compatible endpoint" and "Gemini voices" and neither retired sentence. The existing guards also pass: "local model by default" / "local Ollama model by default", "on by default", "turns it off", and none of "never touches the cloud", "never leaves your machine" or "only if you choose".)
 
 - [ ] **Step 4: Run and confirm they pass**
 Run: the Step 2 command, then `npx vitest run src/test/a11y.test.tsx src/lib/api.config.test.ts src/data/help-topics.test.ts src/components/top-bar.test.tsx src/store src/views/account.test.tsx src/views/model-manager.test.tsx`, then `npm run typecheck`. Expected: PASS.
@@ -11105,7 +11504,7 @@ Run: the Step 2 command, then `npx vitest run src/test/a11y.test.tsx src/lib/api
 8. `KnobControl`: delete the `sourceNote` paragraph → red: "shows the concrete targets the server labels, and the legacy source note".
 9. `localMissing`: drop `Array.isArray(ollamaModels) &&` (treat unknown as missing) → red: "warns, without refusing, when local names an Ollama model that is not installed…" (the `null` rerender still warns). Drop `!ollamaModels.includes(…)` instead → red: the same case (the installed rerender warns).
 10. `advanced.tsx`: never call `setOllamaModels` with the listing (leave it `null`) → red: "warns in the row when the saved local target is not in the Ollama catalog".
-11. `help-topics.ts`: restore the `is-my-data-private` sentence "The one thing that can leave your machine is the optional cloud analyzer…" → red: "says a remote OpenAI-compatible endpoint, and a fallback target when it activates, receive chapter text". Restore the old `does-it-work-offline` body → red: the same case.
+11. `help-topics.ts`: restore the `is-my-data-private` sentence "The one thing that can leave your machine is the optional cloud analyzer…" → red: "names every path text can leave the machine…". Delete the Gemini-voice clause from either body → red: the same case (`/Gemini voice/`). Restore the old `does-it-work-offline` body → red: the same case.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -13265,7 +13664,7 @@ git commit -m "feat(frontend): warn about dropped analyzer endpoint entries, wit
 - Produces: stage `{ kind: 'model-manager'; endpointId?: string; endpointField?: string }`; hash `#/models?endpoint=<id>&field=<field>`; `uiActions.openModelManager(payload?: { endpointId?: string; endpointField?: string })`.
 
 Rules:
-- `fixHref` turns an `endpointField` fix into `#/models?endpoint=<id>&field=<field>`. A fix with both `settingKey` and `endpointField` keeps 2b's `settingKey` link. The fix's `wikiPage` (`OpenAI-Compatible-Analyzer-Endpoints`, Task 3d.9a; its label names the "When a model thinks past its output limit" section) renders as 2b renders it, through `wikiUrl(page)`, with no `#anchor`.
+- `fixHref` turns an `endpointField` fix into `#/models?endpoint=<id>&field=<field>`. A fix with both `settingKey` and `endpointField` keeps 2b's `settingKey` link. The endpoint fixes' wiki link is its own entry, `{ label: 'Read: When a model thinks past its output limit', wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' }` (appended in Task 3d.9a), which 2b renders through `isWikiPage` and `wikiUrl(page)`, with no `#anchor`; `fixHref` returns `null` for it.
 - On `#/models?endpoint=<id>&field=<field>`, Model Manager hydrates the stage with both, and the endpoints section opens that endpoint's editor once the endpoint is loaded, scrolls the field's control into view and focuses it. It handles each (endpoint, field) link once, so a later settings refresh never reopens the editor over the user's edits.
 - An endpoint that is not saved opens nothing. A field with no control yet (`reasoning`, `extraParams` before wave 5) opens the editor without focusing. `ENDPOINT_FIELD_TEST_IDS` covers `maxOutputTokens` and `contextTokens`, the two fields 3b's fixes name; 3b Task 3b.1b's `openai` rows in `server/src/routes/failure-taxonomy-fixes.test.ts` already prove every `endpointField.field` is a key of `analyzerEndpointSchema`'s shape.
 - Plain `#/models` is unchanged.
@@ -13699,8 +14098,8 @@ git commit -m "test(e2e): analyzer endpoints — add, pick, card-aware guard, ke
 - Modify: `docs/wiki/_Sidebar.md` (Full breadth, after `- [Model Manager](Model-Manager)`); `docs/wiki/Analysis-and-the-Analyzer.md` "Choosing an analyzer" (`:13-24`); `docs/wiki/Advanced-Settings.md` §4 (below its picture, `:119-123`, and the `Analyzer fallback` row Task 3d.4b added)
 - Modify: `src/lib/wiki-links.ts` — `WikiPage` (`:12-28`) and `ADMIN_WIKI` (`:55-61`); `src/lib/wiki-links.test.ts` (append)
 - Modify: `src/components/settings/analyzer-endpoints-section.tsx` (Task 3d.8) — the help link; its test (append)
-- Modify: `server/src/routes/failure-taxonomy.ts` — `reasoningOverflowFixes`' `transport === 'openai'` branch (3b Task 3b.1b): both rows gain `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'`. 3b set none on purpose, since the page ships here and the existence guard would fail on `main` between the two merges (w3ab Task 3b.1b, "No `wikiPage` on these two rows").
-- Modify: `server/src/routes/failure-taxonomy-fixes.test.ts` (2b, extended by 3b) — its `openai` rows now expect the page, and every fix's `wikiPage` names a file under `docs/wiki/` (fixes carry a page name, never an `#anchor`: `src/lib/wiki-links.ts:1-4`)
+- Modify: `server/src/routes/failure-taxonomy.ts` — `reasoningOverflowFixes`' `transport === 'openai'` branch (3b Task 3b.1b) appends one entry, `{ label: 'Read: When a model thinks past its output limit', wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' }`. Its other fixes carry no `wikiPage`. 3b added none on purpose, since the page ships here and the existence guard would fail on `main` between the two merges (w3ab Task 3b.1b, "No `wikiPage` on these two rows").
+- Modify: `server/src/routes/failure-taxonomy-fixes.test.ts` (2b, extended by 3b) — the `openai` list ends with that entry, its other fixes carry no `wikiPage`, and every fix's `wikiPage` names a file under `docs/wiki/` (fixes carry a page name, never an `#anchor`: `src/lib/wiki-links.ts:1-4`)
 
 **Interfaces:**
 - Consumes: planning facts §A and §B (`docs/superpowers/specs/2026-09-11-openai-compatible-analyzer-planning-facts.md`) and the probe assets `docs/superpowers/specs/assets/2026-09-11-openai-undici-probe/`; Tasks 3b.5/3d.8 field rules; P30 (Task 3d.4b), P31 (Task 3d.8a), P32, P34; `reasoningOverflowFixes` (2b/3b).
@@ -13753,7 +14152,9 @@ Append to `server/src/routes/failure-taxonomy-fixes.test.ts` (from `server/src/r
       ...reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.5-flash' }),
       ...reasoningOverflowFixes({ transport: 'ollama', model: 'qwen3.5:4b' }),
     ];
-    expect(fixes.filter((f) => f.endpointField).map((f) => f.wikiPage)).toContain('OpenAI-Compatible-Analyzer-Endpoints');
+    const openai = reasoningOverflowFixes({ transport: 'openai', model: 'qwen3-30b', endpointId: 'lab' });
+    expect(openai.at(-1)).toEqual({ label: 'Read: When a model thinks past its output limit', wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' });
+    expect(openai.slice(0, -1).every((f) => f.wikiPage === undefined)).toBe(true);
     for (const fix of fixes.filter((f) => f.wikiPage)) {
       expect(fix.wikiPage, fix.label).toMatch(/^[A-Za-z0-9-]+$/);
       expect(existsSync(fileURLToPath(new URL(`../../../docs/wiki/${fix.wikiPage}.md`, import.meta.url))), fix.wikiPage).toBe(true);
@@ -13761,17 +14162,17 @@ Append to `server/src/routes/failure-taxonomy-fixes.test.ts` (from `server/src/r
   });
 ```
 
-(Import `existsSync` from `node:fs` and `fileURLToPath` from `node:url` if the guard lacks them. This task gives the endpoint fixes `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'` (3b's rows have none); their labels name the "When a model thinks past its output limit" section. 2b's renderer narrows with `isWikiPage` and builds `WIKI_BASE/<page>` through `wikiUrl`; a page outside `WikiPage` renders as plain text with no link, so the page must also be in `src/lib/wiki-links.ts`'s `WikiPage` union (Step 3). No hand-written slugger and no anchor check: the `wikiPage` pattern above refuses a `#`.)
+(Import `existsSync` from `node:fs` and `fileURLToPath` from `node:url` if the guard lacks them. This task appends one link entry to the endpoint fixes, `{ label: 'Read: When a model thinks past its output limit', wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' }`; the label names the section, and the other fixes carry no `wikiPage`. 2b's renderer narrows with `isWikiPage` and builds `WIKI_BASE/<page>` through `wikiUrl`; a page outside `WikiPage` renders as plain text with no link, so the page must also be in `src/lib/wiki-links.ts`'s `WikiPage` union (Step 3). No hand-written slugger and no anchor check: the `wikiPage` pattern above refuses a `#`.)
 
 - [ ] **Step 2: Run them and confirm they fail**
 Run: `npx vitest run src/lib/wiki-links.test.ts src/components/settings/analyzer-endpoints-section.test.tsx` and `npm --prefix server run test -- src/routes/failure-taxonomy-fixes.test.ts`.
-Expected: FAIL — `ENOENT: no such file or directory, open '…/docs/wiki/undefined.md'` (`ADMIN_WIKI.analyzerEndpoints` does not exist yet); the section has no `Setup guide for each server` link; the guard fails on `expect(fixes.filter((f) => f.endpointField).map((f) => f.wikiPage)).toContain('OpenAI-Compatible-Analyzer-Endpoints')` with `expected [ undefined, undefined ] to include 'OpenAI-Compatible-Analyzer-Endpoints'` (3b's `openai` rows carry no `wikiPage`). The Gemini and Ollama fixes' `wikiPage` (`Analysis-and-the-Analyzer`) already pass.
+Expected: FAIL — `ENOENT: no such file or directory, open '…/docs/wiki/undefined.md'` (`ADMIN_WIKI.analyzerEndpoints` does not exist yet); the section has no `Setup guide for each server` link; the guard fails on `expect(openai.at(-1)).toEqual({ label: 'Read: When a model thinks past its output limit', wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' })`, because 3b's list ends with its `contextTokens` fix. The Gemini and Ollama fixes' `wikiPage` (`Analysis-and-the-Analyzer`) pass the existence loop, per w2's corrected guard, which resolves `docs/wiki/` from `import.meta.url` (w2 Task 2.9a); this case uses the same `import.meta.url` form.
 
 - [ ] **Step 3: Write the page, the links and the constants**
 
 `src/lib/wiki-links.ts`: add `| 'OpenAI-Compatible-Analyzer-Endpoints'` to `WikiPage` (so 2b's `isWikiPage` accepts it and the fix renders a link), and `analyzerEndpoints: 'OpenAI-Compatible-Analyzer-Endpoints',` to `ADMIN_WIKI` (the existing `every referenced WikiPage exists as docs/wiki/<page>.md` case then covers the file).
 
-`server/src/routes/failure-taxonomy.ts`: in `reasoningOverflowFixes`' `transport === 'openai'` branch (3b Task 3b.1b), add `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'` to both rows (the `maxOutputTokens` and `contextTokens` fixes). Replace 3b's comment explaining why the rows had none with `/* #3084 P33 — the endpoints wiki page ships with this PR; the label names its section. */`. If 2b types the server-side `wikiPage` against its own page list, add the page there too.
+`server/src/routes/failure-taxonomy.ts`: at the end of `reasoningOverflowFixes`' `transport === 'openai'` branch (3b Task 3b.1b), after its last fix, append `{ label: 'Read: When a model thinks past its output limit', wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints' }`. The branch's other fixes stay without `wikiPage`. Replace 3b's comment explaining why the rows had none with `/* #3084 P33 — the endpoints wiki page ships with this PR; this entry links it, and its label names the section. */`. If 2b types the server-side `wikiPage` against its own page list, add the page there too.
 
 `src/components/settings/analyzer-endpoints-section.tsx`: import `WikiLink` from `'../wiki-link'` and `ADMIN_WIKI` from `'../../lib/wiki-links'`; directly after `<DroppedEndpointEntriesBanner />` add `<WikiLink page={ADMIN_WIKI.analyzerEndpoints} label="Setup guide for each server" />`.
 
@@ -13991,11 +14392,11 @@ Run: `npx vitest run src/lib/wiki-links.test.ts src/components/settings/analyzer
 
 - [ ] **Step 6: Mutation proof** (restore after each)
 1. Leave one `‹verify at implementation: …›` in the page → red: "the endpoints page carries every section … and no unverified placeholder".
-2. Rename `## When a model thinks past its output limit` to `## Thinking past the output limit` → red: the same case (the section the fix labels name is gone). In the `openai` branch's fix, set `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints#when-a-model-thinks-past-its-output-limit'` → red: the guard's "every fix wikiPage names a wiki page that exists, with no anchor". Set it to `'OpenAI-Compatible-Analyzer-Endpoint'` → red: the same guard (no such file).
+2. Rename `## When a model thinks past its output limit` to `## Thinking past the output limit` → red: the same case (the section the fix labels name is gone). In the appended link entry, set `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints#when-a-model-thinks-past-its-output-limit'` → red (the `toEqual` on the last entry, and the no-anchor pattern): the guard's "every fix wikiPage names a wiki page that exists, with no anchor". Set it to `'OpenAI-Compatible-Analyzer-Endpoint'` → red: the same guard (no such file).
 3. Delete one `_Checked against …_` line → red: the first case (fewer version lines than code blocks).
 4. Delete the `WikiLink` → red: "links to the endpoints setup guide on the wiki".
 5. Delete `### LM Studio` → red: the first case (`LM Studio`).
-6. `failure-taxonomy.ts`: remove `wikiPage` from the `openai` branch's rows (3b's shape) → red: "every fix wikiPage names a wiki page that exists, with no anchor" (`expected [ undefined, undefined ] to include 'OpenAI-Compatible-Analyzer-Endpoints'`). Remove the page from `WikiPage` in `wiki-links.ts` instead → typecheck fails on `ADMIN_WIKI.analyzerEndpoints`, and `every referenced WikiPage exists…` no longer covers the file.
+6. `failure-taxonomy.ts`: remove the appended link entry (3b's shape) → red: "every fix wikiPage names a wiki page that exists, with no anchor" (the last `openai` entry is the `contextTokens` fix). Put `wikiPage` on an `openai` fix row as well → red: the same case (`openai.slice(0, -1).every(…)` is false). Remove the page from `WikiPage` in `wiki-links.ts` → typecheck fails on `ADMIN_WIKI.analyzerEndpoints`, and 2b's `isWikiPage` renders the entry without a link.
 
 - [ ] **Step 7: Commit**
 ```bash
@@ -14194,13 +14595,13 @@ git commit -m "docs(docs): on-box rows for endpoint prefill, same-card eviction 
 `docs/release-notes-next.md`:
 
 ```markdown
-- **OpenAI-compatible analyzer endpoints are selectable** (#3084, W3d). Model Manager → Analyzer endpoints adds, edits and deletes named servers (llama.cpp / llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter) with a required served context size (List models prefill from `max_model_len` / `meta.n_ctx` / `context_length`; on-demand Detect with a "may load the model" confirmation for llama-swap), an origin-bound API key that must be re-entered when the host changes, a GPU card (`none` / `any` / `cuda:N`, loopback hosts default to `any`), an optional same-origin unload URL with `{model}` substitution (one POST per model that has served the endpoint; a URL without `{model}` saves with an all-models warning), concurrency, request ceiling and structured-output mode. `selectAnalyzer` builds `OpenAIAnalyzer`. A new Advanced Settings knob, `analyzer.fallback.target` (`ANALYZER_FALLBACK_TARGET`, the first `analyzer-engine` knob type, default `gemini`; `off` / `local` / `gemini` / an endpoint model), replaces the `allowCloudFallback` rule for Ollama and endpoint primaries: one hop, only on unreachable; the target's own key-origin and capability checks run on its first call; a GPU-bound target carries the run's busy marks; the switch announcement and a both-unreachable failure name both; a missing endpoint or a keyless `gemini` is refused at save; `findEndpointReferences` counts it; a saved `allowCloudFallback: false` reads as `off` with no migration; Model Manager's Cloud fallback row is gone. **The default fallback for anyone who adds an endpoint is Gemini** (when a Gemini key is set): an unreachable endpoint's calls go to Gemini unless the target is switched off or retargeted in Advanced Settings → Analyzer fallback, which shows the effective target (a legacy `off` with its reason, `local` with its concrete model and a not-installed warning, and a keyless `gemini` as inactive). **A fallback target holds GPU busy marks only once it activates**, never from run start, so a healthy run does not block TTS eviction of a same-card fallback endpoint; from the switch on, the job's chunk budgets and phase events follow the target. A local primary never falls back to `local`. `analysisEngine` accepts `openai`, and a saved `openai` engine whose default model is not an endpoint id fails before the run with `analyzer-endpoint-missing`. An endpoint is busy while a call to it is in flight or an analysis/script-review run using it is active; TTS capacity admission unloads idle endpoints on the denied card, re-checking each endpoint's busy state before every unload POST and logging one "busy; not unloading" line per endpoint per admission (Ollama's lever is untouched and keeps its own gate and latch; the endpoint lever has no latch and is reached only on an iteration where Ollama was not evicted, so a 2xx unload retries admission and the next denial re-measures free memory before either lever runs again; it is bounded by one unload POST per (endpoint, model) per admission at 10 s each — Σ served models × 10 s at worst, and an admission is one synthesize call, not one chapter — so an endpoint that goes idle mid-wait is still unloaded and a slow or hanging unload server is not re-POSTed on every poll; a model counts as unloadable once a request has been sent to it, Tests included, and leaves that set once an unload answers 2xx or 404; the failure message names every sharing endpoint still holding the card and why — no Unload URL, busy for the whole wait, every unload request failed, unloaded what it could and still short, or no model run on it since Castwright started). `Layout` now loads the config on mount and feeds the guards the device the sidecar reports for an `auto` TTS engine (a resident Qwen's own card, or CPU for an engine the sidecar runs on CPU), so the forward/reverse GPU guards and the generation hold know the TTS card in every session; they compare every live generation's card with the endpoint's and fail closed only when neither the knob nor the sidecar names one. Pickers list endpoint models and run labels show the structured-output mode. Endpoint saves show each refusal's `issues[]` next to its field; entries dropped from settings at read show a banner in Model Manager and Advanced Settings with "Got it" (entries whose archive copy is still pending say so and cannot be dismissed); an endpoint overflow fix opens that endpoint's editor at the field (`#/models?endpoint=<id>&field=<field>`). New wiki page `OpenAI-Compatible-Analyzer-Endpoints` (setup per server, fallback, chunk size, overflow, troubleshooting).
+- **OpenAI-compatible analyzer endpoints are selectable** (#3084, W3d). Model Manager → Analyzer endpoints adds, edits and deletes named servers (llama.cpp / llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter) with a required served context size (List models prefill from `max_model_len` / `meta.n_ctx` / `context_length`; on-demand Detect with a "may load the model" confirmation for llama-swap), an origin-bound API key that must be re-entered when the host changes, a GPU card (`none` / `any` / `cuda:N`, loopback hosts default to `any`), an optional same-origin unload URL with `{model}` substitution (one POST per model that has served the endpoint; a URL without `{model}` saves with an all-models warning), concurrency, request ceiling and structured-output mode. `selectAnalyzer` builds `OpenAIAnalyzer`. A new Advanced Settings knob, `analyzer.fallback.target` (`ANALYZER_FALLBACK_TARGET`, the first `analyzer-engine` knob type, default `gemini`; `off` / `local` / `gemini` / an endpoint model), replaces the `allowCloudFallback` rule for Ollama and endpoint primaries: one hop, only on unreachable; the target's own key-origin and capability checks run on its first call; a GPU-bound target carries the run's busy marks; the switch announcement and a both-unreachable failure name both; a missing endpoint or a keyless `gemini` is refused at save; `findEndpointReferences` counts it; a saved `allowCloudFallback: false` reads as `off` with no migration; Model Manager's Cloud fallback row is gone. **The default fallback for anyone who adds an endpoint is Gemini** (when a Gemini key is set): an unreachable endpoint's calls go to Gemini unless the target is switched off or retargeted in Advanced Settings → Analyzer fallback, which shows the effective target (a legacy `off` with its reason, `local` with its concrete model and a not-installed warning, and a keyless `gemini` as inactive). **After a fallback to a smaller-context model, an oversized request is split, or clearly failed with `AnalyzerTargetInputTooLargeError` ("prompt is larger than the fallback target … can take (context N tokens)", coded `analyzer-request-rejected` with fixes for the fallback target and the stage input fractions), instead of being silently truncated on input; the non-story check logs such a skip.** **A fallback target holds GPU busy marks only once it activates**, never from run start, so a healthy run does not block TTS eviction of a same-card fallback endpoint; from the switch on, the job's chunk budgets and phase events follow the target. A local primary never falls back to `local`. `analysisEngine` accepts `openai`, and a saved `openai` engine whose default model is not an endpoint id fails before the run with `analyzer-endpoint-missing`. An endpoint is busy while a call to it is in flight or an analysis/script-review run using it is active; TTS capacity admission unloads idle endpoints on the denied card, re-checking each endpoint's busy state before every unload POST and logging one "busy; not unloading" line per endpoint per admission (Ollama's lever is untouched and keeps its own gate and latch; the endpoint lever has no latch and is reached only on an iteration where Ollama was not evicted, so a 2xx unload retries admission and the next denial re-measures free memory before either lever runs again; it is bounded by one unload POST per (endpoint, model) per admission at 10 s each — Σ served models × 10 s at worst, and an admission is one synthesize call, not one chapter — so an endpoint that goes idle mid-wait is still unloaded and a slow or hanging unload server is not re-POSTed on every poll; a model counts as unloadable once a request has been sent to it, Tests included, and leaves that set once an unload answers 2xx or 404; the failure message names every sharing endpoint still holding the card and why — no Unload URL, busy for the whole wait, every unload request failed, unloaded what it could and still short, or no model run on it since Castwright started). `Layout` now loads the config on mount and feeds the guards the device the sidecar reports for an `auto` TTS engine (a resident Qwen's own card, or CPU for an engine the sidecar runs on CPU), so the forward/reverse GPU guards and the generation hold know the TTS card in every session; they compare every live generation's card with the endpoint's and fail closed only when neither the knob nor the sidecar names one. Pickers list endpoint models and run labels show the structured-output mode. Endpoint saves show each refusal's `issues[]` next to its field; entries dropped from settings at read show a banner in Model Manager and Advanced Settings with "Got it" (entries whose archive copy is still pending say so and cannot be dismissed); an endpoint overflow fix opens that endpoint's editor at the field (`#/models?endpoint=<id>&field=<field>`). New wiki page `OpenAI-Compatible-Analyzer-Endpoints` (setup per server, fallback, chunk size, overflow, troubleshooting).
 ```
 
 `RELEASE_NOTES.md`:
 
 ```markdown
-- **Analyse with your own OpenAI-compatible server.** Point Castwright at llama.cpp, llama-swap, LM Studio, vLLM or OpenRouter, tell it which graphics card the server uses, and pick its models anywhere you choose an analysis model. Castwright asks before analysing on the card your voices are using, frees that card when a voice model needs it, and shows whether the model really follows its output format. If a server can't be reached, analysis falls back to Gemini by default (when you have a Gemini key); switch that off, or send it to your local model or another server, in Advanced Settings. A fallback only claims its graphics card once it actually takes over. And if a saved server setting was damaged, Castwright tells you what it removed. A new wiki page walks through setting up each server.
+- **Analyse with your own OpenAI-compatible server.** Point Castwright at llama.cpp, llama-swap, LM Studio, vLLM or OpenRouter, tell it which graphics card the server uses, and pick its models anywhere you choose an analysis model. Castwright asks before analysing on the card your voices are using, frees that card when a voice model needs it, and shows whether the model really follows its output format. If a server can't be reached, analysis falls back to Gemini by default (when you have a Gemini key); switch that off, or send it to your local model or another server, in Advanced Settings. A fallback only claims its graphics card once it actually takes over, and if it falls back to a smaller model, oversized requests are split or clearly fail rather than being cut short. And if a saved server setting was damaged, Castwright tells you what it removed. A new wiki page walks through setting up each server.
 ```
 
 - [ ] **Step 3: Verify** — `npm run verify:fast:branch`, `npm run test:hooks` and `npm run test:e2e`. Expected: green.

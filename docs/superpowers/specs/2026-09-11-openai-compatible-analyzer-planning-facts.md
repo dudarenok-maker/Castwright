@@ -103,8 +103,9 @@ SDK `@google/genai` 2.19.0. `D` = `server/node_modules/@google/genai/dist/genai.
      - **No off on 3.x.** Thinking page: "You cannot disable thinking for Gemini 3.1 Pro. Gemini 3 Flash and Flash-Lite also do not support full thinking-off."
      - **Defaults, settled: 3.8 / 3.7 Flash `medium`.** The thinking page's table, read twice on 2026-09-13, marks the default as:
        - `medium` for 3.8 & 3.7 Flash, and for 3.6 & 3.5 Flash;
+       - `high` for Gemini 3 Flash (`gemini-3-flash-preview`), as the first read above records ("high (3 Flash)"). It needs its own row or an override, not the 3.x Flash row's `medium`;
        - `minimal` for 3.5 & 3.1 Flash-Lite;
-       - `high` for 3.1 Pro.
+       - `high` for 3.1 Pro: the thinking page lists "low, medium, high (default)" for 3.1 Pro (ai.google.dev/gemini-api/docs/generate-content/thinking).
 
        The 3.8 page agrees ("Medium (default): Best quality for most tasks."). An earlier owner-review read that recorded `low` for 3.8 / 3.7 was wrong. The plan uses these defaults only to gate reasoning-level overflow fixes (`defaultLevel`); the wire still omits the field at `model default`.
      - **`thinkingBudget` is still accepted for back-compat** (thinking page: "While `thinkingBudget` is accepted for backwards compatibility, using it with Gemini 3 Pro may result in unexpected performance."; gemini-3 page: "`thinking_budget` is still supported for backward compatibility, but we recommend migrating to `thinking_level`"). **The plan no longer uses it:** P9 is retired, Gemini 2.5 ids get `model default` only, and nothing sends `thinkingBudget`. The 2.5 budget facts above are kept as history only.

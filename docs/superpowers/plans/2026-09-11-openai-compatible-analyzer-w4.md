@@ -997,7 +997,7 @@ Before starting this task, confirm 3d.4b has merged: `git grep -n "'analyzer-eng
 - Modify: `server/src/routes/config.test.ts` — append a describe.
 - Regenerate: `server/.env.example`, via `npm run config:sync`. Only the help comment above `# PERSONA_GEN_ENGINE=gemini` (main line 558) changes.
 - **Update `docs/wiki/Advanced-Settings.md`'s existing "Analyzer models & endpoints" row for the persona engine knob in this same PR**, to reflect its new options/pattern text. **Corrected (review pass 1, 2026-09-13):** this task does not change the label `'Persona generation engine'`, and that row already exists at `Advanced-Settings.md:138`, keyed by that unchanged label — so `scripts/tests/knob-docs-sync.test.mjs` (#2012, `test:hooks`), which only checks that every registry knob's *label* has a matching row, does **not** fire here; there is no new-row guard to satisfy. Updating the row's content is still owed on its own terms (a derived-doc-staleness chore, CLAUDE.md's Incidental findings), because the row's options/help text now describes a knob type this PR changes — it just is not the guard's own job to catch that.
-- **Also update `src/lib/api.ts`'s frontend mock config catalogue entry for `analyzer.personaGeneration.engine`** (the mock `/api/config` response `src/lib/api.config.test.ts` exercises) to `type: 'analyzer-engine'`, matching the server registry change above — confirm first whether that entry is hand-maintained or generated, since `src/lib/api.config.test.ts` is listed under "Keeps green" (implying no edit needed); if it turns out to need one, this is where it lands. Task 4.7's regression test reads this mock catalogue directly (via `vi.importActual`) and depends on it already reporting `'analyzer-engine'`.
+- **No frontend mock config catalogue edit needed — confirmed, not assumed (review pass 2, item 5 conflict).** `src/lib/api.ts`'s `mockGetConfig()` (`46e62a34:8700`) returns `{ groups: MOCK_CONFIG_GROUPS, descriptors: MOCK_CONFIG_DESCRIPTORS, values: MOCK_CONFIG_VALUES, … }`, and `MOCK_CONFIG_DESCRIPTORS = allKnobDescriptors()` (`src/lib/api.ts:8584`, imported from **`server/src/config/descriptors.ts`** — a frontend file importing a server file directly). `allKnobDescriptors()` is `allKnobs().map(toKnobDescriptor)` (`server/src/config/descriptors.ts:29-31`), and that file's own header comment says why: "so the frontend mock catalogue (`src/lib/api.ts`) can build itself from the same projection instead of hand-copying it (#2259)". There is no separate, hand-maintained persona-knob mock entry to add or update — this task's `registry.ts` change alone is what `mockGetConfig()` reflects, automatically, the moment it next runs. **This item's own coordinator-supplied instruction ("4.4 ADDS the persona knob's entry to that mock catalogue") conflicts with this — reported per the task's own instruction to report rather than improvise when a rule conflicts with `46e62a34`.** Task 4.7's regression test (below) calls `mockGetConfig()` directly rather than assuming a separate entry exists, so it still catches a missing registry change correctly.
 
 **Dependency:** this wave's `feat/server-3084-w4-persona` branch cuts off `main` only after PR 3d has merged (Entry criterion 1, unchanged), because `analyzer-engine` must already exist in `KnobType`.
 
@@ -2467,17 +2467,20 @@ git commit -m "feat(server): generate personas through the analyzer transports f
 
 **Corrected (review pass 1, 2026-09-13): the earlier draft's `override-row.test.tsx` cases hand-built `type: 'analyzer-engine'` directly into their fixture (`makeDescriptor({ …, type: 'analyzer-engine', … })`), so they could never fail — they exercise 3d.4c's generic picker with a persona-shaped fixture, which Task 3d.4c's own fallback-knob cases and mutation 2 (delete the `analyzer-engine` branch in `KnobControl`) already prove. Deleted here rather than kept as dead weight; do not re-add them.** The regression this task actually needs to guard — "the persona knob's registry descriptor really is `type: 'analyzer-engine'`" — is Task 4.4's own job (`registry.test.ts`'s `is an analyzer-engine knob…` case), not a frontend rendering test with a fixture that assumes the answer.
 
-Append to `src/views/advanced.test.tsx` (reusing its existing `getAnalyzerModels` mock and catalog-fetch wiring — Task 3d.4c added both for the fallback knob; do not re-mock them). This file's `vi.mock('../lib/api')` makes `api.getConfig` a bare mock with no real behaviour, so `renderView()` still needs `mockGetConfig.mockResolvedValue(...)` to render anything — but instead of hand-typing the persona descriptor's `type` into that fixture, pull it from the real (unmocked) frontend mock config catalogue via `vi.importActual`, so this test goes red if that catalogue entry regresses to `'enum'`:
+Append to `src/views/advanced.test.tsx` (reusing its existing `getAnalyzerModels` mock and catalog-fetch wiring — Task 3d.4c added both for the fallback knob; do not re-mock them). This file's `vi.mock('../lib/api')` makes `api.getConfig` a bare mock with no real behaviour, so `renderView()` still needs `mockGetConfig.mockResolvedValue(...)` to render anything (`mockGetConfig` here is this test file's own `vi.mocked(api.getConfig)` spy — a different thing from the real, exported `mockGetConfig()` function below; do not confuse the two, and do not let the import shadow the spy). **Corrected, review pass 2, item 5:** `src/lib/api.ts` has no top-level `getConfig` export at `46e62a34` — the real function is `export async function mockGetConfig(): Promise<ConfigResponse>` (`:8700`). Import it directly, under a distinct local name, rather than reaching for a nonexistent `api.getConfig`:
 ```tsx
 /* ── Persona engine row reuses Task 3d.4c's shared catalog fetch (#3084 W4, F4) ── */
+import { mockGetConfig as realMockGetConfig } from '../lib/api';
 
 describe('AdvancedView — persona engine row (analyzer-engine picker)', () => {
   it('lists endpoint models from the analyzer catalog in the persona engine row', async () => {
-    // Read the real (unmocked) frontend mock catalogue's descriptor for this knob, rather than
-    // hand-typing `type: 'analyzer-engine'` into a fixture — a fixture that assumes the answer
-    // cannot catch a regression in Task 4.4's frontend mock-catalogue update (review pass 1, 2026-09-13).
-    const { getConfig: realGetConfig } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
-    const realConfig = await realGetConfig();
+    // Read the real mockGetConfig() (unmocked here — this file's vi.mock('../lib/api') mocks the
+    // `api` object's methods, not this named export) rather than hand-typing `type:
+    // 'analyzer-engine'` into a fixture, which cannot catch a regression in Task 4.4's registry
+    // change (review pass 1, 2026-09-13). mockGetConfig()'s descriptors come from
+    // allKnobDescriptors() (server/src/config/descriptors.ts), which projects the real registry —
+    // there is no separate frontend catalogue entry to fall out of sync (review pass 2, item 5).
+    const realConfig = await realMockGetConfig();
     const personaDescriptor = realConfig.descriptors.find((d) => d.key === 'analyzer.personaGeneration.engine');
     expect(personaDescriptor?.type).toBe('analyzer-engine');
     const PERSONA_CONFIG: ConfigResponse = {
@@ -2518,7 +2521,7 @@ None expected in this task, per the note above. If Step 2 is still red after Tas
   - **Expected:** PASS.
 - [ ] **Step 5: Mutation proof** (restore after each):
   1. In `override-row.tsx`'s `KnobControl`, delete the `'analyzer-engine'` branch. Expected red (both this task's case AND Task 3d.4c's fallback-knob cases, proving one shared code path): `lists endpoint models from the analyzer catalog in the persona engine row` here, and Task 3d.4c's own `offers off, local, gemini and every endpoint model…` case in `override-row.test.tsx`.
-  2. In the frontend mock config catalogue, change the persona knob's mock entry back to `type: 'enum'`. Expected red: this task's own `expect(personaDescriptor?.type).toBe('analyzer-engine')` assertion, before rendering. Restore.
+  2. In `registry.ts`, change the persona knob's descriptor back to `type: 'enum'` (Task 4.4's own change, reverted). Expected red: this task's own `expect(personaDescriptor?.type).toBe('analyzer-engine')` assertion, before rendering — `mockGetConfig()` reflects it immediately, since its descriptors come from `allKnobDescriptors()` reading the live registry (no separate mock entry to also revert). Restore.
 - [ ] **Step 6: Commit**
 ```bash
 git add src/views/advanced.test.tsx

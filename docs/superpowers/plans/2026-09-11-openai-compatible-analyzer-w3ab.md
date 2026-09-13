@@ -3293,12 +3293,24 @@ additive changes close this, all in this task:
    `opts?: { endpointId?: string }`, stored as a **mutable** (not `readonly`) public field so it can be
    attached after construction (step 2 needs this). Purely additive: every existing 3-arg call site
    (wave 1's Ollama/Gemini paths, wave 2's `mapFinish`) compiles and behaves unchanged.
-2. **`OpenAIAnalyzer` (Task 3b.12, `server/src/analyzer/openai.ts`) attaches its own endpoint id.**
-   Per this file's own Task 3b.12 note ("The overflow itself is raised by wave 2's `mapFinish` in the
-   runner, outside the transport" — line ref in this file, not `46e62a34`, since `mapFinish` does not
-   exist yet on `main`), the shared runner that raises the error has no concept of "endpoint" — only
-   `OpenAIAnalyzer` does (it holds `endpoint` from its constructor). Add a private helper that every
-   stage method routes through:
+2. **`OpenAIAnalyzer` (Task 3b.12, `server/src/analyzer/openai.ts`) attaches its own endpoint id — on
+   BOTH the thrown path and the escalation path (review pass 2, item 1).** Per this file's own Task
+   3b.12 note ("The overflow itself is raised by wave 2's `mapFinish` in the runner, outside the
+   transport" — line ref in this file, not `46e62a34`, since `mapFinish` does not exist yet on `main`),
+   the shared runner that raises the error has no concept of "endpoint" — only `OpenAIAnalyzer` does
+   (it holds `endpoint` from its constructor). There are two distinct surfaces, not one:
+   - **Thrown path.** A first-attempt (non-escalation) overflow is thrown straight out of the stage
+     call. `withEndpointId` (below) catches it there.
+   - **Escalation path.** Per wave 2's own design (w2 `runSingleAttempt`, roughly its lines 3251 and
+     3288-3290 at the time of this review — w2's plan file, not `46e62a34`), an overflow that happens
+     DURING escalation is not thrown: `runSingleAttempt` reports it through `StageCall.onReasoningOverflow`
+     and stores it, and `throwIfReasoningOverflowed` rethrows the STORED error only after escalation
+     resolves (P20's "escalation resolves null for an overflow, like Gemini's content-block precedent" —
+     this file's own Task 3b.12 "Stop-the-run errors" note). `withEndpointId`'s `try/catch` never sees
+     this error at the point it is first produced — the hook does. Every `StageCall` `OpenAIAnalyzer`
+     builds must wrap `onReasoningOverflow` too, so the SAME error object is annotated at the earliest
+     point `OpenAIAnalyzer` can reach it, before `throwIfReasoningOverflowed` (later, inside the same
+     `withEndpointId` try/catch as the thrown path) rethrows it.
    ```ts
    // server/src/analyzer/openai.ts (Task 3b.12)
    private async withEndpointId<T>(run: () => Promise<T>): Promise<T> {
@@ -3311,15 +3323,35 @@ additive changes close this, all in this task:
        throw err;
      }
    }
+
+   /** Wraps the StageCall options every stage method passes to `super.<method>(...)`,
+       so an escalation-path overflow (reported through the hook, never thrown —
+       see above) is annotated at the same point a thrown one is, before
+       `throwIfReasoningOverflowed` rethrows it (which `withEndpointId`'s catch
+       then sees, so the guard there is not fooled into re-annotating). */
+   private withEndpointIdHook<C extends { onReasoningOverflow?: (err: AnalyzerReasoningOverflowError) => void }>(call: C): C {
+     return {
+       ...call,
+       onReasoningOverflow: (err: AnalyzerReasoningOverflowError) => {
+         if (err.endpointId === undefined) err.endpointId = this.endpoint.id;
+         call.onReasoningOverflow?.(err);
+       },
+     };
+   }
    ```
-   and override each stage method `TransportAnalyzer` (W1) exposes to wrap its `super.<method>(...)`
-   call in `this.withEndpointId(...)` — enumerate `TransportAnalyzer`'s actual public stage methods at
-   implementation time (`grep -n "^  async run\|^  async annotate\|^  async " server/src/analyzer/runner/transport-analyzer.ts`
-   or wherever W1 lands it) and override every one it lists; this file cannot pin that list because
-   `TransportAnalyzer` does not exist on `main` yet. **Conflict to flag if untrue at implementation
-   time:** if `TransportAnalyzer`'s stage methods are `final` (not overridable) or funnel through a
-   single protected hook instead, override that hook once there rather than duplicating per method —
-   report this as a contract note on the PR, since it changes where this edit lands but not its effect.
+   and override each stage method `TransportAnalyzer` (W1) exposes to wrap the whole call in
+   `this.withEndpointId(() => super.<method>(…args, this.withEndpointIdHook(opts)))` — enumerate
+   `TransportAnalyzer`'s actual public stage methods and its `StageCall` options shape at
+   implementation time (`grep -n "^  async run\|^  async annotate\|^  async \|onReasoningOverflow"
+   server/src/analyzer/runner/transport-analyzer.ts` or wherever W1/2b land them) and override every
+   stage method it lists, and wrap `onReasoningOverflow` specifically (not every callback) on the
+   options object each one passes down; this file cannot pin that list because `TransportAnalyzer`
+   does not exist on `main` yet. **Conflict to flag if untrue at implementation time:** if
+   `TransportAnalyzer`'s stage methods are `final` (not overridable), if they funnel through a single
+   protected hook instead of one method each, or if `StageCall` has no `onReasoningOverflow` field by
+   the name or shape assumed here — override/wrap wherever the real shape allows the same effect and
+   report this as a contract note on the PR, since it changes where this edit lands but not its
+   effect.
 3. **`classifyAnalysisFailure`'s overflow branch passes `endpointId` through.** Change
    `reasoningOverflowFixes({ transport: err.transport, model: err.model })` (2b) to
    `reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId })`
@@ -3354,10 +3386,11 @@ file, so the guard is never red on `main`. Say this explicitly in 3d's task so i
 
 **Files:**
 - Modify: `server/src/analyzer/errors.ts` (W1/2b) — widen `AnalyzerReasoningOverflowError`'s constructor with the optional `opts?: { endpointId?: string }` 4th argument (additive).
-- Modify: `server/src/analyzer/openai.ts` (Task 3b.12) — `withEndpointId` and the stage-method overrides.
-- Modify: `server/src/routes/failure-taxonomy.ts` — the overflow branch's `reasoningOverflowFixes(...)` call site (add `endpointId: err.endpointId`), and the `transport === 'openai'` branch of `reasoningOverflowFixes` itself (wave 2 owns the function; this task adds the branch).
-- Modify: `server/src/routes/failure-taxonomy-fixes.test.ts` (2b) — extend the guard's `endpointField.field` coverage with this branch's two rows.
-- Test: `server/src/routes/failure-taxonomy-fixes.test.ts` — the `openai` transport case (below), plus a case going through the real error class.
+- Modify: `server/src/analyzer/openai.ts` (Task 3b.12) — `withEndpointId`, `withEndpointIdHook`, and the stage-method overrides.
+- Modify: `server/src/routes/failure-taxonomy.ts` — the overflow branch's `reasoningOverflowFixes(...)` call site (add `endpointId: err.endpointId`), and the `transport === 'openai'` branch of `reasoningOverflowFixes` itself (wave 2 owns the function; this task adds the branch, replacing wave 2's placeholder `it('openai returns no fixes yet (3b adds them)', …)` case — review pass 2, item 3).
+- Modify: `server/src/routes/failure-taxonomy-fixes.test.ts` (2b) — extend the guard's `endpointField.field` coverage with this branch's two rows, and replace the placeholder `openai returns no fixes yet` case (below).
+- Test: `server/src/routes/failure-taxonomy-fixes.test.ts` — the `openai` transport case, plus a case going through the real error class.
+- Test: `server/src/analyzer/openai-analyzer.test.ts` (Task 3b.12) — a thrown-path and an escalation-path overflow, both through a real `OpenAIAnalyzer` with a fake transport, both ending with `endpointId` set (review pass 2, item 1).
 
 **Interfaces:**
 - Consumes: `AnalysisFailureFix`, `reasoningOverflowFixes` (wave 2, F7, `server/src/routes/failure-taxonomy.ts`); `AnalyzerEndpoint`, `analyzerEndpointSchema` (Task 3b.5); `getCachedUserSettings`, `_setUserSettingsCacheForTest` (`server/src/workspace/user-settings.ts`, already used throughout this file — e.g. Task 3b.1/3a.2 imports).
@@ -3374,7 +3407,14 @@ choke on a fix with no `wikiPage` at all (both of this branch's rows) — assert
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `server/src/routes/failure-taxonomy-fixes.test.ts`:
+**Replace, don't append (review pass 2, item 3).** Wave 2 ships this file with a placeholder case —
+`it('openai returns no fixes yet (3b adds them)', () => { … expect(reasoningOverflowFixes({ transport:
+'openai', … })).toEqual([]); });` — that exists ONLY because 3b hadn't landed yet when 2b was written.
+Once this task lands, that placeholder's own assertion (`toEqual([])`) is false: the `openai` branch now
+returns real fixes. Delete that case and put the real expectation in its place, in this same commit —
+leaving both is worse than either alone (one of the two is always lying about what the function does).
+
+Append to `server/src/routes/failure-taxonomy-fixes.test.ts` (in place of the deleted placeholder):
 ```ts
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
@@ -3424,19 +3464,31 @@ Run `server/src/routes/failure-taxonomy-fixes.test.ts`. Expected:
   dropped and `err.endpointId` is `undefined`) — then, even once the constructor is widened, it still
   FAILS until `classifyAnalysisFailure`'s call site is changed, because `err.endpointId` never reaches
   `reasoningOverflowFixes`.
+- With the placeholder deleted and not yet replaced, the file fails to compile/collect (a `describe`
+  block whose body no longer exists) — that FAIL is expected too, and resolves once the replacement
+  block above lands in the same edit.
+
+Run `server/src/analyzer/openai-analyzer.test.ts` (its two new cases, Step 1 below). Expected: FAIL —
+`err.endpointId` is `undefined` on both the thrown-path and the escalation-path case (the class has no
+4th constructor argument yet, and `OpenAIAnalyzer` has no `withEndpointId`/`withEndpointIdHook`).
 
 - [ ] **Step 3: Implement**
 
-In this order: (1) widen `AnalyzerReasoningOverflowError`; (2) add `withEndpointId` and the stage-method
-overrides to `OpenAIAnalyzer`; (3) change `classifyAnalysisFailure`'s call site to pass `endpointId:
-err.endpointId`; (4) add the `transport === 'openai'` branch to `reasoningOverflowFixes`, resolving
-`endpoint.name` from `getCachedUserSettings().analyzerEndpoints` (fall back to `ctx.endpointId` itself
-if the endpoint was deleted between the failure and the fix lookup — do not throw building a
-remediation list).
+In this order: (1) widen `AnalyzerReasoningOverflowError`; (2) add `withEndpointId`, `withEndpointIdHook`
+and the stage-method overrides to `OpenAIAnalyzer`; (3) change `classifyAnalysisFailure`'s call site to
+pass `endpointId: err.endpointId`; (4) add the `transport === 'openai'` branch to
+`reasoningOverflowFixes`, resolving `endpoint.name` from `getCachedUserSettings().analyzerEndpoints`
+(fall back to `ctx.endpointId` itself if the endpoint was deleted between the failure and the fix
+lookup — do not throw building a remediation list); (5) delete wave 2's `openai returns no fixes yet`
+placeholder case from `failure-taxonomy-fixes.test.ts` — its own `toEqual([])` assertion is now false.
 
 - [ ] **Step 4: Run and confirm pass**
 
-Run the same file, plus `npm run typecheck` and the guard test. Expected: PASS.
+Run `server/src/routes/failure-taxonomy-fixes.test.ts` and `server/src/analyzer/openai-analyzer.test.ts`,
+plus `npm run typecheck` and the guard test. Expected: PASS — **including confirming the placeholder
+case is gone, not merely passing**: `grep -n "openai returns no fixes yet" server/src/routes/failure-taxonomy-fixes.test.ts`
+must return nothing, or Step 4 is not honest about what shipped (review pass 2, item 3's "keep Step 4
+honest").
 
 - [ ] **Step 5: Mutation proofs**
 
@@ -3448,7 +3500,7 @@ Run the same file, plus `npm run typecheck` and the guard test. Expected: PASS.
 | `endpoint.name` → `ctx.endpointId` unconditionally | `offers the endpoint's own maxOutputTokens/contextTokens…` (`label` no longer contains `'Lab box'`) and `falls back to the endpoint id…` still passes (documents the fallback is intentional, not the only path) |
 | Set `wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints'` on either row | `…and no wikiPage yet` (also would fail the item-3 guard once that page doesn't exist under `docs/wiki/`) |
 | In `withEndpointId`, drop the `err.endpointId === undefined` guard (always overwrite) | no test currently distinguishes this (documents a gap: nothing yet exercises a re-thrown, already-annotated overflow reaching a second `OpenAIAnalyzer` layer) — add `it('does not overwrite an endpointId a caller already set')` if `FallbackAnalyzer` can wrap two `OpenAIAnalyzer`s in a later wave |
-| Delete `err.endpointId === undefined` and instead never set `err.endpointId` at all in `withEndpointId` | `classifyAnalysisFailure passes the real error's endpointId through…` (constructed-with-opts case still passes; add a second assertion dispatching through `OpenAIAnalyzer` itself once Task 3b.12 exists, per that task's own suite) |
+| Delete `err.endpointId === undefined` and instead never set `err.endpointId` at all in `withEndpointId` (Task 3b.12) | `classifyAnalysisFailure passes the real error's endpointId through…` (the constructed-with-opts case still passes — it never goes through `withEndpointId`) **and** Task 3b.12's own `reasoning deltas then an empty length finish stop the run…` (`err.endpointId` is `undefined`) — the hedge an earlier draft carried ("once 3b.12 exists") is gone: 3b.12 is in this PR, so both tests exist and both go red |
 | In `classifyAnalysisFailure`'s overflow branch, drop `endpointId: err.endpointId` from the `reasoningOverflowFixes(...)` call | `classifyAnalysisFailure passes the real error's endpointId through to the fixes (review finding)` |
 
 - [ ] **Step 6: Commit**
@@ -4819,7 +4871,14 @@ export function friendlyEndpointIssueMessage(path: string, issue: z.ZodIssue): s
     return 'Base URL must be a valid URL, e.g. http://127.0.0.1:8080/v1.';
   }
   if (path === 'unloadUrl' && issue.code === 'invalid_format') {
-    return 'Unload URL must be a valid URL, e.g. http://127.0.0.1:8080/api/models/unload.';
+    /* #3084 F5 review pass 2, item 5 — a bare (no {model}) unload URL unloads
+       EVERY model on the server, which is exactly the P12 warning case;
+       showing that form as the example would steer a user straight into it.
+       Use llama-swap's per-model form instead (planning-facts doc,
+       docs/superpowers/specs/2026-09-11-openai-compatible-analyzer-planning-facts.md
+       line 83: "Endpoint unload for llama-swap: POST {origin}/api/models/unload/{model}
+       with the key"). */
+    return 'Unload URL must be a valid URL, e.g. http://127.0.0.1:8080/api/models/unload/{model}.';
   }
   if (path === 'id' && issue.code === 'invalid_format') {
     return 'Endpoint id must be lowercase letters, digits and hyphens, 1–40 characters.';
@@ -5992,10 +6051,12 @@ the data only.
 
 **Archive stays append-only (P25, unchanged).** `user-settings.invalid-endpoints.json` is still never
 truncated or rewritten (Task 3b.6). Acknowledgement therefore cannot mark a line in that file. A
-second, small sidecar file records which `archiveId`s are acknowledged; `listDroppedEndpointEntries`
-joins the two at read time. This is a design decision this task makes, not one the decision record
-specified — recorded here because it is the one place F5(c) could have contradicted P25's
-append-only rule if done carelessly.
+second, small sidecar file records which **content hashes** are acknowledged (never archiveIds —
+review pass 2, item 4: an archiveId is minted fresh every time an entry is re-archived, so acknowledging
+by id would stop applying the moment that happens); `listDroppedEndpointEntries` joins the two at read
+time. This is a design decision this task makes, not one the decision record specified — recorded
+here because it is the one place F5(c) could have contradicted P25's append-only rule if done
+carelessly.
 
 **Unarchived pending entries ARE listed.** An entry whose append is still retrying (`unarchivedDrops`,
 Task 3b.6) has no `archiveId` yet. It is listed with `archiveId: null` — the user must still be told
@@ -6068,6 +6129,7 @@ or `id`, so the hash depends only on what makes it invalid). Two things use it:
 ```ts
 import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import {
   USER_SETTINGS_PATH,
@@ -6139,6 +6201,57 @@ describe('listDroppedEndpointEntries / acknowledgeDroppedEndpointEntries (#3084 
          `z.string()` check on `origin`, so the code names that field. */
       expect(entry.issues).toEqual(['origin: invalid_type']);
       expect(JSON.stringify(entry)).not.toContain('sk-listed-secret-1');
+    });
+  });
+
+  it('a dropped key entry\'s archive line and the acknowledged-hashes sidecar hold no substring of the key, and no hash is computed over it (#3084 F5 review pass 2, item 2)', async () => {
+    const KEY = 'sk-no-material-on-disk-secret-1';
+    writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpointKeys: { lab: { origin: 99, key: KEY } } }));
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      await readUserSettings();
+      const [entry] = await listDroppedEndpointEntries();
+      /* Not `droppedEntryContentHash(entry)` (the raw value, which holds KEY) —
+         computed over the origin-only projection plus the endpoint id instead,
+         so a hash of the raw key never exists anywhere, including in memory
+         long enough to write it. Built the same way `canonicalStringify`
+         would (sorted keys), so this genuinely matches what a raw-entry hash
+         would put on disk if the mutation in Step 5's table were applied —
+         not a string that merely looks plausible. */
+      const wrongHash = createHash('sha256').update('{"key":' + JSON.stringify(KEY) + ',"origin":99}').digest('hex');
+      const archiveText = readFileSync(ARCHIVE, 'utf8');
+      expect(archiveText).not.toContain(KEY);
+      expect(archiveText).not.toContain(wrongHash);
+      await acknowledgeDroppedEndpointEntries([entry.archiveId as string]);
+      const sidecarText = readFileSync(ACK, 'utf8');
+      expect(sidecarText).not.toContain(KEY);
+      expect(sidecarText).not.toContain(wrongHash);
+      expect(await listDroppedEndpointEntries()).toEqual([]);
+    });
+  });
+
+  it('acknowledgement is keyed on content hash, not on the archiveId that happens to be current, so it survives the archive being re-created with a fresh archiveId (#3084 F5 review pass 2, item 4)', async () => {
+    writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpoints: [{ id: 'Hashkey_Bad', name: 'H', baseUrl: 'nope' }] }));
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      await readUserSettings();
+      const [first] = await listDroppedEndpointEntries();
+      await acknowledgeDroppedEndpointEntries([first.archiveId as string]);
+      expect(await listDroppedEndpointEntries()).toEqual([]);
+      /* Delete the archive itself (not just reset the cache): the on-disk
+         hash-dedupe (Task 3b.6, review item 5) has nothing left to match, so
+         the next cold read re-archives the SAME entry under a BRAND NEW
+         archiveId — exactly the case that distinguishes hash-keyed
+         acknowledgement from id-keyed. Under id-keyed acknowledgement this
+         entry would reappear here, because the id the sidecar remembers no
+         longer names any current line. */
+      rmSync(ARCHIVE, { force: true });
+      _resetUserSettingsCache();
+      await readUserSettings();
+      const after = await listDroppedEndpointEntries();
+      expect(after).toEqual([]);
+      const onDiskNow = JSON.parse(readFileSync(ARCHIVE, 'utf8').trimEnd()) as { archiveId: string };
+      expect(onDiskNow.archiveId).not.toBe(first.archiveId);
     });
   });
 
@@ -6296,10 +6409,15 @@ Expected: FAIL, `does not provide an export named 'listDroppedEndpointEntries'`.
       code for the two non-zod refusals). Never a value: exposed to the client
       via listDroppedEndpointEntries, where `issues` (path: message) is not. */
   codes: string[];
-  /** #3084 F5 review — sha256 of a canonical (sorted-key) JSON encoding of `entry`
-      (never `droppedAt`/`id`, so it depends only on what makes the entry
-      invalid). Drives durable de-duplication and durable "Got it" — never
-      leaves the server, never appears in DroppedEndpointEntrySummary. */
+  /** #3084 F5 review, item 2 — sha256 of a canonical (sorted-key) JSON encoding
+      of the value that is SAFE to hash: `entry` for an endpoint-list or
+      whole-field drop, but for a KEY entry `{ id: endpointId, ...keyEntryOriginOnly(entry) }`
+      — the origin-only projection plus the endpoint id, NEVER the raw entry,
+      because the raw entry holds the key. Never `droppedAt`/`id` for the
+      other two cases either, so the hash depends only on what makes the entry
+      invalid. Drives durable de-duplication and durable "Got it" — never
+      leaves the server, never appears in DroppedEndpointEntrySummary, and (by
+      construction, for a key entry) is never computed over key material. */
   contentHash: string;
 ```
 
@@ -6327,9 +6445,18 @@ function droppedEntryContentHash(entry: unknown): string {
 ```
 
 4. In `dropInvalidEndpointEntries`, add a `codes` **and** `contentHash` entry to each of the three
-   `dropped.push(…)` calls — `contentHash` is always `droppedEntryContentHash(entry)` (the key-entry
-   case hashes the RAW `entry`, not `keyEntryOriginOnly(entry)`, so a changed key value still counts
-   as a genuinely different entry even though the archived, origin-only `entry` field looks the same):
+   `dropped.push(…)` calls. **Review pass 2, item 2 — no key material on disk, in any form, including
+   hashed:** for the endpoint-list and whole-field cases, `contentHash` is `droppedEntryContentHash(entry)`
+   (the raw dropped value — never a secret). For the **key-entry** case specifically, it is
+   `droppedEntryContentHash({ id: endpointId, ...keyEntryOriginOnly(entry) })` — the origin-only
+   projection this file already archives (`keyEntryOriginOnly`, Task 3b.6) plus the endpoint id,
+   **never the raw `entry`**, because the raw value holds the key. This accepts a real trade,
+   stated so it isn't rediscovered as a bug later: a key entry that stays malformed under the SAME
+   origin, with a DIFFERENT (still-invalid) key value, hashes identically and so stays acknowledged —
+   an earlier draft of this task claimed the opposite ("a changed key value still counts as a
+   genuinely different entry"), which is false once the hash cannot see the key at all, and is also
+   the wrong thing to want: hashing the raw key would put key-derived material in a plain file
+   (the archive), for exactly the entries this mechanism exists to protect.
    - whole-list-invalid: `codes: ['analyzerEndpoints: invalid_type']`
    - per-entry: `codes: parsed.success ? ['id: duplicate_id'] : zodIssueCodes(parsed.error)`
    - whole-map-invalid: `codes: ['analyzerEndpointKeys: invalid_type']`
@@ -6680,7 +6807,8 @@ it('mock acknowledgeDroppedEndpointEntries removes only the named entries (#3084
 | `archiveDroppedEndpointEntries`: drop `archiveId: randomUUID()` from the serialised line | `lists a dropped endpoint entry…` (`typeof entry.archiveId).toBe('string')` fails — `parseArchiveLine` returns null) |
 | `archiveDroppedEndpointEntries`: drop the `!onDisk.has(d.contentHash)` half of the `fresh` filter | `acknowledging an archiveId hides it, and it stays hidden across a simulated restart…` (`archiveLinesAfter` grows — a duplicate line for the unchanged entry, and the acknowledgement on the OLD archiveId no longer covers the NEW one, so the entry reappears) |
 | `dropInvalidEndpointEntries`: hash `{ id: d.id, ...entry }` instead of the raw `entry` (id folded into the hash) | `a MODIFIED bad entry (different content, same id) is listed again…` still passes by coincidence; add `it('two entries with different ids but byte-identical content hash the same')` if this distinction ever matters — flagged as a gap, not a currently-failing case |
-| `acknowledgeDroppedEndpointEntries`: resolve archiveId → hash by re-deriving a fresh hash from `entry` instead of reading the archived `contentHash` off disk | `acknowledging an archiveId hides it…` (a `JSON.parse`/`canonicalStringify` round-trip of the archived `entry` is not guaranteed byte-identical to the original pre-archive value, e.g. key ordering — the resolved hash can silently miss) |
+| `acknowledgeDroppedEndpointEntries`: resolve archiveId → hash by re-deriving a fresh hash from the archived `entry` (`droppedEntryContentHash(rec.entry)`) instead of reading the archived `contentHash` off disk | `a dropped key entry's archive line and the acknowledged-hashes sidecar hold no substring of the key…` (review pass 2, item 4 — for an ENDPOINT row this re-derivation happens to match, since `contentHash` already IS `droppedEntryContentHash(entry)` there; only a KEY row's hash is `{id, ...keyEntryOriginOnly(entry)}`, so re-deriving from the raw `entry` alone produces a DIFFERENT hash, the key row never gets acknowledged, and `listDroppedEndpointEntries()` is not `[]` at the end) |
+| In `dropInvalidEndpointEntries`'s key-entry `dropped.push(…)`, hash the raw `entry` (`droppedEntryContentHash(entry)`) instead of `droppedEntryContentHash({ id: endpointId, ...keyEntryOriginOnly(entry) })` | `a dropped key entry's archive line and the acknowledged-hashes sidecar hold no substring of the key…` (the `wrongHash` computed the SAME way in the test now matches what's on disk — the assertions that it is absent fail) |
 | `readAndUnionAcknowledgedHashes`: write directly with `writeJsonAtomic` instead of chaining onto `writeChain` | `two concurrent acknowledge calls do not lose either one (serialised through writeChain, review item 6)` (flaky: one call's read-modify-write can be clobbered by the other's) |
 | `envDerived`: delete `droppedEndpointEntries: listDroppedEndpointEntriesSync()` | `GET /api/user/settings exposes droppedEndpointEntries…` |
 | `summarisePending`: `archiveId: 'placeholder'` instead of `null` | `an unarchived pending entry is listed with archiveId null` |
@@ -8108,7 +8236,7 @@ describe('account slice analyzer-endpoint thunks (#3084 PR 3b)', () => {
      for AnalyzerEndpointError, createAsyncThunk's default rejection path drops
      `issues` (miniSerializeError keeps only name/message/stack/code), so
      .unwrap() rejects with a plain object that has no issues at all. */
-  it('a refused create rejects .unwrap() with the {error, code, issues} payload intact, issues included (F5)', async () => {
+  it('a refused create rejects .unwrap() with EXACTLY the {error, code, issues} payload — not the raw AnalyzerEndpointError instance (#3084 F5 review pass 2, item 4)', async () => {
     const store = configureStore({ reducer: { account: accountSlice.reducer } });
     await store.dispatch(
       createAnalyzerEndpoint({ id: 'slice-bad', name: 'Bad', baseUrl: 'http://127.0.0.1:8080/v1' } as never),
@@ -8120,8 +8248,19 @@ describe('account slice analyzer-endpoint thunks (#3084 PR 3b)', () => {
         () => null,
         (e: unknown) => e,
       );
-    expect(rejection).toMatchObject({ code: 'duplicate-id' });
-    expect(Array.isArray((rejection as { issues: unknown }).issues)).toBe(true);
+    /* toEqual, not toMatchObject: a plain {error, code, issues} object passes,
+       but the RAW AnalyzerEndpointError instance (which also carries `code`
+       and `issues` as its own fields, so a toMatchObject on just those two
+       would pass either way) fails — it additionally carries `message`,
+       `name` and `status`, and is missing `error`. This is what actually
+       distinguishes "rejectAnalyzerEndpointError built the payload" from
+       "rejectWithValue(e as never) forwarded the raw error", which an
+       earlier draft's toMatchObject assertion could not tell apart. */
+    expect(rejection).toEqual({
+      error: 'An analyzer endpoint with id "slice-bad" already exists.',
+      code: 'duplicate-id',
+      issues: [],
+    });
   });
 
   it('a non-refusal rejection still rejects .unwrap() as before, with no issues array (F5)', async () => {
@@ -8821,7 +8960,7 @@ Revert one change at a time, confirm the named test goes red, then restore:
 | `mockAcknowledgeDroppedEndpointEntries`: return `mockSettingsWithEndpoints(mockEndpoints())` without filtering `droppedEndpointEntries` first (the pre-fix no-op) | `mock acknowledgeDroppedEndpointEntries removes only the named entries (#3084 F5 review, item 7)` |
 | In `createAnalyzerEndpoint`, drop the `try/catch` and `rejectWithValue` (back to a bare `(input) => api.createAnalyzerEndpoint(input)`) | `a refused create rejects .unwrap() with the {error, code, issues} payload intact…` (the unwrapped rejection has no `issues` property) |
 | `rejectAnalyzerEndpointError`: build the payload as `{ error: e.message }` only (drop `code`/`issues`) | the same test (`toMatchObject({ code: 'duplicate-id' })` fails, and `issues` is `undefined`) |
-| `rejectAnalyzerEndpointError`: `return rejectWithValue(e as never)` instead of rethrowing a non-`AnalyzerEndpointError` | `a non-refusal rejection still rejects .unwrap() as before, with no issues array` (the `TypeError` gets wrapped as a rejection payload instead of RTK's own serialised error, so `.message` is no longer `'network down'`) |
+| `rejectAnalyzerEndpointError`: drop the `instanceof AnalyzerEndpointError` check and unconditionally `return rejectWithValue(e as never)` (never throw) | `a refused create rejects .unwrap() with EXACTLY the {error, code, issues} payload — not the raw AnalyzerEndpointError instance` — **this is now the genuinely red case; an earlier draft's `toMatchObject({ code: 'duplicate-id' })` could not tell a `{error, code, issues}` object from the raw `AnalyzerEndpointError` instance, since the instance ALSO has `.code` and `.issues` as its own fields — a `TypeError` mutation test could not distinguish this either, since `rejectWithValue(typeError)` still rejects with something whose `.message` is `'network down'` and has no `issues` property, identical to the correctly-thrown case** |
 | Reducer's rejected matcher: `s.error = a.error.message ?? '…'` (drop the `a.payload?.error ??` half) | `records a refusal as an error without changing endpoints` (the message reverts to RTK's generic serialised-error text instead of the server's `'…already exists.'` wording) |
 
 - [ ] **Step 6: Commit**
@@ -10783,6 +10922,12 @@ const { _resetEndpointRuntimeForTest } = await import('./transports/endpoint-run
 const { geminiRateLimiter } = await import('./rate-limit.js');
 const errors = await import('./errors.js');
 const { classifyAnalysisFailure } = await import('../routes/failure-taxonomy.js');
+/* #3084 F7 review pass 2, item 1 — TransportAnalyzer, so the escalation-path
+   test can spy on its prototype method to capture the StageCall options
+   OpenAIAnalyzer builds. If wave 1 splits it into its own module
+   (`runner/transport-analyzer.js`) rather than `runner/stage-runner.js`,
+   import it from wherever it actually lands. */
+const { TransportAnalyzer } = await import('./runner/stage-runner.js');
 
 const HANDOFF_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'handoff');
 const ID = 'm_openai_analyzer';
@@ -10965,6 +11110,42 @@ describe('OpenAIAnalyzer (#3084 PR 3b)', () => {
     expect(err).toBeInstanceOf(errors.AnalyzerReasoningOverflowError);
     expect(err).not.toBeInstanceOf(errors.AnalyzerTruncatedError);
     expect(classifyAnalysisFailure(err, 'Endpoint lab (qwen3:30b)').code).toBe('analyzer-reasoning-overflow');
+    /* #3084 F7 review pass 2, item 1 — the THROWN path: withEndpointId's catch
+       annotates it before it reaches the caller. endpoint(url) (this file's
+       helper, above) sets id: 'lab'. */
+    expect((err as errors.AnalyzerReasoningOverflowError).endpointId).toBe('lab');
+  });
+
+  it('an escalation-path overflow (reported through StageCall.onReasoningOverflow, never thrown at the point it happens — w2 runSingleAttempt/throwIfReasoningOverflowed) is annotated too, before it can ever reach a caller (#3084 F7 review pass 2, item 1)', async () => {
+    /* This does not drive wave 2's actual escalation control flow — that
+       machinery (runSingleAttempt's escalation mode, throwIfReasoningOverflowed)
+       does not exist on `main` at the time this task is written, and its exact
+       call site relative to OpenAIAnalyzer's own stage methods is wave 2's to
+       fix. What IS this file's to prove is narrower and fully testable today:
+       whatever StageCall options object OpenAIAnalyzer passes to
+       `super.runStage1Chapter(...)` has an `onReasoningOverflow` that, when
+       invoked with a fresh (unannotated) AnalyzerReasoningOverflowError,
+       stamps this analyzer's own endpoint id onto it — which is exactly what
+       lets a LATER rethrow (wherever wave 2 places it) carry the id. */
+    const captured: { onReasoningOverflow?: (err: errors.AnalyzerReasoningOverflowError) => void }[] = [];
+    const runStage1Spy = vi
+      .spyOn(TransportAnalyzer.prototype, 'runStage1Chapter')
+      .mockImplementation(async (_id, _chapterId, _text, opts) => {
+        captured.push(opts as never);
+        return { characters: [] } as never;
+      });
+    try {
+      const analyzer = new OpenAIAnalyzer({ endpoint: endpoint('http://127.0.0.1:1'), apiKey: null, model: 'qwen3:30b' });
+      await analyzer.runStage1Chapter(ID, 1, '# p', {});
+      expect(captured).toHaveLength(1);
+      expect(typeof captured[0].onReasoningOverflow).toBe('function');
+      const raw = new errors.AnalyzerReasoningOverflowError('openai', 'qwen3:30b', 512);
+      expect(raw.endpointId).toBeUndefined();
+      captured[0].onReasoningOverflow!(raw);
+      expect(raw.endpointId).toBe('lab');
+    } finally {
+      runStage1Spy.mockRestore();
+    }
   });
 });
 ```
@@ -11079,6 +11260,9 @@ Apply each change, check that the named test fails, then restore it.
 | In `classifyOpenAIOutcome` (Task 3b.11), restore the pre-P21 gate `err !== undefined && !ctx.headersReceived` | `a 502 whose body says ECONNREFUSED fails as that HTTP error and never falls back to Gemini (P21)` (the fallback's `runStage1Chapter` is called) |
 | In `OpenAITransport.attempt` (Task 3b.11), delete `if (reasoningDelta) reasoningSeen = true;` | `reasoning deltas then an empty length finish stop the run…` (no reasoning evidence, so the empty `length` finish is not an overflow) |
 | In Task 3b.11, add `'ECONNRESET', 'UND_ERR_SOCKET', 'EAI_AGAIN'` back to `OPENAI_UNREACHABLE_CODES` (the pre-P21 set) | `a server that closes the socket before writing headers is retried and never falls back to Gemini (P21)` (the fallback's `runStage1Chapter` is called, `bodies` has length 1) |
+| In `withEndpointId` (Task 3b.1b), delete the `err.endpointId === undefined` branch entirely (never annotate) | `reasoning deltas then an empty length finish stop the run…` (`err.endpointId` is `undefined`, not `'lab'`) — this row is now a REAL failure, not the "add once 3b.12 exists" hedge an earlier draft carried: 3b.12 is this task, so it exists now |
+| Delete `this.withEndpointIdHook(opts)` from the `runStage1Chapter` override (pass `opts` straight through) | `an escalation-path overflow (reported through StageCall.onReasoningOverflow…) is annotated too…` (`captured[0].onReasoningOverflow` is `undefined`, or is whatever the caller passed with no wrapping — `raw.endpointId` stays `undefined` after the manual invoke) |
+| In `withEndpointIdHook`, drop the `call.onReasoningOverflow?.(err);` forwarding call | the same test still passes (documents a gap: nothing yet asserts the ORIGINAL caller-supplied hook, if any, still fires — add `it('still calls a caller-supplied onReasoningOverflow after annotating')` passing a spy as `opts.onReasoningOverflow` once a real caller in this codebase supplies one) |
 
 - [ ] **Step 6: Commit**
 ```bash
