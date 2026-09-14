@@ -1,7 +1,7 @@
 import type { AnalysisLiveInfo } from './api';
 
 /** Coarse render state of one analysis phase card. */
-export type PhaseRenderState = 'pending' | 'active' | 'done' | 'paused' | 'halted';
+export type PhaseRenderState = 'pending' | 'active' | 'done' | 'paused' | 'halted' | 'needs-action';
 
 /** Inputs needed to decide one phase's render state, all keyed by phase id. */
 export interface PhaseStateInputs {
@@ -11,8 +11,11 @@ export interface PhaseStateInputs {
   liveByPhase: Record<number, AnalysisLiveInfo | null | undefined>;
   /** Highest phase id seen so far this run (the pipeline frontier). */
   maxPhase: number;
-  /** Overall run state, mirroring `AnalysisStreamSnapshot.state` (analysis-slice.ts). */
-  runState: 'running' | 'paused' | 'halted';
+  /** Overall run state, mirroring `AnalysisStreamSnapshot.state` (analysis-slice.ts),
+      widened with 'needs-action' — the caller's own resolution of a `halted` state
+      whose `haltCode` is one of the two not-a-failure codes (cast_incomplete,
+      stage1_shrink_refused), distinguishing them from a genuine halt (#3224). */
+  runState: 'running' | 'paused' | 'halted' | 'needs-action';
   /** Whether a run has actually started (explicit click, retry, cold-boot
       rehydrate of a running/paused/halted snapshot, …). When false, the
       frontier rule below yields 'pending' instead of 'active' — otherwise

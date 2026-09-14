@@ -273,6 +273,22 @@ describe('PhaseModelChip', () => {
       expect(chip.textContent).toContain('· halted');
       expect(chip.textContent).not.toContain('· streaming');
     });
+
+    it('renders the needs-action tone/dot (mirroring paused), data-phase-state, and "· needs input" suffix', () => {
+      renderChip(
+        { analyzerPhase0Model: null, analyzerPhase1Model: null },
+        { phaseId: 0, state: 'needs-action' },
+        { selectedModel: 'gemini-2.5-flash' },
+      );
+      const chip = screen.getByTestId('phase-model-chip-0');
+      expect(chip.className).toContain('text-ink/70');
+      expect(chip.className).toContain('bg-ink/6');
+      expect(chip.querySelector('span.rounded-full')?.className).toContain('bg-ink/40');
+      expect(chip.getAttribute('data-phase-state')).toBe('needs-action');
+      expect(chip.textContent).toContain('· needs input');
+      expect(chip.textContent).not.toContain('· halted');
+      expect(chip.textContent).not.toContain('· streaming');
+    });
   });
 
   it('renders nothing for phase 2 (no model selection)', () => {

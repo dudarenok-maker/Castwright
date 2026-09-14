@@ -130,6 +130,18 @@ describe('derivePhaseState', () => {
       ).toBe('halted');
     });
 
+    it('renders the frontier phase as needs-action when runState is needs-action (#3224)', () => {
+      expect(
+        derivePhaseState(0, {
+          progressByPhase: {},
+          liveByPhase: {},
+          maxPhase: 0,
+          runState: 'needs-action',
+          started: true,
+        }),
+      ).toBe('needs-action');
+    });
+
     it('a non-frontier, non-done phase still reads pending regardless of runState', () => {
       expect(
         derivePhaseState(2, { progressByPhase: { 0: 0.3 }, liveByPhase: {}, maxPhase: 0, runState: 'halted', started: true }),

@@ -1567,7 +1567,11 @@ export function AnalysingView({
                 (!!manuscriptId && activeStreamSnapshot?.manuscriptId === manuscriptId),
               runState:
                 activeStreamSnapshot && activeStreamSnapshot.manuscriptId === manuscriptId
-                  ? (activeStreamSnapshot.state ?? 'running')
+                  ? activeStreamSnapshot.state === 'halted' &&
+                    (activeStreamSnapshot.haltCode === 'cast_incomplete' ||
+                      activeStreamSnapshot.haltCode === 'stage1_shrink_refused')
+                    ? 'needs-action'
+                    : activeStreamSnapshot.state ?? 'running'
                   : 'running',
             });
             return (
@@ -1579,6 +1583,7 @@ export function AnalysingView({
                 isPhaseDone={phaseState === 'done'}
                 isPhasePaused={phaseState === 'paused'}
                 isPhaseHalted={phaseState === 'halted'}
+                isPhaseNeedsAction={phaseState === 'needs-action'}
                 phaseProgress={progressByPhase[p.id] ?? 0}
                 phaseLogs={logs[p.id] ?? []}
                 live={liveByPhase[p.id] ?? null}
