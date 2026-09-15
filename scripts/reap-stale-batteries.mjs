@@ -22,10 +22,11 @@
 //      subtree) — catches doomed orphans regardless of how busy they are,
 //      but misses a live-parented battery that is truly wedged.
 // The "two samples" for test 1 are NOT two queries in one invocation (the
-// hook budget is ONE Win32_Process query, no pool) — they are THIS
-// census and the immediately-preceding one, read back from the append-only
-// log. That is also why the log records each root's command line: it is the
-// dataset, not a debugging aid (see the design doc's "Deferred work" section).
+// hook budget is up to TWO Win32_Process queries — one initial, one retry on
+// a genuine transient-empty result, no pool) — they are THIS census and the
+// immediately-preceding one, read back from the append-only log. That is also
+// why the log records each root's command line: it is the dataset, not a
+// debugging aid (see the design doc's "Deferred work" section).
 
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statSync } from 'node:fs';
@@ -559,14 +560,15 @@ export function rowsToProcesses(rows) {
     .filter(Boolean);
 }
 
-/** One Win32_Process query — the entire OS-touching cost of a pre-push
- *  census. Measured live (PR #3063 review pass 2, N1): ~694ms for this
- *  query alone, and ~0.8-3.5s for a whole runCensus on a 415-root box — NOT
+/** Up to two Win32_Process queries — the entire OS-touching cost of a
+ *  pre-push census. Measured live (PR #3063 review pass 2, N1): ~694ms for
+ *  a single query, and ~0.8-3.5s for a whole runCensus on a 415-root box — NOT
  *  the "~300ms" earlier drafts of this file, the hook, and the release note
  *  all claimed. The invariant that matters is unchanged and is the one the
- *  hook guard actually enforces: NO POOL. Deliberately spawns exactly one
- *  `powershell` child. Returns [] (never throws) on a non-Windows host or
- *  any PowerShell failure — a census that can't run must never block a push.
+ *  hook guard actually enforces: NO POOL. Single spawn on success or
+ *  genuine failure, up to one retry spawn on a genuine transient-empty result
+ *  (#3238). Returns [] (never throws) on a non-Windows host or any PowerShell
+ *  failure — a census that can't run must never block a push.
  *
  *  `CreationEpochMs` is computed INSIDE PowerShell via `[DateTimeOffset]` and
  *  cast to `[long]` before `ConvertTo-Json` ever sees it, rather than parsing
@@ -577,30 +579,71 @@ export function rowsToProcesses(rows) {
  *  pwsh 7 — and a Node-side parser tuned for one silently drops every row
  *  under the other. `[long]` always serialises as a plain JSON number on
  *  both, sidestepping the ambiguity rather than chasing both formats. */
-export function collectProcessSnapshot() {
-  if (!isWindows) return [];
-  const result = spawnSync(
-    'powershell',
-    [
-      '-NoProfile',
-      '-Command',
-      "Get-CimInstance Win32_Process | " +
-        "Select-Object ProcessId,ParentProcessId,Name,CommandLine," +
-        "@{N='CreationEpochMs';E={ if ($_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { $null } }}," +
-        "@{N='CpuSeconds';E={([double]$_.UserModeTime + [double]$_.KernelModeTime)/1e7}} | " +
-        'ConvertTo-Json -Compress',
-    ],
-    { encoding: 'utf8', timeout: 15000, windowsHide: true },
-  );
-  if (result.error || result.status !== 0 || !result.stdout) return [];
-  let rows;
-  try {
-    const parsed = JSON.parse(result.stdout);
-    rows = Array.isArray(parsed) ? parsed : [parsed];
-  } catch {
-    return [];
+export function collectProcessSnapshot({
+  spawn = spawnSync,
+  windows = isWindows,
+} = {}) {
+  if (!windows) return [];
+
+  const queryArgs = [
+    '-NoProfile',
+    '-Command',
+    "Get-CimInstance Win32_Process | " +
+      "Select-Object ProcessId,ParentProcessId,Name,CommandLine," +
+      "@{N='CreationEpochMs';E={ if ($_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { $null } }}," +
+      "@{N='CpuSeconds';E={([double]$_.UserModeTime + [double]$_.KernelModeTime)/1e7}} | " +
+      'ConvertTo-Json -Compress',
+  ];
+
+  const attempt = () => {
+    const result = spawn('powershell', queryArgs, {
+      encoding: 'utf8',
+      timeout: 15000,
+      windowsHide: true,
+    });
+    // Distinguish between genuine failure and "no data returned".
+    // Genuine failure: error set, non-zero status, or parse failure — these never retry.
+    if (result.error || result.status !== 0) return { success: false, data: null };
+    // Empty stdout is a genuine transient: WMI returned zero rows (empty result set).
+    // Timeouts are caught above and never reach here.
+    if (!result.stdout) return { success: true, data: null };
+    try {
+      const parsed = JSON.parse(result.stdout);
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      return { success: true, data: rows };
+    } catch {
+      // Parse failure is a genuine failure, not a transient.
+      return { success: false, data: null };
+    }
+  };
+
+  const firstAttempt = attempt();
+  // Genuine failure (error, non-zero status, or parse error) — return [] immediately, no retry.
+  if (!firstAttempt.success) return [];
+
+  const firstProcesses = rowsToProcesses(firstAttempt.data ?? []);
+  // If we got rows after filtering, return them.
+  if (firstProcesses.length > 0) return firstProcesses;
+
+  // No rows made it through filtering (either raw data was empty, or all rows
+  // were filtered out by rowsToProcesses). This is a transient empty result —
+  // retry once after a short delay (#3238).
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  const retryAttempt = attempt();
+  // If the retry genuinely failed, return [].
+  if (!retryAttempt.success) return [];
+
+  const retryProcesses = rowsToProcesses(retryAttempt.data ?? []);
+  if (retryProcesses.length > 0) {
+    console.warn(
+      'collectProcessSnapshot: recovered on retry — first Win32_Process query returned empty rows',
+    );
+    return retryProcesses;
   }
-  return rowsToProcesses(rows);
+  console.warn(
+    'collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)',
+  );
+  return [];
 }
 
 /** This process's own ancestor pids, resolved from `processes` — never
