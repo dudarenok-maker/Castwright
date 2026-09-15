@@ -85,6 +85,9 @@ export const STEPS = [
     name: 'check:onbox-register',
     inputs: {
       globs: [
+        // IMPORTANT: These paths must stay in sync with the path constants at
+        // scripts/check-onbox-register.mjs around line 1613 (REGISTER and LIVE_VIEW).
+        // If these paths change, update both locations.
         'docs/testing/onbox-acceptance-register.md',
         'docs/testing/onbox-acceptance-register-live-view.html',
         'scripts/**/*.mjs',

@@ -21,6 +21,12 @@ const checkResult = spawnSync(process.execPath, [join(HERE, 'check-onbox-registe
   windowsHide: true,
 });
 
+// If the spawn itself failed, print the error and exit
+if (checkResult.error) {
+  console.error(`Failed to spawn check-onbox-register.mjs: ${checkResult.error.message}`);
+  process.exit(1);
+}
+
 // If check-onbox-register failed, exit immediately with its status
 if (checkResult.status !== 0) {
   process.exit(checkResult.status ?? 1);
@@ -32,6 +38,12 @@ const buildResult = spawnSync(process.execPath, [join(HERE, 'build-register-live
   stdio: 'inherit',
   windowsHide: true,
 });
+
+// If the spawn itself failed, print the error and exit
+if (buildResult.error) {
+  console.error(`Failed to spawn build-register-live-view.mjs: ${buildResult.error.message}`);
+  process.exit(1);
+}
 
 // Exit with build-register-live-view's status
 process.exit(buildResult.status ?? 1);

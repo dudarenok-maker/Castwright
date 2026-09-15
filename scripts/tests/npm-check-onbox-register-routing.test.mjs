@@ -43,8 +43,8 @@ test('npm run check:onbox-register routes flags to check-onbox-register.mjs, not
     //   "register:build: unrecognised argument(s): --against-published, ..."
     //
     // If the routing is FIXED, the flags go to check-onbox-register.mjs which
-    // knows about --against-published and processes it (may fail with a register error,
-    // but NOT with an unrecognised-argument error from build-register-live-view.mjs).
+    // knows about --against-published and processes it, producing output like:
+    //   "check:onbox-register: OK — ..."
 
     const result = spawnSync(
       'npm',
@@ -82,6 +82,18 @@ test('npm run check:onbox-register routes flags to check-onbox-register.mjs, not
       );
     }
 
+    // POSITIVE SIGNAL: The flags were successfully routed to check-onbox-register.mjs.
+    // When the command runs successfully with --against-published, it produces:
+    //   "check:onbox-register: OK — ..." (from line 2143 of check-onbox-register.mjs)
+    // This proves the flag was actually processed, not just that it didn't produce
+    // an error from the wrong script.
+    assert.ok(
+      combinedOutput.includes('check:onbox-register: OK'),
+      `Expected to see "check:onbox-register: OK" from the --against-published check, ` +
+      `but got output:\n${combinedOutput}. This indicates the flags may have been ` +
+      `routed to the wrong script or the script was not invoked correctly.`
+    );
+
     // If we get here, the routing worked correctly
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
@@ -105,7 +117,7 @@ test('npm run check:onbox-register with no flags still runs both commands', () =
   // Both commands should run. We expect to see output indicating the normal flow.
   // At minimum, we should NOT see an exit 0 from a short-circuit before
   // build-register-live-view runs. We expect:
-  // - check-onbox-register output (or OK message)
+  // - check-onbox-register output (or OK message from line 2170: "check:onbox-register: OK — ...")
   // - build-register-live-view --check to also run
   // Exit code should be 0 if both pass, 1 if either fails.
 
@@ -118,5 +130,14 @@ test('npm run check:onbox-register with no flags still runs both commands', () =
   assert.ok(
     combinedOutput.length > 0,
     `Expected register check output, got empty output`
+  );
+
+  // POSITIVE SIGNAL: both commands were actually invoked.
+  // check-onbox-register.mjs outputs "check:onbox-register: OK — ..." on success (line 2170).
+  // This proves check-onbox-register.mjs actually ran.
+  assert.ok(
+    combinedOutput.includes('check:onbox-register:'),
+    `Expected to see output from check-onbox-register.mjs (contains 'check:onbox-register:'), ` +
+    `but got:\n${combinedOutput}`
   );
 });

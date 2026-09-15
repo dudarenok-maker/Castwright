@@ -99,3 +99,68 @@ test('the stamped-since step is skipped with !cancelled() so it runs even if an 
       'evaluating and reporting the issue',
   );
 });
+
+test('check:onbox-register step must execute and not be disarmed — issue #3138', () => {
+  // #3138 folded check:onbox-register from the non-required standalone workflow
+  // into verify.yml's `lint-and-checks` job (required). A broken register could
+  // still merge if the step is disabled (run: "true"), neutered (continue-on-error),
+  // or renamed. This test goes RED if that happens (mutation-robust, matching the
+  // pattern from workflow-wiring.test.mjs's register citation check test).
+
+  const checkStepMatch = jobBody.match(
+    /- name: Check on-box register consistency\n((?: {8}.*\n|\n)*)/,
+  );
+  assert.ok(
+    checkStepMatch,
+    'step "Check on-box register consistency" not found in lint-and-checks',
+  );
+  const checkStepBody = checkStepMatch[1];
+
+  // Assertion 1: Step must NOT have `continue-on-error: true`
+  const continueOnErrorMatches = checkStepBody.match(/^\s*continue-on-error:\s*/mi);
+  assert.ok(
+    !continueOnErrorMatches,
+    'Check on-box register consistency step must not have `continue-on-error:` set. ' +
+      'If this step fails on a broken register, the job must fail so it is caught by CI (#3076, #3061).',
+  );
+
+  // Assertion 2: Step MUST contain the exact run command
+  const runMatch = /^\s*run:\s*node scripts\/check-onbox-register\.mjs\s*$/m.test(checkStepBody);
+  assert.ok(
+    runMatch,
+    'Check on-box register consistency step must execute `node scripts/check-onbox-register.mjs`, ' +
+      'not a neutered or renamed command.',
+  );
+});
+
+test('register:build --check step must execute and not be disarmed — issue #3138', () => {
+  // #3138 folded register:build --check from the non-required standalone workflow
+  // into verify.yml's `lint-and-checks` job (required). A broken register could
+  // still merge if the step is disabled (run: "true"), neutered (continue-on-error),
+  // or renamed. This test goes RED if that happens (mutation-robust).
+
+  const buildStepMatch = jobBody.match(
+    /- name: Check the generated live-view surfaces are up to date\n((?: {8}.*\n|\n)*)/,
+  );
+  assert.ok(
+    buildStepMatch,
+    'step "Check the generated live-view surfaces are up to date" not found in lint-and-checks',
+  );
+  const buildStepBody = buildStepMatch[1];
+
+  // Assertion 1: Step must NOT have `continue-on-error: true`
+  const continueOnErrorMatches = buildStepBody.match(/^\s*continue-on-error:\s*/mi);
+  assert.ok(
+    !continueOnErrorMatches,
+    'Check the generated live-view surfaces step must not have `continue-on-error:` set. ' +
+      'If this step fails, the job must fail so it is caught by CI.',
+  );
+
+  // Assertion 2: Step MUST contain the exact run command
+  const runMatch = /^\s*run:\s*node scripts\/build-register-live-view\.mjs --check\s*$/m.test(buildStepBody);
+  assert.ok(
+    runMatch,
+    'Check the generated live-view surfaces step must execute `node scripts/build-register-live-view.mjs --check`, ' +
+      'not a neutered or renamed command.',
+  );
+});

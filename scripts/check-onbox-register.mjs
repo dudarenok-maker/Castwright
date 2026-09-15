@@ -1610,6 +1610,8 @@ class CliExitError extends Error {
 
 // CLI mode: `node scripts/check-onbox-register.mjs`
 function runCheckOnboxRegisterCli() {
+  // IMPORTANT: These paths must stay in sync with the globs at scripts/verify-cache.mjs
+  // around line 88. If these paths change, update both locations.
   const REGISTER = 'docs/testing/onbox-acceptance-register.md';
   const LIVE_VIEW = 'docs/testing/onbox-acceptance-register-live-view.html';
 
@@ -1622,7 +1624,10 @@ function runCheckOnboxRegisterCli() {
     } catch (err) {
       if (err.code === 'ENOENT') {
         console.error(
-          `Not found: ${relPath} — if it moved, update scripts/check-onbox-register.mjs (or report it to the verify.yml lint-and-checks job maintainer)`,
+          `Not found: ${relPath}\n` +
+          `Expected paths: ${REGISTER}, ${LIVE_VIEW}\n` +
+          `If these paths have moved, update the path constants in this file (around line 1613) ` +
+          `and the matching globs in scripts/verify-cache.mjs (around line 88).`,
         );
         throw new CliExitError(1);
       }
