@@ -355,7 +355,7 @@ describe('BookLibraryView — loading affordance', () => {
     expect(badge.textContent).toMatch(/Paused — resume\?/);
   });
 
-  it('renders the "Paused — resume?" badge when the snapshot state is halted with a non-failure code', () => {
+  it('renders the "Needs input — review?" badge when the snapshot state is halted with a non-failure code', () => {
     const haltedSnap: ActiveAnalysisSummary = {
       bookId: 'b1',
       bookTitle: 'The Hollow Tide',
@@ -396,7 +396,7 @@ describe('BookLibraryView — loading affordance', () => {
       </Provider>,
     );
     const badge = screen.getByTestId('paused-badge-b1');
-    expect(badge.textContent).toMatch(/Paused — resume\?/);
+    expect(badge.textContent).toMatch(/Needs input — review\?/);
   });
 
   it('renders the "Halted — review?" badge when the snapshot state is halted with a failure code', () => {

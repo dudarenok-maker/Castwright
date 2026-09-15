@@ -263,10 +263,16 @@ function BookCard({
             className={`absolute top-4 right-4 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
               pausedSnapshot.state === 'halted' && !isNotAFailureHaltCode(pausedSnapshot.haltCode)
                 ? 'bg-rose-100 text-rose-800 border-rose-200'
-                : 'bg-amber-100 text-amber-800 border-amber-200'
+                : pausedSnapshot.state === 'halted' && isNotAFailureHaltCode(pausedSnapshot.haltCode)
+                  ? 'bg-ink/6 text-ink/70 border-ink/10'
+                  : 'bg-amber-100 text-amber-800 border-amber-200'
             }`}
           >
-            {pausedSnapshot.state === 'halted' && !isNotAFailureHaltCode(pausedSnapshot.haltCode) ? 'Halted — review?' : 'Paused — resume?'}
+            {pausedSnapshot.state === 'halted' && !isNotAFailureHaltCode(pausedSnapshot.haltCode)
+              ? 'Halted — review?'
+              : pausedSnapshot.state === 'halted' && isNotAFailureHaltCode(pausedSnapshot.haltCode)
+                ? 'Needs input — review?'
+                : 'Paused — resume?'}
           </span>
         )}
         <div ref={menuRef} className="absolute top-3.5 right-3.5">

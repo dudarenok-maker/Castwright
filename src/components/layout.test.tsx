@@ -1529,6 +1529,78 @@ describe('Layout — analysis sub-stage runtime fields forward to the Status pil
   });
 });
 
+describe('Layout — analysis pill state derivation for needs-action (#3203)', () => {
+  /* When an analysis halts with a non-failure code (cast_incomplete /
+     stage1_shrink_refused), the analysis pill's state should be
+     'needs-action', not 'halted'. This test drives a real analysisStream
+     snapshot through Layout's pill-state derivation logic and asserts the
+     correct state by checking the compact Status pill that reflects that state. */
+  it('derives pillState as needs-action when runState is halted with cast_incomplete', async () => {
+    const store = makeStore();
+    store.dispatch(
+      analysisSlice.actions.setActiveStream({
+        bookId: 'b1',
+        manuscriptId: 'mns_b1',
+        state: 'halted',
+        haltCode: 'cast_incomplete',
+        haltReason: 'cast is incomplete',
+        phaseId: 0,
+        phaseLabel: 'Detecting characters',
+        phaseProgress: 0.5,
+        lastTickAt: Date.now(),
+        writtenAt: Date.now(),
+      }),
+    );
+
+    const { findByTestId } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* The Status pill should have aria-label containing 'Needs action',
+       proving the pill's state was derived as 'needs-action' by the
+       layout logic (not 'halted'). */
+    const pill = await findByTestId('status-pill');
+    expect(pill.getAttribute('aria-label')).toMatch(/needs action/i);
+  });
+
+  it('derives pillState as needs-action when runState is halted with stage1_shrink_refused', async () => {
+    const store = makeStore();
+    store.dispatch(
+      analysisSlice.actions.setActiveStream({
+        bookId: 'b1',
+        manuscriptId: 'mns_b1',
+        state: 'halted',
+        haltCode: 'stage1_shrink_refused',
+        haltReason: 'cast shrunk from 10 → 2',
+        phaseId: 1,
+        phaseLabel: 'Attributing lines',
+        phaseProgress: 0.3,
+        lastTickAt: Date.now(),
+        writtenAt: Date.now(),
+      }),
+    );
+
+    const { findByTestId } = render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    const pill = await findByTestId('status-pill');
+    expect(pill.getAttribute('aria-label')).toMatch(/needs action/i);
+  });
+});
+
 describe('Layout — resident-model Stop control in the global TTS notice banner (Task 10 / #1839)', () => {
   /* Kokoro is eagerly resident (PRELOAD_KOKORO). Before this task, its Stop
      control was reachable only via the Status popover (residency-gated, but

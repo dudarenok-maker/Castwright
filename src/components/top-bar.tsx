@@ -190,6 +190,7 @@ export function summarizeStatus({
       detail: exportPill.percent != null ? `${Math.round(exportPill.percent * 100)}%` : undefined,
     };
   if (analysis?.state === 'paused') return { label: 'Paused', tone: 'neutral', icon: 'clock' };
+  if (analysis?.state === 'needs-action') return { label: 'Needs action', tone: 'neutral', icon: 'clock' };
   if (pendingRevisionsCount > 0)
     return {
       label: 'Revisions',
@@ -967,7 +968,7 @@ export function AnalysisPill({ data }: { data: AnalysisPillData }) {
         label: 'Halted',
       },
       'needs-action': {
-        className: 'bg-amber-100 hover:bg-amber-200 text-amber-800',
+        className: 'bg-ink/6 hover:bg-ink/10 text-ink/70',
         icon: <IconClock className="w-3.5 h-3.5" />,
         label: 'Needs action',
       },

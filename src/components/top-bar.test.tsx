@@ -334,6 +334,17 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
     expect(s).toEqual({ label: 'Paused', tone: 'neutral', icon: 'clock' });
   });
 
+  it('needs-action analysis (no run, no loading) → neutral "Needs action"', () => {
+    const s = summarizeStatus({
+      analysis: running({ state: 'needs-action' }),
+      generation: null,
+      pendingRevisionsCount: 0,
+      design: null,
+      anyModelLoading: false,
+    });
+    expect(s).toEqual({ label: 'Needs action', tone: 'neutral', icon: 'clock' });
+  });
+
   it('pending revisions (nothing else active) → peach "Revisions · {n}"', () => {
     const s = summarizeStatus({
       analysis: null,
