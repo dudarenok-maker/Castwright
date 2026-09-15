@@ -355,7 +355,7 @@ describe('BookLibraryView — loading affordance', () => {
     expect(badge.textContent).toMatch(/Paused — resume\?/);
   });
 
-  it('renders the "Halted — review?" badge when the snapshot state is halted', () => {
+  it('renders the "Paused — resume?" badge when the snapshot state is halted with a non-failure code', () => {
     const haltedSnap: ActiveAnalysisSummary = {
       bookId: 'b1',
       bookTitle: 'The Hollow Tide',
@@ -366,6 +366,50 @@ describe('BookLibraryView — loading affordance', () => {
       state: 'halted',
       haltCode: 'stage1_shrink_refused',
       haltReason: 'cast shrunk from 20 → 4',
+      lastTickAt: Date.now(),
+      writtenAt: Date.now(),
+    };
+    const store = configureStore({
+      reducer: { account: accountSlice.reducer, library: librarySlice.reducer, tour: tourSlice.reducer },
+      preloadedState: {
+        library: {
+          loaded: true,
+          error: null,
+          authors: [oneAuthor],
+          books: [oneBook],
+          pausedSnapshots: { b1: haltedSnap },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <BookLibraryView
+          authors={[oneAuthor]}
+          activeBookId={null}
+          onOpenBook={vi.fn()}
+          onDeleteBook={vi.fn()}
+          onReparseBook={vi.fn()}
+          onReplaceManuscript={vi.fn()}
+          onEditBook={vi.fn()}
+          onStartNew={vi.fn()}
+        />
+      </Provider>,
+    );
+    const badge = screen.getByTestId('paused-badge-b1');
+    expect(badge.textContent).toMatch(/Paused — resume\?/);
+  });
+
+  it('renders the "Halted — review?" badge when the snapshot state is halted with a failure code', () => {
+    const haltedSnap: ActiveAnalysisSummary = {
+      bookId: 'b1',
+      bookTitle: 'The Hollow Tide',
+      manuscriptId: 'mns_b1',
+      phaseId: 2,
+      phaseLabel: 'Linking refs',
+      phaseProgress: 0.7,
+      state: 'halted',
+      haltCode: 'attribution_drift',
+      haltReason: 'attribution drift detected',
       lastTickAt: Date.now(),
       writtenAt: Date.now(),
     };

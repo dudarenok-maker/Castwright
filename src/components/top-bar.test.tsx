@@ -666,6 +666,23 @@ describe('AnalysisPill (B3 sticky analysis)', () => {
     expect(pill).toHaveAttribute('title', longReason);
   });
 
+  it('renders the needs-action variant for cast_incomplete / stage1_shrink_refused halts (#3203)', () => {
+    render(
+      <AnalysisPill
+        data={{
+          state: 'needs-action',
+          phaseLabel: 'Detecting characters',
+          percent: 0,
+          haltReason: 'cast shrunk from 20 → 4',
+          onClick: vi.fn(),
+        }}
+      />,
+    );
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill.textContent).toContain('Needs action');
+    expect(pill.textContent).toContain('cast shrunk from 20 → 4');
+  });
+
   it("renders the paused variant without a percent (paused work doesn't tick)", () => {
     render(
       <AnalysisPill

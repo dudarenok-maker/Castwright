@@ -368,7 +368,7 @@ describe('PhaseCard paused/halted rendering (#3172 layer 3/3)', () => {
   });
 });
 
-describe('PhaseCard needs-action rendering (#3224 — cast_incomplete / stage1_shrink_refused)', () => {
+describe('PhaseCard needs-action rendering (#3203 — cast_incomplete / stage1_shrink_refused)', () => {
   /* The two setHalted codes that are explicitly "not a failure" render a
      third, neutral phase-card state — surfaced via isPhaseNeedsAction,
      mirroring how isPhasePaused/isPhaseHalted are threaded from the

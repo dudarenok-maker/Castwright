@@ -44,6 +44,7 @@ import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { computeReanalyseProgress } from '../lib/reanalyse-progress';
 import { shouldSurfaceColdBootAnalysisPill } from '../lib/analysis-pill-gate';
+import { isNotAFailureHaltCode } from '../lib/analysis-phase-state';
 import { filterLinkablePriorCandidates } from '../lib/prior-link-candidates';
 import { parseDuration } from '../lib/time';
 import { stageToHash } from '../lib/router';
@@ -1405,6 +1406,7 @@ export function Layout() {
       lastTickAt,
       state: streamState,
       haltReason,
+      haltCode,
       kind,
       subsetChapterIds,
       phaseElapsedMs,
@@ -1429,7 +1431,9 @@ export function Layout() {
       streamState === 'running' && lastTickAt > 0 && Date.now() - lastTickAt > STALL_THRESHOLD_MS;
     const pillState: AnalysisPillData['state'] =
       streamState === 'halted'
-        ? 'halted'
+        ? isNotAFailureHaltCode(haltCode)
+          ? 'needs-action'
+          : 'halted'
         : streamState === 'paused'
           ? 'paused'
           : stalled

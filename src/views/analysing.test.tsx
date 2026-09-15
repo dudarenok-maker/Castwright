@@ -1967,7 +1967,7 @@ describe('AnalysingView — stage1 shrink-refused banner', () => {
   });
 });
 
-describe('AnalysingView — needs-action phase-card state (#3224)', () => {
+describe('AnalysingView — needs-action phase-card state (#3203)', () => {
   /* cast_incomplete and stage1_shrink_refused are the two setHalted codes
      that are explicitly "not a failure" — they must route the phase card
      to the new neutral needs-action state, never the rose halted state.

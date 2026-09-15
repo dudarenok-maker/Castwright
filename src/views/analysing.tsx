@@ -14,7 +14,7 @@ import {
 } from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { computeOverallProgress } from '../lib/analysis-progress';
-import { derivePhaseState } from '../lib/analysis-phase-state';
+import { derivePhaseState, isNotAFailureHaltCode } from '../lib/analysis-phase-state';
 import {
   MODEL_OPTIONS,
   buildLocalModelOptions,
@@ -1568,8 +1568,7 @@ export function AnalysingView({
               runState:
                 activeStreamSnapshot && activeStreamSnapshot.manuscriptId === manuscriptId
                   ? activeStreamSnapshot.state === 'halted' &&
-                    (activeStreamSnapshot.haltCode === 'cast_incomplete' ||
-                      activeStreamSnapshot.haltCode === 'stage1_shrink_refused')
+                    isNotAFailureHaltCode(activeStreamSnapshot.haltCode)
                     ? 'needs-action'
                     : activeStreamSnapshot.state ?? 'running'
                   : 'running',

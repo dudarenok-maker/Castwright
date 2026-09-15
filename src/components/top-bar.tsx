@@ -30,7 +30,7 @@ export interface GenerationPillData {
    view. State mirrors the analysis slice's activeStream.state, plus a
    `stalled` UI-derived variant when lastTickAt is older than the
    stall threshold (computed by the slice consumer). */
-export type AnalysisPillState = 'running' | 'paused' | 'halted' | 'stalled';
+export type AnalysisPillState = 'running' | 'paused' | 'halted' | 'stalled' | 'needs-action';
 export interface AnalysisPillData {
   state: AnalysisPillState;
   /** Server-supplied phase label, e.g. "Detecting characters". */
@@ -966,6 +966,11 @@ export function AnalysisPill({ data }: { data: AnalysisPillData }) {
         icon: <IconWarning className="w-3.5 h-3.5" />,
         label: 'Halted',
       },
+      'needs-action': {
+        className: 'bg-amber-100 hover:bg-amber-200 text-amber-800',
+        icon: <IconClock className="w-3.5 h-3.5" />,
+        label: 'Needs action',
+      },
     };
   const v = variants[state];
   /* Truncate the halt reason on render so a long error message
@@ -994,7 +999,7 @@ export function AnalysisPill({ data }: { data: AnalysisPillData }) {
       <span className="tabular-nums">
         {v.label} · {state === 'running' && isSubset ? subsetSecondary : phaseLabel}
         {state === 'running' && ` · ${percent}%`}
-        {state === 'halted' && haltTrim && ` · ${haltTrim}`}
+        {(state === 'halted' || state === 'needs-action') && haltTrim && ` · ${haltTrim}`}
       </span>
     </button>
   );

@@ -391,7 +391,7 @@ interface PhaseCardProps {
   isPhaseHalted?: boolean;
   /** True for a halt whose `haltCode` is a not-a-failure code
       (cast_incomplete, stage1_shrink_refused) — renders the neutral
-      "needs action" treatment instead of the rose halted badge (#3224). */
+      "needs action" treatment instead of the rose halted badge (#3203). */
   isPhaseNeedsAction?: boolean;
   phaseProgress: number;
   phaseLogs: string[];
