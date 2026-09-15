@@ -1548,7 +1548,7 @@ describe('Layout — analysis pill state derivation for needs-action (#3203)', (
         phaseLabel: 'Detecting characters',
         phaseProgress: 0.5,
         lastTickAt: Date.now(),
-        writtenAt: Date.now(),
+        remainingMs: null,
       }),
     );
 
@@ -1582,7 +1582,7 @@ describe('Layout — analysis pill state derivation for needs-action (#3203)', (
         phaseLabel: 'Attributing lines',
         phaseProgress: 0.3,
         lastTickAt: Date.now(),
-        writtenAt: Date.now(),
+        remainingMs: null,
       }),
     );
 
