@@ -1061,6 +1061,7 @@ https://claude.ai/code/session_013DFfsAoY1LtxjDgnGPSZkc
   - `export type GeminiModelsClient = { models: { list: (params?: { config?: { httpOptions?: { timeout?: number }; abortSignal?: AbortSignal } }) => Promise<AsyncIterable<GeminiListedModel>> } }`
   - `export const GEMINI_CATALOG_TTL_MS = 600_000`, `export const GEMINI_CATALOG_WARM_TIMEOUT_MS = 10_000`
   - `export function _resetGeminiCatalogForTest(): void`
+  - `export function _seedGeminiCatalogForTest(apiKey: string, models: GeminiModelInfo[]): void` (F7 — used by Task 2.9a's guard test to force its conditional Gemini fix to actually run, without a network call)
 
 **Why the warm-up is bounded (P26).** `prepare()` (Task 2.6) awaits the warm-up before the limiter, the request ceiling and the idle watchdog exist. Concurrent requests share one listing, so a listing that never settles would hang every Gemini request behind it, and pause could not interrupt the wait. So:
 - the listing is bounded at `GEMINI_CATALOG_WARM_TIMEOUT_MS` (10 s), and a timeout counts as a failed listing: the cache stays as it was, callers use the fallback limits (12000-token cap, 8192 output), and the 60 s failure back-off stops a request per stage call from re-waiting during an outage;
@@ -1100,6 +1101,7 @@ import {
   GEMINI_CATALOG_TTL_MS,
   GEMINI_CATALOG_WARM_TIMEOUT_MS,
   _resetGeminiCatalogForTest,
+  _seedGeminiCatalogForTest,
   type GeminiModelsClient,
 } from './gemini-catalog.js';
 
@@ -1334,9 +1336,28 @@ describe('geminiModelThinks (P27)', () => {
     expect(geminiModelThinks('gemini-3.6-flash')).toBe(true);
   });
 });
+
+/* #3084 wave 2b, F7 — test-first: Task 2.9a's guard test needs a way to make
+   getCachedGeminiModelInfo answer for a known model with no network call, to
+   force its conditional Gemini maxOutputTokens fix to actually run. Written
+   here, ahead of _seedGeminiCatalogForTest's own implementation (below, Step
+   3), per this file's TDD convention. */
+describe('_seedGeminiCatalogForTest (#3084 wave 2b, F7)', () => {
+  it('makes getCachedGeminiModelInfo answer synchronously, with no network call', () => {
+    expect(getCachedGeminiModelInfo('gemini-3.6-flash')).toBeUndefined();
+    _seedGeminiCatalogForTest('test-key', [{ id: 'gemini-3.6-flash', outputTokenLimit: 65_536 }]);
+    expect(getCachedGeminiModelInfo('gemini-3.6-flash')).toEqual({ id: 'gemini-3.6-flash', outputTokenLimit: 65_536 });
+  });
+
+  it('a different key from listGeminiModels overwrites the seeded one, same as N6', async () => {
+    _seedGeminiCatalogForTest('test-key', [{ id: 'gemini-3.6-flash', outputTokenLimit: 65_536 }]);
+    await listGeminiModels('other-key', { client: fakeClient([]) });
+    expect(getCachedGeminiModelInfo('gemini-3.6-flash')).toBeUndefined();
+  });
+});
 ```
 - [ ] **Step 2: Run it and confirm it fails**
-Run: `npm --prefix server run test -- src/analyzer/catalog/gemini-catalog.test.ts --retry=0`  Expected: FAIL with `Failed to resolve import "./gemini-catalog.js"`
+Run: `npm --prefix server run test -- src/analyzer/catalog/gemini-catalog.test.ts --retry=0`  Expected: FAIL with `Failed to resolve import "./gemini-catalog.js"` — the whole file fails to import (the module does not exist yet), so this covers every `it(` in the file, including the two new `_seedGeminiCatalogForTest` cases above; there is no separate failure reason for them.
 - [ ] **Step 3: Implement**
 ```ts
 /* #3084 wave 2b — cached Gemini model catalog (spec §3, §6, §7).
@@ -1637,28 +1658,14 @@ export function _seedGeminiCatalogForTest(apiKey: string, models: GeminiModelInf
   activeKeyHash = keyHash;
 }
 ```
-Test (append to `gemini-catalog.test.ts`):
-```ts
-describe('_seedGeminiCatalogForTest (#3084 wave 2b, F7)', () => {
-  it('makes getCachedGeminiModelInfo answer synchronously, with no network call', () => {
-    expect(getCachedGeminiModelInfo('gemini-3.6-flash')).toBeUndefined();
-    _seedGeminiCatalogForTest('test-key', [{ id: 'gemini-3.6-flash', outputTokenLimit: 65_536 }]);
-    expect(getCachedGeminiModelInfo('gemini-3.6-flash')).toEqual({ id: 'gemini-3.6-flash', outputTokenLimit: 65_536 });
-  });
-
-  it('a different key from listGeminiModels overwrites the seeded one, same as N6', async () => {
-    _seedGeminiCatalogForTest('test-key', [{ id: 'gemini-3.6-flash', outputTokenLimit: 65_536 }]);
-    await listGeminiModels('other-key', { client: fakeClient([]) }); // this file's existing client helper (`:1115`)
-    expect(getCachedGeminiModelInfo('gemini-3.6-flash')).toBeUndefined();
-  });
-});
-```
+(Its test is in Step 1 above, test-first, not here — this Step only adds the
+implementation.)
 Mutation row (append to Task 2.5's Step 5): delete `activeKeyHash = keyHash;`
 from `_seedGeminiCatalogForTest`. Expected red: `_seedGeminiCatalogForTest …
 > makes getCachedGeminiModelInfo answer synchronously …` (`getCachedGeminiModelInfo`
 reads `activeKeyHash`, still `null`, so it returns `undefined`). Restore it.
 - [ ] **Step 4: Run and confirm it passes**
-Run: `npm --prefix server run test -- src/analyzer/catalog/gemini-catalog.test.ts`  Expected: PASS (18 tests). Then run `npm run check:cycles`: PASS.
+Run: `npm --prefix server run test -- src/analyzer/catalog/gemini-catalog.test.ts`  Expected: PASS (20 tests — 18 from the original suite plus the 2 `_seedGeminiCatalogForTest` cases added above; counted by `it(` in the Step 1 block, not assumed). Then run `npm run check:cycles`: PASS.
 - [ ] **Step 5: Mutation proof** (run each red with `--retry=0`)
   1. In `toGeminiModelInfo`, change `!(m.supportedActions ?? []).includes('generateContent')` to `false`. Expected red: `toGeminiModelInfo / listGeminiModels filter > keeps generateContent text models, strips models/, drops embedding/tts/image/live/aqa`. Restore it.
   2. Change `return THINKING_ID_RULE.test(model);` to `return getCachedGeminiModelInfo(model)?.thinking ?? THINKING_ID_RULE.test(model);`. Expected red: `geminiModelThinks (P27) > ignores the catalog thinking flag in both directions`. Restore it.
@@ -5581,6 +5588,25 @@ addition to the same ctx type, not this task's.
   a `settingKey` entry as an Advanced Settings link (`fixHref`); a fix with
   neither (the label-only "switch model" entry) renders as plain text. No
   entry ever carries both `settingKey` and `wikiPage`.
+
+  **Wave-stable internal structure.** `reasoningOverflowFixes` builds two
+  local arrays and returns their concatenation:
+  ```ts
+  export function reasoningOverflowFixes(ctx: { transport: TransportKind; model: string; endpointId?: string }): AnalysisFailureFix[] {
+    const fixes: AnalysisFailureFix[] = [];   // actionable — settingKey or label-only
+    const reads: AnalysisFailureFix[] = [];   // wiki-link entries only ("Read: …")
+    // … each branch (gemini / local / openai) pushes into `fixes` and `reads` …
+    return [...fixes, ...reads];
+  }
+  ```
+  This is not 2b's own convention to be reconsidered later — it is the shape
+  every later wave writes into: 3b's endpoint branch and 5b's payload branch
+  each push their actionable fixes into `fixes` and any wiki entry they add
+  (5b's own `Read: Custom payload`) into `reads`; 5a's reasoning-level fix
+  pushes into `fixes`. As long as every branch obeys this split, `[...fixes,
+  ...reads]` keeps every `Read:` entry after every actionable one automatically
+  — no branch has to remember to order its own pushes correctly, and no later
+  wave has to re-sort the result.
   - **Gemini fixes** (2b), in order: `{ label: 'Lower Gemini max input tokens per request', settingKey: 'analyzer.gemini.maxInputTokensPerRequest' }`; `{ label: 'Lower the Gemini output-heavy chunk size', settingKey: 'analyzer.gemini.outputHeavyChunkChars' }`; conditionally — only when `analyzer.gemini.maxOutputTokens` is a NON-ZERO configured value below the model's known limit (`getCachedGeminiModelInfo(model)?.outputTokenLimit`; omit entirely when Auto (`0`) or the limit is unknown) — `{ label: 'Raise Gemini max output tokens (or set it back to Auto)', settingKey: 'analyzer.gemini.maxOutputTokens' }`; label-only `{ label: 'Switch to a different analyzer model' }` (F13 — no `settingKey`, so `fixHref` returns `null` and it renders as plain text); and LAST, the one wiki-link entry, `{ label: 'Read: When a model thinks past its output limit', wikiPage: 'Analysis-and-the-Analyzer' }`.
   - **Ollama fixes** (2b), in order: `{ label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' }`; `{ label: 'Lower the stage-1 local input fraction', settingKey: 'analyzer.stage1.localInputFraction' }`; `{ label: 'Lower the stage-2 local input fraction', settingKey: 'analyzer.stage2.localInputFraction' }`; the same label-only `'Switch to a different analyzer model'` fix; and the SAME wiki-link entry last.
   - **`openai`** (2b): `return [];` — 3b (Task 3b.1b) adds the branch, ending with the endpoints page's own wiki-link entry (F3), not this one.
@@ -5598,7 +5624,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect, afterEach } from 'vitest';
 import { reasoningOverflowFixes } from './failure-taxonomy.js';
 import { allKnobs } from '../config/registry.js';
-import { _seedGeminiCatalogForTest, _resetGeminiCatalogForTest } from './catalog/gemini-catalog.js';
+import { _seedGeminiCatalogForTest, _resetGeminiCatalogForTest } from '../analyzer/catalog/gemini-catalog.js';
 
 /* #3084 F7 — resolved from this FILE's own location, never cwd-relative: the
    server test suite runs with cwd `server/`, so a bare 'docs/wiki/...' would
@@ -5685,19 +5711,31 @@ describe('reasoningOverflowFixes — the RIGHT key, not just a valid one (#3084 
     expect(keys).toContain('analyzer.gemini.outputHeavyChunkChars');
   });
 
-  it('both engines end with a label-only "switch model" fix, then the ONE wiki-link entry, last (#3084 F7, review)', () => {
+  it('every "Read:" entry comes after every actionable fix, at least one exists, and none carries a settingKey (#3084 F7, wave-stable structure)', () => {
     for (const ctx of [{ transport: 'gemini' as const, model: 'gemini-3.6-flash' }, { transport: 'ollama' as const, model: 'qwen3.5:9b' }]) {
       const fixes = reasoningOverflowFixes(ctx);
-      const last = fixes[fixes.length - 1];
-      expect(last).toEqual({ label: 'Read: When a model thinks past its output limit', wikiPage: 'Analysis-and-the-Analyzer' });
-      expect(fixes.some((f) => f.label === 'Switch to a different analyzer model' && !f.settingKey && !f.wikiPage)).toBe(true);
-      // No fix ever names both a settingKey and a wikiPage — the wiki link is
-      // its own entry, never a field bolted onto a setting-changing fix.
-      for (const f of fixes) expect(f.settingKey && f.wikiPage, JSON.stringify(f)).toBeFalsy();
+      const isRead = (f: AnalysisFailureFix) => f.label.startsWith('Read:');
+      const lastNonReadIndex = fixes.reduce((acc, f, i) => (isRead(f) ? acc : i), -1);
+      const firstReadIndex = fixes.findIndex(isRead);
+      // (a) at least one Read: entry exists
+      expect(firstReadIndex).toBeGreaterThanOrEqual(0);
+      // (b) every Read: entry comes after every non-Read: fix
+      expect(firstReadIndex).toBeGreaterThan(lastNonReadIndex);
+      // (c) no Read: entry carries a settingKey — the wiki link is its own
+      // entry, never a field bolted onto a setting-changing fix.
+      for (const f of fixes) if (isRead(f)) expect(f.settingKey, JSON.stringify(f)).toBeUndefined();
+      expect(fixes.some((f) => f.label === 'Switch to a different analyzer model' && !f.settingKey && !isRead(f))).toBe(true);
     }
   });
 });
 ```
+Mutation row (proves the `[...fixes, ...reads]` order is load-bearing, not
+incidental): change `reasoningOverflowFixes`'s return statement from
+`return [...fixes, ...reads];` to `return [...reads, ...fixes];`. Expected
+red: `every "Read:" entry comes after every actionable fix, …` — assertion (b)
+fails (`firstReadIndex` is `0`, `lastNonReadIndex` is a later index, so
+`0 > lastNonReadIndex` is `false`). Restore it.
+
 Mutation row (the companion to row 12 above): change the Ollama branch's
 `settingKey: 'analyzer.ollama.numCtx'` to `settingKey: 'analyzer.ollama.numPredict'`.
 Expected red: `Ollama names numCtx, the binding limit — not numPredict` (fails
@@ -5893,19 +5931,32 @@ Files list bullet above for why it can never have `fixes` to render.
 `ReasoningOverflowToast` (below) imports `fixHref`/`wikiUrl`/`isWikiPage` the
 same way and renders the identical branch.
 
-Test (`src/views/analysing.test.tsx`, using whatever helper this file's other
-error-rendering tests already use to drive the mocked stream into the catch
-block that calls `setError`):
+Test (`src/views/analysing.test.tsx`). This file has NO run-level error-banner
+test to extend at 46e62a34 — the closest precedent is the `AnalysingView —
+stage1 shrink-refused banner` describe (`:1768-1846`), which pre-arms the
+module-level `analyseManuscriptRejection` variable (declared `:32`, read by
+the mocked `api.analyseManuscript` at `:49-50`, reset to `undefined` in
+`beforeEach` at `:84`) and awaits the async `renderViewWaitingForAnalysis()`
+helper (`:172-179`: renders via `renderView()` `:110-131`, clicks "Start
+analysis", awaits `capturedOpts` being set). Real names throughout — no
+placeholders:
 ```tsx
 it('renders a "How to fix" list in the run-level block: a setting link, a label-only fix, and the wiki link (#3084 F7)', async () => {
-  mockAnalyseRejectsWith(
-    new AnalysisError('boom', 'analyzer-reasoning-overflow', undefined, undefined, undefined, 'Then resume — finished chapters are kept.', [
+  const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+  analyseManuscriptRejection = new AnalysisError(
+    'boom',
+    'analyzer-reasoning-overflow',
+    undefined,
+    undefined,
+    undefined,
+    'Then resume — finished chapters are kept.',
+    [
       { label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' },
       { label: 'Switch to a different analyzer model' },
       { label: 'Read: When a model thinks past its output limit', wikiPage: 'Analysis-and-the-Analyzer' },
-    ]),
+    ],
   );
-  renderAnalysingView(); // this file's existing render helper
+  await renderViewWaitingForAnalysis();
   await screen.findByText('How to fix:');
   expect(screen.getByRole('link', { name: 'Raise Ollama num_ctx (the binding limit)' })).toHaveAttribute(
     'href',
@@ -5920,37 +5971,69 @@ it('renders a "How to fix" list in the run-level block: a setting link, a label-
 });
 
 it('renders no "How to fix" list when the error carries no fixes (unchanged behaviour)', async () => {
-  mockAnalyseRejectsWith(new AnalysisError('boom', 'cast_incomplete'));
-  renderAnalysingView();
-  await screen.findByText(/Analysis failed|Daily free-tier quota exhausted/);
+  const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+  analyseManuscriptRejection = new AnalysisError('boom', 'attribution_drift');
+  await renderViewWaitingForAnalysis();
+  await screen.findByText(/Analysis failed/);
   expect(screen.queryByText('How to fix:')).toBeNull();
 });
 
 it('a wiki-link fix with an unrecognised wikiPage renders its label as plain text, no link (#3084 F7, wiki-links review)', async () => {
-  mockAnalyseRejectsWith(
-    new AnalysisError('boom', 'analyzer-reasoning-overflow', undefined, undefined, undefined, 'x', [
-      { label: 'Read: When a model thinks past its output limit', wikiPage: 'Not-A-Real-Wiki-Page' },
-    ]),
-  );
-  renderAnalysingView();
+  const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+  analyseManuscriptRejection = new AnalysisError('boom', 'analyzer-reasoning-overflow', undefined, undefined, undefined, 'x', [
+    { label: 'Read: When a model thinks past its output limit', wikiPage: 'Not-A-Real-Wiki-Page' },
+  ]);
+  await renderViewWaitingForAnalysis();
   await screen.findByText('Read: When a model thinks past its output limit');
   expect(screen.queryByRole('link', { name: 'Read: When a model thinks past its output limit' })).toBeNull();
 });
+```
+`WIKI_BASE` is imported from `../lib/wiki-links`, same as `wiki-links.test.ts`
+already imports it; this file has no existing import of it, so this task adds
+one.
 
+**`haltFixes`, seeded via a pre-loaded store (review: `setHalted` returns
+early with no matching `activeStream` — dispatching it bare, with no prior
+`activeStream`, is a silent no-op, not a working seed).** No existing helper
+in this file accepts extra `activeStream` fields, so this test builds its own
+store inline, copying `renderViewWithActiveStream`'s exact reducer set and
+preloaded shape (`:2050-2073`) rather than dispatching actions against an
+unseeded store:
+```tsx
 it('renders haltFixes from a halted-run snapshot when there is no live error (session-local, not a rejoin) (#3084 F7)', async () => {
-  // Seed the store's activeStream snapshot directly, as if setHalted had
-  // already fired earlier in this session (no live `error` state — the
-  // component just mounted fresh on this manuscript).
-  const store = makeStore({ /* whatever this file's other pre-seeded-store tests pass */ });
-  store.dispatch(
-    analysisActions.setHalted({
-      manuscriptId: BOOK_ID, // this file's existing test manuscript id constant
-      code: 'analyzer-reasoning-overflow',
-      message: 'boom',
-      fixes: [{ label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' }],
-    }),
+  const store = configureStore({
+    reducer: {
+      ui: uiSlice.reducer,
+      cast: castSlice.reducer,
+      analysis: analysisSlice.reducer,
+      account: accountSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
+    },
+    preloadedState: {
+      analysis: {
+        activeStream: {
+          bookId: 'book-1',
+          manuscriptId: 'm1',
+          bookTitle: 'the Coalfall Commission',
+          engine: 'gemini' as const,
+          phaseId: 1,
+          phaseLabel: 'Parsing & attribution',
+          phaseProgress: 0.32,
+          remainingMs: 45_000,
+          lastTickAt: Date.now() - 2_000,
+          state: 'halted' as const,
+          haltCode: 'analyzer-reasoning-overflow',
+          haltReason: 'boom',
+          haltFixes: [{ label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' }],
+        },
+      },
+    },
+  });
+  render(
+    <Provider store={store}>
+      <AnalysingView manuscriptId="m1" title="the Coalfall Commission" wordCount={2440} onComplete={() => {}} />
+    </Provider>,
   );
-  renderAnalysingView({ store }); // pass the pre-seeded store, matching this file's own render-helper signature
   await screen.findByText('How to fix:');
   expect(screen.getByRole('link', { name: 'Raise Ollama num_ctx (the binding limit)' })).toHaveAttribute(
     'href',
@@ -5981,11 +6064,6 @@ Expected red: `isWikiPage … > rejects an unknown string` and the
 `analysing.test.tsx` case above (a link now renders for the bogus page,
 instead of plain text). Restore it.
 
-`mockAnalyseRejectsWith`/`renderAnalysingView` are placeholders for whatever
-this file's existing tests already call to inject a rejected analyse stream
-and mount the view — match their real names at implementation time rather
-than inventing new ones. `WIKI_BASE` is imported from `../lib/wiki-links`,
-same as `wiki-links.test.ts` already imports it.
 
 **The persistent toast — pushed from the middleware, not this view.** No
 effect is added to `analysing.tsx` for this. The middleware bullet in Files
@@ -6001,13 +6079,20 @@ navigating away from the Analysing view neither removes it nor re-pushes it.
 
 Test (`src/store/analysis-stream-middleware.test.ts`, extending the existing
 suite — mirroring the real `flips state to halted when the SSE rejects with
-AnalysisError code=attribution_drift` test at `:430-448` exactly: `buildStore()`,
-`setActiveStream(baseSnapshot)`, `lastCall().reject(...)`, two
-`await Promise.resolve()`, then read `store.getState()`):
+AnalysisError code=attribution_drift` test at `:415-432` on 46e62a34:
+`buildStore()`, `setActiveStream(baseSnapshot)`, then a
+`dispatch(applyAnalysisSnapshotTick(...))` — the middleware opens the stream
+only on the FIRST tick, so `lastCall()` (`:82-86`, throws `'expected at least
+one api.analyseManuscript call'` when nothing was captured yet) would throw
+without it — THEN `lastCall().reject(...)`, two `await Promise.resolve()`,
+then read `store.getState()`):
 ```ts
 it('a reasoning-overflow AnalysisError pushes ONE toast carrying fixes under dedupeKey analysis-stream (#3084 F7)', async () => {
   const store = buildStore();
   store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+  store.dispatch(
+    analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+  );
   const fixes = [{ label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' }];
   lastCall().reject(new AnalysisError('boom', 'analyzer-reasoning-overflow', undefined, undefined, undefined, undefined, fixes));
   await Promise.resolve();
@@ -6020,6 +6105,9 @@ it('a reasoning-overflow AnalysisError pushes ONE toast carrying fixes under ded
 it('a non-reasoning-overflow AnalysisError still pushes the plain toast, with no fixes field (unchanged behaviour)', async () => {
   const store = buildStore();
   store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+  store.dispatch(
+    analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+  );
   lastCall().reject(new AnalysisError('drift', 'attribution_drift'));
   await Promise.resolve();
   await Promise.resolve();
@@ -6064,9 +6152,34 @@ side has to keep in sync with the other's CSS. If `focusKey`'s row's group
 starts collapsed, this effect must also expand that group first — mirror
 `help.tsx:210-218`'s late-hydration merge into `expanded` state.
 
-Test (`src/views/advanced.test.tsx`):
+Test (`src/views/advanced.test.tsx`). The shared top-level `FIXTURE_CONFIG`
+(`:58-97`+) and `renderView()`/`makeStore()` (`:151-169`, both zero-arg, no
+override hook) carry NO `analyzer.gemini.maxInputTokensPerRequest` descriptor
+and no way to pre-seed `ui.stage` — so this describe block, like the file's
+own scoped ones (e.g. `AdvancedView — analyzer read-only row`, `:519-`),
+builds its own local fixture and its own store rather than reusing either
+shared helper:
 ```tsx
 describe('Advanced Settings — scroll-and-highlight (#3084 wave 2b, F7)', () => {
+  const FOCUS_FIXTURE: ConfigResponse = {
+    groups: [{ id: 'analyzer-sampling', label: 'LLM sampling parameters', help: '', risk: 'medium', collapsedByDefault: false }],
+    descriptors: [
+      {
+        key: 'analyzer.gemini.maxInputTokensPerRequest',
+        group: 'analyzer-sampling',
+        label: 'Gemini max input tokens per request',
+        help: 'Per-request INPUT-token cap for cloud analyzer passes.',
+        type: 'integer',
+        min: 1000,
+        max: 1_000_000,
+        apply: 'live',
+        risk: 'medium',
+        isPrompt: false,
+        default: 12000,
+      },
+    ],
+  };
+
   const originalScrollIntoView = Element.prototype.scrollIntoView;
   afterEach(() => {
     // jsdom has no scrollIntoView; other tests in this file, and other
@@ -6074,15 +6187,34 @@ describe('Advanced Settings — scroll-and-highlight (#3084 wave 2b, F7)', () =>
     Element.prototype.scrollIntoView = originalScrollIntoView;
   });
 
-  it('scrolls the focused row into view and sets data-highlighted once', () => {
+  it('scrolls the focused row into view and sets data-highlighted once', async () => {
     const scrollIntoView = vi.fn();
     Element.prototype.scrollIntoView = scrollIntoView;
-    renderAdvancedAt({ focusKey: 'analyzer.gemini.maxInputTokensPerRequest' }); // use whatever render helper this file's other tests already use
+    mockGetConfig.mockResolvedValueOnce(FOCUS_FIXTURE);
+    const store = configureStore({
+      reducer: { config: configSlice.reducer, ui: uiSlice.reducer, notifications: notificationsSlice.reducer },
+      preloadedState: {
+        ui: { stage: { kind: 'advanced', focusKey: 'analyzer.gemini.maxInputTokensPerRequest' } } as never,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AdvancedView />
+      </Provider>,
+    );
+    await screen.findByText('Gemini max input tokens per request');
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText(/Gemini max input tokens per request/i).closest('[data-highlighted="true"]')).toBeTruthy();
   });
 });
 ```
+`mockGetConfig` is the same mocked `api.getConfig` this file's top-level
+`beforeEach` (`:172-`) already configures; `configSlice`/`uiSlice`/
+`notificationsSlice`/`ConfigResponse` are already imported by this file.
+`as never` on the `preloadedState.ui` slice sidesteps `Stage`'s discriminated
+union needing every OTHER variant's fields absent — match whatever cast (or
+narrower literal) this file's own conventions use elsewhere, if a narrower
+one already exists, rather than introducing a new escape hatch.
 
 **Wiki section.** `docs/wiki/Analysis-and-the-Analyzer.md`, new section "When
 a model thinks past its output limit": what a reasoning overflow is (the model

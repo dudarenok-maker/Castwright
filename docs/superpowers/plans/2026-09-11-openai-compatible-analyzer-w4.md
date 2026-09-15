@@ -2467,21 +2467,21 @@ git commit -m "feat(server): generate personas through the analyzer transports f
 
 **Corrected (review pass 1, 2026-09-13): the earlier draft's `override-row.test.tsx` cases hand-built `type: 'analyzer-engine'` directly into their fixture (`makeDescriptor({ …, type: 'analyzer-engine', … })`), so they could never fail — they exercise 3d.4c's generic picker with a persona-shaped fixture, which Task 3d.4c's own fallback-knob cases and mutation 2 (delete the `analyzer-engine` branch in `KnobControl`) already prove. Deleted here rather than kept as dead weight; do not re-add them.** The regression this task actually needs to guard — "the persona knob's registry descriptor really is `type: 'analyzer-engine'`" — is Task 4.4's own job (`registry.test.ts`'s `is an analyzer-engine knob…` case), not a frontend rendering test with a fixture that assumes the answer.
 
-Append to `src/views/advanced.test.tsx` (reusing its existing `getAnalyzerModels` mock and catalog-fetch wiring — Task 3d.4c added both for the fallback knob; do not re-mock them). This file's `vi.mock('../lib/api')` makes `api.getConfig` a bare mock with no real behaviour, so `renderView()` still needs `mockGetConfig.mockResolvedValue(...)` to render anything (`mockGetConfig` here is this test file's own `vi.mocked(api.getConfig)` spy — a different thing from the real, exported `mockGetConfig()` function below; do not confuse the two, and do not let the import shadow the spy). **Corrected, review pass 2, item 5:** `src/lib/api.ts` has no top-level `getConfig` export at `46e62a34` — the real function is `export async function mockGetConfig(): Promise<ConfigResponse>` (`:8700`). Import it directly, under a distinct local name, rather than reaching for a nonexistent `api.getConfig`:
+Append to `src/views/advanced.test.tsx` (reusing its existing `getAnalyzerModels` mock and catalog-fetch wiring — Task 3d.4c added both for the fallback knob; do not re-mock them). `renderView()` still needs `mockGetConfig.mockResolvedValue(...)` to render anything (this file's own `vi.mocked(api.getConfig)` spy).
+
+**Corrected, review pass 3, item 3: cannot import `mockGetConfig` through this file's mocked `'../lib/api'` at all.** `src/views/advanced.test.tsx:16-30` is `vi.mock('../lib/api', () => ({ api: { … } }))` — a **factory** mock that replaces the whole module with only that literal object. There is no real `mockGetConfig` (or any other named export) left to import from `'../lib/api'` in this file; any such import resolves against the factory's return value, which has none. So this task imports the same thing `src/lib/api.ts` itself imports, directly — `allKnobDescriptors` from the server module, at `src/lib/api.ts:69`'s exact path (`import { allKnobDescriptors } from '../../server/src/config/descriptors';`), adjusted for this test file's own directory. `src/views/advanced.test.tsx` sits at the same depth as `src/lib/api.ts` (`src/views/` vs. `src/lib/`), so the identical relative path resolves the same way:
 ```tsx
 /* ── Persona engine row reuses Task 3d.4c's shared catalog fetch (#3084 W4, F4) ── */
-import { mockGetConfig as realMockGetConfig } from '../lib/api';
+import { allKnobDescriptors } from '../../server/src/config/descriptors';
 
 describe('AdvancedView — persona engine row (analyzer-engine picker)', () => {
   it('lists endpoint models from the analyzer catalog in the persona engine row', async () => {
-    // Read the real mockGetConfig() (unmocked here — this file's vi.mock('../lib/api') mocks the
-    // `api` object's methods, not this named export) rather than hand-typing `type:
-    // 'analyzer-engine'` into a fixture, which cannot catch a regression in Task 4.4's registry
-    // change (review pass 1, 2026-09-13). mockGetConfig()'s descriptors come from
-    // allKnobDescriptors() (server/src/config/descriptors.ts), which projects the real registry —
-    // there is no separate frontend catalogue entry to fall out of sync (review pass 2, item 5).
-    const realConfig = await realMockGetConfig();
-    const personaDescriptor = realConfig.descriptors.find((d) => d.key === 'analyzer.personaGeneration.engine');
+    // allKnobDescriptors() projects the real server registry (server/src/config/registry.ts) —
+    // the same function src/lib/api.ts's mockGetConfig() calls to build MOCK_CONFIG_DESCRIPTORS.
+    // Reading it directly here, rather than hand-typing `type: 'analyzer-engine'` into a fixture,
+    // catches a regression in Task 4.4's registry change without going through the mocked api
+    // module at all (review pass 1 + review pass 2 + review pass 3, item 3).
+    const personaDescriptor = allKnobDescriptors().find((d) => d.key === 'analyzer.personaGeneration.engine');
     expect(personaDescriptor?.type).toBe('analyzer-engine');
     const PERSONA_CONFIG: ConfigResponse = {
       ...FIXTURE_CONFIG,
