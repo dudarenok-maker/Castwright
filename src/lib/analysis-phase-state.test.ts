@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalysisLiveInfo } from './api';
-import { derivePhaseState } from './analysis-phase-state';
+import { derivePhaseState, isNotAFailureHaltCode } from './analysis-phase-state';
 
 const live = (n: number): AnalysisLiveInfo => ({
   totalChapters: 9,
@@ -130,6 +130,18 @@ describe('derivePhaseState', () => {
       ).toBe('halted');
     });
 
+    it('renders the frontier phase as needs-action when runState is needs-action (#3203)', () => {
+      expect(
+        derivePhaseState(0, {
+          progressByPhase: {},
+          liveByPhase: {},
+          maxPhase: 0,
+          runState: 'needs-action',
+          started: true,
+        }),
+      ).toBe('needs-action');
+    });
+
     it('a non-frontier, non-done phase still reads pending regardless of runState', () => {
       expect(
         derivePhaseState(2, { progressByPhase: { 0: 0.3 }, liveByPhase: {}, maxPhase: 0, runState: 'halted', started: true }),
@@ -246,5 +258,23 @@ describe('derivePhaseState', () => {
         }),
       ).toBe('pending');
     });
+  });
+});
+
+describe('isNotAFailureHaltCode', () => {
+  it('returns true for cast_incomplete (#3203)', () => {
+    expect(isNotAFailureHaltCode('cast_incomplete')).toBe(true);
+  });
+
+  it('returns true for stage1_shrink_refused (#3203)', () => {
+    expect(isNotAFailureHaltCode('stage1_shrink_refused')).toBe(true);
+  });
+
+  it('returns false for a failure halt code like attribution_drift', () => {
+    expect(isNotAFailureHaltCode('attribution_drift')).toBe(false);
+  });
+
+  it('returns false for undefined', () => {
+    expect(isNotAFailureHaltCode(undefined)).toBe(false);
   });
 });

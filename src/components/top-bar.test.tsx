@@ -334,6 +334,17 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
     expect(s).toEqual({ label: 'Paused', tone: 'neutral', icon: 'clock' });
   });
 
+  it('needs-action analysis (no run, no loading) → neutral "Needs action"', () => {
+    const s = summarizeStatus({
+      analysis: running({ state: 'needs-action' }),
+      generation: null,
+      pendingRevisionsCount: 0,
+      design: null,
+      anyModelLoading: false,
+    });
+    expect(s).toEqual({ label: 'Needs action', tone: 'neutral', icon: 'clock' });
+  });
+
   it('pending revisions (nothing else active) → peach "Revisions · {n}"', () => {
     const s = summarizeStatus({
       analysis: null,
@@ -664,6 +675,23 @@ describe('AnalysisPill (B3 sticky analysis)', () => {
     expect(pill.textContent).toContain('…');
     /* Full message is preserved on the title attribute for hover. */
     expect(pill).toHaveAttribute('title', longReason);
+  });
+
+  it('renders the needs-action variant for cast_incomplete / stage1_shrink_refused halts (#3203)', () => {
+    render(
+      <AnalysisPill
+        data={{
+          state: 'needs-action',
+          phaseLabel: 'Detecting characters',
+          percent: 0,
+          haltReason: 'cast shrunk from 20 → 4',
+          onClick: vi.fn(),
+        }}
+      />,
+    );
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill.textContent).toContain('Needs action');
+    expect(pill.textContent).toContain('cast shrunk from 20 → 4');
   });
 
   it("renders the paused variant without a percent (paused work doesn't tick)", () => {
