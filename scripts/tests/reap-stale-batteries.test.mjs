@@ -1529,3 +1529,48 @@ test('#3238: collectProcessSnapshot returns [] on non-Windows without calling sp
   assert.equal(callCount, 0, 'must not call spawn on non-Windows');
   assert.deepEqual(result, []);
 });
+
+test('#3238: collectProcessSnapshot retries on real WMI transient: status=0, no error, empty stdout', () => {
+  let callCount = 0;
+  const fakeSpawn = (_cmd, _args, _opts) => {
+    callCount += 1;
+    // Real WMI empty result on first call: status 0, error undefined, stdout empty string
+    if (callCount === 1) return { status: 0, stdout: '', stderr: '' };
+    // Second call (retry) returns valid data
+    return realRowSpawn();
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(callCount, 2, 'must call spawn twice (first empty transient, then retry with recovery)');
+  assert.ok(result.length > 0, 'must return the recovered rows from the retry');
+});
+
+test('#3238: collectProcessSnapshot retries when rowsToProcesses filters all rows out', () => {
+  let callCount = 0;
+  // Row with missing CreationEpochMs will be filtered out by rowsToProcesses
+  const rowsWithBadDate = [
+    {
+      ProcessId: 9876,
+      ParentProcessId: 1234,
+      Name: 'node.exe',
+      CommandLine: 'node test',
+      CreationEpochMs: null, // Invalid — will be filtered out
+      CpuSeconds: 2.5,
+    },
+  ];
+  const fakeSpawn = (_cmd, _args, _opts) => {
+    callCount += 1;
+    if (callCount === 1) {
+      return { status: 0, stdout: JSON.stringify(rowsWithBadDate), stderr: '' };
+    }
+    // Second attempt returns a valid row
+    return realRowSpawn();
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(
+    callCount,
+    2,
+    'must retry once when first attempt has rows that are all filtered out',
+  );
+  assert.ok(result.length > 0, 'must return the recovered rows from the retry');
+  assert.equal(result[0].pid, PLAUSIBLE_ROW.ProcessId);
+});

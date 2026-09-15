@@ -564,9 +564,10 @@ export function rowsToProcesses(rows) {
  *  query alone, and ~0.8-3.5s for a whole runCensus on a 415-root box — NOT
  *  the "~300ms" earlier drafts of this file, the hook, and the release note
  *  all claimed. The invariant that matters is unchanged and is the one the
- *  hook guard actually enforces: NO POOL. Deliberately spawns exactly one
- *  `powershell` child. Returns [] (never throws) on a non-Windows host or
- *  any PowerShell failure — a census that can't run must never block a push.
+ *  hook guard actually enforces: NO POOL. Single spawn on success or
+ *  genuine failure, up to one retry spawn on a genuine transient-empty result
+ *  (#3238). Returns [] (never throws) on a non-Windows host or any PowerShell
+ *  failure — a census that can't run must never block a push.
  *
  *  `CreationEpochMs` is computed INSIDE PowerShell via `[DateTimeOffset]` and
  *  cast to `[long]` before `ConvertTo-Json` ever sees it, rather than parsing
@@ -592,38 +593,50 @@ export function collectProcessSnapshot({
       "@{N='CpuSeconds';E={([double]$_.UserModeTime + [double]$_.KernelModeTime)/1e7}} | " +
       'ConvertTo-Json -Compress',
   ];
+
   const attempt = () => {
     const result = spawn('powershell', queryArgs, {
       encoding: 'utf8',
       timeout: 15000,
       windowsHide: true,
     });
-    if (result.error || result.status !== 0 || !result.stdout) return null;
+    // Distinguish between genuine failure and "no data returned".
+    // Genuine failure: error set, non-zero status, or parse failure — these never retry.
+    if (result.error || result.status !== 0) return { success: false, data: null };
+    // Empty stdout is a real transient (WMI has no processes, or timeout) — signal this.
+    if (!result.stdout) return { success: true, data: null };
     try {
       const parsed = JSON.parse(result.stdout);
-      return Array.isArray(parsed) ? parsed : [parsed];
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      return { success: true, data: rows };
     } catch {
-      return null;
+      // Parse failure is a genuine failure, not a transient.
+      return { success: false, data: null };
     }
   };
 
-  const rows = attempt();
-  // A genuine PowerShell failure (error/non-zero-status/parse-failure) returns
-  // null above and we return [] immediately with no retry — the contract is
-  // unchanged. Only the "successful parse but empty rows" transient case
-  // retries once after a short fixed delay (#3238).
-  if (rows === null) return [];
-  if (rows.length > 0) return rowsToProcesses(rows);
+  const firstAttempt = attempt();
+  // Genuine failure (error, non-zero status, or parse error) — return [] immediately, no retry.
+  if (!firstAttempt.success) return [];
 
-  // Transient empty result — retry once after a short delay.
+  const firstProcesses = rowsToProcesses(firstAttempt.data ?? []);
+  // If we got rows after filtering, return them.
+  if (firstProcesses.length > 0) return firstProcesses;
+
+  // No rows made it through filtering (either raw data was empty, or all rows
+  // were filtered out by rowsToProcesses). This is a transient empty result —
+  // retry once after a short delay (#3238).
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-  const retryRows = attempt();
-  if (retryRows === null) return [];
-  if (retryRows.length > 0) {
+  const retryAttempt = attempt();
+  // If the retry genuinely failed, return [].
+  if (!retryAttempt.success) return [];
+
+  const retryProcesses = rowsToProcesses(retryAttempt.data ?? []);
+  if (retryProcesses.length > 0) {
     console.warn(
       'collectProcessSnapshot: recovered on retry — first Win32_Process query returned empty rows',
     );
-    return rowsToProcesses(retryRows);
+    return retryProcesses;
   }
   console.warn(
     'collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)',
