@@ -734,6 +734,18 @@ test('stepTouchedByDiff: editing the budget-poll script is in scope for its own 
   assert.equal(stepTouchedByDiff(stepByName['check:budget-poll'], ['scripts/check-no-budget-poll.mjs']), true);
 });
 
+// ops-3138: check:onbox-register was folded in from the deleted onbox-register-check.yml
+// workflow — the globs mirror that workflow's own path filter. But unlike the deleted
+// workflow (whose own path filter included itself), the globs must ALSO include
+// .github/workflows/verify.yml, so a diff touching the check's own wiring (e.g.
+// changing the `if:` gate on those three steps) puts this scope key in scope and
+// runs the check on the PR that might break it. Without this, a verify.yml-only diff
+// (exactly the shape that breaks the wiring) reports [cached] and the check never
+// re-runs — green on the very diff that reddens it.
+test('stepTouchedByDiff: a verify.yml diff is in scope for check:onbox-register', () => {
+  assert.equal(stepTouchedByDiff(stepByName['check:onbox-register'], ['.github/workflows/verify.yml']), true);
+});
+
 test('stepTouchedByDiff: a frontend config file matches via extraFiles', () => {
   const diff = ['vite.config.ts'];
   assert.equal(stepTouchedByDiff(stepByName['test'], diff), true);

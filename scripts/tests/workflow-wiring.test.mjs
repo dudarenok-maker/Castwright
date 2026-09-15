@@ -275,6 +275,7 @@ const REQUIRED_LEGS = {
   'test:windows': 'shared|step_test',
   'test:server:windows': 'shared|step_test_server',
   'test:hooks:windows': 'shared|step_test_hooks',
+  'check:onbox-register': 'shared|step_check_onbox_register',
 };
 
 test('every required leg is present and gated on exactly its own scope keys', () => {
