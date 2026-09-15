@@ -592,10 +592,12 @@ export function collectProcessSnapshot({
       "@{N='CpuSeconds';E={([double]$_.UserModeTime + [double]$_.KernelModeTime)/1e7}} | " +
       'ConvertTo-Json -Compress',
   ];
-  const spawnOpts = { encoding: 'utf8', timeout: 15000, windowsHide: true };
-
   const attempt = () => {
-    const result = spawn('powershell', queryArgs, spawnOpts);
+    const result = spawn('powershell', queryArgs, {
+      encoding: 'utf8',
+      timeout: 15000,
+      windowsHide: true,
+    });
     if (result.error || result.status !== 0 || !result.stdout) return null;
     try {
       const parsed = JSON.parse(result.stdout);
