@@ -22,10 +22,11 @@
 //      subtree) — catches doomed orphans regardless of how busy they are,
 //      but misses a live-parented battery that is truly wedged.
 // The "two samples" for test 1 are NOT two queries in one invocation (the
-// hook budget is ONE Win32_Process query, no pool) — they are THIS
-// census and the immediately-preceding one, read back from the append-only
-// log. That is also why the log records each root's command line: it is the
-// dataset, not a debugging aid (see the design doc's "Deferred work" section).
+// hook budget is up to TWO Win32_Process queries — one initial, one retry on
+// a genuine transient-empty result, no pool) — they are THIS census and the
+// immediately-preceding one, read back from the append-only log. That is also
+// why the log records each root's command line: it is the dataset, not a
+// debugging aid (see the design doc's "Deferred work" section).
 
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statSync } from 'node:fs';
@@ -559,9 +560,9 @@ export function rowsToProcesses(rows) {
     .filter(Boolean);
 }
 
-/** One Win32_Process query — the entire OS-touching cost of a pre-push
- *  census. Measured live (PR #3063 review pass 2, N1): ~694ms for this
- *  query alone, and ~0.8-3.5s for a whole runCensus on a 415-root box — NOT
+/** Up to two Win32_Process queries — the entire OS-touching cost of a
+ *  pre-push census. Measured live (PR #3063 review pass 2, N1): ~694ms for
+ *  a single query, and ~0.8-3.5s for a whole runCensus on a 415-root box — NOT
  *  the "~300ms" earlier drafts of this file, the hook, and the release note
  *  all claimed. The invariant that matters is unchanged and is the one the
  *  hook guard actually enforces: NO POOL. Single spawn on success or
@@ -603,7 +604,8 @@ export function collectProcessSnapshot({
     // Distinguish between genuine failure and "no data returned".
     // Genuine failure: error set, non-zero status, or parse failure — these never retry.
     if (result.error || result.status !== 0) return { success: false, data: null };
-    // Empty stdout is a real transient (WMI has no processes, or timeout) — signal this.
+    // Empty stdout is a genuine transient: WMI returned zero rows (empty result set).
+    // Timeouts are caught above and never reach here.
     if (!result.stdout) return { success: true, data: null };
     try {
       const parsed = JSON.parse(result.stdout);
