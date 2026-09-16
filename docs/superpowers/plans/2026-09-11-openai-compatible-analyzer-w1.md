@@ -6,7 +6,7 @@
 
 **Goal.** Replace the two hand-rolled stage runners (`OllamaAnalyzer.runStage`, `GeminiAnalyzer.runStage`) with one `StageRunner` driving a per-engine `ChatTransport` + `ValidationRetryPolicy`, without changing a single request body, error message, forensic file, retry, telemetry call or failure-taxonomy outcome. The one intended behaviour change is the leading-`<think>` strip in `parseAndValidate` (PR 1b, Task 1.12). One log-only difference is accepted, and both PR bodies state it: the Ollama non-OK error's `name` changes from `Error` to `AnalyzerHttpError` (Task 1.4), so its logged stack header reads `AnalyzerHttpError: Ollama … returned …` instead of `Error: Ollama … returned …`. Its message text, every SSE and UI string, and its failure-taxonomy outcome are unchanged.
 
-**Line numbers** below are as of `origin/main` 46e62a34, except `server/src/analyzer/attribution-eval/run-eval.ts`, which is cited as `origin/main` after PR #3199 (merge `839c65ac`). Wave 0's open half is **PR #3192**, and it is large: it rewrites `analyzer/select-analyzer.ts` (+83/−71), `routes/analysis.ts` (+80/−56), `workspace/user-settings.ts` (+85/−55), `routes/user-settings.ts` (+45), `src/lib/api.ts`, `openapi.yaml` (+72/−36), adds `config/ollama-resolved.ts`, and edits `server/madge-cycles-allowlist.json`. Those are the same files and seams this wave builds on, so **every line citation into them will move when #3192 merges** — re-read each cited range against the merge commit before editing, and locate constructs by name (Global Constraints).
+**Line numbers** below are as of `origin/main` `80be2f1d` (PR #3192's merge, 2026-09-13). Wave 0 is cleared: #3141 is closed and #3192 — which rewrote `analyzer/select-analyzer.ts` (+83/−71), `routes/analysis.ts` (+80/−56), `workspace/user-settings.ts` (+85/−55), `routes/user-settings.ts` (+45), `src/lib/api.ts`, `openapi.yaml` (+72/−36), and added `config/ollama-resolved.ts` — is merged and is this pin. `git diff 46e62a34 80be2f1d -- server/madge-cycles-allowlist.json` is empty: #3192 did NOT touch that file, whatever an earlier note claimed; it still has 15 entries. `server/src/analyzer/attribution-eval/run-eval.ts` is cited as `origin/main` after PR #3199 (merge `839c65ac`), which predates and is included in this pin.
 
 ### Commands used throughout (run from the worktree root; never `cd`)
 
@@ -27,10 +27,10 @@
 ### PR 1a — Characterise, type the errors, move the shared helpers
 
 - **Branch:** `node scripts/wt-new.mjs refactor/server-3084-w1a-characterise`.
-- **Delivers:** characterisation tests pinning every runner difference in spec §1 and the Ollama HTTP taxonomy outcomes (green on unmodified code, written first); `TransportKind`, `AnalyzerUnreachableError`, `AnalyzerHttpError` in `errors.ts`; `AnalysisAbortedError` + `LocalUnreachableError` moved to `errors.ts` with re-exports from `ollama.ts`; the plain `Error` at `ollama.ts:709-716` replaced by `AnalyzerHttpError`; `FallbackAnalyzer` keyed on `AnalyzerUnreachableError`; the analyzer interface types moved to a leaf `types.ts`; shared helpers moved from `gemini.ts` to `runner/parse.ts` + `runner/prompt.ts` with re-exports; all three `analyzer/` import cycles removed from the allowlist.
-- **Must NOT change:** any error message text, error `name`/`code` of `AnalysisAbortedError`/`LocalUnreachableError`, any request body, any handoff file, any `classifyAnalysisFailure` outcome, `generatePersonaViaOllama` (wave 4 owns persona; its own non-OK throw at `ollama.ts:1019-1022` stays a plain `Error`). The one error `name` that does change is the Ollama non-OK throw's (`Error` → `AnalyzerHttpError`, Task 1.4): log text only.
+- **Delivers:** characterisation tests pinning every runner difference in spec §1 and the Ollama HTTP taxonomy outcomes (green on unmodified code, written first); `TransportKind`, `AnalyzerUnreachableError`, `AnalyzerHttpError` in `errors.ts`; `AnalysisAbortedError` + `LocalUnreachableError` moved to `errors.ts` with re-exports from `ollama.ts`; the plain `Error` at `ollama.ts:710-717` (`throw new Error(` at `:714`) replaced by `AnalyzerHttpError`; `FallbackAnalyzer` keyed on `AnalyzerUnreachableError`; the analyzer interface types moved to a leaf `types.ts`; shared helpers moved from `gemini.ts` to `runner/parse.ts` + `runner/prompt.ts` with re-exports; all three `analyzer/` import cycles removed from the allowlist.
+- **Must NOT change:** any error message text, error `name`/`code` of `AnalysisAbortedError`/`LocalUnreachableError`, any request body, any handoff file, any `classifyAnalysisFailure` outcome, `generatePersonaViaOllama` (wave 4 owns persona; its own non-OK throw at `ollama.ts:1020-1023` stays a plain `Error`). The one error `name` that does change is the Ollama non-OK throw's (`Error` → `AnalyzerHttpError`, Task 1.4): log text only.
 - **Entry:**
-  - Wave 0 is merged: #3139 and #3141. **State re-checked on 2026-09-12 at `4a545750`:** #3139 is **discharged** — PR #3163 merged 2026-09-11 (`ade92d2b`, on `origin/main`). **#3141 is still OPEN**, and its live fix is **PR #3192** ("make Advanced Settings own analyzer endpoint and phase models"), also open. The earlier child chain (#3152–#3158, with #3167/#3168) is design-time history, not what to check. Before cutting the branch, check the two that matter: `gh issue view 3141 --json state -q .state` must print `CLOSED`, and `gh pr view 3192 --json state -q .state` must print `MERGED`.
+  - Wave 0 is fully cleared: #3139 and #3141 are both discharged. #3139 — PR #3163, merged 2026-09-11 (`ade92d2b`). #3141's live fix, **PR #3192** ("make Advanced Settings own analyzer endpoint and phase models"), is **MERGED** as `80be2f1d` (2026-09-13), this wave's pin. The earlier child chain (#3152–#3158, with #3167/#3168) is design-time history, not what to check. Before cutting the branch, re-confirm both are still discharged on the branch's actual base: `gh issue view 3141 --json state -q .state` must print `CLOSED`, and `gh pr view 3192 --json state -q .state` must print `MERGED`.
   - PR #3199 is on `main`: `git merge-base --is-ancestor 839c65acc7a127817719502247b0514b7fe29cb9 origin/main` exits 0.
   - Every cited range is re-verified on the new `main`.
 - **Exit:** Tasks 1.1–1.6 committed; `test:server:analyzer`, the slow `gemini.test.ts`, `src/routes/failure-taxonomy.test.ts`, `npm run typecheck`, `npm run check:cycles` all green; `pr-review-gate` pass recorded.
@@ -167,10 +167,10 @@ describe('OllamaAnalyzer — runner characterisation (#3084 wave 1)', () => {
 - [ ] **Step 3: Implement** — none (characterisation only).
 - [ ] **Step 4: Confirm stable**  Run the Step 2 command again. Expected: PASS.
 - [ ] **Step 5: Mutation proofs** (paste each red run in the PR body, then restore with `git checkout -- server/src/analyzer/ollama.ts`):
-  1. Delete `ollama.ts:456` (`if (err instanceof LocalUnreachableError) throw err;`) → red: "escalation rethrows LocalUnreachableError instead of resolving null".
-  2. At `ollama.ts:568` replace `content: firstText` with `content: ''` → red: "a schema-validation retry replays the exact first output…".
-  3. At `ollama.ts:453` add `call.onEvalTiming,` as the sixth `this.chat(...)` argument → red: "escalation does not forward onEvalTiming…".
-  4. At `ollama.ts:609` replace `${this.model} ${key}` with `${key}` → red: "pins the final validation-failure message…".
+  1. Delete `ollama.ts:457` (`if (err instanceof LocalUnreachableError) throw err;`) → red: "escalation rethrows LocalUnreachableError instead of resolving null".
+  2. At `ollama.ts:569` replace `content: firstText` with `content: ''` → red: "a schema-validation retry replays the exact first output…".
+  3. At `ollama.ts:454` add `call.onEvalTiming,` as the sixth `this.chat(...)` argument → red: "escalation does not forward onEvalTiming…".
+  4. At `ollama.ts:610` replace `${this.model} ${key}` with `${key}` → red: "pins the final validation-failure message…".
 - [ ] **Step 6: Commit**
 ```bash
 git add server/src/analyzer/ollama.test.ts
@@ -322,7 +322,7 @@ git commit -m "test(server): characterise gemini runner retry replay and escalat
 - Test: same
 
 **Interfaces:**
-- Consumes: `OllamaAnalyzer` (`./ollama.js`), `classifyAnalysisFailure` (`../routes/failure-taxonomy.js`); the route's label shape `Ollama (${modelId})` (`routes/analysis.ts:561-563` `engineLabel`).
+- Consumes: `OllamaAnalyzer` (`./ollama.js`), `classifyAnalysisFailure` (`../routes/failure-taxonomy.js`); the route's label shape `Ollama (${modelId})` (`routes/analysis.ts:556-558` `engineLabel`).
 - Produces: four inline snapshots `{ code, userMessage, detail }` captured from `main`. Task 1.4 must leave them byte-identical.
 
 **Capture procedure (do not hand-write the snapshot bodies).** The bodies below are realistic Ollama `{"error": "..."}` envelopes; which `FailureCode` each maps to depends on `classifyAnalysisFailure`'s envelope parse (`failure-taxonomy.ts:545`), bare-status branch (`:562`) and signature scan (`:567`), so it is captured, not predicted.
@@ -330,9 +330,9 @@ git commit -m "test(server): characterise gemini runner retry replay and escalat
 - [ ] **Step 1: Write the capture test (empty inline snapshots)**
 ```ts
 /* #3084 wave 1 — pins how a non-OK Ollama response classifies at the run level,
-   captured from main BEFORE the plain Error at ollama.ts:709-716 became
+   captured from main BEFORE the plain Error at ollama.ts:710-717 became
    AnalyzerHttpError. The snapshots are the contract: the swap must not move
-   any of them (spec §1 "Typed HTTP errors"; plan-29 rule, index.ts:251-256). */
+   any of them (spec §1 "Typed HTTP errors"; plan-29 rule, index.ts:250-255). */
 import { describe, it, expect, vi, afterAll } from 'vitest';
 import { rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -399,10 +399,10 @@ git commit -m "test(server): capture failure-taxonomy outcomes for ollama 400/40
 
 **Files:**
 - Modify: `server/src/analyzer/errors.ts:16-18` (header sentence), `:23` (`engine` type); new declarations added above `:19`
-- Modify: `server/src/analyzer/ollama.ts:68` (import), `:83-107` (class bodies removed → re-export), `:709-716` (throw)
+- Modify: `server/src/analyzer/ollama.ts:69` (import), `:84-108` (class bodies removed → re-export), `:710-717` (throw)
 - Modify: `server/src/analyzer/gemini.ts:39-40` (import `AnalysisAbortedError` from `./errors.js`)
 - Modify: `server/src/analyzer/rate-limit.ts:22` (import from `./errors.js` — required, not tidying: in PR 1b `transport-retry.ts` imports `rate-limit.ts` and `ollama.ts` imports that chain, so a surviving `rate-limit → ollama` edge would close a new cycle)
-- Modify: `server/src/analyzer/index.ts:23` (imports), `:251-253` (comment), `:268,285,306,325,342,365,383,400` (`instanceof`)
+- Modify: `server/src/analyzer/index.ts:23` (imports), `:250-252` (comment), `:267,284,305,324,341,364,382,399` (`instanceof`)
 - Modify: `server/src/analyzer/fallback-analyzer.test.ts:3` (comment only; it says "errors.ts only exports AnalyzerTruncatedError", which this task makes false)
 - Create: `server/src/analyzer/errors.test.ts`
 - Modify: `server/src/analyzer/fallback.test.ts` (append one `describe`)
@@ -416,7 +416,7 @@ Suites that could break and must stay green: `ollama.test.ts`, `ollama-timeout.t
 
 The only literal readers of the `code` strings are the class declarations themselves (`LOCAL_UNREACHABLE` / `ANALYSIS_ABORTED` appear nowhere else in `server/src`, `src/` or `openapi.yaml`), so widening `LocalUnreachableError.code` from a literal type to `string` breaks no comparison.
 
-**The one `name` change is log text only.** The Ollama non-OK throw becomes `AnalyzerHttpError`, so its `err.name` goes from `'Error'` to `'AnalyzerHttpError'`, and so does the header of every logged stack (Node's default print, and the `name` field of `console.error('[analysis] failed', …)` at `routes/analysis.ts:6433-6443`). Nothing branches on it: `classifyAnalysisFailure`'s `matchName` checks compare against the specific class names in `FAILURE_SIGNATURES`, none of which is `'Error'` or `'AnalyzerHttpError'`, and Task 1.3's snapshots record `code`, `userMessage` and `detail`, not `name`. `errors.test.ts` below pins the new name, and Tasks 1.6 and 1.14 state the change in their PR bodies.
+**The one `name` change is log text only.** The Ollama non-OK throw becomes `AnalyzerHttpError`, so its `err.name` goes from `'Error'` to `'AnalyzerHttpError'`, and so does the header of every logged stack (Node's default print, and the `name` field of `console.error('[analysis] failed', …)` at `routes/analysis.ts:6437-6447`). Nothing branches on it: `classifyAnalysisFailure`'s `matchName` checks compare against the specific class names in `FAILURE_SIGNATURES`, none of which is `'Error'` or `'AnalyzerHttpError'`, and Task 1.3's snapshots record `code`, `userMessage` and `detail`, not `name`. `errors.test.ts` below pins the new name, and Tasks 1.6 and 1.14 state the change in their PR bodies.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -642,20 +642,20 @@ git commit -m "refactor(server): typed analyzer errors and AnalyzerHttpError for
 ### Task 1.5: Leaf `types.ts`; move shared helpers to `runner/parse.ts` + `runner/prompt.ts`; remove the analyzer import cycles
 
 **Files:**
-- Create: `server/src/analyzer/types.ts` (moved from `index.ts:12-21,24,34-165`)
-- Modify: `server/src/analyzer/index.ts:24,34-165`
+- Create: `server/src/analyzer/types.ts` (moved from `index.ts:12-21,24,33-164`)
+- Modify: `server/src/analyzer/index.ts:24,33-164`
 - Create: `server/src/analyzer/runner/parse.ts` (moved from `gemini.ts:1001-1391`)
 - Create: `server/src/analyzer/runner/prompt.ts` (moved from `gemini.ts:129-264`)
 - Modify: `server/src/analyzer/gemini.ts:8-15,36-38,129-264,1001-1391`
-- Modify: `server/src/analyzer/ollama.ts:66,69-77`
-- Modify: `server/madge-cycles-allowlist.json` — delete the three `analyzer/` entries **by content, not by line number** (the file is a shared, machine-checked list and wave 0's PR #3192 appends to it)
+- Modify: `server/src/analyzer/ollama.ts:67,70-78`
+- Modify: `server/madge-cycles-allowlist.json` — delete the three `analyzer/` entries **by content, not by line number** (a shared, machine-checked list another lane could touch before this PR lands; #3192, already merged as this wave's pin, did NOT touch it — `git diff 46e62a34 80be2f1d -- server/madge-cycles-allowlist.json` is empty)
 - Create: `server/src/analyzer/runner/moved-helpers.test.ts`
 
 **Interfaces:**
 - Consumes: Task 1.4's `errors.ts`.
 - Produces: `types.ts` exporting `StageChunkInfo`, `StageCall`, `Analyzer` (re-exported by `index.ts`, so every `from './index.js'` type import elsewhere still compiles); `runner/parse.ts` exporting `ParseResult`, `parseAndValidate`, `stripCodeFences`, `repairUnescapedQuotes`, `trimTrailingProse`, `repairStructuralPunctuation`, `buildRetryMessage`, `summariseDetail`, `persistResponse`; `runner/prompt.ts` exporting `SkillName`, `loadSkill`, `buildSystemInstruction`, `languagePreamble` (`SKILL_FILES` / `SKILL_TO_PROMPT_ID` stay module-private, as today). `gemini.ts` re-exports every one of those names.
 
-Suites that could break: `parse-and-repair.test.ts`, `language-preamble.test.ts`, `output-heavy-tpm.test.ts`, `stage1-chunk.test.ts` (all import from `./gemini.js`); `voice-style.test.ts` (`voice-style.ts:32` imports `stripCodeFences` from `./gemini.js` — left pointing there, wave 4 owns persona); `ollama.test.ts`; slow `gemini.test.ts`; `handoff/schemas.test.ts`.
+Suites that could break: `parse-and-repair.test.ts`, `language-preamble.test.ts`, `output-heavy-tpm.test.ts`, `stage1-chunk.test.ts` (all import from `./gemini.js`); `voice-style.test.ts` (`voice-style.ts:33` imports `stripCodeFences` from `./gemini.js` — left pointing there, wave 4 owns persona); `ollama.test.ts`; slow `gemini.test.ts`; `handoff/schemas.test.ts`.
 
 - [ ] **Step 1: Write the failing test** — `server/src/analyzer/runner/moved-helpers.test.ts`:
 ```ts
@@ -704,7 +704,7 @@ describe('helpers moved out of gemini.ts (#3084 wave 1)', () => {
   ```
   Importing the checker does not run it (its `isDirectlyInvoked` guard, `:141`); `runMadge` spawns the pinned `npx --yes madge@8.0.0` from `server/`. Paste both outputs into the PR body.
 - [ ] **Step 3: Implement (mechanical moves; the changed lines are listed exhaustively)**
-  1. **`types.ts`** = header `/* Analyzer interface types. A leaf module (type-only imports) so runner/transport files can reference StageCall/Analyzer without an edge back to index.ts — madge counts type-only imports as cycle edges. */` + `index.ts:12-21` (the `import type { Stage1Output, … } from '../handoff/schemas.js'` block) + `index.ts:24` (`import type { RawEvalTiming } …`) + `index.ts:34-165` verbatim.
+  1. **`types.ts`** = header `/* Analyzer interface types. A leaf module (type-only imports) so runner/transport files can reference StageCall/Analyzer without an edge back to index.ts — madge counts type-only imports as cycle edges. */` + `index.ts:12-21` (the `import type { Stage1Output, … } from '../handoff/schemas.js'` block) + `index.ts:24` (`import type { RawEvalTiming } …`) + `index.ts:33-164` verbatim.
   2. **`index.ts`**: delete `:34-165` and `:24`; below the remaining imports add
      ```ts
      export type { StageChunkInfo, StageCall, Analyzer } from './types.js';
@@ -755,12 +755,12 @@ describe('helpers moved out of gemini.ts (#3084 wave 1)', () => {
      import { parseAndValidate, buildRetryMessage, summariseDetail, persistResponse } from './runner/parse.js';
      ```
   7. **Allowlist**: in `server/madge-cycles-allowlist.json`, delete the three `analyzer/` entries by content — `["analyzer/index.ts", "analyzer/gemini.ts"]`, `["analyzer/gemini.ts", "analyzer/ollama.ts"]` and `["analyzer/index.ts", "analyzer/gemini.ts", "analyzer/ollama.ts"]` — not by line number: wave 0's PR #3192 appends its own entry to this shared, machine-checked list. What this task breaks, edge by edge:
-     - `gemini.ts → index.ts` and `ollama.ts → index.ts` (both `import type`, `gemini.ts:36`, `ollama.ts:66`) now point at `types.ts`, a leaf.
-     - `ollama.ts → gemini.ts` (`ollama.ts:69-77`) now points at `runner/prompt.ts` and `runner/parse.ts`, neither of which imports an analyzer engine.
+     - `gemini.ts → index.ts` and `ollama.ts → index.ts` (both `import type`, `gemini.ts:36`, `ollama.ts:67`) now point at `types.ts`, a leaf.
+     - `ollama.ts → gemini.ts` (`ollama.ts:70-78`) now points at `runner/prompt.ts` and `runner/parse.ts`, neither of which imports an analyzer engine.
      - `index.ts → gemini.ts` and `index.ts → ollama.ts` (`index.ts:22-23`) stay; no back-edge closes them any more.
-     - **The unlisted loop `rate-limit.ts → ollama.ts → gemini.ts → rate-limit.ts`** (`rate-limit.ts:22`, `ollama.ts:69-77`, `gemini.ts:41`) exists on 46e62a34 but is not in the allowlist: madge never reported it, and `check:cycles` passes today only because madge's list is a subset of the allowlist. It is gone after this PR. Task 1.4 already removed its `rate-limit.ts → ollama.ts` edge (`rate-limit.ts` now imports `AnalysisAbortedError` from `errors.ts`), and this step removes `ollama.ts → gemini.ts`. Breaking the listed cycles is exactly what could make madge walk, and report, a loop it hid before; that is why Step 4 compares the lists instead of trusting the count.
+     - **The unlisted loop `rate-limit.ts → ollama.ts → gemini.ts → rate-limit.ts`** (`rate-limit.ts:22`, `ollama.ts:70-78`, `gemini.ts:41`) exists on `80be2f1d` but is not in the allowlist: madge never reported it, and `check:cycles` passes today only because madge's list is a subset of the allowlist. It is gone after this PR. Task 1.4 already removed its `rate-limit.ts → ollama.ts` edge (`rate-limit.ts` now imports `AnalysisAbortedError` from `errors.ts`), and this step removes `ollama.ts → gemini.ts`. Breaking the listed cycles is exactly what could make madge walk, and report, a loop it hid before; that is why Step 4 compares the lists instead of trusting the count.
 
-     Five non-test modules under `analyzer/` still import `index.ts` after this task: `select-analyzer.ts:32`, `dialogue-structure/escalation.ts:2`, `attribution-eval/review-run.ts:21`, `attribution-eval/run-eval.ts:7-8` and `attribution-eval/run-eval-cli.ts:19`. They close no cycle, because `index.ts` imports none of them: its imports are `../handoff/schemas.js`, `./gemini.js`, `./ollama.js`, `./analyzer-eval-stats.js`, `../workspace/user-settings.js` and `../config/resolver.js` (`index.ts:12-32`). This task does not touch them.
+     Five non-test modules under `analyzer/` still import `index.ts` after this task: `select-analyzer.ts:38`, `dialogue-structure/escalation.ts:2`, `attribution-eval/review-run.ts:21`, `attribution-eval/run-eval.ts:7-8` and `attribution-eval/run-eval-cli.ts:19`. They close no cycle, because `index.ts` imports none of them: its imports are `../handoff/schemas.js`, `./gemini.js`, `./ollama.js`, `./analyzer-eval-stats.js`, `../workspace/user-settings.js` (`getResolvedAnalysisEngine`, `getResolvedGeminiApiKey`, `getResolvedAllowCloudFallback`), `../config/ollama-resolved.js` (`getResolvedOllamaUrl`, `getResolvedOllamaModel` — moved here from `user-settings.js`, A7) and `../config/resolver.js` (`configValue`) (`index.ts:12-31`). `config/ollama-resolved.ts` closes no cycle either: it imports only `./resolver.js` and `../workspace/user-settings.js`. This task does not touch any of them.
 - [ ] **Step 4: Run and confirm it passes**  Run, in order: `npm --prefix server run test -- src/analyzer/runner/moved-helpers.test.ts --retry=0`; `npm run test:server:analyzer`; `npm --prefix server run test:slow -- src/analyzer/gemini.test.ts`; `npm run typecheck`; `npm run check:cycles`  Expected: all PASS.
 
   Then capture the after-list with Step 2's `node` command, writing `w1a-cycles-after.txt` instead of `w1a-cycles-before.txt`. Compare the two with `node` too, which reads both files from the same `os.tmpdir()` path Step 2's command wrote them to. Run both captures and this comparison from the same shell. The command is identical in Git Bash and PowerShell: it contains no `$`, no `!` and no shell temp variable, so neither shell rewrites it.
@@ -775,7 +775,7 @@ describe('helpers moved out of gemini.ts (#3084 wave 1)', () => {
   Paste the comparison output into the PR body. If madge still reports an `analyzer/` cycle, `check:cycles` FAILS naming it: find and remove the remaining edge; never re-add the entry.
 - [ ] **Step 5: Mutation proofs**
   1. Revert the Step-3.4 `SKILLS_DIR` line to three `'..'` → red: "loadSkill still resolves on-disk skills from the new directory depth" (ENOENT). Restore.
-  2. Change `ollama.ts:66` back to `from './index.js'` → `npm run check:cycles` FAILS listing a cycle through `analyzer/index.ts` and `analyzer/ollama.ts`. Restore. Paste the output in the PR body.
+  2. Change `ollama.ts:67` back to `from './index.js'` → `npm run check:cycles` FAILS listing a cycle through `analyzer/index.ts` and `analyzer/ollama.ts`. Restore. Paste the output in the PR body.
 - [ ] **Step 6: Commit**
 ```bash
 git add server/src/analyzer/types.ts server/src/analyzer/index.ts server/src/analyzer/runner/parse.ts server/src/analyzer/runner/prompt.ts server/src/analyzer/runner/moved-helpers.test.ts server/src/analyzer/gemini.ts server/src/analyzer/ollama.ts server/madge-cycles-allowlist.json
@@ -790,7 +790,7 @@ git commit -m "refactor(server): move shared analyzer helpers out of gemini.ts a
 - [ ] **Step 2: Release notes — skipped, reason stated in the PR body:** "No shippable delta: characterisation tests and an internal refactor; every error message, request body, forensic file and failure-taxonomy outcome is byte-identical (pinned by Tasks 1.1–1.3). The one difference is log text: a non-OK Ollama response's error `name` is now `AnalyzerHttpError` instead of `Error`, which changes its logged stack header."
 - [ ] **Step 3: On-box acceptance — not applicable** (no hardware-only behaviour); say so in the PR body.
 - [ ] **Step 4: Verify** — `npm run verify:fast:branch`; then, because that battery runs neither the slow lane nor the cycle guard, `npm --prefix server run test:slow -- src/analyzer/gemini.test.ts` and `npm run check:cycles`. Expected: all green.
-- [ ] **Step 5: PR** — `gh pr create --base main --title "refactor(server): characterise analyzer runners and type analyzer errors"`. Body: `## Summary` (Tasks 1.1–1.5; the four captured `FailureCode`s from Task 1.3; the one log-only difference — a non-OK Ollama error's `name` is now `AnalyzerHttpError`, not `Error`; Task 1.5's before and after cycle lists and their diff), `## Test plan` (Step 4 commands; every mutation-proof red output), `Refs #3084`, "Also fixed, found in passing: comments at `errors.ts:16-18`, `index.ts:251-253` and `fallback-analyzer.test.ts:3` that this change made false", attribution lines.
+- [ ] **Step 5: PR** — `gh pr create --base main --title "refactor(server): characterise analyzer runners and type analyzer errors"`. Body: `## Summary` (Tasks 1.1–1.5; the four captured `FailureCode`s from Task 1.3; the one log-only difference — a non-OK Ollama error's `name` is now `AnalyzerHttpError`, not `Error`; Task 1.5's before and after cycle lists and their diff), `## Test plan` (Step 4 commands; every mutation-proof red output), `Refs #3084`, "Also fixed, found in passing: comments at `errors.ts:16-18`, `index.ts:250-252` and `fallback-analyzer.test.ts:3` that this change made false", attribution lines.
 - [ ] **Step 6: Review gate** — run the `pr-review-gate` skill at depth **high** (the PR contains `refactor` commits). Fold findings, re-run Step 4, merge with a merge commit.
 
 ---
@@ -798,7 +798,7 @@ git commit -m "refactor(server): move shared analyzer helpers out of gemini.ts a
 ### PR 1b — Transports, one stage runner, `<think>` strip
 
 - **Branch:** `node scripts/wt-new.mjs refactor/server-3084-w1b-runner`, cut from `main` after PR 1a merged.
-- **Line numbers in this PR** refer to `46e62a34`. PR 1a removed `ollama.ts:83-107`, rewrote the import blocks of `ollama.ts`/`gemini.ts`, and deleted `gemini.ts:129-264,1001-1391`, so locate each range by the **symbol named next to it** before editing.
+- **Line numbers in this PR** refer to `80be2f1d`. PR 1a removed `ollama.ts:84-108`, rewrote the import blocks of `ollama.ts`/`gemini.ts`, and deleted `gemini.ts:129-264,1001-1391`, so locate each range by the **symbol named next to it** before editing.
 - **Delivers:** `runner/transport.ts`, `runner/finish.ts`, `runner/transport-retry.ts`, `runner/retry-policy.ts`, `runner/stage-runner.ts`, `runner/transport-analyzer.ts`, `transports/ollama-transport.ts`, `transports/gemini-transport.ts`, leaf `ollama-settings.ts`; `OllamaAnalyzer` / `GeminiAnalyzer` become `TransportAnalyzer` subclasses with unchanged constructors; `stripThink` in `parseAndValidate`; stale references the moves made false.
 - **Must NOT change:** any request body field or value; message-turn shapes on first attempt or retry; temperatures; forensic files (`inbox`, `outbox`, `errors.json`, `attempt{1,2}.raw.txt`); log lines; retry counts/backoffs/limiter calls; which errors fall back, rethrow or resolve `null`; telemetry ordering (a truncated or empty Ollama stream still skips VRAM sampling, GPU-split detection and eval timing); `generatePersonaViaOllama` and `voice-style.ts` (wave 4). No `includeThoughts`/`thinkingConfig` is sent.
 - **The one behaviour change:** a response that begins with `<think>…</think>` now parses (Task 1.12).
@@ -961,8 +961,8 @@ export interface ChatTransport {
 ```ts
 /* Maps a completed TransportResult to answer text or the classified error the
    stage-2 chunker / failure taxonomy key off. Wave 1 reproduces each engine's
-   pre-extraction order exactly (ollama.ts chat() :829-843, gemini.ts
-   generate() :783-818 on 46e62a34). Wave 2 adds the reasoning-overflow rule. */
+   pre-extraction order exactly (ollama.ts chat() :830-844, gemini.ts
+   generate() :783-818 on 80be2f1d). Wave 2 adds the reasoning-overflow rule. */
 import { AnalyzerTruncatedError, GeminiContentBlockedError, type TransportKind } from '../errors.js';
 import type { TransportResult } from './transport.js';
 
@@ -1181,21 +1181,21 @@ describe('OllamaTransport (#3084 wave 1)', () => {
          const { signal } = req;
          const { onChunk } = req.call;
          const onEvalTiming: ((t: RawEvalTiming) => void) | undefined = req.call.onEvalTiming;
-         /* body: ollama.ts:631-674 with the changed lines below */
-         /* …ollama.ts:676-926 with the changed lines below… */
+         /* body: ollama.ts:632-675 with the changed lines below */
+         /* …ollama.ts:677-927 with the changed lines below… */
        }
      }
      ```
-     Body = `ollama.ts:631-926` (the `chat()` doc comment `:616-622` moves above `send`), with exactly these line changes:
-     - `:633` `messages,` → `messages: req.system ? [{ role: 'system' as const, content: req.system }, ...req.messages] : req.messages,`
-     - `:643` `format: responseFormat,` → `format: ollamaFormat(req.structuredOutput),`
-     - `:656` `temperature,` → `temperature: req.temperature,`
-     - `:672` `num_predict: resolveNumPredict(),` → `num_predict: req.maxOutputTokens ?? resolveNumPredict(),`
-     - `:829-831` → `if (!buf) { return { text: '', reasoningSeen: false, finish: doneReason === 'length' ? 'length' : 'stop', finishReason: doneReason, receivedBytes: 0 }; }`
-     - `:838-843` → keep the `console.warn` at `:839-841` verbatim; replace `:842` `throw new AnalyzerTruncatedError('ollama', 'length', buf.length);` with `return { text: buf, reasoningSeen: false, finish: 'length', finishReason: 'length', receivedBytes: buf.length };`
-     - `:923` `return buf;` → `return { text: buf, reasoningSeen: false, finish: 'stop', finishReason: doneReason, receivedBytes: buf.length };`
+     Body = `ollama.ts:632-927` (the `chat()` doc comment `:617-623` moves above `send`), with exactly these line changes:
+     - `:634` `messages,` → `messages: req.system ? [{ role: 'system' as const, content: req.system }, ...req.messages] : req.messages,`
+     - `:644` `format: responseFormat,` → `format: ollamaFormat(req.structuredOutput),`
+     - `:657` `temperature,` → `temperature: req.temperature,`
+     - `:673` `num_predict: resolveNumPredict(),` → `num_predict: req.maxOutputTokens ?? resolveNumPredict(),`
+     - `:830-832` → `if (!buf) { return { text: '', reasoningSeen: false, finish: doneReason === 'length' ? 'length' : 'stop', finishReason: doneReason, receivedBytes: 0 }; }`
+     - `:839-844` → keep the `console.warn` at `:840-842` verbatim; replace `:843` `throw new AnalyzerTruncatedError('ollama', 'length', buf.length);` with `return { text: buf, reasoningSeen: false, finish: 'length', finishReason: 'length', receivedBytes: buf.length };`
+     - `:924` `return buf;` → `return { text: buf, reasoningSeen: false, finish: 'stop', finishReason: doneReason, receivedBytes: buf.length };`
 
-     Both early returns sit inside the `try` whose `finally` (`:924-926`) calls `releaseSlot()`, and before the VRAM sample (`:846`), split detection (`:854`) and eval timing (`:916`) — the pre-W1 telemetry order.
+     Both early returns sit inside the `try` whose `finally` (`:925-927`) calls `releaseSlot()`, and before the VRAM sample (`:847`), split detection (`:855`) and eval timing (`:917`) — the pre-W1 telemetry order.
   3. **`ollama.ts`**: delete every moved range. Add
      ```ts
      import { OllamaTransport, ANALYZER_DISPATCHER, classifyConnectError } from './transports/ollama-transport.js';
@@ -1796,7 +1796,7 @@ git commit -m "refactor(server): extract GeminiTransport and the shared transpor
 - Consumes: `ChatMessage` (Task 1.7); `ParseResult`, `buildRetryMessage` (`runner/parse.ts`); `resolveOllamaTemperature`, `resolveOllamaRetryTemperature` (`ollama-settings.ts`); `resolveGeminiTemperature` (`transports/gemini-transport.ts`); `AnalysisAbortedError`, `LocalUnreachableError`.
 - Produces: `interface ValidationRetryPolicy` (the contract's members, including `initialTemperature(): number`, `readonly warnsOnRepair: boolean` and the 1b-only `finalFailureMessage`, which wave 3b removes), `OLLAMA_RETRY_POLICY`, `GEMINI_RETRY_POLICY`. (`OPENAI_RETRY_POLICY` is wave 3.)
 
-Encodes, one-for-one: Ollama `ollama.ts:524-533` (repair warning), `:539-548`/`:593-607` (raw forensics), `:559-571` (retry shape + temperature), `:455-456` (escalation rethrows), `:608-610` (message); Gemini `gemini.ts:467-471` (no warning), `:474-482` (no raw files), `:484-493` (always replay), `:421` (escalation rethrows abort only), `:515-517` (message).
+Encodes, one-for-one: Ollama `ollama.ts:525-534` (repair warning), `:540-549`/`:594-608` (raw forensics), `:560-572` (retry shape + temperature), `:456-457` (escalation rethrows), `:609-611` (message); Gemini `gemini.ts:467-471` (no warning), `:474-482` (no raw files), `:484-493` (always replay), `:421` (escalation rethrows abort only), `:515-517` (message).
 
 - [ ] **Step 1: Write the failing test** — `server/src/analyzer/runner/retry-policy.test.ts`:
 ```ts
@@ -1970,8 +1970,8 @@ git commit -m "refactor(server): encode ollama and gemini validation retry polic
 **Files:**
 - Create: `server/src/analyzer/runner/stage-runner.ts`
 - Create: `server/src/analyzer/runner/transport-analyzer.ts`
-- Modify: `server/src/analyzer/ollama.ts` (class `OllamaAnalyzer`, `:296-928` on 46e62a34, including the Task 1.8 adapter)
-- Modify: `server/src/analyzer/gemini.ts` (class `GeminiAnalyzer`, `:266-867` on 46e62a34, including the Task 1.9 adapter)
+- Modify: `server/src/analyzer/ollama.ts` (class `OllamaAnalyzer`, `:297-929` on 80be2f1d, including the Task 1.8 adapter)
+- Modify: `server/src/analyzer/gemini.ts` (class `GeminiAnalyzer`, `:266-867` on 80be2f1d, including the Task 1.9 adapter)
 - Test: `server/src/analyzer/runner/stage-runner.test.ts`
 
 **Interfaces:**
@@ -2326,7 +2326,7 @@ export class StageRunner {
   }
 }
 ```
-The ordering matches both old runners: `writeInbox` → `loadSkill` → system → (schema) → tick → attempt 1 → raw 1 → errors 1 → attempt 2 → raw 2 → errors 2 → throw; escalation: `writeInbox` → (schema) → single call. The `z.toJSONSchema` comment block `ollama.ts:488-503` moves here.
+The ordering matches both old runners: `writeInbox` → `loadSkill` → system → (schema) → tick → attempt 1 → raw 1 → errors 1 → attempt 2 → raw 2 → errors 2 → throw; escalation: `writeInbox` → (schema) → single call. The `z.toJSONSchema` comment block `ollama.ts:489-504` moves here.
 
 `runSingleAttempt`'s `catch` above is final for wave 1. Wave 2 (Task 2.9) adds one line to it: a call to the new optional `StageCall.onReasoningOverflow` for an `AnalyzerReasoningOverflowError`, before `return null`. Neither that class nor that hook exists in wave 1, so this task adds neither, and wave 1 stays behaviour-preserving.
 
@@ -2477,7 +2477,7 @@ export class TransportAnalyzer implements Analyzer {
   }
 }
 ```
-Keys and schema pairs are exactly `ollama.ts:307-473` / `gemini.ts:280-439` (the stage table).
+Keys and schema pairs are exactly `ollama.ts:308-474` / `gemini.ts:280-439` (the stage table).
 
 `ollama.ts` — replace the whole `OllamaAnalyzer` class (including the Task 1.8 adapter) with:
 ```ts
@@ -2543,7 +2543,7 @@ git commit -m "refactor(server): run ollama and gemini analyzers through one sta
 - Consumes: Tasks 1.5, 1.7, 1.11.
 - Produces: `stripThink(raw: string): { text: string; unterminated: boolean }` (contract); `withThinkEvidence(r: TransportResult): TransportResult` (sets `reasoningSeen` for an unterminated leading `<think>`; wave 2's `hasReasoningEvidence` reads it).
 
-Regex precedent: `voice-style.ts:152` (`/^\s*<think>[\s\S]*?<\/think>\s*/i`). `cleanPersona` keeps its own copy (wave 4 owns persona).
+Regex precedent: `voice-style.ts:153` (`/^\s*<think>[\s\S]*?<\/think>\s*/i`). `cleanPersona` keeps its own copy (wave 4 owns persona).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -2666,7 +2666,7 @@ git commit -m "fix(server): strip a leading think block before parsing analyzer 
 
 **Interfaces:** none (prose only; no runtime line).
 
-Each edit below replaces a reference this PR made false (a symbol now in a different file, or a deleted method named). Two are pre-existing defects surfaced while checking these files and are declared in the PR body as found in passing: `docs/local-llm.md:89` states `ANALYZER_NUM_CTX = 16384` (it is 32768, `ollama.ts:252`), and `server/.env.example:11` cites `RESIDENT_MODELS` (removed; keep-alive is per model, `ollama.ts:177-187`).
+Each edit below replaces a reference this PR made false (a symbol now in a different file, or a deleted method named). Two are pre-existing defects surfaced while checking these files and are declared in the PR body as found in passing: `docs/local-llm.md:89` states `ANALYZER_NUM_CTX = 16384` (it is 32768, `ollama.ts:253`), and `server/.env.example:11` cites `RESIDENT_MODELS` (removed; keep-alive is per model, `ollama.ts:178-188`).
 
 - [ ] **Step 1: Find every stale reference first (the check this task must turn clean)**  Run: `git grep -nE "ollama\.ts:[0-9]+|gemini\.ts:[0-9]+|generateWithLimiter|OllamaAnalyzer\.chat|chat\(\)|RESIDENT_MODELS|ANALYZER_NUM_CTX = 16384|keepAliveFor\(\)\*\* at|runStage\` in" -- CLAUDE.md docs/local-llm.md server/.env.example server/src`  Expected before this task: hits at every file listed above. (Historical records — `docs/features/**`, `docs/superpowers/**`, `docs/release-notes-next.md`, `RELEASE_NOTES.md`, `docs/BACKLOG.md` — are out of scope and are not edited.)
 - [ ] **Step 2: Edit** (exact replacements)
@@ -2678,7 +2678,7 @@ Each edit below replaces a reference this PR made false (a symbol now in a diffe
   - `docs/local-llm.md:287-288`: `` `server/src/analyzer/ollama.ts` (the constant lives next to `` → `` `server/src/analyzer/ollama-settings.ts` (the constant lives next to ``
   - `docs/local-llm.md:333`: `` `server/src/analyzer/ollama.ts`) and Ollama's sampler is constrained `` → `` `server/src/analyzer/runner/stage-runner.ts`) and Ollama's sampler is constrained `` and on `:332` `` (`runStage` in `` → `` (`StageRunner` in ``
   - `docs/local-llm.md:394`: `` 8K — see `ANALYZER_NUM_CTX` at `server/src/analyzer/ollama.ts:115`) or `` → `` 8K — see `ANALYZER_NUM_CTX` in `server/src/analyzer/ollama-settings.ts`) or ``
-  - `server/.env.example:9-11` (found in passing): `#                     (qwen3.5:9b, llama3.1:8b) work too but unload after` / `#                     each call by design (see RESIDENT_MODELS in` / `#                     server/src/analyzer/ollama.ts).` → `#                     (qwen3.5:9b, llama3.1:8b) work too; keep-alive is` / `#                     resolved per model (see keepAliveFor in` / `#                     server/src/analyzer/ollama-settings.ts).`
+  - `server/.env.example:9-11` (found in passing; main re-indented these lines to 27 spaces after `#`) — `#                           (qwen3.5:9b, llama3.1:8b) work too but unload after` / `#                           each call by design (see RESIDENT_MODELS in` / `#                           server/src/analyzer/ollama.ts).` → `#                           (qwen3.5:9b, llama3.1:8b) work too; keep-alive is` / `#                           resolved per model (see keepAliveFor in` / `#                           server/src/analyzer/ollama-settings.ts).`
   - `server/src/routes/ollama-health.test.ts:508-509`: `analyzer's runStage path passes (ANALYZER_NUM_CTX, ANALYZER_NUM_GPU` / `in server/src/analyzer/ollama.ts). Either drifting triggers a` → `analyzer's stage runner passes (ANALYZER_NUM_CTX, ANALYZER_NUM_GPU` / `in server/src/analyzer/ollama-settings.ts). Either drifting triggers a`
   - `server/src/routes/ollama-health.test.ts:564`: `VRAM now" — see analyzer/ollama.ts:92 for the equivalent on real chat` → `VRAM now" — see keepAliveFor in analyzer/ollama-settings.ts for the equivalent on real chat`
   - `server/src/tts/retry.ts:102`: `` `signal` fires. Modeled after analyzer/gemini.ts's `sleep`. */ `` → `` `signal` fires. Modeled after analyzer/runner/transport-retry.ts's `sleep`. */ ``
@@ -2698,10 +2698,10 @@ git commit -m "docs(server): update analyzer references moved by the stage-runne
 ### Task 1.14: Ship PR 1b
 
 **Files:**
-- Modify: `docs/release-notes-next.md` (section `## 🗣️ Analyzer, script review & manuscript`, `:284`)
-- Modify: `RELEASE_NOTES.md` (top of the `# Castwright 1.15.0` bullet list, `:3`)
-- Modify: `docs/testing/onbox-acceptance-register.md` (Group B: `## At a glance` row `:557`, the `**N owed.**` line `:566`, the Group B `<!-- next-id: … -->` marker `:4509`, new row after `B1` ending `:4551`, the `> **Last change: …**` line `:570`)
-- Modify: `docs/testing/onbox-acceptance-register-live-view.html` (new `<details class="item">` after `B1`'s, which ends near `:751`)
+- Modify: `docs/release-notes-next.md` (section `## 🗣️ Analyzer, script review & manuscript`, `:289`)
+- Modify: `RELEASE_NOTES.md` (top of the `# Castwright 1.15.0` bullet list, `:1`)
+- Modify: `docs/testing/onbox-acceptance-register.md` (Group B: `## At a glance` row `:557`, the `**N owed.**` line `:566` — both unchanged between `46e62a34` and `80be2f1d`; the Group B `<!-- next-id: … -->` marker, the new row after `B1`'s ending, and the `> **Last change: …**` line all move with every lane that merges a register row first, same as the row ids themselves — re-read their current line numbers on `main` at ship time rather than trusting any number cited here)
+- Modify: `docs/testing/onbox-acceptance-register-live-view.html` (new `<details class="item">` after `B1`'s `</details>` — re-read where that section currently ends on `main` at ship time, same reason)
 
 - [ ] **Step 1: Derived artifacts** — no `openapi.yaml` change (no `npm run openapi:types`); no registry knob (no `npm run config:sync`; `npm run config:check` already ran in Task 1.13).
 - [ ] **Step 2: Open the PR as a draft to get its number** — push the branch, `gh pr create --draft --base main --title "refactor(server): run analyzer engines through one stage runner over per-engine transports"`, then `gh pr view --json number -q .number`. Use that number as `<PR>` below.
@@ -2711,7 +2711,7 @@ git commit -m "docs(server): update analyzer references moved by the stage-runne
   - `RELEASE_NOTES.md`, insert as the first bullet under `# Castwright 1.15.0`:
     `- **A model that "thinks out loud" before answering no longer trips up analysis.** Some models open their reply with a private reasoning note before the actual answer. Castwright used to stumble over that note, try the chapter again, and often give up on it. It now sets the note aside and reads the answer that follows.`
 - [ ] **Step 4: On-box acceptance row (Group B).** The runner now sits on every real analysis call; the mocked suites cannot prove real-daemon telemetry (the `done` line's eval timing, VRAM sampling, GPU-split detection) or a real Gemini stream. The row's id is the next id from that group's `next-id` marker, minted at ship time (`npm run check:onbox-register`); allocate-once — never reuse — and bump the marker by one in the same commit. Below, `B<next>` (`B&lt;next&gt;` inside HTML) stands for that minted id; write the minted id in its place everywhere.
-  - Markdown row, inserted after `B1` (before the `---` at `:4553`):
+  - Markdown row, inserted after `B1` (before the next `---`; re-read that line's current position on `main` at ship time — it moves with every lane that merges a register row first, same as the row ids):
     ```md
     ### B<next> · Stage-runner extraction behaves identically on a real Ollama daemon and a real Gemini key ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR [#<PR>](https://github.com/dudarenok-maker/Castwright/pull/<PR>)) · **local Ollama; the Gemini half needs the `GEMINI_API_KEY` from the primary checkout**
 
@@ -2721,7 +2721,7 @@ git commit -m "docs(server): update analyzer references moved by the stage-runne
     - Gemini: no `[gemini] generate failed` line in `logs/server.log`; a throttle chip appears only when the limiter actually waits;
     - if a local thinking tag that emits a leading `<think>` block is installed, its chapter validates on the first attempt (no `attempt1.raw.txt` for that key).
     ```
-  - Markdown bookkeeping: `## At a glance` Group B row `| **B** | … | 1 |` → `2` (increment whatever it reads); `**48 owed.**` → increment by one; the Group B `<!-- next-id: B<next> -->` marker → the id after `B<next>`; add one line above the existing `> **Last change: …**` paragraph: `> **Last change: <YYYY-MM-DD> (#3084 wave 1b), <old> → <new>.** Row **B<next>** added (stage-runner extraction smoke).`
+  - Markdown bookkeeping: `## At a glance` Group B row `| **B** | … | N |` → `N+1` (increment whatever it reads on `main` at ship time — read the real count, do not assume any number cited elsewhere in this file); the `**N owed.**` line → increment by one from whatever it reads; the Group B `<!-- next-id: B<next> -->` marker → the id after `B<next>`; add one line above the existing `> **Last change: …**` paragraph: `> **Last change: <YYYY-MM-DD> (#3084 wave 1b), <old> → <new>.** Row **B<next>** added (stage-runner extraction smoke).`
   - Live view, insert after `B1`'s `</details>` inside the Group B section:
     ```html
         <details class="item">

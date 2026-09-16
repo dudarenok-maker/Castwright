@@ -30,7 +30,7 @@
   - `persona-gpu-plan.ts`;
   - `cast-design.ts`'s pre-pass and lazy-persona skip.
 - **Design pre-pass:** it rethrows the whole-job error classes instead of recording them per character: `AnalyzerUnreachableError`, `AnalyzerEndpointMissingError`, `AnalyzerKeyOriginError`, `AnalyzerTimeoutError`, and `AnalyzerHttpError` with status 401 or 403.
-- **Failure codes:** the design job's backstop ends the job with the analysis failure taxonomy's code for any error that reaches it (`auth` for a 401/403 or key-origin error, `analyzer-timeout`, `analyzer-endpoint-missing`, …) instead of `unknown` (`cast-design.ts:908-936`). **What reaches it on `46e62a34` is the pre-pass's five wholesale rethrows — not a lazy-path persona failure.** `6222e483` (second half of #3027, follow-ups `b8b12be5`, `f3d3a341`) gave the lazy `generateVoiceStylePersona` + `writeVoiceStylePersona` pair its own try/catch (`cast-design.ts:525-543`): it records a per-character failure, broadcasts `character_failed`, and continues to the next character. So this PR's backstop change is scoped to those whole-job classes, which today end as `unknown`. A lazy persona failure — a reasoning overflow included — stays a per-character failure carrying `itemFailureReason`'s reason **string** (`workspace/file-lock.ts:183-185`); it records no `FailureCode` today, and this PR adds none, because putting a code on `character_failed` is a new wire field and a separate decision. #3230 (still OPEN) asked whether the lazy path should continue per character; `6222e483` makes it do so, so it looks resolved by that commit and nothing here is blocked on it.
+- **Failure codes:** the design job's backstop ends the job with the analysis failure taxonomy's code for any error that reaches it (`auth` for a 401/403 or key-origin error, `analyzer-timeout`, `analyzer-endpoint-missing`, …) instead of `unknown` (`cast-design.ts:908-936`). **What reaches it on `80be2f1d` is the pre-pass's five wholesale rethrows — not a lazy-path persona failure.** `6222e483` (second half of #3027, follow-ups `b8b12be5`, `f3d3a341`) gave the lazy `generateVoiceStylePersona` + `writeVoiceStylePersona` pair its own try/catch (`cast-design.ts:525-543`): it records a per-character failure, broadcasts `character_failed`, and continues to the next character. So this PR's backstop change is scoped to those whole-job classes, which today end as `unknown`. A lazy persona failure — a reasoning overflow included — stays a per-character failure carrying `itemFailureReason`'s reason **string** (`workspace/file-lock.ts:183-185`); it records no `FailureCode` today, and this PR adds none, because putting a code on `character_failed` is a new wire field and a separate decision. #3230 (still OPEN) asked whether the lazy path should continue per character; `6222e483` makes it do so, so it looks resolved by that commit and nothing here is blocked on it.
 - **Cancellation:** the design job's abort signal reaches every persona call (pre-pass and lazy) through `generateVoiceStylePersona(…, { signal })` and `runFreeText` to the transport, so pausing a design job aborts an in-flight persona request. A pause is a clean stop, never a per-character failure or an error event.
   - **On the lazy path that takes an explicit abort check,** as the first statement of the per-character catch `6222e483` added (`cast-design.ts:528-543`), mirroring the pre-pass's (`:2304` in this plan's Step 3 text). Without it that catch swallows the `AnalysisAbortedError` into a `character_failed` and the loop's top-of-iteration abort check (`:388-389`) then breaks to `endJob({type:'idle'})` (`:740`) — so the job ends with no error event but WITH a spurious failure recorded against the character the user paused on. That is why this wave's pause test asserts the absence of `character_failed`, not just the absence of `error`: without that assertion it passes either way.
   - **The backstop's `AnalysisAbortedError` branch is therefore defence in depth, not the live path.** With the lazy check in place and the pre-pass returning on abort, nothing routinely reaches it.
@@ -289,7 +289,7 @@ The method reads one member: the constructor's `transport` (W1 Task 1.11 declare
       structuredOutput: { mode: 'off' },
       temperature: input.temperature,
       maxOutputTokens: undefined,
-      /* The persona limiter estimate from main 46e62a34 (voice-style.ts:211): ~chars/4 plus a flat margin. */
+      /* The persona limiter estimate from main 80be2f1d (voice-style.ts:212, re-pinned from :211 — #3192 split its ollama-resolved import onto its own line): ~chars/4 plus a flat margin. */
       estimatedInputTokens: Math.ceil((system.length + input.prompt.length) / 4) + 200,
       signal: input.signal,
       call: {},
@@ -335,7 +335,7 @@ git commit -m "feat(server): add StageRunner.runFreeText for unstructured single
   - `send()` gains a first-line dispatch;
   - new private `sendFreeText`;
   - new exported `PERSONA_ABSOLUTE_MAX_MS`.
-- Modify: `server/src/analyzer/ollama.ts:135-141`. Delete the `PERSONA_ABSOLUTE_MAX_MS` definition and its comment, and import the constant from the transport; `generatePersonaViaOllama` still uses it until Task 4.5. Line numbers are main's; W1 may have shifted them, so locate the lines by symbol.
+- Modify: `server/src/analyzer/ollama.ts:136-142` at `80be2f1d`, re-pinned from `:135-141`. Delete the `PERSONA_ABSOLUTE_MAX_MS` definition and its comment, and import the constant from the transport; `generatePersonaViaOllama` still uses it until Task 4.5. Line numbers are main's; W1 may have shifted them, so locate the lines by symbol.
 - Test: Modify `server/src/analyzer/ollama.test.ts:1394-1452` (retarget the persona describe to the runner free-text path).
 - Test: Modify `server/src/analyzer/ollama-timeout.test.ts`:
   - `:30-34` — imports;
@@ -356,7 +356,7 @@ In `server/src/analyzer/ollama.test.ts`, replace lines 1394-1452 (the header com
 ```ts
 /* Persona generation's Ollama path (#3084 W4, spec §10): OllamaAnalyzer's runner free-text call,
    which OllamaTransport serves with ONE non-streaming /api/chat call — the body that was
-   generatePersonaViaOllama on main 46e62a34. It carries ANALYZER_DISPATCHER too (`stream:false`
+   generatePersonaViaOllama on main 80be2f1d. It carries ANALYZER_DISPATCHER too (`stream:false`
    withholds headers for the WHOLE generation), so these drive the same undici fetchMock as chat(). */
 describe('Ollama free-text (persona) call', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -541,10 +541,10 @@ Then append these two cases inside `describe('OllamaAnalyzer fetch timeout', …
 
 At the top of `server/src/analyzer/transports/ollama-transport.ts`:
 - Add `FreeTextOptions` to the `../runner/transport.js` type import.
-- Add this export, moved from `ollama.ts:135-141` with its rationale:
+- Add this export, moved from `ollama.ts:136-142` at `80be2f1d` (re-pinned from `:135-141` — #3192 split its ollama-resolved import onto its own line) with its rationale:
 ```ts
-/* Absolute ceiling for a one-shot free-text (persona) call. Moved from ollama.ts (main 46e62a34
-   lines 135-141): ANALYZER_DISPATCHER removes undici's implicit 300s bound and the persona caller
+/* Absolute ceiling for a one-shot free-text (persona) call. Moved from ollama.ts (main 80be2f1d
+   lines 136-142): ANALYZER_DISPATCHER removes undici's implicit 300s bound and the persona caller
    supplies no signal (see sendFreeText). Deliberately generous: the whole point of the dispatcher
    is that a large model on CPU legitimately takes minutes. Mirrors DESIGN_ABSOLUTE_MAX_MS in
    tts/design-voice-core.ts. */
@@ -554,10 +554,10 @@ Make this the first statement of `OllamaTransport.send(req)`:
 ```ts
     if (req.freeText) return this.sendFreeText(req, req.freeText);
 ```
-Add the private method. Its body is `generatePersonaViaOllama` as PR 3b left it: main's `ollama.ts:950-1027` with W3b Task 3b.6a's redacted non-OK excerpt. Every line not marked `CHANGED` is verbatim from that state, including comments. The redaction call is 3b's, carried through the move unchanged.
+Add the private method. Its body is `generatePersonaViaOllama` as PR 3b left it: main's `ollama.ts:951-1028` at `80be2f1d` (re-pinned from `:950-1027`) with W3b Task 3b.6a's redacted non-OK excerpt. Every line not marked `CHANGED` is verbatim from that state, including comments. The redaction call is 3b's, carried through the move unchanged.
 ```ts
   /** #3084 W4 — the free-text path (spec §10): one NON-streaming /api/chat call with no response
-      `format`, GPU-plan aware. Moved from ollama.ts `generatePersonaViaOllama` (main 46e62a34).
+      `format`, GPU-plan aware. Moved from ollama.ts `generatePersonaViaOllama` (main 80be2f1d).
         - onCpu  → num_gpu:0 (system RAM only); the analyzer slot is still taken with onCpu=true.
         - keepAlive is caller-controlled (resident window for a bulk pre-pass; 0 for one-shot / CPU). */
   private async sendFreeText(req: TransportRequest, freeText: FreeTextOptions): Promise<TransportResult> {
@@ -997,7 +997,7 @@ Before starting this task, confirm 3d.4b has merged: `git grep -n "'analyzer-eng
 - Modify: `server/src/routes/config.test.ts` — append a describe.
 - Regenerate: `server/.env.example`, via `npm run config:sync`. Only the help comment above `# PERSONA_GEN_ENGINE=gemini` (main line 558) changes.
 - **Update `docs/wiki/Advanced-Settings.md`'s existing "Analyzer models & endpoints" row for the persona engine knob in this same PR**, to reflect its new options/pattern text. **Corrected (review pass 1, 2026-09-13):** this task does not change the label `'Persona generation engine'`, and that row already exists at `Advanced-Settings.md:138`, keyed by that unchanged label — so `scripts/tests/knob-docs-sync.test.mjs` (#2012, `test:hooks`), which only checks that every registry knob's *label* has a matching row, does **not** fire here; there is no new-row guard to satisfy. Updating the row's content is still owed on its own terms (a derived-doc-staleness chore, CLAUDE.md's Incidental findings), because the row's options/help text now describes a knob type this PR changes — it just is not the guard's own job to catch that.
-- **No frontend mock config catalogue edit needed — confirmed, not assumed (review pass 2, item 5 conflict).** `src/lib/api.ts`'s `mockGetConfig()` (`46e62a34:8700`) returns `{ groups: MOCK_CONFIG_GROUPS, descriptors: MOCK_CONFIG_DESCRIPTORS, values: MOCK_CONFIG_VALUES, … }`, and `MOCK_CONFIG_DESCRIPTORS = allKnobDescriptors()` (`src/lib/api.ts:8584`, imported from **`server/src/config/descriptors.ts`** — a frontend file importing a server file directly). `allKnobDescriptors()` is `allKnobs().map(toKnobDescriptor)` (`server/src/config/descriptors.ts:29-31`), and that file's own header comment says why: "so the frontend mock catalogue (`src/lib/api.ts`) can build itself from the same projection instead of hand-copying it (#2259)". There is no separate, hand-maintained persona-knob mock entry to add or update — this task's `registry.ts` change alone is what `mockGetConfig()` reflects, automatically, the moment it next runs. **This item's own coordinator-supplied instruction ("4.4 ADDS the persona knob's entry to that mock catalogue") conflicts with this — reported per the task's own instruction to report rather than improvise when a rule conflicts with `46e62a34`.** Task 4.7's regression test (below) calls `mockGetConfig()` directly rather than assuming a separate entry exists, so it still catches a missing registry change correctly.
+- **No frontend mock config catalogue edit needed — confirmed, not assumed (review pass 2, item 5 conflict).** `src/lib/api.ts`'s `mockGetConfig()` (`:8766` at `80be2f1d`, re-pinned from `46e62a34:8700`) returns `{ groups: MOCK_CONFIG_GROUPS, descriptors: MOCK_CONFIG_DESCRIPTORS, values: MOCK_CONFIG_VALUES, … }`, and `MOCK_CONFIG_DESCRIPTORS = allKnobDescriptors()` (`src/lib/api.ts:8650` at `80be2f1d`, re-pinned from `:8584`, imported from **`server/src/config/descriptors.ts`** — a frontend file importing a server file directly). `allKnobDescriptors()` is `allKnobs().map(toKnobDescriptor)` (`server/src/config/descriptors.ts:29-31`), and that file's own header comment says why: "so the frontend mock catalogue (`src/lib/api.ts`) can build itself from the same projection instead of hand-copying it (#2259)". There is no separate, hand-maintained persona-knob mock entry to add or update — this task's `registry.ts` change alone is what `mockGetConfig()` reflects, automatically, the moment it next runs. **This item's own coordinator-supplied instruction ("4.4 ADDS the persona knob's entry to that mock catalogue") conflicts with this — reported per the task's own instruction to report rather than improvise when a rule conflicts with the pinned commit.** Task 4.7's regression test (below) calls `mockGetConfig()` directly rather than assuming a separate entry exists, so it still catches a missing registry change correctly.
 
 **Dependency:** this wave's `feat/server-3084-w4-persona` branch cuts off `main` only after PR 3d has merged (Entry criterion 1, unchanged), because `analyzer-engine` must already exist in `KnobType`.
 
@@ -1238,12 +1238,17 @@ vi.mock('../workspace/user-settings.js', async (importOriginal) => {
   return {
     ...actual,
     getResolvedGeminiApiKey: () => mockApiKey,
-    getResolvedOllamaModel: () => 'llama2',
-    getResolvedOllamaUrl: () => 'http://ollama.test',
     readConfigOverrides: () => ({}),
     getCachedUserSettings: () => ({ ...actual.DEFAULT_USER_SETTINGS, ...mockSettingsPatch }),
   };
 });
+// Re-pinned to 80be2f1d (#3192, A1): getResolvedOllamaModel/getResolvedOllamaUrl moved out of
+// workspace/user-settings.ts into server/src/config/ollama-resolved.ts — main's own
+// voice-style.test.ts mocks that module separately, not through the user-settings.js factory above.
+vi.mock('../config/ollama-resolved.js', () => ({
+  getResolvedOllamaModel: () => 'llama2',
+  getResolvedOllamaUrl: () => 'http://ollama.test',
+}));
 
 function ENDPOINT(over: Partial<AnalyzerEndpoint> = {}): AnalyzerEndpoint {
   return {
@@ -1289,7 +1294,8 @@ describe('persona generation config', () => {
   });
 
   it('resolvePersonaLocalModel: blank inherits the analyzer model; explicit wins', async () => {
-    const { getResolvedOllamaModel } = await import('../workspace/user-settings.js');
+    // Re-pinned to 80be2f1d (#3192, A1) — getResolvedOllamaModel moved to config/ollama-resolved.js.
+    const { getResolvedOllamaModel } = await import('../config/ollama-resolved.js');
     expect(resolvePersonaLocalModel()).toBe(getResolvedOllamaModel());
     process.env.PERSONA_GEN_LOCAL_MODEL = 'qwen3.5:9b';
     expect(resolvePersonaLocalModel()).toBe('qwen3.5:9b');
@@ -1691,12 +1697,10 @@ Replace the header comment (lines 1-26) with:
 Replace the imports (lines 28-35) with:
 ```ts
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
-import {
-  getCachedUserSettings,
-  getResolvedGeminiApiKey,
-  getResolvedOllamaModel,
-  getResolvedOllamaUrl,
-} from '../workspace/user-settings.js';
+import { getCachedUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
+// Re-pinned to 80be2f1d (#3192, A1): these two resolvers moved out of workspace/user-settings.ts
+// into their own leaf, server/src/config/ollama-resolved.ts — matches main's own voice-style.ts.
+import { getResolvedOllamaModel, getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { resolveEndpointApiKey, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { endpointsSharingDevice } from '../gpu/endpoint-eviction.js';
 import { GeminiAnalyzer, stripCodeFences } from './gemini.js';
@@ -1756,8 +1760,10 @@ export function personaSharesGpu(): boolean {
 Replace lines 163-226 (from the `generateVoiceStylePersona` doc comment to the end of the file) with:
 ```ts
 const GEMINI_KEY_REQUIRED =
+  // Re-pinned to 80be2f1d: main's own voice-style.ts already reads "Admin → Model Manager", not
+  // "Account → Server configuration" — match it, don't regress the copy.
   'GEMINI_API_KEY is required to generate voice-style personas. ' +
-  'Set it from Account → Server configuration → Gemini API key, ' +
+  'Set it in Admin → Model Manager → Gemini API key, ' +
   'or in server/.env for CI / power users.';
 
 /* Build the analyzer for the selected engine and hand back its stage runner. Every selection error
@@ -2352,7 +2358,7 @@ The `catch (e)` at `:528-543` keeps its per-character shape — recording to `jo
 ```
 Everything already in that catch, from `const message = …` through `continue;`, is unchanged.
 
-**No ride-out-comment fix is owed any more.** An earlier draft of this task corrected the `#2292` comment at `main :680-687`, which named `ensureCharacterVoiceUuid` and `writeVoiceStylePersona` as persist steps inside a `try` they actually ran before. `6222e483`'s follow-ups fixed that upstream: `ensureCharacterVoiceUuid` now really does run inside the per-character `try`, and `46e62a34`'s comment (`:713-721`) correctly lists `ensureCharacterVoiceUuid`, `designQwenVoiceForCharacter`, `applyOverrideToCastFiles` and `persistEmotionVariant`. Leave it alone; do not re-apply the old edit, and do not claim it as a finding in the PR body.
+**No ride-out-comment fix is owed any more.** An earlier draft of this task corrected the `#2292` comment at `main :680-687`, which named `ensureCharacterVoiceUuid` and `writeVoiceStylePersona` as persist steps inside a `try` they actually ran before. `6222e483`'s follow-ups fixed that upstream: `ensureCharacterVoiceUuid` now really does run inside the per-character `try`, and `80be2f1d`'s comment (`:713-721`, unchanged since `46e62a34` — `routes/cast-design.ts` has no diff between the two commits) correctly lists `ensureCharacterVoiceUuid`, `designQwenVoiceForCharacter`, `applyOverrideToCastFiles` and `persistEmotionVariant`. Leave it alone; do not re-apply the old edit, and do not claim it as a finding in the PR body.
 
 In the design POST route's backstop (`void runDesignJob(job, …).catch((e) => { … })`, main `:908-936`), keep the `lock-contention` branch, insert the pause branch after it, and replace the final `unknown` branch's body. Add `import { classifyAnalysisFailure } from './failure-taxonomy.js';` (merge it into an existing `./failure-taxonomy.js` import if the file has one). The backstop becomes:
 ```ts
@@ -2469,7 +2475,7 @@ git commit -m "feat(server): generate personas through the analyzer transports f
 
 Append to `src/views/advanced.test.tsx` (reusing its existing `getAnalyzerModels` mock and catalog-fetch wiring — Task 3d.4c added both for the fallback knob; do not re-mock them). `renderView()` still needs `mockGetConfig.mockResolvedValue(...)` to render anything (this file's own `vi.mocked(api.getConfig)` spy).
 
-**Corrected, review pass 3, item 3: cannot import `mockGetConfig` through this file's mocked `'../lib/api'` at all.** `src/views/advanced.test.tsx:16-30` is `vi.mock('../lib/api', () => ({ api: { … } }))` — a **factory** mock that replaces the whole module with only that literal object. There is no real `mockGetConfig` (or any other named export) left to import from `'../lib/api'` in this file; any such import resolves against the factory's return value, which has none. So this task imports the same thing `src/lib/api.ts` itself imports, directly — `allKnobDescriptors` from the server module, at `src/lib/api.ts:69`'s exact path (`import { allKnobDescriptors } from '../../server/src/config/descriptors';`), adjusted for this test file's own directory. `src/views/advanced.test.tsx` sits at the same depth as `src/lib/api.ts` (`src/views/` vs. `src/lib/`), so the identical relative path resolves the same way:
+**Corrected, review pass 3, item 3: cannot import `mockGetConfig` through this file's mocked `'../lib/api'` at all.** `src/views/advanced.test.tsx:17-31` at `80be2f1d`, re-pinned from `:16-30` (`advanced.test.tsx` changed between the two commits) is `vi.mock('../lib/api', () => ({ api: { … } }))` — a **factory** mock that replaces the whole module with only that literal object. There is no real `mockGetConfig` (or any other named export) left to import from `'../lib/api'` in this file; any such import resolves against the factory's return value, which has none. So this task imports the same thing `src/lib/api.ts` itself imports, directly — `allKnobDescriptors` from the server module, at `src/lib/api.ts:70`'s exact path at `80be2f1d`, re-pinned from `:69` (`import { allKnobDescriptors } from '../../server/src/config/descriptors';`), adjusted for this test file's own directory. `src/views/advanced.test.tsx` sits at the same depth as `src/lib/api.ts` (`src/views/` vs. `src/lib/`), so the identical relative path resolves the same way:
 ```tsx
 /* ── Persona engine row reuses Task 3d.4c's shared catalog fetch (#3084 W4, F4) ── */
 import { allKnobDescriptors } from '../../server/src/config/descriptors';

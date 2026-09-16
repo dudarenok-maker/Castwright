@@ -36,43 +36,43 @@ The #3084 reporter asks for five things: (1) an OpenAI-compatible endpoint (base
 - no settings were changed;
 - it reproduces: the run buffers "on detected characters indefinitely".
 
-The attached `server.log` shows no analysis request at all: no `[analysis]` milestone and no `[gemini] stream idle` retry line (`gemini.ts:590`). The screenshot shows the view still Idle with **Start analysis** visible, while phase 0 renders a spinner and a "streaming" chip, because `derivePhaseState` marks phase 0 active before any start (`src/lib/analysis-phase-state.ts:46`). That UI defect is handed off as its own bug, separately from this design.
+The attached `server.log` shows no analysis request at all: no `[analysis]` milestone and no `[gemini] stream idle` retry line (`gemini.ts:590`). The screenshot shows the view still Idle with **Start analysis** visible, while phase 0 renders a spinner and a "streaming" chip, because `derivePhaseState` marked phase 0 active before any start. That UI defect was handed off as its own bug, separately from this design, and is fixed on `main`: `derivePhaseState` now takes a `started` flag and yields `pending` for a never-started run (`src/lib/analysis-phase-state.ts:16-23`).
 
 What the code does today:
 
 - **Exactly two analyzer engines, hard-coded as a pair.**
-  - `local` goes to Ollama's native `/api/chat` (`server/src/analyzer/ollama.ts:693`).
+  - `local` goes to Ollama's native `/api/chat` (`server/src/analyzer/ollama.ts:694`).
   - `gemini` goes through `@google/genai` (`server/src/analyzer/gemini.ts:725`).
   - The union `'local' | 'gemini'` is spelled out literally in dozens of places, some of them TTS uses of the same words. It is fixed in:
-    - `analysisEngine`'s enum (`openapi.yaml:4628`, `:4831`; `server/src/workspace/user-settings.ts:98`);
-    - `ModelOption.engine` (`src/lib/models.ts:16`);
+    - `analysisEngine`'s enum (`openapi.yaml:4682`, `:4916`; `server/src/workspace/user-settings.ts:174`);
+    - `ModelOption.engine` (`src/lib/models.ts:17`);
     - run snapshots (`server/src/store/analysis-state.ts:52`, `server/src/workspace/active-analyses.ts:47`);
-    - `getResolvedAnalysisEngine`, which coerces anything that isn't `gemini` to `local` (`user-settings.ts:975-977`);
-    - persona generation's engine enum (`server/src/config/registry.ts:1181-1191`).
+    - `getResolvedAnalysisEngine`, which coerces anything that isn't `gemini` to `local` (`user-settings.ts:1009-1011`);
+    - persona generation's engine enum (`server/src/config/registry.ts:1171-1181`).
 - **Two separate stage runners.** `OllamaAnalyzer` and `GeminiAnalyzer` each implement prompt building, `parseAndValidate` and a validation retry (`ollama.ts` ~470-614; `gemini.ts:441-521`). They differ in their retry policy:
-  - **On invalid JSON:** Ollama drops the assistant turn and raises the temperature (`ollama.ts:559-571`). Gemini replays the model turn at the same temperature (`gemini.ts:484-493`).
-  - **Forensics:** Ollama writes `rawAttemptPath` files (`ollama.ts:539`, `:593`); Gemini does not.
-  - **Escalation:** Gemini returns `null` for every error except an abort, `DailyQuotaExhaustedError` included (`gemini.ts:403-439`); Ollama rethrows abort and unreachable errors (`ollama.ts:455-456`).
+  - **On invalid JSON:** Ollama drops the assistant turn and raises the temperature (`ollama.ts:560-572`). Gemini replays the model turn at the same temperature (`gemini.ts:484-493`).
+  - **Forensics:** Ollama writes `rawAttemptPath` files (`ollama.ts:540`, `:594`); Gemini does not.
+  - **Escalation:** Gemini returns `null` for every error except an abort, `DailyQuotaExhaustedError` included (`gemini.ts:403-439`); Ollama rethrows abort and unreachable errors (`ollama.ts:456-457`).
 
-  Persona generation adds two more direct LLM calls: `generatePersonaViaOllama` (`ollama.ts:938`) and a Gemini `generateContent` call (`server/src/analyzer/voice-style.ts:197-219`).
+  Persona generation adds two more direct LLM calls: `generatePersonaViaOllama` (`ollama.ts:939`) and a Gemini `generateContent` call (`server/src/analyzer/voice-style.ts:198-220`).
 - **The engine is inferred from the model id's shape.** `:` means Ollama; anything else means Gemini.
-  - **Explicit inference:** duplicated on the server (`server/src/analyzer/index.ts:195`) and the frontend (`src/lib/models.ts:108`, used at `:120`, `:127`).
+  - **Explicit inference:** duplicated on the server (`server/src/analyzer/index.ts:194`) and the frontend (`src/lib/models.ts:109`, used at `:121`, `:128`).
   - **Implicit reuses:**
-    - `getResolvedOllamaModel` (`user-settings.ts:960-965`), which persona generation inherits (`voice-style.ts:67-70`);
+    - `getResolvedOllamaModel` (`config/ollama-resolved.ts:35-39`), which persona generation inherits (`voice-style.ts:68-71`);
     - `ollama-health.ts:199,205,218`;
     - `setup-diagnosis.ts:300,302`;
     - `model-vram-stats.ts:34,179`;
     - `analyzer-eval-stats.ts:55`;
-    - `models-inventory.ts:132`.
+    - `models-inventory.ts:131`.
 - **Structured output differs by engine.**
-  - **Ollama** sends the per-stage Zod schema as `format` (`ollama.ts:504`, `:643`).
+  - **Ollama** sends the per-stage Zod schema as `format` (`ollama.ts:505`, `:644`).
   - **Gemini** sends only `responseMimeType: 'application/json'` (`gemini.ts:729`); its runner ignores the grammar schema (`_grammarSchema`, `gemini.ts:446`).
   - **Unsupported keywords:** the generated schemas contain `$schema`, `minLength` and `exclusiveMinimum`, none of which are in Gemini's supported `responseJsonSchema` subset (`server/node_modules/@google/genai/dist/genai.d.ts:5651-5666`).
   - **Parsing:** `parseAndValidate` (`gemini.ts:1006-1053`) strips code fences and trailing prose. A leading `<think>` block defeats it, because `trimTrailingProse` slices from index 0 (`gemini.ts:1220-1255`).
-- **HTTP errors carry no structure.** A non-OK Ollama response is thrown as a plain `Error` with the status only in its message text (`ollama.ts:713-715`). The taxonomy maps a typed 5xx to `analyzer-unreachable` (`failure-taxonomy.ts:562-563`), and the plan-29 rule says reachable-but-misbehaving must not read as unreachable (`index.ts:251-256`).
+- **HTTP errors carry no structure.** A non-OK Ollama response is thrown as a plain `Error` with the status only in its message text (`ollama.ts:714-716`). The taxonomy maps a typed 5xx to `analyzer-unreachable` (`failure-taxonomy.ts:562-563`), and the plan-29 rule says reachable-but-misbehaving must not read as unreachable (`index.ts:250-255`).
 - **Long local calls need a special HTTP client.** Ollama sends no response headers until the first generated token.
-  - **Dispatcher:** `ANALYZER_DISPATCHER` (`ollama.ts:120-133`) disables undici's header and body timeouts. It keeps a 10 s connect timeout so a down daemon still fails fast into the fallback path.
-  - **"Unreachable":** `UNREACHABLE_CODES` (`ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `ECONNRESET`, `UND_ERR_SOCKET`; `ollama.ts:147-153`), a bare `fetch failed`, or an abort before the first byte (`ollama.ts:1043-1060`).
+  - **Dispatcher:** `ANALYZER_DISPATCHER` (`ollama.ts:121-134`) disables undici's header and body timeouts. It keeps a 10 s connect timeout so a down daemon still fails fast into the fallback path.
+  - **"Unreachable":** `UNREACHABLE_CODES` (`ECONNREFUSED`, `ENOTFOUND`, `EAI_AGAIN`, `ECONNRESET`, `UND_ERR_SOCKET`; `ollama.ts:148-154`), a bare `fetch failed`, or an abort before the first byte (`ollama.ts:1044-1061`).
 - **Gemini's stream watchdog runs before the first chunk.** `STREAM_IDLE_TIMEOUT_MS = 45_000` (`gemini.ts:60`) is armed before the stream call (`gemini.ts:724`). An idle stream is retried within `MAX_TOTAL_MS` 90 s (`gemini.ts:541-542`), and each retry re-acquires the rate limiter.
 - **Chunk budgets branch on the engine name.** Every resolver treats anything that isn't `local` as Gemini cloud.
   - **Local:** `resolveStage1ChunkCharBudget` and `resolveStage2ChunkCharBudget` derive from Ollama `num_ctx` × `analyzer.stage{1,2}.localInputFraction` (0.7 / 0.3) at a fixed 2 chars/token, with no reservation (`server/src/analyzer/stage1-chunk.ts:96-126`, `stage2-chunk.ts:59-82`). Local chapter-level passes reuse stage 1's budget (`server/src/analyzer/chapter-chunker.ts:136`).
@@ -82,13 +82,13 @@ What the code does today:
   - **Ollama:** `num_predict` defaults to −1, unlimited (`registry.ts:41-47`).
   - **Gemini:** `maxOutputTokens` (`ANALYZER_MAX_OUTPUT_TOKENS`) defaults to 8192, within min 256 / max 32768 (`registry.ts:51-58`). On Gemini thinking models, thinking tokens count against that cap.
   - **Empty output at the cap:** an empty `MAX_TOKENS` response becomes `AnalyzerTruncatedError`, deliberately, as a size problem that splitting recovers, observed on `gemma-4-31b-it` (`gemini.ts:784-804`). Splitting goes up to depth 3 (`stage1-chunk.ts:156`, `stage2-chunk.ts:341`), and does not shrink reasoning.
-- **Reasoning is controlled only on Ollama** (`think: false`, `ollama.ts:651`). **No custom request payload exists.**
+- **Reasoning is controlled only on Ollama** (`think: false`, `ollama.ts:652`). **No custom request payload exists.**
 - **GPU coordination keys on Ollama.**
   - **Forward guard:** reads `ui.selectedModel` (`src/hooks/use-local-analyzer-guard.tsx:64`, `:78`).
   - **Reverse guard:** reads `analysis.activeStream.engine`, captured when the stream starts (`src/hooks/use-reverse-local-analyzer-guard.tsx:34-36`).
   - **TTS capacity eviction:**
     - It is keyed by device (`${kind}:${index}`) and gated on Ollama's VRAM figure (`server/src/gpu/capacity-retry.ts:270-281`).
-    - It is skipped while `isAnalysisInFlight()`, which counts only `acquireAnalyzerSlot` holders (`server/src/tts/sidecar.ts:193-194`, `analyzer-concurrency.ts:60-72`), and only Ollama acquires those (`ollama.ts:688`, `:979`).
+    - It is skipped while `isAnalysisInFlight()`, which counts only `acquireAnalyzerSlot` holders (`server/src/tts/sidecar.ts:193-194`, `analyzer-concurrency.ts:60-72`), and only Ollama acquires those (`ollama.ts:689`, `:980`).
 
 Two defects in this area were split out as prerequisites. Both are now merged (#3141's fix, PR #3192, on 2026-09-13 at `80be2f1d`); their chains were:
 
@@ -141,27 +141,27 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
 - **The transport contract.** `ChatTransport.send({ messages, system, structuredOutput, temperature, maxOutputTokens, reasoning, extraParams, signal, onChunk })` returns `{ text, reasoningSeen: boolean, finish: 'stop' | 'length' | 'blocked', usage? }`.
   - `usage` carries `reasoningTokens` when the provider reports it: Gemini `thoughtsTokenCount` (`genai.d.ts:5917`), OpenAI `completion_tokens_details.reasoning_tokens`.
   - Transports own the wire format, HTTP client, streaming, rate-limiter and concurrency acquisition, and the shared retry helper (429 with retry-after, daily-quota detection, 5xx, idle or incomplete stream; extracted from `gemini.ts:536-652`).
-- **Typed HTTP errors.** Every non-OK HTTP response is thrown as `AnalyzerHttpError { status, bodyExcerpt }`, replacing the plain `Error` at `ollama.ts:713-715`. Wave 1 keeps every current taxonomy outcome. In particular, an Ollama 5xx does not become `analyzer-unreachable` (`failure-taxonomy.ts:562-563`; the plan-29 rule at `index.ts:251-256`). Characterisation tests pin the outcomes for Ollama 400, 404, 500 and 503 bodies.
+- **Typed HTTP errors.** Every non-OK HTTP response is thrown as `AnalyzerHttpError { status, bodyExcerpt }`, replacing the plain `Error` at `ollama.ts:714-716`. Wave 1 keeps every current taxonomy outcome. In particular, an Ollama 5xx does not become `analyzer-unreachable` (`failure-taxonomy.ts:562-563`; the plan-29 rule at `index.ts:250-255`). Characterisation tests pin the outcomes for Ollama 400, 404, 500 and 503 bodies.
 - **What the runner owns.** The stage runner, generalised from the two existing runners, owns:
   - `writeInbox`, skill/system-instruction loading, schema generation and adaptation;
   - the first attempt, `parseAndValidate`, and the validation retry, run through the transport's **retry policy**:
-    - **Ollama:** on invalid JSON, drop the assistant turn and raise the temperature (`ollama.ts:559-571`), and write `rawAttemptPath`.
+    - **Ollama:** on invalid JSON, drop the assistant turn and raise the temperature (`ollama.ts:560-572`), and write `rawAttemptPath`.
     - **Gemini:** replay the model turn at the same temperature (`gemini.ts:484-493`).
 
     The retry's temperature is applied after the custom payload merge.
   - persistence (`persistResponse`, `rawAttemptPath`, `errorPath`) and failure mapping;
-  - escalation (`runAttributionEscalation`: no validation retry, `null` on unusable output) and non-story classification, through the runner's single-attempt path. Each transport keeps its escalation error policy: Gemini returns `null` for every error except an abort (`gemini.ts:403-439`); Ollama rethrows abort and unreachable (`ollama.ts:455-456`). Transport-level retries (Gemini's 429 / 5xx / idle-stream retries) still apply inside an escalation call, as today.
+  - escalation (`runAttributionEscalation`: no validation retry, `null` on unusable output) and non-story classification, through the runner's single-attempt path. Each transport keeps its escalation error policy: Gemini returns `null` for every error except an abort (`gemini.ts:403-439`); Ollama rethrows abort and unreachable (`ollama.ts:456-457`). Transport-level retries (Gemini's 429 / 5xx / idle-stream retries) still apply inside an escalation call, as today.
 - **Characterisation first.** Before extraction, tests pin each difference above and the taxonomy outcomes. `gemini.test.ts` has no assertion on the retry request shape today, so it gets one for the replayed turn and temperature. Extraction is accepted only with these green.
-- **The Ollama transport.** `OllamaTransport` is today's `OllamaAnalyzer.chat()` body (`ollama.ts:623-927`), including:
+- **The Ollama transport.** `OllamaTransport` is today's `OllamaAnalyzer.chat()` body (`ollama.ts:624-928`), including:
   - `keep_alive`, `num_ctx`, `num_gpu`;
   - `acquireAnalyzerSlot` and eval-timing telemetry;
   - `ANALYZER_DISPATCHER`;
-  - its unreachable classifier (`ollama.ts:1043-1060`, abort-before-first-byte included).
+  - its unreachable classifier (`ollama.ts:1044-1061`, abort-before-first-byte included).
 - **The Gemini transport.** `GeminiTransport` is `generateWithLimiter` + `generate` (`gemini.ts:536-860`): limiter, idle watchdog, token-count reconciliation, `MAX_TOKENS` / SAFETY / RECITATION → `finish`. Thought parts (`thought: true`) set `reasoningSeen` and count as stream activity; they are never appended to `text`.
 - **The OpenAI transport.** `OpenAITransport` creates one client per endpoint.
   - **Client.** `new OpenAI({ baseURL, apiKey, maxRetries: 0, timeout: <ceiling>, fetch: undici.fetch, fetchOptions: { dispatcher: <long-call Agent> } })`, with `fetch` and `Agent` from the same `undici` package (`server/node_modules/undici`) and streaming on.
   - **Signals.**
-    - The ceiling is an `AbortSignal.timeout(requestCeilingMs)`, created **after** limiter and semaphore acquisition, so queue time is not charged to the request (the trap `ollama.ts:980-987` documents).
+    - The ceiling is an `AbortSignal.timeout(requestCeilingMs)`, created **after** limiter and semaphore acquisition, so queue time is not charged to the request (the trap `ollama.ts:981-988` documents).
     - It is combined with the caller signal through `AbortSignal.any`.
     - The SDK `timeout` alone clears when headers arrive (`openai` `client.ts:1576,1600-1602`; no stream timer at `:1012-1019`).
   - **Deltas.**
@@ -169,18 +169,18 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
     - A reasoning delta, `reasoning_content` (llama.cpp), `reasoning` (vLLM, where `reasoning_content` is deprecated) or a non-empty `reasoning_details` array (OpenRouter), counts as activity and feeds the route heartbeat. It sets `reasoningSeen` but is never parsed as answer text.
     - `finish_reason: 'length'` → `length`.
   - **Classification.** Verified by running openai 7.15.0 against a local server during planning: an abort **after** response headers (caller or ceiling) ends the streaming iterator without throwing (`openai` `core/streaming.mjs:134-141`, `:375-383`); an abort **before** headers throws `APIUserAbortError` whose `cause` is the signal's reason. "Headers received" means `create()` resolved. So after the loop ends, and in every `catch`, the transport classifies in this order:
-    1. The caller signal aborted → `AnalysisAbortedError`, the contract `FallbackAnalyzer` (`index.ts:267`) and the route rely on.
+    1. The caller signal aborted → `AnalysisAbortedError`, the contract `FallbackAnalyzer` (`index.ts:266`) and the route rely on.
     2. The error is connection-level (`APIConnectionError` or its timeout subclass, or a transport error raised before `create()` resolved), and its cause chain (two levels down, `err.cause.cause.code`) holds a connect-phase code: `ECONNREFUSED`, `ENOTFOUND`, `EHOSTUNREACH`, `ENETUNREACH` or `UND_ERR_CONNECT_TIMEOUT`, or it is a bare `fetch failed` with no code → `AnalyzerUnreachableError`. A reset or DNS hiccup before headers (`ECONNRESET`, `UND_ERR_SOCKET`, `EAI_AGAIN`) comes from a server that may be up, so it is retried as an incomplete stream and never triggers a fallback. An `APIError` that carries an HTTP status is never unreachable: the SDK copies the response body's `error.code` onto it, so a proxy's 502 reporting `ECONNREFUSED` must not trigger a fallback.
     3. The ceiling signal aborted, or `APIConnectionTimeoutError` → `AnalyzerTimeoutError`, never a fallback. A llama.cpp request waiting for a busy slot receives no headers (headers are sent when a slot starts the prompt), so it ends here, not as unreachable.
     4. An `APIError` with an HTTP status → `AnalyzerHttpError`; 429 and 5xx go through the shared retry helper first.
     5. An `APIError` without a status (an error event inside an open stream) → `AnalyzerHttpError` with status 0, not retried.
     6. Headers were received, and either the server dropped the socket (a plain `TypeError` "terminated" with `UND_ERR_SOCKET`) or the loop ended with no `finish_reason` → `AnalyzerStreamIncompleteError`, retried by the shared helper like an idle stream.
   - **Release.** The semaphore and limiter slot are released in `finally` on every path.
-- **Unreachable errors.** `AnalyzerUnreachableError` replaces `LocalUnreachableError` as `FallbackAnalyzer`'s trigger (`index.ts:257-405`). The Ollama transport's classification is unchanged. Endpoints do not inherit "abort before first byte", because their pre-first-byte abort is the caller or the ceiling.
+- **Unreachable errors.** `AnalyzerUnreachableError` replaces `LocalUnreachableError` as `FallbackAnalyzer`'s trigger (`index.ts:256-404`). The Ollama transport's classification is unchanged. Endpoints do not inherit "abort before first byte", because their pre-first-byte abort is the caller or the ceiling.
 - **Engine value.** `AnalysisEngine` becomes `'local' | 'gemini' | 'openai'`, updated in:
   - the settings enum and `openapi.yaml` (regenerating `src/lib/api-types.ts`);
   - `AnalyzerSelection`, `ModelOption.engine` and persona generation's engine setting;
-  - `getResolvedAnalysisEngine` (`user-settings.ts:975-977`, which must accept `openai`);
+  - `getResolvedAnalysisEngine` (`user-settings.ts:1009-1011`, which must accept `openai`);
   - both run snapshots (`analysis-state.ts:52`, `active-analyses.ts:47`).
 - **Classifying `'local'` branches.** A planning task lists every `'local'` engine comparison (TTS uses excluded) and classifies each as "Ollama-specific" (stays on the engine) or "shares the GPU" (reads decision 4's `gpu`). The plan carries that list as a table.
 
@@ -234,7 +234,7 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
   - `analyzer-reasoning-overflow`: decision 7.
   - `analyzer-endpoint-missing`: §3.
   - 401/403 map to the existing `auth` code, naming the engine or endpoint key.
-- **`<think>` strip.** `parseAndValidate` strips a leading `<think>…</think>` block before its existing candidates, following the regex precedent at `voice-style.ts:148-152`. An unterminated leading `<think>` block sets `reasoningSeen` and leaves no answer text.
+- **`<think>` strip.** `parseAndValidate` strips a leading `<think>…</think>` block before its existing candidates, following the regex precedent at `voice-style.ts:149-153`. An unterminated leading `<think>` block sets `reasoningSeen` and leaves no answer text.
 
 ### 3. Endpoints, model ids and catalogs
 
@@ -245,23 +245,23 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
   - **Otherwise:** the user enters the value, and the form refuses to save without it.
   - **No mock:** Detect talks to the local machine and joins CLAUDE.md's documented local-machine exception set.
 - **API keys (decision 3c).**
-  - **Storage:** keys are stored separately per endpoint id as `{ origin, key }`. They are written only through a dedicated endpoint, never returned by the settings GET, and stripped from the general PUT, following the Gemini key precedent (`user-settings.ts:211-219`).
+  - **Storage:** keys are stored separately per endpoint id as `{ origin, key }`. They are written only through a dedicated endpoint, never returned by the settings GET, and stripped from the general PUT, following the Gemini key precedent (`user-settings.ts:275-283`).
   - **Key format:** a key containing any control character (including CR, LF or NUL) is refused when written. The HTTP client would otherwise echo the whole header value in its error.
   - **Origin check:** every call, catalog listing, Test, Detect and unload POST compares `new URL(url).origin` with the stored origin. On mismatch no request is sent, and the call fails as `auth` ("re-enter the key for <endpoint name>").
   - **Host change:** the Settings form prompts for the key when the host changes.
   - **Unload URL:** saving refuses an unload URL whose origin differs from the base URL's.
-- **Deleting an endpoint.** Blocked while any saved setting references its ids (default model, phase knobs from #3141, persona engine, fallback target); the error lists the references.
-  - **References that can't be blocked:** env (`ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL`, `select-analyzer.ts:71-77`; `PERSONA_GEN_ENGINE`, `registry.ts:1182`) and #3141's per-run phase pick.
+- **Deleting an endpoint.** Blocked while any saved setting references its ids (`defaultAnalysisModel`; the Advanced Settings phase-model knobs `analyzer.phase0.model` / `analyzer.phase1.model`, which #3192 moved out of user-settings fields into `configOverrides`; persona engine; fallback target); the error lists the references.
+  - **References that can't be blocked:** env (`ANALYZER_PHASE0_MODEL` / `ANALYZER_PHASE1_MODEL`, read through `resolveKnob` at `select-analyzer.ts:96`; `PERSONA_GEN_ENGINE`, `registry.ts:1172`) and #3141's per-run phase pick.
   - **For those:** a pre-run check fails the run as `analyzer-endpoint-missing` before its first call, naming the id and where it came from.
 - **Id grammar.**
   - **Shape:** `openai:<endpointId>::<model>`.
   - **Inference, in order:** matches `^openai:[a-z0-9-]+::` → `openai`; contains `:` → `local`; else → `gemini`. An Ollama tag such as `openai:latest` cannot match, because it has no `::`. Ollama allows `::` only inside a host segment, which is followed by `/` (`types/model/name.go`); the analyzer never selects host-qualified Ollama names, and the case table records that shape.
   - **One table:** one shared test table drives both `engineForModelId` (frontend) and `inferEngineFromModelId` (server).
   - **Every site that handles a selected model id applies the same inference,** so an `openai:` id never reaches Ollama. Examples:
-    - `getResolvedOllamaModel` (`user-settings.ts:960-965`), and through it persona generation's local model (`voice-style.ts:67-70`);
+    - `getResolvedOllamaModel` (`config/ollama-resolved.ts:35-39`), and through it persona generation's local model (`voice-style.ts:68-71`);
     - `ollama-health.ts:199,205,218`;
     - `POST /api/ollama/load` (`ollama-health.ts:491-492`), which passes a requested model straight to Ollama;
-    - `src/lib/models.ts:120,127`.
+    - `src/lib/models.ts:121,128`.
   - **Sites that handle Ollama's own tag lists stay unchanged.** These include pull status, setup pull checks, VRAM statistics and evaluation statistics (`model-pull-status.tsx:294`, `setup/step-analysis.tsx:21,75-76`, `setup-diagnosis.ts:300,302`, `model-vram-stats.ts`, `analyzer-eval-stats.ts`). An id inference there would misread a colonless Ollama tag such as `llama2` as Gemini.
   - **Classification:** the plan's `'local'` classification table records every site's category and its reason, re-grepped during planning.
 - **Catalogs.** `GET /api/analyzer/models` returns grouped catalogs with a short server-side cache and an explicit refresh.
@@ -270,10 +270,10 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
     - **Gemini:** `models.list()` (`genai.d.ts:11032`), only when a key is set, filtered to `supportedActions` containing `generateContent`. The listing has no output-modality field, so text-output models are selected by a name rule that excludes embedding, `-tts`, `-image` and `-live` models.
     - **Each endpoint:** `/v1/models` via the SDK, plus free-text entry.
   - **Entries:** each carries the model's served context and output limits when known, plus its Test record.
-  - **Curated overlay:** curated entries (`MODEL_OPTIONS`, `src/lib/models.ts:19-95`) overlay labels and hints, extending `buildLocalModelOptions(liveTags, curated)` (`models.ts:156`).
+  - **Curated overlay:** curated entries (`MODEL_OPTIONS`, `src/lib/models.ts:20-96`) overlay labels and hints, extending `buildLocalModelOptions(liveTags, curated)` (`models.ts:157`).
   - **Failure:** each group fails independently and shows its error.
     - **Gemini:** a failed listing falls back to the curated list.
-    - **Ollama:** keeps plan 221's installed-only rule (`src/lib/models.ts:144-155`), so a failed `/api/tags` lists no local models rather than offering ones that are not installed.
+    - **Ollama:** keeps plan 221's installed-only rule (`src/lib/models.ts:145-156`), so a failed `/api/tags` lists no local models rather than offering ones that are not installed.
     - **Endpoints:** stay listed from saved settings, with free-text entry.
   - **Preview:** the add-endpoint form lists an unsaved server's models through a separate preview call, `POST /api/analyzer/models/preview`, with the base URL and key from the form, to prefill the context size. The catalog lists saved endpoints only.
 - **Labels.** `modelLabel(id)` replaces the ~9 `MODEL_OPTIONS.find((m) => m.id === id)?.label ?? id` sites. It resolves the curated label, then the live `displayName`, then the model part of the id prefixed with the endpoint name.
@@ -306,18 +306,18 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
   - **Async unload:** an unload POST blocks until the server has stopped the model. After a 2xx the retry loop retries admission at once; if that attempt is denied again, the next iteration re-probes capacity before either lever runs, so Ollama's gate and the idle-TTS lever see post-unload free memory. A POST that failed does not retry at once; the loop waits its normal poll.
   - **Give-up message:** names every sharing endpoint still holding the card and why — no unload URL, busy for the whole wait, every unload POST failed, unloaded what it could and still short, or a `{model}` URL with no model run since the server started.
   - **During a run:** the forward and reverse guard prompts are the protection, as for Ollama today.
-- **Fallback (Advanced Settings; owner rule, 2026-09-13).** From PR 3d, a chosen target replaces today's Ollama → Gemini rule under `allowCloudFallback` (`server/src/analyzer/index.ts:216`). Before 3d that rule is untouched.
+- **Fallback (Advanced Settings; owner rule, 2026-09-13).** From PR 3d, a chosen target replaces today's Ollama → Gemini rule under `allowCloudFallback` (`server/src/analyzer/index.ts:215`). Before 3d that rule is untouched.
   - **Classification unchanged:** only connect-phase errors are unreachable (§1). A proxy's 502 or a socket reset is retried and never falls back. `AnalyzerTransportError` never falls back.
   - **The knob:** `analyzer.fallback.target` (env `ANALYZER_FALLBACK_TARGET`), in Advanced Settings' `analyzer-models` group (wiki §4 "Analyzer models & endpoints"), knob type `'analyzer-engine'`.
     - **Values:** `off` | `local` | `gemini` | `openai:<endpointId>::<model>`. Default `gemini`.
-    - `local` means `getResolvedOllamaModel()`; the Settings row shows that concrete model and warns if it isn't installed. `gemini` means the resolved `GEMINI_MODEL` and needs a Gemini key.
+    - `local` means `getResolvedOllamaModel()` (`server/src/config/ollama-resolved.ts:35-39`: a `:`-tagged `defaultAnalysisModel`, else env `OLLAMA_MODEL` → Advanced `analyzer.ollama.model` override → default); the Settings row shows that concrete model and warns if it isn't installed. `gemini` means the resolved `GEMINI_MODEL` and needs a Gemini key.
   - **Resolution:** `resolveAnalyzerFallbackTarget()` in `server/src/analyzer/fallback-target.ts`, in order:
     1. env;
     2. saved override;
     3. **legacy,** only when the knob's source is `default`: `getResolvedAllowCloudFallback() === false` → `off`. That is the saved `allowCloudFallback === false`, or, before the first settings read, the existing env `ANALYZER_ALLOW_CLOUD_FALLBACK=0`;
     4. default `gemini`.
 
-    There is no write-migration. `allowCloudFallback` stays in the user-settings schema (`user-settings.ts:148`), read only for that legacy step; nothing writes it any more. Model Manager's "Cloud fallback" row (`src/components/model-settings-form.tsx:505-519`) is removed, and the "Analyzer engine" sublabel (`:493`) points to Advanced Settings → Analyzer fallback instead of "Cloud fallback below".
+    There is no write-migration. `allowCloudFallback` stays in the user-settings schema (`user-settings.ts:224`), read only for that legacy step; nothing writes it any more. Model Manager's "Cloud fallback" row (`src/components/model-settings-form.tsx:452-466`) is removed, and the "Analyzer engine" sublabel (`:440`) points to Advanced Settings → Analyzer fallback instead of "Cloud fallback below".
   - **Semantics.**
     - One global target, one hop: the fallback analyzer is never itself wrapped.
     - It applies when the selected primary (Ollama `local` or an endpoint) throws `AnalyzerUnreachableError`. A Gemini primary never falls back, as today; it raises no unreachable error.
@@ -329,29 +329,29 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
     - The target runs with its own limiter, concurrency, key-origin check and capability check; a capability refusal fails the call naming the target.
     - A GPU-bound target (`local`, or an endpoint whose `gpu` is not `none`) takes the same in-flight and run busy marks a primary would, so TTS eviction never unloads it mid-call. The marks are taken only when fallback activates, never at selection. A switch after the job's release has run takes no mark.
     - **After a switch:** later chunking uses the target's capacity (§6), and phase-1 events carry the target engine.
-      - **Chunks already sized:** up to K chapters (the pool width, default 2) can already be sized for the primary. Before routing any call to the target, `FallbackAnalyzer` checks the prompt's estimated input against the target's capacity. The check covers every analyzer call a fallback can serve:
-        - **Passes that split on `AnalyzerTruncatedError`** (stage 1 chunks, stage 2, script review): an oversized prompt throws it, so the existing split path splits the chunk and retries on the target.
-        - **Passes that cannot split** (emotion annotation, instruct annotation, attribution escalation, non-story classification, whole-book stage 1): the call fails with `AnalyzerTargetInputTooLargeError(transport, model, targetLabel, limitTokens, family: 'context' | 'requestCap')`, never a silently truncated prompt. It maps to `analyzer-request-rejected` with its own copy naming the fallback target and its input limit, never an HTTP status. It is not an `AnalyzerTruncatedError` and is not retried. Non-story classification keeps its story default when it catches this error, but logs a warning naming the target.
+      - **Chunks already sized:** up to K chapters (the pool width, default 2) can already be sized for the primary. Before routing any call to the target, `FallbackAnalyzer` checks the prompt body's characters against the input budget the chunker would compute for that pass on the target's capacity: `resolveStage1ChunkCharBudget(targetCapacity, body)`, `resolveStage2ChunkCharBudget(targetCapacity, body)` or `chapterChunkBudget(targetCapacity, …)`. That is fraction × context at 2 chars/token, bounded by the per-request cap and the pass ceiling, so split halves keep room to answer. It never compares `estimateInputTokens` against raw `contextTokens`. The check covers every analyzer call a fallback can serve:
+        - **Passes that split on `AnalyzerTruncatedError`** (stage 1 chunks, stage 2, script review): an oversized prompt throws it, so the existing split path splits the chunk and retries on the target. When such a pass cannot split further (max split depth, or an unsplittable span) and the `AnalyzerTruncatedError` reason is `'input-over-target-budget'`, it is converted to `AnalyzerTargetInputTooLargeError` before it escapes, so it classifies with the input-too-large copy, never "response truncated".
+        - **Passes that cannot split** (emotion annotation, instruct annotation, attribution escalation, non-story classification, whole-book stage 1): the call fails with `AnalyzerTargetInputTooLargeError(transport, model, targetLabel, limitTokens, family: 'context' | 'requestCap')`, never a silently truncated prompt. It maps to `analyzer-request-rejected` with its own copy naming the fallback target and its input limit, never an HTTP status. It is not an `AnalyzerTruncatedError` and is not retried. Non-story classification keeps its story default when it catches this error, but logs a warning naming the target. An attribution-escalation refusal is caught at the escalation call site and skips that window with a warning, per the escalation contract in `server/src/analyzer/index.ts`; it does not fail the phase-1 chapter.
         - **Why:** only a switch to a smaller-context target can trigger this, and #3084's configurable fallback introduces that case. So nothing regresses, and a visible failure beats corrupted analysis.
     - `onFallback` names both the primary and the target; a fallback is never silent.
     - **Announced behaviour changes (3d):**
-      - **Every method announces:** on `46e62a34` five `FallbackAnalyzer` methods fall back without calling `onFallback` (`runStage1`, `runEmotionChapter`, `runStage3Chapter`, `runAttributionEscalation`, `runNonStoryClassification`). From 3d all eight announce.
+      - **Every method announces:** on `80be2f1d` five `FallbackAnalyzer` methods fall back without calling `onFallback` (`runStage1`, `runEmotionChapter`, `runStage3Chapter`, `runAttributionEscalation`, `runNonStoryClassification`). From 3d all eight announce.
       - **The switch note names both:** it renders the server's `fallbackReason`, for example `Ollama unreachable (<model>) — switched to <target>`, replacing `Switched to Gemini — Ollama unreachable`.
       - **Script review copy:** the warm-fail copy "turn on Cloud fallback in Settings → analyzer" becomes "choose an analyzer fallback in Advanced Settings → Analyzer fallback".
       - **Release notes:** they say Gemini is the default fallback for endpoint users, and that a fallback to a smaller model splits or clearly fails oversized requests instead of truncating them.
     - If the target is also unreachable, the run fails naming both.
   - **Save validation:** a target naming a missing endpoint, or `gemini` with no key saved, is refused at save with a message. The Advanced Settings row shows the effective target, including a legacy `off`, and reads "Gemini — no API key, fallback inactive" when the target is `gemini` with no key.
-  - **Unchanged:** persona generation never falls back (§10, `registry.ts:1185`).
+  - **Unchanged:** persona generation never falls back (§10, `registry.ts:1175`).
 
 ### 5. Rate limits and concurrency
 
-- **Limiter.** `GeminiRateLimiter` (`rate-limit.ts:158`) becomes the analyzer limiter, keyed by full model id, and is used by the Gemini and OpenAI transports, the Test action and persona generation (today `voice-style.ts:213`).
+- **Limiter.** `GeminiRateLimiter` (`rate-limit.ts:158`) becomes the analyzer limiter, keyed by full model id, and is used by the Gemini and OpenAI transports, the Test action and persona generation (today `voice-style.ts:214`).
 - **Limit resolution.**
-  - **Gemini ids:** env → `analyzerRateLimitsByModel` (a user-settings map, following `analyzerKeepAliveByModel`, `user-settings.ts:253`) → `BUILTIN_LIMITS` → Gemini default.
+  - **Gemini ids:** env → `analyzerRateLimitsByModel` (a user-settings map, following `analyzerKeepAliveByModel`, `user-settings.ts:317`) → `BUILTIN_LIMITS` → Gemini default.
   - **Endpoint ids:** `analyzerRateLimitsByModel` → unlimited.
 - **Migrating the Gemma knobs.** The six `rate.*.gemma*` knobs wired by #3139 migrate into the map and are removed.
   - **Guard:** the #3146 guard's `rate.*` dynamic-reader entry and `KNOWN_UNREAD` handling are updated in the same change. Because the map is not a registry knob, that guard cannot see it, so a paired limiter test asserts that the map is read.
-  - **Env still read:** the computed env read at `rate-limit.ts:80-82` keeps reading `GEMINI_{RPM,TPM,RPD}_<slug>`. It stays a documented blind spot (`direct-env-reader-guard.test.ts:57-67`), covered by its existing tests.
+  - **Env still read:** the computed env read at `rate-limit.ts:80-82` keeps reading `GEMINI_{RPM,TPM,RPD}_<slug>`. It stays a documented blind spot (`direct-env-reader-guard.test.ts:57-68`), covered by its existing tests.
   - **Env documentation:** that family is documented by a hand-written `.env.example` entry outside the generated block. `server/scripts/sync-env-example.ts` rewrites only the `BEGIN`/`END` managed block.
 - **Settings editor.** Settings gains a per-model limits editor listing catalog models.
 - **Concurrency.** Per-endpoint concurrency gates calls with the same count-semaphore mechanism as `acquireAnalyzerSlot` (`server/src/analyzer/analyzer-concurrency.ts:60`), one semaphore per endpoint, reporting into the in-flight stats (§4).
@@ -362,7 +362,7 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
 
 - **Ollama.**
   - `family: 'context'`.
-  - `contextTokens` is the `num_ctx` sent (`ollama.ts:275`), exactly as today, with no clamp. Clamping to `/api/show`'s native context length would shrink budgets for short-context tags before measurement, so it is recorded for the recalibration row instead.
+  - `contextTokens` is the `num_ctx` sent (`ollama.ts:276`), exactly as today, with no clamp. Clamping to `/api/show`'s native context length would shrink budgets for short-context tags before measurement, so it is recorded for the recalibration row instead.
   - Large local windows are enabled by raising `analyzer.ollama.numCtx`, which remains the VRAM-bearing choice.
 - **Gemini.**
   - `family: 'requestCap'`.
@@ -424,7 +424,7 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
   - **Ceiling:** every Gemini request is bounded by `analyzer.gemini.requestCeilingMs` (default 30 min), the same mechanism as decision 1c. Both knobs get a Settings row, `.env.example` line and `config:sync`.
   - **Measurement:** the transport logs time to first chunk, time to first answer text, and the number of thought parts before the answer. An on-box row records them on real chapters to tune the default. It does not gate the wave.
 - **Truncation.**
-  - **Split:** a `length` finish raises `AnalyzerTruncatedError`, which splits the chunk as today (`ollama.ts:838`, `gemini.ts:801,816`), in either case:
+  - **Split:** a `length` finish raises `AnalyzerTruncatedError`, which splits the chunk as today (`ollama.ts:839`, `gemini.ts:801,816`), in either case:
     - it has answer text;
     - it has no answer text and **no** reasoning evidence. This keeps the Gemma size-problem recovery (`gemini.ts:784-804`) at Gemma's default level and at `off`. Gemma at `on` asks for thoughts, so its thought tokens are evidence and an empty finish there fails as below.
   - **Reasoning evidence** is any of: `usage.reasoningTokens > 0`, `reasoningSeen` (reasoning deltas, Gemini thought parts), or an unterminated `<think>` block. A Gemini `thoughtsTokenCount` becomes `usage.reasoningTokens` only on a request whose wire sent `includeThoughts`, stage or free text.
@@ -504,9 +504,9 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
   - **Gemini:** a payload is scoped to `config`. Top-level `model` and `contents` are protected, and any other top-level key is refused.
   - **Removal:** `null` removes a key. It is refused on an owned container itself (`options: null`, `config: null`, `chat_template_kwargs: null`).
   - **Output cap keys:** a payload `max_completion_tokens` makes the endpoint transport drop its own `max_tokens`, so the request never carries both.
-  - **Validation:** reasoning levels and protected keys are validated when settings are written, never when they are read. `readUserSettings` falls back to defaults for the whole file when its content parses but fails the schema (`user-settings.ts:522-525`), so validating on read could wipe every setting. An *unparseable* file is a separate path — recovered from its `.bak.N` backups, else in-memory defaults with a corruption flag (`:479-498`) — and does not reject. The risk being avoided is a refinement wiping a valid file. The one exception read *does* make is the per-entry endpoint parse: it hooks into `performUserSettingsRead` between the eager-load migration and that whole-file `safeParse`, drops only the offending entry, and never sets the corruption flag (which means the file itself was unreadable, not that one entry failed its schema).
+  - **Validation:** reasoning levels and protected keys are validated when settings are written, never when they are read. `readUserSettings` falls back to defaults for the whole file when its content parses but fails the schema (`user-settings.ts:579-582`), so validating on read could wipe every setting. An *unparseable* file is a separate path — recovered from its `.bak.N` backups, else in-memory defaults with a corruption flag (`:535-554`) — and does not reject. The risk being avoided is a refinement wiping a valid file. The one exception read *does* make is the per-entry endpoint parse: it hooks into `performUserSettingsRead` between the legacy migrations (`migrateLegacyEagerLoadFields`, then #3192's `migrateLegacyAnalyzerModelFields`, `:570-571`) and that whole-file `safeParse` (`:579`), drops only the offending entry, and never sets the corruption flag (which means the file itself was unreadable, not that one entry failed its schema).
   - **Endpoint entries are validated on save (owner rule, 2026-09-13).**
-    - **Where:** endpoint create/update, the key write and the settings PUT validate every endpoint field before writing (server 3b, UI 3d).
+    - **Where:** endpoint create/update, the key write and the settings PUT validate every endpoint field before writing (server 3b, UI 3d). In the settings PUT that check runs after #3192's retired-field rejection (`routes/user-settings.ts:122-130`) and before `writeUserSettings` (`:131`).
     - **Refusal:** a malformed entry is refused with HTTP 400 `{ error, code, issues: [{ path: string[], message }] }`. `path` is an array of segments (`[]` for a refusal naming no single field), and `code` is the machine-readable refusal kind. Issue messages are field-aware templates that state units, never raw zod text, and never echo a key or a field value.
     - **UI:** each issue is shown inline next to its field.
     - Nothing is written, and nothing is silently dropped at save.
@@ -530,24 +530,24 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
 - **Privacy.**
   - **Label:** shows "+ custom params".
   - **Logs and files:** the payload is excluded from logs and persisted analyzer files.
-  - **Upstream errors:** before logging or display, every payload string value of 8 or more characters is replaced wherever it appears in upstream error text (`ollama.ts:712-715`, `gemini.ts:853-860`, the failure detail at `failure-taxonomy.ts:410-427`). Shorter values (`"json"`, `"auto"`) are not redacted, because they would blank ordinary words in the provider's message.
+  - **Upstream errors:** before logging or display, every payload string value of 8 or more characters is replaced wherever it appears in upstream error text (`ollama.ts:713-716`, `gemini.ts:853-860`, the failure detail at `failure-taxonomy.ts:410-427`). Shorter values (`"json"`, `"auto"`) are not redacted, because they would blank ordinary words in the provider's message.
 
 ### 10. Persona generation
 
 - **Engine setting.** `analyzer.personaGeneration.engine` becomes a model-id-style selection: `local` / `gemini` / any `openai:<endpointId>::<model>`. It uses the `'analyzer-engine'` knob type, which now arrives in PR 3d with the fallback target (§4); wave 4 reuses it.
 - **Transport.** `generatePersonaViaOllama` and the Gemini persona call become transport calls through the runner's free-text path (no structured output), with the limiter, reasoning setting and custom payload applied. The payload's output-cap keys (`max_tokens`, `max_completion_tokens`, `n_predict`, `options.num_predict`, `config.maxOutputTokens`) are dropped from a persona request before the merge, so a persona keeps its own output length. Its other payload keys apply.
-  - **Request shape:** a free-text request sends only what today's persona calls send. The Gemini call has no temperature, system instruction, output cap or JSON mode (`voice-style.ts:215-219`). The Ollama call stays non-streaming, keeps its keep-alive, CPU placement and 600 s bound, and keeps its slot-leak guarantee (`ollama-timeout.test.ts:149-215`).
+  - **Request shape:** a free-text request sends only what today's persona calls send. The Gemini call has no temperature, system instruction, output cap or JSON mode (`voice-style.ts:216-220`). The Ollama call stays non-streaming, keeps its keep-alive, CPU placement and 600 s bound, and keeps its slot-leak guarantee (`ollama-timeout.test.ts:149-215`).
   - **Length stops:** a persona reply cut off by a length stop with answer text is kept, as today.
   - **Behaviour changes** (A5), each announced in the release notes:
     - Gemini persona calls gain the shared transport retry (429, 5xx, idle stream), which today's single `generateContent` call lacks.
     - A blocked Gemini reply fails as `GeminiContentBlockedError` (`analyzer-content-blocked`). Today the empty text reports the empty-persona error.
     - A reply that is only an unterminated `<think>` block is the empty-persona error. Today that text is saved, because `cleanPersona` strips only a closed block.
     - A length stop with no answer and reasoning evidence fails as `analyzer-reasoning-overflow`. The evidence is Ollama's `thinking` or an unterminated `<think>` on any engine, and from wave 5 the thought tokens of a Gemini level that asks for thoughts. Today it is the empty-persona error. A Gemini persona at its default level asks for no thoughts, so its thought-token count is not evidence.
-- **Unchanged.** The "no silent cross-provider fallback" rule in its help text (`registry.ts:1185`) is unchanged: persona generation never falls back, whatever the analyzer fallback target (§4).
+- **Unchanged.** The "no silent cross-provider fallback" rule in its help text (`registry.ts:1175`) is unchanged: persona generation never falls back, whatever the analyzer fallback target (§4).
 
 ## Data flow (one analyzer call)
 
-1. **Selection.** The route resolves engine/endpoint + model (per-run phase pick from #3141), capacity, and that engine/endpoint's settings. Pre-run checks:
+1. **Selection.** The route resolves engine/endpoint + model exactly as `selectAnalyzerForPhase` does (`select-analyzer.ts:86-124`: env → per-run phase pick → request model → saved Advanced override → default), capacity, and that engine/endpoint's settings. Pre-run checks:
    - the endpoint exists;
    - the key origin matches;
    - the Test record does not mark the configured mode or level rejected.
@@ -659,7 +659,16 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
   - **Examples are verified, never invented:** each is checked at implementation time against that tool's current documentation, and against the planning-facts probe findings where they exist. Each example block records the tool version it was checked against.
   - **Linked from:** `docs/wiki/_Sidebar.md`; `docs/wiki/Analysis-and-the-Analyzer.md` "Choosing an analyzer"; `docs/wiki/Advanced-Settings.md` §4 "Analyzer models & endpoints"; the endpoint form's help link in Model Manager; and the overflow fix links (§7).
 - **Advanced Settings wiki.** A PR that adds or changes an Advanced Settings knob updates the matching section of `docs/wiki/Advanced-Settings.md` in the same PR: for example the thinking window, request ceiling and lifted input-cap maximum in 2b, and the fallback target in 3d. `scripts/tests/knob-docs-sync.test.mjs` (#2012) already fails when a registry knob's label has no row there, and asserts the "— N knobs across M groups" count in `Advanced-Settings.md:14`, which 2b (two knobs) and 3d (one) each update.
-- **Privacy help topic (3d).** `src/data/help-topics.ts:338-341` (`is-my-data-private`, at `46e62a34`) says the one thing that can leave the machine is the optional Gemini analyzer, used only when the local model isn't running. 3d rewrites both `is-my-data-private` and `does-it-work-offline` to name every path by which text can leave the machine: a remote analyzer endpoint, Gemini analysis, a fallback target once it activates, and Gemini TTS when chosen (`server/src/tts/gemini.ts`).
+- **Privacy help topics (3d).** In `src/data/help-topics.ts`, `is-my-data-private` (`:331-342`; its Gemini sentence `:338-341`) says the one thing that can leave the machine is the optional Gemini analyzer, used only when the local model isn't running. 3d rewrites it, `does-it-work-offline` (`:344-355`) and `picked-local-but-ran-on-gemini` (`:319-329`), so the copy names every path by which text can leave the machine:
+  - Gemini analysis;
+  - a remote analyzer endpoint;
+  - a fallback target once it activates;
+  - Gemini TTS when chosen (`server/src/tts/gemini.ts`);
+  - persona generation, which has its own engine (`analyzer.personaGeneration.engine`, `registry.ts:1171`, default `gemini`) and sends dialogue quotes;
+  - cloud escalation (`analyzer.structure.escalation: 'cloud'`, `registry.ts:1325`).
+  - **Offline topic:** it keeps main's persona sentence (`:352-354`) and never re-adds "Voice design follows the same analyzer engine".
+  - **`picked-local-but-ran-on-gemini`:** its "turn off Cloud fallback in analyzer settings" points at Advanced Settings → Analyzer fallback instead, with a guard or test case.
+  - **No "keep local" switch:** a single keep-everything-local switch stays out of scope, and the owner is told.
 - **Analyzer wiki.** 2b adds the "When a model thinks past its output limit" section to `docs/wiki/Analysis-and-the-Analyzer.md`.
 - **Publishing.** The wiki is published by `npm run wiki:sync` (`scripts/sync-wiki.mjs`), a manual step after merge; each PR's post-merge checklist says so.
 
@@ -677,6 +686,7 @@ Two defects in this area were split out as prerequisites. Both are now merged (#
   - With the analyzer idle, a Qwen TTS load on that card evicts it instead of failing with out-of-memory.
   - A TTS load on the other card does not evict it.
   - During a run, no unload happens and the guard prompts.
+- **Context overrun after a fallback switch:** after a switch to a smaller-context Ollama target and to a llama.cpp endpoint target, observe what happens when prompt plus output approach the served context (context shift, stop or error), and confirm the pre-send guard leaves room to answer.
 - **Capacity recalibration:** a large-context local model on a 16 GB card, comparing chunk counts, truncation rate and attribution quality against today's defaults. It also compares Ollama `num_ctx` against `/api/show` native context for short-context tags, before any capacity default changes.
 
 ## Sequencing

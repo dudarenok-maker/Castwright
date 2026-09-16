@@ -6,7 +6,7 @@
 
 This section covers PRs **3a** (engine value + id grammar) and **3b** (endpoints, keys, OpenAI transport, structured output, failure codes). PRs 3c/3d are drafted separately. Nothing in 3a or 3b makes an endpoint selectable in any picker, saved default or env-accepted value (Global Constraints).
 
-**How to read the citations.** `file:line` references are to `origin/main` 46e62a34. Files that waves 1–2 create (`server/src/analyzer/runner/*`, `server/src/analyzer/transports/*`, `server/src/analyzer/capacity.ts`, `server/src/analyzer/reasoning.ts`) do not exist on that commit, so they are cited **by symbol**, marked **(W1)** / **(W2)**. Before each task, re-read every cited line on current `main`: waves 0–2 touch `user-settings.ts`, `select-analyzer.ts`, `rate-limit.ts`, `gemini.ts`, `ollama.ts`, and the analysing view.
+**How to read the citations.** `file:line` references are to `origin/main` 80be2f1d. Files that waves 1–2 create (`server/src/analyzer/runner/*`, `server/src/analyzer/transports/*`, `server/src/analyzer/capacity.ts`, `server/src/analyzer/reasoning.ts`) do not exist on that commit, so they are cited **by symbol**, marked **(W1)** / **(W2)**. Before each task, re-read every cited line on current `main`: waves 0–2 touch `user-settings.ts`, `select-analyzer.ts`, `rate-limit.ts`, `gemini.ts`, `ollama.ts`, and the analysing view.
 
 **Wave 1–2 names this section consumes, verbatim from the contract:**
 - `server/src/analyzer/errors.ts`: `TransportKind`, `AnalysisAbortedError`, `AnalyzerUnreachableError(message, transport, cause?)`, `AnalyzerHttpError(transport, httpStatus, bodyExcerpt, message)`, `AnalyzerTruncatedError`.
@@ -37,9 +37,9 @@ below keep their multi-scope `refactor(server,frontend): …` form; only the bra
 
 **What it must NOT change.**
 - **Persisted/validated inputs still refuse `'openai'`.** Three sites keep rejecting it until PR 3d (the former fourth, the `analyzer.engine` registry enum, was removed by #3200 / PR #3201 before this wave):
-  - `ANALYSIS_ENGINE_VALUES` (`server/src/workspace/user-settings.ts:98`, used at `:141`);
-  - the `PERSONA_GEN_ENGINE` enum (`registry.ts:1187`);
-  - the OpenAPI `analysisEngine` enums (`openapi.yaml:4628`, `:4831`), and so the regenerated `src/lib/api-types.ts`.
+  - `ANALYSIS_ENGINE_VALUES` (`server/src/workspace/user-settings.ts:174`, used at `:217`);
+  - the `PERSONA_GEN_ENGINE` enum (`registry.ts:1177`);
+  - the OpenAPI `analysisEngine` enums (`openapi.yaml:4661`, `:4872`), and so the regenerated `src/lib/api-types.ts`.
 - **No request changes.** No Ollama or Gemini request changes for any id that doesn't match `^openai:[a-z0-9-]+::`.
 - **Budget resolvers untouched.** No budget resolver (wave 2 owns them) and no picker contents change.
 - **No new FailureCode, knob, route, or OpenAPI change.** `AnalyzerEndpointMissingError` is added in this PR (Task 3a.2) so that selection can throw it. Its FailureCode `analyzer-endpoint-missing` arrives in PR 3b (Task 3b.1). Until then it classifies as `unknown`, and no UI can reach it.
@@ -64,17 +64,17 @@ Also required:
 
 | Widens in 3a (TypeScript types and non-persisted validation) | Keeps rejecting `'openai'` until PR 3d (persisted/validated inputs) |
 |---|---|
-| `server/src/analyzer/index.ts:181` (`AnalyzerSelection.engine`) | `server/src/workspace/user-settings.ts:98,141` (`ANALYSIS_ENGINE_VALUES` — validates `user-settings.json` and the general PUT) |
-| `server/src/store/analysis-state.ts:52`, `server/src/workspace/active-analyses.ts:47` (run snapshots) | `server/src/config/registry.ts:1181-1191` (`PERSONA_GEN_ENGINE` enum) |
-| `server/src/routes/analysis.ts:561` (`engineLabel` param), `:1215` (`engineFallbackMsPerChar` param), `:2655` (`AnalysisJobState.engine`) | `openapi.yaml:4628` (`UserSettings.analysisEngine`) and `:4831` (`UserSettingsPatch.analysisEngine`) + regenerated `api-types.ts` |
-| `server/src/routes/setup-diagnosis.ts:309`, `server/src/routes/models-inventory.ts:120` | |
-| `server/src/workspace/user-settings.ts:975` (`getResolvedAnalysisEngine` **return type only**) | |
-| `src/lib/models.ts:16,108,179`; `src/lib/types.ts:578,606`; `src/store/analysis-slice.ts:33`; `src/store/analysis-substage-reducers.ts:31`; `src/store/analysis-substage-selectors.ts:43`; `src/store/prosody-slice.ts:35`; `src/components/status-popover.tsx:74`; `src/components/top-bar.tsx:233`; `src/views/analysing.tsx:344` | |
-| `src/lib/api.ts:3041` (type) and `:3055` (validates a **server SSE event**, not a persisted input) | |
+| `server/src/analyzer/index.ts:180` (`AnalyzerSelection.engine`) | `server/src/workspace/user-settings.ts:174,217` (`ANALYSIS_ENGINE_VALUES` — validates `user-settings.json` and the general PUT) |
+| `server/src/store/analysis-state.ts:52`, `server/src/workspace/active-analyses.ts:47` (run snapshots) | `server/src/config/registry.ts:1171-1181` (`PERSONA_GEN_ENGINE` enum) |
+| `server/src/routes/analysis.ts:556` (`engineLabel` param), `:1210` (`engineFallbackMsPerChar` param), `:2650` (`AnalysisJobState.engine`) | `openapi.yaml:4661` (`UserSettings.analysisEngine`) and `:4872` (`UserSettingsPatch.analysisEngine`) + regenerated `api-types.ts` |
+| `server/src/routes/setup-diagnosis.ts:309`, `server/src/routes/models-inventory.ts:119` | |
+| `server/src/workspace/user-settings.ts:1009` (`getResolvedAnalysisEngine` **return type only**) | |
+| `src/lib/models.ts:17,109,180`; `src/lib/types.ts:578,606`; `src/store/analysis-slice.ts:34`; `src/store/analysis-substage-reducers.ts:31`; `src/store/analysis-substage-selectors.ts:43`; `src/store/prosody-slice.ts:35`; `src/components/status-popover.tsx:74`; `src/components/top-bar.tsx:233`; `src/views/analysing.tsx:372` | |
+| `src/lib/api.ts:3060` (type) and `:3074` (validates a **server SSE event**, not a persisted input) | |
 
-There are **no zod enums used only for TypeScript types**. The only analyzer-engine zod enum (`user-settings.ts:141`) validates persisted data, so it stays narrow.
+There are **no zod enums used only for TypeScript types**. The only analyzer-engine zod enum (`user-settings.ts:217`) validates persisted data, so it stays narrow.
 
-The OpenAPI `UserSettingsPatch.analysisEngine` staying narrow is what leaves `src/components/model-settings-form.tsx:112,498` unchanged. It also forces the one-line narrowing at `src/components/setup/step-defaults.tsx:97` (Task 3a.3), which PR 3d removes.
+The OpenAPI `UserSettingsPatch.analysisEngine` staying narrow is what leaves `src/components/model-settings-form.tsx:136,445` unchanged. It also forces the one-line narrowing at `src/components/setup/step-defaults.tsx:97` (Task 3a.3), which PR 3d removes.
 
 #### `'local'` comparison classification (spec §1, last bullet)
 
@@ -95,72 +95,72 @@ TTS uses are excluded at the bottom of the table.
 
 | # | Site (origin/main) | Code | Classification | Changed in | Reason |
 |---|---|---|---|---|---|
-| 1 | `openapi.yaml:4628` | `enum: [local, gemini]` | persisted (response mirror) | PR 3d | GET echoes the stored enum; it can't hold `openai` before 3d |
-| 2 | `openapi.yaml:4831` | `enum: [local, gemini]` | persisted | PR 3d | general PUT request enum |
-| 3 | `server/src/workspace/user-settings.ts:98,141` | `ANALYSIS_ENGINE_VALUES` | persisted | PR 3d | 3a adds the refusal test |
-| 4 | `server/src/config/registry.ts:1121-1129` **NEW** | `analyzer.engine` `options: ['local','gemini']` | removed by #3200 (PR #3201); the device block reads `account.analysisEngine === 'local'`, which already hides it for `openai`; no change | PR #3201 (before this wave) | the knob had no server reader; its only reader was `advanced.tsx:293` (row 48) |
-| 5 | `server/src/config/registry.ts:1181-1191` **NEW** | `PERSONA_GEN_ENGINE` enum | persisted | PR 3d / wave 4 | see report: decision 10 turns this into a model-id-style value, not an `'openai'` literal |
-| 6 | `src/lib/models.ts:16` | `ModelOption.engine` | type | 3a (Task 3a.3) | catalogs (3c) add endpoint options |
-| 7 | `src/lib/models.ts:108-110` | `engineForModelId` | coercion | 3a (Task 3a.3) | delegates to `src/lib/model-id.ts` |
-| 8 | `src/lib/models.ts:117` **NEW** | `localRunModelIds` `=== 'local'` | ollama-specific | unchanged code (shared inference excludes endpoint ids from 3a) | it lists the models whose Ollama residency is checked |
-| 9 | `src/lib/models.ts:158,187,197` **NEW** | curated `m.engine === 'local'` / `'gemini'` filters | ollama-/gemini-specific | unchanged | curated static catalog; endpoint groups come from catalogs (3c/3d) |
-| 10 | `src/lib/models.ts:178-179` **NEW** | group `engine` type | type | 3a (Task 3a.3) | |
+| 1 | `openapi.yaml:4661` | `enum: [local, gemini]` | persisted (response mirror) | PR 3d | GET echoes the stored enum; it can't hold `openai` before 3d |
+| 2 | `openapi.yaml:4872` | `enum: [local, gemini]` | persisted | PR 3d | general PUT request enum |
+| 3 | `server/src/workspace/user-settings.ts:174,217` | `ANALYSIS_ENGINE_VALUES` | persisted | PR 3d | 3a adds the refusal test |
+| 4 | `server/src/config/registry.ts:1121-1129` on `46e62a34` **NEW** | `analyzer.engine` `options: ['local','gemini']` | removed by #3200 (PR #3201); the device block reads `account.analysisEngine === 'local'`, which already hides it for `openai`; no change | PR #3201 (before this wave) | the knob had no server reader; its only reader was `advanced.tsx:293` on `46e62a34` (row 48) |
+| 5 | `server/src/config/registry.ts:1171-1181` **NEW** | `PERSONA_GEN_ENGINE` enum | persisted | PR 3d / wave 4 | see report: decision 10 turns this into a model-id-style value, not an `'openai'` literal |
+| 6 | `src/lib/models.ts:17` | `ModelOption.engine` | type | 3a (Task 3a.3) | catalogs (3c) add endpoint options |
+| 7 | `src/lib/models.ts:109-111` | `engineForModelId` | coercion | 3a (Task 3a.3) | delegates to `src/lib/model-id.ts` |
+| 8 | `src/lib/models.ts:118` **NEW** | `localRunModelIds` `=== 'local'` | ollama-specific | unchanged code (shared inference excludes endpoint ids from 3a) | it lists the models whose Ollama residency is checked |
+| 9 | `src/lib/models.ts:159,188,198` **NEW** | curated `m.engine === 'local'` / `'gemini'` filters | ollama-/gemini-specific | unchanged | curated static catalog; endpoint groups come from catalogs (3c/3d) |
+| 10 | `src/lib/models.ts:179-180` **NEW** | group `engine` type | type | 3a (Task 3a.3) | |
 | 11 | `src/lib/types.ts:578` | analysis-pill snapshot `engine?` | type | 3a (Task 3a.3) | |
 | 12 | `src/lib/types.ts:606` | analysis snapshot `engine?` (verified: analyzer engine for the reverse guard, comment `:601-605`) | type | 3a (Task 3a.3) | 3d adds `gpu` |
-| 13 | `server/src/analyzer/index.ts:181` | `AnalyzerSelection.engine` | type | 3a (Task 3a.2) | |
-| 14 | `server/src/analyzer/index.ts:195-197` | `inferEngineFromModelId` | coercion | 3a (Task 3a.2) | imported from `model-id.ts` |
-| 15 | `server/src/analyzer/index.ts:206` | `engine === 'local'` → `OllamaAnalyzer` | ollama-specific | unchanged; 3a adds a refusing `openai` branch above it, 3d replaces the refusal with `OpenAIAnalyzer` | an `openai` id must not reach this branch |
-| 16 | `server/src/analyzer/index.ts:234-235` | gemini branch | gemini-specific | unchanged | after 3a `openai` no longer falls through to it |
+| 13 | `server/src/analyzer/index.ts:180` | `AnalyzerSelection.engine` | type | 3a (Task 3a.2) | |
+| 14 | `server/src/analyzer/index.ts:194-196` | `inferEngineFromModelId` | coercion | 3a (Task 3a.2) | imported from `model-id.ts` |
+| 15 | `server/src/analyzer/index.ts:205` | `engine === 'local'` → `OllamaAnalyzer` | ollama-specific | unchanged; 3a adds a refusing `openai` branch above it, 3d replaces the refusal with `OpenAIAnalyzer` | an `openai` id must not reach this branch |
+| 16 | `server/src/analyzer/index.ts:233-234` | gemini branch | gemini-specific | unchanged | after 3a `openai` no longer falls through to it |
 | 17 | `server/src/analyzer/stage1-chunk.ts:73-76,100` | `engine !== 'local'` | budget | already capacity-based after wave 2 (PR 2a) | endpoint capacity branch is PR 3c |
 | 18 | `server/src/analyzer/stage2-chunk.ts:62-65,70-72` | `engine !== 'local'` | budget | already capacity-based after wave 2 (PR 2a) | |
 | 19 | `server/src/analyzer/chapter-chunker.ts:131-136` **NEW** | `engine === 'local'` | budget | already capacity-based after wave 2 (PR 2a) | |
 | 20 | `server/src/analyzer/attribution-eval/review-run.ts:47` **NEW** | `engine: 'local' \| 'gemini'` | budget pass-through | wave 2 (PR 2a); widen in 3a only if `npm run typecheck` reports it | feeds `chapterChunkBudget` |
-| 21 | `server/src/routes/analysis.ts:2212` | `engine?: 'gemini' \| 'local'` | budget pass-through | wave 2 (PR 2a); widen in 3a only if typecheck reports it | feeds the stage-2 budget |
-| 22 | `server/src/analyzer/voice-style.ts:61-62` | `resolvePersonaEngine` | coercion (persona) | wave 4 | decision 10 |
-| 23 | `server/src/analyzer/voice-style.ts:177` | persona dispatch | persona | wave 4 | decision 10 |
+| 21 | `server/src/routes/analysis.ts:2207` | `engine?: 'gemini' \| 'local'` | budget pass-through | wave 2 (PR 2a); widen in 3a only if typecheck reports it | feeds the stage-2 budget |
+| 22 | `server/src/analyzer/voice-style.ts:62-63` | `resolvePersonaEngine` | coercion (persona) | wave 4 | decision 10 |
+| 23 | `server/src/analyzer/voice-style.ts:178` | persona dispatch | persona | wave 4 | decision 10 |
 | 24 | `server/src/routes/cast-design.ts:292,509` **NEW** | `resolvePersonaEngine() !== 'local'` / `=== 'local'` | shares-gpu (local persona pre-pass runs before VoiceDesign) | wave 4 | an endpoint persona with `gpu !== 'none'` joins the pre-pass |
 | 25 | `server/src/tts/persona-gpu-plan.ts:57` **NEW** | `resolvePersonaEngine() !== 'local'` | shares-gpu | wave 4 | same |
-| 26 | `server/src/routes/analysis.ts:561-562` | `engineLabel` | label | 3a (Task 3a.2) adds the `openai` branch; 3d swaps endpoint id for endpoint name | |
-| 27 | `server/src/routes/analysis.ts:1214-1218` | `engineFallbackMsPerChar` | shares-gpu (local-device ETA seed) | 3a widens the param; PR 3d picks the local rate for `gpu !== 'none'` | today an endpoint would get the Gemini rate |
-| 28 | `server/src/routes/analysis.ts:2655` | `AnalysisJobState.engine` | type | 3a (Task 3a.2) | |
-| 29 | `server/src/routes/analysis.ts:3235` **NEW** | `job.engine === 'local'` → `unloadResidentOllama` | ollama-specific | unchanged | endpoints unload only through decision-4 eviction (3d) |
-| 30 | `server/src/routes/analysis.ts:3716` **NEW** | `usesLocalAnalyzer` → `detectOllamaDevice` | ollama-specific | unchanged | probes Ollama's device only |
+| 26 | `server/src/routes/analysis.ts:556-557` | `engineLabel` | label | 3a (Task 3a.2) adds the `openai` branch; 3d swaps endpoint id for endpoint name | |
+| 27 | `server/src/routes/analysis.ts:1209-1213` | `engineFallbackMsPerChar` | shares-gpu (local-device ETA seed) | 3a widens the param; PR 3d picks the local rate for `gpu !== 'none'` | today an endpoint would get the Gemini rate |
+| 28 | `server/src/routes/analysis.ts:2650` | `AnalysisJobState.engine` | type | 3a (Task 3a.2) | |
+| 29 | `server/src/routes/analysis.ts:3230` **NEW** | `job.engine === 'local'` → `unloadResidentOllama` | ollama-specific | unchanged | endpoints unload only through decision-4 eviction (3d) |
+| 30 | `server/src/routes/analysis.ts:3720` **NEW** | `usesLocalAnalyzer` → `detectOllamaDevice` | ollama-specific | unchanged | probes Ollama's device only |
 | 31 | `server/src/routes/script-review.ts:748` **NEW** | warm Ollama model | ollama-specific | unchanged | |
 | 32 | `server/src/routes/script-review.ts:798` **NEW** | `pinnedLocal` → Ollama keep-alive pin | ollama-specific | unchanged | `keepAliveFor` is Ollama's |
 | 33 | `server/src/routes/diagnostics.ts:259` **NEW** | Ollama diagnostics row | ollama-specific | unchanged | |
 | 34 | `server/src/routes/diagnostics.ts:299` **NEW** | Gemini diagnostics row | gemini-specific | unchanged | |
 | 35 | `server/src/routes/setup-diagnosis.ts:309` **NEW** | `AnalyzerDiagnosisInput.engine` | type | 3a (Task 3a.2) | |
 | 36 | `server/src/routes/setup-diagnosis.ts:323` **NEW** | `engine === 'gemini'` else Ollama checks | persisted-engine readiness gate | PR 3d | unreachable until `analysisEngine` can be `openai`; then an endpoint needs its own branch |
-| 37 | `server/src/routes/setup-readiness.ts:204` **NEW** | `getResolvedAnalysisEngine() === 'gemini'` | persisted-engine readiness gate | PR 3d | same |
-| 38 | `server/src/routes/models-inventory.ts:120` **NEW** | `InventoryDeps.analysisEngine` | type | 3a (Task 3a.2) | |
-| 39 | `server/src/routes/models-inventory.ts:382` **NEW** | `analysisEngine === 'local' && tagMatches(...)` | ollama-specific | unchanged | marks which Ollama tag is the default |
+| 37 | `server/src/routes/setup-readiness.ts:205` **NEW** | `getResolvedAnalysisEngine() === 'gemini'` | persisted-engine readiness gate | PR 3d | same |
+| 38 | `server/src/routes/models-inventory.ts:119` **NEW** | `InventoryDeps.analysisEngine` | type | 3a (Task 3a.2) | |
+| 39 | `server/src/routes/models-inventory.ts:381` **NEW** | `analysisEngine === 'local' && tagMatches(...)` | ollama-specific | unchanged | marks which Ollama tag is the default |
 | 40 | `server/src/workspace/active-analyses.ts:47` | snapshot `engine?` | type | 3a (Task 3a.2) | |
 | 41 | `server/src/store/analysis-state.ts:52` **NEW** | snapshot `engine?` | type | 3a (Task 3a.2) | |
-| 42 | `server/src/workspace/user-settings.ts:975-977` | `getResolvedAnalysisEngine` | coercion | 3a return type; PR 3d body (with the enum flip) | the body can't compare to `'openai'` while the stored type is narrow |
-| 43 | `src/store/analysis-slice.ts:33` | `AnalysisStreamSnapshot.engine` | type (shares-gpu snapshot) | 3a type; PR 3d adds `gpu` | |
+| 42 | `server/src/workspace/user-settings.ts:1009-1011` | `getResolvedAnalysisEngine` | coercion | 3a return type; PR 3d body (with the enum flip) | the body can't compare to `'openai'` while the stored type is narrow |
+| 43 | `src/store/analysis-slice.ts:34` | `AnalysisStreamSnapshot.engine` | type (shares-gpu snapshot) | 3a type; PR 3d adds `gpu` | |
 | 44 | `src/store/analysis-substage-reducers.ts:31`, `src/store/analysis-substage-selectors.ts:43` | substage `engine?` | type | 3a (Task 3a.3) | |
 | 45 | `src/store/prosody-slice.ts:35` | `engine?` (verified: analyzer backend, "flips to 'gemini' on a mid-pass fallback") | type | 3a (Task 3a.3) | |
-| 46 | `src/views/analysing.tsx:340` | `isLocalAnalyzer` | ollama-specific (Ollama health/residency gating) | unchanged; shared inference excludes endpoint ids | |
-| 47 | `src/views/analysing.tsx:344` | `effectiveEngine` | shares-gpu (snapshot engine for the reverse guard) | 3a type; PR 3d derives endpoint engine + `gpu` | today a non-local id is tagged `'gemini'` |
-| 48 | `src/views/advanced.tsx:293`, `:556` | `analyzerEngine = values['analyzer.engine']?.effective` → `group.id === 'analyzer-models' && analyzerEngine === 'local'` | removed by #3200 (PR #3201); the device block reads `account.analysisEngine === 'local'`, which already hides it for `openai`; no change | PR #3201 (before this wave) | it renders only the read-only "Analyzer (Ollama) device" row (`:557-590` on 46e62a34) |
-| 49 | `src/components/model-settings-form.tsx:112,498` | engine select bound to `account.analysisEngine` | persisted-input UI | PR 3d | bound to the narrow stored enum |
+| 46 | `src/views/analysing.tsx:358` | `isLocalAnalyzer` | ollama-specific (Ollama health/residency gating) | unchanged; shared inference excludes endpoint ids | |
+| 47 | `src/views/analysing.tsx:372` | `effectiveEngine` | shares-gpu (snapshot engine for the reverse guard) | 3a type; PR 3d derives endpoint engine + `gpu` | today a non-local id is tagged `'gemini'` |
+| 48 | `src/views/advanced.tsx:293`, `:556` on `46e62a34` | `analyzerEngine = values['analyzer.engine']?.effective` → `group.id === 'analyzer-models' && analyzerEngine === 'local'` | removed by #3200 (PR #3201); the device block reads `account.analysisEngine === 'local'`, which already hides it for `openai`; no change | PR #3201 (before this wave) | it renders only the read-only "Analyzer (Ollama) device" row (`:557-590` on 46e62a34) |
+| 49 | `src/components/model-settings-form.tsx:136,445` | engine select bound to `account.analysisEngine` | persisted-input UI | PR 3d | bound to the narrow stored enum |
 | 50 | `src/components/status-popover.tsx:74` | `engine?` | type | 3a (Task 3a.3) | |
 | 51 | `src/components/status-popover.tsx:164` **NEW** | `=== 'gemini' ? 'Gemini' : 'Ollama'` | label | 3a (Task 3a.3) | an endpoint must not read "Ollama" |
 | 52 | `src/components/top-bar.tsx:233` | `engine?` | type | 3a (Task 3a.3) | |
 | 53 | `src/hooks/use-local-analyzer-guard.tsx:78-81` | `engine !== 'local'` | shares-gpu | PR 3d | forward guard |
 | 54 | `src/hooks/use-reverse-local-analyzer-guard.tsx:76` | `activeStream?.engine === 'local'` | shares-gpu | PR 3d | reverse guard |
 | 55 | `src/store/generation-stream-middleware.ts:102` | `analysisSnap.engine === 'local'` | shares-gpu | PR 3d | auto-generation hold |
-| 56 | `src/views/generation.tsx:422,591` **NEW** | `engineForModelId(selectedAnalyzerModelId)` into `setActiveStream` | shares-gpu snapshot capture | 3a via shared inference; PR 3d adds `gpu` | |
+| 56 | `src/views/generation.tsx:422,614` **NEW** | `engineForModelId(selectedAnalyzerModelId)` into `setActiveStream` | shares-gpu snapshot capture | 3a via shared inference; PR 3d adds `gpu` | |
 | 57 | `src/components/setup/step-defaults.tsx:97-98` **NEW** | derives and **saves** `analysisEngine` from the id | persisted input | 3a compile-forced narrowing; PR 3d removes it | the patch type is still `'local' \| 'gemini'` |
-| 58 | `src/lib/api.ts:3041` | `SubstagePhaseEvent.engine?` | type | 3a (Task 3a.3) | |
-| 59 | `src/lib/api.ts:3055` | SSE engine validation | type/validation of a server event | 3a (Task 3a.3) | not a persisted input |
+| 58 | `src/lib/api.ts:3060` | `SubstagePhaseEvent.engine?` | type | 3a (Task 3a.3) | |
+| 59 | `src/lib/api.ts:3074` | SSE engine validation | type/validation of a server event | 3a (Task 3a.3) | not a persisted input |
 | 60 | tests: `server/src/routes/analysis.test.ts:3198,3263`, `annotate-emotion.test.ts:34`, `instruct-annotation.test.ts:34`, `script-review.test.ts:48`, `server/src/workspace/active-analyses.test.ts:49`, `server/src/tts/prepare-persona-batch.test.ts:14`, `src/lib/models.test.ts:50,109-110,117`, `src/hooks/use-local-analyzer-guard.test.tsx:148-150` | fixtures | type | widen only where `npm run typecheck` requires | narrower literals assign into the wider union |
 | 61 | `server/src/analyzer/attribution-eval/run-eval.ts:214` on 46e62a34; on `origin/main` after #3199 it is `:190`, before the stage-2 call **NEW** | `const chunkEngine = opts.engine === 'qwen' ? 'local' : 'gemini';` (ternary coercion) | coercion (eval-only budget pass-through) | unchanged in 3a; if wave 2 (PR 2a) already replaced its consumer with a capacity descriptor, the Task 3a.4 sweep finds no hit | it maps the eval CLI's own engine names (`qwen` / `gemma`, `run-eval.ts:178`), not a model id, onto a chunk-budget engine; the eval never runs an endpoint |
 | — | **Excluded (TTS or non-analyzer)** | | | | |
 | — | `src/lib/tts-models.ts:12,187` | `TtsEngineId`, TTS key → engine | TTS | — | TTS engine group |
 | — | `src/components/layout.tsx:1189`, `src/store/engines-in-use-selector.ts:33`, `src/lib/play-sample-with-auto-load.ts:61,180`, `src/lib/tts-voice-mapping.ts:307,314` | TTS pills / voices | TTS | — | |
 | — | `server/src/tts/*`, `server/src/routes/voices.ts:213,823`, `voice-sample.ts:50`, `server/src/workspace/scan.ts:535` | TTS engines | TTS | — | |
-| — | `server/src/workspace/user-settings.ts:97,124` | `TTS_ENGINE_VALUES` / `defaultTtsEngine` | TTS | — | |
+| — | `server/src/workspace/user-settings.ts:173,200` | `TTS_ENGINE_VALUES` / `defaultTtsEngine` | TTS | — | |
 | — | `server/src/routes/failure-taxonomy.ts:275` | `ctx.engine !== 'gemini'` | TTS | — | `ctx.engine` is only set by `classifyFailure(err, engine)` on the generation path; the analysis scan passes none (`:386`) |
 | — | `src/components/character-search-picker.tsx:106,141` | `row.kind === 'local'` | not an engine | — | |
 
@@ -449,14 +449,14 @@ git commit -m "refactor(server,frontend): add shared analyzer model-id grammar a
 
 **Files:**
 - Modify: `server/src/analyzer/errors.ts` (W1) — append `AnalyzerEndpointMissingError`
-- Modify: `server/src/analyzer/index.ts:23-30` (imports), `:163-174` (`SelectAnalyzerOptions` gains `modelSource`), `:176-197` (selection type and private inference), `:199-209` (insert the refusal branch and the saved-default check)
-- Modify: `server/src/analyzer/select-analyzer.ts:74-77`, `:82`, `:92` (comment made false; pass `modelSource`)
-- Modify: `server/src/workspace/user-settings.ts:967-977`
+- Modify: `server/src/analyzer/index.ts:23-31` (imports), `:166-173` (`SelectAnalyzerOptions` gains `modelSource`), `:175-196` (selection type and private inference), `:198-208` (insert the refusal branch and the saved-default check)
+- Modify: `server/src/analyzer/select-analyzer.ts` (80be2f1d — A1: `:96` env, `:104-106` NEW `phaseModel` tier, `:109-111` `opts.model`, `:115` override; was `:74-77`/`:82`/`:92` at 46e62a34, three tiers only)
+- Modify: `server/src/workspace/user-settings.ts:1001-1011`
 - Modify: `server/src/store/analysis-state.ts:52`
 - Modify: `server/src/workspace/active-analyses.ts:47`
-- Modify: `server/src/routes/analysis.ts:557-563` (`engineLabel`, now exported), `:1214-1216`, `:2655`
+- Modify: `server/src/routes/analysis.ts:552-558` (`engineLabel`, now exported), `:1209-1211`, `:2650`
 - Modify: `server/src/routes/setup-diagnosis.ts:309`
-- Modify: `server/src/routes/models-inventory.ts:120`
+- Modify: `server/src/routes/models-inventory.ts:119`
 - Test: `server/src/analyzer/select-analyzer-endpoint-id.test.ts` (new)
 - Test: `server/src/routes/analysis-engine-label.test.ts` (new)
 - Test: `server/src/routes/user-settings.test.ts` (add one case)
@@ -541,7 +541,21 @@ describe('selectAnalyzer — endpoint-shaped model ids (#3084 PR 3a, P23)', () =
       source: 'run-pick',
     });
 
-    _setUserSettingsCacheForTest({ geminiApiKey: null, analyzerPhase1Model: 'openai:saved::m' });
+    /* #3084 A1 (re-pin to 80be2f1d) — the NEW opts.phaseModel tier (#3141 step
+       4, between env and opts.model) also reports 'run-pick': it is this
+       request's own phase0Model/phase1Model, never persisted, same as
+       opts.model. Beats opts.model when both would apply, though this test
+       only needs to show the tier reports the right source on its own. */
+    expect(thrown(() => selectAnalyzerForPhase({ phase: 'phase1', phaseModel: 'openai:runpick::m' }))).toMatchObject({
+      endpointId: 'runpick',
+      source: 'run-pick',
+    });
+
+    /* #3084 A1 (re-pin to 80be2f1d) — a saved phase model is a configOverrides
+       entry now (the resolver reads getCachedUserSettings().configOverrides,
+       user-settings.ts:1143-1144), never analyzerPhase1Model, which no longer
+       exists as a settings field. */
+    _setUserSettingsCacheForTest({ geminiApiKey: null, configOverrides: { 'analyzer.phase1.model': 'openai:saved::m' } });
     expect(thrown(() => selectAnalyzerForPhase({ phase: 'phase1' }))).toMatchObject({ endpointId: 'saved', source: 'settings' });
   });
 
@@ -630,26 +644,26 @@ export class AnalyzerEndpointMissingError extends Error {
 ```
 
 In `server/src/analyzer/index.ts`:
-1. Add to the imports block (`:23-30`):
+1. Add to the imports block (`:23-31`):
    ```ts
    import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
    ```
-   Add `AnalyzerEndpointMissingError` to W1's `./errors.js` import, and `getCachedUserSettings` to the `../workspace/user-settings.js` import (`:25-31`).
-2. In `SelectAnalyzerOptions` (`:167-174`), after `model?: string;`, add:
+   Add `AnalyzerEndpointMissingError` to W1's `./errors.js` import, and `getCachedUserSettings` to the `../workspace/user-settings.js` import (`:25-29`).
+2. In `SelectAnalyzerOptions` (`:166-173`), after `model?: string;`, add:
    ```ts
      /** #3084 P23 — where `model` came from, named by AnalyzerEndpointMissingError.
          selectAnalyzerForPhase sets it; any other caller passing `model` means a
          run pick. */
      modelSource?: 'env' | 'run-pick' | 'settings';
    ```
-3. `:181` becomes `  engine: AnalysisEngine;`.
-4. Delete the private function and its comment (`:189-197`). Replace them with this comment only:
+3. `:180` becomes `  engine: AnalysisEngine;`.
+4. Delete the private function and its comment (`:188-196`). Replace them with this comment only:
    ```ts
    /* Engine inference from a per-request model id lives in ./model-id.ts
       (shared case table with the frontend): `openai:<endpointId>::<model>` →
       openai, contains ':' → local (Ollama), else gemini. */
    ```
-5. Insert immediately before `  if (engine === 'local') {` (`:206`):
+5. Insert immediately before `  if (engine === 'local') {` (`:205`):
    ```ts
      if (engine === 'openai') {
        /* #3084 P23 — endpoint ids have a grammar but no analyzer until PR 3d,
@@ -661,7 +675,7 @@ In `server/src/analyzer/index.ts`:
        throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? String(opts.model), opts.modelSource ?? 'run-pick');
      }
    ```
-6. Inside `if (engine === 'local') {`, as its first statement (before `const ollamaUrl = …`, `:207`):
+6. Inside `if (engine === 'local') {`, as its first statement (before `const ollamaUrl = …`, `:206`):
    ```ts
        /* #3084 P23 — a saved endpoint default must fail the run with a code,
           not be swapped silently for getResolvedOllamaModel()'s Ollama default. */
@@ -671,16 +685,32 @@ In `server/src/analyzer/index.ts`:
        }
    ```
 
+**Re-pinned to `80be2f1d` (#3192 merged) — divergence A1.** `select-analyzer.ts` was rewritten onto
+`resolveKnob`/`getKnob` and gained a NEW tier (`opts.phaseModel`, #3141 step 4) between env and
+`opts.model` — an earlier draft of this task described the pre-#3192 three-tier file (raw
+`process.env`/`userSettings` reads at `:74-92`). At 80be2f1d it is FOUR tiers, each a `return
+selectAnalyzer({ model: … })` call this task adds `modelSource` to:
+
 In `server/src/analyzer/select-analyzer.ts`:
-1. `:74-76` — replace the comment text `it routes via \`inferEngineFromModelId\` (':' → local, otherwise → Gemini).` with:
-   ```
-   it routes via `inferEngineFromModelId` (./model-id.ts: endpoint shape →
-   openai, ':' → local, otherwise → Gemini). `modelSource` names env if that
-   id is an endpoint id this build cannot run (#3084 P23).
-   ```
-2. `:77` → `    return selectAnalyzer({ model: phaseEnvModel.trim(), modelSource: 'env' });`
-3. `:82` → `    return selectAnalyzer({ model: opts.model, modelSource: 'run-pick' });`
-4. `:92` → `    return selectAnalyzer({ model: settingsModel, modelSource: 'settings' });`
+1. Above `export function selectAnalyzerForPhase`, extend the doc comment's "it routes via
+   `inferEngineFromModelId`" sentence (unchanged code, comment only) to note: "(./model-id.ts: endpoint
+   shape → openai, ':' → local, otherwise → Gemini). `modelSource` names where each tier's model id came
+   from, for `AnalyzerEndpointMissingError` (#3084 P23)."
+2. `:96` (env tier) — `return selectAnalyzer({ model: resolvedModel });` becomes
+   `return selectAnalyzer({ model: resolvedModel, modelSource: 'env' });`
+3. `:104-106` (the NEW per-run `opts.phaseModel` tier, #3141 step 4 — not present at 46e62a34, so an
+   earlier draft of this task never touched it) — `return selectAnalyzer({ model: opts.phaseModel });`
+   becomes `return selectAnalyzer({ model: opts.phaseModel, modelSource: 'run-pick' });`
+4. `:109-111` (`opts.model` tier) — `return selectAnalyzer({ model: opts.model });` becomes
+   `return selectAnalyzer({ model: opts.model, modelSource: 'run-pick' });`
+5. `:115` (saved Advanced Settings override tier) — `return selectAnalyzer({ model: resolvedModel });`
+   (the SAME `resolvedModel` local as the env tier, but reached only when `resolved.source ===
+   'override'`) becomes `return selectAnalyzer({ model: resolvedModel, modelSource: 'settings' });`
+6. `:123` (hardcoded default, `selectAnalyzer({})`) — unchanged: no `model`, so no `modelSource` to set.
+
+Both the new `opts.phaseModel` tier and the `opts.model` tier report `'run-pick'` — matching the
+contract's "any other caller that passes `model` gets `run-pick`" and A1's explicit "add a case: a
+`phaseModel` endpoint id reports `run-pick`."
 
 In `server/src/workspace/user-settings.ts`:
 1. Add a type import at the top import block:
@@ -708,11 +738,11 @@ Type-only changes:
 - `server/src/store/analysis-state.ts:52` → `  engine?: AnalysisEngine;`, plus `import type { AnalysisEngine } from '../analyzer/model-id.js';`.
 - `server/src/workspace/active-analyses.ts:47` → `  engine?: AnalysisEngine;`, plus `import type { AnalysisEngine } from '../analyzer/model-id.js';`.
 - `server/src/routes/setup-diagnosis.ts:309` → `  engine: AnalysisEngine;`, plus the same import.
-- `server/src/routes/models-inventory.ts:120` → `  analysisEngine: AnalysisEngine;`, plus the same import.
+- `server/src/routes/models-inventory.ts:119` → `  analysisEngine: AnalysisEngine;`, plus the same import.
 
 `server/src/routes/analysis.ts`:
 1. Add `import { parseEndpointModelId, type AnalysisEngine } from '../analyzer/model-id.js';`.
-2. Replace `:557-563` with:
+2. Replace `:552-558` with:
 ```ts
 /** Engine-aware label so SSE chunks read "Ollama (qwen3.5:9b)" for the
     local analyzer, "Gemma 4 31B" for Gemini, and "Endpoint lab (qwen3:30b)"
@@ -727,11 +757,11 @@ export function engineLabel(engine: AnalysisEngine, modelId: string): string {
   return engine === 'local' ? `Ollama (${modelId})` : humanModel(modelId);
 }
 ```
-3. `:1215` → `  engine: AnalysisEngine,`. The body at `:1218` is unchanged (classification row 27).
-4. `:2655` → `  engine: AnalysisEngine;`.
+3. `:1210` → `  engine: AnalysisEngine,`. The body at `:1213` is unchanged (classification row 27).
+4. `:2650` → `  engine: AnalysisEngine;`.
 
 Then run `npm run typecheck`. The remaining errors can only be at sites that receive `AnalyzerSelection.engine` into a `'local' | 'gemini'` parameter:
-- `routes/analysis.ts:2212` phase-1 option;
+- `routes/analysis.ts:2207` (Part 3 re-pin: was `:2212` at 46e62a34) phase-1 option;
 - `attribution-eval/review-run.ts:47`.
 
 Wave 2 may already have replaced both with a capacity descriptor. If typecheck reports either, change that type to `AnalysisEngine` with the same import.
@@ -749,8 +779,10 @@ Expected: PASS, and typecheck clean.
 - [ ] **Step 5: Mutation proofs**
 1. **Refusal branch.** Delete the `if (engine === 'openai') { … }` block in `index.ts`. Expect red on `refuses an openai:<endpoint>::<model> id instead of handing it to Ollama`. Restore.
 2. **Saved default.** Delete the `if (!opts.model) { … }` block at the top of the local branch. Expect red on `a saved endpoint default is refused as settings-sourced, never run on Ollama's default model` (received `null`: an `OllamaAnalyzer` was built). Restore.
-3. **Source.** In `select-analyzer.ts:77`, drop `, modelSource: 'env'`. Expect red on `each phase source is named: env, run pick, saved phase model` (received `source: 'run-pick'`). Restore.
-4. **Persisted enum.** In `user-settings.ts:98`, change `ANALYSIS_ENGINE_VALUES` to `['local', 'gemini', 'openai'] as const`. Expect red on `refuses analysisEngine "openai" until endpoints are selectable (#3084 PR 3a)`: status 200, not 400. Restore.
+3. **Source.** In `select-analyzer.ts:96` (env tier), drop `, modelSource: 'env'`. Expect red on `each phase source is named: env, run pick, saved phase model` (received `source: 'run-pick'`). Restore.
+4. **New tier.** In `select-analyzer.ts:104-106` (the `opts.phaseModel` tier), drop `, modelSource: 'run-pick'` entirely (so `selectAnalyzer({ model: opts.phaseModel })` is called bare). Expect red on the same test's `phaseModel: 'openai:runpick::m'` case: `AnalyzerEndpointMissingError`'s `source` defaults to `'run-pick'` in `index.ts` (`opts.modelSource ?? 'run-pick'`), so this mutation is a documented gap unless the default is ALSO changed — pair it with reverting `index.ts`'s `opts.modelSource ?? 'run-pick'` to `opts.modelSource ?? 'settings'` to make it observably red (received `source: 'settings'`).
+5. **Override tier.** In `select-analyzer.ts:115`, drop `, modelSource: 'settings'`. Expect red on `a saved endpoint default is refused as settings-sourced…` and the phase-model settings case (both receive `source: 'run-pick'`, `index.ts`'s default).
+4. **Persisted enum.** In `user-settings.ts:174`, change `ANALYSIS_ENGINE_VALUES` to `['local', 'gemini', 'openai'] as const`. Expect red on `refuses analysisEngine "openai" until endpoints are selectable (#3084 PR 3a)`: status 200, not 400. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -764,16 +796,16 @@ git commit -m "refactor(server): widen analyzer engine union and refuse endpoint
 
 **Files:**
 - Modify: `src/lib/model-id.ts` (add `analyzerEngineName`)
-- Modify: `src/lib/models.ts:12-17` (`ModelOption.engine`), `:104-110`, `:178-182`
+- Modify: `src/lib/models.ts:13-18` (`ModelOption.engine`), `:105-111`, `:179-183`
 - Modify: `src/lib/types.ts:578,606`
-- Modify: `src/store/analysis-slice.ts:33`
+- Modify: `src/store/analysis-slice.ts:34`
 - Modify: `src/store/analysis-substage-reducers.ts:31`
 - Modify: `src/store/analysis-substage-selectors.ts:43`
 - Modify: `src/store/prosody-slice.ts:35`
 - Modify: `src/components/status-popover.tsx:74,164`
 - Modify: `src/components/top-bar.tsx:233`
-- Modify: `src/views/analysing.tsx:344`
-- Modify: `src/lib/api.ts:3041,3055`
+- Modify: `src/views/analysing.tsx:372`
+- Modify: `src/lib/api.ts:3060,3074`
 - Modify: `src/components/setup/step-defaults.tsx:93-99`
 - Test: `src/lib/model-id.test.ts` (add), `src/lib/models.endpoint-ids.test.ts` (new), `src/lib/api-substage-phase-event.test.ts` (new)
 
@@ -874,8 +906,8 @@ export function analyzerEngineName(engine: AnalysisEngine | undefined): string {
    ```ts
    import { engineForModelId, type AnalysisEngine } from './model-id';
    ```
-2. `:16` → `  engine: AnalysisEngine;`.
-3. Replace `:104-110` with:
+2. `:17` → `  engine: AnalysisEngine;`.
+3. Replace `:105-111` with:
 ```ts
 /** Engine classification from the id shape — `openai:<endpointId>::<model>` →
     openai, ':' → local (Ollama), else gemini. Implemented in ./model-id.ts,
@@ -885,14 +917,14 @@ export function analyzerEngineName(engine: AnalysisEngine | undefined): string {
     (uncurated) local tag is still correctly classified. */
 export { engineForModelId };
 ```
-4. `:179` → `  engine: AnalysisEngine;`.
+4. `:180` → `  engine: AnalysisEngine;`.
 
 Type sites. Add `import type { AnalysisEngine } from '<relative>/lib/model-id';` where the file doesn't already import it:
 - `src/lib/types.ts:578` and `:606` → `  engine?: AnalysisEngine;` (import path `./model-id`).
-- `src/store/analysis-slice.ts:33`, `src/store/analysis-substage-reducers.ts:31`, `src/store/prosody-slice.ts:35` → `  engine?: AnalysisEngine;` (import path `../lib/model-id`).
+- `src/store/analysis-slice.ts:34`, `src/store/analysis-substage-reducers.ts:31`, `src/store/prosody-slice.ts:35` → `  engine?: AnalysisEngine;` (import path `../lib/model-id`).
 - `src/store/analysis-substage-selectors.ts:43` → `    engine?: AnalysisEngine;` (import path `../lib/model-id`).
 - `src/components/status-popover.tsx:74` and `src/components/top-bar.tsx:233` → `    engine?: AnalysisEngine;` (import path `../lib/model-id`).
-- `src/views/analysing.tsx:344` → `  const effectiveEngine: AnalysisEngine = isLocalAnalyzer ? 'local' : 'gemini';` (import path `../lib/model-id`). Add this line above it:
+- `src/views/analysing.tsx:372` → `  const effectiveEngine: AnalysisEngine = isLocalAnalyzer ? 'local' : 'gemini';` (import path `../lib/model-id`). Add this line above it:
   ```ts
   /* #3084 — PR 3d derives the endpoint engine + gpu per effective id. */
   ```
@@ -903,8 +935,8 @@ Type sites. Add `import type { AnalysisEngine } from '<relative>/lib/model-id';`
 
 `src/lib/api.ts`:
 1. Add `import type { AnalysisEngine } from './model-id';` near `:63`.
-2. `:3041` → `  engine?: AnalysisEngine;`.
-3. `:3055` →
+2. `:3060` → `  engine?: AnalysisEngine;`.
+3. `:3074` →
    ```ts
        engine: p.engine === 'local' || p.engine === 'gemini' || p.engine === 'openai' ? p.engine : undefined,
    ```
@@ -940,7 +972,7 @@ Expected: PASS, and typecheck clean.
    export function engineForModelId(id: string) { return id.includes(':') ? 'local' : 'gemini'; }
    ```
    Also remove the import. Expect red on `classifies an endpoint id as openai, not local` and `localRunModelIds excludes endpoint ids…`. Restore.
-2. **SSE validation.** In `src/lib/api.ts:3055`, remove `|| p.engine === 'openai'`. Expect red on `keeps an openai engine tag`. Restore.
+2. **SSE validation.** In `src/lib/api.ts:3074`, remove `|| p.engine === 'openai'`. Expect red on `keeps an openai engine tag`. Restore.
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -954,12 +986,30 @@ git commit -m "refactor(frontend): widen analyzer engine union onto the shared i
 
 **Which sites change.** Research Inventory 2 mixes two kinds of input, and the fix differs between them.
 
+**Re-pinned to `80be2f1d` (#3192 merged) — divergence A3.** `getResolvedOllamaModel` /
+`getResolvedOllamaUrl` moved out of `workspace/user-settings.ts` into their own leaf module,
+`server/src/config/ollama-resolved.ts`. At 80be2f1d, `getResolvedOllamaModel` is:
+```ts
+export function getResolvedOllamaModel(): string {
+  const fromSettings = getCachedDefaultAnalysisModelIfSet();
+  if (fromSettings && fromSettings.includes(':')) return fromSettings;
+  return configValue<string>('analyzer.ollama.model');
+}
+```
+This has the EXACT bug Task 3a.4 exists to fix, in a NEW shape: `fromSettings.includes(':')` is meant
+to mean "looks like an Ollama tag", but `openai:lab::qwen3:30b` also contains `:` — main's own check
+would return an endpoint id as the Ollama model tag. `DEFAULT_OLLAMA_MODEL` is deleted on `main`, and
+`direct-env-reader-guard` now allowlists only `workspace/user-settings.ts: 1` — so a raw
+`process.env.OLLAMA_MODEL` read anywhere in this fix (including as a "does the endpoint fall through"
+check) fails that guard; every read must go through `resolveKnob`/`getKnob`/`configValue`, which is
+what `configValue<string>('analyzer.ollama.model')` (main's own fallback) already does.
+
 **Selection ids.** These come from saved settings, a knob, a request body or a run pick. They must pass through the shared inference. Five sites:
-- `server/src/workspace/user-settings.ts:963` — `getResolvedOllamaModel`; `ollama-health.ts:199,205,218` and `models-inventory.ts:132` inherit from it.
-- `server/src/analyzer/voice-style.ts:67-69` — `resolvePersonaLocalModel`.
+- `server/src/config/ollama-resolved.ts` — `getResolvedOllamaModel` (moved from `workspace/user-settings.ts:963` at 46e62a34); `ollama-health.ts:199,205,218` and `models-inventory.ts:131` inherit from it.
+- `server/src/analyzer/voice-style.ts:68-70` — `resolvePersonaLocalModel`.
 - `server/src/routes/ollama-health.ts:491-493` **NEW** — `POST /api/ollama/load` passes a request-body `model` straight to `warmOllamaModel`.
-- `src/lib/models.ts:125-131` — `isOllamaModelResident`.
-- `src/lib/models.ts:117` — `localRunModelIds`, already fixed in Task 3a.3.
+- `src/lib/models.ts:126-132` — `isOllamaModelResident`.
+- `src/lib/models.ts:118` — `localRunModelIds`, already fixed in Task 3a.3.
 
 **Ollama-sourced strings.** These are tags from Ollama's `/api/tags` or `/api/ps`, the server pull allowlist, or the model an `OllamaTransport` was already built with. An `openai:…::…` id cannot occur in them: Ollama names cannot contain `::`, and the transport is only constructed in the `local` branch.
 
@@ -969,19 +1019,19 @@ Engine inference is also *wrong* on these inputs. It would classify a bare Ollam
 |---|---|---|
 | `server/src/routes/ollama-health.ts:199,205,218` | `expectedModel` = `getResolvedOllamaModel()` (`:162`) vs `/api/tags` / `/api/ps` names | protected by the `getResolvedOllamaModel` fix |
 | `server/src/routes/setup-diagnosis.ts:300,302` | `/api/tags` names vs pull allowlist | Ollama-sourced on both sides |
-| `server/src/analyzer/model-vram-stats.ts:34,179` | `this.model` of the Ollama transport (`ollama.ts:847`) | reached only from the `local` branch |
+| `server/src/analyzer/model-vram-stats.ts:34,179` | `this.model` of the Ollama transport (`ollama.ts:848`) | reached only from the `local` branch |
 | `server/src/analyzer/analyzer-eval-stats.ts:55` | model from Ollama eval timing (`:76`) | Ollama-only telemetry |
-| `server/src/routes/models-inventory.ts:132` | `/api/tags` name vs `getResolvedOllamaModel()` (`:536,580`) | protected by the `getResolvedOllamaModel` fix |
+| `server/src/routes/models-inventory.ts:131` | `/api/tags` name vs `getResolvedOllamaModel()` (`:535,579`) | protected by the `getResolvedOllamaModel` fix |
 | `src/components/model-pull-status.tsx:294` | curated pull allowlist (`:145`) vs `/api/tags` (`:146`) | Ollama-sourced on both sides |
 | `src/components/setup/step-analysis.tsx:21` | curated `MODEL_OPTIONS` local entries | static Ollama tags |
 | `src/components/setup/step-analysis.tsx:75-76` | `account.localAnalyzerModels` (`/api/tags`) vs `account.pullableModels` (allowlist) | Ollama-sourced on both sides |
 
 **Files:**
-- Modify: `server/src/workspace/user-settings.ts:951-965`
-- Modify: `server/src/analyzer/voice-style.ts:65-70`
+- Modify: `server/src/config/ollama-resolved.ts` (80be2f1d's own module — was `server/src/workspace/user-settings.ts:951-965` at 46e62a34)
+- Modify: `server/src/analyzer/voice-style.ts:67-72` (Part 3 re-pin: `:65-70` → `:67-72`)
 - Modify: `server/src/routes/ollama-health.ts:490-493`
-- Modify: `src/lib/models.ts:122-131`
-- Test: `server/src/workspace/user-settings.endpoint-ids.test.ts` (new)
+- Modify: `src/lib/models.ts:123-132`
+- Test: `server/src/config/ollama-resolved.test.ts` (new — was `user-settings.endpoint-ids.test.ts`, since the function itself moved)
 - Test: `server/src/analyzer/voice-style.persona-model.test.ts` (new)
 - Test: `server/src/routes/ollama-health-load.endpoint-id.test.ts` (new)
 - Test: `src/lib/models.endpoint-ids.test.ts` (add)
@@ -998,17 +1048,15 @@ Engine inference is also *wrong* on these inputs. It would classify a bare Ollam
 
 - [ ] **Step 1: Write the failing tests**
 
-`server/src/workspace/user-settings.endpoint-ids.test.ts`:
+`server/src/config/ollama-resolved.test.ts` (new — the function lives here at 80be2f1d, not in
+`workspace/user-settings.ts`):
 ```ts
 import { describe, it, expect, afterEach } from 'vitest';
-import {
-  getResolvedOllamaModel,
-  _resetUserSettingsCache,
-  _setUserSettingsCacheForTest,
-} from './user-settings.js';
+import { getResolvedOllamaModel } from './ollama-resolved.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 import { inferEngineFromModelId } from '../analyzer/model-id.js';
 
-describe('getResolvedOllamaModel — endpoint ids never reach Ollama (#3084 PR 3a)', () => {
+describe('getResolvedOllamaModel — endpoint ids never reach Ollama (#3084 PR 3a, re-pin A3)', () => {
   const saved = process.env.OLLAMA_MODEL;
   afterEach(() => {
     if (saved === undefined) delete process.env.OLLAMA_MODEL;
@@ -1020,18 +1068,24 @@ describe('getResolvedOllamaModel — endpoint ids never reach Ollama (#3084 PR 3
      never returns an endpoint id. It is NOT what a run falls back to: selection
      refuses a saved endpoint default as analyzer-endpoint-missing before it
      reads this resolver (Task 3a.2, `a saved endpoint default is refused…`). */
-  it('never returns a saved openai:<endpoint>::<model> default as the Ollama tag', () => {
+  it('never returns a saved openai:<endpoint>::<model> default as the Ollama tag (the "step 1" tier)', () => {
     delete process.env.OLLAMA_MODEL;
     _setUserSettingsCacheForTest({ defaultAnalysisModel: 'openai:lab::qwen3:30b' });
     expect(inferEngineFromModelId(getResolvedOllamaModel())).not.toBe('openai');
   });
 
-  it('keeps a saved Ollama tag named openai:latest', () => {
+  it('keeps a saved Ollama tag named openai:latest (the "step 1" tier)', () => {
     _setUserSettingsCacheForTest({ defaultAnalysisModel: 'openai:latest' });
     expect(getResolvedOllamaModel()).toBe('openai:latest');
   });
 
-  it('ignores an endpoint id in OLLAMA_MODEL, falling back exactly as if the env were unset (P23)', () => {
+  it('ignores an endpoint id in OLLAMA_MODEL (env), falling back to the registry default (#3084 P23)', () => {
+    /* #3084 A3 review — main's own "step 2" (configValue('analyzer.ollama.model'),
+       env OLLAMA_MODEL -> saved Advanced override -> registry default) has the
+       SAME bug this task exists to fix, in a different shape: it never
+       checks whether the RESOLVED value is an endpoint id at all. This test
+       drives the env tier; the next drives the override tier — A3 explicitly
+       calls out that the override tier needs its own test, not just env. */
     _setUserSettingsCacheForTest({});
     delete process.env.OLLAMA_MODEL;
     const unset = getResolvedOllamaModel();
@@ -1039,6 +1093,17 @@ describe('getResolvedOllamaModel — endpoint ids never reach Ollama (#3084 PR 3
     expect(getResolvedOllamaModel()).toBe(unset);
     process.env.OLLAMA_MODEL = 'openai:latest';
     expect(getResolvedOllamaModel()).toBe('openai:latest');
+  });
+
+  it('ignores an endpoint id in the saved Advanced Settings override (analyzer.ollama.model), falling back to the registry default (#3084 A3)', () => {
+    delete process.env.OLLAMA_MODEL;
+    _setUserSettingsCacheForTest({ configOverrides: { 'analyzer.ollama.model': 'openai:lab::qwen3:30b' } });
+    const withEndpointOverride = getResolvedOllamaModel();
+    expect(inferEngineFromModelId(withEndpointOverride)).not.toBe('openai');
+    _setUserSettingsCacheForTest({});
+    expect(withEndpointOverride).toBe(getResolvedOllamaModel()); // same as the registry default, unset
+    _setUserSettingsCacheForTest({ configOverrides: { 'analyzer.ollama.model': 'llama2' } });
+    expect(getResolvedOllamaModel()).toBe('llama2'); // a real Ollama tag override still works
   });
 });
 ```
@@ -1098,7 +1163,10 @@ beforeAll(async () => {
   const addr = ollama.address();
   const url = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
   process.env.OLLAMA_URL = url;
-  _setUserSettingsCacheForTest({ ollamaUrl: url });
+  /* #3084 A3 (re-pin to 80be2f1d) — `ollamaUrl` is not a settings field any
+     more (getResolvedOllamaUrl() resolves via the config resolver); the env
+     var above already covers what this seed call used to do, and seeding a
+     field the schema no longer has would be a no-op at best. */
   app = express();
   app.use(express.json());
   app.use('/api/ollama', ollamaHealthRouter);
@@ -1155,31 +1223,39 @@ Expected:
 
 - [ ] **Step 3: Implement**
 
-`server/src/workspace/user-settings.ts`:
-1. Extend the type import from Task 3a.2 to a value import:
-   ```ts
-   import { inferEngineFromModelId, type AnalysisEngine } from '../analyzer/model-id.js';
-   ```
-2. Replace `:757-771` with:
+`server/src/config/ollama-resolved.ts` (80be2f1d — divergence A3; NOT `workspace/user-settings.ts`, which
+no longer has this function at all):
+1. Add `import { inferEngineFromModelId } from '../analyzer/model-id.js';` and
+   `import { getKnob } from './registry.js';` (`resolveKnob` is already imported from `./resolver.js`).
+2. Replace the function body:
 ```ts
-/** Ollama model tag passed to /api/chat. Resolution chain:
-      1. cached `defaultAnalysisModel` if it is an Ollama tag
-      2. process.env.OLLAMA_MODEL
-      3. DEFAULT_OLLAMA_MODEL ('qwen3.5:4b')
-    The per-request `model` override (see selectAnalyzer) trumps all
-    three. "Ollama tag" uses the shared grammar (analyzer/model-id.ts): a
-    Gemini id and an `openai:<endpointId>::<model>` endpoint id both contain no
-    Ollama tag, so both fall through to OLLAMA_MODEL / DEFAULT_OLLAMA_MODEL.
-    #3084 P23: an endpoint id in OLLAMA_MODEL is ignored as if the env were unset. */
+/** Ollama model tag passed to /api/chat. Resolution chain (80be2f1d):
+      1. cached `defaultAnalysisModel`, if it has Ollama tag shape (':')
+      2. config resolver: OLLAMA_MODEL env → saved Advanced Settings
+         override (`analyzer.ollama.model`) → registry default
+    The per-request `model` override (see selectAnalyzer) trumps both.
+    #3084 P23 (review pass 3, A3): main's own step-1 check ("has a colon")
+    also accepts an `openai:<endpointId>::<model>` id, which contains a
+    colon too — so does an env/override value at step 2. Both tiers are
+    guarded here with the shared grammar (analyzer/model-id.ts): an
+    endpoint id is never an Ollama tag, so it is treated as absent at
+    whichever tier it appears, falling through to the tier below it (never
+    a raw env read — resolveKnob/getKnob only, so direct-env-reader-guard
+    stays satisfied). */
 export function getResolvedOllamaModel(): string {
-  const c = cached;
-  const fromSettings = c?.defaultAnalysisModel;
-  if (fromSettings && inferEngineFromModelId(fromSettings) === 'local') return fromSettings;
-  const fromEnv = process.env.OLLAMA_MODEL;
-  if (fromEnv !== undefined && inferEngineFromModelId(fromEnv) === 'openai') return DEFAULT_OLLAMA_MODEL;
-  return fromEnv ?? DEFAULT_OLLAMA_MODEL;
+  const fromSettings = getCachedDefaultAnalysisModelIfSet();
+  if (fromSettings && fromSettings.includes(':') && inferEngineFromModelId(fromSettings) !== 'openai') {
+    return fromSettings;
+  }
+  const knob = getKnob('analyzer.ollama.model');
+  const resolved = String(resolveKnob(knob).effective);
+  if (inferEngineFromModelId(resolved) === 'openai') return String(knob.default);
+  return resolved;
 }
 ```
+`resolveKnob(knob).effective` is what `configValue<string>('analyzer.ollama.model')` already resolves
+to internally; calling `resolveKnob` directly here (rather than `configValue`) is what exposes
+`knob.default` for the fallback without a second lookup.
 
 `server/src/analyzer/voice-style.ts`:
 1. Add `import { inferEngineFromModelId } from './model-id.js';`.
@@ -1234,7 +1310,7 @@ export function isOllamaModelResident(id: string, resident: readonly string[]): 
 - [ ] **Step 4: Run and confirm pass**
 
 ```bash
-npm --prefix server run test -- src/workspace/user-settings.endpoint-ids.test.ts src/analyzer/voice-style.persona-model.test.ts src/routes/ollama-health-load.endpoint-id.test.ts src/workspace/user-settings.test.ts src/analyzer/voice-style.test.ts src/routes/ollama-health.test.ts
+npm --prefix server run test -- src/config/ollama-resolved.test.ts src/analyzer/voice-style.persona-model.test.ts src/routes/ollama-health-load.endpoint-id.test.ts src/workspace/user-settings.test.ts src/analyzer/voice-style.test.ts src/routes/ollama-health.test.ts
 npx vitest run src/lib/models.endpoint-ids.test.ts src/lib/models.test.ts
 ```
 Expected: PASS.
@@ -1245,8 +1321,9 @@ Revert one guard at a time, confirm the named test goes red, then restore:
 
 | Revert | Expected red test |
 |---|---|
-| `getResolvedOllamaModel` back to `fromSettings.includes(':')` | `never returns a saved openai:<endpoint>::<model> default as the Ollama tag` |
-| Delete the `fromEnv !== undefined && … === 'openai'` line | `ignores an endpoint id in OLLAMA_MODEL, falling back exactly as if the env were unset (P23)` |
+| `getResolvedOllamaModel` back to bare `fromSettings.includes(':')` (drop the `&& inferEngineFromModelId(fromSettings) !== 'openai'` half) | `never returns a saved openai:<endpoint>::<model> default as the Ollama tag (the "step 1" tier)` |
+| Delete the `if (inferEngineFromModelId(resolved) === 'openai') return String(knob.default);` line | `ignores an endpoint id in OLLAMA_MODEL (env), falling back to the registry default` and `ignores an endpoint id in the saved Advanced Settings override…` |
+| `getResolvedOllamaModel`'s fallback reads `process.env.OLLAMA_MODEL` directly instead of `resolveKnob(knob).effective` | `npm run test:hooks`' `direct-env-reader-guard` (this file is not in the allowlist, which now names only `workspace/user-settings.ts: 1`) |
 | `resolvePersonaLocalModel` guard `&& inferEngineFromModelId(explicit) !== 'openai'` removed | `falls back to the analyzer Ollama model…` |
 | `/load` `if (requested && …openai…)` block removed | `refuses an openai:<endpoint>::<model> id without contacting Ollama` |
 | `isOllamaModelResident` first line removed | `is false for an endpoint id…` |
@@ -1264,12 +1341,12 @@ rg -n "\?\s*'(local|gemini|openai|qwen|gemma)'\s*:\s*'(local|gemini|openai|qwen|
 ```
 
 The fifth command finds **ternary engine coercions**, which the fourth cannot: in `x === 'qwen' ? 'local' : 'gemini'`, the compared literal is not an analyzer engine. On 46e62a34 it prints seven hits. Each is a table row or excluded:
-- `src/views/analysing.tsx:344` — row 47;
+- `src/views/analysing.tsx:372` — row 47;
 - `server/src/analyzer/attribution-eval/run-eval.ts:214` — row 61;
-- `server/src/analyzer/index.ts:196` — row 14 (Task 3a.2 deletes it);
-- `server/src/analyzer/voice-style.ts:62` — row 22;
-- `server/src/workspace/user-settings.ts:976` — row 42;
-- `src/lib/models.ts:109` — row 7 (Task 3a.3 replaces it);
+- `server/src/analyzer/index.ts:195` — row 14 (Task 3a.2 deletes it);
+- `server/src/analyzer/voice-style.ts:63` — row 22;
+- `server/src/workspace/user-settings.ts:1010` — row 42;
+- `src/lib/models.ts:110` — row 7 (Task 3a.3 replaces it);
 - `src/lib/tts-models.ts:187` — excluded (TTS).
 
 **Classification rule for every hit** of the first three commands. Apply the first rule that fits:
@@ -1289,11 +1366,25 @@ git commit -m "fix(server,frontend): keep endpoint model ids away from every oll
 
 ### Task 3a.5: Refuse endpoint model ids in saved selections until PR 3d (P23)
 
+**Re-pinned to `80be2f1d` (#3192 merged) — divergence A4.** `analyzerPhase0Model` / `analyzerPhase1Model`
+are gone from the schema entirely (moved to `configOverrides`, A5), and main's `routes/user-settings.ts`
+now has its OWN `RETIRED_ANALYZER_FIELDS` refusal (`:42-47`, `:114-130` at 80be2f1d) that unconditionally
+rejects those two field names — with or without an endpoint id — before this task's check would ever
+run. This task's own refusal therefore:
+- checks `defaultAnalysisModel` only (the two phase fields need no check here — they can never reach
+  `writeUserSettings` at all any more, refused for an unrelated reason first);
+- checks THREE knobs, not two: `analyzer.phase0.model`, `analyzer.phase1.model`, and (new, A3)
+  `analyzer.ollama.model` — now Advanced-editable and read at runtime (`getResolvedOllamaModel`,
+  Task 3a.4), so a saved endpoint id there would reach an Ollama probe exactly like a phase knob would;
+- runs AFTER main's `RETIRED_ANALYZER_FIELDS` check, inside the SAME `try` block — never replacing or
+  reordering ahead of it (main's check has to run first: it is what makes the two phase fields
+  unconditionally rejected, independent of whether they look like an endpoint id).
+
 **Files:**
-- Modify: `server/src/workspace/user-settings.ts` — add `ENDPOINT_ID_REFUSED_FIELDS`, `ENDPOINT_ID_REFUSED_KNOBS` and `endpointModelIdRefusals` after `stripForbiddenKeys` (`:663-671`)
-- Modify: `server/src/routes/user-settings.ts:19-28` (imports), `:90-101` (general PUT)
-- Modify: `server/src/routes/config.ts` imports, and `:106-128` (PUT pass 1)
-- Modify: `src/lib/api.ts` — the `./model-id` import Task 3a.3 added near `:63`; `mockPutUserSettings` (`:7308-7346`)
+- Modify: `server/src/workspace/user-settings.ts` — add `ENDPOINT_ID_REFUSED_FIELDS`, `ENDPOINT_ID_REFUSED_KNOBS` and `endpointModelIdRefusals` after `stripForbiddenKeys` (`:730-738` at 80be2f1d — was `:663-671` at 46e62a34, Part 3 re-pin)
+- Modify: `server/src/routes/user-settings.ts` — imports (`:19-30` at 80be2f1d); the general PUT's `try` block, AFTER the existing `RETIRED_ANALYZER_FIELDS`/`offending` check and BEFORE `const updated = await writeUserSettings(req.body);` (`:114-130` at 80be2f1d).
+- Modify: `server/src/routes/config.ts` imports, and PUT pass 1 (line numbers unaffected by #3192 — verify at implementation time, this file is on the "Unaffected" list per the divergence audit).
+- Modify: `src/lib/api.ts` — the `./model-id` import Task 3a.3 added; `mockPutUserSettings` (from `:7382` at 80be2f1d — Part 3 re-pin, was `:7308`).
 - Test: `server/src/routes/user-settings.test.ts` (add)
 - Test: `server/src/routes/config.endpoint-ids.test.ts` (new)
 - Test: `src/lib/api-put-user-settings-endpoint-ids-mock.test.ts` (new)
@@ -1303,8 +1394,8 @@ git commit -m "fix(server,frontend): keep endpoint model ids away from every oll
 - Produces: `endpointModelIdRefusals(patch: unknown): Array<{ path: string[]; message: string }>`, `ENDPOINT_ID_REFUSED_FIELDS`, `ENDPOINT_ID_REFUSED_KNOBS`. PR 3d deletes all three and their three callers ("End of PRs 3a and 3b" lists the lift).
 
 **Why the check sits on client input, not in the schema or `writeUserSettings`:**
-- `userSettingsSchema` also parses the file on read. A refusal there would make `readUserSettings` reset every setting on one stale value (`user-settings.ts:522-525`).
-- The override upsert (`user-settings.ts:1113-1117`) rewrites the whole `configOverrides` map through `writeUserSettings`. A refusal there would fail every later Advanced Settings save once a stale value is on disk.
+- `userSettingsSchema` also parses the file on read. A refusal there would make `readUserSettings` reset every setting on one stale value (`user-settings.ts:579-582`).
+- The override upsert (`user-settings.ts:1148-1151`) rewrites the whole `configOverrides` map through `writeUserSettings`. A refusal there would fail every later Advanced Settings save once a stale value is on disk.
 
 The two routes that accept a client's model id refuse it instead. The mock PUT mirrors the general PUT.
 
@@ -1318,29 +1409,35 @@ The two routes that accept a client's model id refuse it instead. The mock PUT m
 
 Append to `server/src/routes/user-settings.test.ts`, inside `describe('user-settings router', …)`:
 ```ts
-  it.each(['defaultAnalysisModel', 'analyzerPhase0Model', 'analyzerPhase1Model'])(
-    'refuses an endpoint model id in %s until endpoints are selectable (#3084 P23)',
-    async (field) => {
-      const res = await request(app).put('/api/user/settings').send({ [field]: 'openai:lab::qwen3:30b' });
-      expect(res.status).toBe(400);
-      expect(res.body.error).toBe('Invalid user settings.');
-      expect(res.body.issues).toEqual([
-        { path: [field], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' },
-      ]);
-      const after = await request(app).get('/api/user/settings');
-      expect(after.body[field]).not.toBe('openai:lab::qwen3:30b');
-    },
-  );
+  it('refuses an endpoint model id in defaultAnalysisModel until endpoints are selectable (#3084 P23)', async () => {
+    const res = await request(app).put('/api/user/settings').send({ defaultAnalysisModel: 'openai:lab::qwen3:30b' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid user settings.');
+    expect(res.body.issues).toEqual([
+      { path: ['defaultAnalysisModel'], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' },
+    ]);
+    const after = await request(app).get('/api/user/settings');
+    expect(after.body.defaultAnalysisModel).not.toBe('openai:lab::qwen3:30b');
+  });
 
-  it('refuses an endpoint model id in a phase-model override, and still saves an Ollama tag named openai:latest (#3084 P23)', async () => {
-    const refused = await request(app)
-      .put('/api/user/settings')
-      .send({ configOverrides: { 'analyzer.phase1.model': 'openai:lab::m' } });
-    expect(refused.status).toBe(400);
-    expect(refused.body.issues.map((i: { path: string[] }) => i.path)).toEqual([['configOverrides', 'analyzer.phase1.model']]);
-    const ok = await request(app).put('/api/user/settings').send({ analyzerPhase0Model: 'openai:latest' });
+  /* #3084 A4 (re-pin to 80be2f1d) — analyzerPhase0Model/analyzerPhase1Model
+     are unconditionally rejected by main's own RETIRED_ANALYZER_FIELDS check
+     now (`error` names them "managed in Advanced Settings…"), with or
+     without an endpoint id, so this task has nothing left to add for those
+     two field names — no test names them here any more. */
+  it('refuses an endpoint model id in a phase-model or ollama-model override, and still saves a still-writable field (#3084 P23)', async () => {
+    for (const key of ['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model']) {
+      const refused = await request(app)
+        .put('/api/user/settings')
+        .send({ configOverrides: { [key]: 'openai:lab::m' } });
+      expect(refused.status).toBe(400);
+      expect(refused.body.issues.map((i: { path: string[] }) => i.path)).toEqual([['configOverrides', key]]);
+    }
+    /* Any field the general PUT can still write, unaffected by either
+       refusal above (A4: use `displayName`, not `ollamaUrl` — also retired). */
+    const ok = await request(app).put('/api/user/settings').send({ displayName: 'Still writable' });
     expect(ok.status).toBe(200);
-    expect(ok.body.analyzerPhase0Model).toBe('openai:latest');
+    expect(ok.body.displayName).toBe('Still writable');
   });
 ```
 
@@ -1379,8 +1476,12 @@ afterAll(() => {
   settings._resetUserSettingsCache();
 });
 
-describe('PUT /api/config — phase-model overrides (#3084 P23)', () => {
-  it.each(['analyzer.phase0.model', 'analyzer.phase1.model'])(
+describe('PUT /api/config — phase-model and ollama-model overrides (#3084 P23)', () => {
+  it.each(['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model'])(
+    /* #3084 A3/A4 (re-pin to 80be2f1d) — analyzer.ollama.model is a THIRD
+       refused knob now: A3 makes it Advanced-editable and read at runtime
+       (getResolvedOllamaModel), so a saved endpoint id there would reach an
+       Ollama probe exactly like a phase knob would. */
     'refuses an endpoint model id for %s and writes nothing',
     async (key) => {
       const res = await request(app).put('/api/config').send({ [key]: 'openai:lab::qwen3:30b' });
@@ -1406,17 +1507,17 @@ vi.stubEnv('VITE_USE_MOCKS', 'true');
 const { api } = await import('./api');
 
 describe('mock PUT user settings — endpoint model ids (#3084 P23)', () => {
-  it.each(['defaultAnalysisModel', 'analyzerPhase0Model', 'analyzerPhase1Model'] as const)(
-    'refuses an endpoint id in %s, as the server does',
-    async (field) => {
-      const before = (await api.getUserSettings())[field];
-      await expect(api.putUserSettings({ [field]: 'openai:lab::m' })).rejects.toThrow(/\(400\).*Invalid user settings/);
-      expect((await api.getUserSettings())[field]).toBe(before);
-    },
-  );
+  /* #3084 A5 (re-pin to 80be2f1d) — only defaultAnalysisModel is a settings
+     field any more; the two phase fields don't exist on the schema at all. */
+  it('refuses an endpoint id in defaultAnalysisModel, as the server does', async () => {
+    const before = (await api.getUserSettings()).defaultAnalysisModel;
+    await expect(api.putUserSettings({ defaultAnalysisModel: 'openai:lab::m' })).rejects.toThrow(/\(400\).*Invalid user settings/);
+    expect((await api.getUserSettings()).defaultAnalysisModel).toBe(before);
+  });
 
   it('still saves an Ollama tag named openai:latest', async () => {
-    expect((await api.putUserSettings({ analyzerPhase1Model: 'openai:latest' })).analyzerPhase1Model).toBe('openai:latest');
+    const res = await api.putUserSettings({ configOverrides: { 'analyzer.phase1.model': 'openai:latest' } } as never);
+    expect((res.configOverrides as Record<string, unknown>)?.['analyzer.phase1.model']).toBe('openai:latest');
   });
 });
 ```
@@ -1430,24 +1531,30 @@ npx vitest run src/lib/api-put-user-settings-endpoint-ids-mock.test.ts
 ```
 
 Expected:
-- The three `refuses an endpoint model id in …` route cases FAIL: status 200, not 400.
-- `refuses an endpoint model id in a phase-model override…` FAILS: status 200.
-- Both `PUT /api/config … refuses` cases FAIL: status 200.
-- The three mock `refuses an endpoint id in …` cases FAIL: the promise resolves.
+- `refuses an endpoint model id in defaultAnalysisModel…` FAILS: status 200, not 400.
+- `refuses an endpoint model id in a phase-model or ollama-model override…` FAILS: status 200 for all three knobs.
+- All three `PUT /api/config … refuses` cases (phase0/phase1/ollama) FAIL: status 200.
+- The mock `refuses an endpoint id in defaultAnalysisModel…` case FAILS: the promise resolves.
 - `still saves an Ollama tag that starts with openai:` (config) and `still saves an Ollama tag named openai:latest` (mock) PASS already. They pin that an Ollama tag is not refused.
 
 - [ ] **Step 3: Implement**
 
-`server/src/workspace/user-settings.ts` — insert after `stripForbiddenKeys` (`:671`):
+`server/src/workspace/user-settings.ts` — insert after `stripForbiddenKeys` (`:730-738` at 80be2f1d):
 ```ts
 /* #3084 P23 — until PR 3d, no saved selection may name an OpenAI-compatible
-   endpoint. The model fields are plain strings, and an endpoint id saved now
-   would reach selection or an Ollama probe. Checked on CLIENT input only (the
-   general PUT and PUT /api/config): the schema also parses the file on read,
-   and the override upsert below rewrites the whole overrides map. PR 3d deletes
+   endpoint. `defaultAnalysisModel` is the only settings field left to check
+   here — `analyzerPhase0Model`/`analyzerPhase1Model` no longer exist on the
+   schema at all (A5) and are unconditionally refused for an unrelated
+   reason by this file's own RETIRED_ANALYZER_FIELDS (routes/user-settings.ts)
+   before this check would ever run. `analyzer.ollama.model` joins the two
+   phase knobs (A3 — it is Advanced-editable and read at runtime now, so a
+   saved endpoint id there would reach an Ollama probe exactly like a phase
+   knob would). Checked on CLIENT input only (the general PUT and
+   PUT /api/config): the schema also parses the file on read, and the
+   override upsert below rewrites the whole overrides map. PR 3d deletes
    these three exports and their callers (both routes and the mock PUT). */
-export const ENDPOINT_ID_REFUSED_FIELDS = ['defaultAnalysisModel', 'analyzerPhase0Model', 'analyzerPhase1Model'] as const;
-export const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.phase0.model', 'analyzer.phase1.model'] as const;
+export const ENDPOINT_ID_REFUSED_FIELDS = ['defaultAnalysisModel'] as const;
+export const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model'] as const;
 const ENDPOINT_ID_REFUSAL = 'OpenAI-compatible endpoint models cannot be selected in this build.';
 
 export function endpointModelIdRefusals(patch: unknown): Array<{ path: string[]; message: string }> {
@@ -1471,22 +1578,24 @@ export function endpointModelIdRefusals(patch: unknown): Array<{ path: string[];
 ```
 
 `server/src/routes/user-settings.ts`:
-1. Add `endpointModelIdRefusals` to the `../workspace/user-settings.js` import (`:19-27`).
-2. `:78-80` becomes:
+1. Add `endpointModelIdRefusals` to the `../workspace/user-settings.js` import (`:19-30` at 80be2f1d).
+2. Inside the general PUT's existing `try` block, directly AFTER the `RETIRED_ANALYZER_FIELDS`/`offending`
+   check (`:114-130` at 80be2f1d) and BEFORE `const updated = await writeUserSettings(req.body);` —
+   **never replacing or reordering ahead of** that existing check:
 ```ts
-userSettingsRouter.put('/', async (req: Request, res: Response) => {
-  /* #3084 P23 — PR 3d deletes this refusal. */
-  const refusals = endpointModelIdRefusals(req.body);
-  if (refusals.length > 0) {
-    return res.status(400).json({ error: 'Invalid user settings.', issues: refusals });
-  }
-  try {
+    /* #3084 P23 — PR 3d deletes this refusal. Runs after the retired-field
+       check above: that one is unconditional (any value), this one only
+       fires for a value shaped like an endpoint id. */
+    const refusals = endpointModelIdRefusals(req.body);
+    if (refusals.length > 0) {
+      return res.status(400).json({ error: 'Invalid user settings.', issues: refusals });
+    }
     const updated = await writeUserSettings(req.body);
 ```
 
 `server/src/routes/config.ts`:
 1. Add `import { endpointModelIdRefusals } from '../workspace/user-settings.js';` (merge it into an existing import from that module if there is one).
-2. In pass 1, directly after the `if (resolveKnob(knob).locked) { … }` block (`:114-117`), insert:
+2. In pass 1, directly after the `if (resolveKnob(knob).locked) { … }` block, insert:
 ```ts
     /* #3084 P23 — PR 3d deletes this refusal. */
     if (endpointModelIdRefusals({ configOverrides: { [key]: raw } }).length > 0) {
@@ -1497,20 +1606,18 @@ userSettingsRouter.put('/', async (req: Request, res: Response) => {
 
 `src/lib/api.ts`:
 1. Change Task 3a.3's `import type { AnalysisEngine } from './model-id';` to `import { engineForModelId, type AnalysisEngine } from './model-id';`.
-2. In `mockPutUserSettings`, directly after `await wait(50);` (`:7309`), insert:
+2. In `mockPutUserSettings` (from `:7382` at 80be2f1d — Part 3 re-pin), directly after `await wait(50);`, insert:
 ```ts
   /* #3084 P23 — mirrors the server's refusal of an endpoint model id in a saved
      selection (server/src/workspace/user-settings.ts endpointModelIdRefusals),
-     with realPutUserSettings' error text. PR 3d deletes this block. */
-  const refusedFields = (['defaultAnalysisModel', 'analyzerPhase0Model', 'analyzerPhase1Model'] as const).filter((f) => {
-    const v = patch[f];
-    return typeof v === 'string' && engineForModelId(v.trim()) === 'openai';
-  });
-  if (refusedFields.length > 0) {
+     with realPutUserSettings' error text. PR 3d deletes this block. Only
+     defaultAnalysisModel — A5 removed the two phase fields from the schema
+     entirely, so the mock (like the server) never sees them here at all. */
+  if (typeof patch.defaultAnalysisModel === 'string' && engineForModelId(patch.defaultAnalysisModel.trim()) === 'openai') {
     throw new Error(
       `User settings save failed (400): ${JSON.stringify({
         error: 'Invalid user settings.',
-        issues: refusedFields.map((f) => ({ path: [f], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' })),
+        issues: [{ path: ['defaultAnalysisModel'], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' }],
       })}`,
     );
   }
@@ -1532,10 +1639,12 @@ Revert one change at a time, confirm the named test goes red, then restore:
 
 | Revert | Expected red test |
 |---|---|
-| Delete the refusal block in the general PUT | `refuses an endpoint model id in defaultAnalysisModel…` (and the two other fields) |
-| Delete the `configOverrides` loop in `endpointModelIdRefusals` | `refuses an endpoint model id in a phase-model override…` |
+| Delete the refusal block in the general PUT | `refuses an endpoint model id in defaultAnalysisModel…` |
+| Delete the `configOverrides` loop in `endpointModelIdRefusals` | `refuses an endpoint model id in a phase-model or ollama-model override…` |
+| Remove `'analyzer.ollama.model'` from `ENDPOINT_ID_REFUSED_KNOBS` (#3084 A3/A4) | the same test's third iteration, and `PUT /api/config … refuses an endpoint model id for analyzer.ollama.model and writes nothing` |
 | Delete the refusal block in `routes/config.ts` | `refuses an endpoint model id for analyzer.phase0.model and writes nothing` |
-| In `isEndpointId`, test `v.includes(':')` instead of the grammar | `refuses an endpoint model id in a phase-model override, and still saves an Ollama tag named openai:latest` and `still saves an Ollama tag that starts with openai:` |
+| Place the new refusal check BEFORE main's `RETIRED_ANALYZER_FIELDS`/`offending` check instead of after (#3084 A4) | no test currently distinguishes ordering, since neither check inspects the other's outcome — documents that ordering is a should, not a must, for the current test suite; a future test asserting the retired-field error text wins for a `defaultAnalysisModel`-shaped key that also happens to be listed in `RETIRED_ANALYZER_FIELDS` would catch a reversal, if one is ever added |
+| In `isEndpointId`, test `v.includes(':')` instead of the grammar | `refuses an endpoint model id in a phase-model or ollama-model override…` and `still saves an Ollama tag that starts with openai:` |
 | Delete the mock refusal block | `refuses an endpoint id in defaultAnalysisModel, as the server does` |
 
 - [ ] **Step 6: Commit**
@@ -1608,12 +1717,12 @@ Create it with `node scripts/wt-new.mjs feat/server-3084-w3b-endpoints`, off `ma
   - **Cause codes are shown (P22):** rule 7's `AnalyzerTransportError` and the pre-header `AnalyzerStreamIncompleteError` put the sanitized `causeCode` in their message, in the shape `… before a response (ERR_SSL_WRONG_VERSION_NUMBER)`, the same ` (CODE)` suffix as PR 3c's catalog listing error (`causeCodeSuffix`, Task 3b.1). `classifyAnalysisFailure`'s curated endpoint copy for both appends the code, so the run failure, the `[analysis] failed` log line and the Test action (which shows the error's message) all show it.
 - **Classification (P21, P25).** Only a connection-level error with a connect-phase code (`ECONNREFUSED`, `ENOTFOUND`, `EHOSTUNREACH`, `ENETUNREACH`, `UND_ERR_CONNECT_TIMEOUT`) or a bare `fetch failed` can be unreachable. A reset or DNS hiccup before headers (`ECONNRESET`, `UND_ERR_SOCKET`, `EAI_AGAIN`) is an `AnalyzerStreamIncompleteError`: retried, never a fallback. Every `APIError` with a status is an `AnalyzerHttpError`. A stream that has sent `finish_reason` is complete even if the idle watchdog fires, or the socket drops, before `[DONE]`.
 - **Settings load (P25).** `analyzerEndpoints` / `analyzerEndpointKeys` entries parse one by one. An invalid entry, or a later entry repeating an earlier id, is dropped with a warning and never resets the settings file. Before any write can persist the drop, the entry is appended to `user-settings.invalid-endpoints.json` beside the settings file, and the warning names that file.
-  - **Concurrent reads:** the cold settings read is single-flight: concurrent callers share one in-flight read, and so one append. **Already shipped** — PR #3195's `inFlightRead` (`user-settings.ts:375-378`, `:438`) is that single flight, so this requirement is met by the existing code and no wrapper of our own is added. The per-entry drop hooks into `performUserSettingsRead` (`:472-530`) between the eager-load migration and the whole-object `safeParse` (`:522`).
+  - **Concurrent reads:** the cold settings read is single-flight: concurrent callers share one in-flight read, and so one append. **Already shipped** — PR #3195's `inFlightRead` (`user-settings.ts:434`, `:494`) is that single flight, so this requirement is met by the existing code and no wrapper of our own is added. The per-entry drop hooks into `performUserSettingsRead` (`:528-587`) between the eager-load migration and the whole-object `safeParse` (`:579`).
   - **Not a corruption:** dropping an invalid endpoint entry never sets `corruptSettingsFile` / `isUserSettingsFileCorrupt()`. That flag means the settings *file* was unreadable and was recovered (`:479-498`) and it drives the frontend corruption banner; a dropped entry is a schema failure on one entry of a readable file, reported only by its own warning naming the archive.
   - **Marking:** an entry is marked archived only after its `appendFile` succeeds. A failed append is retried on the next read.
   - **Append failure:** a settings write never refuses because an append failed. Until the append lands, every writer writes the still-unarchived entries back into the file, raw and unchanged, so nothing is lost and saving still works.
   - **Keys:** a dropped key entry is archived with its `origin` only, never the `key` value.
-  - **Test state:** `_resetUserSettingsCache()` also forgets archived and unarchived drops and any in-flight archive retry. It already clears the in-flight read (`inFlightRead = null`, `:1137`, shipped in #3195).
+  - **Test state:** `_resetUserSettingsCache()` also forgets archived and unarchived drops and any in-flight archive retry. It already clears the in-flight read (`inFlightRead = null`, `:1171`, shipped in #3195).
 - **Save-time validation and drop visibility (F5, Tasks 3b.5/3b.6b).** Endpoint create/update, the key write and the settings PUT refuse a malformed field with 400 `{ error, code, issues: [{ path: string[], message }] }`, never echoing a key or field value (extends the routes of Tasks 3b.5/3b.7 rather than a second validator). `message` is field-aware copy from `friendlyEndpointIssueMessage` (Task 3b.5, exported for PR 3d's UI test), not zod's own wording — zod 4.4.3's `.url()`/`.regex()` failures are `invalid_format`, not the zod-3 `invalid_string` an earlier draft assumed. Every entry dropped at read time (P25, above) is listed read-only on `GET /api/user/settings` as `droppedEndpointEntries`, with `path: code` issue strings (never a value), de-duplicated across restarts by a `contentHash` that never leaves the server; `POST /api/user/settings/dropped-endpoint-entries/acknowledge` retires the ones the user has seen, durably (keyed on that same hash, not the archive's per-line UUID, and serialised through the settings module's `writeChain` so two acknowledgements can't race). An entry whose archive append is still pending is listed too, flagged `archiveId: null`. No UI yet (PR 3d).
 - **Schema adapters.** Per-provider adapters (with a `dropped` snapshot per stage schema) are wired into the runner for Ollama and Gemini now, and for OpenAI through `OpenAIAnalyzer`. `structuredOutputLabel` is exported for 3d.
 - **Structured-output knobs.** `analyzer.ollama.structuredOutput` (default `schema`) and `analyzer.gemini.structuredOutput` (default `json`) are enum knobs with Settings rows and `config:sync`. The Ollama and Gemini transports honour all three modes.
@@ -1659,7 +1768,7 @@ Create it with `node scripts/wt-new.mjs feat/server-3084-w3b-endpoints`, off `ma
   - `:463-479` `statusToFailureCode`;
   - `:492-571` `classifyAnalysisFailure`.
 - Modify: `server/src/routes/failure-remediations.ts` — insert three entries before `unknown` (`:247`); replace wave 2's `'analyzer-timeout'` remediation.
-- Modify: `openapi.yaml:7033-7056` (`FailureCode` enum).
+- Modify: `openapi.yaml:7098-7129` (`FailureCode` enum).
 - Regenerate: `src/lib/api-types.ts`.
 - Modify: `src/data/help-failures.ts:28-55` (`CATEGORIES`), `:57-81` (`TITLES`).
 - Modify: `src/data/help-failures.test.ts:13`, `src/data/help-categories.test.ts:24`.
@@ -2049,7 +2158,7 @@ function enotfoundAgent(): Agent {
 }
 
 /* A reachable daemon that answers /api/chat with 200 headers, then closes the socket
-   before the first body byte (ollama.ts:757-760 → classifyConnectError). */
+   before the first body byte (ollama.ts:758-761 → classifyConnectError). */
 async function resetBeforeFirstByteUrl(): Promise<string> {
   const server = createHttpServer((req, res) => {
     if (req.url !== '/api/chat') {
@@ -2390,7 +2499,7 @@ export class AnalyzerKeyOriginError extends Error {
 }
 
 /** Validation failed after the retry. The message is exactly today's text
-    (ollama.ts:608-610, gemini.ts:515-517); `detail` is the
+    (ollama.ts:609-611, gemini.ts:515-517); `detail` is the
     "<kind> — <summarised detail>" string the runner builds. */
 export class AnalyzerInvalidOutputError extends Error {
   readonly code = 'ANALYZER_INVALID_OUTPUT';
@@ -2826,9 +2935,9 @@ No selection error ends a stream uncoded, and no call site rethrows after the SS
 
 | Site | Code | Today on an `AnalyzerEndpointMissingError` | Change |
 |---|---|---|---|
-| analysis phase 0, `analysisRouter.post('/:id/analysis')` | `selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, userSettings });` in a `try` (`routes/analysis.ts:3371-3377`) | `send({ kind: 'error', message })`, no code, for every selection error | coded event, every error |
-| subset retry, `analysisRouter.post('/:id/analysis/chapters')` | the phase-0 and phase-1 `selectAnalyzerForPhase` pair in one `try` (`:6662-6673`) | same code-less `send` | coded event, every error |
-| analysis phase 1, `runMainAnalyzerJob` | `selectAnalyzerForPhase({ phase: 'phase1', … })` (`:3679`), inside the job's `try` (`:3614`), whose catch calls `classifyAnalysisFailure` (`:6394-6451`) | already classified (`unknown` for an endpoint id before Task 3b.1; `analyzer-endpoint-missing` after it) | none — pinned by a test |
+| analysis phase 0, `analysisRouter.post('/:id/analysis')` | `selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, phaseModel: requestedPhase0Model });` in a `try` (`routes/analysis.ts:3373-3384`) | `send({ kind: 'error', message })`, no code, for every selection error | coded event, every error |
+| subset retry, `analysisRouter.post('/:id/analysis/chapters')` | the phase-0 and phase-1 `selectAnalyzerForPhase` pair in one `try` (`:6708-6723`) | same code-less `send` | coded event, every error |
+| analysis phase 1, `runMainAnalyzerJob` | `selectAnalyzerForPhase({ phase: 'phase1', … })` (`:3682-3686`), inside the job's `try` (`:3628`), whose catch calls `classifyAnalysisFailure` (`:6437-6447`) | already classified (`unknown` for an endpoint id before Task 3b.1; `analyzer-endpoint-missing` after it) | none — pinned by a test |
 | annotate-emotion | `const selection = selectAnalyzerForPhase({ phase: 'phase1', model: req.body?.model });` (`routes/annotate-emotion.ts:147`), outside any `try`, after the SSE headers are flushed | any throw escapes the handler: no error event | coded event, every error, no rethrow |
 | instruct-annotation | the same line (`routes/instruct-annotation.ts:146`) | same | coded event, every error, no rethrow |
 | script review | `selectAnalyzerForPhase({ phase: 'phase1', model })` in `runScriptReviewJob` (`routes/script-review.ts:713`); the launch's detached `.catch` broadcasts `code: 'internal_error'` (`:448`) for any throw from the job | `internal_error` | selection wrapped in its own `try` inside the job: coded event, every error. A throw from later in the job still reaches the launch `.catch` as `internal_error` |
@@ -3274,7 +3383,7 @@ guard test file is `server/src/routes/failure-taxonomy-fixes.test.ts`. `ctx` is
 `{ transport: TransportKind; model: string; endpointId?: string }`, declared in 2b — **3b only reads
 `ctx.endpointId`**, the field 2b already declared for this purpose; it adds no field of its own. At the
 time of this task's authoring, wave 2's plan file has not yet landed this content, so this task cannot
-pin exact line numbers the way the rest of this file pins into `46e62a34`. Locate
+pin exact line numbers the way the rest of this file pins into `80be2f1d`. Locate
 `reasoningOverflowFixes` and its guard by name before starting; if the exported shape differs from the
 contract below, treat that as a contract conflict against the decision record (F7), not something to
 improvise around.
@@ -3294,23 +3403,31 @@ additive changes close this, all in this task:
    attached after construction (step 2 needs this). Purely additive: every existing 3-arg call site
    (wave 1's Ollama/Gemini paths, wave 2's `mapFinish`) compiles and behaves unchanged.
 2. **`OpenAIAnalyzer` (Task 3b.12, `server/src/analyzer/openai.ts`) attaches its own endpoint id — on
-   BOTH the thrown path and the escalation path (review pass 2, item 1).** Per this file's own Task
-   3b.12 note ("The overflow itself is raised by wave 2's `mapFinish` in the runner, outside the
-   transport" — line ref in this file, not `46e62a34`, since `mapFinish` does not exist yet on `main`),
-   the shared runner that raises the error has no concept of "endpoint" — only `OpenAIAnalyzer` does
-   (it holds `endpoint` from its constructor). There are two distinct surfaces, not one:
-   - **Thrown path.** A first-attempt (non-escalation) overflow is thrown straight out of the stage
-     call. `withEndpointId` (below) catches it there.
-   - **Escalation path.** Per wave 2's own design (w2 `runSingleAttempt`, roughly its lines 3251 and
-     3288-3290 at the time of this review — w2's plan file, not `46e62a34`), an overflow that happens
-     DURING escalation is not thrown: `runSingleAttempt` reports it through `StageCall.onReasoningOverflow`
-     and stores it, and `throwIfReasoningOverflowed` rethrows the STORED error only after escalation
-     resolves (P20's "escalation resolves null for an overflow, like Gemini's content-block precedent" —
-     this file's own Task 3b.12 "Stop-the-run errors" note). `withEndpointId`'s `try/catch` never sees
-     this error at the point it is first produced — the hook does. Every `StageCall` `OpenAIAnalyzer`
-     builds must wrap `onReasoningOverflow` too, so the SAME error object is annotated at the earliest
-     point `OpenAIAnalyzer` can reach it, before `throwIfReasoningOverflowed` (later, inside the same
-     `withEndpointId` try/catch as the thrown path) rethrows it.
+   BOTH the thrown path and the escalation path (review pass 2, item 1; corrected by review pass 3,
+   items 3 and 9).** Per this file's own Task 3b.12 note ("The overflow itself is raised by wave 2's
+   `mapFinish` in the runner, outside the transport" — line ref in this file, not `80be2f1d`, since
+   `mapFinish` does not exist yet on `main`), the shared runner that raises the error has no concept
+   of "endpoint" — only `OpenAIAnalyzer` does (it holds `endpoint` from its constructor). There are
+   two distinct surfaces, and **they are not spread evenly across every stage method** — review pass
+   3, item 3's ruling: only `runAttributionEscalation` goes through `runner.runSingleAttempt`, which
+   is what reports through the hook; every other stage method, `runStage1Chapter` included, always
+   throws.
+   - **Thrown path (every stage method, `runStage1Chapter` included).** A first-attempt
+     (non-escalation) overflow is thrown straight out of the stage call. `withEndpointId` (below)
+     catches it there — this is the ONLY surface a method other than `runAttributionEscalation` needs.
+   - **Escalation path (`runAttributionEscalation` only).** Per wave 2's own design (w2's
+     `runSingleAttempt`, roughly its lines 3251 and 3288-3290 at the time of this review — w2's plan
+     file, not `80be2f1d`), an overflow that happens during escalation is not thrown there:
+     `runSingleAttempt` reports it through `StageCall.onReasoningOverflow` and stores it. **The stored
+     error is rethrown by the ROUTE's `throwIfReasoningOverflowed` (w2 ~3279) — a call OUTSIDE
+     `OpenAIAnalyzer` entirely, not inside `withEndpointId`'s try/catch** (review pass 3, item 9 — an
+     earlier draft of this task wrongly implied the rethrow happens inside this class, "inside the
+     same `withEndpointId` try/catch as the thrown path"; it does not, which is exactly WHY the hook
+     needs its own wrap: `withEndpointId`'s catch never sees this error at all, at any point, because
+     `runAttributionEscalation` never throws it — the hook is the only contact point `OpenAIAnalyzer`
+     ever has with it). Only `runAttributionEscalation`'s `StageCall` needs `onReasoningOverflow`
+     wrapped, so the SAME error object is annotated at that one point before it leaves this class,
+     whenever and wherever the route later rethrows it.
    ```ts
    // server/src/analyzer/openai.ts (Task 3b.12)
    private async withEndpointId<T>(run: () => Promise<T>): Promise<T> {
@@ -3324,11 +3441,13 @@ additive changes close this, all in this task:
      }
    }
 
-   /** Wraps the StageCall options every stage method passes to `super.<method>(...)`,
-       so an escalation-path overflow (reported through the hook, never thrown —
-       see above) is annotated at the same point a thrown one is, before
-       `throwIfReasoningOverflowed` rethrows it (which `withEndpointId`'s catch
-       then sees, so the guard there is not fooled into re-annotating). */
+   /** Wraps ONE StageCall's `onReasoningOverflow` (runAttributionEscalation's —
+       review pass 3, item 3: no other stage method's StageCall reports an
+       overflow through this hook, so no other override needs this wrap),
+       so an escalation-path overflow (reported through the hook, never
+       thrown — see above) is annotated at the point OpenAIAnalyzer last
+       touches it, before w2's route-level `throwIfReasoningOverflowed`
+       rethrows the SAME stored error object later, outside this class. */
    private withEndpointIdHook<C extends { onReasoningOverflow?: (err: AnalyzerReasoningOverflowError) => void }>(call: C): C {
      return {
        ...call,
@@ -3339,14 +3458,15 @@ additive changes close this, all in this task:
      };
    }
    ```
-   and override each stage method `TransportAnalyzer` (W1) exposes to wrap the whole call in
-   `this.withEndpointId(() => super.<method>(…args, this.withEndpointIdHook(opts)))` — enumerate
-   `TransportAnalyzer`'s actual public stage methods and its `StageCall` options shape at
-   implementation time (`grep -n "^  async run\|^  async annotate\|^  async \|onReasoningOverflow"
-   server/src/analyzer/runner/transport-analyzer.ts` or wherever W1/2b land them) and override every
-   stage method it lists, and wrap `onReasoningOverflow` specifically (not every callback) on the
-   options object each one passes down; this file cannot pin that list because `TransportAnalyzer`
-   does not exist on `main` yet. **Conflict to flag if untrue at implementation time:** if
+   Override every stage method `TransportAnalyzer` (W1, imported from `./runner/transport-analyzer.js`
+   — review pass 3, item 9; NOT `./runner/stage-runner.js`, which an earlier draft wrongly named) exposes
+   to wrap the whole call in `this.withEndpointId(() => super.<method>(…args))`, and additionally wrap
+   `runAttributionEscalation`'s own `call` argument specifically: `this.withEndpointId(() =>
+   super.runAttributionEscalation(manuscriptId, chapterId, windowIndex, prompt,
+   this.withEndpointIdHook(call)))`. Enumerate `TransportAnalyzer`'s actual public stage methods at
+   implementation time (`grep -n "^  async run\|^  async annotate\|^  async " server/src/analyzer/runner/transport-analyzer.ts`)
+   and override every one it lists; this file cannot pin that list because `TransportAnalyzer` does
+   not exist on `main` (80be2f1d) yet. **Conflict to flag if untrue at implementation time:** if
    `TransportAnalyzer`'s stage methods are `final` (not overridable), if they funnel through a single
    protected hook instead of one method each, or if `StageCall` has no `onReasoningOverflow` field by
    the name or shape assumed here — override/wrap wherever the real shape allows the same effect and
@@ -3424,16 +3544,33 @@ describe('reasoningOverflowFixes — openai transport (#3084 F7)', () => {
   afterEach(() => _resetUserSettingsCache());
 
   it('offers the endpoint\'s own maxOutputTokens/contextTokens and the stage fractions, naming the endpoint, never reasoning or payload, and no wikiPage yet', () => {
+    /* #3084 review pass 3, item 6 — structural, not an exact-count `toEqual`
+       on the WHOLE array. Per the settled fixes/reads rule: `Read:`-labelled
+       entries are informational, not actionable, and a later wave (3d.9a)
+       is free to append one to ANY `reasoningOverflowFixes` result without
+       this test caring how many there are — it only asserts (a) the
+       ACTIONABLE (non-`Read:`) fixes this branch contributes, exactly, and
+       (b) every `Read:` entry sits after every actionable one, wherever
+       that boundary falls. An earlier draft's `toEqual([...])` on the whole
+       array would go red the moment 3d.9a added its own `Read:` row — not
+       because this branch broke, but because the fixture only knew about
+       its own four rows. */
     _setUserSettingsCacheForTest({
       analyzerEndpoints: [{ id: 'lab', name: 'Lab box', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 }],
     });
     const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' });
-    expect(fixes).toEqual([
+    const isRead = (f: { label: string }) => f.label.startsWith('Read:');
+    const actionable = fixes.filter((f) => !isRead(f));
+    const reads = fixes.filter(isRead);
+    expect(actionable).toEqual([
       expect.objectContaining({ label: expect.stringContaining('Lab box'), endpointField: { endpointId: 'lab', field: 'maxOutputTokens' } }),
       expect.objectContaining({ label: expect.stringContaining('Lab box'), endpointField: { endpointId: 'lab', field: 'contextTokens' } }),
       expect.objectContaining({ settingKey: 'analyzer.stage1.localInputFraction' }),
       expect.objectContaining({ settingKey: 'analyzer.stage2.localInputFraction' }),
     ]);
+    const lastActionableIndex = fixes.length - 1 - [...fixes].reverse().findIndex((f) => !isRead(f));
+    const firstReadIndex = fixes.findIndex(isRead);
+    if (reads.length > 0) expect(firstReadIndex).toBeGreaterThan(lastActionableIndex);
     expect(fixes.every((f) => f.wikiPage === undefined)).toBe(true);
     expect(fixes.some((f) => f.settingKey?.includes('reasoning') || ('endpointField' in f && f.endpointField?.field === 'reasoning'))).toBe(false);
   });
@@ -3567,7 +3704,7 @@ function fakeTransport(kind: 'ollama' | 'gemini') {
   return { transport, requests };
 }
 
-/* Today's exact final-failure text (ollama.ts:608-610, gemini.ts:515-517). */
+/* Today's exact final-failure text (ollama.ts:609-611, gemini.ts:515-517). */
 const TODAY = {
   ollama: (model: string, key: string, detail: string) =>
     `Ollama ${model} ${key} failed validation after retry: ${detail}`,
@@ -4068,7 +4205,7 @@ git commit -m "feat(server): add per-provider structured-output schema adapters"
 - Modify (generated): `server/.env.example`, via `npm run config:sync`.
 - Modify: `server/src/analyzer/transports/ollama-transport.ts` (W1) — the `/api/chat` body's `format` field (main `ollama.ts:643`).
 - Modify: `server/src/analyzer/transports/gemini-transport.ts` (W1) — the `generateContentStream` config (main `gemini.ts:728-734`).
-- Modify: `server/src/analyzer/runner/stage-runner.ts` (W1) — where `TransportRequest.structuredOutput` is built from `z.toJSONSchema(...)` (main `ollama.ts:504`).
+- Modify: `server/src/analyzer/runner/stage-runner.ts` (W1) — where `TransportRequest.structuredOutput` is built from `z.toJSONSchema(...)` (main `ollama.ts:505`).
 - Modify: `server/src/analyzer/ollama.ts` (W1) — `OllamaAnalyzer`'s `StageRunner` options.
 - Modify: `server/src/analyzer/gemini.ts` (W1) — `GeminiAnalyzer`'s `StageRunner` options.
 - Modify: `docs/wiki/Advanced-Settings.md` — two new rows in §1 "LLM sampling parameters", and the
@@ -4299,7 +4436,7 @@ Expected:
     label: 'Ollama structured output',
     help: '"schema" (default) sends the stage\'s JSON schema as Ollama `format`, so the model can only produce JSON of that shape. "json" asks only for syntactically valid JSON. "off" sends no format. Every reply is still validated against the full schema and retried once in every mode. A mode the server rejects fails the run as "analyzer rejected the request" — it is never dropped silently.',
     type: 'enum', options: ['schema', 'json', 'off'],
-    default: 'schema', // ← today's Ollama request: format = the stage schema (ollama.ts:643 on 46e62a34)
+    default: 'schema', // ← today's Ollama request: format = the stage schema (ollama.ts:644 at 80be2f1d; Part 3 re-pin: every ollama.ts line +1 from 46e62a34, import hunk at :40)
     apply: 'live', risk: 'medium',
   },
   {
@@ -4324,9 +4461,9 @@ Add both rows to that table, and bump the sentence:
 | Ollama structured output | "schema" sends the stage's JSON schema as Ollama `format`; "json" asks only for syntactically valid JSON; "off" sends no format. Every reply is still validated and retried once. | schema | schema, json, off | live | medium |
 | Gemini structured output | "json" sets responseMimeType only; "schema" also sends the stage schema as responseJsonSchema (reduced to Gemini's supported keywords); "off" sends neither. | json | schema, json, off | live | medium |
 ```
-At `46e62a34` the intro reads "117 knobs across 12 groups in total" (`docs/wiki/Advanced-Settings.md:14`);
+At `80be2f1d` the intro reads "116 knobs across 12 groups in total" (`docs/wiki/Advanced-Settings.md:14`);
 these two knobs land in the existing `analyzer-sampling` group (section 1), so the group count (12)
-is unchanged and the knob count becomes 119 — **verify this against the registry at implementation
+is unchanged and the knob count becomes 118 — **verify this against the registry at implementation
 time** rather than trusting the arithmetic here, since another PR may have merged a knob in the
 interim; `npm run test:hooks` (which runs `knob-docs-sync.test.mjs`) is the source of truth, not this
 sentence.
@@ -4646,16 +4783,19 @@ describe('create / update / delete / key decisions', () => {
     expect(resolveEndpointApiKey(applyCreate(empty, base), applyCreate(empty, base).analyzerEndpoints[0], base.baseUrl)).toBeNull();
   });
   it('delete is refused while a saved setting references the endpoint, and removes the key when allowed', () => {
+    /* #3084 A5 (re-pin to 80be2f1d) — analyzerPhase0Model/analyzerPhase1Model
+       no longer exist as settings fields (#3192's migration moves any saved
+       phase model into configOverrides). Both references below are
+       configOverrides entries now, not the retired settings fields. */
     const s = applyKey(applyCreate(empty, base), 'lab', 'sk-secret-123');
     const refs = {
       ...DEFAULT_USER_SETTINGS,
-      analyzerPhase0Model: 'openai:lab::qwen3:30b',
-      configOverrides: { 'analyzer.phase1.model': 'openai:lab::m' },
+      configOverrides: { 'analyzer.phase0.model': 'openai:lab::qwen3:30b', 'analyzer.phase1.model': 'openai:lab::m' },
     };
     const r = refusal(() => applyDelete(s, refs, 'lab'));
     expect(r).toMatchObject({ status: 409, refusal: 'referenced' });
     expect(r.issues).toEqual([
-      { path: [], message: 'Account setting "analyzerPhase0Model"' },
+      { path: [], message: 'Advanced setting "analyzer.phase0.model"' },
       { path: [], message: 'Advanced setting "analyzer.phase1.model"' },
     ]);
     const after = applyDelete(s, DEFAULT_USER_SETTINGS, 'lab');
@@ -4665,12 +4805,15 @@ describe('create / update / delete / key decisions', () => {
 
 describe('findEndpointReferences', () => {
   it('matches only ids naming this endpoint', () => {
+    /* #3084 A5 — same fix: both phase knobs are configOverrides entries. */
     const settings = {
       ...DEFAULT_USER_SETTINGS,
       defaultAnalysisModel: 'openai:lab::m',
-      analyzerPhase0Model: 'openai:lab2::m',
-      analyzerPhase1Model: 'openai:latest',
-      configOverrides: { 'analyzer.personaGeneration.engine': 'openai:lab::m' },
+      configOverrides: {
+        'analyzer.phase0.model': 'openai:lab2::m',
+        'analyzer.phase1.model': 'openai:latest',
+        'analyzer.personaGeneration.engine': 'openai:lab::m',
+      },
     };
     expect(findEndpointReferences(settings, 'lab')).toEqual([
       'Account setting "defaultAnalysisModel"',
@@ -4685,7 +4828,7 @@ describe('findEndpointReferences', () => {
       'analyzerKeepAliveByModel', // map keyed by Ollama tag, not a selection
       'defaultTtsModelKey', // TTS
       'defaultTtsModelKeyExplicit', // TTS
-      'dualModelEnabled', // boolean toggle for the two-model pipeline (user-settings.ts:204), not an id
+      'dualModelEnabled', // boolean toggle for the two-model pipeline (user-settings.ts:268), not an id
     ]);
     const fields = Object.keys(userSettingsSchema.shape).filter((k) => /model/i.test(k));
     for (const f of fields) {
@@ -4764,18 +4907,25 @@ export interface EndpointState {
   analyzerEndpointKeys: Record<string, EndpointKeyEntry>;
 }
 
-/** The saved-settings slice findEndpointReferences reads. UserSettings is assignable. */
+/** The saved-settings slice findEndpointReferences reads. UserSettings is assignable.
+    #3084 divergence A5 (re-pin to 80be2f1d) — `analyzerPhase0Model` / `analyzerPhase1Model`
+    are GONE from the schema on `main`: `migrateLegacyAnalyzerModelFields`
+    (`user-settings.ts:115-171` at 80be2f1d) moves any saved phase model into
+    `configOverrides['analyzer.phase{0,1}.model']` at read time, and the schema
+    never re-adds the two fields. An earlier draft of this task (written
+    against 46e62a34, before #3192) still carried them here; they are removed. */
 export interface EndpointReferenceSource {
   defaultAnalysisModel: string;
-  analyzerPhase0Model?: string | null;
-  analyzerPhase1Model?: string | null;
   configOverrides: Record<string, number | boolean | string>;
 }
 
-/** User-settings fields that hold a selectable model id, as of 46e62a34
-    (#3141's phase-model settings included). analyzer-endpoints.test.ts fails
-    until any new model-id field is classified here or excluded there. */
-export const MODEL_ID_SETTING_FIELDS = ['defaultAnalysisModel', 'analyzerPhase0Model', 'analyzerPhase1Model'] as const;
+/** User-settings fields that hold a selectable model id, at 80be2f1d.
+    analyzer-endpoints.test.ts fails until any new model-id field is
+    classified here or excluded there. Phase-model ids are no longer here —
+    they live only in `configOverrides` (MODEL_ID_CONFIG_KNOBS, below) since
+    #3192's migration; A5 removed `analyzerPhase0Model`/`analyzerPhase1Model`,
+    which no longer exist as settings fields at all. */
+export const MODEL_ID_SETTING_FIELDS = ['defaultAnalysisModel'] as const;
 
 /** Registry knobs (config overrides) that hold a selectable model id. The persona
     engine is listed now: wave 4 makes it a model-id-style selection. */
@@ -5093,7 +5243,8 @@ Revert one guard at a time, confirm the named test goes red, then restore:
 | Delete the `unloadOrigin !== baseOrigin` block | `refuses an unload URL on another origin…` |
 | `keyOriginMatches` → compare `new URL(url).host` | `matches scheme + host + port exactly` (the `https` case) |
 | `applyDelete` without the `refs.length > 0` refusal | `delete is refused while a saved setting references the endpoint…` |
-| Remove `'analyzerPhase1Model'` from `MODEL_ID_SETTING_FIELDS` | `every user-settings field … is classified` |
+| Remove `'defaultAnalysisModel'` from `MODEL_ID_SETTING_FIELDS` (#3084 A5 re-pin: it is now the only entry) | `every user-settings field … is classified` |
+| Remove `'analyzer.phase1.model'` from `MODEL_ID_CONFIG_KNOBS` | `matches only ids naming this endpoint` and `delete is refused while a saved setting references the endpoint…` (the `configOverrides` reference is no longer found) |
 | `resolveEndpointApiKey` without the origin check | `resolveEndpointApiKey refuses a key bound to another origin` |
 | Delete the `ep.reasoning !== 'model-default'` push | `until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload…` |
 | `Object.keys(ep.extraParams).length > 0` → `false` | the same test (the `extraParams` half) |
@@ -5119,14 +5270,14 @@ git commit -m "feat(server): add analyzer endpoint schema, key-origin rule and r
 **Files:**
 - Modify: `server/src/workspace/user-settings.ts`:
   - top imports;
-  - `:246-254` (schema, after `analyzerKeepAliveByModel`);
-  - `:330-334` (defaults);
-  - `:643-661` (`FORBIDDEN_KEYS`);
-  - `:472-530` (`performUserSettingsRead` — entries parsed one by one between the migration write and the whole-object `safeParse` at `:522`, P25) and `:439` (the warm-cache branch of `readUserSettings`, for the append retry only — `:438`'s `inFlightRead` single flight is left exactly as PR #3195 shipped it);
-  - `stampCacheAfterWrite` (`:583`) — parameter widened to the object actually written;
+  - `:310-318` (schema, after `analyzerKeepAliveByModel`);
+  - `:386-390` (defaults);
+  - `:710-728` (`FORBIDDEN_KEYS`);
+  - `:528-587` (`performUserSettingsRead` — entries parsed one by one between the migration write and the whole-object `safeParse` at `:579`, P25) and `:495` (the warm-cache branch of `readUserSettings`, for the append retry only — `:494`'s `inFlightRead` single flight is left exactly as PR #3195 shipped it);
+  - `stampCacheAfterWrite` (`:650`) — parameter widened to the object actually written;
   - `knownAnalyzerSecrets` (Task 3b.1), plus `loadKnownAnalyzerSecrets`;
-  - new `mutateUserSettings` after `writeUserSettings` (`:638`).
-- Modify: `server/src/routes/user-settings.ts:19-28` (imports), `:33-72` (`UserSettingsResponse`, `envDerived` — now exported).
+  - new `mutateUserSettings` after `writeUserSettings` (`:705`).
+- Modify: `server/src/routes/user-settings.ts:19-30` (imports), `:33-102` (`UserSettingsResponse`, `envDerived` — now exported; ADD to this range, per divergence A4 — do not replace it).
 - Test: `server/src/routes/user-settings.test.ts` (add)
 - Test: `server/src/workspace/user-settings.endpoints.test.ts` (new)
 
@@ -5142,7 +5293,7 @@ git commit -m "feat(server): add analyzer endpoint schema, key-origin rule and r
   - `export async function loadKnownAnalyzerSecrets(): Promise<string[]>` — `knownAnalyzerSecrets()` after `readUserSettings()` has run. The boot warm at `server/src/index.ts:188` is `void bootWarmUserSettings()` — it awaits `readUserSettings()` inside its own try/catch (`:135-144`), but the caller does not await it, so the cache can be cold on an early request. It becomes the gate's `load` provider, so the transports (Tasks 3b.6a, 3b.11) reach it through `known-secrets-gate.ts`'s `loadKnownAnalyzerSecrets()` without importing `user-settings.ts` (A9).
   - P25 archive guarantees (Q3): the cold read is single-flight — **already shipped**, by PR #3195's `inFlightRead` (`:375-378`, `:438`), so this task adds no wrapper of its own; an entry is marked archived only after its append succeeds; a failed append is retried on the next read and, until it lands, every settings writer still saves and writes the unarchived entries back raw and unchanged (the private `withUnarchivedEntries`), so a write never refuses because an append failed; a dropped key entry is archived as `{ origin }` only; `_resetUserSettingsCache()` also forgets archived and unarchived drops and any in-flight read.
 
-**`mockPutUserSettings` whitelist note (Task 3b.9).** The three new fields are **not** added to `mockPutUserSettings`'s whitelist (`src/lib/api.ts:7324-7337` destructure, `:7341-7354` mirrored object, at the `46e62a34` pin; `mockPutUserSettings` moved to `:7331` on `4a545750`, so locate it by name). That mirrors the server's `FORBIDDEN_KEYS`: the general PUT cannot write them. The mock CRUD functions mutate `MOCK_USER_SETTINGS` directly.
+**`mockPutUserSettings` whitelist note (Task 3b.9).** The three new fields are **not** added to `mockPutUserSettings`'s whitelist (`src/lib/api.ts:7396-7406` destructure, `:7410-7420` mirrored object, at the `80be2f1d` pin — Part 3 re-pin; `mockPutUserSettings` itself is at `:7382`). That mirrors the server's `FORBIDDEN_KEYS`: the general PUT cannot write them. The mock CRUD functions mutate `MOCK_USER_SETTINGS` directly.
 
 **Tests kept green:**
 - `server/src/routes/user-settings.test.ts`
@@ -5560,7 +5711,7 @@ Expected:
 - `GET exposes analyzer endpoints…` FAILS: `analyzerEndpoints` is undefined.
 - `the general PUT cannot write…` FAILS: `analyzerEndpoints` is undefined.
 - `user-settings.endpoints.test.ts` FAILS to load: `does not provide an export named 'loadKnownAnalyzerSecrets'` (and `mutateUserSettings`).
-- With the fields and `mutateUserSettings` added but not the per-entry parse, `drops one malformed endpoint…` FAILS: `displayName` is the default rather than `'Kept'`, and `geminiApiKey` is `null`, because one bad entry makes the whole-file `safeParse` fall back to defaults (`user-settings.ts:522-525`).
+- With the fields and `mutateUserSettings` added but not the per-entry parse, `drops one malformed endpoint…` FAILS: `displayName` is the default rather than `'Kept'`, and `geminiApiKey` is `null`, because one bad entry makes the whole-file `safeParse` fall back to defaults (`user-settings.ts:579-582`).
 - The three P25 archive cases FAIL with `ENOENT` reading `user-settings.invalid-endpoints.json`, or, for the first, with the file holding only the seeded line. `keeps the first of two endpoints sharing an id…` FAILS: received `['First', 'Second']`.
 - With the archive written but none of the Q3 guarantees: `two concurrent cold reads and a write share one read…` FAILS with `ENOENT` **before** the archive exists, and once it does exist this case PASSES on the single-flight half without any new code — PR #3195's `inFlightRead` (`:438`) already shares one cold read, so the only thing this task must add for it is the append itself, inside the shared read. (It is kept as a regression test of that sharing, not as a red-then-green proof of it; its mutation proof below mutates the shipped single flight.) `when the append fails…` and the six `%s saves while a dropped entry is unarchived…` rows FAIL (the write resolves but the file loses the entry); `a key entry whose append failed is written back raw…` FAILS (the file holds only `other`); `a failed append is retried…` FAILS with `ENOENT`; `a dropped key entry is archived with its origin only…` FAILS (the archive holds `sk-archived-key-secret-1`); `_resetUserSettingsCache forgets archived entries…` FAILS with `ENOENT`.
 
@@ -5828,7 +5979,7 @@ The `commitRead({ … })` call below (`:524-529`) is **unchanged**, `corrupt: fa
 
 Untouched by this task, and deliberately so: the all-backups-unreadable fallback (`:479-498`), the absent-file branch (`:499-509`), and `readJsonWithRecovery` itself. `dropInvalidEndpointEntries` only ever sees a value that already parsed as JSON, so none of those three can reach it.
 
-2c. Writers. Each of `writeUserSettings` (`:592`, its write at `:626`), `writeGeminiApiKey` (`:1003`, write `:1009`), `writeUpgradeMeta` (`:1039`, write `:1048`), `writeSetupCompletedAt` (`:1069`, write `:1074`) and `writeTourCompletedAt` (`:1092`, write `:1097`) writes `merged` from inside `writeChain.then`. Their `const current = await readUserSettings();` line is **unchanged** — the read is what runs (and retries) the archive append before the write. Each write becomes (keeping #3195's `rotate` option, which every one of the five already passes):
+2c. Writers. Each of `writeUserSettings` (`:659`, its write at `:693`), `writeGeminiApiKey` (`:1037`, write `:1043`), `writeUpgradeMeta` (`:1073`, write `:1082`), `writeSetupCompletedAt` (`:1103`, write `:1108`) and `writeTourCompletedAt` (`:1126`, write `:1131`) writes `merged` from inside `writeChain.then`. Their `const current = await readUserSettings();` line is **unchanged** — the read is what runs (and retries) the archive append before the write. Each write becomes (keeping #3195's `rotate` option, which every one of the five already passes):
 ```ts
     const written = withUnarchivedEntries(merged);
     await snapshotCorruptBytesBeforeWrite();
@@ -5847,7 +5998,7 @@ function stampCacheAfterWrite(written: object): void {
 
 Afterwards `git grep -n "writeJsonAtomic(USER_SETTINGS_PATH" server/src/workspace/user-settings.ts` must show exactly seven lines: the eager-load migration write inside `performUserSettingsRead` (`:516`, unchanged — it writes `migrated`, which still holds the dropped entries), and six `withUnarchivedEntries` writes (the five writers above plus `mutateUserSettings`), each carrying the `rotate` option.
 
-2d. `_resetUserSettingsCache` (`:1134-1148`). After `writeChain = Promise.resolve();` (`:1139`), add:
+2d. `_resetUserSettingsCache` (`:1168-1182`). After `writeChain = Promise.resolve();` (`:1173`), add:
 ```ts
   /* #3084 P25 — forget archived and unarchived drops and any in-flight archive retry,
      so a later test that reuses an entry archives it again. */
@@ -5855,7 +6006,7 @@ Afterwards `git grep -n "writeJsonAtomic(USER_SETTINGS_PATH" server/src/workspac
   unarchivedDrops = [];
   archiveRetry = null;
 ```
-No `coldRead = null;` — there is no `coldRead`. #3195's `_resetUserSettingsCache` already clears the in-flight **read** (`inFlightRead = null`, `:1137`) along with `cached` and `cachedFileStamp`; only the archive state is new here.
+No `coldRead = null;` — there is no `coldRead`. #3195's `_resetUserSettingsCache` already clears the in-flight **read** (`inFlightRead = null`, `:1171`) along with `cached` and `cachedFileStamp`; only the archive state is new here.
 
 3. Defaults. After `analyzerKeepAliveByModel: {},` (`:334`):
 ```ts
@@ -5941,56 +6092,50 @@ registerKnownSecretsProvider({ known: knownAnalyzerSecrets, load: loadKnownAnaly
 import { endpointKeyStatus, type EndpointKeyStatus } from '../workspace/analyzer-endpoints.js';
 ```
 
-2. Replace `:33-72` with the block below. **It must keep PR #3195's `corruptSettingsFile` field and its `isUserSettingsFileCorrupt()` overlay** — that field is what the frontend corruption banner reads, and dropping it from this interface (or from the returned object) would silently delete the banner's only data source. `isUserSettingsFileCorrupt` therefore stays in the `../workspace/user-settings.js` import at `:19-28`, untouched. Note it is unrelated to the endpoint drop: a dropped entry never sets it (P25).
+2. **ADD to `:33-102` (80be2f1d) — do NOT replace it.** An earlier draft of this task said "Replace
+   `:33-72`", written against 46e62a34 before #3192. At 80be2f1d, `:33-102` holds three things #3192
+   added that this task must NOT drop: `RETIRED_ANALYZER_FIELDS` (`:42-47`), the resolver-derived
+   read-only response fields (`ollamaUrl`, `analyzerPhase0Model`, `analyzerPhase1Model`,
+   `analyzerPhase1MinLagChapters` — interface `:60-63`, `envDerived` overlay `:74-75` and `:94-97`:
+   `ollamaUrl: getResolvedOllamaUrl()`, the two `configValue<string>('analyzer.phase{0,1}.model')`
+   reads, `analyzerPhase1MinLagChapters: configValue<number>(…)`), and `corruptSettingsFile` /
+   `isUserSettingsFileCorrupt()` (the frontend corruption banner's only data source). This task adds
+   only the endpoint-key fields, on top of that — the interface gains `| 'analyzerEndpointKeys'` in its
+   `Omit`, plus `analyzerEndpointKeyStatus`; `envDerived` gains the `delete rest.analyzerEndpointKeys;`
+   line and the `analyzerEndpointKeyStatus: endpointKeyStatus(settings)` field. Nothing else in the
+   interface or the function body changes. Concretely, starting from 80be2f1d's own text:
 ```ts
-export interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey' | 'analyzerEndpointKeys'> {
-  apiKeyStatus: 'set' | 'unset';
+interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey' | 'analyzerEndpointKeys'> {
+  // ← ADD '| analyzerEndpointKeys' to the Omit above; everything else in this interface is #3192's,
+  //   unchanged (apiKeyStatus, workspaceRoot, workspaceSource, resolvedTtsModelKey, ollamaUrl,
+  //   analyzerPhase0Model, analyzerPhase1Model, analyzerPhase1MinLagChapters, corruptSettingsFile).
   /* #3084 — per endpoint id; the keys themselves are never returned. */
   analyzerEndpointKeyStatus: Record<string, EndpointKeyStatus>;
-  workspaceRoot: string;
-  workspaceSource: 'env' | 'default' | 'override';
-  /* The EFFECTIVE default TTS model after the Qwen-when-installed resolution
-     (getResolvedTtsModelKey). Distinct from the STORED `defaultTtsModelKey`
-     (which the Account picker shows + round-trips): the frontend seeds the
-     session engine from this so a fresh box with Qwen installed defaults to
-     Qwen, while the stored key stays Kokoro until the user explicitly picks. */
-  resolvedTtsModelKey: UserSettings['defaultTtsModelKey'];
-  /* #3195 — server-computed, not part of the persisted UserSettings shape; see
-     isUserSettingsFileCorrupt() in workspace/user-settings.ts. Recomputed fresh on
-     every response, same as apiKeyStatus/workspaceRoot/workspaceSource. Means the
-     settings FILE was unreadable and recovered — never set by a dropped analyzer
-     endpoint entry (P25). */
-  corruptSettingsFile: boolean;
 }
 
-/** Exported for routes/analyzer-endpoints.ts, whose writes answer in this shape. */
-export function envDerived(settings: UserSettings): UserSettingsResponse {
-  /* Drop the plaintext keys — the frontend only ever sees the status fields. */
+function envDerived(settings: UserSettings): UserSettingsResponse {
   const rest = { ...settings } as Partial<UserSettings>;
   delete rest.geminiApiKey;
-  delete rest.analyzerEndpointKeys;
+  delete rest.analyzerEndpointKeys; // #3084 — the only new line in this block
+  const phase0Model = configValue<string>('analyzer.phase0.model');
+  const phase1Model = configValue<string>('analyzer.phase1.model');
   return {
     ...(rest as Omit<UserSettings, 'geminiApiKey' | 'analyzerEndpointKeys'>),
     apiKeyStatus: getResolvedGeminiApiKey() ? 'set' : 'unset',
-    analyzerEndpointKeyStatus: endpointKeyStatus(settings),
-    /* Surface the ENV-resolved worker count (GEN_WORKERS env > account setting >
-       default 2), mirroring apiKeyStatus. The client queue-dispatcher reads
-       `account.generationWorkers` from this response, so without this overlay
-       the GEN_WORKERS env never reaches the dispatcher and can't cap concurrency
-       — it was a deploy knob that did nothing. When the env is unset,
-       getResolvedGenerationWorkers() returns the on-disk account value, so the
-       Account-tab UI is unchanged. */
-    generationWorkers: getResolvedGenerationWorkers(),
-    /* Read-only effective default (Qwen-when-installed, else Kokoro). The
-       stored `defaultTtsModelKey` above is left untouched so the Account
-       picker shows what's saved and a no-op round-trip can't pollute it. */
-    resolvedTtsModelKey: getResolvedTtsModelKey(),
+    analyzerEndpointKeyStatus: endpointKeyStatus(settings), // #3084 — the only other new line
+    ollamaUrl: getResolvedOllamaUrl(),
+    analyzerPhase0Model: phase0Model.trim().length > 0 ? phase0Model : null,
+    analyzerPhase1Model: phase1Model.trim().length > 0 ? phase1Model : null,
+    analyzerPhase1MinLagChapters: configValue<number>('analyzer.phase1.minLagChapters'),
     workspaceRoot: WORKSPACE_ROOT,
     workspaceSource: WORKSPACE_SOURCE,
     corruptSettingsFile: isUserSettingsFileCorrupt(),
   };
 }
 ```
+Also export the function (`export function envDerived`) — 80be2f1d's is not exported, and
+`routes/analyzer-endpoints.ts` (Task 3b.7) needs it. Task 3b.6b's own additive edit to this same
+function (its `droppedEndpointEntries` field) is unaffected — it lands on top of this, unchanged.
 
 - [ ] **Step 4: Run and confirm pass**
 
@@ -6082,8 +6227,9 @@ field is `codes`, never `issues`.
 `server/src/workspace/user-settings.ts` (`stripForbiddenKeys`, called from `writeUserSettings`) —
 `routes/user-settings.ts` never references it. An earlier draft of this task put the `FORBIDDEN_KEYS`
 edit under the routes file; it belongs with the other `workspace/user-settings.ts` edits above.
-Likewise `readFileSync` is not already imported in `workspace/user-settings.ts` at `46e62a34` (only
-`existsSync, statSync` at `:14`) — an earlier draft assumed it was; this task adds it explicitly.
+Likewise `readFileSync` is not already imported in `workspace/user-settings.ts` (only `existsSync,
+statSync` at `:14`, confirmed unchanged at 80be2f1d) — an earlier draft assumed it was; this task adds
+it explicitly.
 - Modify: `openapi.yaml`:
   - `UserSettings.properties` — add `droppedEndpointEntries` (readOnly array of `DroppedEndpointEntry` — renamed in this schema to avoid colliding with Task 3b.6's internal type of the same name; call the OpenAPI schema `DroppedEndpointEntrySummary`);
   - new schema `DroppedEndpointEntrySummary`;
@@ -6398,8 +6544,8 @@ Expected: FAIL, `does not provide an export named 'listDroppedEndpointEntries'`.
 
 `server/src/workspace/user-settings.ts`:
 
-1. Imports. Add `readFileSync` to the existing top `node:fs` import (`:14` on `46e62a34` is
-   `import { existsSync, statSync } from 'node:fs';` — `readFileSync` is **not** already there, unlike
+1. Imports. Add `readFileSync` to the existing top `node:fs` import (`:14`, confirmed unchanged at
+   80be2f1d, is `import { existsSync, statSync } from 'node:fs';` — `readFileSync` is **not** already there, unlike
    an earlier draft of this task assumed; item 9 of the review). Add `randomUUID, createHash` from
    `node:crypto` (new import).
 
@@ -6654,7 +6800,7 @@ export async function acknowledgeDroppedEndpointEntries(archiveIds: string[]): P
   await readAndUnionAcknowledgedHashes(hashesToAck);
 }
 ```
-7. `FORBIDDEN_KEYS` (`:643` on `46e62a34`, Task 3b.6's edit — **this file, not `routes/user-settings.ts`**,
+7. `FORBIDDEN_KEYS` (`:710-728` at 80be2f1d, was `:643-661` at 46e62a34 — Part 3 re-pin; Task 3b.6's edit — **this file, not `routes/user-settings.ts`**,
    item 9 of the review) gains `'droppedEndpointEntries'` in the same block as `'analyzerEndpoints'`.
 
 Export `listDroppedEndpointEntriesSync` alongside the async wrapper — `routes/user-settings.ts`'s
@@ -6985,8 +7131,11 @@ describe('Ollama persona call redaction (#3084 P22, A8)', () => {
     });
     await new Promise<void>((r) => server!.listen(0, '127.0.0.1', () => r()));
     const url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-    /* generatePersonaViaOllama reads its URL from settings (getResolvedOllamaUrl). */
-    _setUserSettingsCacheForTest({ geminiApiKey: SECRET, ollamaUrl: url });
+    /* generatePersonaViaOllama reads its URL via getResolvedOllamaUrl (A3 —
+       config/ollama-resolved.ts), which resolves through the config
+       resolver; `ollamaUrl` is not a settings field any more, so seed the
+       saved Advanced Settings override instead (#3084 A3 re-pin). */
+    _setUserSettingsCacheForTest({ geminiApiKey: SECRET, configOverrides: { 'analyzer.ollama.url': url } });
     const err = await generatePersonaViaOllama('Describe the voice.', 'qwen3.5:4b').then(() => null, (e: unknown) => e);
     expect((err as Error).message).toBe(
       `Ollama ${url} returned 500 Internal Server Error: {"error":"persona runner failed for key [redacted]"}`,
@@ -8077,7 +8226,7 @@ git commit -m "feat(server,docs): add on-demand served-context detect for llama.
   - add mock functions after `mockPutUserSettings` (`:7346`);
   - `real` object `:9947-9953`;
   - `mock` object `:10259-10265`.
-- Modify: `src/store/account-slice.ts:9-12` (imports), after `:68` (thunks), `:193-196` (reducers).
+- Modify: `src/store/account-slice.ts:9-12` (imports), after `:68` (thunks), `:181-184` (reducers).
 - Test: `src/lib/api-analyzer-endpoints-mock.test.ts` (new)
 - Test: `src/store/account-slice.analyzer-endpoints.test.ts` (new)
 
@@ -8828,7 +8977,7 @@ export function _setMockUserSettingsForTest(
   putAnalyzerEndpointKey: mockPutAnalyzerEndpointKey,
 ```
 
-`mockPutUserSettings` (`:7308-7346`) is **not** changed. `analyzerEndpoints` and `analyzerEndpointKeyStatus` stay off its whitelist, matching the server's `FORBIDDEN_KEYS`; the last mock test pins that.
+`mockPutUserSettings` (`:7382-7424`) is **not** changed. `analyzerEndpoints` and `analyzerEndpointKeyStatus` stay off its whitelist, matching the server's `FORBIDDEN_KEYS`; the last mock test pins that.
 
 `src/store/account-slice.ts`:
 
@@ -9311,7 +9460,7 @@ git commit -m "feat(server): add endpoint runtime state and unlimited limiter de
 **Three deliberate refinements of the research order:**
 - **Rule 2 is gated on the error's class, not on `headersReceived` alone (P21).** `headersReceived` is set only when `create()` resolves, and an HTTP status error is thrown *from* `create()`. So "no headers" is true for every HTTP error, and the research order's rule 2 would scan an error body's copied `code`.
 - **Bare `fetch failed` only counts when the chain has no string code.** A headers-timeout chain carries `UND_ERR_HEADERS_TIMEOUT` under a `fetch failed` TypeError. Without this rule a slow-but-healthy server would read as unreachable, which is the exact misclassification `ollama-timeout.test.ts` guards.
-- **`OPENAI_UNREACHABLE_CODES` is connect-phase only (P21).** It is not Ollama's `UNREACHABLE_CODES` (`ollama.ts:147-153`), whose `ECONNRESET`, `UND_ERR_SOCKET` and `EAI_AGAIN` can come from an up server resetting before headers or a DNS hiccup; for an endpoint those retry as an incomplete stream instead of silently switching to Gemini. It adds `EHOSTUNREACH`, `ENETUNREACH` and `UND_ERR_CONNECT_TIMEOUT`: an unroutable address returns one of the three depending on the host's routing table. Ollama's own set and classification are unchanged (P28).
+- **`OPENAI_UNREACHABLE_CODES` is connect-phase only (P21).** It is not Ollama's `UNREACHABLE_CODES` (`ollama.ts:148-154`), whose `ECONNRESET`, `UND_ERR_SOCKET` and `EAI_AGAIN` can come from an up server resetting before headers or a DNS hiccup; for an endpoint those retry as an incomplete stream instead of silently switching to Gemini. It adds `EHOSTUNREACH`, `ENETUNREACH` and `UND_ERR_CONNECT_TIMEOUT`: an unroutable address returns one of the three depending on the host's routing table. Ollama's own set and classification are unchanged (P28).
 
 **Tests kept green:** `server/src/analyzer/ollama-timeout.test.ts`. This task does not change `ANALYZER_DISPATCHER` or Ollama classification.
 
@@ -10072,7 +10221,7 @@ describe('OpenAITransport — HTTP statuses', () => {
       const err = await failure(transport(url, {}, 'sk-echo-secret-1234').send(request()));
       expect(err).toBeInstanceOf(errors.AnalyzerHttpError);
       /* What the analysis route does with it: `[analysis] failed` logs the error's name,
-         message and status (routes/analysis.ts:6433-6443), then classifyAnalysisFailure
+         message and status (routes/analysis.ts:6437-6447), then classifyAnalysisFailure
          builds the SSE error event and the saved chapter error. Both read only what is
          asserted below. `lines` holds only what the code under test logged. */
       const classified = classifyAnalysisFailure(err, 'Endpoint lab (qwen3:30b)');
@@ -10790,7 +10939,7 @@ export function allowlistedFetch(apiKey: string | null, keyOrigin: string): type
 }
 ```
 
-**Reasoning deltas and `onChunk`.** A delta carrying `reasoning_content`, `reasoning` or a non-empty `reasoning_details` re-arms the idle watchdog and calls `onChunk` with `receivedBytes` / `receivedText` unchanged, so the route heartbeat (`routes/analysis.ts:1184`, silence warning `:4417-4423`) sees a long think as activity. This is the convention wave 2 Task 2.7 uses for Gemini thought-only chunks. A chunk that carries both reasoning and content fires `onChunk` once.
+**Reasoning deltas and `onChunk`.** A delta carrying `reasoning_content`, `reasoning` or a non-empty `reasoning_details` re-arms the idle watchdog and calls `onChunk` with `receivedBytes` / `receivedText` unchanged, so the route heartbeat (`routes/analysis.ts:1179`, silence warning `:4421-4427`) sees a long think as activity. This is the convention wave 2 Task 2.7 uses for Gemini thought-only chunks. A chunk that carries both reasoning and content fires `onChunk` once.
 
 **Stop-the-run errors (P20).** This task adds two catches:
 - `attempt()`'s semaphore-acquire catch rethrows anything that is not a caller abort.
@@ -10891,7 +11040,7 @@ git commit -m "feat(server): add openai-compatible chat transport with ceiling, 
 
 **How attempt 1 gets its temperature.** Wave 1's `ValidationRetryPolicy` (Task 1.10) has `initialTemperature(): number`: the temperature of the first attempt and of escalation's single attempt. The runner calls it for both. It also has `readonly warnsOnRepair: boolean`. `OPENAI_RETRY_POLICY` implements both. `initialTemperature` returns `OPENAI_DEFAULT_TEMPERATURE`. `warnsOnRepair` is `true`, following Ollama's retry shape, whose policy logs "required JSON cleanup".
 
-**Retry shape.** It is Ollama's (`ollama.ts:559-571`):
+**Retry shape.** It is Ollama's (`ollama.ts:560-572`):
 - invalid JSON → drop the assistant turn, use the retry temperature;
 - a schema failure → replay the output plus `buildRetryMessage`, at the default temperature.
 
@@ -10924,10 +11073,9 @@ const errors = await import('./errors.js');
 const { classifyAnalysisFailure } = await import('../routes/failure-taxonomy.js');
 /* #3084 F7 review pass 2, item 1 — TransportAnalyzer, so the escalation-path
    test can spy on its prototype method to capture the StageCall options
-   OpenAIAnalyzer builds. If wave 1 splits it into its own module
-   (`runner/transport-analyzer.js`) rather than `runner/stage-runner.js`,
-   import it from wherever it actually lands. */
-const { TransportAnalyzer } = await import('./runner/stage-runner.js');
+   OpenAIAnalyzer builds. Review pass 3, item 9: it is W1's own module
+   `./runner/transport-analyzer.js`, not `./runner/stage-runner.js`. */
+const { TransportAnalyzer } = await import('./runner/transport-analyzer.js');
 
 const HANDOFF_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'handoff');
 const ID = 'm_openai_analyzer';
@@ -11116,40 +11264,54 @@ describe('OpenAIAnalyzer (#3084 PR 3b)', () => {
     expect((err as errors.AnalyzerReasoningOverflowError).endpointId).toBe('lab');
   });
 
-  it('an escalation-path overflow (reported through StageCall.onReasoningOverflow, never thrown at the point it happens — w2 runSingleAttempt/throwIfReasoningOverflowed) is annotated too, before it can ever reach a caller (#3084 F7 review pass 2, item 1)', async () => {
-    /* This does not drive wave 2's actual escalation control flow — that
-       machinery (runSingleAttempt's escalation mode, throwIfReasoningOverflowed)
-       does not exist on `main` at the time this task is written, and its exact
-       call site relative to OpenAIAnalyzer's own stage methods is wave 2's to
-       fix. What IS this file's to prove is narrower and fully testable today:
-       whatever StageCall options object OpenAIAnalyzer passes to
-       `super.runStage1Chapter(...)` has an `onReasoningOverflow` that, when
-       invoked with a fresh (unannotated) AnalyzerReasoningOverflowError,
-       stamps this analyzer's own endpoint id onto it — which is exactly what
-       lets a LATER rethrow (wherever wave 2 places it) carry the id. */
+  it('an escalation-path overflow (reported through StageCall.onReasoningOverflow, never thrown at the point it happens) is annotated too, before it can ever reach a caller (#3084 F7 review pass 3, item 3)', async () => {
+    /* #3084 review pass 3, item 3 — corrects an earlier draft of this test,
+       which drove `runStage1Chapter`. Per the ruling: ONLY
+       `runAttributionEscalation` goes through the runner's
+       `runSingleAttempt`, which reports an overflow through
+       `StageCall.onReasoningOverflow` instead of throwing (the stored error
+       is rethrown later, at the route's `throwIfReasoningOverflowed` — w2's
+       plan file, not this one, not inside this analyzer at all).
+       `runStage1Chapter` always throws directly (withEndpointId's catch
+       already covers it, per the test above). This does not drive wave 2's
+       actual escalation control flow — that machinery (runSingleAttempt's
+       escalation mode) does not exist on `main` (80be2f1d) at the time this
+       task is written. What IS this file's to prove is narrower and fully
+       testable today: whatever StageCall options object OpenAIAnalyzer
+       passes to `super.runAttributionEscalation(...)` has an
+       `onReasoningOverflow` that, when invoked with a fresh (unannotated)
+       AnalyzerReasoningOverflowError, stamps this analyzer's own endpoint id
+       onto it — which is exactly what lets w2's route-level rethrow carry
+       the id, wherever it fires. */
     const captured: { onReasoningOverflow?: (err: errors.AnalyzerReasoningOverflowError) => void }[] = [];
-    const runStage1Spy = vi
-      .spyOn(TransportAnalyzer.prototype, 'runStage1Chapter')
-      .mockImplementation(async (_id, _chapterId, _text, opts) => {
-        captured.push(opts as never);
-        return { characters: [] } as never;
+    const runEscalationSpy = vi
+      .spyOn(TransportAnalyzer.prototype, 'runAttributionEscalation')
+      .mockImplementation(async (_manuscriptId, _chapterId, _windowIndex, _prompt, call) => {
+        captured.push(call as never);
+        return null;
       });
+    /* w2's own route-level caller supplies onReasoningOverflow (w2 ~3276,
+       ~3290) — it is not an optional hook nothing calls. Passing one here
+       and asserting it still fires is what makes "drop the forwarding
+       call" a real red, not a documented gap. */
+    const callerHook = vi.fn();
     try {
       const analyzer = new OpenAIAnalyzer({ endpoint: endpoint('http://127.0.0.1:1'), apiKey: null, model: 'qwen3:30b' });
-      await analyzer.runStage1Chapter(ID, 1, '# p', {});
+      await analyzer.runAttributionEscalation(ID, 1, 0, '# p', { onReasoningOverflow: callerHook });
       expect(captured).toHaveLength(1);
       expect(typeof captured[0].onReasoningOverflow).toBe('function');
       const raw = new errors.AnalyzerReasoningOverflowError('openai', 'qwen3:30b', 512);
       expect(raw.endpointId).toBeUndefined();
       captured[0].onReasoningOverflow!(raw);
       expect(raw.endpointId).toBe('lab');
+      expect(callerHook).toHaveBeenCalledWith(raw);
     } finally {
-      runStage1Spy.mockRestore();
+      runEscalationSpy.mockRestore();
     }
   });
 });
 ```
-The schema-failure fixture `{"characters":[{"id":"narrator"}]}` parses but fails `stage1ChapterSchema` (missing `name`, `role`, `color`, `evidence`). `parseAndValidate` strips only unrecognized-keys-only failures (`ollama.ts:500-503`), so it stays a schema failure.
+The schema-failure fixture `{"characters":[{"id":"narrator"}]}` parses but fails `stage1ChapterSchema` (missing `name`, `role`, `color`, `evidence`). `parseAndValidate` strips only unrecognized-keys-only failures (`ollama.ts:501-504`), so it stays a schema failure.
 
 - [ ] **Step 2: Run and confirm failure**
 
@@ -11196,7 +11358,13 @@ Add `AnalyzerUnreachableError` and `AnalysisAbortedError` to the file's `../erro
    transport, retry policy, request settings and schema adapter differ.
    Not constructed by selectAnalyzer until PR 3d. */
 import type { Agent } from 'undici';
-import { StageRunner, TransportAnalyzer } from './runner/stage-runner.js';
+/* #3084 review pass 3, item 9 — TransportAnalyzer is W1's, created in its own
+   module `./runner/transport-analyzer.js`, not `./runner/stage-runner.js`
+   (verified: neither exists on `main`/80be2f1d yet, so this is W1's own
+   file layout, not something this task can pin against a real commit —
+   taken as given per the ruling). StageRunner stays in stage-runner.js. */
+import { StageRunner } from './runner/stage-runner.js';
+import { TransportAnalyzer } from './runner/transport-analyzer.js';
 import { OPENAI_RETRY_POLICY } from './runner/retry-policy.js';
 import { adaptSchemaForOpenAI } from './runner/schema-adapters.js';
 import type { EngineRequestSettings } from './runner/stage-runner.js';
@@ -11234,7 +11402,7 @@ export class OpenAIAnalyzer extends TransportAnalyzer {
   }
 }
 ```
-If wave 1 exported `StageRunner` and `TransportAnalyzer` from separate files (`stage-runner.ts` and `transport-analyzer.ts`, as the contract heading lists), split the import to match.
+`StageRunner` stays in `stage-runner.ts`; `TransportAnalyzer` is `transport-analyzer.ts` (review pass 3, item 9 — no longer a hedge, since the ruling settles it).
 
 **The API key.** Callers resolve it with `resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl)` (Task 3b.5), so an origin mismatch throws `AnalyzerKeyOriginError` before any request exists. PR 3d wires that call into selection.
 
@@ -11261,8 +11429,8 @@ Apply each change, check that the named test fails, then restore it.
 | In `OpenAITransport.attempt` (Task 3b.11), delete `if (reasoningDelta) reasoningSeen = true;` | `reasoning deltas then an empty length finish stop the run…` (no reasoning evidence, so the empty `length` finish is not an overflow) |
 | In Task 3b.11, add `'ECONNRESET', 'UND_ERR_SOCKET', 'EAI_AGAIN'` back to `OPENAI_UNREACHABLE_CODES` (the pre-P21 set) | `a server that closes the socket before writing headers is retried and never falls back to Gemini (P21)` (the fallback's `runStage1Chapter` is called, `bodies` has length 1) |
 | In `withEndpointId` (Task 3b.1b), delete the `err.endpointId === undefined` branch entirely (never annotate) | `reasoning deltas then an empty length finish stop the run…` (`err.endpointId` is `undefined`, not `'lab'`) — this row is now a REAL failure, not the "add once 3b.12 exists" hedge an earlier draft carried: 3b.12 is this task, so it exists now |
-| Delete `this.withEndpointIdHook(opts)` from the `runStage1Chapter` override (pass `opts` straight through) | `an escalation-path overflow (reported through StageCall.onReasoningOverflow…) is annotated too…` (`captured[0].onReasoningOverflow` is `undefined`, or is whatever the caller passed with no wrapping — `raw.endpointId` stays `undefined` after the manual invoke) |
-| In `withEndpointIdHook`, drop the `call.onReasoningOverflow?.(err);` forwarding call | the same test still passes (documents a gap: nothing yet asserts the ORIGINAL caller-supplied hook, if any, still fires — add `it('still calls a caller-supplied onReasoningOverflow after annotating')` passing a spy as `opts.onReasoningOverflow` once a real caller in this codebase supplies one) |
+| Delete `this.withEndpointIdHook(call)` from the `runAttributionEscalation` override (pass `call` straight through) | `an escalation-path overflow (reported through StageCall.onReasoningOverflow…) is annotated too…` (`captured[0].onReasoningOverflow` is either `undefined` or is the caller's own `callerHook` unwrapped — `raw.endpointId` stays `undefined` after the manual invoke) |
+| In `withEndpointIdHook`, drop the `call.onReasoningOverflow?.(err);` forwarding call | the same test (review pass 3, item 3 — this is now a REAL red, not the "once a real caller" hedge an earlier draft carried: w2's own route-level caller supplies `onReasoningOverflow`, w2 ~3276/~3290, and the test above passes `callerHook` and asserts `expect(callerHook).toHaveBeenCalledWith(raw)`) |
 
 - [ ] **Step 6: Commit**
 ```bash
@@ -11454,7 +11622,7 @@ PR 3d consumes:
    - In `src/lib/api-put-user-settings-endpoint-ids-mock.test.ts`, the three refusal cases expect the saved value.
 6. **Selection.** Task 3d.4 replaces 3a's `if (engine === 'openai') { … throw new AnalyzerEndpointMissingError(…) }` branch, as it already plans. Its missing-endpoint throw passes `opts.modelSource ?? (opts.model ? 'run-pick' : 'settings')` — never the literal `'settings'`, and never `opts.modelSource ?? 'settings'`. So a missing endpoint named by `ANALYZER_PHASE{0,1}_MODEL` still says env, and a direct `selectAnalyzer({ model })` caller that sets no `modelSource` says run pick, matching 3a's `?? 'run-pick'`. 3a's cases `refuses an openai:<endpoint>::<model> id…` and `each phase source is named…` are deleted with that branch. 3d.4 must replace them with cases that pin the default:
    - `selectAnalyzer({ model: 'openai:gone::m' })` (no `modelSource`, no endpoint `gone` saved) throws `AnalyzerEndpointMissingError` with `source: 'run-pick'`;
-   - a saved `analyzerPhase1Model: 'openai:gone::m'` through `selectAnalyzerForPhase({ phase: 'phase1' })` throws it with `source: 'settings'`.
+   - a saved `configOverrides: { 'analyzer.phase1.model': 'openai:gone::m' }` (A5 — no longer `analyzerPhase1Model`) through `selectAnalyzerForPhase({ phase: 'phase1' })` throws it with `source: 'settings'`.
 
    Mutation proof: `?? (opts.model ? 'run-pick' : 'settings')` → `?? 'settings'` turns the first case red.
 7. **Keep:**

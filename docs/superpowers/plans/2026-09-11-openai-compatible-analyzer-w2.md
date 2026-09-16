@@ -6,7 +6,7 @@
 
 Spec decisions 6 and 7, §6 and §7. Wave 1 (PRs 1a, 1b) is assumed merged. This file uses wave 1's contract names: `ChatTransport`, `TransportRequest`, `TransportResult`, `StageRunner`, `EngineRequestSettings`, `mapFinish`, `stripThink`, `GeminiTransport`, `OllamaTransport`, `withTransportRetry` and `TransportKind`.
 
-Every `file:line` below is as of `origin/main` 46e62a34, with two marked exceptions: `server/src/analyzer/attribution-eval/run-eval.ts` is cited as `origin/main` after PR #3199 (merge `839c65ac`), and the #3163 `rate-limit.ts` / `registry.ts` lines are cited as `origin/main` after that PR (merge `ade92d2b`). Wave 0 (#3139 → PR #3163, #3141) and wave 1 both edit files cited here. Before each task, re-locate every anchor with `git grep -n` on the current `main`. Code that wave 1 moved is cited twice: its 46e62a34 location, and the wave-1 file it now lives in. Facts about the openai SDK, local servers and the Gemini API are cited from `docs/superpowers/specs/2026-09-11-openai-compatible-analyzer-planning-facts.md` as "planning facts §A/§B/§C" plus the item number.
+Every `file:line` below is as of `origin/main` `80be2f1d` (PR #3192's merge; wave 0, #3141 and #3192 are all discharged as of this pin). Before each task, re-locate every anchor with `git grep -n` on the current `main`. Code that wave 1 moved is cited twice: its `80be2f1d` location, and the wave-1 file it now lives in. Facts about the openai SDK, local servers and the Gemini API are cited from `docs/superpowers/specs/2026-09-11-openai-compatible-analyzer-planning-facts.md` as "planning facts §A/§B/§C" plus the item number.
 
 **Commands used throughout this wave** (from the worktree root; never `cd`):
 
@@ -75,8 +75,8 @@ Case matrix:
 - **Engines.** `local-qwen3.5:4b@32768` (`ANALYZER_NUM_CTX=32768`); `gemini-3.5-flash-lite@12000` (`ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST=12000`); and, only if Step 1's caller grep finds a production caller that passes no engine, `unset` (today's `engine === undefined` path). Since PR #3199, `attribution-eval/run-eval.ts` passes its engine, so the expected matrix has no `unset` column.
 - **Scripts.** Chapter One of `server/src/__fixtures__/the-coalfall-commission.md` (Latin), `.ru.md` (Cyrillic), `.zh.md` (Han) and `.ja.md` (kana + kanji).
 - **Resolvers, each as the real callers pass it:**
-  - stage 1 without a roster, and with a 40-entry roster (`routes/analysis.ts:4496-4501`, `:7065-7070`);
-  - stage 2 (`analysis.ts:2308`);
+  - stage 1 without a roster, and with a 40-entry roster (`routes/analysis.ts:4500-4505`, `:7115-7120`);
+  - stage 2 (`analysis.ts:2303`);
   - `chapterChunkBudget(engine, 0, body, OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS)`, the emotion and instruct passes (`annotate-emotion.ts:178-183`, `instruct-annotation.ts:177-182`);
   - `chapterChunkBudget(engine, JSON.stringify(roster).length + 800, body, OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS)`, script review (`script-review.ts:840-845`, `attribution-eval/review-run.ts:60-65`);
   - `chapterChunkBudget(engine)` with defaults (`chapter-chunker.test.ts:15`).
@@ -93,9 +93,9 @@ Then decide whether the `unset` engine is pinned at all. List every production c
 ```bash
 git grep -n -E "resolveStage[12]ChunkCharBudget\(|chapterChunkBudget\(|attributeChapterStage2(WithEval)?\(" origin/main -- server/src ":!*.test.ts"
 ```
-Read each call's arguments. On 46e62a34 plus PR #3199, every production caller passes an engine:
-- `routes/analysis.ts` stage 1 (`:4496`, `:7065`, `selection.engine`);
-- both `attributeChapterStage2WithEval` calls (`engine: phase1Selection.engine`, `:5461`, `:7360`);
+Read each call's arguments. At `80be2f1d`, every production caller passes an engine:
+- `routes/analysis.ts` stage 1 (`:4500`, `:7115`, `selection.engine`);
+- both `attributeChapterStage2WithEval` calls (`engine: phase1Selection.engine`, `:5465`, `:7410`);
 - the `chapterChunkBudget` passes (`annotate-emotion.ts:178`, `instruct-annotation.ts:177`, `script-review.ts:840`, `attribution-eval/review-run.ts:60`);
 - `attribution-eval/run-eval.ts` (`chunkEngine` declared at `:190`, passed as `engine: chunkEngine,` at `:200` and `:242`; `origin/main` after PR #3199).
 
@@ -508,7 +508,7 @@ git commit -m "refactor(server): add EngineCapacity and resolveCapacity (#3084)"
 - Modify: `server/src/analyzer/chapter-chunker.ts:130-139`
 - Modify: `server/src/config/registry.ts:129` — the comment names `chapterChunkBudget('gemini')`, which no longer exists; and `:70-79`, `:82-91`, `:92-101`, `:102-111`, `:112-121`, `:122-131`, `:953-961` — `help` text for the six chunking/cap knobs plus `analyzer.ollama.numCtx`, naming each family's derivation formula (F1).
 - Modify: `docs/wiki/Advanced-Settings.md` §2 — the five chunking rows' "What it does" column (F1, F3).
-- Modify: `server/src/routes/analysis.ts:12` (import), `:2208-2212`, `:2308`, `:4496-4497`, `:5461`, `:7065-7066`, `:7360`
+- Modify: `server/src/routes/analysis.ts:12` (import), `:2203-2207`, `:2303`, `:4500-4501`, `:5465`, `:7115-7116`, `:7410`
 - Modify: `server/src/routes/annotate-emotion.ts:178-179` (+ import)
 - Modify: `server/src/routes/instruct-annotation.ts:177-178` (+ import)
 - Modify: `server/src/routes/script-review.ts:840-841` (+ import)
@@ -793,7 +793,7 @@ this wave — every knob below stays user-editable in Advanced Settings before
 any on-box row runs; on-box measurement (Task 2.10, run sheet §3) only tunes
 defaults. Update these five knobs' `help` in `server/src/config/registry.ts` so
 each names its family's formula, matching what Task 2.3 just implemented:
-- **`analyzer.stage1.chunkCharBudget`** (`:102-111` on 46e62a34) — replace the
+- **`analyzer.stage1.chunkCharBudget`** (`:102-111` at `80be2f1d`) — replace the
   `help` string with: `"Maximum characters per stage-1 cast-detection chunk
   before the chapter is split. Local (context-family) engines derive the
   effective budget as min(analyzer.stage1.localInputFraction × Ollama num_ctx ×
@@ -839,8 +839,8 @@ each names its family's formula, matching what Task 2.3 just implemented:
 
 These are `help`-string-only edits (no `env`, `min`/`max`, `default` or `type`
 changes) — `config:sync` (`server/scripts/sync-env-example.ts`) does not read
-`help`, so `.env.example` is unaffected; confirmed by reading that script on
-46e62a34, which builds each managed-block line from `env`/`default`/`label`
+`help`, so `.env.example` is unaffected; confirmed by reading that script at
+`80be2f1d`, which builds each managed-block line from `env`/`default`/`label`
 only. `docs/wiki/Advanced-Settings.md`'s "What it does" column is a paraphrase
 of `help` per knob — update §2's five rows (Stage-1/Stage-2 chunk char
 budget, Stage-1/Stage-2 local input fraction, Gemini output-heavy chunk
@@ -855,7 +855,7 @@ the guard stays green; run it in Step 4 alongside the existing suites.
 
 `server/src/routes/analysis.ts`:
 - **Imports.** After line 12, add `import { resolveCapacity, type EngineCapacity } from '../analyzer/capacity.js';`.
-- **Lines 2208-2212.** Replace with:
+- **Lines 2203-2207.** Replace with:
 ```ts
   /* Phase-1 analyzer capacity (#3084 wave 2) — sizes the chunk budget: a
      context-family capacity (local Ollama) derives it from num_ctx so a fat
@@ -864,17 +864,17 @@ the guard stays green; run it in Step 4 alongside the existing suites.
      cap, as an omitted engine behaved before. */
   capacity?: EngineCapacity;
 ```
-- **Line 2308.** `charBudget: resolveStage2ChunkCharBudget(opts.engine, opts.chapter.body),` → `charBudget: resolveStage2ChunkCharBudget(opts.capacity, opts.chapter.body),`
-- **Lines 4410-4411.** Replace `resolveStage1ChunkCharBudget(\n                      selection.engine,` with:
+- **Line 2303.** `charBudget: resolveStage2ChunkCharBudget(opts.engine, opts.chapter.body),` → `charBudget: resolveStage2ChunkCharBudget(opts.capacity, opts.chapter.body),`
+- **Lines 4500-4501.** Replace `resolveStage1ChunkCharBudget(\n                      selection.engine,` with:
 ```ts
                     charBudget: resolveStage1ChunkCharBudget(
                       resolveCapacity({ engine: selection.engine, model: selection.model }),
 ```
-- **Line 5375.** `engine: phase1Selection.engine,` → `capacity: resolveCapacity({ engine: phase1Selection.engine, model: phase1Selection.model }),`
-- **Lines 6926-6927.** Replace `selection.engine,` with `resolveCapacity({ engine: selection.engine, model: selection.model }),`.
-- **Line 7221.** `engine: phase1Selection.engine,` → `capacity: resolveCapacity({ engine: phase1Selection.engine, model: phase1Selection.model }),`
+- **Line 5465.** `engine: phase1Selection.engine,` → `capacity: resolveCapacity({ engine: phase1Selection.engine, model: phase1Selection.model }),`
+- **Lines 7115-7116.** Replace `selection.engine,` with `resolveCapacity({ engine: selection.engine, model: selection.model }),`.
+- **Line 7410.** `engine: phase1Selection.engine,` → `capacity: resolveCapacity({ engine: phase1Selection.engine, model: phase1Selection.model }),`
 
-Check first that 5375 and 7221 are the `attributeChapterStage2WithEval({` argument objects (`analysis.ts:5368`, `:7215`), and not the SSE `engine:` fields at `:6237` / `:7818`, which stay.
+Check first that 5465 and 7410 are the `attributeChapterStage2WithEval({` argument objects (`analysis.ts:5458`, `:7404`), and not the SSE `engine:` fields at `:6327` / `:8007`, which stay.
 
 `server/src/routes/annotate-emotion.ts`:
 - **Import.** Add `import { resolveCapacity } from '../analyzer/capacity.js';` beside the `chapter-chunker.js` import.
@@ -1024,7 +1024,7 @@ https://claude.ai/code/session_013DFfsAoY1LtxjDgnGPSZkc
   - anything endpoint-shaped (wave 3).
 - **Entry criteria:**
   - PR 2a is merged.
-  - `rate-limit.ts`'s limit resolver has been re-read on the current `main`: `function resolveLimits(model: string): ModelLimits` at `:95` after #3163 (`:76` on 46e62a34). Task 2.6 exports it under that name.
+  - `rate-limit.ts`'s limit resolver has been re-read on the current `main`: `function resolveLimits(model: string): ModelLimits` at `:95` after #3163 (unchanged at `80be2f1d`). Task 2.6 exports it under that name.
   - **P5 and P20 are approved by the owner (2026-09-13).** This PR is written to both:
     - **P5:** no probe gate, and a thinking window that bounds silence until the first answer text. Its automatic default is 120 000 ms (2 min); Advanced Settings can raise it to at most 290 000 ms.
     - **P20, "stop new spend," with a loud, actionable warning:** an overflow ends the run and stops new chapters, escalation windows, non-story calls and the output-heavy passes; chapters already in flight finish and cache. The failure names what happened and lists structured fixes the user can act on (Task 2.9a).
@@ -1690,7 +1690,7 @@ git commit -m "feat(server): cache the Gemini model catalog with a bounded warm-
 **Files:**
 - Modify: `server/src/config/registry.ts:50-59` (the `analyzer.gemini.maxOutputTokens` knob) and `:70-79` (the `analyzer.gemini.maxInputTokensPerRequest` knob — lift `max` to `1_000_000` and extend `help` with the TPM bound, F1)
 - Modify: `docs/wiki/Advanced-Settings.md` §1 — the "Gemini max output tokens" and "Gemini max input tokens per request" rows' default/range (F1, F3)
-- Modify: `server/src/analyzer/rate-limit.ts` — export `resolveLimits` (`:95` on `origin/main` after #3163; `:76` on 46e62a34)
+- Modify: `server/src/analyzer/rate-limit.ts` — export `resolveLimits` (`:95` at `80be2f1d`, unchanged since #3163)
 - Modify: `server/src/analyzer/capacity.ts` (the Gemini branch reads the catalog and the model's TPM; add `resolveGeminiMaxOutputTokens`)
 - Modify: `server/src/analyzer/runner/transport.ts`: `ChatTransport` gains `prepare?(signal?: AbortSignal): Promise<void>` (the contract's `prepare?()` plus the caller's abort signal, P26).
 - Modify: `server/src/analyzer/runner/stage-runner.ts`: the private `send(…)` (wave 1 Task 1.11) awaits `this.transport.prepare?.(call.signal)` before its settings read.
@@ -1711,7 +1711,7 @@ Only `maxOutputTokens` depends on the catalog, so the warm-up goes into `send`, 
 **Interfaces:**
 - Consumes:
   - `getCachedGeminiModelInfo`, `warmGeminiCatalog` (bounded at 10 s, takes the caller's `signal`), `GeminiModelsClient` (Task 2.5);
-  - `resolveNumPredict()` (`ollama-settings.ts`, wave 1 Task 1.8; `ollama.ts:289-294` on 46e62a34);
+  - `resolveNumPredict()` (`ollama-settings.ts`, wave 1 Task 1.8; `ollama.ts:290-295` at `80be2f1d`);
   - `resolveLimits(model: string): { rpm: number; tpm: number; rpd: number }` (`rate-limit.ts`, exported here);
   - `EngineRequestSettings.maxOutputTokens` and `TransportRequest.maxOutputTokens` (contract).
 - Produces:
@@ -1932,7 +1932,7 @@ In `server/src/analyzer/transports/gemini-transport.test.ts` (wave 1 Task 1.9):
   });
 ```
 
-In `server/src/analyzer/gemini.test.ts` (re-locate the mock block after wave 1; at 46e62a34 it is `:55-74`), replace lines 55-63 with:
+In `server/src/analyzer/gemini.test.ts` (re-locate the mock block after wave 1; at `80be2f1d` it is `:55-74`), replace lines 55-63 with:
 ```ts
 const generateContentStream = vi.fn();
 const listModels = vi.fn();
@@ -2448,13 +2448,13 @@ git commit -m "feat(server): request Gemini thought summaries from thinking mode
 
 **Files:**
 - Modify: `server/src/analyzer/errors.ts` (append `AnalyzerTimeoutError`, contract shape plus the `'thinking-idle'` reason)
-- Modify: `server/src/config/registry.ts`: add `analyzer.gemini.thinkingIdleTimeoutMs` and `analyzer.gemini.requestCeilingMs` after the `analyzer.gemini.maxInputTokensPerRequest` knob (`:70-79` on 46e62a34).
+- Modify: `server/src/config/registry.ts`: add `analyzer.gemini.thinkingIdleTimeoutMs` and `analyzer.gemini.requestCeilingMs` after the `analyzer.gemini.maxInputTokensPerRequest` knob (`:70-79` at `80be2f1d`).
 - Modify: `server/src/analyzer/transports/gemini-transport.ts`:
   - `GEMINI_THINKING_IDLE_TIMEOUT_MS`, `resolveGeminiThinkingIdleTimeoutMs(model)` and the private `geminiThinkingWindowApplies(model)`;
   - `GEMINI_RETRY_CLASSIFIER` (wave 1 Task 1.9): `AnalyzerTimeoutError` → `no-retry`;
   - constructor option `requestCeilingMs?: number` (contract);
   - in `generate(req)` (wave 1 Task 1.9; body moved from `gemini.ts:684-866`): the ceiling signal, the thinking-window arms, the answer-start re-arm, the timeout classification, and the per-attempt timing line.
-- Modify: `server/.env.example`: the hand-written large-chapter block Task 2.6 edited (`:285-303` on 46e62a34)
+- Modify: `server/.env.example`: the hand-written large-chapter block Task 2.6 edited (`:285-303` at `80be2f1d`)
 - Modify: `docs/wiki/Advanced-Settings.md` §1 — two new rows, "Gemini thinking idle timeout (ms)" and "Gemini request ceiling (ms)" (F1, F3). These are NEW knob labels, so `scripts/tests/knob-docs-sync.test.mjs` (#2012, run by `npm run test:hooks`) fails without them — name it in Step 4.
 - Modify: `server/src/routes/failure-taxonomy.ts:29-52` (union), `:98-140` (signature row), `:492-534` (classify branch)
 - Modify: `server/src/routes/failure-remediations.ts:94-101` (add an entry after `analyzer-truncated`)
@@ -2465,7 +2465,7 @@ git commit -m "feat(server): request Gemini thought summaries from thinking mode
 **Interfaces:**
 - Consumes:
   - `geminiModelThinks(model)` (Task 2.5, the static id rule, P27);
-  - `resolveStreamIdleTimeoutMs(): number` and `GeminiStreamIdleError(model, idleMs)` (`transports/gemini-transport.ts`, wave 1 Task 1.9; `gemini.ts:73-78`, `:118-127` on 46e62a34);
+  - `resolveStreamIdleTimeoutMs(): number` and `GeminiStreamIdleError(model, idleMs)` (`transports/gemini-transport.ts`, wave 1 Task 1.9; `gemini.ts:73-78`, `:118-127` at `80be2f1d`);
   - `GEMINI_RETRY_CLASSIFIER` (wave 1 Task 1.9: `GeminiStreamIdleError` → `idle`; anything without a status → `no-retry`);
   - `withTransportRetry` (wave 1 Task 1.9): an `idle` disposition logs `[gemini] stream idle … — retrying in …` and announces a backoff over 1 s through `onThrottle(…, 'retry-after')`; a `no-retry` disposition rethrows at once and does neither;
   - `TransportKind` (`errors.ts`, wave 1), `configValue`, `coerceAndValidate` (`config/resolver.ts:183`), `withCopy` (`failure-taxonomy.ts:481-483`).
@@ -2950,7 +2950,7 @@ export class AnalyzerTimeoutError extends Error {
 }
 ```
 
-`server/src/config/registry.ts`, inserted after the `analyzer.gemini.maxInputTokensPerRequest` knob (ending `:79` on 46e62a34):
+`server/src/config/registry.ts`, inserted after the `analyzer.gemini.maxInputTokensPerRequest` knob (ending `:79` at `80be2f1d`):
 ```ts
   {
     key: 'analyzer.gemini.thinkingIdleTimeoutMs',
@@ -3251,7 +3251,7 @@ git commit -m "feat(server,openapi,frontend): bound Gemini's silence before an a
 
 **Files:**
 - Modify: `server/src/analyzer/errors.ts` (append `AnalyzerReasoningOverflowError`)
-- Modify: `server/src/analyzer/types.ts` (`StageCall.onReasoningOverflow`; `StageCall` is `index.ts:47-85` on 46e62a34, moved verbatim by wave 1 Task 1.5)
+- Modify: `server/src/analyzer/types.ts` (`StageCall.onReasoningOverflow`; `StageCall` is `index.ts:46-84` at `80be2f1d`, moved verbatim by wave 1 Task 1.5)
 - Modify: `server/src/analyzer/runner/stage-runner.ts` (wave 1 Task 1.11's `StageRunner.runSingleAttempt` `catch`: report an overflow through the hook before `return null`)
 - Modify: `server/src/analyzer/runner/finish.ts` (`hasReasoningEvidence`; `mapFinish` rewritten so the `'length'` rule runs before Ollama's empty-response check)
 - Modify: `server/src/analyzer/transports/ollama-transport.ts` (wave 1 Task 1.8's moved `chat()` body: `reasoningSeen` from `message.thinking`, and each thinking chunk calls `onChunk` with the answer byte count unchanged (P4); the empty-buffer early return logs its truncation)
@@ -3260,7 +3260,7 @@ git commit -m "feat(server,openapi,frontend): bound Gemini's silence before an a
 - Modify: `openapi.yaml:7049` (enum), and regenerate `src/lib/api-types.ts`.
 - Modify: `src/data/help-failures.ts:28-55`, `:57-81`
 - Modify: `server/src/routes/analysis.ts:29` (import), `:2627-2663` (`AnalysisJob.reasoningOverflowed`), before `:2437` (`noteReasoningOverflow`, `buildNonStoryClassifier`), `:4550` (main route, Phase-0 per-chapter catch), `:5685-5689` (main route, Phase-1 pool catch), `:5814-5836` (main route, non-story classifier), `:7149` (subset route, Phase-0 per-chapter catch), `:7540-7566` (subset route, non-story classifier), `:5361-5363` (main route, Phase-1 `stage2Call`: escalation overflow hook), `:7363-7367` (subset route, Phase-1 inline `stageCall`: escalation overflow hook), `:4727-4738` (main route, `runPhase0Pool`'s `launchNextCast`: dispatch check), `:5252-5262` (main route, `runChapter`, after `awaitPhase1Dispatch`: dispatch check), `:7341-7345` (subset route, Phase-1 chapter loop: dispatch check), `:6444-6450` (main route terminal handler — pass `job.reasoningOverflowChapter` to `classifyAnalysisFailure`, F7) and the subset route's equivalent terminal handler (re-locate by the same pattern) — P20 run stop and "stop new spend"
-- Modify: `server/src/routes/script-review.ts:40` (import), `:924` (capture variable), `:944-951` (catch), `:972-987` (terminal event) — P20 pass stop
+- Modify: `server/src/routes/script-review.ts:40` (import), `:924` (capture variable), `:944-951` (catch), `:972-986` (terminal event) — P20 pass stop
 - Modify: `server/src/routes/annotate-emotion.ts:19-20` (imports), `:243-259` (catch) — P20 pass stop
 - Modify: `server/src/routes/instruct-annotation.ts` (imports, beside its `DailyQuotaExhaustedError` import), `:242-258` (catch) — P20 pass stop
 - Modify: `server/src/analyzer/attribution-eval/review-run.ts:36` (import), `:118-136` (comment and terminal rethrow) — P20 eval stop
@@ -3274,7 +3274,7 @@ git commit -m "feat(server,openapi,frontend): bound Gemini's silence before an a
     - `server/src/analyzer/stage2-chunk.test.ts` (append after `:243`);
     - `server/src/analyzer/gemini.test.ts` (the `GeminiAnalyzer — output truncation (#528)` describe at `:746`);
     - `server/src/analyzer/attribution-eval/review-run.test.ts` (import `:26`; a new case after `(e)`, `:222-244`);
-    - `server/src/routes/analysis.phase-model.test.ts` (imports `:13`, `:19`; new `describe`s at the end);
+    - `server/src/routes/analysis.phase-model.test.ts` (imports `:14`, `:20`; new `describe`s at the end);
     - `server/src/routes/script-review.test.ts` (a new case after `:411`);
     - `server/src/routes/annotate-emotion.test.ts` and `server/src/routes/instruct-annotation.test.ts` (a new case after each quota case, `:224-240` and `:269-285`);
     - `server/src/routes/failure-taxonomy.test.ts`;
@@ -3312,12 +3312,12 @@ The overflow error is not an `AnalyzerTruncatedError`, so both chunkers rethrow 
 **Run stop (P20 — approved by the owner 2026-09-13: stop new spend, with a loud, actionable warning; see F7 and Task 2.9a).** A reasoning overflow is not a size problem. The same engine settings overflow again on the next chapter, and each attempt spends a full output budget on thinking — on `gemini-3.6-flash`, one of its 20 requests a day. The fix is a setting change, so the failure stops new spend — new chapters, escalation windows and non-story classification calls — and its copy names the engine's max-output and reasoning settings, with structured fixes (Task 2.9a) pointing at exactly which one to raise. **Alternative (not chosen):** skip the overflowing chapter and continue, which keeps chapters that fit but can spend a full thinking budget on each chapter that does not. This task is written to the recommendation:
 - **Phase 0 (stage 1), main route.** The per-chapter catch rethrows `GeminiContentBlockedError` (`routes/analysis.ts:4550`) instead of recording a chapter failure. It rethrows `AnalyzerReasoningOverflowError` too, marking the job first (below).
 - **Phase 0 (stage 1), subset (Retry) route.** The same, at `routes/analysis.ts:7149`.
-- **Phase 1 (stage 2)** needs no new catch. `runPhase1Pool`'s pool catch marks the job on an overflow and rethrows the first chapter error, as today (`routes/analysis.ts:5680-5691`), to the job's terminal handler, which classifies it with `classifyAnalysisFailure` and ends the job with that code and copy (`:6444-6450`). The subset route's Phase-1 loop (around `:7215`) has no catch either. A test pins that a stage-2 overflow ends the run.
+- **Phase 1 (stage 2)** needs no new catch. `runPhase1Pool`'s pool catch marks the job on an overflow and rethrows the first chapter error, as today (`routes/analysis.ts:5684-5695`), to the job's terminal handler, which classifies it with `classifyAnalysisFailure` and ends the job with that code and copy (`:6448-6454`). The subset route's Phase-1 loop (around `:7413`) has no catch either. A test pins that a stage-2 overflow ends the run.
 - **Chapters already in flight finish.** The job is not aborted. Both pools stop launching once a worker throws (`:4727-4738`, `:5680-5691`), and chapters already calling the model finish and write to the cache, so a resume picks up where the run stopped (`:5672-5675`). That includes another phase's model in pipelined mode (`:5700-5708`). Aborting them would discard work a resume must redo. `endJob` aborts nothing (`:3063`), and neither terminal catch changes. Step 1's route test pins that the job's `halted` snapshot and its code survive the late completion (N4).
 - **No new spend after the overflow.** A per-job flag stops the calls those in-flight chapters, and the rest of the job, would otherwise still start:
   - **Home:** `AnalysisJob.reasoningOverflowed?: boolean` (`:2627-2663`). It is optional, so every existing job literal still compiles. The gates and the tests read this one field.
   - **Set** by `noteReasoningOverflow(job, structureBudget, err)` where the overflow is first rethrown: the main and subset Phase-0 per-chapter catches (`:4550`, `:7149`) and the main Phase-1 pool catch (`:5685-5689`). The subset route's Phase 1 attributes one chapter at a time (`:7341`) with nothing else in flight, so its rethrow needs no mark. Both routes also call it from `StageCall.onReasoningOverflow` on their Phase-1 `StageCall`, so an escalation overflow that the runner swallows marks the job too (below).
-  - **Escalation windows** (up to 120 per chapter and 600 per book, `registry.ts:1335-1362`). The same call empties the book's escalation budget (`structureBudget.remainingWindows = 0`). Every chapter's `attributeChapterStage2` call shares that object (`:3692`, `:5462`; subset `:6805`, `:7361`), and `escalateFlaggedWindows` checks it before each window (`escalation.ts:235`). A chapter still in flight therefore starts no further window, with no change to `escalation.ts`.
+  - **Escalation windows** (up to 120 per chapter and 600 per book, `registry.ts:1325-1352`). The same call empties the book's escalation budget (`structureBudget.remainingWindows = 0`). Every chapter's `attributeChapterStage2` call shares that object (`:3695`, `:5466`; subset `:6855`, `:7411`), and `escalateFlaggedWindows` checks it before each window (`escalation.ts:235`). A chapter still in flight therefore starts no further window, with no change to `escalation.ts`.
   - **Non-story classification** (the swallowing catch at `:5831-5833`). `buildNonStoryClassifier` replaces the two inline classifiers (`:5814-5836`, `:7540-7566`). It returns `false` without a call once the job is marked. When a classification call itself overflows, it marks the job and reads as story, as today's catch does for any Signal-2 hiccup.
   - **New chapters.** An overflow a stage call rethrows stops them through the pool rethrows above, as for a content block. A mark with no rethrow does not: an escalation overflow the runner swallowed marks the job through the hook (below), but the pools stop only on a thrown error, so later chapters would still make stage-2 calls. Every chapter dispatch point that can run after such a mark therefore calls `throwIfReasoningOverflowed(job)` first. On a marked job it rethrows the recorded overflow (`job.reasoningOverflowError`), which ends the run through the same terminal handler a rethrown overflow reaches: code `analyzer-reasoning-overflow`, and a `halted` snapshot. The dispatch points:
     - **Main route, Phase 0:** `runPhase0Pool`'s `launchNextCast`, before each `runCastChapter(i)`. It is reachable only in pipelined mode, where Phase 1 escalates while Phase 0 is still dispatching.
@@ -3325,12 +3325,12 @@ The overflow error is not an `AnalyzerTruncatedError`, so both chunkers rethrow 
     - **Subset route, Phase 1:** the top of the Phase-1 `for (let idx = 0; idx < toRun.length; idx++)` loop.
 
     The subset route's Phase-0 loop needs no check: it ends before the subset's first escalation call, and its own catch rethrows a stage-1 overflow. Chapters already dispatched are unaffected: they finish and cache.
-- **Script review.** `routes/script-review.ts:924-987` captures a content block, stops the pass and sends one terminal `error` event. It does the same for an overflow, with code `analyzer-reasoning-overflow`. Its chunks run one at a time, and it already breaks out on `job.controller.signal.aborted` (`:936`).
+- **Script review.** `routes/script-review.ts:924-986` captures a content block, stops the pass and sends one terminal `error` event. It does the same for an overflow, with code `analyzer-reasoning-overflow`. Its chunks run one at a time, and it already breaks out on `job.controller.signal.aborted` (`:936`).
 - **Emotion and instruct passes.** Each catches per chapter and stops the whole pass on a daily quota (`annotate-emotion.ts:243-259`, `instruct-annotation.ts:242-258`). An overflow takes the same exit, with one terminal `error` event coded `analyzer-reasoning-overflow`. Both run one chapter and one request at a time, so nothing else is in flight.
 - **Attribution eval.** `runReviewOverChapter` rethrows abort, quota and content block instead of dropping the chunk (`attribution-eval/review-run.ts:130-136`). It rethrows an overflow too.
 - **Escalation still returns `null`, and now reports the overflow.** `StageRunner.runSingleAttempt` (wave 1 Task 1.11) returns `null` for every error its policy does not rethrow, and `GEMINI_RETRY_POLICY.escalationRethrows` stays abort-only, so an overflow from that one bounded call skips its window.
   - **The hook.** The runner swallows the error, so before returning `null` it calls a new optional hook, `StageCall.onReasoningOverflow`. The hook is added to `types.ts` in this task, not in wave 1: wave 1 has no overflow class and must stay behaviour-preserving.
-  - **The wiring.** Both routes set the hook on the Phase-1 `StageCall` that `attributeChapterStage2` hands to `escalateFlaggedWindows` (`:2382`): the main route's `stage2Call` (`:5275`) and the subset route's inline `stageCall` (`:7224`). The hook calls `noteReasoningOverflow(job, structureBudget, err)`. The emptied book budget then stops the chapter's remaining windows, and any other in-flight chapter's (`escalation.ts:235`), with no change to `escalation.ts`. The dispatch check (**New chapters**, above) starts no later chapter, so no later stage-2 call is sent either. The `cloud` escalation analyzer gets the same `StageCall`, and `FallbackAnalyzer.runAttributionEscalation` (`index.ts:372-386`) forwards it unchanged.
+  - **The wiring.** Both routes set the hook on the Phase-1 `StageCall` that `attributeChapterStage2` hands to `escalateFlaggedWindows` (`:2377`): the main route's `stage2Call` (`:5365`) and the subset route's inline `stageCall` (`:7413`). The hook calls `noteReasoningOverflow(job, structureBudget, err)`. The emptied book budget then stops the chapter's remaining windows, and any other in-flight chapter's (`escalation.ts:235`), with no change to `escalation.ts`. The dispatch check (**New chapters**, above) starts no later chapter, so no later stage-2 call is sent either. The `cloud` escalation analyzer gets the same `StageCall`, and `FallbackAnalyzer.runAttributionEscalation` (`index.ts:371-385`) forwards it unchanged.
   - **The tests.** `stage-runner.test.ts` pins the runner half. `escalation.test.ts` pins the runner and the window loop together. `analysis.reasoning-overflow.test.ts` pins the wiring on both routes, and the three dispatch checks: after one escalation overflow, no later chapter is started and the run halts with the overflow code.
   - **Not covered.** The attribution eval builds its own `StageCall` with no job (`attribution-eval/run-eval.ts:175`), so it passes no hook.
 - **Timeouts are unchanged.** `AnalyzerTimeoutError` (Task 2.8), including a thinking-window timeout, keeps today's asymmetry, which this task does not touch: Phase 0's per-chapter catch records it as a failed chapter and the run continues (ending `cast_incomplete`), while Phase 1 rethrows it and the run ends with `analyzer-timeout`.
@@ -3339,12 +3339,12 @@ The two rethrown Phase-0 errors reach the same terminal handler, so the run ends
 
 The taxonomy's `fatal` flag plays no part in this. Analysis never reads it: the routes use `classifyAnalysisFailure`'s code and copy only. The flag's one reader is generation (`generation-error.ts:34` hands it to `recordNonFatal`, read at `generation.ts:2179-2184`), and generation's `classifyFailure` never matches a `source: 'analysis'` row.
 
-**Ollama ordering — a deliberate change.** On 46e62a34 Ollama checks for an empty buffer before `done_reason` (`ollama.ts:829` throws `Ollama <model> returned an empty response.`; the `length` check is at `:838`), so an empty `done_reason: 'length'` stream fails as a generic empty response and never splits. Wave 1 preserved that order inside `mapFinish` (Task 1.7), while `OllamaTransport` already reports `finish: 'length'` for an empty `length` stream (Task 1.8). This task moves the `'length'` rule ahead of the empty check for every transport, so the table above applies to Ollama uniformly:
+**Ollama ordering — a deliberate change.** At `80be2f1d` Ollama checks for an empty buffer before `done_reason` (`ollama.ts:830` throws `Ollama <model> returned an empty response.`; the `length` check is at `:839`), so an empty `done_reason: 'length'` stream fails as a generic empty response and never splits. Wave 1 preserved that order inside `mapFinish` (Task 1.7), while `OllamaTransport` already reports `finish: 'length'` for an empty `length` stream (Task 1.8). This task moves the `'length'` rule ahead of the empty check for every transport, so the table above applies to Ollama uniformly:
 - empty `length`, no evidence → `AnalyzerTruncatedError` (0 bytes; the chunk splits);
 - empty `length` after non-empty `message.thinking` chunks → `AnalyzerReasoningOverflowError` (`OllamaTransport` now sets `reasoningSeen` from `message.thinking`);
 - empty `stop` → still today's `Ollama <model> returned an empty response.`
 
-**Ollama copy names `num_ctx` (P6).** On Ollama the binding limit is the context window, not `num_predict`: `analyzer.ollama.numPredict` defaults to `-1`, "predict until the context window fills" (`resolveNumPredict`, `ollama-settings.ts`; `ollama.ts:283-294` on 46e62a34). So the Ollama overflow copy below tells the user to raise `'Ollama num_ctx'` (`ANALYZER_NUM_CTX`, the knob's label at `registry.ts:956`) and never mentions `num_predict`. The existing `analyzer-truncated` copy (`failure-remediations.ts:94-101`, `failure-taxonomy.ts:526-534`) names `STAGE2_CHUNK_CHAR_BUDGET`, not `num_predict`, and this task leaves it unchanged.
+**Ollama copy names `num_ctx` (P6).** On Ollama the binding limit is the context window, not `num_predict`: `analyzer.ollama.numPredict` defaults to `-1`, "predict until the context window fills" (`resolveNumPredict`, `ollama-settings.ts`; `ollama.ts:284-295` at `80be2f1d`). So the Ollama overflow copy below tells the user to raise `'Ollama num_ctx'` (`ANALYZER_NUM_CTX`, the knob's label at `registry.ts:956`) and never mentions `num_predict`. The existing `analyzer-truncated` copy (`failure-remediations.ts:94-101`, `failure-taxonomy.ts:526-534`) names `STAGE2_CHUNK_CHAR_BUDGET`, not `num_predict`, and this task leaves it unchanged.
 
 Help counts: Task 2.8 moved them to 24 / 50, so this task takes them to 25 / 51.
 
@@ -3439,8 +3439,8 @@ describe('hasReasoningEvidence', () => {
 
 `server/src/analyzer/transports/ollama-transport-overflow.test.ts` (real `http.createServer` + real undici `Agent`, per Global Constraints; every case returns before the VRAM sample and GPU-split detection, so the server only ever sees `/api/chat`):
 ```ts
-/* #3084 wave 2b — Ollama's empty `length` stream (spec §7). On 46e62a34 an
-   empty buffer was checked before done_reason (ollama.ts:829 vs :838), so an
+/* #3084 wave 2b — Ollama's empty `length` stream (spec §7). At 80be2f1d an
+   empty buffer was checked before done_reason (ollama.ts:830 vs :839), so an
    empty `length` finish failed as "returned an empty response". The overflow
    rule now applies uniformly: OllamaTransport reports finish 'length' (and
    reasoningSeen from message.thinking) and mapFinish decides. */
@@ -3718,7 +3718,7 @@ describe('AnalyzerReasoningOverflowError (#3084 wave 2b)', () => {
 ```
 - **Help counts.** In `src/data/help-failures.test.ts:13` change `.toBe(24)` to `.toBe(25)`, and in `src/data/help-categories.test.ts:24` change `.toBe(50)` to `.toBe(51)` (Task 2.8 moved them from 23 / 49).
 
-Append to `server/src/routes/analysis.phase-model.test.ts`. Change its `./analysis.js` import (`:13`) to `import { buildNonStoryClassifier, noteReasoningOverflow, runMainAnalyzerJob, runSubsetAnalyzerJob, type AnalysisJob } from './analysis.js';`, and its `../analyzer/errors.js` import (`:19`) to `import { AnalysisAbortedError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../analyzer/errors.js';` (`AnalysisAbortedError` lives in `errors.ts` since wave 1 Task 1.4).
+Append to `server/src/routes/analysis.phase-model.test.ts`. Change its `./analysis.js` import (`:14`) to `import { buildNonStoryClassifier, noteReasoningOverflow, runMainAnalyzerJob, runSubsetAnalyzerJob, type AnalysisJob } from './analysis.js';`, and its `../analyzer/errors.js` import (`:20`) to `import { AnalysisAbortedError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../analyzer/errors.js';` (`AnalysisAbortedError` lives in `errors.ts` since wave 1 Task 1.4).
 ```ts
 /* ── Suite: a reasoning overflow ends the run (#3084 P20) ─────────────── */
 
@@ -3818,7 +3818,7 @@ describe('a reasoning overflow ends the analysis run (#3084 P20)', () => {
     const manuscriptId = `test-overflow-subset-${Date.now()}`;
     registerStubManuscript(manuscriptId, 2);
     /* No cached stage 1, so the subset route runs Phase 0 (cast detection)
-       through its own per-chapter catch (routes/analysis.ts:7144-7155). */
+       through its own per-chapter catch (routes/analysis.ts:7194-7205). */
     await clearAnalysisCache(manuscriptId);
     const job = { ...buildStubJob(manuscriptId), kind: 'subset', subsetChapterIds: [1, 2] } as unknown as AnalysisJob;
     const events = attachEventCapture(job);
@@ -3969,7 +3969,7 @@ describe('buildNonStoryClassifier — no non-story call after a reasoning overfl
 });
 ```
 
-Create `server/src/routes/analysis.reasoning-overflow.test.ts`. It needs a real workspace book: `endJob` persists the terminal snapshot only through a verified book directory (`persistTerminalSnapshot`, `analysis.ts:2875`), so `analysis.phase-model.test.ts`'s `bookDir: null` stub cannot show it. The harness follows `analysis.rename-midrun.test.ts:14-296`.
+Create `server/src/routes/analysis.reasoning-overflow.test.ts`. It needs a real workspace book: `endJob` persists the terminal snapshot only through a verified book directory (`persistTerminalSnapshot`, `analysis.ts:2870`), so `analysis.phase-model.test.ts`'s `bookDir: null` stub cannot show it. The harness follows `analysis.rename-midrun.test.ts:14-296`.
 ```ts
 /* #3084 wave 2b, P20 — "stop new spend" after a reasoning overflow, driven
    through runMainAnalyzerJob against a real workspace book (the harness of
@@ -4047,7 +4047,7 @@ function restoreEnv(name: string, value: string | undefined): void {
 beforeAll(() => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-overflow-spend-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
-  /* Both pools size from analyzerPoolWidth() (analysis.ts:1282-1285): 2 puts
+  /* Both pools size from analyzerPoolWidth() (analysis.ts:1277-1280): 2 puts
      both chapters in flight at once. */
   process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
   process.env.STAGE2_COVERAGE_RETRIES = '0';
@@ -4301,11 +4301,11 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
   }, 30_000);
 
   it('a direct stage-2 overflow on the subset (Retry) route names its chapter — no catch existed for this before (#3084 F7)', async () => {
-    /* #3084 F7 — runSubsetAnalyzerJob's real signature at 46e62a34
-       (analysis.ts:6746-6752): (job, record, selection, phase1Selection,
+    /* #3084 F7 — runSubsetAnalyzerJob's real signature at 80be2f1d
+       (analysis.ts:6796-6802): (job, record, selection, phase1Selection,
        toRun, allowStage1ShrinkSubset). Unlike runMainAnalyzerJob, it takes
        phase1Selection as a direct parameter (phase1Analyzer =
-       phase1Selection.analyzer at :6799), so the stub goes there — no
+       phase1Selection.analyzer at :6849), so the stub goes there — no
        __overflow_spend_test_phase1_selection global hook needed here; that
        hook exists only for the main-route tests above, whose
        runMainAnalyzerJob resolves phase 1's selection internally. */
@@ -4886,8 +4886,8 @@ export function hasReasoningEvidence(r: TransportResult): boolean {
 export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model: string }): string {
   if (r.finish === 'blocked') throw new GeminiContentBlockedError(ctx.model, r.blockReason);
   /* #3084 wave 2 — the 'length' rule runs FIRST for every transport (spec §7).
-     Wave 1 kept Ollama's pre-extraction order (empty check first; ollama.ts:829
-     vs :838 on 46e62a34), which made an empty `length` stream the generic
+     Wave 1 kept Ollama's pre-extraction order (empty check first; ollama.ts:830
+     vs :839 at `80be2f1d`), which made an empty `length` stream the generic
      empty-response error instead of a split or a reasoning overflow. */
   if (r.finish === 'length') {
     const answer = stripThink(r.text);
@@ -4901,7 +4901,7 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
 }
 ```
 
-`server/src/analyzer/transports/ollama-transport.ts` — edits to wave 1 Task 1.8's moved `chat()` body. The source anchors are the moved lines' positions in `ollama.ts` on 46e62a34; locate each by its text.
+`server/src/analyzer/transports/ollama-transport.ts` — edits to wave 1 Task 1.8's moved `chat()` body. The source anchors are the moved lines' positions in `ollama.ts` at `80be2f1d`; locate each by its text.
 - **Evidence flag.** After `let buf = ''; // assembled assistant content` (`:724`), add:
 ```ts
       /* #3084 wave 2 — reasoning evidence for mapFinish: any non-empty
@@ -5024,7 +5024,7 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
 ```ts
 /** #3084 P20/F7 — "stop new spend". Marks the job and empties the book's
     escalation budget: the object every chapter's attributeChapterStage2 call
-    shares (:3692, :6805), which escalateFlaggedWindows checks before each
+    shares (:3695, :6855), which escalateFlaggedWindows checks before each
     window (escalation.ts:235), so no chapter still in flight starts another
     window. Nothing is aborted: in-flight chapters finish and cache for resume,
     as the pools are designed to (:5672-5675). `chapter` records WHICH chapter
@@ -5157,7 +5157,7 @@ with
             } catch (e) {
 ```
     The unchanged `catch` sets `castAborted` and rethrows, as for any error escaping `runCastChapter`.
-  - **Main route, Phase 1.** In `runChapter` (`:5155`), directly after `if (phase0FailedCount > 0) return;` (`:5175`), add:
+  - **Main route, Phase 1.** In `runChapter` (`:5245`), directly after `await watermark.awaitPhase1Dispatch(i);` (`:5257`) and `if (phase0FailedCount > 0) return;` (`:5265`), add:
 ```ts
       /* #3084 P20 — checked here, after the watermark, rather than at the top of
          launchNext's loop: in pipelined mode a worker can be parked on
@@ -5165,15 +5165,15 @@ with
          `aborted` and rethrows. */
       throwIfReasoningOverflowed(job);
 ```
-  - **Subset route, Phase 1.** As the first statement of the Phase-1 loop body (`:7341`), directly above `const ch = toRun[idx];` in the loop whose next statement is `log(1, \`Chapter ${ch.id} — ${ch.title}: attributing sentences via ${phase1AnalyzerLabel}…\`);` (the Phase-0 loop at `:6878` opens the same way), add:
+  - **Subset route, Phase 1.** As the first statement of the Phase-1 loop body (`:7391`), directly above `const ch = toRun[idx];` in the loop whose next statement is `log(1, \`Chapter ${ch.id} — ${ch.title}: attributing sentences via ${phase1AnalyzerLabel}…\`);` (the Phase-0 loop at `:7067` opens the same way), add:
 ```ts
       /* #3084 P20 — no further chapter after an escalation overflow; the throw
          reaches this job's terminal catch, as a rethrown overflow does. */
       throwIfReasoningOverflowed(job);
 ```
   - **Subset route, Phase 1 — the direct stage-2 call has no catch (F7 finding).**
-    Re-reading `analysis.ts:7341-7365` on 46e62a34: the loop's
-    `attributeChapterStage2WithEval({ … })` call (`:7350` on) is awaited with
+    Re-reading `analysis.ts:7391-7415` at `80be2f1d`: the loop's
+    `attributeChapterStage2WithEval({ … })` call (`:7404` on) is awaited with
     NO surrounding `try`/`catch` at all — unlike the main route's `runChapter`,
     the subset route relies entirely on this call propagating to the route's
     own outer catch. That means a DIRECT stage-2 overflow (not one only an
@@ -5214,7 +5214,7 @@ with
     Converting the original `const { … } = await …` into pre-declared `let`s
     assigned inside the `try` is the minimal change that lets a `catch` wrap
     it; keep every existing option in the `attributeChapterStage2WithEval({…})`
-    call literal exactly as `:7350` on 46e62a34 already has it — only the
+    call literal exactly as `:7413` at `80be2f1d` already has it — only the
     destructuring assignment's shape changes, not the call's arguments. Test:
     a Retry-route (`/analysis/chapters`) stage-2 call that throws
     `AnalyzerReasoningOverflowError` directly (not via escalation) ends the
@@ -5244,8 +5244,8 @@ with
       bookLanguage,
     });
 ```
-- **No terminal-catch ABORT change.** Neither terminal catch (main `:6308-6365`, subset `:7867-7912`) aborts the job's controller or changes that behaviour. The subset route's Phase 1 attributes one chapter at a time (`:7341`) with nothing else in flight, and both routes' non-story pass runs after Phase 1. So the three marks above plus the builder cover every overflow that has other model calls behind it.
-- **Terminal handler passes the chapter through (F7).** The main route's terminal handler (`:6444-6450`) destructures `classifyAnalysisFailure`'s result and calls `endJob`:
+- **No terminal-catch ABORT change.** Neither terminal catch (main `} catch (e) {` `:6398`, subset `:8056`) aborts the job's controller or changes that behaviour. The subset route's Phase 1 attributes one chapter at a time (`:7391`) with nothing else in flight, and both routes' non-story pass runs after Phase 1. So the three marks above plus the builder cover every overflow that has other model calls behind it.
+- **Terminal handler passes the chapter through (F7).** The main route's terminal handler (destructure `:6448-6454`, `endJob` `:6454`) destructures `classifyAnalysisFailure`'s result and calls `endJob` (subset: destructure/`endJob` at `:8100`):
 ```ts
     const {
       code,
@@ -5319,7 +5319,7 @@ with
 
 `server/src/analyzer/types.ts` (wave 1 Task 1.5's leaf):
 - **Import.** After the `import type { RawEvalTiming } …` line, add `import type { AnalyzerReasoningOverflowError } from './errors.js';`. `errors.ts` imports nothing, so this type edge closes no cycle; `npm run check:cycles` confirms it.
-- **Field.** In `export interface StageCall`, directly after `onFallback?: (info: { reason: string }) => void;` (`index.ts:84` on 46e62a34), add:
+- **Field.** In `export interface StageCall`, directly after `onFallback?: (info: { reason: string }) => void;` (`index.ts:83` at `80be2f1d`), add:
 ```ts
   /** #3084 P20 — called by StageRunner.runSingleAttempt (attribution
       escalation) when its one call ends in a reasoning overflow, just before it
@@ -5342,10 +5342,10 @@ with
   The `console.warn` and `return null;` that follow do not change. `runStage`, `structuredOutput` and `send` are not touched.
 
 `server/src/routes/analysis.ts`:
-- **Main route, Phase-1 `stage2Call`.** Inside `const stage2Call: StageCall = {` (`:5275`), directly after `language: bookLanguage,` (`:5277`), add:
+- **Main route, Phase-1 `stage2Call`.** Inside `const stage2Call: StageCall = {` (`:5365`), directly after `language: bookLanguage,` (`:5367`), add:
 ```ts
         /* #3084 P20/F7 — attributeChapterStage2 hands this StageCall to
-           escalateFlaggedWindows (:2382). An escalation call that overflows
+           escalateFlaggedWindows (:2377). An escalation call that overflows
            returns null inside the runner and reports here: the job is marked and
            the book's escalation budget emptied, so neither this chapter nor any
            other sends a further window (escalation.ts:235). `ch` is in scope
@@ -5353,7 +5353,7 @@ with
            other fields). */
         onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }),
 ```
-- **Subset route, Phase-1 inline `stageCall`.** Inside the `stageCall: {` literal passed to `attributeChapterStage2WithEval` (`:7224`), directly after `language: bookLanguage,` (`:7226`), add:
+- **Subset route, Phase-1 inline `stageCall`.** Inside the `stageCall: {` literal passed to `attributeChapterStage2WithEval` (`:7413`), directly after `language: bookLanguage,` (`:7415`), add:
 ```ts
             /* #3084 P20/F7 — escalation overflow hook; see the main route's
                stage2Call. `ch` is in scope (`const ch = toRun[idx];`, the
@@ -5361,8 +5361,8 @@ with
                above adds throwIfReasoningOverflowed(job) to). */
             onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }),
 ```
-  `job` and `structureBudget` (`:3692`, `:6805`) are in scope at both sites, as they are at the pool catch above.
-  - **Every escalation call gets the hook.** The `cloud` escalation analyzer receives the same `stageCall` (`:2382`). `withPassEval` only reassigns `onEvalTiming` on that object (`analyzer-eval-stats.ts:193`). The `stage2CallSeq` spread (`:2303`) copies the hook too, though no stage-2 call reads it.
+  `job` and `structureBudget` (`:3695`, `:6855`) are in scope at both sites, as they are at the pool catch above.
+  - **Every escalation call gets the hook.** The `cloud` escalation analyzer receives the same `stageCall` (`:2377`). `withPassEval` only reassigns `onEvalTiming` on that object (`analyzer-eval-stats.ts:193`). The `stage2CallSeq` spread (`:2298`) copies the hook too, though no stage-2 call reads it.
   - **The return type fits.** `noteReasoningOverflow` returns a `boolean`, and a function returning a value is assignable to the hook's `void` return type.
 - [ ] **Step 4: Run and confirm it passes**
 Run:
@@ -5496,12 +5496,12 @@ addition to the same ctx type, not this task's.
 **Files:**
 - Modify: `server/src/routes/failure-taxonomy.ts` — add `AnalysisFailureFix` (interface, below) and `reasoningOverflowFixes(ctx)` near `withCopy`; extend the `AnalyzerReasoningOverflowError` branch's `return` (Task 2.9's edit) to attach `fixes` (below) — do not touch its `userMessage`/`chapter` logic, and do not touch `failure-remediations.ts`'s static entry (Task 2.9's "Then resume" ending stays put, unedited here).
 - Create: `server/src/routes/failure-taxonomy-fixes.test.ts` — the guard (test-only; no matching source file)
-- Modify: `server/src/routes/analysis.ts` — the two terminal handlers' destructure of `classifyAnalysisFailure`'s result gains `fixes` and the `endJob`/`send` call passes it through to the SSE `error` event. **`fixes` does NOT reach the `#3004` last-outcome record** (per review: nothing on the frontend reads the rejoin event's `priorOutcome` today — no consumer exists at 46e62a34 — so writing `fixes` there would be dead data with no reader; `endJob`'s last-outcome write and `buildRejoinMissEvent` are untouched by this task).
-- Modify: `src/store/analysis-slice.ts` (46e62a34 `:173-181`) — `ActiveStreamSnapshot` gains `haltFixes?: AnalysisFailureFix[]`; `setHalted`'s payload type gains `fixes?: AnalysisFailureFix[]`, and the reducer sets `snap.haltFixes = action.payload.fixes;` alongside the existing `haltCode`/`haltReason` assignments — **not** a new field on a different record; this is the SAME halted-run state a user who navigates away and back in the same session (not a rejoin after the server restarts) sees rendered by the Analysing view.
-- Modify: `openapi.yaml` — add `AnalysisFailureFix` schema (`wikiPage` not `wikiHref`, below) and a `fixes` array property on the analysis SSE error shape. **Finding, unchanged from the prior draft:** the analysis SSE stream's `error` event is NOT modelled in `openapi.yaml` today — `AnalysePhaseEvent` and `AnalyseWarningEvent` are the only two members of the `text/event-stream` `oneOf` at `/api/manuscripts/{manuscriptId}/analysis` (`:545-563`) and `/analysis/chapters` (`:578-611`); the real wire shape lives only in `src/lib/api.ts`'s local `AnalysisStreamEvent` interface. Add a new `AnalyseErrorEvent` schema (`kind`, `code`, `message`, `remediation`, `detail`, `fixes`) and append it to both `oneOf` lists.
+- Modify: `server/src/routes/analysis.ts` — the two terminal handlers' destructure of `classifyAnalysisFailure`'s result gains `fixes` and the `endJob`/`send` call passes it through to the SSE `error` event. **`fixes` does NOT reach the `#3004` last-outcome record** (per review: nothing on the frontend reads the rejoin event's `priorOutcome` today — no consumer exists at `80be2f1d` — so writing `fixes` there would be dead data with no reader; `endJob`'s last-outcome write and `buildRejoinMissEvent` are untouched by this task).
+- Modify: `src/store/analysis-slice.ts` (`80be2f1d` `:191-199`) — `AnalysisStreamSnapshot` gains `haltFixes?: AnalysisFailureFix[]`; `setHalted`'s payload type gains `fixes?: AnalysisFailureFix[]`, and the reducer sets `snap.haltFixes = action.payload.fixes;` alongside the existing `haltCode`/`haltReason` assignments — **not** a new field on a different record; this is the SAME halted-run state a user who navigates away and back in the same session (not a rejoin after the server restarts) sees rendered by the Analysing view.
+- Modify: `openapi.yaml` — add `AnalysisFailureFix` schema (`wikiPage` not `wikiHref`, below) and a `fixes` array property on the analysis SSE error shape. **Finding, unchanged from the prior draft:** the analysis SSE stream's `error` event is NOT modelled in `openapi.yaml` today — `AnalysePhaseEvent` and `AnalyseWarningEvent` are the only two members of the `text/event-stream` `oneOf` at `/api/manuscripts/{manuscriptId}/analysis` (`:545-586`, `oneOf` at `:585-586`) and `/analysis/chapters` (`:600-646`, `oneOf` at `:645-646`); the real wire shape lives only in `src/lib/api.ts`'s local `AnalysisStreamEvent` interface. Add a new `AnalyseErrorEvent` schema (`kind`, `code`, `message`, `remediation`, `detail`, `fixes`) and append it to both `oneOf` lists.
 - Modify: `src/lib/api-types.ts` (regenerate via `npm run openapi:types`); note for mocks: mock mode (`VITE_USE_MOCKS`) never calls a real analyzer, so it cannot organically emit `analyzer-reasoning-overflow` — the Playwright e2e task below (Step 8) hand-authors a mock SSE fixture that does, rather than trying to make the ordinary mock manuscript flow produce this failure.
-- Modify: `src/lib/api.ts` — `AnalysisStreamEvent` (add `fixes?: AnalysisFailureFix[]`), `AnalysisError` (add `fixes` field + constructor param, carried from `payload.fixes` at BOTH terminal-error throw sites — the main route's and the subset route's, confirmed at `:2997-3005` and `:5714-5721` on the current checkout).
-- **CRITICAL — the persistent notification lives in the middleware, not the view (review finding).** `src/store/analysis-stream-middleware.ts:220-230` on `46e62a34` (`git show 46e62a34:src/store/analysis-stream-middleware.ts`; the generic `if (e instanceof AnalysisError) { … }` branch, its `dispatch(setHalted)`/`dispatch(pushToast)` payload lines at `:221-228`, matching the review's own citation) is the stream that survives navigation — `analysing.tsx`'s OWN stream aborts on unmount (`:662-668` on the current checkout, `controller.abort()` in the effect cleanup), so a toast pushed from the view disappears the moment the user navigates away, defeating "survives navigation" outright. **Pin drift, noted once:** on the current checkout this same branch sits at `:267-277` — a `language_unset` special case (current `:223-245`ish) was added ahead of it after `46e62a34`, shifting every line below. Re-locate by the `if (e instanceof AnalysisError) {` text, not either line number, when implementing. Modify this branch:
+- Modify: `src/lib/api.ts` — `AnalysisStreamEvent` (add `fixes?: AnalysisFailureFix[]`), `AnalysisError` (add `fixes` field + constructor param, carried from `payload.fixes` at BOTH terminal-error throw sites — the main route's and the subset route's, confirmed at `:3016-3024` and `:5738-5745` at `80be2f1d`; the `AnalysisError` ctor itself is at `:2834-2862` with 6 positional params today — the added `fixes` is an optional 7th, so every existing call site stays compatible).
+- **CRITICAL — the persistent notification lives in the middleware, not the view (review finding).** `src/store/analysis-stream-middleware.ts:267-277` at `80be2f1d` (the generic `if (e instanceof AnalysisError) { … }` branch, its `dispatch(setHalted)`/`dispatch(pushToast)` payload lines at `:268-275`) is the stream that survives navigation — `analysing.tsx`'s OWN stream aborts on unmount (`:707-713` on the current checkout, `controller.abort()` in the effect cleanup), so a toast pushed from the view disappears the moment the user navigates away, defeating "survives navigation" outright. The `language_unset` branch above it (`:223-245`) already existed at the wave-2 draft's original pin — it is not what shifted this branch. What did: #3198 added reopen-dampening state (`:72-78`, plus the dampen check in `openHandle` at `:103-111`) and an earlier early-return, `if (e instanceof AnalysisError && e.code === ANALYSIS_STREAM_NO_RESULT) { closeHandle(); return; }` (`:263-266`). An overflow still reaches the target branch, and `dedupeKey: 'analysis-stream'` holds throughout (`language_unset`'s own toast at `:230`, this branch's at `:273`, the generic transport-failure fallback's at `:302`, which now dispatches `code: ANALYSIS_STREAM_FAILED` per `:289-296`). Re-locate by the `if (e instanceof AnalysisError) {` text, not the line number, when implementing. Modify this branch:
   ```ts
   if (e instanceof AnalysisError) {
     dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message, fixes: e.fixes }));
@@ -5538,8 +5538,8 @@ addition to the same ctx type, not this task's.
 - Modify: `src/components/toast-stack.tsx:32-34` (route a `t.fixes` toast to a new component, mirroring the `t.nudge` → `VoiceNudgeToast` branch — check `t.fixes` before `t.nudge` since a future toast could carry both, though none does yet)
 - Create: `src/components/reasoning-overflow-toast.tsx` — no auto-dismiss timer (mirrors `VoiceNudgeToast`'s exemption from `ToastItem`'s 6 s timer), renders the "How to fix" list via `fixHref` + `wikiUrl`, a dismiss button
 - Create: `src/lib/failure-fixes.ts` — `fixHref(fix)`, the ONE place that turns a structured fix's `settingKey` into a link (or `null` for a label-only fix). 3d adds an `endpointField` branch and 5a a `reasoningSetting` branch to this same function; neither renderer changes.
-- Modify: `src/views/analysing.tsx` — `error` state type (add `fixes`), the catch block at `:648-660` on the current checkout (both `setHalted`'s payload AND `setError`'s object gain `fixes` from the caught `AnalysisError` — `const fixes = e instanceof AnalysisError ? e.fixes : undefined;`; the view's OWN `dispatch(analysisActions.setHalted({ manuscriptId, code, message, fixes }))` at `:648-654` must carry `fixes` too, so it agrees with the middleware's dispatch (both bullets above) rather than one of the two dispatchers silently omitting it), and the RUN-LEVEL "What to do:" block (`:1342-1344`) — see the next bullet for why the per-chapter block at `:1592-1594` is explicitly excluded. That run-level block ALSO renders `haltFixes` from the halted-run snapshot (`useAppSelector` on `activeStream.haltFixes`, guarded to the same manuscript) when `error` is null but the stream is halted — this is what lets a user who navigated away and back in the SAME session see the fixes without re-triggering the failure; a real cross-session rejoin does not carry them (see the last-outcome bullet above). **Add no new toast-pushing effect here (review correction).** `analysing.tsx` already pushes plain `kind: 'warn'` toasts of its own, unrelated to this task, at `:588` and `:893` on the current checkout (the `onWarning` handler's `cast_merge_base_stale` dedupe — untouched by this task). What this task drops is only the earlier draft's plan to ALSO add a `useEffect` dispatching the reasoning-overflow `pushToast` from this view; the middleware bullet above is the only place THAT toast is pushed. Do not add a second dispatch site for it here.
-- **Per-chapter block excluded (review finding).** `analysing.tsx:1592-1594` is inside `failedChapters.map((f) => …)` — one row PER FAILED CHAPTER, not the run-level failure block. Task 2.9's reasoning-overflow rule rethrows at every dispatch point instead of ever recording a `chapter-failed` entry (the whole point of "stop new spend" is that it is RUN-fatal, not per-chapter), so `f.code` is never `analyzer-reasoning-overflow` and this block never has `fixes` to render. Render the "How to fix" list ONLY in the run-level block (`:1342`-area); add a `error.fixes && error.fixes.length > 0` guard there and touch the per-chapter block not at all.
+- Modify: `src/views/analysing.tsx` — `error` state type (add `fixes`), the catch block at `:693-705` at `80be2f1d` (both `setHalted`'s payload AND `setError`'s object gain `fixes` from the caught `AnalysisError` — `const fixes = e instanceof AnalysisError ? e.fixes : undefined;`; the view's OWN `dispatch(analysisActions.setHalted({ manuscriptId, code, message, fixes }))` at `:692-697` must carry `fixes` too, so it agrees with the middleware's dispatch (both bullets above) rather than one of the two dispatchers silently omitting it), and the RUN-LEVEL "What to do:" block (`:1435-1437`) — see the next bullet for why the per-chapter block at `:1692-1694` is explicitly excluded. That run-level block ALSO renders `haltFixes` from the halted-run snapshot (`useAppSelector` on `activeStream.haltFixes`, guarded to the same manuscript) when `error` is null but the stream is halted — this is what lets a user who navigated away and back in the SAME session see the fixes without re-triggering the failure; a real cross-session rejoin does not carry them (see the last-outcome bullet above). **Add no new toast-pushing effect here (review correction).** `analysing.tsx` already pushes plain `kind: 'warn'` toasts of its own, unrelated to this task, at `:631` and `:945` at `80be2f1d` (the `onWarning` handler's `cast_merge_base_stale` dedupe — untouched by this task). What this task drops is only the earlier draft's plan to ALSO add a `useEffect` dispatching the reasoning-overflow `pushToast` from this view; the middleware bullet above is the only place THAT toast is pushed. Do not add a second dispatch site for it here.
+- **Per-chapter block excluded (review finding).** `analysing.tsx:1692-1694` is inside `failedChapters.map((f) => …)` — one row PER FAILED CHAPTER, not the run-level failure block. Task 2.9's reasoning-overflow rule rethrows at every dispatch point instead of ever recording a `chapter-failed` entry (the whole point of "stop new spend" is that it is RUN-fatal, not per-chapter), so `f.code` is never `analyzer-reasoning-overflow` and this block never has `fixes` to render. Render the "How to fix" list ONLY in the run-level block (`:1435`-area); add a `error.fixes && error.fixes.length > 0` guard there and touch the per-chapter block not at all.
 - Modify: `src/views/advanced.tsx` — read `focusKey` from the hydrated stage, scroll the matching row into view and highlight it, mirroring `help.tsx`'s existing `focusCode` pattern (`ref` + a `scrolledForRef` once-per-focus guard + optional-chained `scrollIntoView?.()`, `help.tsx:220-233`) rather than `document.getElementById`.
 - Modify: `docs/wiki/Analysis-and-the-Analyzer.md` — new section "When a model thinks past its output limit"
 - Modify: `src/lib/wiki-links.ts` — add `export function isWikiPage(value: string): value is WikiPage`, checking membership in the existing `WikiPage` union (a `Set` built from the same literals, not `Object.values` — the union is type-only, not a runtime object). `'Analysis-and-the-Analyzer'` is already in the union (`:18`, confirmed by reading the file) — this task adds no new page there, only the guard function. 3d adds the new endpoints page name when it creates `docs/wiki/OpenAI-Compatible-Analyzer-Endpoints.md`.
@@ -5804,7 +5804,7 @@ function AdvancedRoute() {
 }
 ```
 mirroring `HelpRoute` (`:491-495`) exactly. Test (`src/routes/index.test.tsx`)
-— 46e62a34 has ONLY `SetupRoute`/`AnalysingRoute`/`BooksRoute` describes with
+— `80be2f1d` has ONLY `SetupRoute`/`AnalysingRoute`/`BooksRoute` describes with
 `renderAtSetup`/`renderAtAnalysing` helpers and no `HelpRoute` case at all
 (confirmed by reading the file — do not cite a `HelpRoute` test as precedent,
 there isn't one), so this task adds the FIRST test for this pattern, modelled
@@ -5926,18 +5926,18 @@ an untyped `string` off the wire (server sends a plain string; see the
 Interfaces section above) — `isWikiPage` narrows it to the frontend's
 `WikiPage` union before `wikiUrl` ever sees it, so an unrecognised page
 renders the fix's `label` as plain text with no link at all, rather than a
-broken href. The per-chapter block (`:1592-1594`) is untouched — see the
+broken href. The per-chapter block (`:1692-1694`) is untouched — see the
 Files list bullet above for why it can never have `fixes` to render.
 `ReasoningOverflowToast` (below) imports `fixHref`/`wikiUrl`/`isWikiPage` the
 same way and renders the identical branch.
 
 Test (`src/views/analysing.test.tsx`). This file has NO run-level error-banner
-test to extend at 46e62a34 — the closest precedent is the `AnalysingView —
-stage1 shrink-refused banner` describe (`:1768-1846`), which pre-arms the
-module-level `analyseManuscriptRejection` variable (declared `:32`, read by
-the mocked `api.analyseManuscript` at `:49-50`, reset to `undefined` in
-`beforeEach` at `:84`) and awaits the async `renderViewWaitingForAnalysis()`
-helper (`:172-179`: renders via `renderView()` `:110-131`, clicks "Start
+test to extend at `80be2f1d` — the closest precedent is the `AnalysingView —
+stage1 shrink-refused banner` describe (`:1884-1962`), which pre-arms the
+module-level `analyseManuscriptRejection` variable (declared `:33`, read by
+the mocked `api.analyseManuscript` at `:50-51`, reset to `undefined` in
+`beforeEach` at `:87`) and awaits the async `renderViewWaitingForAnalysis()`
+helper (`:175-182`: renders via `renderView()` `:113-134`, clicks "Start
 analysis", awaits `capturedOpts` being set). Real names throughout — no
 placeholders:
 ```tsx
@@ -5997,7 +5997,7 @@ early with no matching `activeStream` — dispatching it bare, with no prior
 `activeStream`, is a silent no-op, not a working seed).** No existing helper
 in this file accepts extra `activeStream` fields, so this test builds its own
 store inline, copying `renderViewWithActiveStream`'s exact reducer set and
-preloaded shape (`:2050-2073`) rather than dispatching actions against an
+preloaded shape (`:2201-2224`) rather than dispatching actions against an
 unseeded store:
 ```tsx
 it('renders haltFixes from a halted-run snapshot when there is no live error (session-local, not a rejoin) (#3084 F7)', async () => {
@@ -6079,10 +6079,10 @@ navigating away from the Analysing view neither removes it nor re-pushes it.
 
 Test (`src/store/analysis-stream-middleware.test.ts`, extending the existing
 suite — mirroring the real `flips state to halted when the SSE rejects with
-AnalysisError code=attribution_drift` test at `:415-432` on 46e62a34:
+AnalysisError code=attribution_drift` test at `:430-449` at `80be2f1d`:
 `buildStore()`, `setActiveStream(baseSnapshot)`, then a
 `dispatch(applyAnalysisSnapshotTick(...))` — the middleware opens the stream
-only on the FIRST tick, so `lastCall()` (`:82-86`, throws `'expected at least
+only on the FIRST tick, so `lastCall()` (`:94-98`, throws `'expected at least
 one api.analyseManuscript call'` when nothing was captured yet) would throw
 without it — THEN `lastCall().reject(...)`, two `await Promise.resolve()`,
 then read `store.getState()`):
@@ -6192,7 +6192,12 @@ describe('Advanced Settings — scroll-and-highlight (#3084 wave 2b, F7)', () =>
     Element.prototype.scrollIntoView = scrollIntoView;
     mockGetConfig.mockResolvedValueOnce(FOCUS_FIXTURE);
     const store = configureStore({
-      reducer: { config: configSlice.reducer, ui: uiSlice.reducer, notifications: notificationsSlice.reducer },
+      reducer: {
+        config: configSlice.reducer,
+        ui: uiSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        account: accountSlice.reducer,
+      },
       preloadedState: {
         ui: { stage: { kind: 'advanced', focusKey: 'analyzer.gemini.maxInputTokensPerRequest' } } as never,
       },
@@ -6210,7 +6215,11 @@ describe('Advanced Settings — scroll-and-highlight (#3084 wave 2b, F7)', () =>
 ```
 `mockGetConfig` is the same mocked `api.getConfig` this file's top-level
 `beforeEach` (`:172-`) already configures; `configSlice`/`uiSlice`/
-`notificationsSlice`/`ConfigResponse` are already imported by this file.
+`notificationsSlice`/`accountSlice`/`ConfigResponse` are already imported by
+this file (`accountSlice` at `:12`, since #3201 — `advanced.tsx` reads
+`s.account` unconditionally at `:245`/`:292`/`:555`, so a store missing that
+reducer is broken, not just incomplete; main's own `makeStore()`, `:151-161`,
+already includes it).
 `as never` on the `preloadedState.ui` slice sidesteps `Stage`'s discriminated
 union needing every OTHER variant's fields absent — match whatever cast (or
 narrower literal) this file's own conventions use elsewhere, if a narrower
@@ -6324,17 +6333,17 @@ git commit -m "feat(server,frontend,openapi): point a reasoning-overflow failure
 
 **Files:**
 - Modify: `server/.env.example` (managed block, via `config:sync`)
-- Modify: `docs/release-notes-next.md` (section `## 🗣️ Analyzer, script review & manuscript`, `:284`)
+- Modify: `docs/release-notes-next.md` (section `## 🗣️ Analyzer, script review & manuscript`, `:289`)
 - Modify: `RELEASE_NOTES.md` (top of the `# Castwright 1.15.0` bullet list)
 - Create: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` (§1–§3). No earlier PR creates it: wave 1's row (PR 1b) has no run sheet, and PR 2a ships no row.
 - Modify: `docs/testing/onbox-acceptance-register.md`:
-  - "At a glance" table `:554-566`;
-  - "Last change" block `:570`;
-  - `## Group B` `:4507-4553`;
-  - `## Group E` `:4924-…`.
-- Modify: `docs/testing/onbox-acceptance-register-live-view.html` (`#gb` `:728-753`, `#ge` `:1019-…`)
+  - "At a glance" table (Group B row currently at `:557`; re-read on `main` at ship time);
+  - "Last change" block (currently `:570`, reading `**50 owed.**`; increment by one and re-read the line number on `main` at ship time);
+  - `## Group B` (currently `:4603-4649`, marker `B101` at `:4605`; insert the new row before the closing `---` at `:4649` — re-derive all three positions on `main` at ship time, as the register and its counts move with every lane that merges a row first);
+  - `## Group E` (currently starting `:5020`, marker `E105` at `:5022` — same re-derive-at-ship-time caveat).
+- Modify: `docs/testing/onbox-acceptance-register-live-view.html` (`#gb` currently ending `:753`, B1's `</details>` at `:777`, `</section>` at `:778`; `#ge` currently starting `:1044` — re-derive all four on `main` at ship time, same reason as the register above)
 
-**Row ids.** Three ids are minted at ship time from their groups' `next-id` markers (Group B's at `:4509`, Group E's at `:4926` on 46e62a34), checked by `npm run check:onbox-register`:
+**Row ids.** Three ids are minted at ship time from their groups' `next-id` markers, checked by `npm run check:onbox-register`:
 - `B<next>`: Group B's next id (capacity recalibration);
 - `E<next>`: Group E's next id (thinking-window timing);
 - `E<next+1>`: the Group E id after it (thinking-model output and the Gemma split).
@@ -6703,7 +6712,7 @@ Body:
 - **Reasoning overflow (P20):** `length` + no answer text + reasoning evidence → `AnalyzerReasoningOverflowError` / `analyzer-reasoning-overflow` (no split); an empty `MAX_TOKENS` with no evidence (Gemma) still splits. It stops new spend. Both routes' Phase-0 catches rethrow it and Phase 1 already ends the run on its first error; the first rethrow marks the job (`AnalysisJob.reasoningOverflowed`) and empties the book's escalation budget, so chapters still in flight start no escalation window, and `buildNonStoryClassifier` makes no further non-story call. Those chapters are not aborted: they finish and cache for resume, and the job's `halted` snapshot keeps its code (N4). Script-review, emotion and instruct passes stop as they do on a content block or daily quota; the attribution eval's review run rethrows it; an escalation call that overflows still returns `null`, but first reports through the new `StageCall.onReasoningOverflow`, which both routes wire to `noteReasoningOverflow`, so no further window is sent in that chapter or any other. Every chapter dispatch point (main Phase 0, main Phase 1 after the watermark, subset Phase 1) calls `throwIfReasoningOverflowed`, which rethrows the recorded overflow (`AnalysisJob.reasoningOverflowError`), so after an overflow only escalation saw, no later chapter starts and the run halts with the overflow code, as for a rethrown one. Alternative put to the owner (not chosen): skip the chapter and continue. The failure names what happened (chapter, model, engine); its `remediation` ends "Then resume — finished chapters are kept." (Task 2.9). Task 2.9a adds structured `fixes`, rendered as a "How to fix" list in the Analysing view's run-level block and, via `analysis-stream-middleware.ts`'s `AnalysisError` branch (not the view — the view's own stream aborts on unmount), a persistent toast that replaces the plain one under the same `dedupeKey` and survives navigation. Ollama now applies the same rule to an empty `done_reason: length` stream (previously the empty-response error), with `reasoningSeen` from `message.thinking`, and its copy names `num_ctx`. `AnalyzerTimeoutError` keeps its Phase 0 / Phase 1 asymmetry unchanged. Owner approved P20 on 2026-09-13: stop new spend, with a loud, actionable warning (F7).
 - **On-box:** register rows **B<next>** (capacity recalibration), **E<next>** (Gemini thinking-window timing, a measurement that gates nothing) and **E<next+1>** (thinking-model output and the Gemma split) — write the minted ids — run sheet §1–§3 created, live view republished.
 
-Also fixed, found in passing: `server/.env.example:293,301` stated the old 8192 default; the `MAX_RESPONSE_BYTES` comment (moved to `transports/gemini-transport.ts` by wave 1; `gemini.ts:62-64` on 46e62a34) named the removed `resolveMaxOutputTokens`.
+Also fixed, found in passing: `server/.env.example:293,301` stated the old 8192 default; the `MAX_RESPONSE_BYTES` comment (moved to `transports/gemini-transport.ts` by wave 1; `gemini.ts:62-64` at `80be2f1d`) named the removed `resolveMaxOutputTokens`.
 
 ## Test plan
 - [ ] `gemini-catalog.test.ts` (bounded warm-up released per caller and cancelled once abandoned, failure warning re-armed, cache keyed to the active key, static thinking rule), `capacity.test.ts` (Auto and the TPM bound), `stage-runner.test.ts` (`prepare(call.signal)` before settings; escalation returns `null` on an overflow and calls `onReasoningOverflow` once, never for another failure), `escalation.test.ts` (a real runner over an overflowing transport: one overflow stops that chapter's second window and a later chapter's windows), `gemini-transport.test.ts` (`prepare` released after 10 s and on abort), `gemini-transport-thinking.test.ts` (`includeThoughts`, reasoning tokens, heartbeat; on a fake clock, 60 s thought-part gaps not killed, a 121 s silence failing once with no retry warning or `onThrottle`, and the after-answer idle watchdog; positive knob, 290 000 maximum, ceiling, timing line), `finish-reasoning-overflow.test.ts`, `ollama-transport-overflow.test.ts`, chunker no-split pins, `failure-taxonomy.test.ts`, help counts
