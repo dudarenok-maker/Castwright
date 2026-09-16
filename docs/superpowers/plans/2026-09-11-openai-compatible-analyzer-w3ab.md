@@ -1112,7 +1112,8 @@ describe('getResolvedOllamaModel — endpoint ids never reach Ollama (#3084 PR 3
 ```ts
 import { describe, it, expect, afterEach } from 'vitest';
 import { resolvePersonaLocalModel } from './voice-style.js';
-import { getResolvedOllamaModel, _resetUserSettingsCache } from '../workspace/user-settings.js';
+import { getResolvedOllamaModel } from '../config/ollama-resolved.js';
+import { _resetUserSettingsCache } from '../workspace/user-settings.js';
 
 const ENV = 'PERSONA_GEN_LOCAL_MODEL';
 
@@ -11324,7 +11325,7 @@ Expected: FAIL with `Failed to resolve import "./openai.js"`.
 Append to `server/src/analyzer/runner/retry-policy.ts`:
 ```ts
 /* #3084 PR 3b — OpenAI-compatible endpoints use Ollama's retry SHAPE
-   (ollama.ts:559-571): invalid JSON drops the assistant turn and raises the
+   (ollama.ts:560-572): invalid JSON drops the assistant turn and raises the
    temperature so the sampler can leave the failure path; a schema failure
    replays the output with the field list. Endpoints carry no temperature
    field, so the temperatures are these constants (= the Ollama knob defaults,
