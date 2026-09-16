@@ -36,6 +36,7 @@ import { useAppSelector } from '../../store';
 import { selectPausedSnapshotForBook } from '../../store/library-slice';
 import type { LibraryAuthor, LibraryBook, LibrarySeries } from '../../lib/types';
 import { SAMPLE } from '../../lib/tour-steps';
+import { isNotAFailureHaltCode } from '../../lib/analysis-phase-state';
 import { STATUS_UI } from './library-status-ui';
 import { EmptyLibrary, LibrarySkeleton } from './library-empty-states';
 import { SeriesMemoryChip } from '../series-memory/series-memory-chip';
@@ -166,8 +167,9 @@ function BookCard({
   const [from, to] = book.coverGradient;
   const grad = `linear-gradient(135deg, ${from}, ${to})`;
   const meta = STATUS_UI[book.status];
-  /* Paused/halted snapshot from the cold-boot active-analyses scan.
-     Drives the "Paused — resume?" / "Halted — review?" badge. Only
+  /* Paused/halted/needs-input snapshot from the cold-boot active-analyses scan.
+     Drives the "Paused — resume?" / "Halted — review?" / "Needs input — review?"
+     badge. Only
      rendered when the card is NOT the currently-open book — when it
      IS the open card the top-bar AnalysisPill already conveys the
      same information, and the cover badge would collide with the
@@ -260,12 +262,18 @@ function BookCard({
           <span
             data-testid={`paused-badge-${book.bookId}`}
             className={`absolute top-4 right-4 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${
-              pausedSnapshot.state === 'halted'
+              pausedSnapshot.state === 'halted' && !isNotAFailureHaltCode(pausedSnapshot.haltCode)
                 ? 'bg-rose-100 text-rose-800 border-rose-200'
-                : 'bg-amber-100 text-amber-800 border-amber-200'
+                : pausedSnapshot.state === 'halted' && isNotAFailureHaltCode(pausedSnapshot.haltCode)
+                  ? 'bg-ink/6 text-ink/70 border-ink/10'
+                  : 'bg-amber-100 text-amber-800 border-amber-200'
             }`}
           >
-            {pausedSnapshot.state === 'halted' ? 'Halted — review?' : 'Paused — resume?'}
+            {pausedSnapshot.state === 'halted' && !isNotAFailureHaltCode(pausedSnapshot.haltCode)
+              ? 'Halted — review?'
+              : pausedSnapshot.state === 'halted' && isNotAFailureHaltCode(pausedSnapshot.haltCode)
+                ? 'Needs input — review?'
+                : 'Paused — resume?'}
           </span>
         )}
         <div ref={menuRef} className="absolute top-3.5 right-3.5">

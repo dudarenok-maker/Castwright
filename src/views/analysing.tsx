@@ -14,7 +14,7 @@ import {
 } from '../lib/api';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { computeOverallProgress } from '../lib/analysis-progress';
-import { derivePhaseState } from '../lib/analysis-phase-state';
+import { derivePhaseState, isNotAFailureHaltCode } from '../lib/analysis-phase-state';
 import {
   MODEL_OPTIONS,
   buildLocalModelOptions,
@@ -1567,7 +1567,10 @@ export function AnalysingView({
                 (!!manuscriptId && activeStreamSnapshot?.manuscriptId === manuscriptId),
               runState:
                 activeStreamSnapshot && activeStreamSnapshot.manuscriptId === manuscriptId
-                  ? (activeStreamSnapshot.state ?? 'running')
+                  ? activeStreamSnapshot.state === 'halted' &&
+                    isNotAFailureHaltCode(activeStreamSnapshot.haltCode)
+                    ? 'needs-action'
+                    : activeStreamSnapshot.state ?? 'running'
                   : 'running',
             });
             return (
@@ -1579,6 +1582,7 @@ export function AnalysingView({
                 isPhaseDone={phaseState === 'done'}
                 isPhasePaused={phaseState === 'paused'}
                 isPhaseHalted={phaseState === 'halted'}
+                isPhaseNeedsAction={phaseState === 'needs-action'}
                 phaseProgress={progressByPhase[p.id] ?? 0}
                 phaseLogs={logs[p.id] ?? []}
                 live={liveByPhase[p.id] ?? null}

@@ -368,6 +368,61 @@ describe('PhaseCard paused/halted rendering (#3172 layer 3/3)', () => {
   });
 });
 
+describe('PhaseCard needs-action rendering (#3203 — cast_incomplete / stage1_shrink_refused)', () => {
+  /* The two setHalted codes that are explicitly "not a failure" render a
+     third, neutral phase-card state — surfaced via isPhaseNeedsAction,
+     mirroring how isPhasePaused/isPhaseHalted are threaded from the
+     parent's derivePhaseState result. Neutral means: reuse the paused
+     treatment's tone (IconClock/bg-ink/6/text-ink/50), never the rose
+     IconWarning halted treatment — a genuine halt must still look broken. */
+  it('renders IconClock in the same neutral badge as paused, not the rose halted badge', () => {
+    const { container } = renderCard({ isPhaseNeedsAction: true, isPhaseActive: false });
+    const badge = container.querySelector('span.bg-ink\\/6.rounded-full.w-7');
+    expect(badge).not.toBeNull();
+    expect(badge!.querySelector('svg')).not.toBeNull();
+    expect(container.querySelector('span.bg-rose-100')).toBeNull();
+    expect(container.querySelector('span.bg-peach\\/20')).toBeNull();
+    expect(container.querySelector('span.bg-emerald-100')).toBeNull();
+  });
+
+  it('freezes the progress bar at phaseProgress without the log-bridging text when needs-action', () => {
+    renderCard({
+      isPhaseNeedsAction: true,
+      isPhaseActive: false,
+      phaseProgress: 0.63,
+      phaseLogs: [],
+      analysisStarted: true,
+      conn: 'idle',
+    });
+    const bar = document.querySelector('.bg-gradient-progress') as HTMLElement | null;
+    expect(bar).not.toBeNull();
+    expect(bar!.style.width).toBe('63%');
+    expect(screen.queryByText(/Reading the manuscript/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Reconnecting to the running analysis/)).not.toBeInTheDocument();
+  });
+
+  it('passes chipState "needs-action" through to PhaseModelChip, not "halted"', () => {
+    renderCard({ isPhaseNeedsAction: true, isPhaseActive: false });
+    expect(screen.getByTestId('phase-model-chip-1')).toHaveAttribute(
+      'data-phase-state',
+      'needs-action',
+    );
+  });
+
+  it('isPhaseHalted alone (no needs-action) still renders the rose halted badge unchanged', () => {
+    const { container } = renderCard({ isPhaseHalted: true, isPhaseActive: false });
+    expect(container.querySelector('span.bg-rose-100.rounded-full.w-7')).not.toBeNull();
+    expect(screen.getByTestId('phase-model-chip-1')).toHaveAttribute('data-phase-state', 'halted');
+  });
+
+  it('done still wins over needs-action for chipState and the icon badge', () => {
+    renderCard({ isPhaseDone: true, isPhaseNeedsAction: true, isPhaseActive: false });
+    expect(screen.getByTestId('phase-model-chip-1')).toHaveAttribute('data-phase-state', 'done');
+    expect(document.querySelector('.bg-emerald-100')).not.toBeNull();
+    expect(document.querySelector('.bg-ink\\/6.rounded-full.w-7')).toBeNull();
+  });
+});
+
 describe('PhaseCard layout', () => {
   /* The detail copy must span the full card width rather than the narrow
      column beneath the label. The model chip + swap dropdown share the
