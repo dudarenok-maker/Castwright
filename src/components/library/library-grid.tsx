@@ -167,8 +167,9 @@ function BookCard({
   const [from, to] = book.coverGradient;
   const grad = `linear-gradient(135deg, ${from}, ${to})`;
   const meta = STATUS_UI[book.status];
-  /* Paused/halted snapshot from the cold-boot active-analyses scan.
-     Drives the "Paused — resume?" / "Halted — review?" badge. Only
+  /* Paused/halted/needs-input snapshot from the cold-boot active-analyses scan.
+     Drives the "Paused — resume?" / "Halted — review?" / "Needs input — review?"
+     badge. Only
      rendered when the card is NOT the currently-open book — when it
      IS the open card the top-bar AnalysisPill already conveys the
      same information, and the cover badge would collide with the
