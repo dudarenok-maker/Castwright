@@ -17,7 +17,7 @@ Recorded `durationMs` from the last **green** run of each step
 
 | Step | Green duration |
 |---|---|
-| `test:server` | **19.45 min** |
+| `test:server` | **17.85 min (1 attempt, re-baselined 2026-09-13 — #3025)** |
 | `test:e2e` | 8.33 min |
 | `test:sidecar` | 6.85 min |
 | `test:hooks` | 3.35 min |
@@ -222,7 +222,7 @@ Per-step-total is also the only shape that composes additively with a pipeline c
 
 | Knob | Interim default | Basis |
 |---|---|---|
-| `CASTWRIGHT_STEP_TIMEOUT_MIN` | **45** | `test:server`'s measured green total is 19.45 min; 20 gave a 3% margin and would false-positive constantly |
+| `CASTWRIGHT_STEP_TIMEOUT_MIN` | **45** | `test:server`'s measured green total was 19.45 min (pre-#3018, attempt count unknown), re-baselined 2026-09-13 to **17.85 min at `attempts: 1`** (#3025) — not materially different, so the basis and the 45-min budget stand; 20 gave a 3% margin and would false-positive constantly |
 | `CASTWRIGHT_RUN_TIMEOUT_MIN` | **180** | a full `verify` floors at 44.9 min; still cuts the 273.8-min incident by a third |
 
 **Target design — self-calibrating, replacing both constants.** `verify-cache.json` already
@@ -248,7 +248,7 @@ The problem the conflation caused is narrower: that formula calibrates off which
 
 **Do not derive a per-attempt figure by dividing.** Attempts are not equal length — a crashed attempt aborts early — so `durationMs / attempts` is meaningless. Worked example: crash at 60 s, crash at 60 s, pass at 1100 s gives `{ durationMs: 1220000, attempts: 3 }`; dividing yields 407 s against a true single-pass cost of 1100 s, a budget **~2.7× too tight** that false-positives on every clean run — precisely the failure `:223` cites as the reason 20 min was rejected.
 
-**This does not retroactively qualify the 19.45 min figure in the table above.** Entries written before this change carry no attempt count, so that number remains a step total of unknown composition until the next full local run rewrites it.
+**This does not retroactively qualify the 19.45 min figure in the table above** — entries written before this change carry no attempt count, so that number's own composition stays unknown. **A subsequent full local run has since supplied a qualified figure** (#3025, 2026-09-13): `{ durationMs: 1070714, attempts: 1 }`, i.e. 17.85 min for a single clean attempt with no crash retries. That is ~8% below the stale 19.45 min total and, being a single-attempt measurement, not materially different from it — see the table above and the deferred-measurement table below.
 
 **Implementation is an async `spawn` conversion of step execution — the largest piece of work
 here, and its real risk is source-text pins, not caller compatibility.**
@@ -484,7 +484,7 @@ the governor entirely.
 |---|---|---|
 | 1 | Is the wedge a concurrency phenomenon at all? | **Still open.** The "two concurrent batteries are enough" claim came from immediate-parent root detection later proved wrong. Its urgency has dropped: since Part 1 **no git hook spawns a pool**, so the hook-driven wedge is structurally impossible and this now governs only Parts 2-6 (manual `verify` runs and OE lanes). Deliberately reproducing it costs ~40 min of a shared box and recreates the failure it studies — not done. |
 | 2a | Can the artifact tell us the composition? | **Answered 2026-09-06: no**, because the attempt count was never recorded. Fixed by #3018. See Part 2 above. |
-| 2b | What is `test:server`'s 19.45 min broken down by attempts? | **Still open.** Pre-#3018 cache entries carry no attempt count, so the composition of the 19.45 min figure remains unknown. Tracked by **[#3025](https://github.com/dudarenok-maker/Castwright/issues/3025)** — once the artifact records attempts going forward, a future run can re-baseline this figure and qualify it. |
+| 2b | What is `test:server`'s 19.45 min broken down by attempts? | **Answered 2026-09-13.** The pre-#3018 19.45 min figure's own composition remains unrecoverable (no attempt count was captured at the time). **[#3025](https://github.com/dudarenok-maker/Castwright/issues/3025)** re-baselined it with a fresh full local run under the fixed instrument: `{ durationMs: 1070714, attempts: 1 }` — 17.85 min, one clean attempt, no crash retries. Not materially different from 19.45 min, so `CASTWRIGHT_STEP_TIMEOUT_MIN`'s 45-min basis (`:225`) needs no follow-up revisit. |
 
 **Part 1 propagation is complete.** `.husky/*` is tracked, so each worktree kept the old ~35-min
 hooks until `main` merged into it. As of 2026-09-06 the sweep is finished: **19/19 worktrees on
