@@ -164,3 +164,35 @@ test('register:build --check step must execute and not be disarmed — issue #31
       'not a neutered or renamed command.',
   );
 });
+
+test('the stamped-since check step must execute and not be disarmed — issue #3138 pass 3', () => {
+  // pr-review-gate pass 3 found this third folded step (#3116's publish-token
+  // enforcement) had no disarm guard, unlike its two siblings above — adding
+  // `continue-on-error: true` here left all wiring tests green. Same
+  // mutation-robust pattern as the two tests above.
+
+  const stampStepMatch = jobBody.match(
+    /- name: Check the live view was re-stamped if its content changed\n((?: {8}.*\n|\n)*)/,
+  );
+  assert.ok(stampStepMatch, "step 'Check the live view was re-stamped...' not found");
+  const stampStepBody = stampStepMatch[1];
+
+  // Assertion 1: Step must NOT have `continue-on-error: true`
+  const continueOnErrorMatches = stampStepBody.match(/^\s*continue-on-error:\s*/mi);
+  assert.ok(
+    !continueOnErrorMatches,
+    'Check the live view was re-stamped step must not have `continue-on-error:` set. ' +
+      'This is #3116\'s publish-token enforcement, promoted from "reports" to "enforces it ' +
+      'as a merge gate" by this same PR — a neutered step reopens exactly that gap.',
+  );
+
+  // Assertion 2: Step MUST contain the exact run command
+  const runMatch = /^\s*run:\s*node scripts\/check-onbox-register\.mjs --stamped-since HEAD\^1\s*$/m.test(
+    stampStepBody,
+  );
+  assert.ok(
+    runMatch,
+    'Check the live view was re-stamped step must execute ' +
+      '`node scripts/check-onbox-register.mjs --stamped-since HEAD^1`, not a neutered or renamed command.',
+  );
+});

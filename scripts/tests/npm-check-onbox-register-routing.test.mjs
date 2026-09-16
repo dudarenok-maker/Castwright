@@ -5,106 +5,147 @@
 // command, not the first.
 //
 // This test spawns a real `npm run` subprocess to verify the routing works.
+//
+// pr-review-gate pass 3 (#3138) found this file's positive-signal assertions
+// were not actually discriminating: `check:onbox-register: OK` is printed by
+// BOTH the `--against-published` success path AND the plain no-flag success
+// path (check-onbox-register.mjs:2148 and :2175), so asserting only its
+// presence passed even when `run-check-onbox-register.mjs` silently dropped
+// every CLI flag it was handed. Each test now asserts the SPECIFIC suffix
+// each code path actually prints, and test 2 additionally asserts on
+// build-register-live-view.mjs's own `register:build --check: up to date.`
+// line, so a mutation that skips invoking it (e.g. by short-circuiting the
+// status check that gates the second spawn) reddens the test instead of
+// passing on the vaguer "check:onbox-register:" substring both scripts share.
+//
+// pr-review-gate pass 3 also found this file made the REQUIRED `test:hooks`
+// leg depend on live network + a reachable `origin`: `--against-published`
+// resolves its baseline via a real `git fetch origin main` unless
+// `ONBOX_TEST_BASELINE_FILE` is set — the repo's own hermetic seam for
+// exactly this (see check-onbox-register.mjs's `ONBOX_TEST_BASELINE_FILE`
+// comment, and the equivalent pattern in check-onbox-register.test.mjs's
+// `withHermeticBaseline`). Both tests below now inject the REAL, currently
+// in-sync register text + live-view HTML as the baseline/published pair —
+// they already agree (register:build --check passes on this repo as
+// shipped), so the comparison is deterministic and needs no network.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { readNormalized } from '../lib/read-normalized.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, '../..');
 
-test('npm run check:onbox-register routes flags to check-onbox-register.mjs, not build-register-live-view.mjs', () => {
-  // Create a temporary file to use as --against-published target
-  const tmpDir = mkdtempSync(join(tmpdir(), 'npm-routing-test-'));
-  const publishedPath = join(tmpDir, 'published.html');
+// npm on Windows is a .cmd shim, which spawnSync can only invoke through
+// shell:true (spawning 'npm.cmd' directly fails with EINVAL — confirmed on
+// this box; matches the pattern already documented in scripts/start-app.mjs).
+// DEP0190 fires specifically when an `args` ARRAY is combined with
+// shell:true, because the array elements are joined WITHOUT shell quoting —
+// a temp path containing a space would then split into two arguments. The
+// fix is to build one already-quoted command STRING and pass it as the sole
+// `command`, with no separate `args` array, which is what these two calls do.
+function quoteArg(arg) {
+  return `"${String(arg).replace(/"/g, '\\"')}"`;
+}
 
+const REAL_LIVE_VIEW_PATH = join(
+  REPO_ROOT,
+  'docs',
+  'testing',
+  'onbox-acceptance-register-live-view.html',
+);
+const REAL_REGISTER_PATH = join(REPO_ROOT, 'docs', 'testing', 'onbox-acceptance-register.md');
+
+// Raw, not readNormalized — mirrors check-onbox-register.test.mjs's own
+// REAL_LIVE_VIEW_HTML: every live-view parser tolerates a stray `\r`.
+const REAL_LIVE_VIEW_HTML = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
+// readNormalized, not a bare readFileSync — the baseline-diffing code scans
+// for literal '\n---\n' / '\n## ' delimiters, which miss on a CRLF checkout.
+const REAL_REGISTER_TEXT = readNormalized(REAL_REGISTER_PATH);
+
+function withHermeticBaseline(publishedHtml, baselineText, fn) {
+  const dir = mkdtempSync(join(tmpdir(), 'npm-routing-hermetic-'));
+  const publishedPath = join(dir, 'published.html');
+  const baselinePath = join(dir, 'baseline.md');
+  writeFileSync(publishedPath, publishedHtml, 'utf8');
+  writeFileSync(baselinePath, baselineText, 'utf8');
   try {
-    // Write a minimal valid HTML for the published page
-    writeFileSync(
-      publishedPath,
-      `<title>Test</title>
-<div class="strip"><div class="n owed">0</div></div>
-<table class="glance"><thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead><tbody>
-<tr><td><a href="#ga">A</a></td><td>Setup A</td><td>0</td></tr>
-</tbody></table>
-<section class="group" id="ga">
-<h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">0 rows</span></h3>
-</section>`,
-      'utf8'
-    );
+    return fn(publishedPath);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 
-    // Spawn `npm run check:onbox-register -- --against-published <file>`
-    // If the routing is BROKEN (the current bug), the flags go to build-register-live-view.mjs
-    // which doesn't recognize --against-published and exits with:
+test('npm run check:onbox-register routes flags to check-onbox-register.mjs, not build-register-live-view.mjs', () => {
+  withHermeticBaseline(REAL_LIVE_VIEW_HTML, REAL_REGISTER_TEXT, (publishedPath) => {
+    // Spawn `npm run check:onbox-register -- --against-published <file>`,
+    // with ONBOX_TEST_BASELINE_FILE pointed at the real register's own text
+    // (which agrees with the real, currently-published live view) so the
+    // comparison is hermetic — no `git fetch` against a live `origin`.
+    //
+    // If the routing is BROKEN (the pass-1 bug), the flags go to
+    // build-register-live-view.mjs, which doesn't recognize
+    // --against-published and exits with:
     //   "register:build: unrecognised argument(s): --against-published, ..."
     //
-    // If the routing is FIXED, the flags go to check-onbox-register.mjs which
-    // knows about --against-published and processes it, producing output like:
-    //   "check:onbox-register: OK — ..."
-
-    const result = spawnSync(
-      'npm',
-      ['run', 'check:onbox-register', '--', '--against-published', publishedPath],
-      {
-        cwd: REPO_ROOT,
-        encoding: 'utf8',
-        timeout: 30000,
-        shell: true,
-        windowsHide: true,
-      }
-    );
+    // If the routing is FIXED, the flags go to check-onbox-register.mjs,
+    // which recognizes --against-published and, once the comparison agrees,
+    // prints the exact suffix asserted below.
+    const command = `npm run check:onbox-register -- --against-published ${quoteArg(publishedPath)}`;
+    const result = spawnSync(command, {
+      cwd: REPO_ROOT,
+      encoding: 'utf8',
+      timeout: 30000,
+      shell: true,
+      windowsHide: true,
+      env: { ...process.env, ONBOX_TEST_BASELINE_FILE: REAL_REGISTER_PATH },
+    });
 
     const combinedOutput = (result.stdout || '') + (result.stderr || '');
 
-    // The broken routing produces this error from build-register-live-view.mjs:
     const brokenError = 'register:build: unrecognised argument(s): --against-published';
 
-    // The test FAILS (red) if we see the broken error, which proves the bug exists
-    // The test PASSES (green) once we fix it and the error goes away
     assert.ok(
       combinedOutput,
-      `No output captured; stdout: ${result.stdout}, stderr: ${result.stderr}`
+      `No output captured; stdout: ${result.stdout}, stderr: ${result.stderr}`,
     );
 
-    // The key assertion: we should NOT see the error from build-register-live-view.mjs
-    // complaining about unrecognised arguments. This is the mutation check.
+    // The test FAILS (red) if we see the broken error, which proves the bug exists.
     if (combinedOutput.includes(brokenError)) {
       throw new Error(
         `BUG DETECTED: Arguments routed to wrong command.\n` +
-        `Expected --against-published to route to check-onbox-register.mjs, ` +
-        `but it reached build-register-live-view.mjs instead.\n` +
-        `Error: ${brokenError}\n` +
-        `Full output:\n${combinedOutput}`
+          `Expected --against-published to route to check-onbox-register.mjs, ` +
+          `but it reached build-register-live-view.mjs instead.\n` +
+          `Error: ${brokenError}\n` +
+          `Full output:\n${combinedOutput}`,
       );
     }
 
-    // POSITIVE SIGNAL: The flags were successfully routed to check-onbox-register.mjs.
-    // When the command runs successfully with --against-published, it produces:
-    //   "check:onbox-register: OK — ..." (from line 2143 of check-onbox-register.mjs)
-    // This proves the flag was actually processed, not just that it didn't produce
-    // an error from the wrong script.
-    assert.ok(
-      combinedOutput.includes('check:onbox-register: OK'),
-      `Expected to see "check:onbox-register: OK" from the --against-published check, ` +
-      `but got output:\n${combinedOutput}. This indicates the flags may have been ` +
-      `routed to the wrong script or the script was not invoked correctly.`
+    // POSITIVE SIGNAL, specific to the --against-published code path: this
+    // exact "is not behind" phrasing is only printed once the flag was
+    // actually parsed AND the comparison ran (check-onbox-register.mjs's
+    // --against-published success branch), not by the plain no-flag path,
+    // so it cannot be satisfied by a mutation that silently drops the flag.
+    assert.match(
+      combinedOutput,
+      /check:onbox-register: OK.*is not behind/,
+      `Expected the --against-published success line (naming "is not behind"), ` +
+        `but got output:\n${combinedOutput}. This indicates the flag may have been ` +
+        `dropped or routed to the wrong script.`,
     );
-
-    // If we get here, the routing worked correctly
-  } finally {
-    rmSync(tmpDir, { recursive: true, force: true });
-  }
+  });
 });
 
 test('npm run check:onbox-register with no flags still runs both commands', () => {
-  // Verify that when NO flags are passed, both commands still run as expected.
-  // This is the "preserve both behaviors" requirement.
-
-  const result = spawnSync('npm', ['run', 'check:onbox-register'], {
+  // No ONBOX_TEST_BASELINE_FILE here — this invocation passes no
+  // --against-published flag at all, so check-onbox-register.mjs never
+  // reaches the baseline-fetching code path regardless.
+  const result = spawnSync('npm run check:onbox-register', {
     cwd: REPO_ROOT,
     encoding: 'utf8',
     timeout: 30000,
@@ -114,30 +155,30 @@ test('npm run check:onbox-register with no flags still runs both commands', () =
 
   const combinedOutput = (result.stdout || '') + (result.stderr || '');
 
-  // Both commands should run. We expect to see output indicating the normal flow.
-  // At minimum, we should NOT see an exit 0 from a short-circuit before
-  // build-register-live-view runs. We expect:
-  // - check-onbox-register output (or OK message from line 2170: "check:onbox-register: OK — ...")
-  // - build-register-live-view --check to also run
-  // Exit code should be 0 if both pass, 1 if either fails.
-
   assert(
     result.status === 0 || result.status === 1,
-    `Unexpected exit code ${result.status}; output: ${combinedOutput}`
+    `Unexpected exit code ${result.status}; output: ${combinedOutput}`,
   );
 
-  // At least one command ran (we'd see SOME output from the register checks)
-  assert.ok(
-    combinedOutput.length > 0,
-    `Expected register check output, got empty output`
-  );
+  assert.ok(combinedOutput.length > 0, `Expected register check output, got empty output`);
 
-  // POSITIVE SIGNAL: both commands were actually invoked.
-  // check-onbox-register.mjs outputs "check:onbox-register: OK — ..." on success (line 2170).
-  // This proves check-onbox-register.mjs actually ran.
+  // POSITIVE SIGNAL that check-onbox-register.mjs's structural check ran
+  // (not the --against-published path, which needs the flag to reach it).
   assert.ok(
     combinedOutput.includes('check:onbox-register:'),
     `Expected to see output from check-onbox-register.mjs (contains 'check:onbox-register:'), ` +
-    `but got:\n${combinedOutput}`
+      `but got:\n${combinedOutput}`,
+  );
+
+  // POSITIVE SIGNAL, specific to build-register-live-view.mjs, that the
+  // SECOND command actually ran too — this is what a mutation that
+  // short-circuits before the second spawn (e.g. inverting the status check
+  // that gates it) reddens, unlike the shared "check:onbox-register:"
+  // substring above.
+  assert.ok(
+    combinedOutput.includes('register:build --check: up to date.'),
+    `Expected to see build-register-live-view.mjs's own success line ` +
+      `("register:build --check: up to date."), proving the second command ` +
+      `actually ran, but got:\n${combinedOutput}`,
   );
 });
