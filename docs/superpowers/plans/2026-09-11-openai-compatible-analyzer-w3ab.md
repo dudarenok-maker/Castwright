@@ -1392,7 +1392,7 @@ run. This task's own refusal therefore:
 
 **Interfaces:**
 - Consumes: `inferEngineFromModelId` (Task 3a.1; `user-settings.ts` already imports it, Task 3a.4) and `engineForModelId` (frontend).
-- Produces: `endpointModelIdRefusals(patch: unknown): Array<{ path: string[]; message: string }>`, `ENDPOINT_ID_REFUSED_FIELDS`, `ENDPOINT_ID_REFUSED_KNOBS`. PR 3d deletes all three and their three callers ("End of PRs 3a and 3b" lists the lift).
+- Produces: `endpointModelIdRefusals(patch: unknown): Array<{ path: string[]; message: string }>`, `ENDPOINT_ID_REFUSED_FIELDS`, `ENDPOINT_ID_REFUSED_KNOBS`. PR 3d deletes `ENDPOINT_ID_REFUSED_FIELDS` and the field loop, and narrows `ENDPOINT_ID_REFUSED_KNOBS` to `['analyzer.ollama.model']` rather than deleting it — `analyzer.ollama.model` keeps its save refusal permanently (coordinator ruling; see Task 3a.5's Step 3 comment). `ENDPOINT_ID_REFUSAL` and `endpointModelIdRefusals` survive, narrowed, along with their two server call sites ("End of PRs 3a and 3b" lists the lift).
 
 **Why the check sits on client input, not in the schema or `writeUserSettings`:**
 - `userSettingsSchema` also parses the file on read. A refusal there would make `readUserSettings` reset every setting on one stale value (`user-settings.ts:579-582`).
@@ -1426,8 +1426,14 @@ Append to `server/src/routes/user-settings.test.ts`, inside `describe('user-sett
      now (`error` names them "managed in Advanced Settings…"), with or
      without an endpoint id, so this task has nothing left to add for those
      two field names — no test names them here any more. */
-  it('refuses an endpoint model id in a phase-model or ollama-model override, and still saves a still-writable field (#3084 P23)', async () => {
-    for (const key of ['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model']) {
+  /* Split into two cases (coordinator ruling): PR 3d lifts the refusal for
+     the two phase-model knobs but NOT for analyzer.ollama.model, which keeps
+     its save refusal permanently — that knob is the Ollama tag, so an
+     endpoint id there can never be what the user meant. Task 3d.4a flips
+     only the phase-model case to "accepts"; the ollama-model case survives
+     unchanged into PR 3d. */
+  it('refuses an endpoint model id in a phase-model override, and still saves a still-writable field (#3084 P23)', async () => {
+    for (const key of ['analyzer.phase0.model', 'analyzer.phase1.model']) {
       const refused = await request(app)
         .put('/api/user/settings')
         .send({ configOverrides: { [key]: 'openai:lab::m' } });
@@ -1439,6 +1445,16 @@ Append to `server/src/routes/user-settings.test.ts`, inside `describe('user-sett
     const ok = await request(app).put('/api/user/settings').send({ displayName: 'Still writable' });
     expect(ok.status).toBe(200);
     expect(ok.body.displayName).toBe('Still writable');
+  });
+
+  it('refuses an endpoint model id in the analyzer.ollama.model override (#3084 P23)', async () => {
+    const refused = await request(app)
+      .put('/api/user/settings')
+      .send({ configOverrides: { 'analyzer.ollama.model': 'openai:lab::m' } });
+    expect(refused.status).toBe(400);
+    expect(refused.body.issues.map((i: { path: string[] }) => i.path)).toEqual([
+      ['configOverrides', 'analyzer.ollama.model'],
+    ]);
   });
 ```
 
@@ -1533,7 +1549,8 @@ npx vitest run src/lib/api-put-user-settings-endpoint-ids-mock.test.ts
 
 Expected:
 - `refuses an endpoint model id in defaultAnalysisModel…` FAILS: status 200, not 400.
-- `refuses an endpoint model id in a phase-model or ollama-model override…` FAILS: status 200 for all three knobs.
+- `refuses an endpoint model id in a phase-model override…` FAILS: status 200 for both phase knobs.
+- `refuses an endpoint model id in the analyzer.ollama.model override…` FAILS: status 200.
 - All three `PUT /api/config … refuses` cases (phase0/phase1/ollama) FAIL: status 200.
 - The mock `refuses an endpoint id in defaultAnalysisModel…` case FAILS: the promise resolves.
 - `still saves an Ollama tag that starts with openai:` (config) and `still saves an Ollama tag named openai:latest` (mock) PASS already. They pin that an Ollama tag is not refused.
@@ -1553,7 +1570,15 @@ Expected:
    knob would). Checked on CLIENT input only (the general PUT and
    PUT /api/config): the schema also parses the file on read, and the
    override upsert below rewrites the whole overrides map. PR 3d deletes
-   these three exports and their callers (both routes and the mock PUT). */
+   ENDPOINT_ID_REFUSED_FIELDS and narrows ENDPOINT_ID_REFUSED_KNOBS to
+   ['analyzer.ollama.model'] rather than deleting it — that knob keeps its
+   save refusal permanently (coordinator ruling): it is the Ollama tag, so
+   an endpoint id there can never be what the user meant, and this is the
+   only guard that stops one being WRITTEN in the first place (3a.4's
+   getResolvedOllamaModel merely keeps a written one off the wire). The
+   general PUT, PUT /api/config, and this helper therefore all survive PR
+   3d, narrowed to that one knob; only the mock PUT's defaultAnalysisModel
+   block is fully deleted there. */
 export const ENDPOINT_ID_REFUSED_FIELDS = ['defaultAnalysisModel'] as const;
 export const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model'] as const;
 const ENDPOINT_ID_REFUSAL = 'OpenAI-compatible endpoint models cannot be selected in this build.';
@@ -1584,9 +1609,10 @@ export function endpointModelIdRefusals(patch: unknown): Array<{ path: string[];
    check (`:114-130` at 80be2f1d) and BEFORE `const updated = await writeUserSettings(req.body);` —
    **never replacing or reordering ahead of** that existing check:
 ```ts
-    /* #3084 P23 — PR 3d deletes this refusal. Runs after the retired-field
-       check above: that one is unconditional (any value), this one only
-       fires for a value shaped like an endpoint id. */
+    /* #3084 P23 — PR 3d narrows this refusal to analyzer.ollama.model only
+       (coordinator ruling); it does not delete it. Runs after the
+       retired-field check above: that one is unconditional (any value),
+       this one only fires for a value shaped like an endpoint id. */
     const refusals = endpointModelIdRefusals(req.body);
     if (refusals.length > 0) {
       return res.status(400).json({ error: 'Invalid user settings.', issues: refusals });
@@ -1598,7 +1624,8 @@ export function endpointModelIdRefusals(patch: unknown): Array<{ path: string[];
 1. Add `import { endpointModelIdRefusals } from '../workspace/user-settings.js';` (merge it into an existing import from that module if there is one).
 2. In pass 1, directly after the `if (resolveKnob(knob).locked) { … }` block, insert:
 ```ts
-    /* #3084 P23 — PR 3d deletes this refusal. */
+    /* #3084 P23 — PR 3d narrows this refusal to analyzer.ollama.model only
+       (coordinator ruling); it does not delete it. */
     if (endpointModelIdRefusals({ configOverrides: { [key]: raw } }).length > 0) {
       res.status(400).json({ error: `${key}: OpenAI-compatible endpoint models cannot be selected in this build.` });
       return;
@@ -1641,11 +1668,11 @@ Revert one change at a time, confirm the named test goes red, then restore:
 | Revert | Expected red test |
 |---|---|
 | Delete the refusal block in the general PUT | `refuses an endpoint model id in defaultAnalysisModel…` |
-| Delete the `configOverrides` loop in `endpointModelIdRefusals` | `refuses an endpoint model id in a phase-model or ollama-model override…` |
-| Remove `'analyzer.ollama.model'` from `ENDPOINT_ID_REFUSED_KNOBS` (#3084 A3/A4) | the same test's third iteration, and `PUT /api/config … refuses an endpoint model id for analyzer.ollama.model and writes nothing` |
+| Delete the `configOverrides` loop in `endpointModelIdRefusals` | `refuses an endpoint model id in a phase-model override…` and `refuses an endpoint model id in the analyzer.ollama.model override…` |
+| Remove `'analyzer.ollama.model'` from `ENDPOINT_ID_REFUSED_KNOBS` (#3084 A3/A4) | `refuses an endpoint model id in the analyzer.ollama.model override…`, and `PUT /api/config … refuses an endpoint model id for analyzer.ollama.model and writes nothing` |
 | Delete the refusal block in `routes/config.ts` | `refuses an endpoint model id for analyzer.phase0.model and writes nothing` |
 | Place the new refusal check BEFORE main's `RETIRED_ANALYZER_FIELDS`/`offending` check instead of after (#3084 A4) | no test currently distinguishes ordering, since neither check inspects the other's outcome — documents that ordering is a should, not a must, for the current test suite; a future test asserting the retired-field error text wins for a `defaultAnalysisModel`-shaped key that also happens to be listed in `RETIRED_ANALYZER_FIELDS` would catch a reversal, if one is ever added |
-| In `isEndpointId`, test `v.includes(':')` instead of the grammar | `refuses an endpoint model id in a phase-model or ollama-model override…` and `still saves an Ollama tag that starts with openai:` |
+| In `isEndpointId`, test `v.includes(':')` instead of the grammar | `refuses an endpoint model id in a phase-model override…`, `refuses an endpoint model id in the analyzer.ollama.model override…`, and `still saves an Ollama tag that starts with openai:` |
 | Delete the mock refusal block | `refuses an endpoint id in defaultAnalysisModel, as the server does` |
 
 - [ ] **Step 6: Commit**
@@ -11612,21 +11639,22 @@ PR 3d consumes:
 - `servedModels` and `forgetEndpointModel` (Task 3b.10), `resolveUnloadUrl(endpoint, model)`, `defaultGpuForBaseUrl`;
 - `SelectAnalyzerOptions.modelSource` (Task 3a.2).
 
-**What PR 3d lifts (P23).** PRs 3a and 3b refuse endpoint model ids everywhere a selection can be saved or read. PR 3d, which makes endpoints selectable, removes exactly these, in the task beside Task 3d.4:
-1. **Server helper.** Delete `ENDPOINT_ID_REFUSED_FIELDS`, `ENDPOINT_ID_REFUSED_KNOBS`, `ENDPOINT_ID_REFUSAL` and `endpointModelIdRefusals` from `server/src/workspace/user-settings.ts` (Task 3a.5).
-2. **General PUT.** Delete the `/* #3084 P23 — PR 3d deletes this refusal. */` block at the top of `userSettingsRouter.put('/')` in `server/src/routes/user-settings.ts`, and `endpointModelIdRefusals` from that file's import.
-3. **Config PUT.** Delete the same-commented block in pass 1 of `configRouter.put('/')` in `server/src/routes/config.ts`, and its import.
-4. **Mock PUT.** Delete the `/* #3084 P23 — mirrors the server's refusal… */` block at the top of `mockPutUserSettings` in `src/lib/api.ts`. Drop `engineForModelId` from its `./model-id` import only if nothing else in the file uses it. `_setMockUserSettingsForTest` stays.
-5. **Tests flip to accepts:**
-   - In `server/src/routes/user-settings.test.ts`, the three `refuses an endpoint model id in %s…` cases and `refuses an endpoint model id in a phase-model override…` expect status 200 and the value saved.
-   - In `server/src/routes/config.endpoint-ids.test.ts`, the two refusal cases expect status 200 and `applied: [key]`.
-   - In `src/lib/api-put-user-settings-endpoint-ids-mock.test.ts`, the three refusal cases expect the saved value.
+**What PR 3d lifts (P23).** PRs 3a and 3b refuse endpoint model ids everywhere a selection can be saved or read. PR 3d, which makes endpoints selectable, removes exactly these, in the task beside Task 3d.4 — **except for `analyzer.ollama.model`, which keeps its save refusal permanently (coordinator ruling).** That knob is the Ollama tag, so an `openai:<endpoint>::<model>` value there can never be what the user meant, and refusing it at save time is what stops one being written in the first place; 3a Task 3a.4's `getResolvedOllamaModel` fallback (which returns the knob default for an endpoint id) only keeps an id that reached the file some other way off the wire — it is defence in depth, not the only guard.
+1. **Server helper.** Delete `ENDPOINT_ID_REFUSED_FIELDS` and the field loop of `endpointModelIdRefusals` from `server/src/workspace/user-settings.ts` (Task 3a.5); narrow `ENDPOINT_ID_REFUSED_KNOBS` to `['analyzer.ollama.model']` rather than deleting it. `ENDPOINT_ID_REFUSAL` and `endpointModelIdRefusals` survive, narrowed.
+2. **General PUT.** The refusal block at the top of `userSettingsRouter.put('/')` in `server/src/routes/user-settings.ts` **survives, narrowed** to whatever `endpointModelIdRefusals` now reports (i.e. only `analyzer.ollama.model`) — do not delete the block or its `endpointModelIdRefusals` import.
+3. **Config PUT.** The same-commented block in pass 1 of `configRouter.put('/')` in `server/src/routes/config.ts`, and its import, **survive** for the same reason — it already fires per-knob, so it keeps firing for `analyzer.ollama.model` and simply never fires for the two phase knobs any more once they route through selection instead.
+4. **Mock PUT.** Delete the `/* #3084 P23 — mirrors the server's refusal… */` block at the top of `mockPutUserSettings` in `src/lib/api.ts` — this one only ever guarded `defaultAnalysisModel`, which PR 3d fully lifts, so it has no `analyzer.ollama.model` half to keep. Drop `engineForModelId` from its `./model-id` import only if nothing else in the file uses it. `_setMockUserSettingsForTest` stays.
+5. **Tests flip to accepts, except the one that doesn't:**
+   - In `server/src/routes/user-settings.test.ts`, `refuses an endpoint model id in defaultAnalysisModel…` and `refuses an endpoint model id in a phase-model override…` flip to accepts (status 200, value saved). `refuses an endpoint model id in the analyzer.ollama.model override…` is **kept as-is, unflipped** — it must still expect 400.
+   - In `server/src/routes/config.endpoint-ids.test.ts`, the `analyzer.phase0.model` / `analyzer.phase1.model` refusal cases flip to accepts (status 200, `applied: [key]`); the `analyzer.ollama.model` case is kept as-is, unflipped.
+   - In `src/lib/api-put-user-settings-endpoint-ids-mock.test.ts`, the `defaultAnalysisModel` refusal case flips to accepts (there is no `analyzer.ollama.model` case here — see item 4).
 6. **Selection.** Task 3d.4 replaces 3a's `if (engine === 'openai') { … throw new AnalyzerEndpointMissingError(…) }` branch, as it already plans. Its missing-endpoint throw passes `opts.modelSource ?? (opts.model ? 'run-pick' : 'settings')` — never the literal `'settings'`, and never `opts.modelSource ?? 'settings'`. So a missing endpoint named by `ANALYZER_PHASE{0,1}_MODEL` still says env, and a direct `selectAnalyzer({ model })` caller that sets no `modelSource` says run pick, matching 3a's `?? 'run-pick'`. 3a's cases `refuses an openai:<endpoint>::<model> id…` and `each phase source is named…` are deleted with that branch. 3d.4 must replace them with cases that pin the default:
    - `selectAnalyzer({ model: 'openai:gone::m' })` (no `modelSource`, no endpoint `gone` saved) throws `AnalyzerEndpointMissingError` with `source: 'run-pick'`;
    - a saved `configOverrides: { 'analyzer.phase1.model': 'openai:gone::m' }` (A5 — no longer `analyzerPhase1Model`) through `selectAnalyzerForPhase({ phase: 'phase1' })` throws it with `source: 'settings'`.
 
    Mutation proof: `?? (opts.model ? 'run-pick' : 'settings')` → `?? 'settings'` turns the first case red.
 7. **Keep:**
+   - **`analyzer.ollama.model`'s save refusal, permanently (coordinator ruling).** The helper (narrowed), the general PUT block (narrowed), the config PUT block (narrowed), and their three tests all survive unchanged into and past PR 3d — this is the one knob w3d's lift list above does not touch.
    - 3a's saved-default check at the top of the `local` branch (`a saved endpoint default is refused as settings-sourced…`): a `local` engine with an endpoint-id default must still never run on Ollama's default model.
    - Selection's `AnalyzerEndpointMissingError` for an id whose endpoint is not saved.
 
