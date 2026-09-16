@@ -14,8 +14,12 @@
 //   node scripts/build-register-live-view.mjs            # write the result
 //   node scripts/build-register-live-view.mjs --check     # report, change nothing; exit 1 on drift
 //
-// No npm dependencies: onbox-register-check.yml runs this with no `npm ci`
-// step. node builtins and scripts/lib/* only.
+// Runs within the CI verify.yml `lint-and-checks` job (folded in by PR #3236),
+// as its own step, immediately after `check:onbox-register` — this file does
+// not spawn that script; run-check-onbox-register.mjs's npm wrapper spawns
+// BOTH, in that order. No npm dependencies: only node builtins plus
+// ./lib/read-normalized.mjs and ./lib/is-main-module.mjs (neither imports
+// acorn — that lives in scripts/lib/module-graph.mjs, unused here).
 
 import { writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
