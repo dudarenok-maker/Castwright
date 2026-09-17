@@ -46,6 +46,10 @@ import {
   stagedDiffFiles,
   sidecarFingerprint,
   STEPS,
+  computeBudgetMs,
+  qualifiedDurationFor,
+  DEFAULT_STEP_TIMEOUT_MIN,
+  DEFAULT_RUN_TIMEOUT_MIN,
   _internals,
 } from '../verify-cache.mjs';
 
@@ -1377,7 +1381,7 @@ test('runStepProcess keys the retriable-pool-crash lookup on retryKey, not the s
   );
   assert.match(
     body,
-    /spawnSync\('npm', \['run', npmScript\]/,
+    /spawn\('npm', \['run', npmScript\]/,
     'runStepProcess must spawn npmScript (the possibly-substituted script), not retryKey',
   );
 });
@@ -1452,36 +1456,172 @@ process.exit(0);
   return marker;
 }
 
-test('runStepProcess: a step passing on the first attempt records 1 attempt', () => {
+test('runStepProcess: a step passing on the first attempt records 1 attempt', async () => {
   const dir = mkTmp();
   writeFlakyFixture(dir, 'always-pass', { failFirst: false });
-  const result = runStepProcess('always-pass', { cwd: dir, env: process.env, retryKey: 'test:server' });
+  const result = await runStepProcess('always-pass', { cwd: dir, env: process.env, retryKey: 'test:server' });
   assert.equal(result.code, 0);
   assert.equal(result.attempts, 1);
 });
 
-test('runStepProcess: a fork-pool crash followed by a pass records the true attempt count, summed across attempts', () => {
+test('runStepProcess: a fork-pool crash followed by a pass records the true attempt count, summed across attempts', async () => {
   const dir = mkTmp();
   const marker = writeFlakyFixture(dir, 'flaky', { failFirst: true });
-  const result = runStepProcess('flaky', { cwd: dir, env: process.env, retryKey: 'test:server' });
+  const result = await runStepProcess('flaky', { cwd: dir, env: process.env, retryKey: 'test:server' });
   assert.equal(result.code, 0);
   assert.equal(result.attempts, 2, 'first attempt crashes, second passes — 2 total attempts');
   // The fixture appends to marker on each launch, so 2 attempts → 2 bytes.
   assert.equal(readFileSync(marker, 'utf8').length, 2, 'marker file must record 2 real process launches');
 });
 
-test('runStepProcess: a non-retriable step always records 1 attempt, even given a crash-shaped failure', () => {
+test('runStepProcess: a non-retriable step always records 1 attempt, even given a crash-shaped failure', async () => {
   const dir = mkTmp();
   writeFlakyFixture(dir, 'flaky-nonretriable', { failFirst: true });
   // retryKey NOT in RETRIABLE_POOL_STEPS — must never retry, regardless of
   // stderr shape, and must report exactly 1 attempt.
-  const result = runStepProcess('flaky-nonretriable', {
+  const result = await runStepProcess('flaky-nonretriable', {
     cwd: dir,
     env: process.env,
     retryKey: 'some-other-step',
   });
   assert.equal(result.code, 1);
   assert.equal(result.attempts, 1);
+});
+
+// --- Part 2 (ops-72) time budgets ----------------------------------------
+
+function writeHangingFixture(dir, npmScriptName) {
+  // Deliberately never exits — simulates a genuinely wedged process (the
+  // 4h34m incident this feature exists to bound), so a real timeout kill is
+  // exercised rather than a step that would have finished on its own.
+  const fixtureFile = 'hang.mjs';
+  writeFileSync(join(dir, fixtureFile), 'setInterval(() => {}, 1000);\n', 'utf8');
+  const packageJsonPath = join(dir, 'package.json');
+  let packageJson;
+  if (existsSync(packageJsonPath)) {
+    packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  } else {
+    packageJson = { name: 'flaky-fixture', private: true, scripts: {} };
+  }
+  packageJson.scripts[npmScriptName] = `node ${fixtureFile}`;
+  writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8');
+}
+
+test('runStepProcess: a step exceeding its budget is classified TIMEOUT, not a crash-retry exhaustion (mutation test)', async () => {
+  const dir = mkTmp();
+  writeHangingFixture(dir, 'hang');
+  const start = Date.now();
+  // retryKey IS in RETRIABLE_POOL_STEPS on purpose — this is exactly the
+  // shape that could be mistaken for a crash-retry exhaustion (attempts ===
+  // MAX_POOL_ATTEMPTS) if the timeout classification were folded into, or
+  // ordered after, the isVitestPoolCrash check instead of short-circuiting
+  // before it.
+  const result = await runStepProcess('hang', {
+    cwd: dir,
+    env: process.env,
+    retryKey: 'test:server',
+    timeoutMs: 400,
+  });
+  const elapsed = Date.now() - start;
+  assert.equal(result.timedOut, true, 'a wedged process must be classified as a timeout');
+  assert.notEqual(result.code, 0);
+  assert.equal(
+    result.attempts,
+    1,
+    'a timed-out attempt must never be retried as a vitest pool crash — attempts must stay at 1, ' +
+      'not climb to MAX_POOL_ATTEMPTS (3) the way a real fork-pool crash would',
+  );
+  assert.ok(
+    elapsed < 30000,
+    `the taskkill /T /F path should land well under a real multi-hour wedge — took ${elapsed}ms`,
+  );
+});
+
+test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {
+  const dir = makeGitFixture();
+  writeHangingFixture(dir, 'test:server');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    const result = await runPipeline({
+      argv: ['--steps', 'test:server'],
+      cwd: dir,
+      env: {
+        ...scrubGitEnvForThrowawayRepo(process.env),
+        SKIP_CONTENTION_CHECK: '1',
+        CASTWRIGHT_STEP_TIMEOUT_MIN: '0.01', // 600ms — deliberately tiny for the mutation test
+      },
+    });
+    assert.notEqual(result, 0, 'a timed-out step must fail the pipeline');
+    const timeoutLine = logs.find((l) => l.includes('[timeout]') && l.includes('test:server'));
+    assert.ok(timeoutLine, `expected a [timeout] line, got:\n${logs.join('\n')}`);
+    assert.ok(
+      !logs.some((l) => l.includes('[retry]')),
+      'a timed-out step must never be retried as a vitest pool crash',
+    );
+    assert.ok(
+      !logs.some((l) => l.includes('[fail]') && l.includes('3 attempts')),
+      'must not be reported as a MAX_POOL_ATTEMPTS-exhausted crash-retry outcome',
+    );
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+// Calibration (design doc, "What this buys Part 2 — qualifying the
+// baseline"): prefer an attempts === 1 cache entry as the qualified
+// baseline; an attempts > 1 entry is uncalibratable (a crashed attempt
+// aborts early, so durationMs/attempts is not a meaningful per-attempt
+// figure) and must fall back to FLOOR, not be divided down.
+test('qualifiedDurationFor: returns durationMs for an attempts === 1 cache entry (#3025 real shape)', () => {
+  const cache = { steps: { 'test:server': { durationMs: 1070714, attempts: 1 } } };
+  assert.equal(qualifiedDurationFor(cache, 'test:server'), 1070714);
+});
+
+test('qualifiedDurationFor: returns null (uncalibratable) for an attempts > 1 cache entry', () => {
+  const cache = { steps: { 'test:server': { durationMs: 1220000, attempts: 3 } } };
+  assert.equal(qualifiedDurationFor(cache, 'test:server'), null);
+});
+
+test('qualifiedDurationFor: returns null when the step has no cache entry at all', () => {
+  assert.equal(qualifiedDurationFor({ steps: {} }, 'test:server'), null);
+});
+
+test('computeBudgetMs: a qualified attempts === 1 baseline (#3025, 17.85 min) yields ~44.6 min at K=2.5, above the 45-min FLOOR only if K x duration exceeds it', () => {
+  const floorMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000; // 45 min
+  const qualifiedDurationMs = 1070714; // #3025: 17.85 min, attempts: 1
+  const budget = computeBudgetMs(qualifiedDurationMs, floorMs);
+  // 1070714 * 2.5 ≈ 2676785ms ≈ 44.6 min — just under the 45-min FLOOR, so
+  // max(FLOOR, K*duration) degrades to FLOOR here, matching the design
+  // doc's own observation that the qualified baseline and the interim
+  // default "are not materially different".
+  assert.equal(budget, floorMs);
+});
+
+test('computeBudgetMs: falls back to FLOOR when the baseline is uncalibratable (attempts > 1)', () => {
+  const floorMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000;
+  const uncalibratable = qualifiedDurationFor(
+    { steps: { 'test:server': { durationMs: 1220000, attempts: 3 } } },
+    'test:server',
+  );
+  assert.equal(uncalibratable, null);
+  assert.equal(computeBudgetMs(uncalibratable, floorMs), floorMs);
+});
+
+test('computeBudgetMs: a large qualified baseline scales the budget past FLOOR (K x duration wins)', () => {
+  const floorMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000; // 45 min
+  const qualifiedDurationMs = 30 * 60 * 1000; // 30 min green run
+  const budget = computeBudgetMs(qualifiedDurationMs, floorMs);
+  assert.equal(budget, 30 * 60 * 1000 * 2.5); // 75 min — K*duration exceeds FLOOR
+});
+
+test('DEFAULT_STEP_TIMEOUT_MIN and DEFAULT_RUN_TIMEOUT_MIN match the design doc interim defaults (45 / 180)', () => {
+  assert.equal(DEFAULT_STEP_TIMEOUT_MIN, 45);
+  assert.equal(DEFAULT_RUN_TIMEOUT_MIN, 180);
 });
 
 test('decide: a legacy cache entry with durationMs but no attempts field is still a valid cache hit', () => {
@@ -1943,7 +2083,7 @@ test('hasVitestStep returns FALSE for an empty array', () => {
 // cache entry persists attempts, and the [pass] console line conditionally
 // reports the count.
 
-test('#3018: runPipeline persists attempts to cache and reports count only on retry', () => {
+test('#3018: runPipeline persists attempts to cache and reports count only on retry', async () => {
   const dir = makeGitFixture();
 
   // Fixture 1: crashes on first run (fork-pool crash shape), passes on retry.
@@ -1964,7 +2104,7 @@ test('#3018: runPipeline persists attempts to cache and reports count only on re
     // Criterion 1: retry case → cache.steps[step].attempts = 2
     // Criterion 2: [pass] line includes "2 attempts" (only when attempts > 1)
     logs.length = 0;
-    const result1 = runPipeline({
+    const result1 = await runPipeline({
       argv: ['--steps', 'test:server'],
       cwd: dir,
       env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
@@ -1982,7 +2122,7 @@ test('#3018: runPipeline persists attempts to cache and reports count only on re
     // Criterion 1: first-try case → cache.steps[step].attempts = 1
     // Criterion 2: [pass] line does NOT include attempt count (only when attempts > 1)
     logs.length = 0;
-    const result2 = runPipeline({
+    const result2 = await runPipeline({
       argv: ['--steps', 'test'],
       cwd: dir,
       env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
@@ -2001,7 +2141,7 @@ test('#3018: runPipeline persists attempts to cache and reports count only on re
   }
 });
 
-test('#3018: [fail] line reports attempt count when step crashes all retries', () => {
+test('#3018: [fail] line reports attempt count when step crashes all retries', async () => {
   const dir = makeGitFixture();
 
   // Fixture: crashes on all 3 attempts (fork-pool crash shape).
@@ -2018,7 +2158,7 @@ test('#3018: [fail] line reports attempt count when step crashes all retries', (
   try {
     // Run the pipeline; it will crash all 3 attempts and return non-zero
     logs.length = 0;
-    const result = runPipeline({
+    const result = await runPipeline({
       argv: ['--steps', 'test:server'],
       cwd: dir,
       env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },

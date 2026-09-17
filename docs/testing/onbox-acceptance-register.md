@@ -557,17 +557,29 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 7 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**51 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**52 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-17, adding A109** (#3084, claude): the OpenAI-compatible analyzer
+> **Last change: 2026-09-18, adding E105** (Castwright#3249, ops-72 Part 2, claude): the
+> `runStepProcess`/`runPipeline` async `spawn` conversion and step/pipeline time budgets
+> are unit-tested (including timeout-vs-crash-retry mutation tests) against a fast
+> throwaway fixture process tree, but `taskkill /T /F`'s own documented blind spot — a
+> fork whose parent PID link died before `/T`'s walk reached it — needs a real, deep,
+> long-lived Windows process tree (a genuine vitest fork-pool battery) to observe, the
+> same way Part 3's reaper needed one for **E104**. This lands on top of the independent
+> **A109** addition below (#3084 — a same-card endpoint's model yielding its card to Qwen
+> VoiceDesign, owed against a design rather than shipped code): 51 → 52 owed, Group E 7 → 8,
+> Group A unchanged at 35. `next-id` bumped E105 → E106 in the same change.
+> `npm run check:onbox-register` green.
+>
+> **Prior change: 2026-09-17, adding A109** (#3084, claude): the OpenAI-compatible analyzer
 > design (PR [#3245](https://github.com/dudarenok-maker/Castwright/pull/3245)) claimed that an
 > existing row already covered the one hardware consequence of its wave-4 pre-pass — a same-card
 > endpoint's model yielding its card to Qwen VoiceDesign. It cited a row "W3", which does not
@@ -579,8 +591,8 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > **Unusually, this row is owed against a design rather than shipped code** — wave 4 is not built,
 > so A109 cannot be run until it merges, and wave 4's ship PR discharges or narrows it. Recorded
 > this way deliberately: the alternative was an unproven claim with nothing tracking it.
->
-> **Last change: 2026-09-10, adding A107** (#3086/#3101, claude): the unit-level fix for
+
+> **Prior change: 2026-09-10, adding A107** (#3086/#3101, claude): the unit-level fix for
 > `/load`'s Kokoro-cold-load arbiter bypass is proven with a pure-Python threading test
 > (fake Kokoro engine, no GPU); the ORIGINAL symptom — a real Kokoro `/load` racing a
 > resident VoiceDesign forward on a shared-device box — still needs a real on-box re-run,
@@ -5060,7 +5072,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E105 -->
+<!-- next-id: E106 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9/E103). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -5511,6 +5523,47 @@ the TTS sidecar's `python.exe` if it's up):
 
 *Needs:* a Windows dev box, no GPU. *Cost:* ~20 minutes across a few pushes.
 *Criteria:* the five observations above; issue #3047's acceptance list.
+
+### E105 · ops-72 step/pipeline time budgets — `taskkill /T /F`'s orphan blind spot against a real Windows process tree ([Castwright#3249](https://github.com/dudarenok-maker/Castwright/issues/3249), Part 2 of [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)) · **any Windows dev box; no GPU needed**
+
+`runStepProcess`'s timeout path is unit-tested against a real (but tiny and fast)
+process tree: a fixture npm script that never exits is killed via
+`taskkill /PID <pid> /T /F` and classified `timedOut: true`, never retried as a
+crash (`scripts/tests/verify-cache.test.mjs`'s `runStepProcess`/`runPipeline`
+timeout mutation tests). What no unit test can prove is the thing the design
+doc calls out as **load-bearing**: `taskkill /T` walks *live* parent-PID links
+at the moment it runs, so a fork whose parent already died before that walk
+reaches it is invisible to `/T` — exactly the shape of the two 390-minute
+orphans in the 2026-09-05 census that motivated this whole design doc. A
+one-line `npm run <script>` fixture that exits almost instantly never grows a
+process tree deep or long-lived enough (`cmd.exe -> npm.cmd -> node(npm) ->
+node(vitest) -> N forks`) to exhibit that specific race.
+
+**What to observe, concretely**, on a Windows dev box:
+
+- Run a genuinely slow, fork-pool-heavy step (e.g. `npm run test:server`)
+  under an artificially tiny `CASTWRIGHT_STEP_TIMEOUT_MIN` (e.g. `0.2`) and
+  confirm the console reports `[timeout]`, not a `[retry]`/crash-exhausted
+  `[fail]` — then confirm via Task Manager / `Get-Process` that the ENTIRE
+  tree (`cmd.exe`, `npm`, the vitest parent, and every fork) is gone, not
+  just the top-level `cmd.exe` `taskkill /T` was pointed at.
+- Reproduce the actual blind spot: start the same slow step, then kill one of
+  its vitest fork children's immediate parent out from under it (simulating
+  the parent-dies-before-the-walk race) before the step's own timeout fires,
+  and confirm that fork survives the subsequent `taskkill /PID <root> /T /F`
+  — then confirm `runCensus({ kill: true, killReasons:
+  ['orphaned-unreachable'] })`, invoked immediately after the kill, catches
+  and reaps that survivor (this is the sweep Part 3's reaper already proves
+  in isolation at **E104** above; this row is specifically about the
+  hand-off from Part 2's timeout kill into it, on a real tree).
+- Confirm the whole-pipeline `CASTWRIGHT_RUN_TIMEOUT_MIN` budget actually
+  bounds a real multi-step `verify` run — start one with a tiny override and
+  confirm it aborts with `[timeout]` well before the 4h34m incident figure
+  this feature exists to cap, rather than running to completion because the
+  per-step budgets alone left enough total headroom.
+
+*Needs:* a Windows dev box, no GPU. *Cost:* ~15–20 minutes.
+*Criteria:* the three observations above; issue Castwright#3249's acceptance list.
 
 ## Group G — GitHub Actions itself
 
