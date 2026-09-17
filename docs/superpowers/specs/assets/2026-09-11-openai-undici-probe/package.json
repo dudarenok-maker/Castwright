@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "openai": "^7.15.0",
+    "undici": "^8.10.0"
+  }
+}
