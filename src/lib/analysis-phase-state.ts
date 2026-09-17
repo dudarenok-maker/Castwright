@@ -1,7 +1,16 @@
 import type { AnalysisLiveInfo } from './api';
 
 /** Coarse render state of one analysis phase card. */
-export type PhaseRenderState = 'pending' | 'active' | 'done' | 'paused' | 'halted';
+export type PhaseRenderState = 'pending' | 'active' | 'done' | 'paused' | 'halted' | 'needs-action';
+
+/** Predicate: is this halt code one of the two "not a failure" codes?
+ * @param haltCode The halt code from a stream snapshot (or undefined).
+ * @returns true if the code is cast_incomplete or stage1_shrink_refused, indicating
+ *   a state that requires user action but is not an error (#3203).
+ */
+export function isNotAFailureHaltCode(haltCode: string | undefined): boolean {
+  return haltCode === 'cast_incomplete' || haltCode === 'stage1_shrink_refused';
+}
 
 /** Inputs needed to decide one phase's render state, all keyed by phase id. */
 export interface PhaseStateInputs {
@@ -11,8 +20,11 @@ export interface PhaseStateInputs {
   liveByPhase: Record<number, AnalysisLiveInfo | null | undefined>;
   /** Highest phase id seen so far this run (the pipeline frontier). */
   maxPhase: number;
-  /** Overall run state, mirroring `AnalysisStreamSnapshot.state` (analysis-slice.ts). */
-  runState: 'running' | 'paused' | 'halted';
+  /** Overall run state, mirroring `AnalysisStreamSnapshot.state` (analysis-slice.ts),
+      widened with 'needs-action' — the caller's own resolution of a `halted` state
+      whose `haltCode` is one of the two not-a-failure codes (cast_incomplete,
+      stage1_shrink_refused), distinguishing them from a genuine halt (#3203). */
+  runState: 'running' | 'paused' | 'halted' | 'needs-action';
   /** Whether a run has actually started (explicit click, retry, cold-boot
       rehydrate of a running/paused/halted snapshot, …). When false, the
       frontier rule below yields 'pending' instead of 'active' — otherwise
@@ -40,7 +52,7 @@ const DONE_THRESHOLD = 0.999;
  *    stale live chapters; completion must win or its ticker would never clear);
  *  - the run isn't `running` AND this phase would otherwise read as active
  *    (live chapters present, or it's the frontier) AND the run has started
- *    → the run's own state (`paused`/`halted`) — checked BEFORE the
+ *    → the run's own state (`paused`/`halted`/`needs-action`) — checked BEFORE the
  *    live-chapters check below, because a paused/halted run can still carry
  *    a stale, sticky live payload from before the pause, and that stale data
  *    must not make the phase look active; checked AFTER the completion check
