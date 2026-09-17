@@ -53,7 +53,7 @@ import {
   _internals,
 } from '../verify-cache.mjs';
 
-const { hasVitestStep } = _internals;
+const { hasVitestStep, makeTailAccumulator, MAX_STDERR_BUFFER } = _internals;
 import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 
 const { SCHEMA_VERSION } = _internals;
@@ -1570,6 +1570,50 @@ test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout
   } finally {
     console.log = originalLog;
   }
+});
+
+// The tail/head stderr-accumulator regression test (#3258). Part 2's
+// retriable-pool-steps capture stderr through makeTailAccumulator, which keeps
+// the TAIL of the stream when it overflows. isVitestPoolCrash's signature
+// ("Worker exited unexpectedly") appears at the END of a crashed run's output,
+// so a head-keeping accumulator silently loses the signal under exactly the
+// high-output contention where crashes happen. This is the missing regression
+// test acceptance item 13 of #3250 flagged on #3249's completion claim.
+//
+// Driving a real 64MiB stderr child process end-to-end is deliberately not the
+// shape here: the accumulator is exported as a seam, the test feeds it more
+// than MAX_STDERR_BUFFER of content with the crash signature at the END, and
+// asserts the signature survives trimming.
+test('makeTailAccumulator keeps the TAIL past MAX_STDERR_BUFFER - the isVitestPoolCrash signature at the end of a crashed run survives (mutation test)', () => {
+  const acc = makeTailAccumulator(MAX_STDERR_BUFFER);
+
+  // More than a full 64MiB buffer, signature near the END (the real crashed
+  // run's shape: the signature is the LAST line before the process died).
+  // Chunk size mirrors a real OS pipe read (a few KiB to tens of KiB); the
+  // accumulator's Buffer.concat is O(size) per push and it trims to
+  // MAX_STDERR_BUFFER each time, so ~128MiB of input is ~2 concats of the
+  // capped buffer — fast enough for a unit test. (An earlier draft pushed
+  // 131072 x 1KiB chunks and turned the concat into O(n^2) over the whole
+  // buffer — that hung.)
+  const filler = Buffer.alloc(8 * 1024 * 1024).fill(0x78); // 'x', 8MiB per chunk
+  const tail = Buffer.from('[vitest-pool]: Worker exited unexpectedly\n');
+  // Emit enough chunks to exceed MAX_STDERR_BUFFER by a wide margin.
+  const chunkCount = Math.ceil((MAX_STDERR_BUFFER * 2) / filler.length);
+  for (let i = 0; i < chunkCount; i += 1) acc.push(filler);
+  acc.push(tail);
+
+  const out = acc.toString();
+  assert.match(
+    out,
+    /Worker exited unexpectedly/,
+    'after >MAX_STDERR_BUFFER of stderr, the crash signature at the END of the stream must survive ' +
+      '(an accumulator that keeps the HEAD would have trimmed it away)',
+  );
+  // And the kept tail is bounded: the accumulator must actually have trimmed.
+  assert.ok(
+    out.length >= tail.length && out.length <= MAX_STDERR_BUFFER,
+    `accumulator must keep at most MAX_STDERR_BUFFER bytes (kept ${out.length})`,
+  );
 });
 
 // Calibration (design doc, "What this buys Part 2 — qualifying the

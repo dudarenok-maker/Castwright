@@ -1787,4 +1787,18 @@ if (isDirectInvocation) {
 
 // For tests that want to know the schema version / cache filename without
 // hardcoding string literals.
-export const _internals = { SCHEMA_VERSION, CACHE_FILENAME, toPosix, globToRegex, hasVitestStep };
+//
+// makeTailAccumulator + MAX_STDERR_BUFFER are the regression-test seam for
+// Part 2's tail-keeping stderr accumulator (#3258): the test drives it
+// directly with more than MAX_STDERR_BUFFER bytes, asserting the
+// isVitestPoolCrash signature survives (i.e. the tail is kept, not the head).
+export const _internals = {
+  SCHEMA_VERSION,
+  CACHE_FILENAME,
+  toPosix,
+  globToRegex,
+  hasVitestStep,
+  makeTailAccumulator,
+  MAX_STDERR_BUFFER,
+};
+
