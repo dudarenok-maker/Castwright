@@ -2608,7 +2608,7 @@ Replace `#PR` with the PR number once it is opened.
 
 Everything this PR adds is provable in automation: selection, the free-text wire shape per transport, the Ollama bound and slot release, the limiter estimate, key-origin and missing-endpoint refusals, endpoint wiring over a real HTTP server, the same-card rule, and the pre-pass ordering and errors.
 
-The hardware consequence — a same-card endpoint's model yielding the card to VoiceDesign after the pre-pass — is a Qwen TTS load on that endpoint's card. That is exactly the "Same-card eviction" row W3 owns. The register, run sheet and live view are therefore unchanged.
+The hardware consequence — a same-card endpoint's model yielding the card to VoiceDesign after the pre-pass — is a Qwen TTS load on that endpoint's card, and automation cannot reach it: a third-party server's model has to actually release the card. No existing register row covers it (an earlier draft of this step claimed a row "W3" did; there is no `W` group, and the closest real rows, A17 and A105, are different scenarios). It is therefore recorded as **row A109**, minted by the design PR — so this step's PR body says the row is already open and owed, rather than claiming nothing is.
 
 - [ ] **Step 5: Commit the docs, push, open the PR.**
 ```bash

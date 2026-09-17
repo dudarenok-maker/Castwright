@@ -124,6 +124,7 @@ SDK `@google/genai` 2.19.0. `D` = `server/node_modules/@google/genai/dist/genai.
    - Google Cloud's Gemini 3.8 Flash developer guide (docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-8-flash) says temperature, top_p and top_k are ignored by the backend. This is from the owner-review read; a 2026-09-13 re-fetch returned only the page's navigation, so that sentence was not re-read.
    - Castwright at `80be2f1d` (both lines unchanged since `46e62a34`): `analyzer.gemini.temperature` defaults to 0.2 (`registry.ts:61-69`), and the Gemini validation retry replays at that temperature (`gemini.ts:484-493`).
    - Options owed: keep 0.2; default to 1.0; or send no temperature to 3.x.
+   - **Recommended (2026-09-17):** send none to `gemini-3.*`, keep 0.2 for `gemma-*`. Rationale and the two riders (the misleading registry help text; conformance comes from the response schema, not the temperature) are in the spec's "Decisions owed outside #3084". Verified live on 2026-09-17: the ai.google.dev wording above still stands, and the shipped default model `gemini-3.5-flash-lite` IS a Gemini 3 model, so the warned-against setting is today's default path — the retry at `gemini.ts:484-493` replays through the same `config`, so attempt 2 carries it too. The persona path (`voice-style.ts`) sends no temperature at all, so the repo is already internally inconsistent on this.
 
 ## §D — the pinned main commit, and what moved under it
 

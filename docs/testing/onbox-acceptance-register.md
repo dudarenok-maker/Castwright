@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,10 +563,23 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**50 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**51 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
+> **Last change: 2026-09-17, adding A109** (#3084, claude): the OpenAI-compatible analyzer
+> design (PR [#3245](https://github.com/dudarenok-maker/Castwright/pull/3245)) claimed that an
+> existing row already covered the one hardware consequence of its wave-4 pre-pass — a same-card
+> endpoint's model yielding its card to Qwen VoiceDesign. It cited a row "W3", which does not
+> exist (there is no `W` group; the label was a wave number that leaked into a citation), and the
+> nearest real rows — A17 (contended eviction on the default Qwen path) and A105 (base17 eviction
+> guard) — are different scenarios. `check:register-citations` caught it as a nonexistent-ID
+> citation. Rather than drop the claim, the debt is recorded as **A109**, minted from Group A's
+> `next-id` floor; marker bumped A109 → A110 in the same change. 50 → 51 owed, Group A 34 → 35.
+> **Unusually, this row is owed against a design rather than shipped code** — wave 4 is not built,
+> so A109 cannot be run until it merges, and wave 4's ship PR discharges or narrows it. Recorded
+> this way deliberately: the alternative was an unproven claim with nothing tracking it.
+>
 > **Last change: 2026-09-10, adding A107** (#3086/#3101, claude): the unit-level fix for
 > `/load`'s Kokoro-cold-load arbiter bypass is proven with a pure-Python threading test
 > (fake Kokoro engine, no GPU); the ORIGINAL symptom — a real Kokoro `/load` racing a
@@ -1310,7 +1323,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A109 -->
+<!-- next-id: A110 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -4599,6 +4612,34 @@ I/O but not a multi-minute download, ~30s per engine if the weights are already 
 or pre-cached) and one refusal attempt with a chapter queued to render (Qwen, since
 it's the fastest to boot). No golden-audio comparison, no complex fixture setup, no
 timeout tolerance tuning.
+
+### A109 · A same-card OpenAI-compatible endpoint yields its card to Qwen VoiceDesign after the analyzer pre-pass ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), design [`docs/superpowers/specs/2026-09-10-openai-compatible-analyzer-design.md`](../superpowers/specs/2026-09-10-openai-compatible-analyzer-design.md)) · **single 8 GB card, a real OpenAI-compatible server (llama.cpp/llama-swap or LM Studio) holding a model on that same card, Qwen VoiceDesign**
+
+Minted by the design PR, not by shipped code — **this row is owed against wave 4 of the
+plan and cannot be run until wave 4 merges.** It is recorded now because the design
+originally asserted an existing row already covered this hardware consequence, and no
+such row exists; the alternative was leaving the claim unproven and unrecorded.
+
+Wave 4 adds a pre-pass that orders the analyzer's endpoint call ahead of a Qwen
+VoiceDesign load when both target the same GPU. Everything else in that wave is provable
+in automation — selection, the free-text wire shape per transport, the Ollama bound and
+slot release, the limiter estimate, key-origin and missing-endpoint refusals, endpoint
+wiring over a real HTTP server, the same-card rule, and the pre-pass ordering and errors.
+The one consequence automation cannot reach is the real VRAM handover: a third-party
+server's model must actually release the card so a 1.7B VoiceDesign load succeeds on it.
+
+*Criteria:*
+1. With an OpenAI-compatible server resident on the single 8 GB card and an analysis
+   configured against it, trigger a cast design that needs Qwen VoiceDesign. The
+   pre-pass runs, the endpoint's model yields the card, and VoiceDesign loads and
+   designs without an OOM.
+2. The reverse order is also safe: with VoiceDesign resident, an analysis against the
+   same-card endpoint does not OOM and does not silently fall back to another engine.
+3. Neither path leaves the card stranded — after both complete, a subsequent chapter
+   render on that card succeeds.
+
+*Cost:* medium — needs a real third-party server installed and pinned to the same card,
+plus one cast design and one chapter render. No golden-audio comparison.
 
 ## Group B — local Ollama analyzer only
 
