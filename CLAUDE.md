@@ -1302,6 +1302,16 @@ Working practice below; this holds even under contention).
 **Verify where a dispatched agent actually wrote**
 ([#3044](https://github.com/dudarenok-maker/Castwright/issues/3044)):
 
+- **Option 2 (prevention) now exists and supersedes option 1 as the gate:**
+  `scripts/hooks/guard-worktree-write.mjs`, wired as a `hooks:` frontmatter
+  `PreToolUse` guard on `.claude/agents/fix-agent.md`, denies a dispatched
+  fix-agent's `Write`/`Edit` call whose target path resolves outside its
+  assigned worktree, and denies a `Bash` call whose command text contains a
+  foreign checkout root's absolute path. The Bash check is COARSE by design —
+  a path referenced indirectly (a shell variable, a relative path resolved
+  elsewhere, a runtime-assembled string) is not caught. **Option 1 below stays
+  as the backstop**, since it also catches writes through paths a hook does
+  not model.
 - **Capture the primary checkout's `git status --porcelain` before a dispatch
   round and again after each agent returns.** Any entry that is not yours is a
   **failed dispatch** — revert it and re-dispatch; do not adopt it. This is the

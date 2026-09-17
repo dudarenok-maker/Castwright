@@ -3,6 +3,12 @@ name: fix-agent
 description: Fixes one narrowly-scoped incidental finding — one finding, one fix, one paired regression test — briefed from the report that surfaced it.
 model: haiku
 effort: medium
+hooks:
+  PreToolUse:
+    - matcher: "Write|Edit|Bash"
+      hooks:
+        - type: command
+          command: "node \"${CLAUDE_PROJECT_DIR}/scripts/hooks/guard-worktree-write.mjs\""
 ---
 
 You fix exactly ONE finding, briefed from the report that surfaced it.
