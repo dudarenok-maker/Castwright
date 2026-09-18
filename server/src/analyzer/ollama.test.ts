@@ -1451,6 +1451,120 @@ describe('generatePersonaViaOllama', () => {
   });
 });
 
+describe('OllamaAnalyzer — runner characterisation (#3084 wave 1)', () => {
+  const IDS = [
+    'm_ollama_char_final',
+    'm_ollama_char_replay',
+    'm_ollama_char_esc_down',
+    'm_ollama_char_esc_abort',
+    'm_ollama_char_esc_500',
+    'm_ollama_char_esc_trunc',
+    'm_ollama_char_esc_timing',
+  ];
+
+  afterEach(async () => {
+    for (const id of IDS) {
+      for (const key of ['stage1-ch1', 'stageescalation-ch1-w0']) {
+        await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-${key}.md`), { force: true });
+        await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-${key}.json`), { force: true });
+        await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-${key}.errors.json`), { force: true });
+        await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-${key}.attempt1.raw.txt`), { force: true });
+        await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-${key}.attempt2.raw.txt`), { force: true });
+      }
+    }
+  });
+
+  it('pins the final validation-failure message and the attempt-2 errors.json payload', async () => {
+    const bad = JSON.stringify({ characters: 'nope' });
+    fetchMock.mockImplementation(() => Promise.resolve(okResponse(ndjsonStream(chunksOf(bad, 32)))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const { readFile } = await import('node:fs/promises');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    const err = await analyzer
+      .runStage1Chapter('m_ollama_char_final', 1, '# prompt', {})
+      .then(() => null, (e: Error) => e);
+
+    expect(err?.message.startsWith('Ollama qwen3.5:9b 1-ch1 failed validation after retry: schema-validation — ')).toBe(true);
+    const errorsJson = JSON.parse(
+      await readFile(resolve(HANDOFF_ROOT, 'outbox', 'm_ollama_char_final-stage1-ch1.errors.json'), 'utf8'),
+    );
+    expect(errorsJson).toMatchObject({ kind: 'schema-validation', attempt: 2, firstError: { kind: 'schema-validation' } });
+  });
+
+  it('a schema-validation retry replays the exact first output and buildRetryMessage text', async () => {
+    const strictlyInvalid = JSON.stringify({ characters: 'nope' });
+    fetchMock
+      .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(strictlyInvalid, 32))))
+      .mockResolvedValueOnce(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 32))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+
+    await analyzer.runStage1Chapter('m_ollama_char_replay', 1, '# prompt', {});
+
+    const first = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    const second = JSON.parse((fetchMock.mock.calls[1][1] as { body: string }).body);
+    expect(second.messages).toHaveLength(4);
+    expect(second.messages[0]).toEqual(first.messages[0]); // same system instruction
+    expect(second.messages[1]).toEqual({ role: 'user', content: '# prompt' });
+    expect(second.messages[2]).toEqual({ role: 'assistant', content: strictlyInvalid });
+    expect(second.messages[3].role).toBe('user');
+    expect(second.messages[3].content.startsWith('Your previous response failed schema validation.')).toBe(true);
+    expect(second.format).toEqual(first.format); // same grammar on the retry
+  });
+
+  it('escalation rethrows LocalUnreachableError instead of resolving null', async () => {
+    fetchMock.mockRejectedValue(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNREFUSED' } }));
+    const { OllamaAnalyzer, LocalUnreachableError } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    await expect(
+      analyzer.runAttributionEscalation('m_ollama_char_esc_down', 1, 0, 'resolve these lines', {}),
+    ).rejects.toBeInstanceOf(LocalUnreachableError);
+  });
+
+  it('escalation rethrows AnalysisAbortedError for an already-aborted signal, before any fetch', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const { OllamaAnalyzer, AnalysisAbortedError } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    await expect(
+      analyzer.runAttributionEscalation('m_ollama_char_esc_abort', 1, 0, 'resolve these lines', { signal: ac.signal }),
+    ).rejects.toBeInstanceOf(AnalysisAbortedError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('escalation resolves null on a non-OK 500 and on a done_reason:length stream', async () => {
+    fetchMock
+      .mockResolvedValueOnce(new Response('boom', { status: 500, statusText: 'Internal Server Error' }))
+      .mockResolvedValueOnce(okResponse(ndjsonStreamWithDoneReason(['{"assignments":[{"line":1'], 'length')));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    expect(await analyzer.runAttributionEscalation('m_ollama_char_esc_500', 1, 0, 'p', {})).toBeNull();
+    expect(await analyzer.runAttributionEscalation('m_ollama_char_esc_trunc', 1, 0, 'p', {})).toBeNull();
+  });
+
+  it('escalation does not forward onEvalTiming (only runStage calls pass the telemetry sink)', async () => {
+    fetchMock.mockResolvedValue(
+      okResponse(
+        ndjsonStreamWithTiming(chunksOf(JSON.stringify({ assignments: [] }), 8), {
+          eval_count: 10,
+          eval_duration: 1_000_000,
+          prompt_eval_count: 20,
+          prompt_eval_duration: 1_000_000,
+          load_duration: 0,
+        }),
+      ),
+    );
+    const onEvalTiming = vi.fn();
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    expect(await analyzer.runAttributionEscalation('m_ollama_char_esc_timing', 1, 0, 'p', { onEvalTiming })).toEqual({
+      assignments: [],
+    });
+    expect(onEvalTiming).not.toHaveBeenCalled();
+  });
+});
+
 afterAll(async () => {
   /* Tidy test inbox/outbox files. */
   for (const id of [
