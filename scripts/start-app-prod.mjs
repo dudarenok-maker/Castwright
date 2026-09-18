@@ -236,6 +236,17 @@ async function probeServed(port, useHttps) {
   return getJson('https', port, agent);
 }
 
+/* Whether an /api/health response describes THIS worktree's own server
+   instance rather than some other Castwright install (e.g. a sibling
+   worktree's server) that happens to answer on a port we probed. The server
+   stamps configLoad.cwd with its own process.cwd() at boot (load-env.ts),
+   which the launcher spawns as `server/` under its own repo root — a
+   workspace-identifying field, not a guess. Exported for
+   scripts/tests/start-app-prod.test.mjs. */
+export function isOwnServerInstance(served, ownServerCwd) {
+  return served?.configLoad?.cwd === ownServerCwd;
+}
+
 async function main() {
   mkdirSync(runDir, { recursive: true });
   mkdirSync(logDir, { recursive: true });
@@ -281,28 +292,42 @@ async function main() {
           `likely a stale or foreign server. Run "npm run stop" and retry.`,
       );
     }
-    if (served.configLoad && served.configLoad.envLoaded === false) {
-      info(
-        `[WARN] server on :${port} is running WITHOUT server/.env ` +
-          `(cwd=${served.configLoad.cwd}) — on DEFAULTS. Stop it and relaunch from server/.`,
-      );
+    if (isOwnServerInstance(served, serverDir)) {
+      if (served.configLoad && served.configLoad.envLoaded === false) {
+        info(
+          `[WARN] server on :${port} is running WITHOUT server/.env ` +
+            `(cwd=${served.configLoad.cwd}) — on DEFAULTS. Stop it and relaunch from server/.`,
+        );
+      }
+      info(`[SKIP] server already listening on :${port} — leaving it alone`);
+      info(`[READY] ${url}`);
+      process.exit(0);
     }
-    info(`[SKIP] server already listening on :${port} — leaving it alone`);
-    info(`[READY] ${url}`);
-    process.exit(0);
+    /* A DIFFERENT Castwright install (e.g. a sibling worktree's own server)
+       answers on our target port — not a duplicate of this worktree's own
+       instance, so don't refuse to start. Fall through to spawn:
+       listenWithAutoRebind (production) walks to the next free port if
+       binding here EADDRINUSEs, rather than the launcher refusing outright. */
+    info(
+      `[INFO] a different Castwright server (cwd=${served.configLoad?.cwd ?? 'unknown'}) is already ` +
+        `listening on :${port} — not this worktree's own instance. Starting anyway; the server will ` +
+        `auto-rebind to a free port if :${port} is unavailable.`,
+    );
   }
 
-  /* A prior launch may have bound the OTHER port — e.g. it started loopback HTTP
-     :8080 because certs were absent, and now certs exist so our target is :8443.
-     Probing only the target would miss that running server and spawn a duplicate
-     (two servers, one stale pid file). Detect a live Castwright server on the
-     alternate port and leave it alone. */
+  /* A prior launch of THIS worktree's own server may have bound the OTHER
+     port — e.g. it started loopback HTTP :8080 because certs were absent,
+     and now certs exist so our target is :8443. Probing only the target
+     would miss that running server and spawn a duplicate (two servers, one
+     stale pid file). Detect a live instance of THIS worktree's own server on
+     the alternate port and leave it alone — a sibling worktree's (or any
+     other install's) own server answering there is not a reason to skip. */
   const altPort = port === Number(process.env.LAN_HTTPS_PORT ?? 8443)
     ? Number(process.env.PORT ?? 8080)
     : Number(process.env.LAN_HTTPS_PORT ?? 8443);
   if (altPort !== port && (await probePort(altPort))) {
     const servedAlt = await probeServed(altPort, altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443));
-    if (servedAlt) {
+    if (servedAlt && isOwnServerInstance(servedAlt, serverDir)) {
       info(
         `[SKIP] a Castwright server is already listening on :${altPort} — leaving it alone. ` +
           `Run "npm run stop:prod" first to relaunch on :${port}.`,

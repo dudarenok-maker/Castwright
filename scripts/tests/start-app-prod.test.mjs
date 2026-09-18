@@ -12,7 +12,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveLaunchTarget } from '../start-app-prod.mjs';
+import { resolveLaunchTarget, isOwnServerInstance } from '../start-app-prod.mjs';
 
 test('prod default (certs present, no LAN_HTTPS) → https on :8443', () => {
   assert.deepEqual(resolveLaunchTarget({}, true), {
@@ -73,6 +73,29 @@ test('defaults to process.env + certsPresent=true when called with no argument',
     if (saved.PORT === undefined) delete process.env.PORT;
     else process.env.PORT = saved.PORT;
   }
+});
+
+// Castwright#3030 — the launcher's "already running" liveness check must
+// distinguish THIS worktree's own server from a sibling worktree's (or any
+// other install's) server that happens to answer on a probed port, using the
+// /api/health configLoad.cwd field the server stamps at boot.
+test('isOwnServerInstance: matching cwd is this worktree\'s own server', () => {
+  assert.equal(
+    isOwnServerInstance({ configLoad: { cwd: '/repo/server' } }, '/repo/server'),
+    true,
+  );
+});
+
+test('isOwnServerInstance: a sibling worktree\'s server (different cwd) is NOT this instance', () => {
+  assert.equal(
+    isOwnServerInstance({ configLoad: { cwd: '/other-worktree/server' } }, '/repo/server'),
+    false,
+  );
+});
+
+test('isOwnServerInstance: missing configLoad (unexpected /api/health shape) is NOT this instance', () => {
+  assert.equal(isOwnServerInstance({}, '/repo/server'), false);
+  assert.equal(isOwnServerInstance(null, '/repo/server'), false);
 });
 
 import { bannerLine, formatBuildManifestLine } from '../start-app-prod.mjs';
