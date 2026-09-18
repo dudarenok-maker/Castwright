@@ -9,8 +9,16 @@
 // and a confirmed-working deny is exit code 2 with a stderr message.
 //
 import { readdirSync, readFileSync } from 'node:fs';
-import { join, resolve, sep } from 'node:path';
+import { win32 } from 'node:path';
 import { isDirectlyInvoked } from '../lib/is-main-module.mjs';
+
+// PRIMARY_CHECKOUT_ROOT / PROJECTS_ROOT are hardcoded Windows paths regardless
+// of what OS this hook runs on (CI runs the test suite on Ubuntu). The
+// platform-default `node:path` export resolves to `path.posix` there, which
+// treats a `C:\...` string as a non-absolute path and silently prepends
+// `process.cwd()` to it — breaking both the containment check and the Bash
+// substring match. Pin to `path.win32` so the logic is identical on every OS.
+const { join, resolve, sep } = win32;
 
 // The primary checkout — never itself a valid target for a dispatched
 // fix-agent's writes, whatever tree it was assigned.
