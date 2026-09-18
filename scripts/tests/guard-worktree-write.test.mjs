@@ -132,6 +132,65 @@ test('Bash command referencing a foreign root via the WSL /mnt/c/ form is denied
   assert.match(verdict.reason, /foreign checkout root/);
 });
 
+// === Bash path-spelling coverage (Castwright#3261 review pass 2, C5) =======
+// tool_input.command is the RAW string before the shell's own escape
+// processing runs, so a command that resolves to a real Windows path at
+// execution time can still arrive here doubled-backslash (the correct Git
+// Bash spelling of a literal `\`) or with `/` and `\` mixed within one path.
+// Pass 1's fix only caught the single-backslash and single-style forms.
+
+test('Bash command referencing a foreign root via a doubled (Git-Bash-escaped) backslash is denied', () => {
+  const verdict = decideGuardVerdict({
+    toolName: 'Bash',
+    toolInput: { command: `cat "C:\\\\Claude\\\\Projects\\\\Audiobook-Generator\\\\RELEASE_NOTES.md"` },
+    cwd: WORKTREE,
+    knownRoots: KNOWN_ROOTS,
+  });
+  assert.equal(verdict.deny, true);
+  assert.match(verdict.reason, /foreign checkout root/);
+});
+
+test('Bash command referencing a foreign root via mixed forward/back slashes is denied', () => {
+  const verdict = decideGuardVerdict({
+    toolName: 'Bash',
+    toolInput: { command: `cat C:\\Claude/Projects\\Audiobook-Generator/RELEASE_NOTES.md` },
+    cwd: WORKTREE,
+    knownRoots: KNOWN_ROOTS,
+  });
+  assert.equal(verdict.deny, true);
+  assert.match(verdict.reason, /foreign checkout root/);
+});
+
+// === Bash path-boundary coverage (Castwright#3261 review pass 2, C6) =======
+// A root that is a literal string prefix of a sibling worktree's own name
+// (a shape wt-new.mjs actively mints, e.g. wt-3243 / wt-3243-followup) must
+// not deny a command that only ever references the agent's OWN tree.
+
+test('Bash command referencing only the agent\'s own worktree is allowed, even when a sibling root is its name prefix', () => {
+  const shortSibling = 'C:\\Claude\\Projects\\wt-3243';
+  const ownWorktree = 'C:\\Claude\\Projects\\wt-3243-followup';
+  const verdict = decideGuardVerdict({
+    toolName: 'Bash',
+    toolInput: { command: `ls "${ownWorktree}\\src"` },
+    cwd: ownWorktree,
+    knownRoots: [PRIMARY_CHECKOUT_ROOT, shortSibling, ownWorktree],
+  });
+  assert.equal(verdict.deny, false);
+});
+
+test('Bash command referencing a sibling root that is a name-prefix of a longer one is still denied on its own', () => {
+  const shortSibling = 'C:\\Claude\\Projects\\wt-3243';
+  const longerSibling = 'C:\\Claude\\Projects\\wt-3243-followup';
+  const verdict = decideGuardVerdict({
+    toolName: 'Bash',
+    toolInput: { command: `ls "${shortSibling}\\src"` },
+    cwd: longerSibling,
+    knownRoots: [PRIMARY_CHECKOUT_ROOT, shortSibling, longerSibling],
+  });
+  assert.equal(verdict.deny, true);
+  assert.match(verdict.reason, /foreign checkout root/);
+});
+
 // === PowerShell (Castwright#3261 review pass 1, C3) ========================
 
 test('PowerShell command referencing a foreign checkout root is denied', () => {

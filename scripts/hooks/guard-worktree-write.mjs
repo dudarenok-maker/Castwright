@@ -71,19 +71,55 @@ function isUnderRoot(absPath, root) {
   return normPath === normRoot || normPath.startsWith(normRoot + sep);
 }
 
-/** Every spelling a Windows absolute path can appear under in a command this
- *  hook has to scan as plain text: native backslash, forward-slash (accepted
- *  by most Windows tools too), Git Bash's `/c/...` mount form, and WSL's
- *  `/mnt/c/...` form. All four are literal, unexpanded substrings — no shell
- *  variable or relative-path resolution is attempted (see the Bash-detection
- *  doc comment below). Non-drive-letter roots (defensive only — every real
- *  root here is `C:\...`) fall back to the single lowercased root string. */
+/** Collapses every separator spelling a Windows path can appear under in a
+ *  shell command down to ONE canonical form (forward slash), so a single
+ *  substring check catches all of them at once instead of enumerating —
+ *  enumerating already lost a round to a spelling nobody listed (pass 1 of
+ *  Castwright#3261's review missed the doubled-backslash and mixed-separator
+ *  forms a Bash-tool payload actually carries: `tool_input.command` is the
+ *  RAW string before the shell's own escape processing runs, so a command
+ *  that will resolve to a real Windows path at execution time can still
+ *  arrive here as `C:\\Claude\\...` (doubled backslash) or with `/` and `\`
+ *  mixed within one path). Order matters: collapse doubled backslashes to a
+ *  single one FIRST, then unify every remaining run of `/`/`\` to a single
+ *  `/` — reversing the order would turn `\\` into `//` instead of `/`. */
+function normalizeSeparators(text) {
+  return text.replace(/\\\\/g, '\\').replace(/[\\/]+/g, '/');
+}
+
+/** The two path forms that are NOT reachable by separator normalization
+ *  alone — Git Bash's `/c/...` mount and WSL's `/mnt/c/...` — plus the
+ *  drive-letter form itself (post-normalization). All are literal,
+ *  unexpanded substrings — no shell variable or relative-path resolution is
+ *  attempted (see the Bash-detection doc comment below). Non-drive-letter
+ *  roots (defensive only — every real root here is `C:\...`) fall back to
+ *  the single normalized, lowercased root string. */
 function pathSpellings(root) {
-  const m = /^([A-Za-z]):[\\/](.*)$/.exec(root);
-  if (!m) return [root.toLowerCase()];
-  const drive = m[1].toLowerCase();
-  const rest = m[2].replace(/\\/g, '/').toLowerCase();
-  return [`${drive}:\\${rest.replace(/\//g, '\\')}`, `${drive}:/${rest}`, `/${drive}/${rest}`, `/mnt/${drive}/${rest}`];
+  const normalized = normalizeSeparators(root).toLowerCase();
+  const m = /^([a-z]):\/(.*)$/.exec(normalized);
+  if (!m) return [normalized];
+  const [, drive, rest] = m;
+  return [normalized, `/${drive}/${rest}`, `/mnt/${drive}/${rest}`];
+}
+
+/** True if `needle` occurs in `haystack` at a real path-component boundary —
+ *  i.e. what follows the match is a separator, quote, whitespace, or the end
+ *  of the string, never another filename-continuation character. Without
+ *  this, a shorter root that is a literal string prefix of a longer sibling
+ *  worktree's name (e.g. `wt-3243` vs. `wt-3243-followup` — a shape
+ *  `wt-new.mjs` actively mints) makes the guard deny the agent's OWN tree: a
+ *  plain `.includes()` finds `wt-3243` inside `wt-3243-followup` and treats
+ *  it as a reference to the wrong root. Mirrors `isUnderRoot`'s `+ sep`
+ *  boundary check, adapted for scanning free-text instead of comparing two
+ *  already-resolved paths. */
+function containsPathAtBoundary(haystack, needle) {
+  let idx = haystack.indexOf(needle);
+  while (idx !== -1) {
+    const next = haystack[idx + needle.length];
+    if (next === undefined || !/[a-z0-9_.-]/i.test(next)) return true;
+    idx = haystack.indexOf(needle, idx + 1);
+  }
+  return false;
 }
 
 /** Pure decision function. Never throws — a hook that crashes on a payload
@@ -108,15 +144,20 @@ function pathSpellings(root) {
  *  Bash/PowerShell: COARSE by design (per #3044's "Decision (2026-09-06)"
  *  comment — a precise shell-command check does not exist yet, and shipping
  *  the coarse one is the documented decision rather than deferring). Flags a
- *  command whose text contains an absolute path belonging to a DIFFERENT
- *  known checkout root while cwd is a different root — checked against every
- *  spelling a Windows path can appear under in a shell command (native
- *  backslash, forward-slash, Git Bash's `/c/...`, WSL's `/mnt/c/...`; see
- *  `pathSpellings`). FALSE-NEGATIVE RISK, stated per the issue's requirement:
- *  a command that references a foreign path indirectly — via a shell
- *  variable, a relative path resolved elsewhere, an environment expansion,
- *  or a path assembled at runtime — is not caught. Only a literal absolute
- *  path substring, in one of its known spellings, is detected. */
+ *  command whose text contains, AT A REAL PATH-COMPONENT BOUNDARY (see
+ *  `containsPathAtBoundary` — otherwise a root that is a string prefix of a
+ *  sibling worktree's name denies the agent's own tree), an absolute path
+ *  belonging to a DIFFERENT known checkout root while cwd is a different
+ *  root — checked after normalizing every separator spelling a Windows path
+ *  can appear under in a shell command to one canonical form (native
+ *  backslash, doubled/escaped backslash, forward-slash, and any mix of
+ *  those; see `normalizeSeparators`), plus Git Bash's `/c/...` and WSL's
+ *  `/mnt/c/...` mount forms (see `pathSpellings`). FALSE-NEGATIVE RISK,
+ *  stated per the issue's requirement: a command that references a foreign
+ *  path indirectly — via a shell variable, a relative path resolved
+ *  elsewhere, an environment expansion, or a path assembled at runtime — is
+ *  not caught. Only a literal absolute path substring, in one of its known
+ *  spellings, is detected. */
 export function decideGuardVerdict({ toolName, toolInput, cwd, knownRoots = listKnownCheckoutRoots() }) {
   try {
     if (toolName === 'Write' || toolName === 'Edit' || toolName === 'NotebookEdit') {
@@ -133,11 +174,11 @@ export function decideGuardVerdict({ toolName, toolInput, cwd, knownRoots = list
     }
 
     if (toolName === 'Bash' || toolName === 'PowerShell') {
-      const command = String(toolInput?.command ?? '').toLowerCase();
+      const command = normalizeSeparators(String(toolInput?.command ?? '').toLowerCase());
       const ownRoot = knownRoots.find((root) => isUnderRoot(cwd, root));
       for (const root of knownRoots) {
         if (ownRoot && resolve(root).toLowerCase() === resolve(ownRoot).toLowerCase()) continue;
-        if (pathSpellings(root).some((spelling) => command.includes(spelling))) {
+        if (pathSpellings(root).some((spelling) => containsPathAtBoundary(command, spelling))) {
           return {
             deny: true,
             reason: `guard-worktree-write: ${toolName} command references a foreign checkout root "${root}" while cwd is "${cwd}".`,
