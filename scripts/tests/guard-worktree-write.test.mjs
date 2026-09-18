@@ -29,6 +29,34 @@ test('Write to the primary checkout is denied', () => {
   assert.match(verdict.reason, /outside the assigned worktree/);
 });
 
+// === cwd as a subdirectory, not a worktree root (Castwright#3261 review pass 3, C7) ===
+// A real dispatched agent's cwd for a given tool call is not always the
+// worktree ROOT. Comparing the containment check against raw cwd (rather
+// than the known root cwd resolves to) denied a legitimate write from any
+// tool call issued from a subdirectory — invisible to every test above,
+// which all set cwd to a root already.
+
+test('Write to a sibling file, issued while cwd is a SUBDIRECTORY of the assigned worktree, is allowed', () => {
+  const verdict = decideGuardVerdict({
+    toolName: 'Write',
+    toolInput: { file_path: `${WORKTREE}\\CLAUDE.md`, content: 'x' },
+    cwd: `${WORKTREE}\\src`,
+    knownRoots: KNOWN_ROOTS,
+  });
+  assert.equal(verdict.deny, false);
+});
+
+test('Write to a foreign root is still denied when cwd is a subdirectory of the assigned worktree', () => {
+  const verdict = decideGuardVerdict({
+    toolName: 'Write',
+    toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\RELEASE_NOTES.md`, content: 'x' },
+    cwd: `${WORKTREE}\\src`,
+    knownRoots: KNOWN_ROOTS,
+  });
+  assert.equal(verdict.deny, true);
+  assert.match(verdict.reason, /outside the assigned worktree/);
+});
+
 // === Edit ==================================================================
 
 test('Edit to a sibling wt-* worktree is denied', () => {

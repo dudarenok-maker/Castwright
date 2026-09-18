@@ -71,7 +71,13 @@ Confirmed real fields from the JSON above, for all three tool types tested:
 
 - Common to every call: `hook_event_name` (`"PreToolUse"`), `tool_name`,
   `tool_input`, `cwd` (the subagent's working directory — the worktree, not
-  the scratch dir), `session_id`, plus **`agent_id`** and **`agent_type`**,
+  the scratch dir, IN THIS SPIKE'S SETUP; this was arranged by `Set-Location`
+  into the worktree before launching `claude -p`, per "Setup" above, not a
+  property this spike observed a subagent guarantee on its own — see
+  [Castwright#3263](https://github.com/dudarenok-maker/Castwright/issues/3263),
+  filed from PR #3261's own review pass, for the real failure mode this
+  arrangement doesn't rule out), `session_id`, plus **`agent_id`** and
+  **`agent_type`**,
   which were present and populated (`agent_type: "fix-agent"`) specifically
   because these calls came from inside a subagent — this is the field a
   future global hook would use to distinguish subagent calls from main-session

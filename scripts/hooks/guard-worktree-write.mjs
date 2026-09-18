@@ -122,24 +122,41 @@ function containsPathAtBoundary(haystack, needle) {
   return false;
 }
 
+/** Resolves `cwd` to the known checkout root it sits under, falling back to
+ *  raw `cwd` when it matches none (matching listKnownCheckoutRoots' own
+ *  fail-closed default: "a guard that cannot see other worktrees still
+ *  protects the one root it knows about for certain"). Needed because a real
+ *  dispatched agent's `cwd` for a given tool call is not always a worktree
+ *  ROOT — a call issued from a subdirectory (`cwd = <worktree>\src`, an
+ *  ordinary shape) must still see every other file inside that SAME
+ *  worktree as in-bounds, not just siblings of the subdirectory `cwd`
+ *  happens to sit in. */
+function resolveAssignedRoot(cwd, knownRoots) {
+  return knownRoots.find((root) => isUnderRoot(cwd, root)) ?? cwd;
+}
+
 /** Pure decision function. Never throws — a hook that crashes on a payload
  *  shape it did not expect must fail OPEN (allow), not open a window where a
  *  parse bug blocks every tool call from every subagent.
  *
  *  KNOWN GAP (Castwright#3263, filed from PR #3261's own review pass):
- *  "assigned worktree" is defined here as `cwd`, which is NOT independently
- *  verified — it is whatever the harness happened to start this subagent
- *  process in. #3044's own incident record describes a brief that correctly
- *  named the worktree while the agent's process nonetheless ran with `cwd`
- *  pointed at the wrong root; in that shape this guard protects the wrong
- *  root, not the right one. Fixing that needs an independent per-dispatch
- *  signal this hook does not currently have — tracked in #3263, not fixed
- *  here.
+ *  "assigned worktree" is defined here as the root `cwd` resolves to, which
+ *  is NOT independently verified — it is whatever the harness happened to
+ *  start this subagent process in. #3044's own incident record describes a
+ *  brief that correctly named the worktree while the agent's process
+ *  nonetheless ran with `cwd` pointed at the wrong root; in that shape this
+ *  guard protects the wrong root, not the right one. Fixing that needs an
+ *  independent per-dispatch signal this hook does not currently have —
+ *  tracked in #3263, not fixed here.
  *
  *  Write/Edit/NotebookEdit: resolve the target path (tool_input.file_path
- *  for Write/Edit, tool_input.notebook_path for NotebookEdit) against cwd
- *  and deny anything that does not fall under the assigned worktree (cwd).
- *  Precise — this is a real path containment check, not a heuristic.
+ *  for Write/Edit, tool_input.notebook_path for NotebookEdit) against the
+ *  root `resolveAssignedRoot` resolves `cwd` to (pass 3 of #3261's review,
+ *  C7 — comparing against raw `cwd` instead denied a legitimate write from
+ *  any tool call issued outside the worktree's own root, invisible to the
+ *  guard's own suite because every test set `cwd` to a root already) and
+ *  deny anything that does not fall under it. Precise — this is a real path
+ *  containment check, not a heuristic.
  *
  *  Bash/PowerShell: COARSE by design (per #3044's "Decision (2026-09-06)"
  *  comment — a precise shell-command check does not exist yet, and shipping
@@ -160,14 +177,16 @@ function containsPathAtBoundary(haystack, needle) {
  *  spellings, is detected. */
 export function decideGuardVerdict({ toolName, toolInput, cwd, knownRoots = listKnownCheckoutRoots() }) {
   try {
+    const assignedRoot = resolveAssignedRoot(cwd, knownRoots);
+
     if (toolName === 'Write' || toolName === 'Edit' || toolName === 'NotebookEdit') {
       const filePath = toolName === 'NotebookEdit' ? toolInput?.notebook_path : toolInput?.file_path;
       if (!filePath) return { deny: false };
       const abs = resolve(cwd, filePath);
-      if (!isUnderRoot(abs, cwd)) {
+      if (!isUnderRoot(abs, assignedRoot)) {
         return {
           deny: true,
-          reason: `guard-worktree-write: ${toolName} target "${abs}" is outside the assigned worktree "${cwd}".`,
+          reason: `guard-worktree-write: ${toolName} target "${abs}" is outside the assigned worktree "${assignedRoot}".`,
         };
       }
       return { deny: false };
@@ -175,7 +194,7 @@ export function decideGuardVerdict({ toolName, toolInput, cwd, knownRoots = list
 
     if (toolName === 'Bash' || toolName === 'PowerShell') {
       const command = normalizeSeparators(String(toolInput?.command ?? '').toLowerCase());
-      const ownRoot = knownRoots.find((root) => isUnderRoot(cwd, root));
+      const ownRoot = assignedRoot;
       for (const root of knownRoots) {
         if (ownRoot && resolve(root).toLowerCase() === resolve(ownRoot).toLowerCase()) continue;
         if (pathSpellings(root).some((spelling) => containsPathAtBoundary(command, spelling))) {
