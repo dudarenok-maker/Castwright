@@ -5,7 +5,7 @@ model: haiku
 effort: medium
 hooks:
   PreToolUse:
-    - matcher: "Write|Edit|Bash"
+    - matcher: "Write|Edit|Bash|PowerShell|NotebookEdit"
       hooks:
         - type: command
           command: "node \"${CLAUDE_PROJECT_DIR}/scripts/hooks/guard-worktree-write.mjs\""

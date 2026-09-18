@@ -1,6 +1,9 @@
 #!/usr/bin/env node
-// PreToolUse guard for a dispatched fix-agent's Write/Edit/Bash calls
-// (Castwright#3044, option 2 — see #3044's "Decision (2026-09-06)" comment).
+// PreToolUse guard for a dispatched fix-agent's Write/Edit/NotebookEdit/
+// Bash/PowerShell calls (Castwright#3044, option 2 — see #3044's "Decision
+// (2026-09-06)" comment). KNOWN GAP: see decideGuardVerdict's doc comment
+// and Castwright#3263 — this guard is not currently a full replacement for
+// the manual before/after `git status --porcelain` check.
 //
 // Wired via the `hooks:` frontmatter key on `.claude/agents/fix-agent.md`,
 // per #3246's empirical findings (docs/ops/3044-hook-mechanism-findings.md):
@@ -8,40 +11,58 @@
 // delivers the PreToolUse JSON payload on stdin (tool_name, tool_input, cwd),
 // and a confirmed-working deny is exit code 2 with a stderr message.
 //
-import { readdirSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { win32 } from 'node:path';
 import { isDirectlyInvoked } from '../lib/is-main-module.mjs';
+import { scrubGitEnv } from '../git-env.mjs';
 
-// PRIMARY_CHECKOUT_ROOT / PROJECTS_ROOT are hardcoded Windows paths regardless
-// of what OS this hook runs on (CI runs the test suite on Ubuntu). The
-// platform-default `node:path` export resolves to `path.posix` there, which
-// treats a `C:\...` string as a non-absolute path and silently prepends
-// `process.cwd()` to it — breaking both the containment check and the Bash
-// substring match. Pin to `path.win32` so the logic is identical on every OS.
-const { join, resolve, sep } = win32;
+// PRIMARY_CHECKOUT_ROOT is a hardcoded Windows path regardless of what OS
+// this hook runs on (CI runs the test suite on Ubuntu). The platform-default
+// `node:path` export resolves to `path.posix` there, which treats a `C:\...`
+// string as a non-absolute path and silently prepends `process.cwd()` to it
+// — breaking both the containment check and the Bash/PowerShell substring
+// match. Pin to `path.win32` so the logic is identical on every OS.
+const { resolve, sep } = win32;
 
 // The primary checkout — never itself a valid target for a dispatched
 // fix-agent's writes, whatever tree it was assigned.
 export const PRIMARY_CHECKOUT_ROOT = 'C:\\Claude\\Projects\\Audiobook-Generator';
 
-// Sibling worktrees live directly under this directory, named `wt-*`.
-export const PROJECTS_ROOT = 'C:\\Claude\\Projects';
-
-/** Enumerate every known checkout root: the primary checkout plus every
- *  `wt-*` sibling directory that currently exists under PROJECTS_ROOT.
- *  Returns just PRIMARY_CHECKOUT_ROOT if PROJECTS_ROOT cannot be read
- *  (missing, permissions) — a guard that cannot see other worktrees still
- *  protects the one root it knows about for certain. */
-export function listKnownCheckoutRoots(projectsRoot = PROJECTS_ROOT) {
-  let siblings = [];
+/** Enumerate every known checkout root: the primary checkout plus every real
+ *  worktree `git worktree list` reports for it. Sourced from git itself
+ *  rather than a directory-name convention (`wt-*` under a single hardcoded
+ *  parent) — this repo has real worktrees that violate both assumptions
+ *  (`scratch-*` prefixes, and trees under the OS temp dir entirely), and a
+ *  naming/location guess misses them. Returns just PRIMARY_CHECKOUT_ROOT if
+ *  `git worktree list` fails (not a repo, git absent) — a guard that cannot
+ *  see other worktrees still protects the one root it knows about for
+ *  certain. Over-inclusion (a stale/prunable worktree entry) is harmless:
+ *  the only consumer (Bash detection, below) only ever widens what counts as
+ *  "foreign", never narrows it. */
+export function listKnownCheckoutRoots({ cwd = PRIMARY_CHECKOUT_ROOT, spawn = spawnSync } = {}) {
   try {
-    siblings = readdirSync(projectsRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && entry.name.startsWith('wt-'))
-      .map((entry) => join(projectsRoot, entry.name));
+    const result = spawn('git', ['worktree', 'list', '--porcelain'], {
+      cwd,
+      encoding: 'utf8',
+      env: scrubGitEnv(),
+      windowsHide: true,
+    });
+    if (result.error || result.status !== 0 || !result.stdout) return [PRIMARY_CHECKOUT_ROOT];
+    const roots = result.stdout
+      .split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => line.slice('worktree '.length).trim())
+      .filter(Boolean)
+      // git emits forward-slash paths on Windows even for a backslash
+      // PRIMARY_CHECKOUT_ROOT; normalize through win32.resolve so a plain
+      // `.includes(PRIMARY_CHECKOUT_ROOT)` membership check (not just the
+      // slash-tolerant isUnderRoot comparison) can rely on this list.
+      .map((p) => resolve(p));
+    return roots.length > 0 ? roots : [PRIMARY_CHECKOUT_ROOT];
   } catch {
-    siblings = [];
+    return [PRIMARY_CHECKOUT_ROOT];
   }
-  return [PRIMARY_CHECKOUT_ROOT, ...siblings];
 }
 
 function isUnderRoot(absPath, root) {
@@ -50,27 +71,56 @@ function isUnderRoot(absPath, root) {
   return normPath === normRoot || normPath.startsWith(normRoot + sep);
 }
 
+/** Every spelling a Windows absolute path can appear under in a command this
+ *  hook has to scan as plain text: native backslash, forward-slash (accepted
+ *  by most Windows tools too), Git Bash's `/c/...` mount form, and WSL's
+ *  `/mnt/c/...` form. All four are literal, unexpanded substrings — no shell
+ *  variable or relative-path resolution is attempted (see the Bash-detection
+ *  doc comment below). Non-drive-letter roots (defensive only — every real
+ *  root here is `C:\...`) fall back to the single lowercased root string. */
+function pathSpellings(root) {
+  const m = /^([A-Za-z]):[\\/](.*)$/.exec(root);
+  if (!m) return [root.toLowerCase()];
+  const drive = m[1].toLowerCase();
+  const rest = m[2].replace(/\\/g, '/').toLowerCase();
+  return [`${drive}:\\${rest.replace(/\//g, '\\')}`, `${drive}:/${rest}`, `/${drive}/${rest}`, `/mnt/${drive}/${rest}`];
+}
+
 /** Pure decision function. Never throws — a hook that crashes on a payload
  *  shape it did not expect must fail OPEN (allow), not open a window where a
  *  parse bug blocks every tool call from every subagent.
  *
- *  Write/Edit: resolve tool_input.file_path against cwd and deny anything
- *  that does not fall under the assigned worktree (cwd). Precise — this is a
- *  real path containment check, not a heuristic.
+ *  KNOWN GAP (Castwright#3263, filed from PR #3261's own review pass):
+ *  "assigned worktree" is defined here as `cwd`, which is NOT independently
+ *  verified — it is whatever the harness happened to start this subagent
+ *  process in. #3044's own incident record describes a brief that correctly
+ *  named the worktree while the agent's process nonetheless ran with `cwd`
+ *  pointed at the wrong root; in that shape this guard protects the wrong
+ *  root, not the right one. Fixing that needs an independent per-dispatch
+ *  signal this hook does not currently have — tracked in #3263, not fixed
+ *  here.
  *
- *  Bash: COARSE by design (per #3044's "Decision (2026-09-06)" comment — a
- *  precise Bash check does not exist yet, and shipping the coarse one is the
- *  documented decision rather than deferring). Flags a command whose text
- *  contains an absolute path belonging to a DIFFERENT known checkout root
- *  while cwd is a different root. FALSE-NEGATIVE RISK, stated per the issue's
- *  requirement: a command that references a foreign path indirectly — via a
- *  shell variable, a relative path resolved elsewhere, an environment
- *  expansion, or a path assembled at runtime — is not caught. Only a literal
- *  absolute path substring is detected. */
+ *  Write/Edit/NotebookEdit: resolve the target path (tool_input.file_path
+ *  for Write/Edit, tool_input.notebook_path for NotebookEdit) against cwd
+ *  and deny anything that does not fall under the assigned worktree (cwd).
+ *  Precise — this is a real path containment check, not a heuristic.
+ *
+ *  Bash/PowerShell: COARSE by design (per #3044's "Decision (2026-09-06)"
+ *  comment — a precise shell-command check does not exist yet, and shipping
+ *  the coarse one is the documented decision rather than deferring). Flags a
+ *  command whose text contains an absolute path belonging to a DIFFERENT
+ *  known checkout root while cwd is a different root — checked against every
+ *  spelling a Windows path can appear under in a shell command (native
+ *  backslash, forward-slash, Git Bash's `/c/...`, WSL's `/mnt/c/...`; see
+ *  `pathSpellings`). FALSE-NEGATIVE RISK, stated per the issue's requirement:
+ *  a command that references a foreign path indirectly — via a shell
+ *  variable, a relative path resolved elsewhere, an environment expansion,
+ *  or a path assembled at runtime — is not caught. Only a literal absolute
+ *  path substring, in one of its known spellings, is detected. */
 export function decideGuardVerdict({ toolName, toolInput, cwd, knownRoots = listKnownCheckoutRoots() }) {
   try {
-    if (toolName === 'Write' || toolName === 'Edit') {
-      const filePath = toolInput?.file_path;
+    if (toolName === 'Write' || toolName === 'Edit' || toolName === 'NotebookEdit') {
+      const filePath = toolName === 'NotebookEdit' ? toolInput?.notebook_path : toolInput?.file_path;
       if (!filePath) return { deny: false };
       const abs = resolve(cwd, filePath);
       if (!isUnderRoot(abs, cwd)) {
@@ -82,15 +132,15 @@ export function decideGuardVerdict({ toolName, toolInput, cwd, knownRoots = list
       return { deny: false };
     }
 
-    if (toolName === 'Bash') {
+    if (toolName === 'Bash' || toolName === 'PowerShell') {
       const command = String(toolInput?.command ?? '').toLowerCase();
       const ownRoot = knownRoots.find((root) => isUnderRoot(cwd, root));
       for (const root of knownRoots) {
         if (ownRoot && resolve(root).toLowerCase() === resolve(ownRoot).toLowerCase()) continue;
-        if (command.includes(resolve(root).toLowerCase())) {
+        if (pathSpellings(root).some((spelling) => command.includes(spelling))) {
           return {
             deny: true,
-            reason: `guard-worktree-write: Bash command references a foreign checkout root "${root}" while cwd is "${cwd}".`,
+            reason: `guard-worktree-write: ${toolName} command references a foreign checkout root "${root}" while cwd is "${cwd}".`,
           };
         }
       }
