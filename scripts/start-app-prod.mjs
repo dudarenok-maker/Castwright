@@ -335,6 +335,119 @@ export async function waitForOwnServer({ startPort, maxPorts = 1, timeoutMs, lan
   return null;
 }
 
+/* Everything main() must decide BEFORE spawning, extracted so it is
+   unit-testable with injected probe functions rather than only reachable by
+   spawning the real launcher (Castwright#3030 round 4, finding R5 — this
+   file's pre-spawn orchestration had zero automated coverage, which is
+   exactly how round 4's finding R1 survived rounds 1-3 unnoticed). Probe
+   functions default to the real network-touching ones; tests inject fakes.
+
+   Returns one of:
+     { kind: 'fail', message }                                   — main() should fail(message)
+     { kind: 'skip', messageLines: string[] }                    — main() should print each line, then exit(0)
+     { kind: 'proceed', mayHaveRebound, infoMessage: string|null } — main() should proceed to spawn
+
+   The stale-own-instance scan (Castwright#3030 round 3's finding N1, fixed
+   properly in round 4's finding R1) runs UNCONDITIONALLY — regardless of
+   whether the target port is currently free or foreign-occupied — because a
+   stale copy of THIS worktree's own server can be sitting in the rebind
+   window from an EARLIER launch even after whatever foreign occupant caused
+   that earlier rebind has since gone away: target port genuinely free now,
+   but a rebound copy of this worktree's OWN server is still running on
+   :port+N from before. Scoping the scan to only the "currently foreign"
+   branch (round 3's shape) missed exactly that case — the launcher would
+   see the target free and spawn a SECOND copy of its own server against one
+   WORKSPACE_DIR, with no cross-process lock
+   (server/src/workspace/file-lock.ts's mutex is in-process only). */
+export async function decideLaunchAction({
+  port,
+  altPort,
+  lanHttps,
+  runDir,
+  url,
+  probePort: probePortFn = probePort,
+  probeServed: probeServedFn = probeServed,
+  scanForOwnServer: scanForOwnServerFn = scanForOwnServer,
+}) {
+  let mayHaveRebound = false;
+  let foreignOccupantCwd = null;
+
+  const alreadyUp = await probePortFn(port);
+  if (alreadyUp) {
+    const served = await probeServedFn(port, lanHttps);
+    if (!served) {
+      return {
+        kind: 'fail',
+        message:
+          `Port :${port} is occupied by a process that does not answer /api/health — ` +
+          `likely a stale or foreign server. Run "npm run stop" and retry.`,
+      };
+    }
+    if (isOwnServerInstance(served, runDir)) {
+      const lines = [];
+      if (served.configLoad && served.configLoad.envLoaded === false) {
+        lines.push(
+          `[WARN] server on :${port} is running WITHOUT server/.env ` +
+            `(cwd=${served.configLoad.cwd}) — on DEFAULTS. Stop it and relaunch from server/.`,
+        );
+      }
+      lines.push(`[SKIP] server already listening on :${port} — leaving it alone`);
+      lines.push(`[READY] ${url}`);
+      return { kind: 'skip', messageLines: lines };
+    }
+    /* A DIFFERENT Castwright install (e.g. a sibling worktree's own server)
+       answers on our target port — not a duplicate of this worktree's own
+       instance, so don't refuse to start outright. */
+    mayHaveRebound = true;
+    foreignOccupantCwd = served.configLoad?.cwd ?? 'unknown';
+  }
+
+  const stalePort = await scanForOwnServerFn(port + 1, 19, lanHttps, runDir, Date.now() + 5000);
+  if (stalePort !== null) {
+    return {
+      kind: 'skip',
+      messageLines: [
+        `[SKIP] this worktree's own server is already listening on :${stalePort} ` +
+          `(rebound off :${port}) — leaving it alone. Run "npm run stop:prod" first to relaunch cleanly.`,
+      ],
+    };
+  }
+
+  /* A prior launch of THIS worktree's own server may have bound the OTHER
+     port — e.g. it started loopback HTTP :8080 because certs were absent,
+     and now certs exist so our target is :8443. Probing only the target
+     would miss that running server and spawn a duplicate (two servers, one
+     stale pid file). Detect a live instance of THIS worktree's own server on
+     the alternate port and leave it alone — a sibling worktree's (or any
+     other install's) own server answering there is not a reason to skip. */
+  if (altPort !== port && (await probePortFn(altPort))) {
+    const servedAlt = await probeServedFn(altPort, altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443));
+    if (isOwnServerInstance(servedAlt, runDir)) {
+      return {
+        kind: 'skip',
+        messageLines: [
+          `[SKIP] a Castwright server is already listening on :${altPort} — leaving it alone. ` +
+            `Run "npm run stop:prod" first to relaunch on :${port}.`,
+        ],
+      };
+    }
+  }
+
+  return {
+    kind: 'proceed',
+    mayHaveRebound,
+    // Deferred to this final, definitely-proceeding point (rather than printed the
+    // moment a foreign occupant was found) so it can never say "starting anyway"
+    // right before a later check decides to skip after all (Castwright#3030
+    // round 3, finding N7).
+    infoMessage: mayHaveRebound
+      ? `[INFO] a different Castwright server (cwd=${foreignOccupantCwd}) is already listening on ` +
+        `:${port} — not this worktree's own instance. Starting anyway; this worktree's server will ` +
+        `bind the next free port.`
+      : null,
+  };
+}
+
 async function main() {
   mkdirSync(runDir, { recursive: true });
   mkdirSync(logDir, { recursive: true });
@@ -371,89 +484,20 @@ async function main() {
 
   printBanner();
 
-  // Set below when the target port turns out to be held by a DIFFERENT
-  // Castwright install (Castwright#3030 round 2) — widens the post-spawn
-  // readiness wait into a scan, since the child may land on a rebound port
-  // in that case (see waitForOwnServer). The [INFO] announcing this is
-  // deferred until AFTER the altPort check below, which can still itself
-  // decide to [SKIP] — printing "starting anyway" only to skip moments later
-  // would misreport what actually happened (Castwright#3030 round 3, N7).
-  let mayHaveRebound = false;
-  let foreignOccupantCwd = null;
-
-  const alreadyUp = await probePort(port);
-  if (alreadyUp) {
-    const served = await probeServed(port, lanHttps);
-    if (!served) {
-      fail(
-        `Port :${port} is occupied by a process that does not answer /api/health — ` +
-          `likely a stale or foreign server. Run "npm run stop" and retry.`,
-      );
-    }
-    if (isOwnServerInstance(served, runDir)) {
-      if (served.configLoad && served.configLoad.envLoaded === false) {
-        info(
-          `[WARN] server on :${port} is running WITHOUT server/.env ` +
-            `(cwd=${served.configLoad.cwd}) — on DEFAULTS. Stop it and relaunch from server/.`,
-        );
-      }
-      info(`[SKIP] server already listening on :${port} — leaving it alone`);
-      info(`[READY] ${url}`);
-      process.exit(0);
-    }
-    /* A DIFFERENT Castwright install (e.g. a sibling worktree's own server)
-       answers on our target port — not a duplicate of this worktree's own
-       instance, so don't refuse to start outright. But before spawning,
-       check whether THIS worktree's own server is already sitting somewhere
-       ELSE in the rebind window listenWithAutoRebind would walk — a stale
-       instance left over from an earlier launch that also hit a foreign
-       occupant here. Skipping that check would let this launcher spawn a
-       genuine SECOND copy of its own server against one WORKSPACE_DIR (with
-       no cross-process lock — server/src/workspace/file-lock.ts's mutex is
-       in-process only) while the post-spawn wait below reports the OLD
-       instance ready instead of the one just spawned (Castwright#3030
-       round 3, finding N1). */
-    const stalePort = await scanForOwnServer(port + 1, 19, lanHttps, runDir);
-    if (stalePort !== null) {
-      info(
-        `[SKIP] this worktree's own server is already listening on :${stalePort} ` +
-          `(rebound off :${port}, held by a different Castwright install) — leaving it alone. ` +
-          `Run "npm run stop:prod" first to relaunch cleanly.`,
-      );
-      process.exit(0);
-    }
-    mayHaveRebound = true;
-    foreignOccupantCwd = served.configLoad?.cwd ?? 'unknown';
-  }
-
-  /* A prior launch of THIS worktree's own server may have bound the OTHER
-     port — e.g. it started loopback HTTP :8080 because certs were absent,
-     and now certs exist so our target is :8443. Probing only the target
-     would miss that running server and spawn a duplicate (two servers, one
-     stale pid file). Detect a live instance of THIS worktree's own server on
-     the alternate port and leave it alone — a sibling worktree's (or any
-     other install's) own server answering there is not a reason to skip. */
   const altPort = port === Number(process.env.LAN_HTTPS_PORT ?? 8443)
     ? Number(process.env.PORT ?? 8080)
     : Number(process.env.LAN_HTTPS_PORT ?? 8443);
-  if (altPort !== port && (await probePort(altPort))) {
-    const servedAlt = await probeServed(altPort, altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443));
-    if (isOwnServerInstance(servedAlt, runDir)) {
-      info(
-        `[SKIP] a Castwright server is already listening on :${altPort} — leaving it alone. ` +
-          `Run "npm run stop:prod" first to relaunch on :${port}.`,
-      );
-      process.exit(0);
-    }
-  }
 
-  if (mayHaveRebound) {
-    info(
-      `[INFO] a different Castwright server (cwd=${foreignOccupantCwd}) is already listening on ` +
-        `:${port} — not this worktree's own instance. Starting anyway; this worktree's server will ` +
-        `bind the next free port.`,
-    );
+  const decision = await decideLaunchAction({ port, altPort, lanHttps, runDir, url });
+  if (decision.kind === 'fail') {
+    fail(decision.message);
   }
+  if (decision.kind === 'skip') {
+    for (const line of decision.messageLines) info(line);
+    process.exit(0);
+  }
+  const { mayHaveRebound, infoMessage } = decision;
+  if (infoMessage) info(infoMessage);
 
   const outLog = openSync(resolve(logDir, 'server.log'), 'a');
   const errLog = openSync(resolve(logDir, 'server.err.log'), 'a');

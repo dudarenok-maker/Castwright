@@ -52,9 +52,15 @@ describe('buildHealthPayload', () => {
   it('with APP_RUN_DIR unset, runDir derives from the compiled file location, not process.cwd()', () => {
     const savedRunDir = process.env.APP_RUN_DIR;
     const savedCwd = process.cwd();
-    delete process.env.APP_RUN_DIR;
-    process.chdir(os.tmpdir());
     try {
+      // Castwright#3030 round 4 (finding R3): both mutations must be INSIDE
+      // the try, not above it — process.chdir throws under some pool
+      // configurations (e.g. --pool=threads), and a throw above the try
+      // would skip the finally entirely, leaving APP_RUN_DIR deleted and
+      // process.cwd() pointed at the temp dir for every later test in this
+      // worker.
+      delete process.env.APP_RUN_DIR;
+      process.chdir(os.tmpdir());
       const payload = buildHealthPayload();
       expect(payload.configLoad.runDir).toBe(resolve(expectedRepoRoot, '.run'));
       expect(payload.configLoad.runDir).not.toBe(resolve(process.cwd(), '.run'));

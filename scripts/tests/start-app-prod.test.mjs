@@ -18,6 +18,7 @@ import {
   isOwnServerInstance,
   waitForOwnServer,
   scanForOwnServer,
+  decideLaunchAction,
   defaultNormalizePathForCompare,
 } from '../start-app-prod.mjs';
 
@@ -301,6 +302,165 @@ test('waitForOwnServer: returns null when nothing answers anywhere in range', as
     runDir: '/repo/.run',
   });
   assert.equal(found, null);
+});
+
+// decideLaunchAction is main()'s entire pre-spawn decision sequence,
+// extracted (Castwright#3030 round 4, finding R5) so it is exercised here
+// directly, with fully injected fake probes — no real sockets needed. This
+// is also what pins finding R1: the stale-own-instance scan must run
+// UNCONDITIONALLY, not only when the target port currently has a foreign
+// occupant, because a stale rebound copy of this worktree's own server can
+// outlive the very occupant that caused the rebind.
+const OWN_RUN_DIR = '/repo/.run';
+const served = (runDir, extra = {}) => ({ configLoad: { runDir, ...extra } });
+
+function fakeProbes({ listening = {}, healthByPort = {} } = {}) {
+  return {
+    probePort: async (port) => Boolean(listening[port]),
+    probeServed: async (port) => healthByPort[port] ?? null,
+  };
+}
+
+test('decideLaunchAction: target port is our own instance → skip with READY', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({ listening: { 8443: true }, healthByPort: { 8443: served(OWN_RUN_DIR) } }),
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.ok(decision.messageLines.some((l) => l.includes('[SKIP]')));
+  assert.ok(decision.messageLines.some((l) => l.includes('[READY]')));
+});
+
+test('decideLaunchAction: target port occupied by an unresponsive process → fail', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({ listening: { 8443: true }, healthByPort: {} }), // probeServed returns null
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'fail');
+  assert.match(decision.message, /does not answer \/api\/health/);
+});
+
+test('decideLaunchAction: foreign occupant on target, nothing stale, nothing on altPort → proceed with mayHaveRebound', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({
+      listening: { 8443: true },
+      healthByPort: { 8443: served('/other-worktree/.run', { cwd: '/other/server' }) },
+    }),
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'proceed');
+  assert.equal(decision.mayHaveRebound, true);
+  assert.match(decision.infoMessage, /\[INFO\]/);
+  assert.match(decision.infoMessage, /\/other\/server/);
+});
+
+// Castwright#3030 round 4, finding R1 — the exact regression: launch while a
+// sibling holds the port (rebind to :N) -> sibling stops -> the target port
+// is free again on the NEXT launch, but the rebound copy of THIS worktree's
+// own server from the earlier launch is still running on :N. Scoping the
+// stale-scan to only the "currently foreign" branch (round 3's shape) missed
+// this exactly because alreadyUp is false here.
+test('decideLaunchAction: R1 — target port now FREE, but a stale rebound copy of OUR OWN server lingers → skip, not spawn', async () => {
+  const scanCalls = [];
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({ listening: { 8080: false, 8443: false } }), // target genuinely free now
+    scanForOwnServer: async (startPort, maxPorts) => {
+      scanCalls.push({ startPort, maxPorts });
+      return 8444; // our own stale instance, rebound here on an earlier launch
+    },
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.ok(decision.messageLines.some((l) => l.includes(':8444')));
+  // The scan must have actually run even though the target port was free —
+  // this is the exact placement bug R1 found in round 3's version.
+  assert.equal(scanCalls.length, 1);
+  assert.equal(scanCalls[0].startPort, 8444); // port + 1
+  assert.equal(scanCalls[0].maxPorts, 19);
+});
+
+test('decideLaunchAction: foreign occupant AND a stale own instance elsewhere → skip at the stale instance, never spawn', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({
+      listening: { 8443: true },
+      healthByPort: { 8443: served('/other-worktree/.run') },
+    }),
+    scanForOwnServer: async () => 8446,
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.ok(decision.messageLines.some((l) => l.includes(':8446')));
+});
+
+test('decideLaunchAction: target free, nothing stale, our own instance already on altPort → skip', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({
+      listening: { 8443: false, 8080: true },
+      healthByPort: { 8080: served(OWN_RUN_DIR) },
+    }),
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.ok(decision.messageLines.some((l) => l.includes(':8080')));
+});
+
+test('decideLaunchAction: target free, altPort held by a FOREIGN install → proceed, no rebind expected', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({
+      listening: { 8443: false, 8080: true },
+      healthByPort: { 8080: served('/other-worktree/.run') },
+    }),
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'proceed');
+  assert.equal(decision.mayHaveRebound, false);
+  assert.equal(decision.infoMessage, null);
+});
+
+test('decideLaunchAction: fully clean boot — nothing anywhere → proceed, no rebind, no info message', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({ listening: { 8443: false, 8080: false } }),
+    scanForOwnServer: async () => null,
+  });
+  assert.deepEqual(decision, { kind: 'proceed', mayHaveRebound: false, infoMessage: null });
 });
 
 import { bannerLine, formatBuildManifestLine } from '../start-app-prod.mjs';
