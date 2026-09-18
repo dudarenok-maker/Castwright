@@ -1491,11 +1491,23 @@ test('runStepProcess: a non-retriable step always records 1 attempt, even given 
 // --- Part 2 (ops-72) time budgets ----------------------------------------
 
 function writeHangingFixture(dir, npmScriptName) {
-  // Deliberately never exits — simulates a genuinely wedged process (the
-  // 4h34m incident this feature exists to bound), so a real timeout kill is
-  // exercised rather than a step that would have finished on its own.
+  // Deliberately never exits on its own — simulates a genuinely wedged
+  // process (the 4h34m incident this feature exists to bound), so a real
+  // timeout kill is exercised rather than a step that would have finished by
+  // itself. The 60s self-exit is a safety net, not the mechanism under test:
+  // if the kill path being tested is itself broken (the exact class of bug
+  // this fixture caught on Linux CI — killTree() was a no-op there), this
+  // process must not become an unreapable orphan that outlives the test run
+  // — confirmed live on a real box (PR #3260 review pass 1, B1): the census
+  // sweep that's supposed to catch a `/T`-survivor doesn't recognize a bare
+  // `node hang.mjs` as a battery invocation, so it's invisible to
+  // runCensus()'s own reap and survives until reboot.
   const fixtureFile = 'hang.mjs';
-  writeFileSync(join(dir, fixtureFile), 'setInterval(() => {}, 1000);\n', 'utf8');
+  writeFileSync(
+    join(dir, fixtureFile),
+    'setInterval(() => {}, 1000);\nsetTimeout(() => process.exit(0), 60_000);\n',
+    'utf8',
+  );
   const packageJsonPath = join(dir, 'package.json');
   let packageJson;
   if (existsSync(packageJsonPath)) {
@@ -1534,6 +1546,47 @@ test('runStepProcess: a step exceeding its budget is classified TIMEOUT, not a c
   assert.ok(
     elapsed < 30000,
     `the taskkill /T /F path should land well under a real multi-hour wedge — took ${elapsed}ms`,
+  );
+});
+
+// PR #3260 review pass 1, B2: a budget calibrated at full concurrency is too
+// tight once LOW_CONCURRENCY has actually throttled the fork pool for THIS
+// run (serverMaxForks 2->1 roughly doubles a vitest-backed step's wall-clock
+// time for the same work) — without accounting for that, the SAME throttle
+// runPipeline applies to itself makes its own step timeout fire on an
+// otherwise-healthy, merely-slower run.
+test('runPipeline doubles a vitest-backed step\'s budget under LOW_CONCURRENCY, so the throttle it just applied cannot false-positive its own timeout (mutation test, B2)', async () => {
+  const dir = makeGitFixture();
+  // Genuinely takes 700ms — long enough to exceed a 600ms floor on its own,
+  // comfortably short of the 1200ms the LOW_CONCURRENCY multiplier grants.
+  writeFileSync(join(dir, 'slow.mjs'), 'await new Promise((r) => setTimeout(r, 700));\n', 'utf8');
+  const packageJsonPath = join(dir, 'package.json');
+  const packageJson = existsSync(packageJsonPath)
+    ? JSON.parse(readFileSync(packageJsonPath, 'utf8'))
+    : { name: 'slow-fixture', private: true, scripts: {} };
+  packageJson.scripts['test:server'] = 'node slow.mjs';
+  writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  const baseEnv = {
+    ...scrubGitEnvForThrowawayRepo(process.env),
+    SKIP_CONTENTION_CHECK: '1',
+    CASTWRIGHT_STEP_TIMEOUT_MIN: '0.01', // 600ms floor
+  };
+
+  const withoutThrottle = await runPipeline({ argv: ['--steps', 'test:server'], cwd: dir, env: baseEnv });
+  assert.notEqual(withoutThrottle, 0, 'without LOW_CONCURRENCY the 700ms fixture must exceed the 600ms budget');
+
+  const withThrottle = await runPipeline({
+    argv: ['--steps', 'test:server'],
+    cwd: dir,
+    env: { ...baseEnv, LOW_CONCURRENCY: '1' },
+  });
+  assert.equal(
+    withThrottle,
+    0,
+    'under LOW_CONCURRENCY the budget must double to 1200ms, comfortably covering the 700ms fixture',
   );
 });
 

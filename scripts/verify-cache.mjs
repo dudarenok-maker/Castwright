@@ -1397,6 +1397,16 @@ export const DEFAULT_RUN_TIMEOUT_MIN = 180;
 // what this formula already converges to on this box.
 const BUDGET_MULTIPLIER = 2.5;
 
+// A budget calibrated at full concurrency is too tight once LOW_CONCURRENCY
+// has actually engaged for THIS run — serverMaxForks/frontendPoolCap
+// (test-concurrency.mjs) halve the fork pool, which roughly doubles a
+// vitest-backed step's own wall-clock time for the identical work. Without
+// this, the throttle runPipeline applies to itself above (contention guard)
+// makes its OWN step timeout fire on an otherwise-healthy, merely-slower
+// run (PR #3260 review pass 1, B2). 2x is the reciprocal of the 2->1 fork
+// halving, not a new tuned constant.
+const LOW_CONCURRENCY_BUDGET_MULTIPLIER = 2;
+
 function envMinutes(env, key, fallbackMin) {
   const raw = env ? env[key] : undefined;
   if (raw === undefined || raw === null || raw === '') return fallbackMin;
@@ -1468,6 +1478,36 @@ function makeTailAccumulator(maxBytes) {
     name, used to look up RETRIABLE_POOL_STEPS/isVitestPoolCrash — it can
     differ from `npmScript` when CHANGED_ONLY_NPM_SCRIPT substitutes a
     different underlying script. */
+// The child currently in flight, if any — tracked at module scope so a
+// SIGINT/SIGTERM handler registered once at the CLI entry point (below) can
+// reach it. Steps run sequentially (never concurrently), so a single slot is
+// enough; guarded by identity on clear so a stale reference from an already
+// -finished step can never clobber a newer one.
+let activeStepChild = null;
+
+/** Kill the whole tree rooted at `child`, cross-platform — shared by the
+ *  per-step timeout path and the SIGINT/SIGTERM forwarding below, so there
+ *  is exactly one place that knows how. Windows: `taskkill /T /F` (killTree,
+ *  reap-stale-batteries.mjs). POSIX: SIGKILL the whole process GROUP via a
+ *  negative pid — requires the child to have been spawned with
+ *  `detached: true` (see runOnce below); `child.kill()` alone only reaps the
+ *  immediate shell, exactly as this function's callers already document. */
+function killStepChildTree(child) {
+  if (process.platform === 'win32') {
+    killTree(child.pid);
+    return;
+  }
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Already gone — nothing left to kill.
+    }
+  }
+}
+
 export async function runStepProcess(
   npmScript,
   { cwd, env, retryKey = npmScript, timeoutMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000 },
@@ -1483,15 +1523,21 @@ export async function runStepProcess(
         windowsHide: true,
         // On POSIX, `detached: true` makes the shell the leader of its own
         // process group (setsid) without backgrounding it (we still await
-        // its 'close' event normally) — that's what lets the timeout path
-        // below kill the whole `sh -c npm run ... -> npm -> node -> forks`
-        // tree via a negative-pid signal, the same shape stop-app.mjs
-        // already uses for the production server/sidecar. Windows has no
+        // its 'close' event normally) — that's what lets killStepChildTree
+        // reach the whole `sh -c npm run ... -> npm -> node -> forks` tree
+        // via a negative-pid signal, the same shape stop-app.mjs already
+        // uses for the production server/sidecar. Windows has no
         // process-group equivalent; `taskkill /T /F` walks by parent PID
-        // instead, so `detached` is left at its default there.
+        // instead, so `detached` is left at its default there. NOTE: this
+        // also takes the child out of the terminal's foreground process
+        // group on POSIX — see the module-level SIGINT/SIGTERM handlers at
+        // the CLI entry point below, which exist specifically to forward an
+        // operator's Ctrl+C into this now-detached tree rather than leaving
+        // it orphaned.
         ...(process.platform === 'win32' ? {} : { detached: true }),
         ...(capture ? { stdio: ['inherit', 'inherit', 'pipe'] } : { stdio: 'inherit' }),
       });
+      activeStepChild = child;
 
       const stderrAcc = capture ? makeTailAccumulator(MAX_STDERR_BUFFER) : null;
       if (capture && child.stderr) {
@@ -1502,28 +1548,9 @@ export async function runStepProcess(
       let timedOut = false;
       const remainingMs = Math.max(0, deadline - Date.now());
       const timer = setTimeout(() => {
+        if (settled) return; // the step closed right at the deadline — nothing left to kill or reclassify
         timedOut = true;
-        if (process.platform === 'win32') {
-          killTree(child.pid);
-        } else {
-          // killTree (reap-stale-batteries.mjs) is Windows-only by design
-          // for the dev-box reap sweep it primarily serves — but this path
-          // also runs in CI (Ubuntu), where a step that genuinely wedges
-          // must still be killed or the timeout budget this feature exists
-          // to enforce is silently inert. Kill the whole process GROUP
-          // (negative pid), not just the immediate shell — `child.kill()`
-          // alone only reaps the shell, exactly as the doc comment above
-          // this function already says for the Windows case.
-          try {
-            process.kill(-child.pid, 'SIGKILL');
-          } catch {
-            try {
-              child.kill('SIGKILL');
-            } catch {
-              // Already gone — nothing left to kill.
-            }
-          }
-        }
+        killStepChildTree(child);
         try {
           // Provably-orphaned only (dead parent) — mirrors the pre-push
           // reap's own narrow scope; a merely-slow-but-live subtree is not
@@ -1539,6 +1566,7 @@ export async function runStepProcess(
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        if (activeStepChild === child) activeStepChild = null;
         const stderr = stderrAcc ? stderrAcc.toString() : '';
         if (stderr) process.stderr.write(stderr); // captured stderr isn't echoed live — surface it
         settlePromise({ code: code ?? 1, stderr, timedOut });
@@ -1675,10 +1703,13 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     const d = qualifiedDurationFor(cache, s.name);
     return d === null ? sum : sum + d;
   }, 0);
-  const runBudgetMs = computeBudgetMs(
-    qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null,
-    runTimeoutFloorMs,
-  );
+  // Read AFTER the contention guard above so a throttle it just applied for
+  // THIS run is reflected here, not just for the next one.
+  const contentionBudgetMultiplier =
+    affectedByContention && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
+  const runBudgetMs =
+    computeBudgetMs(qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null, runTimeoutFloorMs) *
+    contentionBudgetMultiplier;
   const runDeadline = Date.now() + runBudgetMs;
 
   for (const step of activeSteps) {
@@ -1761,8 +1792,13 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     } else {
       console.log(`[run] ${step.name}`);
     }
+    // Only a vitest-backed step is actually slowed by LOW_CONCURRENCY (see
+    // hasVitestStep's own doc comment) — widening a step this throttle
+    // doesn't affect would just mask a genuine hang in it for longer.
+    const stepContentionMultiplier =
+      hasVitestStep([step]) && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
     const stepBudgetMs = Math.min(
-      computeBudgetMs(qualifiedDurationFor(cache, step.name), stepTimeoutFloorMs),
+      computeBudgetMs(qualifiedDurationFor(cache, step.name), stepTimeoutFloorMs) * stepContentionMultiplier,
       Math.max(0, runDeadline - Date.now()),
     );
     const t0 = Date.now();
@@ -1808,6 +1844,21 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
 const isDirectInvocation = isDirectlyInvoked(import.meta.url);
 
 if (isDirectInvocation) {
+  // On POSIX, the in-flight step's child is `detached: true` (see
+  // runStepProcess) so its whole process group can be SIGKILLed on timeout
+  // — but that also takes it out of the terminal's foreground process
+  // group, so an operator's Ctrl+C (SIGINT) or a `kill` (SIGTERM) sent to
+  // THIS process no longer reaches it on its own. Forward both into the
+  // active child's tree before this process exits, so a manual interrupt
+  // can't orphan a battery the way `detached` alone would let it. A no-op
+  // exit code (130/143, the POSIX shell convention for SIGINT/SIGTERM) once
+  // there is no active child to kill.
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.on(sig, () => {
+      if (activeStepChild) killStepChildTree(activeStepChild);
+      process.exit(sig === 'SIGINT' ? 130 : 143);
+    });
+  }
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = resolve(here, '..');
   const code = await runPipeline({ argv: process.argv.slice(2), cwd: repoRoot, env: process.env });
