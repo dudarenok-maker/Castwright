@@ -13,7 +13,7 @@
 // :8443. resolveLaunchTarget() mirrors the server's selection so the two agree.
 
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, openSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, openSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
@@ -164,15 +164,6 @@ function probePort(port) {
   });
 }
 
-async function waitForListen(port, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await probePort(port)) return true;
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  return false;
-}
-
 // Inline mirror of server resolveRootCaPath() (the script is plain ESM and can't
 // import the compiled server module): env MKCERT_CAROOT -> `mkcert -CAROOT` ->
 // per-OS default (honoring LOCALAPPDATA / XDG_DATA_HOME). Returns the rootCA.pem
@@ -236,15 +227,82 @@ async function probeServed(port, useHttps) {
   return getJson('https', port, agent);
 }
 
+function realpathWithFallback(p) {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p; // path doesn't exist (yet) or isn't resolvable — fall back to the raw string
+  }
+}
+
+/* Windows filesystems are case-insensitive but case-PRESERVING, so the same
+   directory can come back spelled two different ways: this launcher derives
+   its own runDir off a realpathed import.meta.url (always canonical drive
+   letter), while a server started via Pinokio's `cd server && node
+   dist/index.js`, or the manual `node dist/index.js` workaround #3030's own
+   body describes, inherits whatever case the invoking shell happened to type.
+   A raw string compare would then treat a server's OWN already-running
+   instance as foreign and spawn a duplicate onto the same workspace — the
+   same class of bug as #2291 (see scripts/lib/is-main-module.mjs), just for
+   directory identity instead of module identity. Real path first (also
+   collapses a worktree junction to its target), THEN lowercase on win32 —
+   exported so tests can inject a stub and pin the behaviour without touching
+   the real filesystem. */
+export function defaultNormalizePathForCompare(p) {
+  const real = realpathWithFallback(p);
+  return process.platform === 'win32' ? real.toLowerCase() : real;
+}
+
 /* Whether an /api/health response describes THIS worktree's own server
    instance rather than some other Castwright install (e.g. a sibling
-   worktree's server) that happens to answer on a port we probed. The server
-   stamps configLoad.cwd with its own process.cwd() at boot (load-env.ts),
-   which the launcher spawns as `server/` under its own repo root — a
-   workspace-identifying field, not a guess. Exported for
+   worktree's server, or a foreign box) that happens to answer on a port we
+   probed. Compares runDir, NOT cwd (Castwright#3030 round 2): resolveRunDir
+   honours APP_RUN_DIR, which a versioned-dir (fs-1) install sets IDENTICALLY
+   across every release version (scripts/launch.mjs's planLaunch) — so an
+   in-progress upgrade restart (restart-after-upgrade.mjs launching the NEW
+   release while the OLD release's server may still be shutting down) still
+   recognizes the old release's server as its own, even though the two
+   releases' server/ cwd differ. A bare checkout/worktree has no APP_RUN_DIR
+   override, so runDir defaults to <that worktree's own repoRoot>/.run —
+   distinct per worktree, which is what lets this launcher tell a sibling
+   worktree's own server apart from its own already-running instance.
+   Exported for scripts/tests/start-app-prod.test.mjs. */
+export function isOwnServerInstance(served, ownRunDir, { normalize = defaultNormalizePathForCompare } = {}) {
+  const servedRunDir = served?.configLoad?.runDir;
+  if (typeof servedRunDir !== 'string') return false;
+  return normalize(servedRunDir) === normalize(ownRunDir);
+}
+
+/* Wait for THIS worktree's OWN server to become reachable somewhere in
+   [startPort, startPort + maxPorts). A bare TCP-connect on the one port this
+   launcher asked the child to bind is not enough once a rebind is possible:
+   server/src/crash-logging.ts's listenWithAutoRebind (which every path
+   through this launcher runs under — it always sets NODE_ENV=production)
+   silently walks upward on EADDRINUSE, and per that mechanism's design of
+   record (docs/superpowers/specs/2026-07-14-srv60-auto-rebind-port-design.md)
+   "the ACTUAL bound port... becomes the single source of truth" every
+   consumer must read — not the port a consumer merely asked for. So success
+   here is confirmed by IDENTITY (this worktree's own runDir answering
+   /api/health on some candidate port), never by a socket merely accepting a
+   connection: that socket could belong to a different process that grabbed
+   the assumed port in the gap between an earlier probe and this wait
+   (Castwright#3030 round 2, finding F1 — the first version of this fix tried
+   to pre-guess the child's port instead of reading it back, which is exactly
+   the shape that design doc's invariant forbids). Exported for
    scripts/tests/start-app-prod.test.mjs. */
-export function isOwnServerInstance(served, ownServerCwd) {
-  return served?.configLoad?.cwd === ownServerCwd;
+export async function waitForOwnServer({ startPort, maxPorts = 1, timeoutMs, lanHttps, runDir }) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    for (let i = 0; i < maxPorts; i += 1) {
+      const candidate = startPort + i;
+      if (await probePort(candidate)) {
+        const served = await probeServed(candidate, lanHttps);
+        if (isOwnServerInstance(served, runDir)) return candidate;
+      }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return null;
 }
 
 async function main() {
@@ -283,6 +341,12 @@ async function main() {
 
   printBanner();
 
+  // Set to true below when the target port turns out to be held by a
+  // DIFFERENT Castwright install (Castwright#3030 round 2) — widens the
+  // post-spawn readiness wait into a scan, since the child may land on a
+  // rebound port in that case (see waitForOwnServer).
+  let mayHaveRebound = false;
+
   const alreadyUp = await probePort(port);
   if (alreadyUp) {
     const served = await probeServed(port, lanHttps);
@@ -292,7 +356,7 @@ async function main() {
           `likely a stale or foreign server. Run "npm run stop" and retry.`,
       );
     }
-    if (isOwnServerInstance(served, serverDir)) {
+    if (isOwnServerInstance(served, runDir)) {
       if (served.configLoad && served.configLoad.envLoaded === false) {
         info(
           `[WARN] server on :${port} is running WITHOUT server/.env ` +
@@ -305,13 +369,16 @@ async function main() {
     }
     /* A DIFFERENT Castwright install (e.g. a sibling worktree's own server)
        answers on our target port — not a duplicate of this worktree's own
-       instance, so don't refuse to start. Fall through to spawn:
-       listenWithAutoRebind (production) walks to the next free port if
-       binding here EADDRINUSEs, rather than the launcher refusing outright. */
+       instance, so don't refuse to start. Spawn anyway: listenWithAutoRebind
+       (production, which this launcher always requests) will walk :${port}
+       upward on EADDRINUSE, so the child may land on a different port than
+       requested — the post-spawn wait below scans for it rather than
+       assuming :${port}. */
+    mayHaveRebound = true;
     info(
       `[INFO] a different Castwright server (cwd=${served.configLoad?.cwd ?? 'unknown'}) is already ` +
-        `listening on :${port} — not this worktree's own instance. Starting anyway; the server will ` +
-        `auto-rebind to a free port if :${port} is unavailable.`,
+        `listening on :${port} — not this worktree's own instance. Starting anyway; this worktree's ` +
+        `server will bind the next free port.`,
     );
   }
 
@@ -327,7 +394,7 @@ async function main() {
     : Number(process.env.LAN_HTTPS_PORT ?? 8443);
   if (altPort !== port && (await probePort(altPort))) {
     const servedAlt = await probeServed(altPort, altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443));
-    if (servedAlt && isOwnServerInstance(servedAlt, serverDir)) {
+    if (isOwnServerInstance(servedAlt, runDir)) {
       info(
         `[SKIP] a Castwright server is already listening on :${altPort} — leaving it alone. ` +
           `Run "npm run stop:prod" first to relaunch on :${port}.`,
@@ -367,16 +434,29 @@ async function main() {
 
   child.unref();
 
-  const ready = await waitForListen(port, HEALTH_TIMEOUT_MS);
-  if (!ready) {
+  // Mirrors listenWithAutoRebind's own 20-port window (server/src/crash-logging.ts)
+  // ONLY when a rebind is actually possible (mayHaveRebound) — the ordinary
+  // case still confirms the single port we asked for, unchanged.
+  const boundPort = await waitForOwnServer({
+    startPort: port,
+    maxPorts: mayHaveRebound ? 20 : 1,
+    timeoutMs: HEALTH_TIMEOUT_MS,
+    lanHttps,
+    runDir,
+  });
+  if (boundPort === null) {
     fail(
-      `Server did not start listening on :${port} within ${HEALTH_TIMEOUT_MS / 1000}s. ` +
-        `Tail logs/server.err.log for details.`,
+      mayHaveRebound
+        ? `This worktree's server did not become reachable on :${port}–:${port + 19} within ` +
+            `${HEALTH_TIMEOUT_MS / 1000}s. Tail logs/server.err.log for details.`
+        : `Server did not start listening on :${port} within ${HEALTH_TIMEOUT_MS / 1000}s. ` +
+            `Tail logs/server.err.log for details.`,
     );
   }
 
-  info(`[OK] server on :${port}${lanHttps ? ' (LAN HTTPS)' : ''}`);
-  info(`[READY] ${url}  (stop with "npm run stop:prod")`);
+  const boundUrl = `${protocol}://localhost:${boundPort}/`;
+  info(`[OK] server on :${boundPort}${lanHttps ? ' (LAN HTTPS)' : ''}`);
+  info(`[READY] ${boundUrl}  (stop with "npm run stop:prod")`);
   process.exit(0);
 }
 

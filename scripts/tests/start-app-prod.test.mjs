@@ -12,7 +12,13 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveLaunchTarget, isOwnServerInstance } from '../start-app-prod.mjs';
+import http from 'node:http';
+import {
+  resolveLaunchTarget,
+  isOwnServerInstance,
+  waitForOwnServer,
+  defaultNormalizePathForCompare,
+} from '../start-app-prod.mjs';
 
 test('prod default (certs present, no LAN_HTTPS) → https on :8443', () => {
   assert.deepEqual(resolveLaunchTarget({}, true), {
@@ -78,24 +84,159 @@ test('defaults to process.env + certsPresent=true when called with no argument',
 // Castwright#3030 — the launcher's "already running" liveness check must
 // distinguish THIS worktree's own server from a sibling worktree's (or any
 // other install's) server that happens to answer on a probed port, using the
-// /api/health configLoad.cwd field the server stamps at boot.
-test('isOwnServerInstance: matching cwd is this worktree\'s own server', () => {
+// /api/health configLoad.runDir field the server stamps at boot. Comparison
+// is injectable (`normalize`) so these pin behaviour without touching the
+// real filesystem — see defaultNormalizePathForCompare's own tests below for
+// the real realpath+case-fold implementation.
+const identity = (p) => p; // no-op normalize for tests that don't care about path folding
+
+test('isOwnServerInstance: matching runDir is this worktree\'s own server', () => {
   assert.equal(
-    isOwnServerInstance({ configLoad: { cwd: '/repo/server' } }, '/repo/server'),
+    isOwnServerInstance({ configLoad: { runDir: '/repo/.run' } }, '/repo/.run', { normalize: identity }),
     true,
   );
 });
 
-test('isOwnServerInstance: a sibling worktree\'s server (different cwd) is NOT this instance', () => {
+test('isOwnServerInstance: a sibling worktree\'s server (different runDir) is NOT this instance', () => {
   assert.equal(
-    isOwnServerInstance({ configLoad: { cwd: '/other-worktree/server' } }, '/repo/server'),
+    isOwnServerInstance({ configLoad: { runDir: '/other-worktree/.run' } }, '/repo/.run', { normalize: identity }),
     false,
   );
 });
 
 test('isOwnServerInstance: missing configLoad (unexpected /api/health shape) is NOT this instance', () => {
-  assert.equal(isOwnServerInstance({}, '/repo/server'), false);
-  assert.equal(isOwnServerInstance(null, '/repo/server'), false);
+  assert.equal(isOwnServerInstance({}, '/repo/.run', { normalize: identity }), false);
+  assert.equal(isOwnServerInstance(null, '/repo/.run', { normalize: identity }), false);
+});
+
+// Castwright#3030 round 2 (finding F2) — an fs-1 upgrade restart launches the
+// NEW release while the OLD release's server may still be shutting down. The
+// two releases have DIFFERENT server/ cwd but the SAME runDir (APP_RUN_DIR is
+// set identically across every release of one install), so the old server
+// must still be recognized as this install's own.
+test('isOwnServerInstance: same runDir across different release directories (upgrade restart) IS this install', () => {
+  assert.equal(
+    isOwnServerInstance(
+      { configLoad: { cwd: '/srv/audiobook/releases/v1.14.0/server', runDir: '/srv/audiobook/.run' } },
+      '/srv/audiobook/.run',
+      { normalize: identity },
+    ),
+    true,
+  );
+});
+
+test('isOwnServerInstance: uses the injected normalize on BOTH sides (case-insensitive win32 stand-in)', () => {
+  const foldCase = (p) => p.toLowerCase();
+  assert.equal(
+    isOwnServerInstance({ configLoad: { runDir: 'C:\\Repo\\.run' } }, 'c:\\repo\\.run', { normalize: foldCase }),
+    true,
+  );
+});
+
+test('defaultNormalizePathForCompare: on win32, folds case; elsewhere, exact', () => {
+  const a = defaultNormalizePathForCompare('C:\\Nonexistent\\Path\\.run');
+  const b = defaultNormalizePathForCompare('c:\\nonexistent\\path\\.run');
+  if (process.platform === 'win32') {
+    assert.equal(a, b);
+  } else {
+    assert.notEqual(a, b);
+  }
+});
+
+// Castwright#3030 round 2 (finding F1) — once a rebind is possible, the
+// launcher must confirm success by IDENTITY (this worktree's own runDir
+// answering /api/health), not by a bare TCP-connect to an assumed port: per
+// the srv-60 auto-rebind design doc, the actual bound port is the single
+// source of truth every consumer must read. These spin up real HTTP servers
+// (plain http, not TLS) answering /api/health with a controllable
+// configLoad.runDir, exactly the shape probeServed()/getJson() parse.
+function makeHealthServer(runDir) {
+  return http.createServer((req, res) => {
+    if (req.url === '/api/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, configLoad: { runDir } }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+}
+
+async function listenOnFreePort(server) {
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return server.address().port;
+}
+
+test('waitForOwnServer: resolves immediately when OUR OWN server already answers on startPort', async () => {
+  const server = makeHealthServer('/repo/.run');
+  const port = await listenOnFreePort(server);
+  try {
+    const found = await waitForOwnServer({
+      startPort: port,
+      maxPorts: 1,
+      timeoutMs: 2000,
+      lanHttps: false,
+      runDir: '/repo/.run',
+    });
+    assert.equal(found, port);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('waitForOwnServer: a FOREIGN server on startPort is not mistaken for success (maxPorts=1 times out)', async () => {
+  const server = makeHealthServer('/other-worktree/.run');
+  const port = await listenOnFreePort(server);
+  try {
+    const found = await waitForOwnServer({
+      startPort: port,
+      maxPorts: 1,
+      timeoutMs: 300,
+      lanHttps: false,
+      runDir: '/repo/.run',
+    });
+    assert.equal(found, null);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('waitForOwnServer: scans past a foreign occupant to find OUR OWN server on a rebound port', async () => {
+  const foreign = makeHealthServer('/other-worktree/.run');
+  const startPort = await listenOnFreePort(foreign);
+  const own = makeHealthServer('/repo/.run');
+  await new Promise((r) => own.listen(startPort + 1, '127.0.0.1', r));
+  try {
+    const found = await waitForOwnServer({
+      startPort,
+      maxPorts: 3,
+      timeoutMs: 2000,
+      lanHttps: false,
+      runDir: '/repo/.run',
+    });
+    assert.equal(found, startPort + 1);
+  } finally {
+    await Promise.all([
+      new Promise((r) => foreign.close(r)),
+      new Promise((r) => own.close(r)),
+    ]);
+  }
+});
+
+test('waitForOwnServer: returns null when nothing answers anywhere in range', async () => {
+  // Bind + immediately release a port so we know a moment ago it was free;
+  // nothing listens there for the whole test, so every candidate refuses.
+  const probe = http.createServer();
+  const startPort = await listenOnFreePort(probe);
+  await new Promise((r) => probe.close(r));
+  const found = await waitForOwnServer({
+    startPort,
+    maxPorts: 2,
+    timeoutMs: 300,
+    lanHttps: false,
+    runDir: '/repo/.run',
+  });
+  assert.equal(found, null);
 });
 
 import { bannerLine, formatBuildManifestLine } from '../start-app-prod.mjs';
