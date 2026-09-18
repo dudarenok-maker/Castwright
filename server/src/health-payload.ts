@@ -24,7 +24,7 @@ export function buildHealthPayload() {
       /* Identity signal for "is this the SAME install", not merely the same
          cwd (Castwright#3030): resolveRunDir honours APP_RUN_DIR, which a
          versioned-dir (fs-1) install sets IDENTICALLY across every release
-         version (scripts/launch.mjs's planLaunch), so an in-progress upgrade
+         version (root `launch.mjs`'s planLaunch), so an in-progress upgrade
          restart still recognizes the old release's server as its own. A bare
          checkout/worktree has no APP_RUN_DIR override, so runDir defaults to
          <that worktree's own repoRoot>/.run — distinct per worktree, which is

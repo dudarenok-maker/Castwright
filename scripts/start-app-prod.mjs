@@ -258,7 +258,7 @@ export function defaultNormalizePathForCompare(p) {
    worktree's server, or a foreign box) that happens to answer on a port we
    probed. Compares runDir, NOT cwd (Castwright#3030 round 2): resolveRunDir
    honours APP_RUN_DIR, which a versioned-dir (fs-1) install sets IDENTICALLY
-   across every release version (scripts/launch.mjs's planLaunch) — so an
+   across every release version (root `launch.mjs`'s planLaunch) — so an
    in-progress upgrade restart (restart-after-upgrade.mjs launching the NEW
    release while the OLD release's server may still be shutting down) still
    recognizes the old release's server as its own, even though the two
@@ -273,32 +273,62 @@ export function isOwnServerInstance(served, ownRunDir, { normalize = defaultNorm
   return normalize(servedRunDir) === normalize(ownRunDir);
 }
 
-/* Wait for THIS worktree's OWN server to become reachable somewhere in
-   [startPort, startPort + maxPorts). A bare TCP-connect on the one port this
-   launcher asked the child to bind is not enough once a rebind is possible:
-   server/src/crash-logging.ts's listenWithAutoRebind (which every path
-   through this launcher runs under — it always sets NODE_ENV=production)
-   silently walks upward on EADDRINUSE, and per that mechanism's design of
-   record (docs/superpowers/specs/2026-07-14-srv60-auto-rebind-port-design.md)
-   "the ACTUAL bound port... becomes the single source of truth" every
-   consumer must read — not the port a consumer merely asked for. So success
-   here is confirmed by IDENTITY (this worktree's own runDir answering
-   /api/health on some candidate port), never by a socket merely accepting a
-   connection: that socket could belong to a different process that grabbed
-   the assumed port in the gap between an earlier probe and this wait
-   (Castwright#3030 round 2, finding F1 — the first version of this fix tried
-   to pre-guess the child's port instead of reading it back, which is exactly
-   the shape that design doc's invariant forbids). Exported for
+/* Single pass over [startPort, startPort + maxPorts) looking for THIS
+   worktree's own server, confirmed by IDENTITY (runDir via /api/health), not
+   merely a socket accepting a connection — a listening socket at a candidate
+   port could belong to a completely different process. `deadline`, when
+   given, additionally aborts the scan (returning null) before starting a new
+   candidate once time is up, so a caller's overall timeout budget can't be
+   blown open-ended by a slow multi-candidate pass (Castwright#3030 round 3,
+   finding N8). Exported for scripts/tests/start-app-prod.test.mjs. */
+export async function scanForOwnServer(startPort, maxPorts, lanHttps, runDir, deadline = Infinity) {
+  for (let i = 0; i < maxPorts; i += 1) {
+    if (Date.now() >= deadline) return null;
+    const candidate = startPort + i;
+    if (await probePort(candidate)) {
+      const served = await probeServed(candidate, lanHttps);
+      if (isOwnServerInstance(served, runDir)) return candidate;
+    }
+  }
+  return null;
+}
+
+/* Wait for THIS worktree's OWN server to become reachable at `startPort`
+   (maxPorts=1, the ordinary case) or somewhere in
+   [startPort, startPort + maxPorts) (maxPorts>1, only reachable when a
+   rebind is genuinely possible — see main()'s mayHaveRebound).
+
+   The ordinary (maxPorts=1) case deliberately stays a BARE TCP-connect,
+   exactly matching this launcher's pre-#3030 behaviour: nothing else could
+   plausibly have taken the one port this launcher itself confirmed free a
+   moment ago (short of the same vanishingly rare race this file has always
+   tolerated), so identity confirmation buys nothing there and only adds a
+   dependency this path never needed before — going through probeServed's
+   TLS-cert resolution (findRootCa()) for every ordinary boot, on hardware
+   where cert FILES exist but the mkcert CA is not independently
+   discoverable, timed out for a server that was actually healthy
+   (Castwright#3030 round 3, finding N2: this is exactly the regression the
+   round-2 fix introduced by routing the ordinary path through identity
+   confirmation too).
+
+   Only the maxPorts>1 (rebind-possible) case needs identity confirmation —
+   there, multiple candidates are plausible and a bare "something is
+   listening" can't tell this worktree's own child apart from a different
+   process that happens to occupy one of the scanned ports. Per the
+   auto-rebind design of record
+   (docs/superpowers/specs/2026-07-14-srv60-auto-rebind-port-design.md), "the
+   ACTUAL bound port... becomes the single source of truth" every consumer
+   must read — not a port a consumer merely asked for or guessed
+   (Castwright#3030 round 2, finding F1). Exported for
    scripts/tests/start-app-prod.test.mjs. */
 export async function waitForOwnServer({ startPort, maxPorts = 1, timeoutMs, lanHttps, runDir }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    for (let i = 0; i < maxPorts; i += 1) {
-      const candidate = startPort + i;
-      if (await probePort(candidate)) {
-        const served = await probeServed(candidate, lanHttps);
-        if (isOwnServerInstance(served, runDir)) return candidate;
-      }
+    if (maxPorts === 1) {
+      if (await probePort(startPort)) return startPort;
+    } else {
+      const found = await scanForOwnServer(startPort, maxPorts, lanHttps, runDir, deadline);
+      if (found !== null) return found;
     }
     await new Promise((r) => setTimeout(r, 500));
   }
@@ -341,11 +371,15 @@ async function main() {
 
   printBanner();
 
-  // Set to true below when the target port turns out to be held by a
-  // DIFFERENT Castwright install (Castwright#3030 round 2) — widens the
-  // post-spawn readiness wait into a scan, since the child may land on a
-  // rebound port in that case (see waitForOwnServer).
+  // Set below when the target port turns out to be held by a DIFFERENT
+  // Castwright install (Castwright#3030 round 2) — widens the post-spawn
+  // readiness wait into a scan, since the child may land on a rebound port
+  // in that case (see waitForOwnServer). The [INFO] announcing this is
+  // deferred until AFTER the altPort check below, which can still itself
+  // decide to [SKIP] — printing "starting anyway" only to skip moments later
+  // would misreport what actually happened (Castwright#3030 round 3, N7).
   let mayHaveRebound = false;
+  let foreignOccupantCwd = null;
 
   const alreadyUp = await probePort(port);
   if (alreadyUp) {
@@ -369,17 +403,27 @@ async function main() {
     }
     /* A DIFFERENT Castwright install (e.g. a sibling worktree's own server)
        answers on our target port — not a duplicate of this worktree's own
-       instance, so don't refuse to start. Spawn anyway: listenWithAutoRebind
-       (production, which this launcher always requests) will walk :${port}
-       upward on EADDRINUSE, so the child may land on a different port than
-       requested — the post-spawn wait below scans for it rather than
-       assuming :${port}. */
+       instance, so don't refuse to start outright. But before spawning,
+       check whether THIS worktree's own server is already sitting somewhere
+       ELSE in the rebind window listenWithAutoRebind would walk — a stale
+       instance left over from an earlier launch that also hit a foreign
+       occupant here. Skipping that check would let this launcher spawn a
+       genuine SECOND copy of its own server against one WORKSPACE_DIR (with
+       no cross-process lock — server/src/workspace/file-lock.ts's mutex is
+       in-process only) while the post-spawn wait below reports the OLD
+       instance ready instead of the one just spawned (Castwright#3030
+       round 3, finding N1). */
+    const stalePort = await scanForOwnServer(port + 1, 19, lanHttps, runDir);
+    if (stalePort !== null) {
+      info(
+        `[SKIP] this worktree's own server is already listening on :${stalePort} ` +
+          `(rebound off :${port}, held by a different Castwright install) — leaving it alone. ` +
+          `Run "npm run stop:prod" first to relaunch cleanly.`,
+      );
+      process.exit(0);
+    }
     mayHaveRebound = true;
-    info(
-      `[INFO] a different Castwright server (cwd=${served.configLoad?.cwd ?? 'unknown'}) is already ` +
-        `listening on :${port} — not this worktree's own instance. Starting anyway; this worktree's ` +
-        `server will bind the next free port.`,
-    );
+    foreignOccupantCwd = served.configLoad?.cwd ?? 'unknown';
   }
 
   /* A prior launch of THIS worktree's own server may have bound the OTHER
@@ -401,6 +445,14 @@ async function main() {
       );
       process.exit(0);
     }
+  }
+
+  if (mayHaveRebound) {
+    info(
+      `[INFO] a different Castwright server (cwd=${foreignOccupantCwd}) is already listening on ` +
+        `:${port} — not this worktree's own instance. Starting anyway; this worktree's server will ` +
+        `bind the next free port.`,
+    );
   }
 
   const outLog = openSync(resolve(logDir, 'server.log'), 'a');
