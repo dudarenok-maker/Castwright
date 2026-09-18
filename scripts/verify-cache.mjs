@@ -1481,6 +1481,15 @@ export async function runStepProcess(
         shell: true,
         env,
         windowsHide: true,
+        // On POSIX, `detached: true` makes the shell the leader of its own
+        // process group (setsid) without backgrounding it (we still await
+        // its 'close' event normally) — that's what lets the timeout path
+        // below kill the whole `sh -c npm run ... -> npm -> node -> forks`
+        // tree via a negative-pid signal, the same shape stop-app.mjs
+        // already uses for the production server/sidecar. Windows has no
+        // process-group equivalent; `taskkill /T /F` walks by parent PID
+        // instead, so `detached` is left at its default there.
+        ...(process.platform === 'win32' ? {} : { detached: true }),
         ...(capture ? { stdio: ['inherit', 'inherit', 'pipe'] } : { stdio: 'inherit' }),
       });
 
@@ -1494,7 +1503,27 @@ export async function runStepProcess(
       const remainingMs = Math.max(0, deadline - Date.now());
       const timer = setTimeout(() => {
         timedOut = true;
-        killTree(child.pid);
+        if (process.platform === 'win32') {
+          killTree(child.pid);
+        } else {
+          // killTree (reap-stale-batteries.mjs) is Windows-only by design
+          // for the dev-box reap sweep it primarily serves — but this path
+          // also runs in CI (Ubuntu), where a step that genuinely wedges
+          // must still be killed or the timeout budget this feature exists
+          // to enforce is silently inert. Kill the whole process GROUP
+          // (negative pid), not just the immediate shell — `child.kill()`
+          // alone only reaps the shell, exactly as the doc comment above
+          // this function already says for the Windows case.
+          try {
+            process.kill(-child.pid, 'SIGKILL');
+          } catch {
+            try {
+              child.kill('SIGKILL');
+            } catch {
+              // Already gone — nothing left to kill.
+            }
+          }
+        }
         try {
           // Provably-orphaned only (dead parent) — mirrors the pre-push
           // reap's own narrow scope; a merely-slow-but-live subtree is not
