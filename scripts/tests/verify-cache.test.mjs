@@ -46,10 +46,16 @@ import {
   stagedDiffFiles,
   sidecarFingerprint,
   STEPS,
+  computeBudgetMs,
+  computeStepBudgetMs,
+  computeRunBudgetMs,
+  qualifiedDurationFor,
+  DEFAULT_STEP_TIMEOUT_MIN,
+  DEFAULT_RUN_TIMEOUT_MIN,
   _internals,
 } from '../verify-cache.mjs';
 
-const { hasVitestStep } = _internals;
+const { hasVitestStep, makeTailAccumulator, MAX_STDERR_BUFFER } = _internals;
 import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 
 const { SCHEMA_VERSION } = _internals;
@@ -1377,7 +1383,7 @@ test('runStepProcess keys the retriable-pool-crash lookup on retryKey, not the s
   );
   assert.match(
     body,
-    /spawnSync\('npm', \['run', npmScript\]/,
+    /spawn\('npm', \['run', npmScript\]/,
     'runStepProcess must spawn npmScript (the possibly-substituted script), not retryKey',
   );
 });
@@ -1452,36 +1458,333 @@ process.exit(0);
   return marker;
 }
 
-test('runStepProcess: a step passing on the first attempt records 1 attempt', () => {
+test('runStepProcess: a step passing on the first attempt records 1 attempt', async () => {
   const dir = mkTmp();
   writeFlakyFixture(dir, 'always-pass', { failFirst: false });
-  const result = runStepProcess('always-pass', { cwd: dir, env: process.env, retryKey: 'test:server' });
+  const result = await runStepProcess('always-pass', { cwd: dir, env: process.env, retryKey: 'test:server' });
   assert.equal(result.code, 0);
   assert.equal(result.attempts, 1);
 });
 
-test('runStepProcess: a fork-pool crash followed by a pass records the true attempt count, summed across attempts', () => {
+test('runStepProcess: a fork-pool crash followed by a pass records the true attempt count, summed across attempts', async () => {
   const dir = mkTmp();
   const marker = writeFlakyFixture(dir, 'flaky', { failFirst: true });
-  const result = runStepProcess('flaky', { cwd: dir, env: process.env, retryKey: 'test:server' });
+  const result = await runStepProcess('flaky', { cwd: dir, env: process.env, retryKey: 'test:server' });
   assert.equal(result.code, 0);
   assert.equal(result.attempts, 2, 'first attempt crashes, second passes — 2 total attempts');
   // The fixture appends to marker on each launch, so 2 attempts → 2 bytes.
   assert.equal(readFileSync(marker, 'utf8').length, 2, 'marker file must record 2 real process launches');
 });
 
-test('runStepProcess: a non-retriable step always records 1 attempt, even given a crash-shaped failure', () => {
+test('runStepProcess: a non-retriable step always records 1 attempt, even given a crash-shaped failure', async () => {
   const dir = mkTmp();
   writeFlakyFixture(dir, 'flaky-nonretriable', { failFirst: true });
   // retryKey NOT in RETRIABLE_POOL_STEPS — must never retry, regardless of
   // stderr shape, and must report exactly 1 attempt.
-  const result = runStepProcess('flaky-nonretriable', {
+  const result = await runStepProcess('flaky-nonretriable', {
     cwd: dir,
     env: process.env,
     retryKey: 'some-other-step',
   });
   assert.equal(result.code, 1);
   assert.equal(result.attempts, 1);
+});
+
+// --- Part 2 (ops-72) time budgets ----------------------------------------
+
+function writeHangingFixture(dir, npmScriptName) {
+  // Deliberately never exits on its own — simulates a genuinely wedged
+  // process (the 4h34m incident this feature exists to bound), so a real
+  // timeout kill is exercised rather than a step that would have finished by
+  // itself. The 60s self-exit is a safety net, not the mechanism under test:
+  // if the kill path being tested is itself broken (the exact class of bug
+  // this fixture caught on Linux CI — killTree() was a no-op there), this
+  // process must not become an unreapable orphan that outlives the test run
+  // — confirmed live on a real box (PR #3260 review pass 1, B1): the census
+  // sweep that's supposed to catch a `/T`-survivor doesn't recognize a bare
+  // `node hang.mjs` as a battery invocation, so it's invisible to
+  // runCensus()'s own reap and survives until reboot.
+  const fixtureFile = 'hang.mjs';
+  writeFileSync(
+    join(dir, fixtureFile),
+    'setInterval(() => {}, 1000);\nsetTimeout(() => process.exit(0), 60_000);\n',
+    'utf8',
+  );
+  const packageJsonPath = join(dir, 'package.json');
+  let packageJson;
+  if (existsSync(packageJsonPath)) {
+    packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  } else {
+    packageJson = { name: 'flaky-fixture', private: true, scripts: {} };
+  }
+  packageJson.scripts[npmScriptName] = `node ${fixtureFile}`;
+  writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8');
+}
+
+test('runStepProcess: a step exceeding its budget is classified TIMEOUT, not a crash-retry exhaustion (mutation test)', async () => {
+  const dir = mkTmp();
+  writeHangingFixture(dir, 'hang');
+  const start = Date.now();
+  // retryKey IS in RETRIABLE_POOL_STEPS on purpose — this is exactly the
+  // shape that could be mistaken for a crash-retry exhaustion (attempts ===
+  // MAX_POOL_ATTEMPTS) if the timeout classification were folded into, or
+  // ordered after, the isVitestPoolCrash check instead of short-circuiting
+  // before it.
+  const result = await runStepProcess('hang', {
+    cwd: dir,
+    env: process.env,
+    retryKey: 'test:server',
+    timeoutMs: 400,
+  });
+  const elapsed = Date.now() - start;
+  assert.equal(result.timedOut, true, 'a wedged process must be classified as a timeout');
+  assert.notEqual(result.code, 0);
+  assert.equal(
+    result.attempts,
+    1,
+    'a timed-out attempt must never be retried as a vitest pool crash — attempts must stay at 1, ' +
+      'not climb to MAX_POOL_ATTEMPTS (3) the way a real fork-pool crash would',
+  );
+  assert.ok(
+    elapsed < 30000,
+    `the taskkill /T /F path should land well under a real multi-hour wedge — took ${elapsed}ms`,
+  );
+});
+
+// PR #3260 review pass 1, B2: a budget calibrated at full concurrency is too
+// tight once LOW_CONCURRENCY has actually throttled the fork pool for THIS
+// run — without accounting for that, the SAME throttle runPipeline applies
+// to itself makes its own step timeout fire on an otherwise-healthy,
+// merely-slower run.
+//
+// PR #3260 review pass 3, B9/B11: this used to be two tests that raced a
+// real `npm run` subprocess against a wall-clock deadline. That went flaky
+// on this box: real process-launch overhead alone (565-698ms measured on
+// Windows) rivals the fixtures' own sleep durations, leaving 0-100ms of
+// actual margin — both tests failed unmutated, repeatedly, on the
+// committed head. Replaced with direct value assertions against
+// computeStepBudgetMs/computeRunBudgetMs (no subprocess, no wall clock),
+// PLUS a source-regex check that runPipeline's real call sites actually go
+// through those functions rather than reimplementing the formula inline —
+// together these prove both the arithmetic AND the wiring, deterministically.
+
+test('runPipeline computes its step and pipeline budgets via computeStepBudgetMs/computeRunBudgetMs, not an inline reimplementation', () => {
+  const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
+  assert.match(
+    pipelineBody,
+    /computeStepBudgetMs\(\s*cache,\s*step\.name,\s*stepTimeoutFloorMs,\s*stepContentionMultiplier\s*\)/,
+    'the per-step budget must go through computeStepBudgetMs, not an inline computeBudgetMs(...) * multiplier',
+  );
+  assert.match(
+    pipelineBody,
+    /computeRunBudgetMs\(\s*qualifiedRunDurationMs,\s*runTimeoutFloorMs,\s*contentionBudgetMultiplier\s*\)/,
+    'the whole-pipeline budget must go through computeRunBudgetMs, not an inline computeBudgetMs(...) * multiplier',
+  );
+});
+
+test('computeStepBudgetMs widens the FLOOR for an UNCALIBRATED step (no cache entry) under LOW_CONCURRENCY (B2)', () => {
+  const floorMs = 45 * 60 * 1000;
+  const emptyCache = { schemaVersion: SCHEMA_VERSION, steps: {} };
+  assert.equal(computeStepBudgetMs(emptyCache, 'test:server', floorMs, 1), floorMs);
+  assert.equal(computeStepBudgetMs(emptyCache, 'test:server', floorMs, 2), floorMs * 2);
+});
+
+test('computeStepBudgetMs widens the FLOOR, not the calibrated (K x lastGreenDurationMs) branch, for a baseline recorded under a PRIOR throttled run (B5/B9/B11)', () => {
+  // Real figures from this PR's own review: the #3025 baseline is 17.85 min
+  // unthrottled; a baseline recorded THROTTLED (roughly 2x slower for the
+  // same work) is ~35.7 min. An uncalibrated-only test (the one above) can
+  // never catch this regression — computeBudgetMs(null, F) returns F
+  // verbatim regardless of k, so "multiply the result" and "multiply the
+  // floor input" are algebraically IDENTICAL for a null duration. They
+  // diverge only once a real qualified baseline exists.
+  const floorMs = 45 * 60 * 1000;
+  const throttledBaselineMs = 35.7 * 60 * 1000;
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: { 'test:server': { inputHash: 'stale', durationMs: throttledBaselineMs, attempts: 1 } },
+  };
+  const oldBuggyShape = computeBudgetMs(throttledBaselineMs, floorMs) * 2; // computeBudgetMs(d, F) * mult
+  const fixed = computeStepBudgetMs(cache, 'test:server', floorMs, 2); // computeBudgetMs(d, F * mult)
+  assert.equal(
+    oldBuggyShape,
+    178.5 * 60 * 1000,
+    'sanity: the old (buggy) shape doubles the already-throttled baseline a second time',
+  );
+  assert.equal(fixed, 90 * 60 * 1000, 'the fixed shape must land on max(2F, 2.5d), not 2 x max(F, 2.5d)');
+  assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a baseline the prior throttled run already absorbed');
+});
+
+test('computeRunBudgetMs widening the uncalibrated pipeline floor is a documented open question, not fixed here (B10)', () => {
+  // This test does NOT assert a fix — it pins the current, known-incomplete
+  // behavior so a future change to it is deliberate, not silent.
+  // computeBudgetMs(null, F) returns F verbatim regardless of k, so
+  // multiplying the floor before vs. after that null-duration call is
+  // mathematically IDENTICAL: the uncalibrated whole-pipeline floor under
+  // throttle is unchanged by this PR (still 2x DEFAULT_RUN_TIMEOUT_MIN).
+  // Whether that number is safe against the 273.8-min incident this budget
+  // exists to bound is a real, separate, unresolved question — argued
+  // against that figure, not derived from the fork-pool ratio — tracked as
+  // Castwright#3272 rather than picked here.
+  const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000;
+  assert.equal(computeRunBudgetMs(0, floorMs, 2), floorMs * 2);
+  assert.equal(
+    computeRunBudgetMs(0, floorMs, 2),
+    computeBudgetMs(null, floorMs) * 2,
+    'uncalibrated: multiplying the floor before vs. after computeBudgetMs is identical — not a fix for this case',
+  );
+});
+
+test('computeRunBudgetMs widens the FLOOR, not the calibrated branch, for a CALIBRATED pipeline baseline (B5, the case this PR does fix)', () => {
+  const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000; // 180 min
+  const throttledBaselineMs = 200 * 60 * 1000; // exceeds the 180-min floor, so the calibrated branch dominates
+  const oldBuggyShape = computeBudgetMs(throttledBaselineMs, floorMs) * 2;
+  const fixed = computeRunBudgetMs(throttledBaselineMs, floorMs, 2);
+  assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a calibrated pipeline baseline either');
+});
+
+test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {
+  const dir = makeGitFixture();
+  writeHangingFixture(dir, 'test:server');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  const start = Date.now();
+  try {
+    const result = await runPipeline({
+      argv: ['--steps', 'test:server'],
+      cwd: dir,
+      env: {
+        ...scrubGitEnvForThrowawayRepo(process.env),
+        SKIP_CONTENTION_CHECK: '1',
+        CASTWRIGHT_STEP_TIMEOUT_MIN: '0.01', // 600ms — deliberately tiny for the mutation test
+      },
+    });
+    const elapsed = Date.now() - start;
+    // Without this, a genuinely broken kill (killStepChildTree() a no-op) is
+    // indistinguishable from a real one: the hanging fixture's own 60s
+    // self-exit (added for B1, PR #3260 review pass 1 — an orphan-prevention
+    // safety net, not the mechanism under test) supplies a clean exit that
+    // satisfies every assertion below just as well as a fast kill would,
+    // taking ~61s instead of ~1s to do it (PR #3260 review pass 2, B4 — this
+    // guard mirrors the one runStepProcess's own equivalent test already has
+    // a few lines up).
+    assert.ok(
+      elapsed < 30000,
+      `the kill path should land well under the fixture's own 60s self-exit safety net — took ${elapsed}ms`,
+    );
+    assert.notEqual(result, 0, 'a timed-out step must fail the pipeline');
+    const timeoutLine = logs.find((l) => l.includes('[timeout]') && l.includes('test:server'));
+    assert.ok(timeoutLine, `expected a [timeout] line, got:\n${logs.join('\n')}`);
+    assert.ok(
+      !logs.some((l) => l.includes('[retry]')),
+      'a timed-out step must never be retried as a vitest pool crash',
+    );
+    assert.ok(
+      !logs.some((l) => l.includes('[fail]') && l.includes('3 attempts')),
+      'must not be reported as a MAX_POOL_ATTEMPTS-exhausted crash-retry outcome',
+    );
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+// The tail/head stderr-accumulator regression test (#3258). Part 2's
+// retriable-pool-steps capture stderr through makeTailAccumulator, which keeps
+// the TAIL of the stream when it overflows. isVitestPoolCrash's signature
+// ("Worker exited unexpectedly") appears at the END of a crashed run's output,
+// so a head-keeping accumulator silently loses the signal under exactly the
+// high-output contention where crashes happen. This is the missing regression
+// test acceptance item 13 of #3250 flagged on #3249's completion claim.
+//
+// Driving a real 64MiB stderr child process end-to-end is deliberately not the
+// shape here: the accumulator is exported as a seam, the test feeds it more
+// than MAX_STDERR_BUFFER of content with the crash signature at the END, and
+// asserts the signature survives trimming.
+test('makeTailAccumulator keeps the TAIL past MAX_STDERR_BUFFER - the isVitestPoolCrash signature at the end of a crashed run survives (mutation test)', () => {
+  const acc = makeTailAccumulator(MAX_STDERR_BUFFER);
+
+  // More than a full 64MiB buffer, signature near the END (the real crashed
+  // run's shape: the signature is the LAST line before the process died).
+  // Chunk size mirrors a real OS pipe read (a few KiB to tens of KiB); the
+  // accumulator's Buffer.concat is O(size) per push and it trims to
+  // MAX_STDERR_BUFFER each time, so ~128MiB of input is ~2 concats of the
+  // capped buffer — fast enough for a unit test. (An earlier draft pushed
+  // 131072 x 1KiB chunks and turned the concat into O(n^2) over the whole
+  // buffer — that hung.)
+  const filler = Buffer.alloc(8 * 1024 * 1024).fill(0x78); // 'x', 8MiB per chunk
+  const tail = Buffer.from('[vitest-pool]: Worker exited unexpectedly\n');
+  // Emit enough chunks to exceed MAX_STDERR_BUFFER by a wide margin.
+  const chunkCount = Math.ceil((MAX_STDERR_BUFFER * 2) / filler.length);
+  for (let i = 0; i < chunkCount; i += 1) acc.push(filler);
+  acc.push(tail);
+
+  const out = acc.toString();
+  assert.match(
+    out,
+    /Worker exited unexpectedly/,
+    'after >MAX_STDERR_BUFFER of stderr, the crash signature at the END of the stream must survive ' +
+      '(an accumulator that keeps the HEAD would have trimmed it away)',
+  );
+  // And the kept tail is bounded: the accumulator must actually have trimmed.
+  assert.ok(
+    out.length >= tail.length && out.length <= MAX_STDERR_BUFFER,
+    `accumulator must keep at most MAX_STDERR_BUFFER bytes (kept ${out.length})`,
+  );
+});
+
+// Calibration (design doc, "What this buys Part 2 — qualifying the
+// baseline"): prefer an attempts === 1 cache entry as the qualified
+// baseline; an attempts > 1 entry is uncalibratable (a crashed attempt
+// aborts early, so durationMs/attempts is not a meaningful per-attempt
+// figure) and must fall back to FLOOR, not be divided down.
+test('qualifiedDurationFor: returns durationMs for an attempts === 1 cache entry (#3025 real shape)', () => {
+  const cache = { steps: { 'test:server': { durationMs: 1070714, attempts: 1 } } };
+  assert.equal(qualifiedDurationFor(cache, 'test:server'), 1070714);
+});
+
+test('qualifiedDurationFor: returns null (uncalibratable) for an attempts > 1 cache entry', () => {
+  const cache = { steps: { 'test:server': { durationMs: 1220000, attempts: 3 } } };
+  assert.equal(qualifiedDurationFor(cache, 'test:server'), null);
+});
+
+test('qualifiedDurationFor: returns null when the step has no cache entry at all', () => {
+  assert.equal(qualifiedDurationFor({ steps: {} }, 'test:server'), null);
+});
+
+test('computeBudgetMs: a qualified attempts === 1 baseline (#3025, 17.85 min) yields ~44.6 min at K=2.5, above the 45-min FLOOR only if K x duration exceeds it', () => {
+  const floorMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000; // 45 min
+  const qualifiedDurationMs = 1070714; // #3025: 17.85 min, attempts: 1
+  const budget = computeBudgetMs(qualifiedDurationMs, floorMs);
+  // 1070714 * 2.5 ≈ 2676785ms ≈ 44.6 min — just under the 45-min FLOOR, so
+  // max(FLOOR, K*duration) degrades to FLOOR here, matching the design
+  // doc's own observation that the qualified baseline and the interim
+  // default "are not materially different".
+  assert.equal(budget, floorMs);
+});
+
+test('computeBudgetMs: falls back to FLOOR when the baseline is uncalibratable (attempts > 1)', () => {
+  const floorMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000;
+  const uncalibratable = qualifiedDurationFor(
+    { steps: { 'test:server': { durationMs: 1220000, attempts: 3 } } },
+    'test:server',
+  );
+  assert.equal(uncalibratable, null);
+  assert.equal(computeBudgetMs(uncalibratable, floorMs), floorMs);
+});
+
+test('computeBudgetMs: a large qualified baseline scales the budget past FLOOR (K x duration wins)', () => {
+  const floorMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000; // 45 min
+  const qualifiedDurationMs = 30 * 60 * 1000; // 30 min green run
+  const budget = computeBudgetMs(qualifiedDurationMs, floorMs);
+  assert.equal(budget, 30 * 60 * 1000 * 2.5); // 75 min — K*duration exceeds FLOOR
+});
+
+test('DEFAULT_STEP_TIMEOUT_MIN and DEFAULT_RUN_TIMEOUT_MIN match the design doc interim defaults (45 / 180)', () => {
+  assert.equal(DEFAULT_STEP_TIMEOUT_MIN, 45);
+  assert.equal(DEFAULT_RUN_TIMEOUT_MIN, 180);
 });
 
 test('decide: a legacy cache entry with durationMs but no attempts field is still a valid cache hit', () => {
@@ -1943,7 +2246,7 @@ test('hasVitestStep returns FALSE for an empty array', () => {
 // cache entry persists attempts, and the [pass] console line conditionally
 // reports the count.
 
-test('#3018: runPipeline persists attempts to cache and reports count only on retry', () => {
+test('#3018: runPipeline persists attempts to cache and reports count only on retry', async () => {
   const dir = makeGitFixture();
 
   // Fixture 1: crashes on first run (fork-pool crash shape), passes on retry.
@@ -1964,7 +2267,7 @@ test('#3018: runPipeline persists attempts to cache and reports count only on re
     // Criterion 1: retry case → cache.steps[step].attempts = 2
     // Criterion 2: [pass] line includes "2 attempts" (only when attempts > 1)
     logs.length = 0;
-    const result1 = runPipeline({
+    const result1 = await runPipeline({
       argv: ['--steps', 'test:server'],
       cwd: dir,
       env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
@@ -1982,7 +2285,7 @@ test('#3018: runPipeline persists attempts to cache and reports count only on re
     // Criterion 1: first-try case → cache.steps[step].attempts = 1
     // Criterion 2: [pass] line does NOT include attempt count (only when attempts > 1)
     logs.length = 0;
-    const result2 = runPipeline({
+    const result2 = await runPipeline({
       argv: ['--steps', 'test'],
       cwd: dir,
       env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
@@ -2001,7 +2304,7 @@ test('#3018: runPipeline persists attempts to cache and reports count only on re
   }
 });
 
-test('#3018: [fail] line reports attempt count when step crashes all retries', () => {
+test('#3018: [fail] line reports attempt count when step crashes all retries', async () => {
   const dir = makeGitFixture();
 
   // Fixture: crashes on all 3 attempts (fork-pool crash shape).
@@ -2018,7 +2321,7 @@ test('#3018: [fail] line reports attempt count when step crashes all retries', (
   try {
     // Run the pipeline; it will crash all 3 attempts and return non-zero
     logs.length = 0;
-    const result = runPipeline({
+    const result = await runPipeline({
       argv: ['--steps', 'test:server'],
       cwd: dir,
       env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
