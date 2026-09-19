@@ -1623,6 +1623,48 @@ export async function runStepProcess(
   return { code: lastRes.code, attempts: MAX_POOL_ATTEMPTS, timedOut: false };
 }
 
+// Unconditional local checks (#3140) --------------------------------------
+//
+// These scripts run on EVERY full `npm run verify` - never `[cached]`, never
+// scope-skipped, and never as a `STEPS[]` entry. WHY they cannot live in
+// STEPS[]: `scripts/ci-scope.mjs` auto-derives a `step_<slug>` scope key for
+// every STEPS[] entry (computeScopes/slugFor), and
+// scripts/tests/workflow-wiring.test.mjs's "every emitted scope key is
+// referenced by the workflow" test then requires that key to be referenced by
+// an `if:` condition in .github/workflows/verify.yml - while that same file's
+// "register citation check: must be unconditional (no if: guard) - #3122" test
+// requires the CI step for this exact check to have NO `if:` at all. A STEPS[]
+// entry would force those two tests into direct contradiction.
+//
+// WHY unconditional-and-uncached rather than a step: the checker
+// (scripts/check-register-citations.mjs) scans the WHOLE git-tracked tree for
+// register-row citations, so no diff-scope and no input-glob set can predict
+// whether one broke. Reached only via `test:hooks`, a diff touching any file
+// outside that step's globs printed `test:hooks [cached]` and left a broken
+// citation stale-green locally - #3140's local-wiring gap (#1847 is the same
+// trap shape, one step further out).
+export const UNCONDITIONAL_LOCAL_CHECK_SCRIPTS = Object.freeze(['check:register-citations']);
+
+// Runs each UNCONDITIONAL_LOCAL_CHECK_SCRIPTS entry through the SAME spawn
+// mechanism (`runStepProcess`) the STEPS[] loop uses, and reports the SAME
+// [run]/[pass]/[fail] shape - only the cache-hash and scope-filter machinery
+// is absent. Returns the first non-zero exit code, failing the whole run
+// exactly like a failed step; 0 when every check passed.
+export function runUnconditionalLocalChecks({ cwd, env }) {
+  for (const script of UNCONDITIONAL_LOCAL_CHECK_SCRIPTS) {
+    console.log(`[run] ${script} (unconditional)`);
+    const t0 = Date.now();
+    const { code } = runStepProcess(script, { cwd, env, retryKey: script });
+    const dt = Date.now() - t0;
+    if (code !== 0) {
+      console.log(`[fail] ${script} (exit ${code}, took ${formatSecs(dt)})`);
+      return code;
+    }
+    console.log(`[pass] ${script} (took ${formatSecs(dt)})`);
+  }
+  return 0;
+}
+
 export async function runPipeline({ argv = [], cwd = process.cwd(), env = process.env } = {}) {
   const flags = parseFlags(argv);
   const validNames = STEPS.map((s) => s.name);
@@ -1638,6 +1680,19 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     }
     const selected = new Set(flags.steps);
     activeSteps = STEPS.filter((s) => selected.has(s.name));
+  }
+
+  // Unconditional local checks (#3140) — run at the HEAD of the pipeline, so a
+  // broken citation fails the run before any cached/skipped step can report
+  // [pass] on stale evidence. Full runs only: a `--steps` run is a
+  // deliberately narrow developer/hook filter (package.json's verify:fast*,
+  // which the pre-commit hook uses), and the same `flags.steps` condition the
+  // selection block above uses is what distinguishes "full" from "filtered".
+  // Deliberately NOT wrapped in a cache check or a scope check — see
+  // runUnconditionalLocalChecks' own header for why both are impossible here.
+  if (!flags.steps || flags.steps.length === 0) {
+    const checkCode = runUnconditionalLocalChecks({ cwd, env });
+    if (checkCode !== 0) return checkCode;
   }
 
   // Contention guard — if a generation run is hammering the GPU, throttle the
