@@ -4419,6 +4419,23 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # device-wide delta with the same foreign-PID/concurrent-reservation
     # guards `reservation()` already has for the cold "asr" key above — not
     # done here; tracked in #3036.
+    #
+    # #3265 (child 1 of the #3036 chain) built that third option's NVML
+    # OWN-PROCESS delta: `usedGpuMemory` from
+    # `nvmlDeviceGetComputeRunningProcesses`, filtered to `os.getpid()`,
+    # diffed across a resident forward (`PlacementController.
+    # _own_process_used_mb`). A per-process reading is contamination-immune
+    # by construction, so it needs none of the foreign-PID guards the
+    # device-wide delta required. REAL ON-BOX OUTCOME: DID NOT CONVERGE on
+    # this 4070-Laptop box — the machinery works (our own PID IS present in
+    # NVML's compute-process list) but the Windows WDDM driver returns
+    # `usedGpuMemory=None` for it even with hundreds of MB of live CUDA
+    # allocations, so `_own_process_used_mb` correctly returns None, every
+    # warm sample is discarded, and the learned estimate stays on this
+    # seed. Evidence (pasted /debug/memory JSON + standalone NVML probe
+    # output): docs/testing/onbox-3036-results/step-1-nvml.md. The
+    # device-wide-delta fallback with own-process-style attribution guards
+    # is tracked in #3266.
     "asr.warm": 128,
     "spk": 200,
 }
@@ -5114,6 +5131,66 @@ class PlacementController:
             return None
 
     @staticmethod
+    def _own_process_used_mb(device_key: Optional[str]) -> Optional[int]:
+        """#3036 — THIS process's own VRAM usage on `device_key`, in MB, via
+        NVML's per-process accounting. Every entry
+        `nvmlDeviceGetComputeRunningProcesses` returns carries a `pid` AND a
+        `usedGpuMemory`; filtering that list to `os.getpid()`'s own entry and
+        diffing two readings across a resident ASR forward (see
+        `reservation()`'s `finally`) is the `asr.warm` measurement the
+        torch-allocator peak structurally cannot provide: CTranslate2
+        (faster-whisper's backend) never routes ANY of its CUDA work —
+        weights or per-forward activations alike — through PyTorch's caching
+        allocator (#2930/#3012, docs/testing/onbox-e12-results/
+        step-1-rework-run.md).
+
+        Unlike `_foreign_pid_holds_device` below — the SAME NVML call used
+        for the opposite purpose, enumerating FOREIGN pids — no foreign-PID
+        or concurrent-traffic guard is needed here: a per-process reading
+        cannot be contaminated by other processes' allocations at all. That
+        immunity is precisely why this technique exists, where the device-wide
+        `_device_free_mb` delta (#2094) proved too noisy for `asr.warm`
+        (#2682).
+
+        Returns `Optional[int]`, never 0-on-failure, for the same reason
+        `_device_free_mb` returns None rather than 0: `record()`'s `<= 0`
+        guard must not be able to mistake "couldn't measure" for "measured
+        zero". `None` on: a non-CUDA/`rocm:` device_key (NVML covers NVIDIA
+        only, same as `_foreign_pid_holds_device`), unimportable `pynvml`,
+        any NVML error, no entry for our own PID, or an entry whose
+        `usedGpuMemory` is falsy/None. The last two are known Windows WDDM
+        edge cases of per-process accounting (the field is documented as
+        potentially unavailable), not faults to raise on — whether THIS box
+        yields usable own-process numbers at all is exactly what #3265's
+        on-box run exists to find out. Never raises: same
+        `nvmlInit`/try/`finally: nvmlShutdown`/broad-except shape as
+        `_foreign_pid_holds_device`."""
+        if not device_key or not device_key.startswith("cuda:"):
+            return None
+        pynvml = _load_pynvml()
+        if pynvml is None:
+            return None
+        try:
+            index = int(device_key.split(":", 1)[1])
+            pynvml.nvmlInit()
+            try:
+                handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+                procs = pynvml.nvmlDeviceGetComputeRunningProcesses(handle)
+            finally:
+                pynvml.nvmlShutdown()
+            own_pid = os.getpid()
+            for proc in procs:
+                if getattr(proc, "pid", None) != own_pid:
+                    continue
+                used = getattr(proc, "usedGpuMemory", None)
+                if not used:
+                    return None
+                return int(used // 1_048_576)
+            return None
+        except Exception:
+            return None
+
+    @staticmethod
     def _foreign_pid_holds_device(device_key: Optional[str]) -> Optional[bool]:
         """#2094 — per-process VRAM attribution via NVML, closing the
         cold-bucket gap the two existing guards leave open: Guard 1
@@ -5169,7 +5246,7 @@ class PlacementController:
         heavy: bool,
         pinned: Optional[str],
         preferred: Optional[str] = None,
-    ) -> tuple[dict, Optional[tuple], bool, Optional[int], bool]:
+    ) -> tuple[dict, Optional[tuple], bool, Optional[int], bool, Optional[int]]:
         """The probe -> try_hold -> evict -> resolve body of `reservation()`
         (plan 273, T4) — extracted so `reservation()` can run it under
         `_admit_lock` while keeping the `yield`/`finally` (release) OUTSIDE
@@ -5193,7 +5270,15 @@ class PlacementController:
         at this SAME snapshot point — `False` for every non-ASR engine;
         `reservation()` ORs it with an equivalent after-snapshot check so a
         foreign process present at either end of the window discards the
-        sample."""
+        sample. `warm_before_mb` (#3036) is the RESIDENT-`asr` counterpart
+        of `mem_before_mb`: the `_own_process_used_mb` NVML own-process
+        reading taken at this SAME point for `engine == "asr"` when the
+        model is ALREADY resident — `None` for every other engine, for a
+        cold load, and when the reading itself failed. It is a separate
+        element rather than an overload of `mem_before_mb` because the two
+        measure different things (per-process used-bytes vs device-wide
+        free bytes) on mutually exclusive branches; `reservation()` pairs it
+        with an after-reading into the `asr.warm` delta."""
         resident = self.is_resident(engine)
         # #2094 — consult residency BEFORE booking: an already-resident engine
         # (currently only distinguished for "asr", see `FootprintTable._key`)
@@ -5282,6 +5367,7 @@ class PlacementController:
 
         mem_before_mb: Optional[int] = None
         foreign_before = False
+        warm_before_mb: Optional[int] = None
         if held is not None:
             admission: dict = {"device": held[0]}
             # Device-wide reset, not scoped to this op — a concurrent op on the
@@ -5308,12 +5394,21 @@ class PlacementController:
                 # "discard"; only a positive `False` clears this snapshot.
                 if mem_before_mb is not None:
                     foreign_before = self._foreign_pid_holds_device(held[0]) is not False
+            elif engine == "asr" and resident is not None:
+                # #3036 — the RESIDENT ("asr.warm") counterpart of the cold
+                # snapshot above: this process's own NVML used-bytes reading,
+                # taken at the SAME point `_reset_peak_mb` brackets from, so
+                # `reservation()`'s `finally` can pair it with an after-
+                # reading into a per-process delta. `None` (couldn't
+                # measure) is not an error here — it routes the sample to
+                # the same discard fall-through as a failed cold snapshot.
+                warm_before_mb = self._own_process_used_mb(held[0])
         elif cpu_capable and not heavy:
             admission = {"device": "cpu"}
         else:
             device_key = resident if resident is not None else (pinned if pinned is not None else self._worst_device_key(devices))
             admission = {"noCapacity": {"neededMb": peak, "deviceKey": device_key}}
-        return admission, held, resident is not None, mem_before_mb, foreign_before
+        return admission, held, resident is not None, mem_before_mb, foreign_before, warm_before_mb
 
     @asynccontextmanager
     async def reservation(
@@ -5357,7 +5452,7 @@ class PlacementController:
         real hazard for tests, which must therefore each drive this
         `PlacementController` under exactly one `asyncio.run()`."""
         async with self._admit_lock:
-            admission, held, resident, mem_before_mb, foreign_before = await self._resolve_admission(
+            admission, held, resident, mem_before_mb, foreign_before, warm_before_mb = await self._resolve_admission(
                 engine, model, cfg, cpu_capable, heavy, pinned, preferred
             )
         try:
@@ -5373,6 +5468,7 @@ class PlacementController:
                 # (see `_resolve_admission`) — #2682 moved the RESIDENT
                 # ("asr.warm") case off this path entirely (below).
                 asr_observed_mb: Optional[int] = None
+                asr_warm_mb: Optional[int] = None
                 if engine == "asr" and mem_before_mb is not None:
                     mem_after_mb = self._device_free_mb(device_key)
                     other_engines = self.ledger.engines_holding(device_key) - {engine}
@@ -5406,22 +5502,39 @@ class PlacementController:
                     # stays None -> record() below sees 0 via the `or 0` and
                     # its own `<= 0` guard drops it) rather than attributed to
                     # ASR.
+                # #3036 — RESIDENT ("asr.warm") own-process NVML DELTA, the
+                # warm sibling of the cold block above. `warm_before_mb` is
+                # only ever non-None for a resident ASR load (see
+                # `_resolve_admission`); the after-reading is taken HERE,
+                # before releasing our own hold, so both snapshots bracket
+                # the forward the same way the cold pair brackets the load.
+                # A `None` after-reading (NVML went away mid-window, the own
+                # entry vanished under WDDM) discards the sample exactly like
+                # a failed cold snapshot; a non-positive delta falls through
+                # to `record()`'s own `<= 0` guard — no second guard here.
+                if engine == "asr" and resident and warm_before_mb is not None:
+                    warm_after_mb = self._own_process_used_mb(device_key)
+                    if warm_after_mb is not None:
+                        asr_warm_mb = warm_after_mb - warm_before_mb
                 self.ledger.release(held)
                 # `resident` (#2094) is the PRE-op snapshot `_resolve_admission`
                 # booked the reservation under — recording under that same key
                 # (not a freshly re-checked residency) keeps the observation in
-                # the bucket its own peak_mb() estimate came from. A COLD ASR
-                # load uses the free-memory-delta measurement above (or is
-                # dropped, per the guards there); a RESIDENT ("asr.warm") ASR
-                # forward and every other engine keep the torch-allocator peak
-                # (#2682 — the device-wide delta essentially never returned a
-                # positive `asr.warm` sample, so it can never learn off its
-                # seed; the torch-allocator peak sees the CTranslate2-backed
-                # forward's own torch-side feature-extraction/attention-buffer
-                # activity instead, matching every other engine's key).
-                observed_mb = (
-                    asr_observed_mb if (engine == "asr" and not resident) else self._observed_mb(device_key)
-                )
+                # the bucket its own peak_mb() estimate came from. Three-way
+                # per-engine measurement: a COLD ASR load uses the device-wide
+                # free-memory delta above (or is dropped, per the guards
+                # there); a RESIDENT ("asr.warm") ASR forward uses the NVML
+                # own-process delta (#3036 — this branch used to fall through
+                # to the torch-allocator peak, which #2930/#3012 proved reads
+                # structurally 0 for a CTranslate2-backed engine, pinning the
+                # learned estimate at its seed forever); every other engine
+                # keeps the torch-allocator peak.
+                if engine == "asr" and not resident:
+                    observed_mb = asr_observed_mb
+                elif engine == "asr" and resident:
+                    observed_mb = asr_warm_mb
+                else:
+                    observed_mb = self._observed_mb(device_key)
                 self.footprints.record(engine, model, cfg, observed_mb or 0, resident)
 
 
