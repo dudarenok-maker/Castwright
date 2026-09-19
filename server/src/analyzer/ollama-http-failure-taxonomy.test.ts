@@ -76,4 +76,21 @@ describe('Ollama non-OK responses → classifyAnalysisFailure (captured from mai
       }
     `);
   });
+  it.each([
+    [400, 'Bad Request'],
+    [404, 'Not Found'],
+    [500, 'Internal Server Error'],
+    [503, 'Service Unavailable'],
+  ] as const)('%i surfaces as AnalyzerHttpError with the unchanged message and no status', async (status, statusText) => {
+    const body = '{"error":"boom"}';
+    const { err } = await classifyOllamaHttp(status, statusText, body);
+    const { AnalyzerHttpError } = await import('./errors.js');
+    expect(err).toBeInstanceOf(AnalyzerHttpError);
+    const typed = err as InstanceType<typeof AnalyzerHttpError>;
+    expect(typed.httpStatus).toBe(status);
+    expect(typed.bodyExcerpt).toBe(body);
+    expect(typed.transport).toBe('ollama');
+    expect('status' in err).toBe(false);
+    expect(err.message).toBe(`Ollama http://localhost:11434 returned ${status} ${statusText}: ${body}`);
+  });
 });

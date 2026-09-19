@@ -344,3 +344,29 @@ describe('FallbackAnalyzer — all three Analyzer methods share the same policy'
     expect(fallback.runAttributionEscalation).not.toHaveBeenCalled();
   });
 });
+
+describe('FallbackAnalyzer — keyed on AnalyzerUnreachableError (#3084 wave 1)', () => {
+  it('falls back on a bare AnalyzerUnreachableError from any transport, announcing the switch', async () => {
+    const { AnalyzerUnreachableError } = await import('./errors.js');
+    const primary = makeAnalyzer({
+      runStage2Chapter: () => Promise.reject(new AnalyzerUnreachableError('endpoint down', 'openai')),
+    });
+    const fallback = makeAnalyzer({});
+    const onFallback = vi.fn();
+    const out = await new FallbackAnalyzer(primary, fallback).runStage2Chapter('m', 1, 'p', {
+      onFallback,
+    } as StageCall);
+    expect(out).toEqual(STAGE2_RESULT);
+    expect(fallback.runStage2Chapter).toHaveBeenCalledTimes(1);
+    expect(onFallback).toHaveBeenCalledWith({ reason: 'Ollama unreachable' });
+  });
+
+  it('does NOT fall back on AnalyzerHttpError (reachable but misbehaving, plan 29)', async () => {
+    const { AnalyzerHttpError } = await import('./errors.js');
+    const httpErr = new AnalyzerHttpError('ollama', 500, 'x', 'Ollama u returned 500 Internal Server Error: x');
+    const primary = makeAnalyzer({ runStage2Chapter: () => Promise.reject(httpErr) });
+    const fallback = makeAnalyzer({});
+    await expect(new FallbackAnalyzer(primary, fallback).runStage2Chapter('m', 1, 'p', {})).rejects.toBe(httpErr);
+    expect(fallback.runStage2Chapter).not.toHaveBeenCalled();
+  });
+});

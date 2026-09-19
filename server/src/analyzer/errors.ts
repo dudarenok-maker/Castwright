@@ -15,12 +15,67 @@
 
    Lives in its own module (not on an engine) so both engines + the route layer
    can import it without a circular dependency. Mirrors the sentinel shape of
-   `AnalysisAbortedError` / `LocalUnreachableError` in ollama.ts. */
+   AnalysisAbortedError / LocalUnreachableError below. */
+/** Every transport the stage runner can drive. Wave 1 uses 'ollama' and 'gemini'. */
+export type TransportKind = 'ollama' | 'gemini' | 'openai';
+
+/** Sentinel error for "the SSE client disconnected, drop work silently."
+    The analysis route uses `err instanceof AnalysisAbortedError` to skip
+    its own error-reporting path (the client is gone — there's no one to
+    tell) and to NOT trigger the Gemini fallback decorator. */
+export class AnalysisAbortedError extends Error {
+  readonly code = 'ANALYSIS_ABORTED';
+  constructor(message: string) {
+    super(message);
+    this.name = 'AnalysisAbortedError';
+  }
+}
+
+/** "Couldn't reach the analyzer at all", from any transport. FallbackAnalyzer
+    (index.ts) uses `instanceof AnalyzerUnreachableError` as the SOLE trigger
+    for Gemini fallback; every other error propagates and hard-fails. */
+export class AnalyzerUnreachableError extends Error {
+  readonly code: string = 'ANALYZER_UNREACHABLE';
+  constructor(
+    message: string,
+    public readonly transport: TransportKind,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'AnalyzerUnreachableError';
+  }
+}
+
+/** Ollama's unreachable sentinel — produced only by classifyConnectError. */
+export class LocalUnreachableError extends AnalyzerUnreachableError {
+  readonly code: string = 'LOCAL_UNREACHABLE';
+  constructor(message: string, cause?: unknown) {
+    super(message, 'ollama', cause);
+    this.name = 'LocalUnreachableError';
+  }
+}
+
+/** A reachable analyzer answered with a non-OK HTTP status. Deliberately has
+    NO `status` property: failure-taxonomy.ts reads `.status` (its bare-status
+    branch maps 500/503 to analyzer-unreachable), and wave 1 must not move any
+    taxonomy outcome. */
+export class AnalyzerHttpError extends Error {
+  constructor(
+    public readonly transport: TransportKind,
+    public readonly httpStatus: number,
+    public readonly bodyExcerpt: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AnalyzerHttpError';
+  }
+}
+
 export class AnalyzerTruncatedError extends Error {
   readonly code = 'ANALYZER_TRUNCATED';
   constructor(
     /** Which engine truncated. */
-    public readonly engine: 'gemini' | 'ollama',
+    public readonly engine: TransportKind,
     /** The engine's own stop reason — Gemini `MAX_TOKENS`/`SAFETY`/…, Ollama `length`. */
     public readonly reason: string,
     /** Bytes assembled before the stop, for the diagnostic log line. */

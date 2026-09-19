@@ -36,8 +36,7 @@ import {
 import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
 import { isNonEnglish, normaliseBookLanguage } from '../tts/language.js';
 import { getLanguageEntry } from '../tts/language-registry.js';
-import { AnalysisAbortedError } from './ollama.js';
-import { AnalyzerTruncatedError, GeminiContentBlockedError } from './errors.js';
+import { AnalysisAbortedError, AnalyzerTruncatedError, GeminiContentBlockedError } from './errors.js';
 import { geminiRateLimiter, DailyQuotaExhaustedError } from './rate-limit.js';
 import { countCjkChars } from '../util/cjk.js';
 import {

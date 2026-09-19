@@ -20,7 +20,8 @@ import type {
   NonStoryClassificationOutput,
 } from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
-import { OllamaAnalyzer, LocalUnreachableError, AnalysisAbortedError } from './ollama.js';
+import { OllamaAnalyzer } from './ollama.js';
+import { AnalysisAbortedError, AnalyzerUnreachableError } from './errors.js';
 import type { RawEvalTiming } from './analyzer-eval-stats.js';
 import {
   getResolvedAnalysisEngine,
@@ -247,8 +248,7 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
   };
 }
 
-/* Decorator that delegates to a primary analyzer and falls back to a
-   secondary only when the primary throws LocalUnreachableError. Every
+/* Decorator that delegates to a primary analyzer and falls back to a secondary only when the primary throws AnalyzerUnreachableError (Ollama's LocalUnreachableError is one). Every
    other error — HTTP failure, validation failure, schema mismatch —
    propagates unchanged. The rule (plan 29): if the local daemon is
    *reachable* but misbehaving, surface the error so the operator can fix
@@ -264,7 +264,7 @@ export class FallbackAnalyzer implements Analyzer {
       return await this.primary.runStage1(manuscriptId, promptMd, call);
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof LocalUnreachableError) {
+      if (err instanceof AnalyzerUnreachableError) {
         return await this.fallback.runStage1(manuscriptId, promptMd, call);
       }
       throw err;
@@ -281,7 +281,7 @@ export class FallbackAnalyzer implements Analyzer {
       return await this.primary.runStage1Chapter(manuscriptId, chapterId, promptMd, call);
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof LocalUnreachableError) {
+      if (err instanceof AnalyzerUnreachableError) {
         /* Announce the switch so the route re-labels the pill with the effective
            Gemini model (mirrors runScriptReviewChapter) — otherwise the UI keeps
            naming the local model that isn't running. */
@@ -302,7 +302,7 @@ export class FallbackAnalyzer implements Analyzer {
       return await this.primary.runStage2Chapter(manuscriptId, chapterId, promptMd, call);
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof LocalUnreachableError) {
+      if (err instanceof AnalyzerUnreachableError) {
         /* Announce the switch so the route re-labels the pill (see runStage1Chapter). */
         call.onFallback?.({ reason: 'Ollama unreachable' });
         return await this.fallback.runStage2Chapter(manuscriptId, chapterId, promptMd, call);
@@ -321,7 +321,7 @@ export class FallbackAnalyzer implements Analyzer {
       return await this.primary.runEmotionChapter(manuscriptId, chapterId, promptMd, call);
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof LocalUnreachableError) {
+      if (err instanceof AnalyzerUnreachableError) {
         return await this.fallback.runEmotionChapter(manuscriptId, chapterId, promptMd, call);
       }
       throw err;
@@ -338,7 +338,7 @@ export class FallbackAnalyzer implements Analyzer {
       return await this.primary.runScriptReviewChapter(manuscriptId, chapterId, promptMd, call);
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof LocalUnreachableError) {
+      if (err instanceof AnalyzerUnreachableError) {
         call.onFallback?.({ reason: 'Ollama unreachable' });
         return await this.fallback.runScriptReviewChapter(
           manuscriptId,
@@ -361,7 +361,7 @@ export class FallbackAnalyzer implements Analyzer {
       return await this.primary.runStage3Chapter(manuscriptId, chapterId, promptMd, call);
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof LocalUnreachableError) {
+      if (err instanceof AnalyzerUnreachableError) {
         return await this.fallback.runStage3Chapter(manuscriptId, chapterId, promptMd, call);
       }
       throw err;
@@ -379,7 +379,7 @@ export class FallbackAnalyzer implements Analyzer {
       return await this.primary.runAttributionEscalation(manuscriptId, chapterId, windowIndex, prompt, call);
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof LocalUnreachableError) {
+      if (err instanceof AnalyzerUnreachableError) {
         return await this.fallback.runAttributionEscalation(manuscriptId, chapterId, windowIndex, prompt, call);
       }
       throw err;
@@ -396,7 +396,7 @@ export class FallbackAnalyzer implements Analyzer {
       return await this.primary.runNonStoryClassification!(manuscriptId, chapterId, promptMd, call);
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
-      if (err instanceof LocalUnreachableError) {
+      if (err instanceof AnalyzerUnreachableError) {
         return await this.fallback.runNonStoryClassification!(manuscriptId, chapterId, promptMd, call);
       }
       throw err;
