@@ -204,6 +204,31 @@ describe('SettingsAccordion — with sections: mobile dropdown', () => {
     // The stub is registered; just assert it's a function (no throw).
     expect(Element.prototype.scrollIntoView).toBeInstanceOf(Function);
   });
+
+  it('clears the requestedOpenId-reset timeout on unmount to prevent setState after unmount', () => {
+    /* Regression: the setTimeout resetting requestedOpenId back to null
+       (so the same section can be re-selected again) was never cleared on
+       unmount — the same unguarded-timer shape fixed elsewhere in this PR
+       (AccountView, ModelSettingsForm, ModelManagerView, ShareLinkModal,
+       WorkspacePathRow, PairDeviceModal's CopyRow, and
+       EditBookMetaModal's tag-suggestions close). Capture the exact
+       setTimeout(..., 400) call's id via a spy and assert clearTimeout is
+       invoked with THAT id on unmount. */
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const { unmount } = renderWithSections();
+    const select = screen.getByRole('combobox', { name: /jump to section/i });
+
+    fireEvent.change(select, { target: { value: 'sec-c' } });
+
+    const resetCallIndex = setTimeoutSpy.mock.calls.findIndex((call) => call[1] === 400);
+    expect(resetCallIndex).toBeGreaterThanOrEqual(0);
+    const resetTimeoutId = setTimeoutSpy.mock.results[resetCallIndex]?.value;
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(resetTimeoutId);
+  });
 });
 
 describe('SettingsAccordion — with sections: desktop nav rail', () => {
