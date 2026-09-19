@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="26" data-publish-id="24b924ee7f78"></div>
+  <div hidden data-published-as="28" data-publish-id="ce5e961eda2e"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">52</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">53</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->1<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->8<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->9<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1056,7 +1056,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">8 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">9 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1152,6 +1152,18 @@
           <li>Confirm the whole-pipeline <code>CASTWRIGHT_RUN_TIMEOUT_MIN</code> budget actually bounds a real multi-step <code>verify</code> run &#8212; start one with a tiny override and confirm it aborts with <code>[timeout]</code> well before the 4h34m incident figure this feature exists to cap, rather than running to completion because the per-step budgets alone left enough total headroom.</li>
         </ul>
         <p class="src">A Windows dev box, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3249">Castwright#3249</a>, Part 2 of <a href="../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md">the commit-gate rebalance design</a> &#183; the three observations above; issue Castwright#3249&#39;s acceptance list &#183; ~15&#8211;20 minutes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E106</span><span class="iname">ops-72 step/pipeline time budgets &#8212; POSIX Ctrl+C/SIGTERM/SIGHUP forwarding into a detached process group</span><span class="risk">a Mac or Linux dev box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>runStepProcess</code>&#39;s timeout-kill path spawns the step&#39;s child with <code>detached: true</code> on POSIX (needed to reach the whole <code>sh -c npm run ... -&gt; npm -&gt; node -&gt; forks</code> tree via a negative-pid <code>SIGKILL</code>, since <code>detached</code> makes the child the leader of its own process group). That has a real consequence: the child is now outside the terminal&#39;s foreground process group, so an operator&#39;s Ctrl+C (SIGINT), a <code>kill</code> (SIGTERM), or closing the terminal / an SSH session dropping (SIGHUP) no longer reaches it on its own &#8212; <code>runPipeline</code> forwards all three into the active child&#39;s tree via a <code>process.on(sig, ...)</code> handler at its CLI entry point before exiting. This is entirely unproven on the primary dev box for this repo, which is Windows &#8212; <code>detached</code>, process groups, and POSIX signal delivery semantics do not exist there in the shape this fix targets, so nothing about it can be observed on a Windows box no matter how thoroughly it&#39;s exercised there.</p>
+        <ul>
+          <li>Start <code>npm run verify</code> (or any step selection that includes a real vitest-backed step, e.g. <code>--steps test:server</code>), press Ctrl+C mid-run, and confirm BOTH: the shell prompt returns promptly, AND <code>pgrep -f vitest</code> (or equivalent) shows nothing left running a few seconds later &#8212; not just that the foreground process exited.</li>
+          <li>Repeat with <code>kill -TERM &lt;pipeline&#39;s own pid&gt;</code> sent from a second terminal instead of Ctrl+C, confirming the same clean-tree outcome.</li>
+          <li>Repeat once more simulating a dropped session: start the run, then close the terminal window (or, over SSH, kill the SSH connection) rather than sending a signal directly, and confirm &#8212; from a still-open second session &#8212; that no vitest/npm/node processes from that run remain.</li>
+        </ul>
+        <p class="src">A Mac or Linux dev box, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3249">Castwright#3249</a>, Part 2 of <a href="../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md">the commit-gate rebalance design</a> &#183; the three observations above; issue Castwright#3249&#39;s acceptance list &#183; ~10 minutes</p>
       </div>
     </details>
 

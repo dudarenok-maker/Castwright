@@ -557,17 +557,24 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**52 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**53 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-18, adding E105** (Castwright#3249, ops-72 Part 2, claude): the
+> **Last change: 2026-09-19, adding E106** (Castwright#3249, ops-72 Part 2, claude): a
+> review pass on the same PR found that the POSIX SIGINT/SIGTERM/SIGHUP forwarding added
+> to close a Ctrl+C-orphans-the-battery gap is unproven on this repo's primary (Windows)
+> dev box — `detached`, process groups, and POSIX signal delivery semantics don't exist
+> there in the shape this fix targets. 52 → 53 owed, Group E 8 → 9. `next-id` bumped
+> E106 → E107 in the same change. `npm run check:onbox-register` green.
+>
+> **Prior change: 2026-09-18, adding E105** (Castwright#3249, ops-72 Part 2, claude): the
 > `runStepProcess`/`runPipeline` async `spawn` conversion and step/pipeline time budgets
 > are unit-tested (including timeout-vs-crash-retry mutation tests) against a fast
 > throwaway fixture process tree, but `taskkill /T /F`'s own documented blind spot — a
@@ -5072,7 +5079,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E106 -->
+<!-- next-id: E107 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9/E103). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -5563,6 +5570,39 @@ node(vitest) -> N forks`) to exhibit that specific race.
   per-step budgets alone left enough total headroom.
 
 *Needs:* a Windows dev box, no GPU. *Cost:* ~15–20 minutes.
+*Criteria:* the three observations above; issue Castwright#3249's acceptance list.
+
+### E106 · ops-72 step/pipeline time budgets — POSIX Ctrl+C/SIGTERM/SIGHUP forwarding into a detached process group ([Castwright#3249](https://github.com/dudarenok-maker/Castwright/issues/3249), Part 2 of [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)) · **a Mac or Linux dev box; no GPU needed**
+
+`runStepProcess`'s timeout-kill path spawns the step's child with
+`detached: true` on POSIX (needed to reach the whole `sh -c npm run ... ->
+npm -> node -> forks` tree via a negative-pid `SIGKILL`, since `detached`
+makes the child the leader of its own process group). That has a real
+consequence: the child is now outside the terminal's foreground process
+group, so an operator's Ctrl+C (SIGINT), a `kill` (SIGTERM), or closing the
+terminal / an SSH session dropping (SIGHUP) no longer reaches it on its own
+— `runPipeline` forwards all three into the active child's tree via a
+`process.on(sig, ...)` handler at its CLI entry point before exiting. This
+is entirely unproven on the primary dev box for this repo, which is
+Windows — `detached`, process groups, and POSIX signal delivery semantics
+do not exist there in the shape this fix targets, so nothing about it can
+be observed on a Windows box no matter how thoroughly it's exercised there.
+
+**What to observe, concretely**, on a Mac or Linux box:
+
+- Start `npm run verify` (or any step selection that includes a real
+  vitest-backed step, e.g. `--steps test:server`), press Ctrl+C mid-run,
+  and confirm BOTH: the shell prompt returns promptly, AND `pgrep -f vitest`
+  (or equivalent) shows nothing left running a few seconds later — not just
+  that the foreground process exited.
+- Repeat with `kill -TERM <pipeline's own pid>` sent from a second terminal
+  instead of Ctrl+C, confirming the same clean-tree outcome.
+- Repeat once more simulating a dropped session: start the run, then close
+  the terminal window (or, over SSH, kill the SSH connection) rather than
+  sending a signal directly, and confirm — from a still-open second
+  session — that no vitest/npm/node processes from that run remain.
+
+*Needs:* a Mac or Linux dev box, no GPU. *Cost:* ~10 minutes.
 *Criteria:* the three observations above; issue Castwright#3249's acceptance list.
 
 ## Group G — GitHub Actions itself

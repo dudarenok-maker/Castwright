@@ -1590,6 +1590,51 @@ test('runPipeline doubles a vitest-backed step\'s budget under LOW_CONCURRENCY, 
   );
 });
 
+// PR #3260 review pass 2, B6: the previous test's CASTWRIGHT_RUN_TIMEOUT_MIN
+// stays at its 180-minute default, so the per-step budget is always the
+// binding constraint and the WHOLE-PIPELINE half of the same multiplier
+// (runBudgetMs) was never actually exercised — deleting it left the suite
+// unchanged. This test inverts that: a generous per-step floor so the step
+// budget is never binding, and a tiny pipeline floor so the pipeline budget
+// is.
+test('runPipeline doubles the WHOLE-PIPELINE budget under LOW_CONCURRENCY too, not just the per-step one (mutation test, B6)', async () => {
+  const dir = makeGitFixture();
+  writeFileSync(join(dir, 'slow.mjs'), 'await new Promise((r) => setTimeout(r, 700));\n', 'utf8');
+  const packageJsonPath = join(dir, 'package.json');
+  const packageJson = existsSync(packageJsonPath)
+    ? JSON.parse(readFileSync(packageJsonPath, 'utf8'))
+    : { name: 'slow-fixture', private: true, scripts: {} };
+  packageJson.scripts['test:server'] = 'node slow.mjs';
+  writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  const baseEnv = {
+    ...scrubGitEnvForThrowawayRepo(process.env),
+    SKIP_CONTENTION_CHECK: '1',
+    CASTWRIGHT_STEP_TIMEOUT_MIN: '10', // generous -- must never be the binding constraint here
+    CASTWRIGHT_RUN_TIMEOUT_MIN: '0.01', // 600ms pipeline floor -- the binding constraint
+  };
+
+  const withoutThrottle = await runPipeline({ argv: ['--steps', 'test:server'], cwd: dir, env: baseEnv });
+  assert.notEqual(
+    withoutThrottle,
+    0,
+    'without LOW_CONCURRENCY the 700ms fixture must exceed the 600ms pipeline floor',
+  );
+
+  const withThrottle = await runPipeline({
+    argv: ['--steps', 'test:server'],
+    cwd: dir,
+    env: { ...baseEnv, LOW_CONCURRENCY: '1' },
+  });
+  assert.equal(
+    withThrottle,
+    0,
+    'under LOW_CONCURRENCY the pipeline floor must double to 1200ms, comfortably covering the 700ms fixture',
+  );
+});
+
 test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {
   const dir = makeGitFixture();
   writeHangingFixture(dir, 'test:server');
@@ -1599,6 +1644,7 @@ test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout
   const logs = [];
   const originalLog = console.log;
   console.log = (...args) => logs.push(args.join(' '));
+  const start = Date.now();
   try {
     const result = await runPipeline({
       argv: ['--steps', 'test:server'],
@@ -1609,6 +1655,19 @@ test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout
         CASTWRIGHT_STEP_TIMEOUT_MIN: '0.01', // 600ms — deliberately tiny for the mutation test
       },
     });
+    const elapsed = Date.now() - start;
+    // Without this, a genuinely broken kill (killStepChildTree() a no-op) is
+    // indistinguishable from a real one: the hanging fixture's own 60s
+    // self-exit (added for B1, PR #3260 review pass 1 — an orphan-prevention
+    // safety net, not the mechanism under test) supplies a clean exit that
+    // satisfies every assertion below just as well as a fast kill would,
+    // taking ~61s instead of ~1s to do it (PR #3260 review pass 2, B4 — this
+    // guard mirrors the one runStepProcess's own equivalent test already has
+    // a few lines up).
+    assert.ok(
+      elapsed < 30000,
+      `the kill path should land well under the fixture's own 60s self-exit safety net — took ${elapsed}ms`,
+    );
     assert.notEqual(result, 0, 'a timed-out step must fail the pipeline');
     const timeoutLine = logs.find((l) => l.includes('[timeout]') && l.includes('test:server'));
     assert.ok(timeoutLine, `expected a [timeout] line, got:\n${logs.join('\n')}`);
