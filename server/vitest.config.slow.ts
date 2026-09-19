@@ -60,6 +60,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
+    /* Same clearMocks pin as the main config — see its comment. */
+    clearMocks: false,
     /* Same user-settings redirect as the main config (plan 122). */
     setupFiles: ['src/test-setup.ts'],
     include: SLOW_FILES,
