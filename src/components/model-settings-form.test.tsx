@@ -124,6 +124,28 @@ describe('ModelSettingsForm — Cloud fallback toggle (Part 1)', () => {
       );
     });
   });
+
+  it('clears the save-confirmation timeout on unmount to prevent setState after unmount', async () => {
+    /* Regression: the setTimeout inside onSave was never cleared here (unlike
+       the sibling AccountView, which already guards this) — the timeout kept
+       running after the component unmounted and tried to call setShowSaved on
+       jsdom's window after it had been torn down for a later test file. This
+       test verifies the timeout is cleared on unmount. */
+    vi.mocked(api.putUserSettings).mockImplementation(
+      async (patch) => ({ ...accountSlice.getInitialState(), ...(patch as object) }) as never,
+    );
+    const { unmount } = renderForm();
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(vi.mocked(api.putUserSettings)).toHaveBeenCalled();
+    });
+
+    /* Unmount before the 2400ms confirmation timeout fires. If it were not
+       cleared, the timeout would later try to setState on the unmounted
+       component. */
+    unmount();
+  });
 });
 
 describe('ModelSettingsForm — Voice engine URL sublabel (#2632 N22)', () => {
