@@ -413,25 +413,95 @@ describe('claimSidecarOwnership', () => {
     });
 
     it('legacy note with DEAD foreign pid is deleted (safe — stale owner)', () => {
-      // Setup: port-keyed note from one stack, legacy note from a dead foreign stack
-      claimSidecarOwnership({ runDir, pid: 100, ppid: 50, port: 9000, nowIso: () => 'portkeyed' });
-      const legacyPath = legacySidecarOwnerPath(runDir);
-      writeFileSync(
-        legacyPath,
-        JSON.stringify({
-          pid: 999999, // obviously dead
-          ppid: 60, // different lineage
+      // This test exercises claimSidecarOwnership's PRODUCTION default
+      // (no aliveFn passed — production, via server/src/index.ts, never
+      // passes one either), so the real isProcessAlive(999999) decides the
+      // outcome. Leaving that to the real OS pid 999999 would be
+      // host-dependent (Windows ignores a pid's low 2 bits; a long-lived
+      // Linux process can hold that pid; macOS can't fail at all) — so we
+      // stub process.kill instead, which isProcessAlive's killFn parameter
+      // resolves to process.kill by default, evaluated at call time.
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid: number) => {
+        if (pid === 999999) {
+          throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+        }
+        // Any other probed pid (e.g. the fire-and-forget background reap)
+        // reports dead too, so nothing here depends on a real process.
+        throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+      });
+      try {
+        // Setup: port-keyed note from one stack, legacy note from a dead foreign stack
+        claimSidecarOwnership({
+          runDir,
+          pid: 100,
+          ppid: 50,
           port: 9000,
-          startedAt: 'stale',
-        }),
-        'utf8',
-      );
-      // Claim ownership (different pid, different ppid)
-      claimSidecarOwnership({ runDir, pid: 200, ppid: 70, port: 9000, nowIso: () => 'new' });
-      // Port-keyed note updated
-      expect(readSidecarOwner(runDir, 9000)?.pid).toBe(200);
-      // Stale legacy note can be deleted (owner is dead)
-      expect(() => readFileSync(legacyPath, 'utf8')).toThrow();
+          nowIso: () => 'portkeyed',
+        });
+        const legacyPath = legacySidecarOwnerPath(runDir);
+        writeFileSync(
+          legacyPath,
+          JSON.stringify({
+            pid: 999999, // obviously dead
+            ppid: 60, // different lineage
+            port: 9000,
+            startedAt: 'stale',
+          }),
+          'utf8',
+        );
+        // Claim ownership (different pid, different ppid) — no aliveFn: production default
+        claimSidecarOwnership({ runDir, pid: 200, ppid: 70, port: 9000, nowIso: () => 'new' });
+        // Port-keyed note updated
+        expect(readSidecarOwner(runDir, 9000)?.pid).toBe(200);
+        // Stale legacy note can be deleted (owner is dead)
+        expect(() => readFileSync(legacyPath, 'utf8')).toThrow();
+      } finally {
+        killSpy.mockRestore();
+      }
+    });
+
+    it('legacy note with EPERM foreign pid is PRESERVED (real default: EPERM ⇒ alive)', () => {
+      // Twin of the DEAD-pid test above, same production default (no aliveFn):
+      // isProcessAlive treats EPERM (process exists, owned by another user) as
+      // alive, not dead. This pins that the real default — not a test double —
+      // is what's under test, so a broken default (e.g. always-false) can't
+      // slip through by having every test inject its own aliveFn instead.
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation((pid: number) => {
+        if (pid === 999998) {
+          throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+        }
+        throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+      });
+      try {
+        claimSidecarOwnership({
+          runDir,
+          pid: 100,
+          ppid: 50,
+          port: 9000,
+          nowIso: () => 'portkeyed',
+        });
+        const legacyPath = legacySidecarOwnerPath(runDir);
+        writeFileSync(
+          legacyPath,
+          JSON.stringify({
+            pid: 999998, // alive per EPERM, but a different user
+            ppid: 60, // different lineage
+            port: 9000,
+            startedAt: 'stale',
+          }),
+          'utf8',
+        );
+        // Claim ownership (different pid, different ppid) — no aliveFn: production default
+        claimSidecarOwnership({ runDir, pid: 200, ppid: 70, port: 9000, nowIso: () => 'new' });
+        // Port-keyed note updated
+        expect(readSidecarOwner(runDir, 9000)?.pid).toBe(200);
+        // Legacy note must SURVIVE — EPERM means alive, not safe to delete
+        const survivingLegacy = JSON.parse(readFileSync(legacyPath, 'utf8'));
+        expect(survivingLegacy.pid).toBe(999998);
+        expect(survivingLegacy.ppid).toBe(60);
+      } finally {
+        killSpy.mockRestore();
+      }
     });
 
     it('writes port-keyed note BEFORE deleting legacy note (ordering fix)', () => {
