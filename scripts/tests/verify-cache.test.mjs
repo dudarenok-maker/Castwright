@@ -47,6 +47,8 @@ import {
   sidecarFingerprint,
   STEPS,
   computeBudgetMs,
+  computeStepBudgetMs,
+  computeRunBudgetMs,
   qualifiedDurationFor,
   DEFAULT_STEP_TIMEOUT_MIN,
   DEFAULT_RUN_TIMEOUT_MIN,
@@ -1551,88 +1553,93 @@ test('runStepProcess: a step exceeding its budget is classified TIMEOUT, not a c
 
 // PR #3260 review pass 1, B2: a budget calibrated at full concurrency is too
 // tight once LOW_CONCURRENCY has actually throttled the fork pool for THIS
-// run (serverMaxForks 2->1 roughly doubles a vitest-backed step's wall-clock
-// time for the same work) — without accounting for that, the SAME throttle
-// runPipeline applies to itself makes its own step timeout fire on an
-// otherwise-healthy, merely-slower run.
-test('runPipeline doubles a vitest-backed step\'s budget under LOW_CONCURRENCY, so the throttle it just applied cannot false-positive its own timeout (mutation test, B2)', async () => {
-  const dir = makeGitFixture();
-  // Genuinely takes 700ms — long enough to exceed a 600ms floor on its own,
-  // comfortably short of the 1200ms the LOW_CONCURRENCY multiplier grants.
-  writeFileSync(join(dir, 'slow.mjs'), 'await new Promise((r) => setTimeout(r, 700));\n', 'utf8');
-  const packageJsonPath = join(dir, 'package.json');
-  const packageJson = existsSync(packageJsonPath)
-    ? JSON.parse(readFileSync(packageJsonPath, 'utf8'))
-    : { name: 'slow-fixture', private: true, scripts: {} };
-  packageJson.scripts['test:server'] = 'node slow.mjs';
-  writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8');
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+// run — without accounting for that, the SAME throttle runPipeline applies
+// to itself makes its own step timeout fire on an otherwise-healthy,
+// merely-slower run.
+//
+// PR #3260 review pass 3, B9/B11: this used to be two tests that raced a
+// real `npm run` subprocess against a wall-clock deadline. That went flaky
+// on this box: real process-launch overhead alone (565-698ms measured on
+// Windows) rivals the fixtures' own sleep durations, leaving 0-100ms of
+// actual margin — both tests failed unmutated, repeatedly, on the
+// committed head. Replaced with direct value assertions against
+// computeStepBudgetMs/computeRunBudgetMs (no subprocess, no wall clock),
+// PLUS a source-regex check that runPipeline's real call sites actually go
+// through those functions rather than reimplementing the formula inline —
+// together these prove both the arithmetic AND the wiring, deterministically.
 
-  const baseEnv = {
-    ...scrubGitEnvForThrowawayRepo(process.env),
-    SKIP_CONTENTION_CHECK: '1',
-    CASTWRIGHT_STEP_TIMEOUT_MIN: '0.01', // 600ms floor
-  };
-
-  const withoutThrottle = await runPipeline({ argv: ['--steps', 'test:server'], cwd: dir, env: baseEnv });
-  assert.notEqual(withoutThrottle, 0, 'without LOW_CONCURRENCY the 700ms fixture must exceed the 600ms budget');
-
-  const withThrottle = await runPipeline({
-    argv: ['--steps', 'test:server'],
-    cwd: dir,
-    env: { ...baseEnv, LOW_CONCURRENCY: '1' },
-  });
-  assert.equal(
-    withThrottle,
-    0,
-    'under LOW_CONCURRENCY the budget must double to 1200ms, comfortably covering the 700ms fixture',
+test('runPipeline computes its step and pipeline budgets via computeStepBudgetMs/computeRunBudgetMs, not an inline reimplementation', () => {
+  const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
+  assert.match(
+    pipelineBody,
+    /computeStepBudgetMs\(\s*cache,\s*step\.name,\s*stepTimeoutFloorMs,\s*stepContentionMultiplier\s*\)/,
+    'the per-step budget must go through computeStepBudgetMs, not an inline computeBudgetMs(...) * multiplier',
+  );
+  assert.match(
+    pipelineBody,
+    /computeRunBudgetMs\(\s*qualifiedRunDurationMs,\s*runTimeoutFloorMs,\s*contentionBudgetMultiplier\s*\)/,
+    'the whole-pipeline budget must go through computeRunBudgetMs, not an inline computeBudgetMs(...) * multiplier',
   );
 });
 
-// PR #3260 review pass 2, B6: the previous test's CASTWRIGHT_RUN_TIMEOUT_MIN
-// stays at its 180-minute default, so the per-step budget is always the
-// binding constraint and the WHOLE-PIPELINE half of the same multiplier
-// (runBudgetMs) was never actually exercised — deleting it left the suite
-// unchanged. This test inverts that: a generous per-step floor so the step
-// budget is never binding, and a tiny pipeline floor so the pipeline budget
-// is.
-test('runPipeline doubles the WHOLE-PIPELINE budget under LOW_CONCURRENCY too, not just the per-step one (mutation test, B6)', async () => {
-  const dir = makeGitFixture();
-  writeFileSync(join(dir, 'slow.mjs'), 'await new Promise((r) => setTimeout(r, 700));\n', 'utf8');
-  const packageJsonPath = join(dir, 'package.json');
-  const packageJson = existsSync(packageJsonPath)
-    ? JSON.parse(readFileSync(packageJsonPath, 'utf8'))
-    : { name: 'slow-fixture', private: true, scripts: {} };
-  packageJson.scripts['test:server'] = 'node slow.mjs';
-  writeFileSync(packageJsonPath, JSON.stringify(packageJson), 'utf8');
-  gitAt(dir, ['add', '.']);
-  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+test('computeStepBudgetMs widens the FLOOR for an UNCALIBRATED step (no cache entry) under LOW_CONCURRENCY (B2)', () => {
+  const floorMs = 45 * 60 * 1000;
+  const emptyCache = { schemaVersion: SCHEMA_VERSION, steps: {} };
+  assert.equal(computeStepBudgetMs(emptyCache, 'test:server', floorMs, 1), floorMs);
+  assert.equal(computeStepBudgetMs(emptyCache, 'test:server', floorMs, 2), floorMs * 2);
+});
 
-  const baseEnv = {
-    ...scrubGitEnvForThrowawayRepo(process.env),
-    SKIP_CONTENTION_CHECK: '1',
-    CASTWRIGHT_STEP_TIMEOUT_MIN: '10', // generous -- must never be the binding constraint here
-    CASTWRIGHT_RUN_TIMEOUT_MIN: '0.01', // 600ms pipeline floor -- the binding constraint
+test('computeStepBudgetMs widens the FLOOR, not the calibrated (K x lastGreenDurationMs) branch, for a baseline recorded under a PRIOR throttled run (B5/B9/B11)', () => {
+  // Real figures from this PR's own review: the #3025 baseline is 17.85 min
+  // unthrottled; a baseline recorded THROTTLED (roughly 2x slower for the
+  // same work) is ~35.7 min. An uncalibrated-only test (the one above) can
+  // never catch this regression — computeBudgetMs(null, F) returns F
+  // verbatim regardless of k, so "multiply the result" and "multiply the
+  // floor input" are algebraically IDENTICAL for a null duration. They
+  // diverge only once a real qualified baseline exists.
+  const floorMs = 45 * 60 * 1000;
+  const throttledBaselineMs = 35.7 * 60 * 1000;
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: { 'test:server': { inputHash: 'stale', durationMs: throttledBaselineMs, attempts: 1 } },
   };
-
-  const withoutThrottle = await runPipeline({ argv: ['--steps', 'test:server'], cwd: dir, env: baseEnv });
-  assert.notEqual(
-    withoutThrottle,
-    0,
-    'without LOW_CONCURRENCY the 700ms fixture must exceed the 600ms pipeline floor',
-  );
-
-  const withThrottle = await runPipeline({
-    argv: ['--steps', 'test:server'],
-    cwd: dir,
-    env: { ...baseEnv, LOW_CONCURRENCY: '1' },
-  });
+  const oldBuggyShape = computeBudgetMs(throttledBaselineMs, floorMs) * 2; // computeBudgetMs(d, F) * mult
+  const fixed = computeStepBudgetMs(cache, 'test:server', floorMs, 2); // computeBudgetMs(d, F * mult)
   assert.equal(
-    withThrottle,
-    0,
-    'under LOW_CONCURRENCY the pipeline floor must double to 1200ms, comfortably covering the 700ms fixture',
+    oldBuggyShape,
+    178.5 * 60 * 1000,
+    'sanity: the old (buggy) shape doubles the already-throttled baseline a second time',
   );
+  assert.equal(fixed, 90 * 60 * 1000, 'the fixed shape must land on max(2F, 2.5d), not 2 x max(F, 2.5d)');
+  assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a baseline the prior throttled run already absorbed');
+});
+
+test('computeRunBudgetMs widening the uncalibrated pipeline floor is a documented open question, not fixed here (B10)', () => {
+  // This test does NOT assert a fix — it pins the current, known-incomplete
+  // behavior so a future change to it is deliberate, not silent.
+  // computeBudgetMs(null, F) returns F verbatim regardless of k, so
+  // multiplying the floor before vs. after that null-duration call is
+  // mathematically IDENTICAL: the uncalibrated whole-pipeline floor under
+  // throttle is unchanged by this PR (still 2x DEFAULT_RUN_TIMEOUT_MIN).
+  // Whether that number is safe against the 273.8-min incident this budget
+  // exists to bound is a real, separate, unresolved question — argued
+  // against that figure, not derived from the fork-pool ratio — tracked as
+  // Castwright#3272 rather than picked here.
+  const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000;
+  assert.equal(computeRunBudgetMs(0, floorMs, 2), floorMs * 2);
+  assert.equal(
+    computeRunBudgetMs(0, floorMs, 2),
+    computeBudgetMs(null, floorMs) * 2,
+    'uncalibrated: multiplying the floor before vs. after computeBudgetMs is identical — not a fix for this case',
+  );
+});
+
+test('computeRunBudgetMs widens the FLOOR, not the calibrated branch, for a CALIBRATED pipeline baseline (B5, the case this PR does fix)', () => {
+  const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000; // 180 min
+  const throttledBaselineMs = 200 * 60 * 1000; // exceeds the 180-min floor, so the calibrated branch dominates
+  const oldBuggyShape = computeBudgetMs(throttledBaselineMs, floorMs) * 2;
+  const fixed = computeRunBudgetMs(throttledBaselineMs, floorMs, 2);
+  assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a calibrated pipeline baseline either');
 });
 
 test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {

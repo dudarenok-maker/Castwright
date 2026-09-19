@@ -1437,6 +1437,27 @@ export function qualifiedDurationFor(cache, stepName) {
   return entry.durationMs;
 }
 
+/** The real per-step budget computation runPipeline uses — extracted so a
+ *  test can assert the exact millisecond value directly (PR #3260 review
+ *  pass 3, B9/B11: the tests that raced a real `npm run` subprocess against
+ *  a wall-clock budget went flaky on a box where process-launch overhead
+ *  alone — 565-698ms measured on Windows — is comparable to the fixture's
+ *  own sleep duration; a formula bug like B5's should never depend on
+ *  outracing real subprocess overhead to be provable). Widens the FLOOR,
+ *  not computeBudgetMs' result — see runBudgetMs's own comment on why that
+ *  distinction matters for a CALIBRATED baseline specifically. */
+export function computeStepBudgetMs(cache, stepName, floorMs, multiplier) {
+  return computeBudgetMs(qualifiedDurationFor(cache, stepName), floorMs * multiplier);
+}
+
+/** The real whole-pipeline budget computation runPipeline uses — same
+ *  extraction rationale as computeStepBudgetMs. `qualifiedRunDurationMs` is
+ *  the SUM of the active steps' own qualified baselines (0 when nothing is
+ *  calibratable, treated as null/uncalibrated per computeBudgetMs). */
+export function computeRunBudgetMs(qualifiedRunDurationMs, floorMs, multiplier) {
+  return computeBudgetMs(qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null, floorMs * multiplier);
+}
+
 // Cap on the tail-keeping stderr accumulator below — mirrors spawnSync's old
 // `maxBuffer: 64 * 1024 * 1024` for the retriable/piped-capture shape.
 const MAX_STDERR_BUFFER = 64 * 1024 * 1024;
@@ -1710,16 +1731,19 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   // conditions produced that baseline, so multiplying its RESULT double-
   // counts a throttle a prior throttled run's own baseline already absorbed
   // (measured: a baseline recorded throttled at 2x, multiplied again here,
-  // gives 4x instead of the intended 2x) and, for the un-calibrated case,
-  // pushes the whole-pipeline floor to 2x DEFAULT_RUN_TIMEOUT_MIN (360 min)
-  // — past the 273.8-min incident this budget exists to bound, the opposite
-  // of what widening it for contention is supposed to do.
+  // gave 4x instead of the intended 2x — now correctly gives 2x). This DOES
+  // NOT touch the uncalibrated pipeline floor (PR #3260 review pass 3, B10):
+  // computeBudgetMs(null, F) returns F verbatim regardless of k, so
+  // "multiply the result" and "multiply the floor input" are algebraically
+  // IDENTICAL — both still land the whole-pipeline floor at 2x
+  // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle, past the 273.8-min
+  // incident this budget exists to bound. What widened uncalibrated pipeline
+  // floor is actually safe under contention is a real open question, argued
+  // against that 273.8-min figure rather than derived from the fork-pool
+  // ratio — tracked as Castwright#3272 rather than picked here.
   const contentionBudgetMultiplier =
     affectedByContention && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
-  const runBudgetMs = computeBudgetMs(
-    qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null,
-    runTimeoutFloorMs * contentionBudgetMultiplier,
-  );
+  const runBudgetMs = computeRunBudgetMs(qualifiedRunDurationMs, runTimeoutFloorMs, contentionBudgetMultiplier);
   const runDeadline = Date.now() + runBudgetMs;
 
   for (const step of activeSteps) {
@@ -1805,13 +1829,12 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     // Only a vitest-backed step is actually slowed by LOW_CONCURRENCY (see
     // hasVitestStep's own doc comment) — widening a step this throttle
     // doesn't affect would just mask a genuine hang in it for longer.
-    // Widens the FLOOR, not computeBudgetMs' result — see the matching
-    // comment on runBudgetMs above (B5): a calibrated baseline already
-    // recorded under a throttled run must not be multiplied again here.
+    // See computeStepBudgetMs's own doc comment for why FLOOR is widened,
+    // not the whole computed result.
     const stepContentionMultiplier =
       hasVitestStep([step]) && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
     const stepBudgetMs = Math.min(
-      computeBudgetMs(qualifiedDurationFor(cache, step.name), stepTimeoutFloorMs * stepContentionMultiplier),
+      computeStepBudgetMs(cache, step.name, stepTimeoutFloorMs, stepContentionMultiplier),
       Math.max(0, runDeadline - Date.now()),
     );
     const t0 = Date.now();
