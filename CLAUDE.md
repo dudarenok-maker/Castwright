@@ -1302,6 +1302,24 @@ Working practice below; this holds even under contention).
 **Verify where a dispatched agent actually wrote**
 ([#3044](https://github.com/dudarenok-maker/Castwright/issues/3044)):
 
+- **Option 2 (prevention) now exists as an additional layer, NOT a
+  replacement for option 1:** `scripts/hooks/guard-worktree-write.mjs`, wired
+  as a `hooks:` frontmatter `PreToolUse` guard on `.claude/agents/fix-agent.md`,
+  denies a dispatched fix-agent's `Write`/`Edit`/`NotebookEdit` call whose
+  target path resolves outside its assigned worktree, and denies a
+  `Bash`/`PowerShell` call whose command text contains a foreign checkout
+  root's absolute path (in any of its common spellings — native backslash,
+  forward-slash, Git Bash's `/c/...`, WSL's `/mnt/c/...`). The shell-command
+  check is COARSE by design — a path referenced indirectly (a shell variable,
+  a relative path resolved elsewhere, a runtime-assembled string) is not
+  caught. **Known gap, tracked in
+  [#3263](https://github.com/dudarenok-maker/Castwright/issues/3263):** the
+  guard defines "assigned worktree" as the PreToolUse payload's `cwd`, which
+  is not independently verified — in exactly the "Do not rely on the brief"
+  shape two bullets below (a correctly-named worktree, but the agent's
+  process actually running with `cwd` pointed at the wrong root), the guard
+  protects the wrong root and denies the right one. **Option 1 below is the
+  mandatory backstop, not an optional one**, until #3263 closes.
 - **Capture the primary checkout's `git status --porcelain` before a dispatch
   round and again after each agent returns.** Any entry that is not yours is a
   **failed dispatch** — revert it and re-dispatch; do not adopt it. This is the
