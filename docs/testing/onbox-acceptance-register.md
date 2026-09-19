@@ -2033,6 +2033,24 @@ The original blocker: `start.ps1` absorbed code-43 exits internally in its resta
 
 A forced card-specific three-exits-in-ten-minutes streak was run for real before this fix and did not reach `runAutoRevert` — but now the supervised path should observe and respond to individual code-43 exits. **Owed:** re-run the hardware trigger on real 2-card hardware to confirm the auto-revert trip now fires and resolves the cascade, then record the outcome. Tracked as [#3121](https://github.com/dudarenok-maker/Castwright/issues/3121).
 
+> **2026-09-20 (#3295, on-box re-run) — the owed hardware trigger ran for
+> real: trip fires, cascade resolves.** On this 2-card box,
+> `SIDECAR_VRAM_FREE_FLOOR_MB=999999` produced three individually-observed
+> `code=43` exits in ~90 s (the visibility gap #3148 fixed is gone), the
+> streak trip logged with the breach card's real UUID, respawn stopped
+> (0 listeners on the sidecar port at trip — the original pile-up symptom is
+> resolved), `GET /api/gpu/trip-status` answered live with
+> `status: "unrevertable"` + the card-specific toast, and the trip breadcrumb
+> recorded card/residentEngines. **A live `reverted` decision (pin actually
+> rewritten on hardware) remains owed and is structurally uninducible on this
+> machine**: the per-card floor breach only fires on torch-*inactive* cards,
+> so a breached card can never have a revertible engine resident/pinned on it
+> while every engine here fits either card comfortably (a reserved-ceiling
+> threshold low enough to breach would ping-pong). Full run records, including
+> the failed Run C attempt and the general law for future boxes:
+> `docs/testing/onbox-2card-pinokio-batch-results/a3-rerun-2026-09-20.md`.
+> Row stays owed (narrowed); counts unchanged.
+
 ### A4 · Audition engine + tier fidelity ([#1849](https://github.com/dudarenok-maker/Castwright/pull/1849))
 
 Verified by tests and CI; never listened to except where noted below.
