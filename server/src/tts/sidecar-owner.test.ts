@@ -294,8 +294,16 @@ describe('claimSidecarOwnership', () => {
       'utf8',
     );
     // Claim ownership on port 9000 — should delete the legacy note since it's superseded
-    // Inject legacy owner as dead so the test doesn't depend on whether the host's PID 100 is alive (#3276)
-    claimSidecarOwnership({ runDir, pid: 555, ppid: 8, port: 9000, nowIso: () => 'new', aliveFn: () => false });
+    // Legacy owner injected as dead: the real probe would depend on whether the
+    // host's PID 100 is alive, which it is on macOS runners (#3276).
+    claimSidecarOwnership({
+      runDir,
+      pid: 555,
+      ppid: 8,
+      port: 9000,
+      nowIso: () => 'new',
+      aliveFn: () => false,
+    });
     expect(readSidecarOwner(runDir, 9000)?.pid).toBe(555); // new owner claimed
     // Legacy note should be deleted (it's now superseded by the port-keyed note)
     expect(() => readFileSync(legacyPath, 'utf8')).toThrow();
