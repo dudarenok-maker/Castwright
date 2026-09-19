@@ -601,11 +601,17 @@ export function collectProcessSnapshot({
       timeout: 15000,
       windowsHide: true,
     });
+    // A spawnSync timeout sets result.error with code 'ETIMEDOUT'. This is a
+    // transient failure (the runner was slow, not broken), so it gets the
+    // retry. Return a distinguishable outcome carrying the error code so the
+    // caller can log it (#3331).
+    if (result.error?.code === 'ETIMEDOUT') {
+      return { success: false, data: null, transient: true, errorCode: result.error.code };
+    }
     // Distinguish between genuine failure and "no data returned".
     // Genuine failure: error set, non-zero status, or parse failure — these never retry.
     if (result.error || result.status !== 0) return { success: false, data: null };
     // Empty stdout is a genuine transient: WMI returned zero rows (empty result set).
-    // Timeouts are caught above and never reach here.
     if (!result.stdout) return { success: true, data: null };
     try {
       const parsed = JSON.parse(result.stdout);
@@ -617,32 +623,62 @@ export function collectProcessSnapshot({
     }
   };
 
-  const firstAttempt = attempt();
-  // Genuine failure (error, non-zero status, or parse error) — return [] immediately, no retry.
-  if (!firstAttempt.success) return [];
+  // Single bounded retry loop — at most 2 spawn calls total, covering BOTH
+  // timeouts (#3331) and the empty-rows transient (#3238). A first attempt
+  // that times out and a second that returns empty rows still makes exactly
+  // two spawn calls; there is no stacked second retry (#3331).
+  const MAX_ATTEMPTS = 2;
+  let lastFailReason = null; // { kind: 'timeout', errorCode } | { kind: 'empty' } | null
 
-  const firstProcesses = rowsToProcesses(firstAttempt.data ?? []);
-  // If we got rows after filtering, return them.
-  if (firstProcesses.length > 0) return firstProcesses;
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    if (i > 0) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+    const a = attempt();
 
-  // No rows made it through filtering (either raw data was empty, or all rows
-  // were filtered out by rowsToProcesses). This is a transient empty result —
-  // retry once after a short delay (#3238).
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-  const retryAttempt = attempt();
-  // If the retry genuinely failed, return [].
-  if (!retryAttempt.success) return [];
+    // Permanent failures (error, non-zero status, or parse error) — return []
+    // immediately, no retry. Timeouts have transient: true and fall through.
+    if (!a.success && !a.transient) return [];
 
-  const retryProcesses = rowsToProcesses(retryAttempt.data ?? []);
-  if (retryProcesses.length > 0) {
-    console.warn(
-      'collectProcessSnapshot: recovered on retry — first Win32_Process query returned empty rows',
-    );
-    return retryProcesses;
+    // Timeout is transient — record the error code and continue to the next
+    // attempt (the retry, if any remaining).
+    if (!a.success && a.transient) {
+      lastFailReason = { kind: 'timeout', errorCode: a.errorCode };
+      continue;
+    }
+
+    // Success: check if we got rows after filtering.
+    const processes = rowsToProcesses(a.data ?? []);
+    if (processes.length > 0) {
+      if (i > 0) {
+        if (lastFailReason?.kind === 'timeout') {
+          console.warn(
+            `collectProcessSnapshot: recovered on retry — first Win32_Process query timed out (error code ${lastFailReason.errorCode})`,
+          );
+        } else {
+          console.warn(
+            'collectProcessSnapshot: recovered on retry — first Win32_Process query returned empty rows',
+          );
+        }
+      }
+      return processes;
+    }
+
+    // No rows made it through filtering (raw data was empty, or all rows were
+    // filtered out by rowsToProcesses). This is a transient empty result.
+    lastFailReason = { kind: 'empty' };
   }
-  console.warn(
-    'collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)',
-  );
+
+  // All attempts exhausted — log the reason and return [].
+  if (lastFailReason?.kind === 'timeout') {
+    console.warn(
+      `collectProcessSnapshot: still failing after retry — returning [] (Win32_Process query timed out, error code ${lastFailReason.errorCode})`,
+    );
+  } else {
+    console.warn(
+      'collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)',
+    );
+  }
   return [];
 }
 
