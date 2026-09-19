@@ -1,51 +1,11 @@
-/* Local Ollama analyzer. Mirrors GeminiAnalyzer's streaming + validation-retry
-   shape (see gemini.ts) but talks to a local Ollama daemon over plain HTTP
-   instead of the Google SDK.
-
-   The key novelty is the error classification: only "couldn't connect" /
-   "connection reset before first byte" failures translate into
-   LocalUnreachableError — one case of AnalyzerUnreachableError, the type the
-   FallbackAnalyzer in index.ts keys on to retry against Gemini. Everything
-   else hard-fails: an HTTP non-2xx response surfaces as AnalyzerHttpError
-   (errors.ts), which deliberately does NOT extend AnalyzerUnreachableError,
-   and validation failures, stream failures and client aborts surface as
-   ordinary Errors (aborts as AnalysisAbortedError). The point: a misbehaving
-   local model should not silently burn Gemini quota; if Ollama is up at all,
-   we trust the error.
-
-   That classification is only sound if the fetch itself never invents a
-   failure. Node's global fetch (undici) defaults `headersTimeout` to 300s,
-   and Ollama withholds response headers until the FIRST generated token —
-   so on a big prompt the whole prefill counts against that budget. A busy
-   but perfectly healthy daemon therefore dies at exactly 302s with a bare
-   `TypeError: fetch failed`, which classifyConnectError below reads as
-   "unreachable" — the one condition that reroutes to Gemini. So whenever a
-   Gemini key is present AND allowCloudFallback is on (the two gates in
-   selectAnalyzer, index.ts), a slow local call silently completes in the
-   cloud, which is precisely what the paragraph above says must not happen;
-   with either gate off it instead hard-fails with a wrong diagnosis
-   ("start the daemon") about a daemon that is running fine. Observed
-   2026-08-12: two chapters of a 103k-word book failed cast detection this
-   way, both at 302s.
-
-   Hence ANALYZER_DISPATCHER: unlimited header/body timeouts so a busy
-   daemon never aborts mid-call, with a short connectTimeout so a genuinely
-   down daemon still fails fast and still reaches the fallback. Same shape
-   and same rationale as tts/sidecar.ts and tts/embed-client.ts. */
+/* Local Ollama analyzer. Header + chat() moved to transports/ollama-transport.ts (#3084 wave 1b). */
 
 import { writeFile } from 'node:fs/promises';
 import { fetch as undiciFetch, Agent } from 'undici';
 import { z } from 'zod';
-import { sampleAndRecordVram } from './model-vram-stats.js';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
-import { getLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
-import { detectOllamaGpuSplit } from '../gpu/ollama-gpu-split.js';
-import { getCachedUserSettings } from '../workspace/user-settings.js';
 import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
-import { configValue } from '../config/resolver.js';
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
-import type { Accelerator } from '../gpu/vram-state.js';
-import { getLastKnownVram } from '../gpu/vram-state.js';
 import { writeInbox, errorPath, rawAttemptPath, stage2HandoffKey, type HandoffKey } from '../handoff/protocol.js';
 import {
   stage1Schema,
@@ -69,10 +29,22 @@ import {
 } from '../handoff/schemas.js';
 import type { Analyzer, StageCall, StageChunkInfo } from './types.js';
 import type { RawEvalTiming } from './analyzer-eval-stats.js';
-import { AnalyzerTruncatedError, AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError } from './errors.js';
-export { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
 import { parseAndValidate, buildRetryMessage, summariseDetail, persistResponse } from './runner/parse.js';
 import { loadSkill, buildSystemInstruction, type SkillName } from './runner/prompt.js';
+import { OllamaTransport, ANALYZER_DISPATCHER, classifyConnectError } from './transports/ollama-transport.js';
+import { resolveOllamaTemperature, resolveOllamaRetryTemperature } from './ollama-settings.js';
+import { mapFinish } from './runner/finish.js';
+import type { ChatMessage } from './runner/transport.js';
+import { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
+export { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
+export { ANALYZER_DISPATCHER, classifyConnectError } from './transports/ollama-transport.js';
+export {
+  resolveOllamaTemperature, resolveOllamaRetryTemperature,
+  resolveKeepAliveSeconds, hasKeepAliveOverride, keepAliveFor,
+  normalizeModelTag, resolveAnalyzerNumCtx, resolveAnalyzerNumGpu, resolveNumPredict,
+  DEFAULT_TEMPERATURE, INVALID_JSON_RETRY_TEMPERATURE,
+  ANALYZER_NUM_CTX, ANALYZER_NUM_GPU,
+} from './ollama-settings.js';
 
 if (process.env.VITEST !== 'true' && process.env.NODE_ENV !== 'test') {
   console.log(describeAnalyzerConcurrency());
@@ -89,191 +61,21 @@ interface OllamaOptions {
   dispatcher?: Agent;
 }
 
-/* Long-call dispatcher — see the header note. `headersTimeout: 0` is the
-   load-bearing field: Ollama sends no response headers until the first
-   generated token, so prefill on a large prompt otherwise races undici's
-   300s default. `bodyTimeout: 0` covers a long inter-token stall on a
-   loaded GPU. `connectTimeout` stays short so a down daemon still fails
-   fast into LocalUnreachableError, preserving the fallback path.
-   Exported for the regression test, which injects a deliberately tiny
-   `headersTimeout` to prove the dispatcher is actually wired into the
-   fetch — a bare global fetch ignores it. */
-export const ANALYZER_DISPATCHER = new Agent({
-  headersTimeout: 0,
-  bodyTimeout: 0,
-  connectTimeout: 10_000,
-});
-
 /* Absolute ceiling for a one-shot persona generation. Needed because
    ANALYZER_DISPATCHER removes undici's implicit 300s bound and this call site
-   has no caller-supplied signal to fall back on — see the note in
+   has no caller-supplied signal to fall back on; see the note in
    generatePersonaViaOllama. Deliberately generous: the whole point of the
    dispatcher is that a large model on CPU legitimately takes minutes. Mirrors
    DESIGN_ABSOLUTE_MAX_MS in tts/design-voice-core.ts. */
 export const PERSONA_ABSOLUTE_MAX_MS = 600_000;
 
-/* Network-failure error codes that Node's undici fetch surfaces via
-   `err.cause.code`. These are the "couldn't connect" cases that warrant
-   fallback to Gemini. Anything else (HTTP 5xx, malformed body, validation
-   failure) means the daemon is reachable but misbehaving — hard-fail. */
-const UNREACHABLE_CODES = new Set([
-  'ECONNREFUSED',
-  'ENOTFOUND',
-  'EAI_AGAIN',
-  'ECONNRESET',
-  'UND_ERR_SOCKET',
-]);
-
-/* Default sampling temperature for /api/chat. Low enough that the model
-   sticks close to the schema and the system prompt's structural rules, but
-   not zero — pure-greedy decoding makes the validation-retry loop a no-op
-   because attempt 2 is just attempt 1 again.
-   Read through the registry so the operator can tune without a rebuild;
-   kept as an exported const for any importer that references the symbol
-   directly (the value is evaluated at module load — use configValue for
-   a live read). */
-export const DEFAULT_TEMPERATURE = 0.2;
-/* Retry temperature — kept for compat; use resolveOllamaTemperature() /
-   resolveOllamaRetryTemperature() for live values. */
-export const INVALID_JSON_RETRY_TEMPERATURE = 0.6;
-
-/** Live-read first-attempt temperature (registry wins over the const). */
-export function resolveOllamaTemperature(): number {
-  return configValue<number>('analyzer.ollama.temperature');
-}
-/** Live-read invalid-JSON retry temperature (registry wins over the const). */
-export function resolveOllamaRetryTemperature(): number {
-  return configValue<number>('analyzer.ollama.retryTemperature');
-}
-
-/* Fallback keep-alive (seconds) for any analyzer model WITHOUT an explicit
-   per-model override in userSettings.analyzerKeepAliveByModel. Deliberately a
-   single flat value — the previous per-model curated map (qwen3.5:4b→300 etc.)
-   was removed: it left every UNCURATED tag (a Castwright fine-tune like
-   qwen36-cw-iq4-32k, any pulled community model) falling through to 0, which is
-   Ollama's EVICT-IMMEDIATELY idiom — so the analyzer unloaded after every
-   /api/chat call and cold-reloaded on the next, thrashing a whole run. 30s
-   comfortably bridges the gap between back-to-back attribution calls (which
-   refresh the timer) so the model stays resident through a run, while still
-   idling out ~30s after the run ends. Raise per-model in Model Manager for a
-   longer hold; 0 (evict) / -1 (pin) remain available as explicit overrides. */
-const DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS = 30;
-
-/* Models unsafe to keep resident on CPU (would pin ~6.4 GB system RAM for the
-   whole window). Clamped to 0 on a CPU-only box regardless of the configured
-   value. Orthogonal to the per-model map — a deliberate safety rail. */
-const RAM_HEAVY_MODELS = new Set(['qwen3.5:9b']);
-
-/* srv-2367: device-signature ("0,1") of every GPU split already warned about
-   this run, so the warning fires once per distinct split rather than once
-   per chat() call (Stage 1/2 call chat() per chapter — dozens of times per
-   book). A full server restart clears this naturally; no TTL needed. */
-const warnedGpuSplitSignatures = new Set<string>();
-
-/** Strip a trailing ':latest' only (Ollama treats bare == :latest). Leaves real
-    tags like 'qwen3.5:9b' untouched. */
-export function normalizeModelTag(tag: string): string {
-  return tag.endsWith(':latest') ? tag.slice(0, -':latest'.length) : tag;
-}
-
-/** Resolved keep-alive (seconds) for `model`: user override (raw or normalized
-    key) → flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS (30). Reads the settings
-    cache synchronously so it is safe at the request-body build site. */
-export function resolveKeepAliveSeconds(model: string): number {
-  const map = getCachedUserSettings().analyzerKeepAliveByModel ?? {};
-  const norm = normalizeModelTag(model);
-  const override = map[model] ?? map[norm];
-  if (override !== undefined) return override;
-  return DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS;
-}
-
-/** True when the user has an explicit override for `model` (either key form). */
-export function hasKeepAliveOverride(model: string): boolean {
-  const map = getCachedUserSettings().analyzerKeepAliveByModel ?? {};
-  return map[model] !== undefined || map[normalizeModelTag(model)] !== undefined;
-}
-
-/** `keep_alive` (integer seconds, or -1 to pin) for an Ollama analyzer call.
-    While ANY analyzer run (analysis OR script review) is in flight the model is PINNED (-1); otherwise
-    per-model via resolveKeepAliveSeconds, with RAM-heavy models clamped to 0
-    on CPU. */
-export function keepAliveFor(model: string, accelerator: Accelerator = 'unknown'): number {
-  /* Pin the analyzer resident for the whole run. Attribution calls land minutes
-     apart — measured 120–200 s gaps between /api/chat calls on a 100k-word book
-     — so ANY finite idle TTL (even the 30 s fallback, or a user's 90) lets
-     Ollama evict the model between calls and cold-reload on the next. That
-     thrash both slows the run and opens a window where a transient
-     unreachable-during-reload trips the cloud (Gemini) fallback into a hard
-     failure. The run's teardown (routes/analysis.ts endJob) issues the matching
-     keep_alive:0 evict once no run remains, so the pin is strictly run-scoped
-     and the per-model value keeps its meaning as the POST-run idle retention. */
-  if (isAnyAnalyzerRunBusy()) return -1;
-  if (RAM_HEAVY_MODELS.has(model) && accelerator === 'cpu') return 0;
-  return resolveKeepAliveSeconds(model);
-}
-
-/* num_ctx the analyzer hands Ollama on every /api/chat call (see the
-   structured-output runStage path below). Exported so the in-app Load
-   button's warming probe can pass the same value — Ollama treats
-   (model, num_ctx) as the cache key, so warming with default 2048 and
-   then running with 16384 triggers a full model reload mid-request,
-   which surfaces to the UI as "stream ended without a result event"
-   while Ollama re-paged the model.
-   Kept as static export for compat; call-sites inside this module use
-   resolveAnalyzerNumCtx() / resolveAnalyzerNumGpu() for live values. */
-export const ANALYZER_NUM_CTX = 32768;
-
-/* Force Ollama to load every layer of the model onto the GPU. 999 is
-   the standard idiom for "all layers" — it exceeds any model's actual
-   layer count, so Ollama clamps to the real value (32 for llama3.1:8b,
-   40 for qwen3.5:9b, etc.). Hard-coding to 999 means this knob is
-   correct for every supported tag without a per-model lookup.
-   Without this hint, Ollama makes its own auto-split decision based on
-   a VRAM-headroom heuristic that turns out to be twitchy under
-   pressure: at llama3.1:8b + num_ctx 16384, ollama ps reported
-   "8.0 GB, 8%/92% CPU/GPU" — ~640 MB silently offloaded to system RAM,
-   which dragged stage-2 wall-clock measurably. Combined with the
-   daemon's OLLAMA_FLASH_ATTENTION=1 + OLLAMA_KV_CACHE_TYPE=q8_0 env
-   pair (see docs/local-llm.md "Pinning the analyzer to 100% GPU"),
-   this pins the analyzer to GPU-only and produces a clean OOM if the
-   budget is ever exceeded, instead of a silent slowdown the user can't
-   diagnose from the UI. Exported for the in-app Load button to thread
-   the same value (Ollama treats num_gpu as part of the load-time cache
-   key the same way num_ctx is — mismatching values between /load and
-   the first /api/chat call triggers a silent reload mid-stream). */
-export const ANALYZER_NUM_GPU = 999;
-
-/** Live-read num_ctx (registry wins over the const). */
-export function resolveAnalyzerNumCtx(): number {
-  return configValue<number>('analyzer.ollama.numCtx');
-}
-/** Live-read num_gpu (registry wins over the const). */
-export function resolveAnalyzerNumGpu(): number {
-  return configValue<number>('analyzer.ollama.numGpu');
-}
-
-/* Optional explicit output-token cap (`num_predict`). Unset → -1 (Ollama's
-   "predict until the context window fills"), which on a huge stage-2 chapter
-   silently truncates the JSON once input + output brush num_ctx. The
-   `done_reason: 'length'` check in chat() turns any such truncation into a
-   loud AnalyzerTruncatedError (#528); this knob lets an operator cap output
-   sooner. Shares the env name with Gemini's maxOutputTokens knob's sibling. */
-export function resolveNumPredict(): number {
-  // 0 is pathological (a zero-token cap truncates all output); preserve the
-  // historical behaviour where 0 is treated as "no explicit cap" (-1).
-  const n = configValue<number>('analyzer.ollama.numPredict');
-  return n === 0 ? -1 : n;
-}
-
 export class OllamaAnalyzer implements Analyzer {
-  private readonly url: string;
   private readonly model: string;
-  private readonly dispatcher: Agent;
+  private readonly transport: OllamaTransport;
 
   constructor(opts: OllamaOptions) {
-    this.url = opts.url;
     this.model = opts.model;
-    this.dispatcher = opts.dispatcher ?? ANALYZER_DISPATCHER;
+    this.transport = new OllamaTransport({ url: opts.url, model: opts.model, dispatcher: opts.dispatcher });
   }
 
   async runStage1(manuscriptId: string, promptMd: string, call: StageCall): Promise<Stage1Output> {
@@ -585,13 +387,10 @@ export class OllamaAnalyzer implements Analyzer {
     }
   }
 
-  /* Streamed chat against /api/chat. Mirrors GeminiAnalyzer.generate so the
-     route-layer 45s silence watchdog (analysis.ts) keeps working unchanged —
-     each NDJSON line fires onChunk with the assembled buffer.
-     When the caller passes an AbortSignal, it's wired into both the initial
-     fetch and the stream-read loop. If the signal fires we throw an
-     AnalysisAbortedError so the route can distinguish "client went away,
-     drop work silently" from a real model failure. */
+  /* TEMPORARY adapter: delegates to OllamaTransport.send and maps the
+     TransportResult back to a plain string for the existing runStage
+     callers. Will be removed when runStage is migrated to call
+     OllamaTransport directly (next wave). */
   private async chat(
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
     responseFormat: unknown,
@@ -600,306 +399,17 @@ export class OllamaAnalyzer implements Analyzer {
     signal?: AbortSignal,
     onEvalTiming?: (t: RawEvalTiming) => void,
   ): Promise<string> {
-    const body = {
-      model: this.model,
-      messages,
-      stream: true,
-      /* Strict structured output via Ollama 0.5+ constrained decoding. The
-         schema is derived from the per-stage Zod schema (see runStage); the
-         sampler can only emit tokens that keep the output a valid prefix of
-         a value matching this schema. This eliminates the "malformed JSON
-         at byte N" failure mode on smaller models (qwen3.5:4b in
-         particular) — the model literally cannot produce invalid JSON or
-         extra fields. The existing validation-retry loop below still guards
-         against semantic violations the schema can't express. */
-      format: responseFormat,
-      /* Per-model keep_alive — see keepAliveFor + resolveKeepAliveSeconds
-         above; a user override in analyzerKeepAliveByModel wins over the flat
-         DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS fallback. */
-      keep_alive: keepAliveFor(this.model, getLastKnownVram().accelerator),
-      /* Suppress qwen3.5's thinking tokens — they'd appear as
-         `<think>…</think>` ahead of the JSON and break the parser. Ollama
-         silently ignores this flag on non-thinking models. */
-      think: false,
-      options: {
-        /* Caller-controlled temperature — DEFAULT_TEMPERATURE for the first
-           attempt and schema-validation retries, INVALID_JSON_RETRY_TEMPERATURE
-           for invalid-json retries. See runStage for the kind-aware branch. */
-        temperature,
-        /* 16K covers long chapters (~12–15K chars ≈ 3–4K tokens) plus the
-           inlined response schema + skill system prompt without spilling.
-           At 8K we observed silent hangs on 12K+ char chapters where the
-           combined prompt brushed the context limit and Ollama's
-           structured-output path stalled with no first byte. The 4B
-           weights (~3 GB) leave enough headroom on an 8 GB box for the
-           larger KV cache. */
-        num_ctx: resolveAnalyzerNumCtx(),
-        /* Pin every layer to GPU — see ANALYZER_NUM_GPU above for the
-           full rationale (was: Ollama silently offloading ~8% of
-           llama3.1:8b layers to CPU under 16K-context pressure). */
-        num_gpu: resolveAnalyzerNumGpu(),
-        /* Output-token cap — see resolveNumPredict above. -1 by default
-           (predict until context fills); truncation is caught loudly via
-           done_reason below regardless. */
-        num_predict: resolveNumPredict(),
-      },
-    };
-
-    /* Short-circuit if the caller has already aborted (e.g. the SSE client
-       disconnected while a previous chapter was still running). Saves a
-       wasted Ollama round-trip and lets the route loop bail immediately. */
-    if (signal?.aborted) {
-      throw new AnalysisAbortedError(
-        `Ollama ${this.model} call aborted before fetch (client disconnected).`,
-      );
-    }
-
-    /* Analyzer concurrency: width-K limiter + per-model GPU lease
-       (analyzer-concurrency.ts). Replaces the old per-call gpuSemaphore acquire;
-       the lease holds one cross-engine slot per resident model. */
-    const releaseSlot = await acquireAnalyzerSlot(this.model, getLastKnownAnalyzerDevice() === 'cpu');
-
-    try {
-      let response: Awaited<ReturnType<typeof undiciFetch>>;
-      try {
-        response = await undiciFetch(`${this.url}/api/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal,
-          dispatcher: this.dispatcher,
-        });
-      } catch (err) {
-        if (signal?.aborted) {
-          throw new AnalysisAbortedError(
-            `Ollama ${this.model} fetch aborted (client disconnected).`,
-          );
-        }
-        throw classifyConnectError(err, this.url);
-      }
-
-      if (!response.ok) {
-        /* Reachable but errored — hard-fail. Surface the body verbatim so
-           operator can diagnose ("model not found", "invalid format", …). */
-        const text = await response.text().catch(() => '');
-        const bodyExcerpt = text.slice(0, 500);
-        throw new AnalyzerHttpError(
-          'ollama',
-          response.status,
-          bodyExcerpt,
-          `Ollama ${this.url} returned ${response.status} ${response.statusText}: ${bodyExcerpt}`,
-        );
-      }
-
-      if (!response.body) {
-        throw new Error(`Ollama ${this.url} returned an empty body (no readable stream).`);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let buf = ''; // assembled assistant content
-      let lineBuf = ''; // partial NDJSON line carried across reads
-      let firstByteSeen = false;
-      /* Ollama reports WHY it stopped on the final `done:true` line:
-         'stop' (clean), 'length' (hit num_ctx/num_predict — truncated),
-         'load'. Captured here, asserted after the stream drains (#528). */
-      let doneReason: string | undefined;
-      /* Raw decode timing off the `done:true` line — see analyzer-eval-stats.ts.
-         Fired via onEvalTiming after the stream drains (best-effort telemetry,
-         gated by the analyzer.evalStats.enabled knob below). */
-      let timing: RawEvalTiming | null = null;
-      const start = Date.now();
-      let lastChunkAt = start;
-
-      try {
-        for (;;) {
-          if (signal?.aborted) {
-            /* Caller (the route's req.on('close') handler) aborted while we
-               were mid-stream. Tear down cleanly rather than burning more
-               tokens on output the client will never see. */
-            throw new AnalysisAbortedError(
-              `Ollama ${this.model} stream aborted (client disconnected).`,
-            );
-          }
-          let result: { done: boolean; value?: Uint8Array };
-          try {
-            result = await reader.read();
-          } catch (err) {
-            if (signal?.aborted) {
-              throw new AnalysisAbortedError(
-                `Ollama ${this.model} stream aborted (client disconnected).`,
-              );
-            }
-            /* A connection drop mid-stream — daemon was up, then went away.
-               If we've already seen bytes, this is a partial-stream failure
-               (hard-fail). If we haven't, treat as unreachable. */
-            if (!firstByteSeen) throw classifyConnectError(err, this.url);
-            throw new Error(`Ollama ${this.url} stream interrupted: ${(err as Error).message}`);
-          }
-          if (result.done) break;
-          firstByteSeen = true;
-          lineBuf += decoder.decode(result.value ?? new Uint8Array(), { stream: true });
-
-          let nl: number;
-          while ((nl = lineBuf.indexOf('\n')) >= 0) {
-            const line = lineBuf.slice(0, nl).trim();
-            lineBuf = lineBuf.slice(nl + 1);
-            if (!line) continue;
-
-            let parsed: {
-              message?: { content?: string };
-              done?: boolean;
-              done_reason?: string;
-              error?: string;
-              eval_count?: number; eval_duration?: number;
-              prompt_eval_count?: number; prompt_eval_duration?: number;
-              load_duration?: number;
-            };
-            try {
-              parsed = JSON.parse(line);
-            } catch {
-              /* Skip a corrupted NDJSON line rather than abort the stream —
-                 Ollama very occasionally emits keep-alive noise. If the whole
-                 stream produces no content, the empty-buffer check below
-                 will hard-fail. */
-              continue;
-            }
-
-            if (parsed.error) {
-              throw new Error(`Ollama ${this.url} stream error: ${parsed.error}`);
-            }
-            if (parsed.done) {
-              if (parsed.done_reason) doneReason = parsed.done_reason;
-              timing = {
-                model: this.model,
-                evalCount: parsed.eval_count ?? 0,
-                evalDuration: parsed.eval_duration ?? 0,
-                promptEvalCount: parsed.prompt_eval_count ?? 0,
-                promptEvalDuration: parsed.prompt_eval_duration ?? 0,
-                loadDuration: parsed.load_duration ?? 0,
-              };
-            }
-
-            const piece = parsed.message?.content;
-            if (piece) {
-              buf += piece;
-              const now = Date.now();
-              onChunk?.({
-                receivedBytes: buf.length,
-                receivedText: buf,
-                sinceLastChunkMs: now - lastChunkAt,
-                elapsedMs: now - start,
-              });
-              lastChunkAt = now;
-            }
-          }
-        }
-      } finally {
-        try {
-          reader.releaseLock();
-        } catch {
-          /* already released */
-        }
-      }
-
-      if (!buf) {
-        throw new Error(`Ollama ${this.model} returned an empty response.`);
-      }
-      /* Truncation gate (#528): the stream completed but Ollama stopped
-         because it hit the context/output budget (`done_reason: 'length'`),
-         not because the model finished. The buffered JSON is cut off
-         mid-object; returning it hands a corrupt payload to parseAndValidate.
-         Throw a classified error so the stage-2 chunker can split the
-         chapter rather than retrying the same oversized prompt. */
-      if (doneReason === 'length') {
-        console.warn(
-          `[ollama] output truncated done_reason=length bytes=${buf.length} model=${this.model}`,
-        );
-        throw new AnalyzerTruncatedError('ollama', 'length', buf.length);
-      }
-      // fs-45 v1: record this model's real GPU footprint while provably resident.
-      // Env-gated (Global Constraints) so fetch-count tests can opt out; best-effort.
-      if (process.env.CASTWRIGHT_VRAM_SAMPLE !== '0') {
-        await sampleAndRecordVram(this.url, this.model, resolveAnalyzerNumCtx());
-      }
-      /* srv-2367: warn once per distinct GPU split that would have fit on a
-         single device — independently best-effort of the VRAM sample above,
-         and never trusting detectOllamaGpuSplit's own never-throws contract
-         blindly from this call site (belt and suspenders). Also warns when
-         expectedDevice is set and the detected placement disagrees. */
-      try {
-        const splitResult = await detectOllamaGpuSplit();
-        const expectedDevice = configValue<string>('analyzer.ollama.expectedDevice');
-
-        /* Check for multi-GPU split that would fit on a single device. Only
-           warn if we have complete data; a split with unavailable VRAM data
-           means we can't confidently assess whether it would fit, so don't
-           suggest a migration that might not actually help. */
-        if (splitResult.split && splitResult.wouldFitSingleDevice && !splitResult.dataUnavailable) {
-          const signature = splitResult.deviceIndices.join(',');
-          if (!warnedGpuSplitSignatures.has(signature)) {
-            warnedGpuSplitSignatures.add(signature);
-            console.warn(
-              `[ollama] analyzer model split across GPUs ${signature} (would fit on a single device) — see docs/local-llm.md "Pinning the analyzer to 100% GPU"`,
-            );
-          }
-        }
-
-        /* Check for expectedDevice mismatch: either a split touching ANY device
-           outside the expected one, or a single device that isn't the expected one.
-           Use .every() semantics (not .includes()): a split that touches ANY
-           device outside expected counts as a mismatch, just like on the frontend.
-           Guard against NaN (non-numeric expectedDevice) to fail safe: a malformed
-           value like 'gpu0' would become NaN and compare false against every device
-           index, producing a bogus always-mismatch warning. Mirror the frontend's
-           !Number.isNaN guard (advanced.tsx line 314/323).
-           Also mirror the frontend's dataUnavailable suppression: when the VRAM data
-           is inconclusive (driver doesn't expose per-process memory), we can't
-           confidently assert a mismatch, so suppress the warning. */
-        if (expectedDevice && splitResult.reachable && !splitResult.dataUnavailable) {
-          const expectedIndex = Number(expectedDevice);
-          if (!Number.isNaN(expectedIndex)) {
-            const isMismatch =
-              (splitResult.split && !splitResult.deviceIndices.every((idx) => idx === expectedIndex)) ||
-              /* Mismatch only fires when there's exactly one resident Ollama process/PID.
-                 With 2+ distinct PIDs on different GPUs (e.g., analyzer + design model),
-                 ambiguous which model expectedDevice refers to, so skip the warning. */
-              (!splitResult.split && splitResult.deviceIndices.length === 1 && splitResult.deviceIndices[0] !== expectedIndex);
-
-            if (isMismatch) {
-              /* Include both the device list and expectedDevice in the signature so
-                 each distinct mismatch state is warned once (rate-limited per
-                 device signature + expected state pair). */
-              const mismatchSignature = `${splitResult.deviceIndices.join(',')}-expected:${expectedDevice}`;
-              if (!warnedGpuSplitSignatures.has(mismatchSignature)) {
-                warnedGpuSplitSignatures.add(mismatchSignature);
-                const deviceDesc = splitResult.deviceIndices.length === 0 ? 'unknown' : splitResult.deviceIndices.join(',');
-                console.warn(
-                  `[ollama] analyzer GPU device mismatch: expected GPU ${expectedDevice}, detected on GPU ${deviceDesc}`,
-                );
-              }
-            }
-          }
-        }
-      } catch {
-        /* best-effort; never let a detector bug surface as an analyzer failure */
-      }
-      /* fs-analyzer-eval-telemetry: best-effort decode-timing capture, gated
-         by the analyzer.evalStats.enabled knob so an operator can disable it.
-         Wrapped so the sink can NEVER turn a clean decode into a stage failure —
-         the sole consumer today is an inert array push, but "never throws on the
-         hot path" must hold by construction for any future sink (srv-61). */
-      if (timing && onEvalTiming && configValue<boolean>('analyzer.evalStats.enabled')) {
-        try {
-          onEvalTiming(timing);
-        } catch (evalSinkErr) {
-          console.warn('[ollama] onEvalTiming sink threw (ignored, telemetry is best-effort):', evalSinkErr);
-        }
-      }
-      return buf;
-    } finally {
-      releaseSlot();
-    }
+    const hasSystem = messages[0]?.role === 'system';
+    const result = await this.transport.send({
+      system: hasSystem ? messages[0].content : '',
+      messages: (hasSystem ? messages.slice(1) : messages) as ChatMessage[],
+      structuredOutput: { mode: 'schema', name: 'stage', schema: responseFormat as Record<string, unknown> },
+      temperature,
+      estimatedInputTokens: 0,
+      signal,
+      call: { onChunk, onEvalTiming },
+    });
+    return mapFinish(result, { kind: 'ollama', model: this.model });
   }
 }
 
@@ -1001,38 +511,4 @@ export async function generatePersonaViaOllama(
   } finally {
     releaseSlot(); // non-nullable (unlike the old acquireGpuTokenIfOnGpu release)
   }
-}
-
-/* Map a fetch / stream-read failure to either LocalUnreachableError (triggers
-   fallback) or a plain Error (hard-fail). Undici surfaces connection-level
-   errors as `TypeError: fetch failed` with `.cause` carrying the inner
-   SystemError; we read `.cause.code` to discriminate. */
-export function classifyConnectError(err: unknown, url: string): Error {
-  const e = err as { cause?: { code?: string }; name?: string; code?: string; message?: string };
-  const innerCode = e?.cause?.code ?? e?.code;
-  if (innerCode && UNREACHABLE_CODES.has(innerCode)) {
-    return new LocalUnreachableError(
-      `Ollama at ${url} is unreachable (${innerCode}). Start the daemon or switch to Gemini in Admin → Model Manager.`,
-      err,
-    );
-  }
-  /* Bare "fetch failed" with no inner code on Node 20 is almost always a
-     connection refusal at the OS layer (Windows surfaces it without a code
-     in some configs). Treat as unreachable. */
-  if (e?.name === 'TypeError' && /fetch failed/i.test(e?.message ?? '')) {
-    return new LocalUnreachableError(
-      `Ollama at ${url} is unreachable (fetch failed). Start the daemon or switch to Gemini in Admin → Model Manager.`,
-      err,
-    );
-  }
-  /* AbortError before first byte = the daemon never responded; treat as
-     unreachable. Callers that abort mid-stream are handled by the inner
-     read-loop catch which keys off `firstByteSeen`. */
-  if (e?.name === 'AbortError') {
-    return new LocalUnreachableError(
-      `Ollama at ${url} aborted before first byte. Likely unreachable or hung.`,
-      err,
-    );
-  }
-  return err instanceof Error ? err : new Error(String(err));
 }
