@@ -4436,6 +4436,34 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # output): docs/testing/onbox-3036-results/step-1-nvml.md. The
     # device-wide-delta fallback with own-process-style attribution guards
     # is tracked in #3266.
+    #
+    # #3266 (child 2 of the #3036 chain) built that fallback: the warm
+    # branch now measures `asr.warm` through the SAME device-wide
+    # `_device_free_mb` delta as the COLD "asr" key above, carrying the
+    # full foreign-PID / concurrent-reservation guard set that #2094's
+    # original warm attempt lacked. REAL ON-BOX OUTCOME: ALSO DID NOT
+    # CONVERGE on this 4070-Laptop box. On a provably uncontaminated
+    # window (card idle at precheck, no foreign PID at either snapshot,
+    # no other engine holding the device, and the cold "asr" key took its
+    # device-wide sample in the SAME session — the readings are alive),
+    # the resident-forward delta still produced zero accepted samples:
+    # CTranslate2 allocates its arena at load and reuses it per forward,
+    # so device-wide free VRAM does not measurably move across a warm
+    # forward, and non-positive deltas are dropped by `record()`'s own
+    # `<= 0` guard. #2682's contamination theory for the earlier failure
+    # is thus disproven on this box — guards were in place and changed
+    # nothing. BOTH directions from #3036 have now been tried on real
+    # hardware and documented non-viable (step-1-nvml.md,
+    # step-2-device-delta.md). This seed therefore REMAINS AUTHORITATIVE:
+    # no measurement technique currently available on this box can move
+    # it. The technique ACTIVE in shipped code for `asr.warm` is this
+    # child's device-wide delta — NOT the pre-#3036 `_observed_mb`
+    # fall-through (structurally 0 for a CTranslate2 engine, #2930/
+    # #3012) and not #3265's `_own_process_used_mb` (kept in the
+    # codebase, tested, no longer called from production; deleting it is
+    # a separate human decision). A real fix still needs a CTranslate2-
+    # side memory query or driver-level per-process accounting this
+    # box's WDDM does not provide; tracked onward via #3036/#3267.
     "asr.warm": 128,
     "spk": 200,
 }
