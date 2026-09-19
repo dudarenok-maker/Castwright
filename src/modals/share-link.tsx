@@ -46,6 +46,17 @@ type CopyState = 'idle' | 'copied' | 'failed';
 export function ShareLinkModal({ open, url, onClose, onCopyFailed }: ShareLinkModalProps) {
   const [copyState, setCopyState] = useState<CopyState>('idle');
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const copyStateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* Clean up the copy-state-reset timeout if the modal unmounts before it
+     fires (mirrors AccountView / ModelSettingsForm's own fix). */
+  useEffect(() => {
+    return () => {
+      if (copyStateTimeoutRef.current !== null) {
+        clearTimeout(copyStateTimeoutRef.current);
+      }
+    };
+  }, []);
 
   /* Reset copy state every time the modal opens for a new URL so a
      re-open after a previous "Copied" doesn't flash the green tick
@@ -85,11 +96,13 @@ export function ShareLinkModal({ open, url, onClose, onCopyFailed }: ShareLinkMo
       await navigator.clipboard.writeText(url);
       setCopyState('copied');
       /* Flip back after 1.5 s so a second click works visually. */
-      setTimeout(() => setCopyState('idle'), 1500);
+      if (copyStateTimeoutRef.current !== null) clearTimeout(copyStateTimeoutRef.current);
+      copyStateTimeoutRef.current = setTimeout(() => setCopyState('idle'), 1500);
     } catch (e) {
       setCopyState('failed');
       onCopyFailed?.(e instanceof Error ? e.message : '');
-      setTimeout(() => setCopyState('idle'), 1500);
+      if (copyStateTimeoutRef.current !== null) clearTimeout(copyStateTimeoutRef.current);
+      copyStateTimeoutRef.current = setTimeout(() => setCopyState('idle'), 1500);
     }
   };
 

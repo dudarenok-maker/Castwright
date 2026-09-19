@@ -7,12 +7,13 @@
 // epub2@3.0.2 is the latest release and declares `adm-zip: ^0.5.10`, so the
 // patched 0.6.x releases are OUT of that range and arrive ONLY via the
 // override. That makes the override a load-bearing security fix delivered
-// entirely by config: delete it and npm happily reinstalls 0.5.17, satisfying
-// epub2's declared range, with no error and no warning.
+// entirely by config: delete it and npm happily reinstalls the latest release
+// satisfying epub2's declared range (0.5.18 as of this writing), with no
+// error and no warning.
 //
 // Nothing else would notice. The 27 cases in epub.test.ts produce byte-identical
-// results on 0.5.17, 0.6.0, and 0.6.1, so the parser suite cannot detect the
-// regression — hence this explicit floor assertion.
+// results on 0.5.17, 0.5.18, 0.6.0, and 0.6.1, so the parser suite cannot detect
+// the regression — hence this explicit floor assertion.
 //
 // 0.6.0 fixes GHSA-xcpc-8h2w-3j85 (crafted ZIP triggers a ~4 GB allocation) and,
 // separately, removes a data-descriptor CRC path in which 0.5.17 threw from

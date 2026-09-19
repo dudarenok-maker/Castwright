@@ -179,6 +179,17 @@ function SettingsAccordionWithNav({
   const [activeId, setActiveId] = useState<string>(sections[0]?.id ?? '');
   /* nonce lets repeated clicks on the same section re-fire the scroll+open. */
   const nonceRef = useRef(0);
+  const requestedOpenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* Clean up the requestedOpenId-reset timeout if this provider unmounts
+     before it fires (mirrors AccountView / ModelSettingsForm's own fix). */
+  useEffect(() => {
+    return () => {
+      if (requestedOpenTimeoutRef.current !== null) {
+        clearTimeout(requestedOpenTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const requestOpen = (id: string) => {
     nonceRef.current += 1;
@@ -192,7 +203,8 @@ function SettingsAccordionWithNav({
       });
     });
     /* Reset after a short delay so the same id can be re-selected again. */
-    setTimeout(() => setRequestedOpenId(null), 400);
+    if (requestedOpenTimeoutRef.current !== null) clearTimeout(requestedOpenTimeoutRef.current);
+    requestedOpenTimeoutRef.current = setTimeout(() => setRequestedOpenId(null), 400);
   };
 
   /* Scroll-spy via IntersectionObserver — guard for jsdom (undefined in tests). */
