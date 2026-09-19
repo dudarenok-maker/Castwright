@@ -1465,8 +1465,11 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
   });
 });
 
-/* Register rows H1/H2 (docs/testing/onbox-acceptance-register.md, Group H) —
-   real-manuscript CJK richness fixtures, not the synthetic hand-authored
+/* Register row H1 was discharged 2026-09-19 (docs/testing/onbox-acceptance-register.md,
+   Group H no longer lists it) — this test is the evidence that discharged it,
+   kept here as a historical annotation, not a live citation. Register row H2
+   (still open, narrowed not discharged) remains live in Group H.
+   H1/H2 real-manuscript CJK richness fixtures, not the synthetic hand-authored
    samples finding 3(b)/C5 (H1) and finding B3 (H2) flagged as unproven.
    H2 (zh): the Analects (論語), chapters 學而 through 子路 (13 of the work's
    20 chapters), sourced verbatim from Wikisource (zh.wikisource.org/wiki/論語),
@@ -1475,11 +1478,12 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
    Coalfall Commission zh translation, 4,425 Han chars / R=12.078 — see the
    register row). NOT full novel scale (the register's own N=400,000 concern)
    — narrows the row, does not discharge the book-scale question.
-   H1 (ja): the first 50 poems of the Ogura Hyakunin Isshu (小倉百人一首,
-   13th century), rendered in the standard all-hiragana karuta reading-card
-   (読み札) form — the conventional no-kanji transcription of this anthology,
-   not an invented one. Real, non-synthetic, genuinely all-kana (no kanji). */
-describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK fixtures (register rows H1/H2)', () => {
+   H1 (ja) — discharged: the first 50 poems of the Ogura Hyakunin Isshu
+   (小倉百人一首, 13th century), rendered in the standard all-hiragana karuta
+   reading-card (読み札) form — the conventional no-kanji transcription of
+   this anthology, not an invented one. Real, non-synthetic, genuinely
+   all-kana (no kanji). */
+describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK fixtures (register row H1, discharged; H2, narrowed)', () => {
   const ZH_FIXTURE = join(__dirname, '..', '__fixtures__', 'analects-xueer-yongye.zh.md');
   const JA_FIXTURE = join(__dirname, '..', '__fixtures__', 'hyakunin-isshu-1-50.ja.md');
 
