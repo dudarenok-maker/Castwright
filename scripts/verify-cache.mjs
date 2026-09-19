@@ -1650,11 +1650,11 @@ export const UNCONDITIONAL_LOCAL_CHECK_SCRIPTS = Object.freeze(['check:register-
 // [run]/[pass]/[fail] shape - only the cache-hash and scope-filter machinery
 // is absent. Returns the first non-zero exit code, failing the whole run
 // exactly like a failed step; 0 when every check passed.
-export function runUnconditionalLocalChecks({ cwd, env }) {
+export async function runUnconditionalLocalChecks({ cwd, env }) {
   for (const script of UNCONDITIONAL_LOCAL_CHECK_SCRIPTS) {
     console.log(`[run] ${script} (unconditional)`);
     const t0 = Date.now();
-    const { code } = runStepProcess(script, { cwd, env, retryKey: script });
+    const { code } = await runStepProcess(script, { cwd, env, retryKey: script });
     const dt = Date.now() - t0;
     if (code !== 0) {
       console.log(`[fail] ${script} (exit ${code}, took ${formatSecs(dt)})`);
@@ -1691,7 +1691,7 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   // Deliberately NOT wrapped in a cache check or a scope check — see
   // runUnconditionalLocalChecks' own header for why both are impossible here.
   if (!flags.steps || flags.steps.length === 0) {
-    const checkCode = runUnconditionalLocalChecks({ cwd, env });
+    const checkCode = await runUnconditionalLocalChecks({ cwd, env });
     if (checkCode !== 0) return checkCode;
   }
 

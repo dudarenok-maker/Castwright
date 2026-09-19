@@ -2404,7 +2404,7 @@ test('#3271: check:register-citations is an unconditional local check, not a STE
 });
 
 function runPipelineBody() {
-  const match = src.match(/export function runPipeline\([\s\S]*?\n\}\n/);
+  const match = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/);
   assert.ok(match, "could not locate runPipeline's function body in verify-cache.mjs");
   return match[0];
 }
@@ -2420,7 +2420,7 @@ test('#3271: runPipeline calls the unconditional checks unguarded, outside the c
 
   assert.match(
     body,
-    /if \(!flags\.steps \|\| flags\.steps\.length === 0\) \{\s*\n\s*const checkCode = runUnconditionalLocalChecks\(/,
+    /if \(!flags\.steps \|\| flags\.steps\.length === 0\) \{\s*\n\s*const checkCode = await runUnconditionalLocalChecks\(/,
     'the call must be gated only on "this is a full run" (`!flags.steps`) — the same ' +
       'condition the step-selection block above uses to tell "full" from "--steps"-filtered',
   );
@@ -2454,13 +2454,13 @@ test('#3271: runPipeline calls the unconditional checks unguarded, outside the c
 });
 
 test('#3271: runUnconditionalLocalChecks spawns via the existing runStepProcess helper', () => {
-  const match = src.match(/export function runUnconditionalLocalChecks\([\s\S]*?\n\}\n/);
+  const match = src.match(/export async function runUnconditionalLocalChecks\([\s\S]*?\n\}\n/);
   assert.ok(match, 'could not locate runUnconditionalLocalChecks in verify-cache.mjs');
   const body = match[0];
 
   assert.match(
     body,
-    /runStepProcess\(/,
+    /await runStepProcess\(/,
     'must spawn through the existing runStepProcess helper rather than inventing a new ' +
       'spawn path (same retry/`shell: true`/windowsHide semantics as every STEPS[] step)',
   );
@@ -2499,18 +2499,18 @@ function writeRegisterCitationFixture(dir, { passing = true } = {}) {
   return marker;
 }
 
-function captureLogs(fn) {
+async function captureLogs(fn) {
   const logs = [];
   const originalLog = console.log;
   console.log = (...args) => logs.push(args.join(' '));
   try {
-    return { result: fn(), logs };
+    return { result: await fn(), logs };
   } finally {
     console.log = originalLog;
   }
 }
 
-test('#3271: a full run executes the citation check every time, and never reports it [cached]', () => {
+test('#3271: a full run executes the citation check every time, and never reports it [cached]', async () => {
   const dir = makeGitFixture();
   const marker = writeRegisterCitationFixture(dir);
   gitAt(dir, ['add', '.']);
@@ -2520,7 +2520,7 @@ test('#3271: a full run executes the citation check every time, and never report
   // Two consecutive full runs with nothing changed in between — the exact shape
   // that printed `test:hooks [cached]` before #3271.
   for (const run of [1, 2]) {
-    const { logs } = captureLogs(() => runPipeline({ argv: [], cwd: dir, env }));
+    const { logs } = await captureLogs(() => runPipeline({ argv: [], cwd: dir, env }));
 
     assert.ok(
       logs.some((l) => l.startsWith(`[run] ${CHECK_SCRIPT} (unconditional)`)),
@@ -2547,14 +2547,14 @@ test('#3271: a full run executes the citation check every time, and never report
   }
 });
 
-test('#3271: a broken citation fails the whole run with the checker error visible', () => {
+test('#3271: a broken citation fails the whole run with the checker error visible', async () => {
   const dir = makeGitFixture();
   const marker = writeRegisterCitationFixture(dir, { passing: false });
   gitAt(dir, ['add', '.']);
   gitAt(dir, ['commit', '-q', '-m', 'fixture']);
   const env = { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' };
 
-  const { result, logs } = captureLogs(() => runPipeline({ argv: [], cwd: dir, env }));
+  const { result, logs } = await captureLogs(() => runPipeline({ argv: [], cwd: dir, env }));
 
   assert.equal(result, 1, 'runPipeline must return the failure exit code');
   assert.equal(readFileSync(marker, 'utf8').length, 1, 'the checker must have run once');
@@ -2566,7 +2566,7 @@ test('#3271: a broken citation fails the whole run with the checker error visibl
   assert.match(failLine, /\(exit 1, took /);
 });
 
-test('#3271: a --steps run is left alone (the deliberate narrow developer/hook filter)', () => {
+test('#3271: a --steps run is left alone (the deliberate narrow developer/hook filter)', async () => {
   const dir = makeGitFixture();
   const marker = writeRegisterCitationFixture(dir);
   gitAt(dir, ['add', '.']);
@@ -2576,10 +2576,10 @@ test('#3271: a --steps run is left alone (the deliberate narrow developer/hook f
   // The pre-commit hook and package.json's verify:fast* scripts are narrow
   // `--steps` filters, and test:hooks already covers the checker there. Widening
   // them would silently change what the hook costs.
-  assert.equal(runUnconditionalLocalChecks({ cwd: dir, env }), 0);
+  assert.equal(await runUnconditionalLocalChecks({ cwd: dir, env }), 0);
   assert.equal(readFileSync(marker, 'utf8').length, 1);
 
-  const { logs } = captureLogs(() =>
+  const { logs } = await captureLogs(() =>
     runPipeline({ argv: ['--steps', 'test:hooks'], cwd: dir, env }),
   );
   assert.ok(
