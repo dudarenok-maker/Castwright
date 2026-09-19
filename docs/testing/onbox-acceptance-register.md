@@ -559,7 +559,7 @@ setup rather than repeatedly loading and evicting models.
 | **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
-| **H** | No hardware — needs a real CJK manuscript (all-kana, and full-length Han), not yet in this repo's corpus | 2 |
+| **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
@@ -567,7 +567,47 @@ setup rather than repeatedly loading and evicting models.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-19, adding E106** (Castwright#3249, ops-72 Part 2, claude): a
+> **Last change: 2026-09-19 — two lanes touched the register the same day,
+> reconciled here on merge.** This branch (chore/docs-onbox-register-decompose)
+> and a separate lane's E105/E106 additions (Castwright#3249, ops-72 Part 2)
+> both diverged from a common ancestor at 51 owed. Combined: **53 owed** — this
+> branch's own work is owed-count-neutral (see below), the other lane's
+> E105+E106 additions net +2 (51→53, Group E 7→9). `next-id` markers: Group H
+> unmoved, Group E bumped E106→E107 (unaffected by this merge — inherited as-is
+> from the other lane).
+>
+> **This branch, 2026-09-19 (claude), owed-count-neutral — both Group H rows
+> NARROWED, neither discharged.** Row **H1** (kana-trigram richness gate at
+> real-book scale for an all-kana Japanese manuscript): a real,
+> sourced-from-Wikisource, genuinely all-kana Hyakunin Isshu fixture (50
+> poems, 1,572 kana chars) now runs through `detectManuscriptLanguageFromChapters`
+> in `detect-language.test.ts` and confirms the gate holds (`guiraudR` ≈
+> 29.015). A pr-review-gate pass caught that this sample is real progress but
+> too small to answer the row's own question — the gate can pass on a small
+> sample for the same reason a synthetic one used to (finding B4's "the
+> separation only appears at length"): flipping `KANA_NGRAM_SIZE` 3→2 makes
+> the pre-existing finding-3(b) test go red while this new test stays green,
+> proving 1,572 kana chars doesn't lock in the regression it's presented as
+> locking. So H1 stays **narrowed, not discharged** — an initial pass on this
+> same PR incorrectly discharged it; corrected before merge. Row **H2** (Han
+> lexical-richness floor at book scale) NARROWED but stays owed — a larger
+> real Han fixture (13 Analects chapters, ~2.25x the prior largest real
+> sample) confirms the gate holds at that intermediate scale, but true
+> book-scale (100k+ chars) remains unconfirmed. Neither `next-id` marker
+> moved (no new row minted; H1's attempted discharge was corrected within this
+> same round). Also this round, not owed-count-affecting:
+> A6/A7 got a cross-reference sequencing note (same #3027 fix, same
+> book/cast — one on-box session expected to cover both), A10's UI-surfacing
+> reframing was already current, B1's criteria were re-derived against PR
+> #2518 (row stays owed — criteria fix only), A23's live-view HTML was
+> already in sync with the register (publish still owed to the operator),
+> and E5 narrowed its DevTools-smoke-check target from 3 controls to 2
+> pending [#3268](https://github.com/dudarenok-maker/Castwright/issues/3268)
+> (the voice-library drag icon is confirmed structurally unreachable dead
+> code from any current call site — filed as a design-pass decision per
+> CLAUDE.md's incidental-findings protocol, not fixed silently).
+>
+> **Prior change: 2026-09-19, adding E106** (Castwright#3249, ops-72 Part 2, claude): a
 > review pass on the same PR found that the POSIX SIGINT/SIGTERM/SIGHUP forwarding added
 > to close a Ctrl+C-orphans-the-battery gap is unproven on this repo's primary (Windows)
 > dev box — `detached`, process groups, and POSIX signal delivery semantics don't exist
@@ -2063,6 +2103,16 @@ all found through real use) — but never this specific forced-recycle walkthrou
 > multi-voice cast (with or without a `GEMINI_API_KEY` set) to confirm the run
 > now reaches 12/12 instead of halting at 2/12.
 
+> **2026-09-19 — sequencing note (decomposition pass).** A6 and A7 are both
+> still-owed on-box re-runs against the SAME now-fixed halt (#3027, PR #3161)
+> and the SAME multi-voice book/cast setup — see A7's own "2026-09-19" note
+> below for the identical cross-reference. A single on-box session driving one
+> "Design full cast" run to a genuine terminal state is expected to discharge
+> or narrow BOTH rows at once (A6's "completes end to end" bullet and A7's
+> three not-reached bullets), not two separate sessions. No result is claimed
+> here — this is scope-sequencing only, so the next on-box pass doesn't
+> duplicate the run.
+
 ### A7 · Design full cast — bulk Qwen voice design (plan 195)
 
 Shipped 2026-06-07 (`7f0d5f4b`, PR #637); PR #638 filled the Ship-notes SHA but
@@ -2103,6 +2153,14 @@ character. *Blocked on the same halt as A6* — [#3027](https://github.com/dudar
 > summary counts, series propagation, 2nd-tab serialization) are still owed a
 > fresh on-box run that gets past the 2/12 point the A6 halt previously capped
 > both runs at — this fix is not itself that run.
+
+> **2026-09-19 — sequencing note (decomposition pass).** A7 and A6 are both
+> still-owed on-box re-runs against the SAME now-fixed halt (#3027, PR #3161)
+> and the SAME multi-voice book/cast setup — see A6's own "2026-09-19" note
+> above for the identical cross-reference. A single on-box session driving one
+> "Design full cast" run to a genuine terminal state is expected to discharge
+> or narrow BOTH rows at once, not two separate sessions. No result is claimed
+> here — this is scope-sequencing only.
 
 ### A8 · Batch the QA re-record loops (plan 228)
 
@@ -4705,6 +4763,43 @@ at K=4 with a monotonic per-phase bar.
 > against current `main` before this row is run** — a run against the
 > criteria as currently written would not be trustworthy. Re-derivation is
 > itself owed, not attempted here.
+>
+> **2026-09-19 — criteria re-derived against PR #2518 (decomposition pass).
+> Row STAYS OWED — this is a criteria fix, not a run.** Read #2518's diff
+> (`server/src/analyzer/dialogue-structure/parser.ts`,
+> `lang/de.ts`): it is a narrow segmentation fix to `cutsATagClause`'s
+> tag-clause guard — a colon-introduced spoken turn (e.g. `sagte er: <<Zu>>.`)
+> was being dropped from the dialogue-structure parse because a trailing-
+> whitespace strip mishandled that shape. The PR's own corpus A/B diff (both
+> arms 331 books / 726,385 paragraphs) is exactly **2 changed paragraphs in 2
+> books** — `pg/de/63460.txt` and `pg/zh/52200.txt` — **neither of which is**
+> *Ночной дозор* (Night Watch), this row's own fixture (per the 2026-08-21
+> correction above). So there is no confirmed effect on the specific ~110k-
+> char paragraph steps 2-4 exercise. What the fix DOES change, structurally,
+> is upstream of every one of this row's six steps: `cutsATagClause` runs
+> inside the dialogue-structure parser that turns a chapter's raw text into
+> the turn/paragraph units the per-phase analyzer chunks and streams over —
+> so a turn-boundary shift anywhere in a chapter can change how many units
+> exist, where a phase boundary falls, and therefore the ETA-tightening
+> timing (steps 1-2), the "dense single-paragraph...now completes" criterion
+> (step 3, which depends on how that dense paragraph gets split before the
+> per-phase call), and the first-chapter CPU-only ETA seed (step 4, which
+> reads the same per-unit timing). None of this is confirmed to move Night
+> Watch's own numbers — the corpus diff above says it very likely doesn't —
+> but the ORIGINAL six-step wording (`:124-142`) was written before this fix
+> (and before design #2426/#2334 generally) existed, so its literal pass/fail
+> thresholds cannot be trusted without re-running against current `main`.
+> **Re-derived criteria for the next on-box run:** run the same six steps
+> (Gemini recitation-block to Qwen fallback; ETA realism + ~10s tightening;
+> dense single-paragraph completion; CPU-only ETA seed — `LiveChapterTicker`
+> rendering is now split out as the browser-shaped operator item per the
+> 2026-08-21 correction) against *Ночной дозор* on current `main`, and judge
+> pass/fail by the STATED BEHAVIOUR (falls back cleanly / ETA realistic and
+> tightens / completes without truncation / seeds slow) rather than by any
+> specific number cited in the pre-#2518 register text — no pre-#2518 number
+> here was ever confirmed against real hardware in the first place, so there
+> is no baseline number this correction needs to preserve. The row's run is
+> still owed; only the trustworthiness of its criteria changed.
 
 ---
 
@@ -5242,6 +5337,26 @@ wizard "Review ›" chip, voice-library drag icon. Minutes, any machine.
 > intentional now that touch users are meant to use the `Assign` pill
 > instead. Full evidence:
 > `docs/testing/onbox-human-checkpoint-results/step6-e5.md`.
+>
+> **2026-09-19 — question (2) resolved to a filed issue; row narrows to 2 of
+> 3 remaining controls (decomposition pass).** Re-verified in source: grepped
+> the whole `src/` tree for `<VoiceLibraryPanel` — exactly two call sites
+> exist, both in `src/views/cast.tsx` (~2279, ~2334), and **both** pass
+> `onTapAssign` unconditionally; no third (e.g. a global `/#/voices` page)
+> call site exists in current `main`. The drag-icon `else` branch in
+> `VoiceCard` (`src/components/voice-library-panel.tsx`) is therefore
+> unreachable from ANY current caller, not merely CSS-hidden below 768px on
+> top of being unreachable, which is a stronger form of the same finding.
+> Filed [#3268](https://github.com/dudarenok-maker/Castwright/issues/3268)
+> naming the decision per CLAUDE.md's incidental-findings protocol: remove
+> the dead branch, or justify keeping it for a not-yet-existing consumer.
+> **This row's remaining touch smoke-check targets are the 2 controls whose
+> validity isn't in question — the continue-listening play badge and the
+> "Add book" tile — pending #3268's decision on the drag icon.** If #3268
+> resolves to "remove," the drag icon drops out of this row's bullet list
+> entirely (there being no reachable control left to smoke-check); if it
+> resolves to "keep, justified," the drag icon returns as a genuine third
+> target and this row should re-widen to 3.
 
 ### E9 · `measure-attribution.mjs` against the real workspace ([#1984](https://github.com/dudarenok-maker/Castwright/issues/1984) Wave 1, [plan](../superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md)) · **real workspace, no GPU needed**
 
@@ -5862,15 +5977,42 @@ not the all-kana case this row is about):
    see `prose-units.ts`'s finding-3(a) retraction) — the margin at that
    real scale is the actual thing this row exists to confirm.
 
-*Needs:* a real, legally usable all-kana (no kanji) Japanese manuscript —
-no GPU, sidecar, or analyzer.
+*Needs:* a real, legally usable all-kana (no kanji) Japanese manuscript, at
+real book scale (thousands to tens of thousands of kana characters, not a
+few dozen poems) — no GPU, sidecar, or analyzer.
 *Cost:* one `detectManuscriptLanguageFromChapters` call plus recording the
 observed `R`/`digitTokenShare` numbers here.
-*Discharges when:* a real all-kana manuscript has been run through
-detection, the result and the observed `R` are recorded in this row (or a
-dedicated run sheet this row is updated to point at), and either the
+*Discharges when:* a real all-kana manuscript AT BOOK SCALE has been run
+through detection, the result and the observed `R` are recorded in this row
+(or a dedicated run sheet this row is updated to point at), and either the
 current trigram fix is confirmed sufficient at real scale or a follow-up
 issue is filed with the real numbers that show it isn't.
+
+> **2026-09-19 — NARROWED, not discharged (decomposition pass).** A real,
+> genuinely all-kana (no kanji) Japanese fixture is now in the tree —
+> `server/src/__fixtures__/hyakunin-isshu-1-50.ja.md`, the first 50 poems of
+> the Ogura Hyakunin Isshu (小倉百人一首, 13th century, public domain),
+> rendered in the standard all-hiragana karuta reading-card (読み札) form —
+> the conventional no-kanji transcription of this anthology, sourced from
+> Wikisource (ja.wikisource.org/wiki/小倉百人一首), not an invented one.
+> `detect-language.test.ts`'s new Group-H describe block runs the fixture
+> (split into 5 chapters of 10 poems each) through
+> `detectManuscriptLanguageFromChapters` and asserts
+> `{ language: 'ja', supported: true, fallback: false }`, asserts the sample
+> is genuinely kanji-free (no `一-鿿` characters at all — the entire
+> point of this row), and asserts `guiraudR` clears `LEXICAL_RICHNESS_FLOOR`.
+> Observed at real (if modest) scale: **1,572 combined kana characters**,
+> `guiraudR` ≈ **29.015** — comfortably above the floor of 3, current trigram
+> tokenizer holds. **This is real progress, not a discharge**: an initial
+> pass of this same PR discharged H1 outright, but a pr-review-gate pass
+> caught that 1,572 characters is far too small a sample to answer this
+> row's actual question — flipping `KANA_NGRAM_SIZE` from 3 to 2 makes the
+> pre-existing finding-3(b) test fail while this new test stays green,
+> meaning this sample doesn't lock in the same richness-decay regression
+> finding B4 already found insufficient at small scale. Corrected before
+> merge: H1 stays owed, narrowed rather than discharged. *Needs* is
+> unchanged: a genuinely full-length (not five-poem-chapter-scale) real
+> all-kana manuscript.
 
 ### H2 · Lexical-richness floor still clears on a FULL-LENGTH real Han (Chinese) book (#2256 round 4, finding B3)
 
@@ -5884,7 +6026,7 @@ saturates while `N` keeps growing, so R decays with book length.
 Round 3 recorded a direct measurement of "the corpus's 815k-char worst case
 → R≈4.4" as the justification for removing the cap. **Round 4 could not
 reproduce that number from anything in this repo, and it has been deleted
-rather than restated.** What this repo can actually reach:
+rather than restated.** What this repo could reach before 2026-09-19:
 
 - the two real Coalfall Commission translations (read-only,
   `C:\AudiobookWorkspace\books\Castwright\Standalones\{煤落的委托,
@@ -5896,8 +6038,8 @@ rather than restated.** What this repo can actually reach:
   thousands. A synthetic large-N fixture measures its own vocabulary, not
   the gate.
 
-So the largest real Han sample this repo can measure is ~4.4k characters,
-one to two orders of magnitude short of a book.
+See the 2026-09-19 note below for the real, larger sample this PR added —
+this section is kept as the pre-2026-09-19 baseline, not the current reach.
 
 **What to observe, once a full-length real Chinese manuscript is available:**
 
@@ -5912,6 +6054,11 @@ one to two orders of magnitude short of a book.
    `V` in `V / sqrt(N)` and it is the whole question: at N = 400,000, R
    clears the floor only if V is above ~1,900.
 
+Sourcing a genuine full-length PD Chinese manuscript is tracked as
+[#3270](https://github.com/dudarenok-maker/Castwright/issues/3270); see the
+2026-09-19 note below for the real (narrower) progress made against this row
+already.
+
 *Needs:* one real, legally usable full-length Chinese (Han) manuscript —
 no GPU, sidecar, or analyzer.
 *Cost:* one detection call plus recording three numbers here.
@@ -5920,6 +6067,33 @@ detection and its N, V and R are recorded in this row — either confirming
 the uncapped gate clears the floor at book scale, or showing it does not,
 in which case a follow-up issue owns re-introducing a length correction
 that is NOT a chapter-order-dependent prefix.
+
+> **2026-09-19 — NARROWED, not discharged (decomposition pass).** A larger
+> real Han fixture is now in the tree —
+> `server/src/__fixtures__/analects-xueer-zilu.zh.md`, 13 of the
+> Analects' (論語) 20 chapters (學而 through 子路), sourced verbatim from
+> Wikisource (zh.wikisource.org/wiki/論語), public domain (~5th century
+> BCE). `detect-language.test.ts`'s new Group-H describe block runs it
+> through `detectManuscriptLanguageFromChapters` and confirms
+> `{ language: 'zh', supported: true, fallback: false }`, with **9,948
+> combined Han characters, 1,096 distinct** — roughly **2.25x** this row's
+> prior largest real sample (the Coalfall Commission zh translation, 4,425
+> chars / 795 distinct / R=12.078). At this new scale, `guiraudR` measures
+> **~10.97** (raw joined sample; the pipeline's own dedupe runs internally
+> during detection, which is what the `fallback:false` result actually
+> certifies) — still comfortably above `LEXICAL_RICHNESS_FLOOR` (3). Note the
+> two samples being compared (R 12.078→10.97, V 795→1,096 at 4,425→9,948
+> chars) are a modern Chinese translation and a ~5th-century-BCE classical
+> text respectively — different genres with different vocabularies, not two
+> points on one book's growth curve, so this pair doesn't itself establish a
+> length-decay trend; it's cited only as the two largest real samples
+> reachable, not as evidence the decay is gentle.
+> **This is real progress, not a discharge: 9,948 characters is still one to
+> two orders of magnitude short of book scale** (the row's own N=400,000
+> concern, where V needs to clear ~1,900 distinct for R to hold). The
+> question this row exists to answer — does a real 100k+-character novel
+> keep V growing fast enough — remains open. *Needs* is unchanged: a
+> genuinely full-length (not classical-text-scale) real Han manuscript.
 
 ---
 

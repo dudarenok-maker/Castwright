@@ -2,9 +2,14 @@
    Script pre-pass is authoritative; franc disambiguates Latin; front-matter
    stripped before detecting; es/fr/de detected but not yet `supported`. */
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { detectManuscriptLanguage, detectManuscriptLanguageFromChapters, prepareSample } from './detect-language.js';
 import { getLanguageEntry } from './language-registry.js';
 import { countWords, FRONT_MATTER_WORD_THRESHOLD } from '../parsers/front-matter.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 import {
   countProseUnits,
   PROSE_UNIT_FLOOR,
@@ -1457,5 +1462,98 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
     const zhResult = detectManuscriptLanguageFromChapters([{ title: '第一章', body: zhVerse }]);
     expect(enResult.fallback).toBe(false);
     expect(zhResult.fallback).toBe(false);
+  });
+});
+
+/* Register rows H1 and H2 (docs/testing/onbox-acceptance-register.md, Group
+   H) — both NARROWED 2026-09-19, neither discharged. Both are real-manuscript
+   CJK richness fixtures, not the synthetic hand-authored samples finding
+   3(b)/C5 (H1) and finding B3 (H2) flagged as unproven.
+   H2 (zh): the Analects (論語), chapters 學而 through 子路 (13 of the work's
+   20 chapters), sourced verbatim from Wikisource (zh.wikisource.org/wiki/論語),
+   a public-domain classical Chinese text (~5th century BCE). Real, ~2.25x
+   the Han-character scale of this repo's prior largest real sample (the
+   Coalfall Commission zh translation, 4,425 Han chars / R=12.078 — see the
+   register row). NOT full novel scale (the register's own N=400,000 concern)
+   — narrows the row, does not discharge the book-scale question.
+   H1 (ja): the first 50 poems of the Ogura Hyakunin Isshu (小倉百人一首,
+   13th century), rendered in the standard all-hiragana karuta reading-card
+   (読み札) form — the conventional no-kanji transcription of this anthology,
+   not an invented one. Real, non-synthetic, genuinely all-kana (no kanji),
+   guiraudR ≈ 29.015. An initial pass of this same PR discharged H1 outright;
+   a pr-review-gate pass caught that 1,572 kana characters is too small a
+   sample to prove the richness gate holds at the real-book scale the row's
+   own title requires (the same "only separates at length" defect finding B4
+   already found — flipping this repo's KANA_NGRAM_SIZE from 3 to 2 makes the
+   pre-existing finding-3(b) test fail while this fixture's test stays green).
+   Corrected to narrowed before merge — see the register row's own history. */
+describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK fixtures (register row H1, narrowed; H2, narrowed)', () => {
+  const ZH_FIXTURE = join(__dirname, '..', '__fixtures__', 'analects-xueer-zilu.zh.md');
+  const JA_FIXTURE = join(__dirname, '..', '__fixtures__', 'hyakunin-isshu-1-50.ja.md');
+
+  /** Splits the Analects fixture's `## <title>` headings into {title, body}
+   *  chapters, mirroring how a real `##`-delimited manuscript import splits. */
+  function splitZhFixtureChapters(md: string): { title: string; body: string }[] {
+    return md
+      .split(/^## /m)
+      .slice(1)
+      .map((part) => {
+        const newline = part.indexOf('\n');
+        return { title: part.slice(0, newline).trim(), body: part.slice(newline + 1).trim() };
+      });
+  }
+
+  it('H2 — the real Analects fixture (13 chapters, 論語 學而–子路) detects as zh, supported, not a fallback guess', () => {
+    const md = readFileSync(ZH_FIXTURE, 'utf8');
+    const chapters = splitZhFixtureChapters(md);
+    // Fixture sanity: this is 13 real chapters, not the 6-or-fewer a
+    // trimmed-down copy would leave.
+    expect(chapters.length).toBe(13);
+    expect(chapters[0].title).toBe('學而第一');
+    expect(chapters.at(-1)!.title).toBe('子路第十三');
+
+    const result = detectManuscriptLanguageFromChapters(chapters);
+    expect(result).toEqual({ language: 'zh', supported: true, fallback: false });
+
+    // Record the real scale this fixture reaches, per the row's own ask:
+    // combined Han-character count and distinct-Han-character count (the N
+    // and V in Guiraud's R = V / sqrt(N)) at real, non-synthetic scale.
+    const joined = chapters.map((c) => c.body).join(' ');
+    const hanChars = joined.match(/[一-鿿]/g) ?? [];
+    // ~9,948 combined / ~1,096 distinct as measured when this test was
+    // written (2026-09-19) — roughly 2.25x the repo's prior largest real
+    // Han sample (4,425 chars / 795 distinct, R=12.078). Still one to two
+    // orders of magnitude short of book scale (N~400,000) — the row is
+    // narrowed by this test, not discharged.
+    expect(hanChars.length).toBeGreaterThan(9000);
+    expect(new Set(hanChars).size).toBeGreaterThan(1000);
+    expect(guiraudR(joined)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+  });
+
+  it('H1 — the real Hyakunin Isshu all-kana fixture (50 poems) detects as ja, supported, not a fallback guess', () => {
+    const md = readFileSync(JA_FIXTURE, 'utf8');
+    const poemLines = md.split('\n').filter((line) => /^\d+\. /.test(line));
+    // Fixture sanity: 50 real poems, not a truncated copy.
+    expect(poemLines.length).toBe(50);
+
+    // Split into 5 chapters of 10 poems each — mirrors a real book's
+    // chapter-level granularity rather than voting over one giant chapter.
+    const chapters = Array.from({ length: 5 }, (_, i) => ({
+      title: `Chapter ${i + 1}`,
+      body: poemLines.slice(i * 10, i * 10 + 10).join(' '),
+    }));
+
+    const result = detectManuscriptLanguageFromChapters(chapters);
+    expect(result).toEqual({ language: 'ja', supported: true, fallback: false });
+
+    // Fixture sanity: genuinely all-kana — no kanji (Han) characters at all,
+    // which is the entire point of this row (H1's finding was that the
+    // repo's only all-kana sample was a hand-authored synthetic fixture).
+    const joined = chapters.map((c) => c.body).join(' ');
+    expect(joined.match(/[一-鿿]/g)).toBeNull();
+    const kanaChars = joined.match(/[぀-ヿ]/g) ?? [];
+    // ~1,572 kana chars as measured when this test was written (2026-09-19).
+    expect(kanaChars.length).toBeGreaterThan(1500);
+    expect(guiraudR(joined)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
   });
 });

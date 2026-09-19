@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="28" data-publish-id="ce5e961eda2e"></div>
+  <div hidden data-published-as="29" data-publish-id="79d44168db98"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -215,7 +215,7 @@
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
       <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->9<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
-      <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
+      <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
   </table>
   </div>
@@ -1090,6 +1090,7 @@
         <p>The behavioural touch-flash is confirmed by construction but not by an automated test (jsdom cannot compile the variant); a one-time DevTools touch-emulation check is the spec's accepted proof.</p>
         <p>Four controls: continue-listening play badge, “Add book” tile, wizard “Review ›” chip, voice-library drag icon.</p>
         <div class="flag"><b>Wave-4 step 5d, 2026-08-21 — 1 of 4 DISCHARGED, shrinks.</b> The wizard "Review ›" chip is <b>DISCHARGED</b> via real synthesized touch (CDP <code>Input.dispatchTouchEvent</code>, <code>hasTouch:true</code>). The other three controls (continue-listening play badge, "Add book" tile, voice-library drag icon) are <b>STILL OWED</b> — this worktree's workspace has 0 books, a genuine environment limitation, not a missing control.</div>
+        <div class="flag"><b>2026-09-19 — narrows to 2 of 3 remaining controls.</b> Re-verified in source: the voice-library drag icon is structurally unreachable from any current caller (both real <code>&lt;VoiceLibraryPanel</code> call sites pass <code>onTapAssign</code> unconditionally). Filed <a href="https://github.com/dudarenok-maker/Castwright/issues/3268">#3268</a> naming the decision (remove the dead branch, or justify keeping it) per the incidental-findings protocol. This row's remaining touch smoke-check targets are the 2 controls not in question — continue-listening play badge and "Add book" tile — pending #3268's decision on the drag icon.</div>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/pull/1795">#1795</a></p>
       </div>
     </details>
@@ -1214,30 +1215,25 @@
   <section class="group is-soft" id="gh">
     <header>
       <h3 class="gtitle"><span class="gtag">H</span> No hardware — a real CJK manuscript this corpus lacks <span class="gcount">2 rows</span></h3>
-      <p class="setup">Not a hardware prerequisite at all: the blocker is a real-book fixture. <code>detectManuscriptLanguageFromChapters</code> is a pure function over chapter text — no GPU, no sidecar, no analyzer. Runnable on any machine the moment the right book exists.</p>
+      <p class="setup">Not a hardware prerequisite at all: the blocker is a real-book fixture. <code>detectManuscriptLanguageFromChapters</code> is a pure function over chapter text — no GPU, no sidecar, no analyzer. Runnable on any machine the moment the right book exists. Both rows NARROWED 2026-09-19, neither discharged — see the register's own changelog.</p>
     </header>
     <details class="item">
-      <summary><span class="num">H1</span><span class="iname">Kana trigram gate at real-book scale</span><span class="risk">Synthetic only</span><span class="chev">›</span></summary>
+      <summary><span class="num">H1</span><span class="iname">Kana-trigram richness gate holds at real-book scale for an all-kana (no kanji) Japanese manuscript (#2256 round 3, finding 3(b)/C5)</span><span class="risk">Narrowed 2026-09-19 — book scale still unconfirmed</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>The kana tokenizer (overlapping character <b>trigrams</b>, replacing per-character tokenization) is verified only against a hand-authored synthetic fixture — 30 distinct hiragana base words composed into 1,500 sentences — <b>not a genuine all-kana book</b>. The fix closes the specific real failure #2256 reported (a real book at N≈4,843 characters measured R = 1.72 under the old scheme, and was refused), but this repo cannot reproduce that book to re-measure it.</p>
-        <p class="flag">Round 3 additionally found the richness gate is <b>close to inert for kana</b> beyond what <code>dedupeProseUnits</code> already catches. That is recorded honestly in <code>prose-units.ts</code> rather than implied away — which is part of why this row exists.</p>
-        <p><b>What to observe</b>, once a real all-kana manuscript is available (a children's or early-reader text with no kanji — note this repo's two real Coalfall translations are <i>mixed</i> kanji+kana, not this case):</p>
-        <ul>
-          <li>Detection returns <code>{ language: 'ja', supported: true, fallback: false }</code>.</li>
-          <li><code>guiraudR</code> on the deduped winning sample, recorded as a real number against the floor of 3 — not the 30-word fixture's.</li>
-          <li>The combined character count the gate actually saw (no cap applies since round 3).</li>
-        </ul>
-        <p class="src">A real, legally usable all-kana Japanese manuscript. No GPU, sidecar or analyzer · <a href="https://github.com/dudarenok-maker/Castwright/issues/2256">#2256</a> round 3, finding C5</p>
+        <p><code>server/src/tts/prose-units.ts</code>'s kana tokenizer (overlapping character trigrams, replacing per-character tokenization) is verified only against a hand-authored synthetic all-kana fixture — 30 distinct hiragana base words composed into 1,500 sentences, <code>detect-language.test.ts</code>'s <code>finding 3(b)</code> fixture — not a genuine all-kana book. The fix closes the specific real failure the original #2256 finding reported (a real book at N ≈ 4,843 characters, old per-character scheme measured R = 1.72, refused) using that number as an anchor, but this repo cannot reproduce the exact book to re-measure it directly, and the synthetic fixture's margin is known to be vocabulary-dependent and thinner than Han-based CJK's.</p>
+        <p>What to observe, once a real all-kana Japanese manuscript is available (a children's book or early-reader text with no kanji at all is the realistic shape): run its chapters through <code>detectManuscriptLanguageFromChapters</code>, record the result, separately call <code>guiraudR</code> on the same deduped winning sample against <code>LEXICAL_RICHNESS_FLOOR</code> (3), and note the total combined character count the gate actually saw — the margin at real scale is the thing this row exists to confirm.</p>
+        <p class="flag"><b>NARROWED 2026-09-19, not discharged.</b> A real, genuinely all-kana fixture is now in the tree — the first 50 poems of the Ogura Hyakunin Isshu (小倉百人一首, 13th century, public domain), sourced from Wikisource, rendered in the standard all-hiragana karuta reading-card form. Detection confirms <code>{ language: 'ja', supported: true, fallback: false }</code>, the sample is genuinely kanji-free, and <code>guiraudR</code> measures <b>≈ 29.015</b> at <b>1,572 combined kana characters</b> — comfortably above the floor of 3. <b>An initial pass of this same PR discharged H1 outright; a pr-review-gate pass caught that 1,572 characters is too small a sample to answer this row's real question</b> — flipping <code>KANA_NGRAM_SIZE</code> from 3 to 2 makes the pre-existing finding-3(b) test fail while this new test stays green, meaning the sample doesn't lock in the same richness-decay regression finding B4 already found insufficient at small scale. Corrected before merge: this row stays owed, narrowed rather than discharged.</p>
+        <p class="src">A real, legally usable all-kana Japanese manuscript at real book scale (thousands to tens of thousands of kana characters, not a few dozen poems). No GPU, sidecar or analyzer · <a href="https://github.com/dudarenok-maker/Castwright/issues/2256">#2256</a> round 3, finding 3(b)/C5</p>
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">H2</span><span class="iname">Richness floor on a full-length real Han book</span><span class="risk">Claim retracted</span><span class="chev">›</span></summary>
+      <summary><span class="num">H2</span><span class="iname">Richness floor on a full-length real Han book</span><span class="risk">Narrowed 2026-09-19 — book scale still unconfirmed</span><span class="chev">›</span></summary>
       <div class="body">
         <p><code>voteLanguage</code> measures both gates over the whole joined sample with <b>no length cap</b>. Round 2 added one; round 3 removed it because the cap made the verdict chapter-<i>order</i>-dependent. Removing it is right for that reason — which is measured. What is <b>not</b> measured is the thing the cap was added for: Guiraud's R is <code>V / √N</code>, and V saturates while N keeps growing, so R decays with book length.</p>
         <p class="flag">Round 3 justified the removal with "the corpus's 815k-char worst case → R ≈ 4.4". <b>Round 4 could not reproduce that number from anything in this repo, and it was deleted rather than restated.</b> This row is what replaces it.</p>
-        <p>What this repo can actually reach: the two real Coalfall translations measure R = <b>12.078</b> (zh, 4,425 Han characters, 795 distinct) and <b>27.302</b> (ja mixed). There is no synthetic substitute — a 30-word-pool zh narrative at 21,711 characters measures R = <b>1.581</b> and is <i>refused</i>, because a hand-authored pool reaches ~250 distinct Han characters where real Chinese prose reaches thousands. A synthetic large-N fixture measures its own vocabulary, not the gate.</p>
-        <p>So the largest real Han sample measurable here is ~4.4k characters — one to two orders of magnitude short of a book.</p>
-        <p><b>What to observe:</b> import a full-length real Chinese manuscript, confirm <code>{ language: 'zh', supported: true, fallback: false }</code>, and record the joined sample's combined character count alongside the observed <code>guiraudR</code> against the floor of 3. Vocabulary growth is the thing being checked: at chapter scale V still outruns √N, so R <i>rises</i> — the exposure is only in the saturation regime.</p>
+        <p>What this repo could reach before 2026-09-19: the two real Coalfall translations measure R = <b>12.078</b> (zh, 4,425 Han characters, 795 distinct) and <b>27.302</b> (ja mixed). There is no synthetic substitute — a 30-word-pool zh narrative at 21,711 characters measures R = <b>1.581</b> and is <i>refused</i>, because a hand-authored pool reaches ~250 distinct Han characters where real Chinese prose reaches thousands. A synthetic large-N fixture measures its own vocabulary, not the gate.</p>
+        <p class="flag"><b>NARROWED 2026-09-19, not discharged.</b> A larger real fixture now in the tree — 13 chapters of the Analects (論語), sourced verbatim from Wikisource, public domain — measures <b>9,948 combined Han characters, 1,096 distinct, R ≈ 10.97</b>, roughly 2.25× the prior largest real sample. Detection confirms <code>{ language: 'zh', supported: true, fallback: false }</code> at this scale. Note the two samples compared (R 12.078→10.97, V 795→1,096 at 4,425→9,948 chars) are a modern translation and a ~5th-century-BCE classical text respectively — different genres, not two points on one book's growth curve — so this pair is cited only as the two largest real samples reachable, not as evidence of a length-decay trend. Still one to two orders of magnitude short of book scale (N ~400,000) — the vocabulary-growth question this row exists to answer remains open.</p>
+        <p><b>What to observe, once a genuinely full-length (100k+ character) real Chinese manuscript is available:</b> import it, confirm <code>{ language: 'zh', supported: true, fallback: false }</code>, and record the joined sample's combined character count alongside the observed <code>guiraudR</code> against the floor of 3. Vocabulary growth is the thing being checked: at chapter scale V still outruns √N, so R <i>rises</i> — the exposure is only in the saturation regime.</p>
         <p class="src">A full-length real Chinese book. No GPU, sidecar or analyzer · <a href="https://github.com/dudarenok-maker/Castwright/issues/2256">#2256</a> round 4, finding B3</p>
       </div>
     </details>
