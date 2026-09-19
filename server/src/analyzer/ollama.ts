@@ -64,19 +64,12 @@ import {
   type EscalationOutput,
   type NonStoryClassificationOutput,
 } from '../handoff/schemas.js';
-import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
+import type { Analyzer, StageCall, StageChunkInfo } from './types.js';
 import type { RawEvalTiming } from './analyzer-eval-stats.js';
 import { AnalyzerTruncatedError, AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError } from './errors.js';
 export { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
-import {
-  buildSystemInstruction,
-  parseAndValidate,
-  buildRetryMessage,
-  summariseDetail,
-  persistResponse,
-  loadSkill,
-  type SkillName,
-} from './gemini.js';
+import { parseAndValidate, buildRetryMessage, summariseDetail, persistResponse } from './runner/parse.js';
+import { loadSkill, buildSystemInstruction, type SkillName } from './runner/prompt.js';
 
 if (process.env.VITEST !== 'true' && process.env.NODE_ENV !== 'test') {
   console.log(describeAnalyzerConcurrency());

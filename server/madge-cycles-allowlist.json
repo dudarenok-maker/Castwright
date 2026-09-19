@@ -1,7 +1,4 @@
 [
-  ["analyzer/index.ts", "analyzer/gemini.ts"],
-  ["analyzer/gemini.ts", "analyzer/ollama.ts"],
-  ["analyzer/index.ts", "analyzer/gemini.ts", "analyzer/ollama.ts"],
   ["tts/index.ts", "tts/gemini.ts"],
   ["tts/voice-mapping.ts", "tts/index.ts", "tts/gemini.ts"],
   ["tts/index.ts", "tts/sidecar.ts"],
