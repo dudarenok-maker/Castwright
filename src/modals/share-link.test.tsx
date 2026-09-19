@@ -118,6 +118,34 @@ describe('share-link modal', () => {
     expect(clearTimeoutSpy).toHaveBeenCalledWith(resetTimeoutId);
   });
 
+  it('also clears the copy-state-reset timeout on unmount after a failed copy', async () => {
+    /* The failure branch arms the same ref via its own setTimeout(..., 1500)
+       call site — the success-path test above doesn't exercise it. */
+    writeText.mockImplementation(() => Promise.reject(new Error('permission denied')));
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const { unmount } = render(
+      <ShareLinkModal
+        open={true}
+        url="https://example.test/share/ABCDEFGHJKMN"
+        onClose={() => {}}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId('share-link-copy'));
+    await waitFor(() => {
+      expect(screen.getByTestId('share-link-copy').textContent).toMatch(/Copy failed/i);
+    });
+
+    const resetCallIndex = setTimeoutSpy.mock.calls.findIndex((call) => call[1] === 1500);
+    expect(resetCallIndex).toBeGreaterThanOrEqual(0);
+    const resetTimeoutId = setTimeoutSpy.mock.results[resetCallIndex]?.value;
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(resetTimeoutId);
+  });
+
   it('Escape closes the modal', () => {
     const onClose = vi.fn();
     render(
