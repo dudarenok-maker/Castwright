@@ -11,14 +11,21 @@ reported.
 #2930/#3012 then proved that path structurally reads 0 for a
 CTranslate2-backed forward — so #3036/#3265 moved `asr.warm` onto a THIRD
 technique: an NVML own-process delta (`_own_process_used_mb` read
-before/after a resident forward). This module covers the COLD `asr`
-device-wide delta AND the WARM `asr.warm` own-process delta — see
-`test_asr_warm_measurement_uses_the_nvml_own_process_delta` for the warm path.
+before/after a resident forward). #3265's on-box run then proved THAT dead
+on this box (WDDM reports `usedGpuMemory=None` for our own PID, so every warm
+sample was discarded) — and #3266 brought `asr.warm` BACK to the device-wide
+delta, this time behind the full cold-path guard set (foreign-PID
+attribution + concurrent-reservation ledger), which #2094's original warm
+attempt lacked. This module covers the COLD `asr` device-wide delta AND the
+WARM `asr.warm` device-wide delta — see
+`test_asr_warm_measurement_uses_the_device_free_delta` for the warm path.
 
 These drive `reservation()` end-to-end for `engine="asr"` with
-`PlacementController._device_free_mb` (cold) or `_load_pynvml` (warm)
-monkeypatched to a scripted before/after sequence — no real CUDA needed —
-and assert on what reaches `footprints.record()`."""
+`PlacementController._device_free_mb` (cold and warm, #3266) or
+`_load_pynvml` (the foreign-PID guard, and the retired-but-still-tested
+`_own_process_used_mb` unit contract below) monkeypatched to a scripted
+before/after sequence — no real CUDA needed — and assert on what reaches
+`footprints.record()`."""
 from __future__ import annotations
 
 import asyncio
@@ -102,8 +109,8 @@ def _patch_free_mb(monkeypatch, sequence: list[Optional[int]]) -> None:
 class _FakeProc:
     """`used_mb` (#3036/#3265) mirrors the real struct's second documented
     field, `usedGpuMemory` — BYTES in the real driver, None when the driver
-    declines to report per-process usage (a documented Windows/WDDM case the
-    warm tests need to script). Pre-#3036 tests never read it."""
+    declined to report per-process usage (a documented Windows/WDDM case).
+    Pre-#3036 tests never read it."""
 
     def __init__(self, pid: int, used_mb: Optional[int] = None) -> None:
         self.pid = pid
@@ -116,10 +123,11 @@ class _FakePynvml:
     `_own_process_used_mb`'s real bodies (index parsing, handle lookup,
     process-list comparison, shutdown) run end-to-end without a real
     NVML/driver present. `memories` (#3036) is a pid->used-MB map applied to
-    every returned entry; `memory_sequence` scripts ONE used-MB value per
-    call — the before/after pair a warm `reservation()` takes — and once the
-    script is exhausted the OWN pid vanishes from the list entirely (the
-    WDDM half-measurement edge case)."""
+    every returned entry; `memory_sequence` (#3036/#3265) scripted ONE
+    used-MB value per call for child 1's warm own-process before/after pair —
+    #3266 moved the warm path back to `_device_free_mb`, so no test drives it
+    any more; it stays so the fake keeps the shape the #3265-era tests
+    exercised."""
 
     def __init__(
         self,
@@ -212,38 +220,42 @@ def test_asr_reservation_discards_when_another_engine_holds_the_device(monkeypat
     assert fp.records == [("asr", None, {}, 0, False)]
 
 
-def test_asr_warm_measurement_uses_the_nvml_own_process_delta(monkeypatch) -> None:
-    """RESIDENT ASR (warm) — #3036/#3265: `asr.warm` measures neither the
+def test_asr_warm_measurement_uses_the_device_free_delta(monkeypatch) -> None:
+    """RESIDENT ASR (warm) — #3266: `asr.warm` measures neither the
     torch-allocator peak (#2930/#3012: a CTranslate2 forward reads
-    structurally 0 there) nor the device-wide free-memory delta (#2682:
-    indistinguishable from card noise). `reservation()` now pairs two
-    `_own_process_used_mb` NVML OWN-PROCESS readings — the before-reading
-    taken in `_resolve_admission` alongside the residency snapshot, the
-    after-reading in the `finally` before the hold releases — and records
-    their delta: 2048 MB -> 2148 MB records 100. `_device_free_mb` stays
-    cold-path-only.
+    structurally 0 there) nor child 1's NVML own-process delta (#3265: WDDM
+    reports `usedGpuMemory=None` for our own PID on this box, so every sample
+    was discarded). `reservation()` now pairs two `_device_free_mb`
+    device-wide readings — the before-reading taken in `_resolve_admission`
+    alongside the residency snapshot, the after-reading in the `finally`
+    before the hold releases — and records their delta: free 2048 MB -> 1948
+    MB records 100. `_own_process_used_mb` must NOT be called from this path
+    any more; it is stubbed to raise so a regression to child 1's technique
+    fails loudly rather than silently reading None.
 
-    Mutation that must fail it — delete the `elif engine == "asr" and
-    resident:` branch from `reservation()`'s three-way `observed_mb` choice
-    (the pre-#3036 fall-through to `self._observed_mb(device_key)` for the
-    warm case). The stubbed 77 would then be recorded, not the NVML 100.
+    Mutation that must fail it — revert this branch to child 1's NVML
+    own-process pairing (`warm_after_mb - warm_before_mb` from
+    `_own_process_used_mb`). The stubbed method raises AssertionError and the
+    test fails before the delta is even compared.
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
 
     def fail_if_called(device_key):
-        raise AssertionError("_device_free_mb must not be called for a resident ASR forward")
+        raise AssertionError(
+            "_own_process_used_mb must not be called for a resident ASR forward (#3266)"
+        )
 
-    monkeypatch.setattr(main.PlacementController, "_device_free_mb", staticmethod(fail_if_called))
+    monkeypatch.setattr(
+        main.PlacementController, "_own_process_used_mb", staticmethod(fail_if_called)
+    )
     # Stubbed (rather than relying on the no-CUDA-in-CI 0 every other test in
-    # this module uses) so this test can tell "the NVML delta was recorded"
-    # apart from "fell through to the torch-allocator path" — the latter
-    # reads 77 here, the former 100.
+    # this module uses) so this test can tell "the device-wide delta was
+    # recorded" apart from "fell through to the torch-allocator path" — the
+    # latter reads 77 here, the former 100.
     monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
-    # ONE fake instance: `_load_pynvml` is called by both the before- and the
-    # after-reading, and the scripted sequence lives on the instance.
-    fake = _FakePynvml([os.getpid()], memory_sequence=[2048, 2148])
-    monkeypatch.setattr(main, "_load_pynvml", lambda: fake)
+    # before=2048 free, after=1948 free -> the forward took 100 MB.
+    _patch_free_mb(monkeypatch, [2048, 1948])
 
     async def body():
         async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=False):
@@ -257,22 +269,20 @@ def test_asr_warm_measurement_uses_the_nvml_own_process_delta(monkeypatch) -> No
 
 def test_asr_warm_reservation_discards_when_the_after_reading_fails(monkeypatch) -> None:
     """Half a measurement is no measurement: the before-reading succeeds
-    (2048 MB) but the after-reading's process list no longer contains our
-    own PID at all — the WDDM edge case #3265 documents — so the sample is
-    discarded (recorded 0, `record()`'s `<= 0` guard drops it) rather than
-    trusted against a delta computed from nothing.
+    (2048 MB free) but the after-reading returns None (`_device_free_mb`
+    swallows any pynvml error into None, mirroring the cold path's contract)
+    — the sample is discarded (recorded 0, `record()`'s `<= 0` guard drops
+    it) rather than trusted against a delta computed from nothing.
 
-    Mutation that must fail it — delete the `if warm_after_mb is not None`
-    guard in `reservation()`'s warm block: the arithmetic on `None` raises
-    inside the `finally` of every resident ASR op, breaking the
-    never-crash contract (this test fails with that TypeError — which is
-    precisely the point).
+    Mutation that must fail it — delete the `warm_after_mb is not None`
+    clause from the guard: the arithmetic on `None` raises inside the
+    `finally` of every resident ASR op, breaking the never-crash contract
+    (this test fails with that TypeError — which is precisely the point).
     """
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
     monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
-    fake = _FakePynvml([os.getpid()], memory_sequence=[2048])
-    monkeypatch.setattr(main, "_load_pynvml", lambda: fake)
+    _patch_free_mb(monkeypatch, [2048, None])  # after-reading fails
 
     async def body():
         async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=False):
@@ -284,15 +294,101 @@ def test_asr_warm_reservation_discards_when_the_after_reading_fails(monkeypatch)
     assert fp.records == [("asr", None, {}, 0, True)]
 
 
-def test_asr_warm_reservation_does_not_double_guard_non_positive_deltas(monkeypatch) -> None:
-    """#3265: a non-positive delta is the job of `record()`'s existing
-    `observed_mb <= 0` guard — `reservation()` must NOT invent a second one.
-    A negative raw delta (2148 -> 2048, e.g. unrelated own-process
-    allocations freed between the readings) reaches `record()` verbatim,
-    where the single owner of that rule drops it (the real table's dropping
-    is asserted in test_footprints.py).
+def test_asr_warm_reservation_discards_when_a_foreign_pid_is_present(monkeypatch) -> None:
+    """#3266's whole theory is that the device-wide warm delta (#2094,
+    abandoned by #2682) failed from CONTAMINATION, not driver noise — so the
+    guard that was missing back then must now be live: NVML reports a foreign
+    PID on the device and a genuine 100 MB delta is discarded. This is the
+    cold path's `test_asr_cold_reservation_discards_when_a_foreign_pid_is_
+    present` mirrored onto the warm branch.
 
-    Mutation that must fail it — add a `warm_after_mb > warm_before_mb`
+    Mutation that must fail it — drop the `not foreign_before and not
+    warm_foreign_after` clauses from the warm guard: the 100 MB delta would
+    then be recorded despite the foreign PID, reproducing the contamination
+    shape #3266 hypothesises as what killed #2094's first attempt.
+    """
+    devices = [dev(total=16000, free=16000)]
+    pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    _patch_free_mb(monkeypatch, [2048, 1948])  # a real 100 MB delta
+    fake = _FakePynvml([os.getpid(), os.getpid() + 999])  # a foreign PID
+    monkeypatch.setattr(main, "_load_pynvml", lambda: fake)  # later setattr wins
+
+    async def body():
+        async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=False):
+            pass
+        return _RAN
+
+    run_case(body())
+
+    assert fp.records == [("asr", None, {}, 0, True)]
+
+
+def test_asr_warm_reservation_discards_when_nvml_is_unavailable(monkeypatch) -> None:
+    """Fail-conservative, warm mirror of the cold
+    `test_asr_cold_reservation_discards_when_nvml_is_unavailable`: with no
+    NVML the delta is unattributable, and on a device-wide reading that is
+    precisely #2682's noise shape — so it must be dropped, not trusted. This
+    is the guard #2094's first attempt lacked.
+
+    Mutation that must fail it — loosen either foreign comparison to
+    `is True` (treating None — "couldn't determine" — as trustworthy): the
+    100 MB delta would then be recorded despite NVML being unavailable.
+    """
+    devices = [dev(total=16000, free=16000)]
+    pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    _patch_free_mb(monkeypatch, [2048, 1948])  # a real 100 MB delta
+    monkeypatch.setattr(main, "_load_pynvml", lambda: None)  # NVML unavailable
+
+    async def body():
+        async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=False):
+            pass
+        return _RAN
+
+    run_case(body())
+
+    assert fp.records == [("asr", None, {}, 0, True)]
+
+
+def test_asr_warm_reservation_discards_when_another_engine_holds_the_device(monkeypatch) -> None:
+    """Warm mirror of the ledger guard
+    (`test_asr_reservation_discards_when_another_engine_holds_the_device`):
+    a concurrent Coqui reservation on the same card during the forward's
+    window contaminates a device-wide delta, so `asr.warm` must check
+    `engines_holding` exactly like the cold path does.
+
+    Mutation that must fail it — drop the `not warm_other_engines` clause:
+    the 100 MB delta (really Coqui's render) would be recorded as warm ASR.
+    """
+    devices = [dev(total=16000, free=16000)]
+    pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    _patch_free_mb(monkeypatch, [2048, 1948])  # a real 100 MB delta
+
+    async def body():
+        coqui_token = pc.ledger.hold(devices[0]["kind"] + ":0", 3000, "coqui")
+        try:
+            async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=False):
+                pass
+        finally:
+            pc.ledger.release(coqui_token)
+        return _RAN
+
+    run_case(body())
+
+    assert fp.records == [("asr", None, {}, 0, True)]
+
+
+def test_asr_warm_reservation_does_not_double_guard_non_positive_deltas(monkeypatch) -> None:
+    """#3265/#3266: a non-positive delta is the job of `record()`'s existing
+    `observed_mb <= 0` guard — `reservation()` must NOT invent a second one.
+    A negative raw delta (free 1948 -> 2048, memory FREED during the forward
+    — e.g. allocator-cache eviction on a device-wide reading) reaches
+    `record()` verbatim, where the single owner of that rule drops it (the
+    real table's dropping is asserted in test_footprints.py).
+
+    Mutation that must fail it — add a `warm_after_mb < warm_before_mb`
     guard to `reservation()`'s warm block: `record()` would see 0 via the
     `or 0` instead of -100, silently duplicating the drop rule in a place
     where it can drift from `record()`'s.
@@ -300,8 +396,7 @@ def test_asr_warm_reservation_does_not_double_guard_non_positive_deltas(monkeypa
     devices = [dev(total=16000, free=16000)]
     pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
     monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
-    fake = _FakePynvml([os.getpid()], memory_sequence=[2148, 2048])
-    monkeypatch.setattr(main, "_load_pynvml", lambda: fake)
+    _patch_free_mb(monkeypatch, [1948, 2048])  # free went UP: raw delta -100
 
     async def body():
         async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=False):
@@ -569,11 +664,14 @@ def test_asr_cold_reservation_discards_when_nvml_is_unavailable(monkeypatch) -> 
 
 
 # ---------------------------------------------------------------------------
-# #3036/#3265 — direct tests of `_own_process_used_mb`'s None contract (the
-# warm before/after producer). Every failure mode MUST yield None, never 0:
-# `record()`'s `<= 0` guard cannot tell "own process holds nothing" from
-# "could not measure" if failures also read 0 — the same reasoning as
-# `_device_free_mb`'s None contract.
+# #3036/#3265 — direct tests of `_own_process_used_mb`'s None contract.
+# #3266 retired the method from the warm before/after producer role (WDDM
+# reports no own-PID memory on this box — see
+# docs/testing/onbox-3036-results/step-1-nvml.md), but kept it, tested and
+# working, deliberately: deleting it is a separate human decision. Every
+# failure mode MUST yield None, never 0: `record()`'s `<= 0` guard cannot
+# tell "own process holds nothing" from "could not measure" if failures also
+# read 0 — the same reasoning as `_device_free_mb`'s None contract.
 # ---------------------------------------------------------------------------
 
 
