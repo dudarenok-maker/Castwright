@@ -82,6 +82,13 @@ updates:
         applies-to: security-updates
         patterns:
           - '*'
+    # Held back — see the root entry's comment above for the mechanism this
+    # mirrors. Without this, the weekly server-npm sweep re-proposes typescript
+    # 7.x, reddens the four guard tests that walk the classic Compiler API
+    # directly (#3277), and blocks the rest of the group's bumps behind it
+    # every week. Remove once #3277 closes.
+    ignore:
+      - dependency-name: 'typescript' # #3277 — TS7 drops the classic Compiler API our guard tests use
 
   - package-ecosystem: 'github-actions'
     directories:

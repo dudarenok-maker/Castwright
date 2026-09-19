@@ -127,6 +127,13 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
+    /* Vitest 5 flipped this default false -> true (restores every mock's
+       calls/results, but NOT its implementation, before each test AND each
+       retry). Audited: no `not.toHaveBeenCalled` assertion in this suite
+       relies on call history surviving into a later test — pinned to the
+       pre-5 behavior anyway, so a future vitest bump can't silently start
+       clearing state a test happens to depend on. */
+    clearMocks: false,
     /* Redirect user-settings to a temp file before any module loads (plan
        122) so suites never touch the real ~/.audiobook-generator file. */
     setupFiles: ['src/test-setup.ts'],
