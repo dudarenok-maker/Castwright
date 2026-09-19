@@ -6026,7 +6026,7 @@ saturates while `N` keeps growing, so R decays with book length.
 Round 3 recorded a direct measurement of "the corpus's 815k-char worst case
 → R≈4.4" as the justification for removing the cap. **Round 4 could not
 reproduce that number from anything in this repo, and it has been deleted
-rather than restated.** What this repo can actually reach:
+rather than restated.** What this repo could reach before 2026-09-19:
 
 - the two real Coalfall Commission translations (read-only,
   `C:\AudiobookWorkspace\books\Castwright\Standalones\{煤落的委托,
@@ -6038,8 +6038,8 @@ rather than restated.** What this repo can actually reach:
   thousands. A synthetic large-N fixture measures its own vocabulary, not
   the gate.
 
-So the largest real Han sample this repo can measure is ~4.4k characters,
-one to two orders of magnitude short of a book.
+See the 2026-09-19 note below for the real, larger sample this PR added —
+this section is kept as the pre-2026-09-19 baseline, not the current reach.
 
 **What to observe, once a full-length real Chinese manuscript is available:**
 
