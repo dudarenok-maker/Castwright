@@ -784,7 +784,7 @@ Run this before declaring any non-trivial task "done." Skipping a step is fine w
 
    When adding a row, say what to observe (concretely, not "verify it works"), the hardware prerequisites, and where the criteria live. A row **comes out** only when (a) the acceptance was run on the box and the result recorded, or (b) the repo owner explicitly confirms it was exercised on a live book or books; either way record what was observed, by whom, and when — an outcome, not a deletion. "Tests pass, so it's presumably fine" never removes a row.
 
-   `npm run check:onbox-register` (`.github/workflows/onbox-register-check.yml`, ops-43) validates the register's internal structure — row ID uniqueness across the whole document, each group's `next-id` marker sitting at or above its group's allocation floor (the floor gates the next id a group may mint, never the ids already in use) and every row ID in the group sitting strictly below that same marker, and glance-table group counts vs. their corresponding body row counts — on every PR touching the file. `npm run register:build` generates and verifies the summary strip figures (owed total, per-group glance-table row). Together they catch structural drift (rows added/removed/miscounted) but neither can verify the published artifact itself — that is procedure, not mechanical gate.
+   `npm run check:onbox-register` (a step in `verify.yml`'s `lint-and-checks` job, ops-43) validates the register's internal structure — row ID uniqueness across the whole document, each group's `next-id` marker sitting at or above its group's allocation floor (the floor gates the next id a group may mint, never the ids already in use) and every row ID in the group sitting strictly below that same marker, and glance-table group counts vs. their corresponding body row counts — on every PR touching the file. `npm run register:build` generates and verifies the summary strip figures (owed total, per-group glance-table row). Together they catch structural drift (rows added/removed/miscounted) but neither can verify the published artifact itself — that is procedure, not mechanical gate.
 4. **Update `docs/features/INDEX.md`** if the plan is new or moved (new entry under its area, or move to `## Shipped (archive)` per `archive/README.md` when shipping a plan).
 5. **Update the two release-notes documents, in this PR.** Append an entry to `docs/release-notes-next.md` (technical register, PR-refed) AND a matching user-facing, brand-voice line to the in-progress version section at the top of `RELEASE_NOTES.md`. Land both PR-by-PR, not reconstructed from git history at cut time — that's the whole point of this step. The first-PR-after-a-cut bootstrap case (resetting both files) is documented once, in [CONTRIBUTING.md "Release notes"](CONTRIBUTING.md#release-notes) — check there, don't re-derive it. Skip only when the change has no shippable delta (pure docs/process, CI-only, internal chore with no user- or operator-visible effect) — say so explicitly rather than silently omitting.
 6. **Close or advance the linked issue.** Put `Closes #NN` in the PR body for a full delivery (`Refs #NN` for a partial), and confirm the issue's `area:`/`moscow:` labels still reflect reality. Bugs link their `bug` issue with `Closes #NN` too. This link is verified, not assumed — if none exists at PR-creation time, one is auto-filed and linked without pausing to ask, including for bug-shaped work (a deliberate, scoped override of "The backlog" section's general "the user files [bugs] as they hit them" convention, for this gate only — see [PR review → issue verification](.claude/skills/pr-review-gate/SKILL.md#issue-verification-at-pr-creation)); `.github/workflows/pr-issue-link.yml` mechanically backstops the check on every PR, and (since 2026-07-06) a missing link blocks merge outright via `main`'s required-status-check ruleset — see `docs/features/235-model-routing-review-gates.md`.
@@ -1302,6 +1302,24 @@ Working practice below; this holds even under contention).
 **Verify where a dispatched agent actually wrote**
 ([#3044](https://github.com/dudarenok-maker/Castwright/issues/3044)):
 
+- **Option 2 (prevention) now exists as an additional layer, NOT a
+  replacement for option 1:** `scripts/hooks/guard-worktree-write.mjs`, wired
+  as a `hooks:` frontmatter `PreToolUse` guard on `.claude/agents/fix-agent.md`,
+  denies a dispatched fix-agent's `Write`/`Edit`/`NotebookEdit` call whose
+  target path resolves outside its assigned worktree, and denies a
+  `Bash`/`PowerShell` call whose command text contains a foreign checkout
+  root's absolute path (in any of its common spellings — native backslash,
+  forward-slash, Git Bash's `/c/...`, WSL's `/mnt/c/...`). The shell-command
+  check is COARSE by design — a path referenced indirectly (a shell variable,
+  a relative path resolved elsewhere, a runtime-assembled string) is not
+  caught. **Known gap, tracked in
+  [#3263](https://github.com/dudarenok-maker/Castwright/issues/3263):** the
+  guard defines "assigned worktree" as the PreToolUse payload's `cwd`, which
+  is not independently verified — in exactly the "Do not rely on the brief"
+  shape two bullets below (a correctly-named worktree, but the agent's
+  process actually running with `cwd` pointed at the wrong root), the guard
+  protects the wrong root and denies the right one. **Option 1 below is the
+  mandatory backstop, not an optional one**, until #3263 closes.
 - **Capture the primary checkout's `git status --porcelain` before a dispatch
   round and again after each agent returns.** Any entry that is not yours is a
   **failed dispatch** — revert it and re-dispatch; do not adopt it. This is the

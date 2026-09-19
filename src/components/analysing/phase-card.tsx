@@ -389,6 +389,10 @@ interface PhaseCardProps {
   isPhaseDone?: boolean;
   isPhasePaused?: boolean;
   isPhaseHalted?: boolean;
+  /** True for a halt whose `haltCode` is a not-a-failure code
+      (cast_incomplete, stage1_shrink_refused) — renders the neutral
+      "needs action" treatment instead of the rose halted badge (#3203). */
+  isPhaseNeedsAction?: boolean;
   phaseProgress: number;
   phaseLogs: string[];
   live: AnalysisLiveInfo | null;
@@ -425,6 +429,7 @@ export function PhaseCard({
   isPhaseDone,
   isPhasePaused,
   isPhaseHalted,
+  isPhaseNeedsAction,
   phaseProgress,
   phaseLogs,
   live,
@@ -443,6 +448,7 @@ export function PhaseCard({
   const isDone = isPhaseDone ?? activePhaseId > p.id;
   const isPaused = isPhasePaused ?? false;
   const isHalted = isPhaseHalted ?? false;
+  const isNeedsAction = isPhaseNeedsAction ?? false;
   const throttleActive = throttle && throttle.until > Date.now();
   /* The "warms up after ch. N" handoff only happens when the two-model split
      is engaged — then Phase 1 dispatches `minLag` chapters behind Phase 0
@@ -456,13 +462,15 @@ export function PhaseCard({
     ? 'done'
     : isPaused
       ? 'paused'
-      : isHalted
-        ? 'halted'
-        : isActive
-          ? 'streaming'
-          : p.id === 1 && activePhaseId === 0 && splitActive
-            ? 'warming'
-            : 'pending';
+      : isNeedsAction
+        ? 'needs-action'
+        : isHalted
+          ? 'halted'
+          : isActive
+            ? 'streaming'
+            : p.id === 1 && activePhaseId === 0 && splitActive
+              ? 'warming'
+              : 'pending';
   const hasModelControls = p.id === 0 || p.id === 1;
   return (
     <div className="px-6 py-4 flex items-start gap-4">
@@ -477,24 +485,29 @@ export function PhaseCard({
             <IconClock className="w-4 h-4 text-ink/50" />
           </span>
         )}
-        {!isDone && !isPaused && isHalted && (
+        {!isDone && !isPaused && isNeedsAction && (
+          <span className="w-7 h-7 rounded-full bg-ink/6 grid place-items-center">
+            <IconClock className="w-4 h-4 text-ink/50" />
+          </span>
+        )}
+        {!isDone && !isPaused && !isNeedsAction && isHalted && (
           <span className="w-7 h-7 rounded-full bg-rose-100 grid place-items-center">
             <IconWarning className="w-4 h-4 text-rose-700" />
           </span>
         )}
-        {!isDone && !isPaused && !isHalted && isActive && (
+        {!isDone && !isPaused && !isNeedsAction && !isHalted && isActive && (
           <span className="w-7 h-7 rounded-full bg-peach/20 grid place-items-center">
             <IconSpinner className="w-4 h-4 text-magenta" />
           </span>
         )}
-        {!isDone && !isPaused && !isHalted && !isActive && (
+        {!isDone && !isPaused && !isNeedsAction && !isHalted && !isActive && (
           <span className="w-7 h-7 rounded-full border border-ink/15" />
         )}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-3 flex-wrap">
           <p
-            className={`font-semibold min-w-0 flex-1 ${isDone || isActive || isPaused || isHalted ? 'text-ink' : 'text-ink/40'}`}
+            className={`font-semibold min-w-0 flex-1 ${isDone || isActive || isPaused || isHalted || isNeedsAction ? 'text-ink' : 'text-ink/40'}`}
           >
             {p.label}
           </p>
@@ -518,11 +531,11 @@ export function PhaseCard({
             beneath the label — keeping the model chip/dropdown out of its
             flow so it never wraps into a cramped two- or three-line block. */}
         <p
-          className={`text-sm mt-0.5 ${isDone || isActive || isPaused || isHalted ? 'text-ink/60' : 'text-ink/30'}`}
+          className={`text-sm mt-0.5 ${isDone || isActive || isPaused || isHalted || isNeedsAction ? 'text-ink/60' : 'text-ink/30'}`}
         >
           {p.detail}
         </p>
-        {(isActive || isPaused || isHalted) && (
+        {(isActive || isPaused || isHalted || isNeedsAction) && (
           <div className="mt-3 h-1 rounded-full bg-ink/6 overflow-hidden">
             <div
               className="h-full bg-gradient-progress rounded-full"

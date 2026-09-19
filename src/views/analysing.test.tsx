@@ -1967,6 +1967,74 @@ describe('AnalysingView — stage1 shrink-refused banner', () => {
   });
 });
 
+describe('AnalysingView — needs-action phase-card state (#3203)', () => {
+  /* cast_incomplete and stage1_shrink_refused are the two setHalted codes
+     that are explicitly "not a failure" — they must route the phase card
+     to the new neutral needs-action state, never the rose halted state.
+     Any other/unknown code is a genuine failure and must still route to
+     halted, unchanged — that's the regression this ticket must not cause.
+     Driven via a preloaded activeStream snapshot (mirroring the cold-boot
+     rehydration describe below) rather than the live click+reject flow —
+     cast_incomplete's own auto-resume effect (`retry` nonce bump once
+     failedChapters drains to 0) re-fires analyseManuscript forever against
+     a rejection mock that never seeds a failed chapter, which is a hazard
+     of the live flow, not of the fix itself. */
+  function renderViewWithHaltedSnapshot(haltCode: string) {
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      preloadedState: {
+        analysis: {
+          activeStream: {
+            bookId: 'book-1',
+            manuscriptId: 'm1',
+            bookTitle: 'the Coalfall Commission',
+            engine: 'gemini' as const,
+            phaseId: 0,
+            phaseLabel: 'Detecting characters',
+            phaseProgress: 0.5,
+            remainingMs: 0,
+            lastTickAt: Date.now(),
+            state: 'halted' as const,
+            haltCode,
+          },
+        },
+      },
+    });
+    return render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+  }
+
+  it('routes the phase card to needs-action (not halted) for a cast_incomplete haltCode', () => {
+    renderViewWithHaltedSnapshot('cast_incomplete');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'needs-action');
+  });
+
+  it('routes the phase card to needs-action (not halted) for a stage1_shrink_refused haltCode', () => {
+    renderViewWithHaltedSnapshot('stage1_shrink_refused');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'needs-action');
+  });
+
+  it('still routes the phase card to halted (not needs-action) for an unknown/other haltCode', () => {
+    renderViewWithHaltedSnapshot('some_other_error');
+    expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'halted');
+  });
+});
+
 describe('AnalysingView — cross-navigation analysis snapshot (B2)', () => {
   it('sets analysis.activeStream when the SSE fires so the AnalysisPill can read from Redux', async () => {
     const { store } = await renderViewWaitingForAnalysis();

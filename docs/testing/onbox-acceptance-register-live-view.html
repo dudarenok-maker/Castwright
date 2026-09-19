@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="24" data-publish-id="a3fa58271bd8"></div>
+  <div hidden data-published-as="28" data-publish-id="ce5e961eda2e"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">50</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">53</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,11 +209,11 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->34<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->35<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->1<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->7<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->9<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (all-kana, and full-length Han) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">34 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">35 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -745,6 +745,19 @@
         <p class="src">GPU box with a real sidecar, Qwen resident (the installer test itself does not require Qwen, but the chapter-mid-render scenario does) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3056">#3056</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/3197">PR #3197</a> &#183; no separate run sheet &#183; low &#8212; each of the three engines needs one successful install from the UI (Admin &#8594; Model Manager, account-logged, real install-*.mjs script, real pip swap, real venv I/O but not a multi-minute download, ~30s per engine if the weights are already present or pre-cached) and one refusal attempt with a chapter queued to render (Qwen, since it&#39;s the fastest to boot). No golden-audio comparison, no complex fixture setup, no timeout tolerance tuning.</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">A109</span><span class="iname">#3084 &#8212; same-card OpenAI-compatible endpoint yields its card to Qwen VoiceDesign</span><span class="risk">Single 8 GB card, a same-card OpenAI-compatible server, Qwen VoiceDesign</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Minted by the design PR, not by shipped code &#8212; <b>this row is owed against wave 4 of the plan and cannot be run until wave 4 merges.</b> It is recorded now because the design originally asserted that an existing row already covered this hardware consequence, and no such row exists; the alternative was leaving the claim unproven and unrecorded.</p>
+        <p>Wave 4 adds a pre-pass that orders the analyzer&#39;s endpoint call ahead of a Qwen VoiceDesign load when both target the same GPU. Everything else in that wave is provable in automation &#8212; selection, the free-text wire shape per transport, the Ollama bound and slot release, the limiter estimate, key-origin and missing-endpoint refusals, endpoint wiring over a real HTTP server, the same-card rule, and the pre-pass ordering and errors. The one consequence automation cannot reach is the real VRAM handover: a third-party server&#39;s model must actually release the card so a 1.7B VoiceDesign load succeeds on it.</p>
+        <ul>
+          <li>With an OpenAI-compatible server resident on the single 8 GB card and an analysis configured against it, trigger a cast design that needs Qwen VoiceDesign. The pre-pass runs, the endpoint&#39;s model yields the card, and VoiceDesign loads and designs without an OOM.</li>
+          <li>The reverse order is also safe: with VoiceDesign resident, an analysis against the same-card endpoint does not OOM and does not silently fall back to another engine.</li>
+          <li>Neither path leaves the card stranded &#8212; after both complete, a subsequent chapter render on that card succeeds.</li>
+        </ul>
+        <p class="src">Single 8 GB card, a real OpenAI-compatible server (llama.cpp/llama-swap or LM Studio) holding a model on that same card, Qwen VoiceDesign &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; no separate run sheet &#183; medium &#8212; needs a real third-party server installed and pinned to the same card, plus one cast design and one chapter render. No golden-audio comparison.</p>
+      </div>
+    </details>
 
 
 </section>
@@ -1043,7 +1056,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">7 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">9 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1127,6 +1140,30 @@
         </ul>
         <p><b>Residual N4 (accepted):</b> <code>killTree()</code> performs no creation-time pid-reuse re-check before invoking <code>taskkill /PID &lt;root&gt; /T /F</code>. Review passes 2, 3, and 4 all agreed this is acceptable &#8212; closing it would need a second <code>Get-CimInstance -Filter ProcessId=&lt;pid&gt;</code> creation-time re-check per kill. Since the reaper now actually fires (as of this PR), the PID-reuse window is live rather than theoretical; an operator running the acceptance should watch for the edge case where a process exits and Windows quickly recycles its PID before the taskkill lands.</p>
         <p class="src">A Windows dev box, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3047">#3047</a>, Part 3 of <a href="../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md">the commit-gate rebalance design</a> &#183; the observations above; issue #3047&#39;s acceptance list &#183; ~20 minutes across a few pushes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E105</span><span class="iname">ops-72 step/pipeline time budgets &#8212; <code>taskkill /T /F</code>&#39;s orphan blind spot against a real Windows process tree</span><span class="risk">any Windows dev box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>runStepProcess</code>&#39;s timeout path is unit-tested against a real (but tiny and fast) process tree: a fixture npm script that never exits is killed via <code>taskkill /PID &lt;pid&gt; /T /F</code> and classified <code>timedOut: true</code>, never retried as a crash (<code>scripts/tests/verify-cache.test.mjs</code>&#39;s <code>runStepProcess</code>/<code>runPipeline</code> timeout mutation tests). What no unit test can prove is the thing the design doc calls out as <b>load-bearing</b>: <code>taskkill /T</code> walks <i>live</i> parent-PID links at the moment it runs, so a fork whose parent already died before that walk reaches it is invisible to <code>/T</code> &#8212; exactly the shape of the two 390-minute orphans in the 2026-09-05 census that motivated this whole design doc. A one-line <code>npm run &lt;script&gt;</code> fixture that exits almost instantly never grows a process tree deep or long-lived enough (<code>cmd.exe -&gt; npm.cmd -&gt; node(npm) -&gt; node(vitest) -&gt; N forks</code>) to exhibit that specific race.</p>
+        <ul>
+          <li>Run a genuinely slow, fork-pool-heavy step (e.g. <code>npm run test:server</code>) under an artificially tiny <code>CASTWRIGHT_STEP_TIMEOUT_MIN</code> (e.g. <code>0.2</code>) and confirm the console reports <code>[timeout]</code>, not a <code>[retry]</code>/crash-exhausted <code>[fail]</code> &#8212; then confirm via Task Manager / <code>Get-Process</code> that the ENTIRE tree (<code>cmd.exe</code>, <code>npm</code>, the vitest parent, and every fork) is gone, not just the top-level <code>cmd.exe</code> <code>taskkill /T</code> was pointed at.</li>
+          <li>Reproduce the actual blind spot: start the same slow step, then kill one of its vitest fork children&#39;s immediate parent out from under it (simulating the parent-dies-before-the-walk race) before the step&#39;s own timeout fires, and confirm that fork survives the subsequent <code>taskkill /PID &lt;root&gt; /T /F</code> &#8212; then confirm <code>runCensus({ kill: true, killReasons: [&#39;orphaned-unreachable&#39;] })</code>, invoked immediately after the kill, catches and reaps that survivor (this is the sweep Part 3&#39;s reaper already proves in isolation at <b>E104</b> above; this row is specifically about the hand-off from Part 2&#39;s timeout kill into it, on a real tree).</li>
+          <li>Confirm the whole-pipeline <code>CASTWRIGHT_RUN_TIMEOUT_MIN</code> budget actually bounds a real multi-step <code>verify</code> run &#8212; start one with a tiny override and confirm it aborts with <code>[timeout]</code> well before the 4h34m incident figure this feature exists to cap, rather than running to completion because the per-step budgets alone left enough total headroom.</li>
+        </ul>
+        <p class="src">A Windows dev box, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3249">Castwright#3249</a>, Part 2 of <a href="../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md">the commit-gate rebalance design</a> &#183; the three observations above; issue Castwright#3249&#39;s acceptance list &#183; ~15&#8211;20 minutes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E106</span><span class="iname">ops-72 step/pipeline time budgets &#8212; POSIX Ctrl+C/SIGTERM/SIGHUP forwarding into a detached process group</span><span class="risk">a Mac or Linux dev box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>runStepProcess</code>&#39;s timeout-kill path spawns the step&#39;s child with <code>detached: true</code> on POSIX (needed to reach the whole <code>sh -c npm run ... -&gt; npm -&gt; node -&gt; forks</code> tree via a negative-pid <code>SIGKILL</code>, since <code>detached</code> makes the child the leader of its own process group). That has a real consequence: the child is now outside the terminal&#39;s foreground process group, so an operator&#39;s Ctrl+C (SIGINT), a <code>kill</code> (SIGTERM), or closing the terminal / an SSH session dropping (SIGHUP) no longer reaches it on its own &#8212; <code>runPipeline</code> forwards all three into the active child&#39;s tree via a <code>process.on(sig, ...)</code> handler at its CLI entry point before exiting. This is entirely unproven on the primary dev box for this repo, which is Windows &#8212; <code>detached</code>, process groups, and POSIX signal delivery semantics do not exist there in the shape this fix targets, so nothing about it can be observed on a Windows box no matter how thoroughly it&#39;s exercised there.</p>
+        <ul>
+          <li>Start <code>npm run verify</code> (or any step selection that includes a real vitest-backed step, e.g. <code>--steps test:server</code>), press Ctrl+C mid-run, and confirm BOTH: the shell prompt returns promptly, AND <code>pgrep -f vitest</code> (or equivalent) shows nothing left running a few seconds later &#8212; not just that the foreground process exited.</li>
+          <li>Repeat with <code>kill -TERM &lt;pipeline&#39;s own pid&gt;</code> sent from a second terminal instead of Ctrl+C, confirming the same clean-tree outcome.</li>
+          <li>Repeat once more simulating a dropped session: start the run, then close the terminal window (or, over SSH, kill the SSH connection) rather than sending a signal directly, and confirm &#8212; from a still-open second session &#8212; that no vitest/npm/node processes from that run remain.</li>
+        </ul>
+        <p class="src">A Mac or Linux dev box, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3249">Castwright#3249</a>, Part 2 of <a href="../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md">the commit-gate rebalance design</a> &#183; the three observations above; issue Castwright#3249&#39;s acceptance list &#183; ~10 minutes</p>
       </div>
     </details>
 

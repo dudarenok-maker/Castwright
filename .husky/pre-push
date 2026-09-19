@@ -27,14 +27,15 @@
 # its own globs say, so that push pays the full cost on a cold cache.
 #
 # ops-71 (#3047, Part 3 of the same design, "A reaper that actually runs"):
-# every push also runs the stale-battery census — ONE Win32_Process query,
-# ~694ms for the query alone, ~0.8-3.5s for a whole census on a 415-root box,
-# no pool — which appends a log entry (every root's command line
-# included, the dataset the deferred concurrency-governor question needs)
-# and kills only PROVABLY orphaned trees (a dead parent, per classify()'s
-# reachability test). It never blocks the push: reap-stale-batteries.mjs's
-# own CLI catches everything and always exits 0 (see runCli's try/catch and
-# its "always returns 0, even when the census throws" test).
+# every push also runs the stale-battery census — up to two Win32_Process queries
+# (one initial, one retry on a genuine transient-empty result), with a pathological
+# worst case of ~30.25s (two 15s spawn timeouts + 250ms retry delay). Nominal case
+# is ~694ms for a single query, and ~0.8-3.5s for a whole census on a 415-root box.
+# No pool — which appends a log entry (every root's command line included, the
+# dataset the deferred concurrency-governor question needs) and kills only PROVABLY
+# orphaned trees (a dead parent, per classify()'s reachability test). It never blocks
+# the push: reap-stale-batteries.mjs's own CLI catches everything and always exits 0
+# (see runCli's try/catch and its "always returns 0, even when the census throws" test).
 #
 # Deliberately placed BEFORE the is-docs-only-push branch, so it runs on
 # EVERY push, docs-only included: the census costs the same ~0.8-3.5s either

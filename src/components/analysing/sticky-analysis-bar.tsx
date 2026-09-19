@@ -50,7 +50,7 @@ export function StickyAnalysisBar({
   const buttonDisabled = !isRunning && !isAnalyzerReady;
 
   /* The sticky bar's model chip shows only streaming/pending (a simplified
-     subset of the PhaseCard's full state — done/paused/halted/warming/streaming
+     subset of the PhaseCard's full state — done/paused/halted/needs-action/warming/streaming
      /pending). This reflects the running/not-running dichotomy without the card's
      phase-specific granularity. Phase 2 (library match) has no model chip —
      collapse to just the phase label. */
