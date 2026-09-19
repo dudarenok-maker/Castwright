@@ -152,30 +152,33 @@ describe('AccountView â€” save flow', () => {
   it('clears the save-confirmation timeout on unmount to prevent setState after unmount', async () => {
     /* Regression: the setTimeout inside onSave was never cleared. When the
        component unmounted before the 2400ms timer fired, the timeout still
-       executed and tried to call setShowSaved on an unmounted component,
-       triggering a React warning about "Can't perform a React state update
-       on an unmounted component". This test verifies the timeout is properly
-       cleared when the component unmounts. */
+       executed and tried to call setShowSaved on an unmounted component.
+       A timer-count assertion is too fragile here: sibling effects own
+       unrelated timers that come and go independently, so counting the
+       total proves nothing about THIS timeout specifically. Instead, capture
+       the exact setTimeout(..., 2400) call's id and assert clearTimeout is
+       invoked with THAT id on unmount — precise regardless of how many other
+       timers exist, and false before the fix (no cleanup effect existed, so
+       this id is never passed to clearTimeout at all). An absent console
+       warning proves nothing either way: React removed the "setState on an
+       unmounted component" warning in 18.0.0. */
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
     (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(SERVER_FIXTURE);
-    const user = userEvent.setup();
     const { unmount } = renderView();
 
-    /* Trigger Save to queue the 2400ms timeout. */
-    await user.click(screen.getByRole('button', { name: /save changes/i }));
-
-    /* Wait for the save to complete and the "Saved." text to appear. */
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
     await waitFor(() => {
-      expect(screen.getByText(/^saved\.$/i)).toBeInTheDocument();
+      expect(api.putUserSettings).toHaveBeenCalled();
     });
 
-    /* Unmount the component before the 2400ms timeout fires. If the timeout
-       was not properly cleared, React would log a console warning about
-       setState on an unmounted component when the timeout fires. */
+    const confirmCallIndex = setTimeoutSpy.mock.calls.findIndex((call) => call[1] === 2400);
+    expect(confirmCallIndex).toBeGreaterThanOrEqual(0);
+    const confirmTimeoutId = setTimeoutSpy.mock.results[confirmCallIndex]?.value;
+
     unmount();
 
-    /* The test passes if no React warning is logged. The vitest environment
-       reports console.error and console.warn, so the test automatically fails
-       if the bug causes a React state-update warning. */
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(confirmTimeoutId);
   });
 
   it('surfaces an error text when the save rejects', async () => {

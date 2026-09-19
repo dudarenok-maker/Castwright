@@ -7,7 +7,7 @@
    own Save (the server merges partial patches). The workspace-dir field
    deliberately stays in Account (a user-library concern, not a model one). */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { PrimaryButton, Checkbox } from './primitives';
 import { FieldRow, ReadOnlyRow, GeminiKeyField, analyzerModelLabel } from './account-forms';
 import {
@@ -147,6 +147,17 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     account.generationWorkers ?? 1,
   );
   const [showSaved, setShowSaved] = useState(false);
+  const saveConfirmTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* Clean up the save-confirmation timeout if the component unmounts before
+     it fires. This prevents a "setState on unmounted component" warning. */
+  useEffect(() => {
+    return () => {
+      if (saveConfirmTimeoutRef.current !== null) {
+        clearTimeout(saveConfirmTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     setDefaultAnalysisModel(account.defaultAnalysisModel);
@@ -241,7 +252,12 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
     const action = await dispatch(saveAccountSettings(patch));
     if (saveAccountSettings.fulfilled.match(action)) {
       setShowSaved(true);
-      setTimeout(() => setShowSaved(false), 2400);
+      /* Clear any previous timeout to avoid stacking timers if Save is called
+         multiple times before the first timeout completes. */
+      if (saveConfirmTimeoutRef.current !== null) {
+        clearTimeout(saveConfirmTimeoutRef.current);
+      }
+      saveConfirmTimeoutRef.current = setTimeout(() => setShowSaved(false), 2400);
     }
   };
 
