@@ -2436,7 +2436,7 @@ test('#3271: runPipeline calls the unconditional checks unguarded, outside the c
   // routes the call back through the same machinery that caused #3140.
   assert.doesNotMatch(
     body,
-    /decide\(\{[\s\S]{0,200}?stepName: '[^']*register-citations'/,
+    /decide\(\{[\s\S]{0,200}?stepName: \u0027[^\u0027]*register-citations\u0027/,
     'the register-citation check must not be routed through decide() (the cache-hash ' +
       'skip) — a cached citation check is the #3140 bug itself',
   );
