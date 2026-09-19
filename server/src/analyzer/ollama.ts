@@ -4,11 +4,14 @@
 
    The key novelty is the error classification: only "couldn't connect" /
    "connection reset before first byte" failures translate into
-   LocalUnreachableError, which is the *only* condition that triggers the
-   FallbackAnalyzer in index.ts to retry against Gemini. Everything else —
-   HTTP non-2xx, validation failures, mid-stream aborts — surfaces as a plain
-   Error and hard-fails. The point: a misbehaving local model should not
-   silently burn Gemini quota; if Ollama is up at all, we trust the error.
+   LocalUnreachableError — one case of AnalyzerUnreachableError, the type the
+   FallbackAnalyzer in index.ts keys on to retry against Gemini. Everything
+   else hard-fails: an HTTP non-2xx response surfaces as AnalyzerHttpError
+   (errors.ts), which deliberately does NOT extend AnalyzerUnreachableError,
+   and validation failures, stream failures and client aborts surface as
+   ordinary Errors (aborts as AnalysisAbortedError). The point: a misbehaving
+   local model should not silently burn Gemini quota; if Ollama is up at all,
+   we trust the error.
 
    That classification is only sound if the fetch itself never invents a
    failure. Node's global fetch (undici) defaults `headersTimeout` to 300s,
@@ -64,47 +67,15 @@ import {
   type EscalationOutput,
   type NonStoryClassificationOutput,
 } from '../handoff/schemas.js';
-import type { Analyzer, StageCall, StageChunkInfo } from './index.js';
+import type { Analyzer, StageCall, StageChunkInfo } from './types.js';
 import type { RawEvalTiming } from './analyzer-eval-stats.js';
-import { AnalyzerTruncatedError } from './errors.js';
-import {
-  buildSystemInstruction,
-  parseAndValidate,
-  buildRetryMessage,
-  summariseDetail,
-  persistResponse,
-  loadSkill,
-  type SkillName,
-} from './gemini.js';
+import { AnalyzerTruncatedError, AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError } from './errors.js';
+export { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
+import { parseAndValidate, buildRetryMessage, summariseDetail, persistResponse } from './runner/parse.js';
+import { loadSkill, buildSystemInstruction, type SkillName } from './runner/prompt.js';
 
 if (process.env.VITEST !== 'true' && process.env.NODE_ENV !== 'test') {
   console.log(describeAnalyzerConcurrency());
-}
-
-/** Sentinel error class. The FallbackAnalyzer decorator in index.ts uses
-    `err instanceof LocalUnreachableError` as the SOLE trigger for Gemini
-    fallback. Any other error type propagates unchanged and hard-fails. */
-export class LocalUnreachableError extends Error {
-  readonly code = 'LOCAL_UNREACHABLE';
-  constructor(
-    message: string,
-    public readonly cause?: unknown,
-  ) {
-    super(message);
-    this.name = 'LocalUnreachableError';
-  }
-}
-
-/** Sentinel error for "the SSE client disconnected, drop work silently."
-    The analysis route uses `err instanceof AnalysisAbortedError` to skip
-    its own error-reporting path (the client is gone — there's no one to
-    tell) and to NOT trigger the Gemini fallback decorator. */
-export class AnalysisAbortedError extends Error {
-  readonly code = 'ANALYSIS_ABORTED';
-  constructor(message: string) {
-    super(message);
-    this.name = 'AnalysisAbortedError';
-  }
 }
 
 interface OllamaOptions {
@@ -711,8 +682,12 @@ export class OllamaAnalyzer implements Analyzer {
         /* Reachable but errored — hard-fail. Surface the body verbatim so
            operator can diagnose ("model not found", "invalid format", …). */
         const text = await response.text().catch(() => '');
-        throw new Error(
-          `Ollama ${this.url} returned ${response.status} ${response.statusText}: ${text.slice(0, 500)}`,
+        const bodyExcerpt = text.slice(0, 500);
+        throw new AnalyzerHttpError(
+          'ollama',
+          response.status,
+          bodyExcerpt,
+          `Ollama ${this.url} returned ${response.status} ${response.statusText}: ${bodyExcerpt}`,
         );
       }
 

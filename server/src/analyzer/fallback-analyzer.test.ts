@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { FallbackAnalyzer } from './index.js';
-import { LocalUnreachableError } from './ollama.js'; // NOT ./errors — errors.ts only exports AnalyzerTruncatedError
+import { LocalUnreachableError } from './ollama.js'; // re-exported from ./errors.js
 
 const stubOut = { ops: [] } as any;
 

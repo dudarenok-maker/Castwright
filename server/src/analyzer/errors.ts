@@ -1,11 +1,69 @@
-/* Shared analyzer error sentinels.
+/* Shared analyzer error sentinels — one per failure mode the analyzer transports
+   distinguish — plus `TransportKind`, the union that names those transports.
 
-   `AnalyzerTruncatedError` is thrown by an engine (Gemini / Ollama) when the
-   model stopped because it hit its OUTPUT budget mid-response, not because it
-   finished — Gemini surfaces this as `finishReason: 'MAX_TOKENS'`, Ollama as
-   `done_reason: 'length'`. Pre-fix, both engines silently returned the
-   truncated buffer, which then failed JSON parse, retried at the same size,
-   failed again, and surfaced to the client as a bare ECONNRESET (issue #528).
+   Lives in its own module (not on an engine) so both engines + the route layer
+   can import these without a circular dependency. */
+/** Every transport the stage runner can drive. Wave 1 uses 'ollama' and 'gemini'. */
+export type TransportKind = 'ollama' | 'gemini' | 'openai';
+
+/** Sentinel error for "the SSE client disconnected, drop work silently."
+    The analysis route uses `err instanceof AnalysisAbortedError` to skip
+    its own error-reporting path (the client is gone — there's no one to
+    tell) and to NOT trigger the Gemini fallback decorator. */
+export class AnalysisAbortedError extends Error {
+  readonly code = 'ANALYSIS_ABORTED';
+  constructor(message: string) {
+    super(message);
+    this.name = 'AnalysisAbortedError';
+  }
+}
+
+/** "Couldn't reach the analyzer at all", from any transport. FallbackAnalyzer
+    (index.ts) uses `instanceof AnalyzerUnreachableError` as the SOLE trigger
+    for Gemini fallback; every other error propagates and hard-fails. */
+export class AnalyzerUnreachableError extends Error {
+  readonly code: string = 'ANALYZER_UNREACHABLE';
+  constructor(
+    message: string,
+    public readonly transport: TransportKind,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = 'AnalyzerUnreachableError';
+  }
+}
+
+/** Ollama's unreachable sentinel — produced only by classifyConnectError. */
+export class LocalUnreachableError extends AnalyzerUnreachableError {
+  readonly code: string = 'LOCAL_UNREACHABLE';
+  constructor(message: string, cause?: unknown) {
+    super(message, 'ollama', cause);
+    this.name = 'LocalUnreachableError';
+  }
+}
+
+/** A reachable analyzer answered with a non-OK HTTP status. Deliberately has
+    NO `status` property: failure-taxonomy.ts reads `.status` (its bare-status
+    branch maps 500/503 to analyzer-unreachable), and wave 1 must not move any
+    taxonomy outcome. */
+export class AnalyzerHttpError extends Error {
+  constructor(
+    public readonly transport: TransportKind,
+    public readonly httpStatus: number,
+    public readonly bodyExcerpt: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = 'AnalyzerHttpError';
+  }
+}
+
+/* Thrown by an engine (Gemini / Ollama) when the model stopped because it hit
+   its OUTPUT budget mid-response, not because it finished — Gemini surfaces
+   this as `finishReason: 'MAX_TOKENS'`, Ollama as `done_reason: 'length'`.
+   Pre-fix, both engines silently returned the truncated buffer, which then
+   failed JSON parse, retried at the same size, failed again, and surfaced to
+   the client as a bare ECONNRESET (issue #528).
 
    Two consumers key off the type:
      - the per-engine retry loop re-throws it immediately (replaying the same
@@ -13,14 +71,13 @@
      - the stage-2 chunking runner (`stage2-chunk.ts`) CATCHES it and splits the
        offending span into smaller sub-bodies so each call fits under the cap.
 
-   Lives in its own module (not on an engine) so both engines + the route layer
-   can import it without a circular dependency. Mirrors the sentinel shape of
-   `AnalysisAbortedError` / `LocalUnreachableError` in ollama.ts. */
+   Mirrors the sentinel shape of the AnalysisAbortedError /
+   AnalyzerUnreachableError blocks above. */
 export class AnalyzerTruncatedError extends Error {
   readonly code = 'ANALYZER_TRUNCATED';
   constructor(
     /** Which engine truncated. */
-    public readonly engine: 'gemini' | 'ollama',
+    public readonly engine: TransportKind,
     /** The engine's own stop reason — Gemini `MAX_TOKENS`/`SAFETY`/…, Ollama `length`. */
     public readonly reason: string,
     /** Bytes assembled before the stop, for the diagnostic log line. */

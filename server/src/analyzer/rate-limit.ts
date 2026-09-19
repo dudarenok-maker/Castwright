@@ -19,7 +19,7 @@
    TPM rarely bites on Flash Lite under normal use but is the safety net
    against outlier long chapters and burst-retry pathology. */
 
-import { AnalysisAbortedError } from './ollama.js';
+import { AnalysisAbortedError } from './errors.js';
 import { allKnobs } from '../config/registry.js';
 import { resolveKnob } from '../config/resolver.js';
 

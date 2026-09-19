@@ -1065,3 +1065,112 @@ describe('appendBounded — stream accumulator cap', () => {
     expect(() => appendBounded('x'.repeat(8 * 1024 * 1024), 'y')).toThrow(/maximum size/);
   });
 });
+
+describe('GeminiAnalyzer — runner characterisation (#3084 wave 1)', () => {
+  const PER_CHAPTER = JSON.stringify({
+    characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' }],
+  });
+  const IDS = ['m_gem_char_schema', 'm_gem_char_json', 'm_gem_char_final', 'm_gem_char_daily', 'm_gem_char_abort'];
+
+  /* An earlier describe calls vi.resetModules(), detaching this file's static
+     geminiRateLimiter import from the instance gemini.js uses — reset the live
+     one, and use model ids no other test uses so a daily-quota block cannot leak. */
+  beforeEach(async () => {
+    const { geminiRateLimiter: limiter } = await import('./rate-limit.js');
+    limiter._reset();
+  });
+
+  afterAll(async () => {
+    for (const id of IDS) {
+      for (const key of ['stage1-ch1', 'stageescalation-ch1-w0']) {
+        await rm(resolve(HANDOFF_ROOT, 'inbox', `${id}-${key}.md`), { force: true });
+        await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-${key}.json`), { force: true });
+        await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-${key}.errors.json`), { force: true });
+      }
+    }
+  });
+
+  function apiError429PerDay(): Error {
+    const body = {
+      error: {
+        code: 429,
+        message: 'Quota exceeded for metric: generate_requests_per_model_per_day_free_tier, quotaId: GenerateRequestsPerDayPerProjectPerModel-FreeTier',
+        status: 'RESOURCE_EXHAUSTED',
+      },
+    };
+    return Object.assign(new Error(`got status: 429. ${JSON.stringify(body)}`), { status: 429 });
+  }
+
+  it('schema-validation retry replays [user, model(firstText), user(buildRetryMessage)] at the same temperature and system', async () => {
+    const strictlyInvalid = JSON.stringify({ characters: 'nope' });
+    generateContentStream
+      .mockResolvedValueOnce(asyncFromArray([{ text: strictlyInvalid }]))
+      .mockResolvedValueOnce(asyncFromArray([{ text: PER_CHAPTER }]));
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const { existsSync } = await import('node:fs');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'k', model: 'gemma-char-schema' });
+
+    await analyzer.runStage1Chapter('m_gem_char_schema', 1, '# prompt', {});
+
+    const first = generateContentStream.mock.calls[0][0];
+    const second = generateContentStream.mock.calls[1][0];
+    expect(first.contents).toEqual([{ role: 'user', parts: [{ text: '# prompt' }] }]);
+    expect(second.contents).toHaveLength(3);
+    expect(second.contents[0]).toEqual({ role: 'user', parts: [{ text: '# prompt' }] });
+    expect(second.contents[1]).toEqual({ role: 'model', parts: [{ text: strictlyInvalid }] });
+    expect(second.contents[2].role).toBe('user');
+    expect(second.contents[2].parts[0].text.startsWith('Your previous response failed schema validation.')).toBe(true);
+    expect(second.config.temperature).toBe(first.config.temperature);
+    expect(second.config.systemInstruction).toBe(first.config.systemInstruction);
+    expect(second.config.responseMimeType).toBe('application/json');
+    expect(existsSync(resolve(HANDOFF_ROOT, 'outbox', 'm_gem_char_schema-stage1-ch1.errors.json'))).toBe(true);
+    expect(existsSync(resolve(HANDOFF_ROOT, 'outbox', 'm_gem_char_schema-stage1-ch1.attempt1.raw.txt'))).toBe(false);
+  });
+  it('invalid-json retry ALSO replays the model turn at the same temperature (unlike Ollama)', async () => {
+    const malformed = '{ "characters": [ { "id": "narrator"';
+    generateContentStream
+      .mockResolvedValueOnce(asyncFromArray([{ text: malformed }]))
+      .mockResolvedValueOnce(asyncFromArray([{ text: PER_CHAPTER }]));
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'k', model: 'gemma-char-json' });
+
+    await analyzer.runStage1Chapter('m_gem_char_json', 1, '# prompt', {});
+
+    const first = generateContentStream.mock.calls[0][0];
+    const second = generateContentStream.mock.calls[1][0];
+    expect(second.contents).toHaveLength(3);
+    expect(second.contents[1]).toEqual({ role: 'model', parts: [{ text: malformed }] });
+    expect(second.contents[2].parts[0].text.startsWith('Your previous response was not valid JSON:')).toBe(true);
+    expect(second.config.temperature).toBe(first.config.temperature);
+  });
+
+  it('pins the final validation-failure message', async () => {
+    const bad = JSON.stringify({ characters: 'nope' });
+    generateContentStream
+      .mockResolvedValueOnce(asyncFromArray([{ text: bad }]))
+      .mockResolvedValueOnce(asyncFromArray([{ text: bad }]));
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'k', model: 'gemma-char-final' });
+    const err = await analyzer.runStage1Chapter('m_gem_char_final', 1, '# prompt', {}).then(() => null, (e: Error) => e);
+    expect(err?.message.startsWith('Gemini 1-ch1 failed validation after retry: schema-validation — ')).toBe(true);
+  });
+
+  it('escalation resolves null on DailyQuotaExhaustedError, with exactly one upstream call', async () => {
+    generateContentStream.mockRejectedValueOnce(apiError429PerDay());
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'k', model: 'gemma-char-daily' });
+    expect(await analyzer.runAttributionEscalation('m_gem_char_daily', 1, 0, 'p', {})).toBeNull();
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('escalation rethrows AnalysisAbortedError', async () => {
+    const ac = new AbortController();
+    ac.abort();
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const { AnalysisAbortedError } = await import('./ollama.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'k', model: 'gemma-char-abort' });
+    await expect(
+      analyzer.runAttributionEscalation('m_gem_char_abort', 1, 0, 'p', { signal: ac.signal }),
+    ).rejects.toBeInstanceOf(AnalysisAbortedError);
+  });
+});
