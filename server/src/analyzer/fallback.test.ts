@@ -358,6 +358,27 @@ describe('FallbackAnalyzer — keyed on AnalyzerUnreachableError (#3084 wave 1)'
     } as StageCall);
     expect(out).toEqual(STAGE2_RESULT);
     expect(fallback.runStage2Chapter).toHaveBeenCalledTimes(1);
+    /* #3284 — the announced reason is derived from the error's own transport,
+       not frozen to the Ollama wording. This error says 'openai', and the route
+       renders `fallbackReason` in the UI (script-review.ts switchToFallback), so
+       a hard-coded "Ollama unreachable" would re-label the pill with a daemon
+       that was never involved. */
+    expect(onFallback).toHaveBeenCalledWith({ reason: 'OpenAI unreachable' });
+  });
+
+  it('still announces "Ollama unreachable" for an Ollama-transport error (#3284)', async () => {
+    const primary = makeAnalyzer({
+      runStage2Chapter: () => Promise.reject(new LocalUnreachableError('daemon down')),
+    });
+    const fallback = makeAnalyzer({});
+    const onFallback = vi.fn();
+    const out = await new FallbackAnalyzer(primary, fallback).runStage2Chapter('m', 1, 'p', {
+      onFallback,
+    } as StageCall);
+    expect(out).toEqual(STAGE2_RESULT);
+    expect(fallback.runStage2Chapter).toHaveBeenCalledTimes(1);
+    /* The transport-derived wording must not lose the Ollama case, which is the
+       only one production can reach today. */
     expect(onFallback).toHaveBeenCalledWith({ reason: 'Ollama unreachable' });
   });
 

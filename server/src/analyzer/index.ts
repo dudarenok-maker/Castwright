@@ -21,7 +21,7 @@ import type {
 } from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { OllamaAnalyzer } from './ollama.js';
-import { AnalysisAbortedError, AnalyzerUnreachableError } from './errors.js';
+import { AnalysisAbortedError, AnalyzerUnreachableError, type TransportKind } from './errors.js';
 import {
   getResolvedAnalysisEngine,
   getResolvedGeminiApiKey,
@@ -117,11 +117,33 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
   };
 }
 
-/* Decorator that delegates to a primary analyzer and falls back to a secondary only when the primary throws AnalyzerUnreachableError (Ollama's LocalUnreachableError is one). Every
-   other error — HTTP failure, validation failure, schema mismatch —
-   propagates unchanged. The rule (plan 29): if the local daemon is
-   *reachable* but misbehaving, surface the error so the operator can fix
-   it. Don't silently consume Gemini quota on a flaky local stack. */
+/* Human-readable name per transport, for the message that announces a fallback.
+    Spelled out rather than capitalised from TransportKind so acronyms stay right
+    ('openai' → 'OpenAI', not 'Openai'). */
+const TRANSPORT_LABEL: Record<TransportKind, string> = {
+  ollama: 'Ollama',
+  gemini: 'Gemini',
+  openai: 'OpenAI',
+};
+
+/* #3284 — the reason announced via `StageCall.onFallback` is derived from the
+   error's own, required `transport`, not hard-coded to Ollama. The guard above
+   each call site fires on ANY AnalyzerUnreachableError, and the route renders
+   this string to the user (script-review.ts passes it through to the SSE
+   `fallbackReason`), so a frozen "Ollama unreachable" would name a daemon that
+   was never involved the moment a second transport lands. Wording is unchanged
+   for the 'ollama' case, which is the only one production reaches today. */
+function fallbackReason(err: AnalyzerUnreachableError): string {
+  return `${TRANSPORT_LABEL[err.transport]} unreachable`;
+}
+
+/* Decorator that delegates to a primary analyzer and falls back to a secondary
+   only when the primary throws AnalyzerUnreachableError (Ollama's
+   LocalUnreachableError is one case of it). Every other error — HTTP failure,
+   validation failure, schema mismatch — propagates unchanged. The rule (plan
+   29): if the local daemon is *reachable* but misbehaving, surface the error so
+   the operator can fix it. Don't silently consume Gemini quota on a flaky local
+   stack. */
 export class FallbackAnalyzer implements Analyzer {
   constructor(
     private readonly primary: Analyzer,
@@ -154,7 +176,7 @@ export class FallbackAnalyzer implements Analyzer {
         /* Announce the switch so the route re-labels the pill with the effective
            Gemini model (mirrors runScriptReviewChapter) — otherwise the UI keeps
            naming the local model that isn't running. */
-        call.onFallback?.({ reason: 'Ollama unreachable' });
+        call.onFallback?.({ reason: fallbackReason(err) });
         return await this.fallback.runStage1Chapter(manuscriptId, chapterId, promptMd, call);
       }
       throw err;
@@ -173,7 +195,7 @@ export class FallbackAnalyzer implements Analyzer {
       if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof AnalyzerUnreachableError) {
         /* Announce the switch so the route re-labels the pill (see runStage1Chapter). */
-        call.onFallback?.({ reason: 'Ollama unreachable' });
+        call.onFallback?.({ reason: fallbackReason(err) });
         return await this.fallback.runStage2Chapter(manuscriptId, chapterId, promptMd, call);
       }
       throw err;
@@ -208,7 +230,7 @@ export class FallbackAnalyzer implements Analyzer {
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
       if (err instanceof AnalyzerUnreachableError) {
-        call.onFallback?.({ reason: 'Ollama unreachable' });
+        call.onFallback?.({ reason: fallbackReason(err) });
         return await this.fallback.runScriptReviewChapter(
           manuscriptId,
           chapterId,

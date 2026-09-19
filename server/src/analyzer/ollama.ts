@@ -4,11 +4,14 @@
 
    The key novelty is the error classification: only "couldn't connect" /
    "connection reset before first byte" failures translate into
-   LocalUnreachableError, which is the *only* condition that triggers the
-   FallbackAnalyzer in index.ts to retry against Gemini. Everything else —
-   HTTP non-2xx, validation failures, mid-stream aborts — surfaces as a plain
-   Error and hard-fails. The point: a misbehaving local model should not
-   silently burn Gemini quota; if Ollama is up at all, we trust the error.
+   LocalUnreachableError — one case of AnalyzerUnreachableError, the type the
+   FallbackAnalyzer in index.ts keys on to retry against Gemini. Everything
+   else hard-fails: an HTTP non-2xx response surfaces as AnalyzerHttpError
+   (errors.ts), which deliberately does NOT extend AnalyzerUnreachableError,
+   and validation failures, stream failures and client aborts surface as
+   ordinary Errors (aborts as AnalysisAbortedError). The point: a misbehaving
+   local model should not silently burn Gemini quota; if Ollama is up at all,
+   we trust the error.
 
    That classification is only sound if the fetch itself never invents a
    failure. Node's global fetch (undici) defaults `headersTimeout` to 300s,

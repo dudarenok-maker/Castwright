@@ -1,21 +1,8 @@
-/* Shared analyzer error sentinels.
-
-   `AnalyzerTruncatedError` is thrown by an engine (Gemini / Ollama) when the
-   model stopped because it hit its OUTPUT budget mid-response, not because it
-   finished — Gemini surfaces this as `finishReason: 'MAX_TOKENS'`, Ollama as
-   `done_reason: 'length'`. Pre-fix, both engines silently returned the
-   truncated buffer, which then failed JSON parse, retried at the same size,
-   failed again, and surfaced to the client as a bare ECONNRESET (issue #528).
-
-   Two consumers key off the type:
-     - the per-engine retry loop re-throws it immediately (replaying the same
-       oversized prompt just truncates again — retrying in place is futile),
-     - the stage-2 chunking runner (`stage2-chunk.ts`) CATCHES it and splits the
-       offending span into smaller sub-bodies so each call fits under the cap.
+/* Shared analyzer error sentinels — one per failure mode the analyzer transports
+   distinguish — plus `TransportKind`, the union that names those transports.
 
    Lives in its own module (not on an engine) so both engines + the route layer
-   can import it without a circular dependency. Mirrors the sentinel shape of
-   AnalysisAbortedError / LocalUnreachableError below. */
+   can import these without a circular dependency. */
 /** Every transport the stage runner can drive. Wave 1 uses 'ollama' and 'gemini'. */
 export type TransportKind = 'ollama' | 'gemini' | 'openai';
 
@@ -71,6 +58,21 @@ export class AnalyzerHttpError extends Error {
   }
 }
 
+/* Thrown by an engine (Gemini / Ollama) when the model stopped because it hit
+   its OUTPUT budget mid-response, not because it finished — Gemini surfaces
+   this as `finishReason: 'MAX_TOKENS'`, Ollama as `done_reason: 'length'`.
+   Pre-fix, both engines silently returned the truncated buffer, which then
+   failed JSON parse, retried at the same size, failed again, and surfaced to
+   the client as a bare ECONNRESET (issue #528).
+
+   Two consumers key off the type:
+     - the per-engine retry loop re-throws it immediately (replaying the same
+       oversized prompt just truncates again — retrying in place is futile),
+     - the stage-2 chunking runner (`stage2-chunk.ts`) CATCHES it and splits the
+       offending span into smaller sub-bodies so each call fits under the cap.
+
+   Mirrors the sentinel shape of the AnalysisAbortedError /
+   AnalyzerUnreachableError blocks above. */
 export class AnalyzerTruncatedError extends Error {
   readonly code = 'ANALYZER_TRUNCATED';
   constructor(

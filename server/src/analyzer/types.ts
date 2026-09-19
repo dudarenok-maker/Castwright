@@ -59,9 +59,9 @@ export interface StageCall {
       Flows verbatim through every `runStage*` of every analyzer
       implementation, so it never touches a method signature. */
   language?: string;
-  /** Fired by FallbackAnalyzer when it switches from a LocalUnreachable
-      primary to the fallback for this call. Route uses it to announce the
-      switch. */
+  /** Fired by FallbackAnalyzer when it switches from a primary that threw
+      AnalyzerUnreachableError to the fallback for this call. Route uses it to
+      announce the switch. */
   onFallback?: (info: { reason: string }) => void;
 }
 
