@@ -37,7 +37,7 @@
     "zod": "^4.6.2"
   },
   "overrides": {
-    "adm-zip": ">=0.6.0"
+    "adm-zip": ">=0.6.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
