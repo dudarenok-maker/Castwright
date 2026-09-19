@@ -6,7 +6,7 @@
 // docs/features/archive/50-verify-cache.md for the design.
 
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { readFileSync, renameSync, writeFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,6 +14,11 @@ import { lowConcurrency } from './test-concurrency.mjs';
 import { resolveVenvPython } from './run-sidecar-tests.mjs';
 import { scrubGitEnv } from './git-env.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+// Part 3 (#3047) prior art, reused rather than reimplemented: killTree is the
+// taskkill /PID <pid> /T /F wrapper (Windows-only, no-op elsewhere) and
+// runCensus is the classify+kill sweep. Both are called from the timeout-kill
+// path below — see Part 2's design doc section, "Tree-kill on Windows".
+import { killTree, runCensus } from './reap-stale-batteries.mjs';
 
 const SCHEMA_VERSION = 1;
 const CACHE_FILENAME = '.verify-cache.json';
@@ -1372,35 +1377,241 @@ const CHANGED_ONLY_NPM_SCRIPT = {
   'test:server': 'test:server:changed',
 };
 
-/** Run one pipeline step (`npm run <npmScript>`) and return `{ code, attempts }` —
-    `attempts` is how many times the underlying process actually ran (always 1 for a
-    non-retriable step). Retriable pool steps stream stdout LIVE but CAPTURE stderr so
-    a fork-pool crash can be detected and the step retried; every other step inherits
-    both streams unchanged. `retryKey` is the step's cache/identity name, used to look
-    up RETRIABLE_POOL_STEPS/isVitestPoolCrash — it can differ from `npmScript` when
-    CHANGED_ONLY_NPM_SCRIPT substitutes a different underlying script. */
-export function runStepProcess(npmScript, { cwd, env, retryKey = npmScript }) {
-  const runOnce = (capture) => {
-    const r = spawnSync('npm', ['run', npmScript], {
-      cwd,
-      shell: true,
-      env,
-      windowsHide: true,
-      ...(capture
-        ? { encoding: 'utf8', stdio: ['inherit', 'inherit', 'pipe'], maxBuffer: 64 * 1024 * 1024 }
-        : { stdio: 'inherit' }),
-    });
-    const stderr = capture ? r.stderr || '' : '';
-    if (stderr) process.stderr.write(stderr); // captured stderr isn't echoed live — surface it
-    return { code: r.status ?? 1, stderr };
+// --- Part 2 (ops-72): per-step-total / per-pipeline-total time budgets ----
+//
+// A prior incident measured a hang of up to 4h34m, non-progressing. Budget
+// SHAPE is settled by the design doc (see docs/superpowers/specs/
+// 2026-09-05-commit-gate-rebalance-design.md, "Part 2 — No run outlives a
+// budget"): per-step TOTAL across all retries of that step, not per-attempt
+// — a per-attempt shape composes multiplicatively (attempts x minutes) and
+// is why an earlier draft's 20-minute-per-attempt figure false-positived
+// constantly. These two knobs are env-overridable interim defaults; the
+// self-calibrating target design below replaces both with
+// max(FLOOR, K x lastGreenDurationMs) wherever a qualified baseline exists.
+export const DEFAULT_STEP_TIMEOUT_MIN = 45;
+export const DEFAULT_RUN_TIMEOUT_MIN = 180;
+
+// K in max(FLOOR, K x lastGreenDurationMs). Chosen so the qualified #3025
+// baseline (17.85 min at attempts: 1) lands almost exactly on the 45-min
+// interim FLOOR (17.85 * 2.5 = 44.6 min) — i.e. today's static default is
+// what this formula already converges to on this box.
+const BUDGET_MULTIPLIER = 2.5;
+
+// A budget calibrated at full concurrency is too tight once LOW_CONCURRENCY
+// has actually engaged for THIS run — serverMaxForks/frontendPoolCap
+// (test-concurrency.mjs) halve the fork pool, which roughly doubles a
+// vitest-backed step's own wall-clock time for the identical work. Without
+// this, the throttle runPipeline applies to itself above (contention guard)
+// makes its OWN step timeout fire on an otherwise-healthy, merely-slower
+// run (PR #3260 review pass 1, B2). 2x is the reciprocal of the 2->1 fork
+// halving, not a new tuned constant.
+const LOW_CONCURRENCY_BUDGET_MULTIPLIER = 2;
+
+function envMinutes(env, key, fallbackMin) {
+  const raw = env ? env[key] : undefined;
+  if (raw === undefined || raw === null || raw === '') return fallbackMin;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : fallbackMin;
+}
+
+/** max(FLOOR, K x qualifiedDurationMs) — the self-calibrating target shape.
+    `qualifiedDurationMs` must already be null for an uncalibratable baseline
+    (see qualifiedDurationFor below); this function never divides
+    durationMs/attempts itself — a crashed attempt aborts early, so that
+    division is not a meaningful per-attempt unit (design doc's worked
+    example: crash/crash/pass gives durationMs:1220000, attempts:3; dividing
+    yields a budget ~2.7x too tight against the true 1100s pass). */
+export function computeBudgetMs(qualifiedDurationMs, floorMs, k = BUDGET_MULTIPLIER) {
+  if (qualifiedDurationMs === null || qualifiedDurationMs === undefined) return floorMs;
+  return Math.max(floorMs, k * qualifiedDurationMs);
+}
+
+/** The qualified (attempts === 1) lastGreenDurationMs for one step's cache
+    entry, or null when uncalibratable: no entry, or an entry with
+    attempts > 1 (a crash-inflated baseline — not representative of a
+    typical run; falls back to FLOOR rather than being divided down). */
+export function qualifiedDurationFor(cache, stepName) {
+  const entry = cache && cache.steps ? cache.steps[stepName] : undefined;
+  if (!entry || typeof entry.durationMs !== 'number') return null;
+  if (entry.attempts !== 1) return null;
+  return entry.durationMs;
+}
+
+/** The real per-step budget computation runPipeline uses — extracted so a
+ *  test can assert the exact millisecond value directly (PR #3260 review
+ *  pass 3, B9/B11: the tests that raced a real `npm run` subprocess against
+ *  a wall-clock budget went flaky on a box where process-launch overhead
+ *  alone — 565-698ms measured on Windows — is comparable to the fixture's
+ *  own sleep duration; a formula bug like B5's should never depend on
+ *  outracing real subprocess overhead to be provable). Widens the FLOOR,
+ *  not computeBudgetMs' result — see runBudgetMs's own comment on why that
+ *  distinction matters for a CALIBRATED baseline specifically. */
+export function computeStepBudgetMs(cache, stepName, floorMs, multiplier) {
+  return computeBudgetMs(qualifiedDurationFor(cache, stepName), floorMs * multiplier);
+}
+
+/** The real whole-pipeline budget computation runPipeline uses — same
+ *  extraction rationale as computeStepBudgetMs. `qualifiedRunDurationMs` is
+ *  the SUM of the active steps' own qualified baselines (0 when nothing is
+ *  calibratable, treated as null/uncalibrated per computeBudgetMs). */
+export function computeRunBudgetMs(qualifiedRunDurationMs, floorMs, multiplier) {
+  return computeBudgetMs(qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null, floorMs * multiplier);
+}
+
+// Cap on the tail-keeping stderr accumulator below — mirrors spawnSync's old
+// `maxBuffer: 64 * 1024 * 1024` for the retriable/piped-capture shape.
+const MAX_STDERR_BUFFER = 64 * 1024 * 1024;
+
+/** Accumulates stdout/stderr chunks up to `maxBytes`, keeping the TAIL when
+    it overflows — not the head. isVitestPoolCrash's signature ("Worker
+    exited unexpectedly") appears at the END of a crashed run's output, so a
+    head-keeping accumulator silently loses the signal under exactly the
+    high-output contention where crashes happen. */
+function makeTailAccumulator(maxBytes) {
+  let buf = Buffer.alloc(0);
+  return {
+    push(chunk) {
+      buf = Buffer.concat([buf, Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))]);
+      if (buf.length > maxBytes) buf = buf.subarray(buf.length - maxBytes); // keep the TAIL
+    },
+    toString() {
+      return buf.toString('utf8');
+    },
   };
-  if (!RETRIABLE_POOL_STEPS.has(retryKey)) return { code: runOnce(false).code, attempts: 1 };
+}
+
+// The child currently in flight, if any — tracked at module scope so a
+// SIGINT/SIGTERM/SIGHUP handler registered once at the CLI entry point
+// (below) can reach it. Steps run sequentially (never concurrently), so a
+// single slot is enough; guarded by identity on clear so a stale reference
+// from an already-finished step can never clobber a newer one.
+let activeStepChild = null;
+
+/** Kill the whole tree rooted at `child`, cross-platform — shared by the
+ *  per-step timeout path and the SIGINT/SIGTERM/SIGHUP forwarding below, so
+ *  there is exactly one place that knows how. Windows: `taskkill /T /F`
+ *  (killTree, reap-stale-batteries.mjs). POSIX: SIGKILL the whole process
+ *  GROUP via a negative pid — requires the child to have been spawned with
+ *  `detached: true` (see runOnce below); `child.kill()` alone only reaps the
+ *  immediate shell, exactly as this function's callers already document. */
+function killStepChildTree(child) {
+  if (process.platform === 'win32') {
+    killTree(child.pid);
+    return;
+  }
+  try {
+    process.kill(-child.pid, 'SIGKILL');
+  } catch {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      // Already gone — nothing left to kill.
+    }
+  }
+}
+
+/** Run one pipeline step (`npm run <npmScript>`) and return
+    `{ code, attempts, timedOut }` — `attempts` is how many times the
+    underlying process actually ran (always 1 for a non-retriable step).
+    `timeoutMs` is the step's TOTAL budget shared across every retry, not a
+    per-attempt allowance — a step or the whole pipeline breaching it is
+    killed via `taskkill /PID <pid> /T /F` (never `child.kill()`: under
+    `shell: true` the real process tree is
+    `cmd.exe -> npm.cmd -> node(npm) -> node(vitest) -> N forks`, and
+    `child.kill()` only reaps the shell, leaving the fork pool running), then
+    swept by reap-stale-batteries.mjs's runCensus() so a fork whose parent
+    PID link died before `/T`'s walk reached it still gets caught. A timeout
+    is classified BEFORE the crash-retry check — a timed-out step must never
+    be retried as a vitest pool crash. Retriable pool steps stream stdout
+    LIVE but CAPTURE stderr (tail-kept, see makeTailAccumulator) so a
+    fork-pool crash can be detected and the step retried; every other step
+    inherits both streams unchanged. `retryKey` is the step's cache/identity
+    name, used to look up RETRIABLE_POOL_STEPS/isVitestPoolCrash — it can
+    differ from `npmScript` when CHANGED_ONLY_NPM_SCRIPT substitutes a
+    different underlying script. */
+export async function runStepProcess(
+  npmScript,
+  { cwd, env, retryKey = npmScript, timeoutMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000 },
+) {
+  const deadline = Date.now() + timeoutMs;
+
+  const runOnce = (capture) =>
+    new Promise((settlePromise) => {
+      const child = spawn('npm', ['run', npmScript], {
+        cwd,
+        shell: true,
+        env,
+        windowsHide: true,
+        // On POSIX, `detached: true` makes the shell the leader of its own
+        // process group (setsid) without backgrounding it (we still await
+        // its 'close' event normally) — that's what lets killStepChildTree
+        // reach the whole `sh -c npm run ... -> npm -> node -> forks` tree
+        // via a negative-pid signal, the same shape stop-app.mjs already
+        // uses for the production server/sidecar. Windows has no
+        // process-group equivalent; `taskkill /T /F` walks by parent PID
+        // instead, so `detached` is left at its default there. NOTE: this
+        // also takes the child out of the terminal's foreground process
+        // group on POSIX — see the module-level SIGINT/SIGTERM handlers at
+        // the CLI entry point below, which exist specifically to forward an
+        // operator's Ctrl+C into this now-detached tree rather than leaving
+        // it orphaned.
+        ...(process.platform === 'win32' ? {} : { detached: true }),
+        ...(capture ? { stdio: ['inherit', 'inherit', 'pipe'] } : { stdio: 'inherit' }),
+      });
+      activeStepChild = child;
+
+      const stderrAcc = capture ? makeTailAccumulator(MAX_STDERR_BUFFER) : null;
+      if (capture && child.stderr) {
+        child.stderr.on('data', (chunk) => stderrAcc.push(chunk));
+      }
+
+      let settled = false;
+      let timedOut = false;
+      const remainingMs = Math.max(0, deadline - Date.now());
+      const timer = setTimeout(() => {
+        if (settled) return; // the step closed right at the deadline — nothing left to kill or reclassify
+        timedOut = true;
+        killStepChildTree(child);
+        try {
+          // Provably-orphaned only (dead parent) — mirrors the pre-push
+          // reap's own narrow scope; a merely-slow-but-live subtree is not
+          // this sweep's job.
+          runCensus({ kill: true, killReasons: ['orphaned-unreachable'] });
+        } catch {
+          // Best-effort — never let the reaper sweep mask the timeout outcome.
+        }
+      }, remainingMs);
+      if (typeof timer.unref === 'function') timer.unref();
+
+      const finish = (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (activeStepChild === child) activeStepChild = null;
+        const stderr = stderrAcc ? stderrAcc.toString() : '';
+        if (stderr) process.stderr.write(stderr); // captured stderr isn't echoed live — surface it
+        settlePromise({ code: code ?? 1, stderr, timedOut });
+      };
+
+      child.on('close', (code) => finish(code));
+      child.on('error', () => finish(1));
+    });
+
+  if (!RETRIABLE_POOL_STEPS.has(retryKey)) {
+    const res = await runOnce(false);
+    return { code: res.code, attempts: 1, timedOut: res.timedOut };
+  }
   let lastRes = null;
   for (let attempt = 1; attempt <= MAX_POOL_ATTEMPTS; attempt += 1) {
-    const res = runOnce(true);
+    const res = await runOnce(true);
     lastRes = res;
+    if (res.timedOut) {
+      // Classified BEFORE the crash-retry check, on purpose: a timeout is a
+      // distinct outcome, never a crash-retry candidate.
+      return { code: res.code, attempts: attempt, timedOut: true };
+    }
     if (res.code === 0 || !isVitestPoolCrash(res.stderr)) {
-      return { code: res.code, attempts: attempt }; // success or a genuine red test (not a crash)
+      return { code: res.code, attempts: attempt, timedOut: false }; // success or a genuine red test (not a crash)
     }
     if (attempt < MAX_POOL_ATTEMPTS) {
       console.log(
@@ -1409,10 +1620,10 @@ export function runStepProcess(npmScript, { cwd, env, retryKey = npmScript }) {
     }
   }
   // Exhausted all MAX_POOL_ATTEMPTS attempts on crashes — return the last exit code
-  return { code: lastRes.code, attempts: MAX_POOL_ATTEMPTS };
+  return { code: lastRes.code, attempts: MAX_POOL_ATTEMPTS, timedOut: false };
 }
 
-export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env } = {}) {
+export async function runPipeline({ argv = [], cwd = process.cwd(), env = process.env } = {}) {
   const flags = parseFlags(argv);
   const validNames = STEPS.map((s) => s.name);
   let activeSteps = STEPS;
@@ -1501,6 +1712,40 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
     console.log('[verify-cache] git ls-files failed; running uncached');
   }
 
+  // Part 2 (ops-72) budgets — see the constants' own doc comments above for
+  // the max(FLOOR, K x lastGreenDurationMs) shape. The whole-pipeline budget
+  // is calibrated off the SUM of the active steps' own qualified baselines
+  // (falling back to the flat FLOOR when nothing is calibratable), so the
+  // per-step-total shape composes additively with this pipeline cap exactly
+  // as the design doc requires.
+  const stepTimeoutFloorMs = envMinutes(env, 'CASTWRIGHT_STEP_TIMEOUT_MIN', DEFAULT_STEP_TIMEOUT_MIN) * 60 * 1000;
+  const runTimeoutFloorMs = envMinutes(env, 'CASTWRIGHT_RUN_TIMEOUT_MIN', DEFAULT_RUN_TIMEOUT_MIN) * 60 * 1000;
+  const qualifiedRunDurationMs = activeSteps.reduce((sum, s) => {
+    const d = qualifiedDurationFor(cache, s.name);
+    return d === null ? sum : sum + d;
+  }, 0);
+  // Read AFTER the contention guard above so a throttle it just applied for
+  // THIS run is reflected here, not just for the next one. Widens the FLOOR,
+  // not the whole computeBudgetMs result (PR #3260 review pass 2, B5): the
+  // calibrated branch (K x lastGreenDurationMs) already reflects whatever
+  // conditions produced that baseline, so multiplying its RESULT double-
+  // counts a throttle a prior throttled run's own baseline already absorbed
+  // (measured: a baseline recorded throttled at 2x, multiplied again here,
+  // gave 4x instead of the intended 2x — now correctly gives 2x). This DOES
+  // NOT touch the uncalibrated pipeline floor (PR #3260 review pass 3, B10):
+  // computeBudgetMs(null, F) returns F verbatim regardless of k, so
+  // "multiply the result" and "multiply the floor input" are algebraically
+  // IDENTICAL — both still land the whole-pipeline floor at 2x
+  // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle, past the 273.8-min
+  // incident this budget exists to bound. What widened uncalibrated pipeline
+  // floor is actually safe under contention is a real open question, argued
+  // against that 273.8-min figure rather than derived from the fork-pool
+  // ratio — tracked as Castwright#3272 rather than picked here.
+  const contentionBudgetMultiplier =
+    affectedByContention && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
+  const runBudgetMs = computeRunBudgetMs(qualifiedRunDurationMs, runTimeoutFloorMs, contentionBudgetMultiplier);
+  const runDeadline = Date.now() + runBudgetMs;
+
   for (const step of activeSteps) {
     if (scopeDiff !== null && !scopeShared && !stepTouchedByDiff(step, scopeDiff)) {
       console.log(`[skip] ${step.name} (out of scope)`);
@@ -1553,6 +1798,13 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
       continue;
     }
 
+    if (Date.now() >= runDeadline) {
+      console.log(
+        `[timeout] pipeline run budget exceeded (${formatSecs(runBudgetMs)}) before starting ${step.name}`,
+      );
+      return 1;
+    }
+
     // --changed HEAD only ever substitutes on an UNSHARED --scope-staged run
     // (pre-commit, one narrow diff) whose diff is known (scopeDiff !== null)
     // and is CONFINED to this step's own primary source tree with a safe
@@ -1574,14 +1826,30 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
     } else {
       console.log(`[run] ${step.name}`);
     }
+    // Only a vitest-backed step is actually slowed by LOW_CONCURRENCY (see
+    // hasVitestStep's own doc comment) — widening a step this throttle
+    // doesn't affect would just mask a genuine hang in it for longer.
+    // See computeStepBudgetMs's own doc comment for why FLOOR is widened,
+    // not the whole computed result.
+    const stepContentionMultiplier =
+      hasVitestStep([step]) && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
+    const stepBudgetMs = Math.min(
+      computeStepBudgetMs(cache, step.name, stepTimeoutFloorMs, stepContentionMultiplier),
+      Math.max(0, runDeadline - Date.now()),
+    );
     const t0 = Date.now();
-    const { code, attempts } = runStepProcess(changedOnlyScript ?? step.name, {
+    const { code, attempts, timedOut } = await runStepProcess(changedOnlyScript ?? step.name, {
       cwd,
       env,
       retryKey: step.name,
+      timeoutMs: stepBudgetMs,
     });
     const dt = Date.now() - t0;
     const attemptsNote = attempts > 1 ? `, ${attempts} attempts` : '';
+    if (timedOut) {
+      console.log(`[timeout] ${step.name} (exceeded budget after ${formatSecs(dt)}${attemptsNote})`);
+      return code === 0 ? 1 : code;
+    }
     if (code === 0) {
       console.log(`[pass] ${step.name} (took ${formatSecs(dt)}${attemptsNote})`);
       // A --changed-only pass covers a NARROWER set of tests than currentHash's
@@ -1612,12 +1880,49 @@ export function runPipeline({ argv = [], cwd = process.cwd(), env = process.env 
 const isDirectInvocation = isDirectlyInvoked(import.meta.url);
 
 if (isDirectInvocation) {
+  // On POSIX, the in-flight step's child is `detached: true` (see
+  // runStepProcess), which calls setsid() — the child becomes a new SESSION
+  // leader with no controlling terminal, and its whole process group can be
+  // SIGKILLed on timeout. Two consequences follow, both closed here:
+  // Ctrl+C (SIGINT) or a `kill` (SIGTERM) sent to THIS process no longer
+  // reaches the child on its own, since it's out of the terminal's
+  // foreground process group; and closing the terminal / an SSH session
+  // dropping delivers SIGHUP to THIS process's (old) session, never to the
+  // child's (new) one (PR #3260 review pass 2, B7 — SIGHUP was missing from
+  // an earlier round of this same fix, leaving the identical orphan outcome
+  // reachable by a different, arguably more common, real-world trigger).
+  // Forward all three into the active child's tree before this process
+  // exits. Exit codes follow the POSIX shell convention (128 + signal
+  // number) once there is no active child left to kill.
+  const EXIT_CODE_FOR_SIGNAL = { SIGHUP: 129, SIGINT: 130, SIGTERM: 143 };
+  for (const sig of Object.keys(EXIT_CODE_FOR_SIGNAL)) {
+    process.on(sig, () => {
+      if (activeStepChild) killStepChildTree(activeStepChild);
+      process.exit(EXIT_CODE_FOR_SIGNAL[sig]);
+    });
+  }
   const here = dirname(fileURLToPath(import.meta.url));
   const repoRoot = resolve(here, '..');
-  const code = runPipeline({ argv: process.argv.slice(2), cwd: repoRoot, env: process.env });
+  const code = await runPipeline({ argv: process.argv.slice(2), cwd: repoRoot, env: process.env });
   process.exit(code);
 }
 
 // For tests that want to know the schema version / cache filename without
 // hardcoding string literals.
-export const _internals = { SCHEMA_VERSION, CACHE_FILENAME, toPosix, globToRegex, hasVitestStep };
+//
+// makeTailAccumulator + MAX_STDERR_BUFFER are the regression-test seam for
+// Part 2's tail-keeping stderr accumulator (#3258): the test drives it
+// directly with more than MAX_STDERR_BUFFER bytes, asserting the
+// isVitestPoolCrash signature survives (i.e. the tail is kept, not the head).
+export const _internals = {
+  SCHEMA_VERSION,
+  CACHE_FILENAME,
+  toPosix,
+  globToRegex,
+  hasVitestStep,
+  makeTailAccumulator,
+  MAX_STDERR_BUFFER,
+  killStepChildTree,
+  LOW_CONCURRENCY_BUDGET_MULTIPLIER,
+};
+

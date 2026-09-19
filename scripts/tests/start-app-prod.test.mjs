@@ -12,7 +12,15 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveLaunchTarget } from '../start-app-prod.mjs';
+import http from 'node:http';
+import {
+  resolveLaunchTarget,
+  isOwnServerInstance,
+  waitForOwnServer,
+  scanForOwnServer,
+  decideLaunchAction,
+  defaultNormalizePathForCompare,
+} from '../start-app-prod.mjs';
 
 test('prod default (certs present, no LAN_HTTPS) → https on :8443', () => {
   assert.deepEqual(resolveLaunchTarget({}, true), {
@@ -73,6 +81,386 @@ test('defaults to process.env + certsPresent=true when called with no argument',
     if (saved.PORT === undefined) delete process.env.PORT;
     else process.env.PORT = saved.PORT;
   }
+});
+
+// Castwright#3030 — the launcher's "already running" liveness check must
+// distinguish THIS worktree's own server from a sibling worktree's (or any
+// other install's) server that happens to answer on a probed port, using the
+// /api/health configLoad.runDir field the server stamps at boot. Comparison
+// is injectable (`normalize`) so these pin behaviour without touching the
+// real filesystem — see defaultNormalizePathForCompare's own tests below for
+// the real realpath+case-fold implementation.
+const identity = (p) => p; // no-op normalize for tests that don't care about path folding
+
+test('isOwnServerInstance: matching runDir is this worktree\'s own server', () => {
+  assert.equal(
+    isOwnServerInstance({ configLoad: { runDir: '/repo/.run' } }, '/repo/.run', { normalize: identity }),
+    true,
+  );
+});
+
+test('isOwnServerInstance: a sibling worktree\'s server (different runDir) is NOT this instance', () => {
+  assert.equal(
+    isOwnServerInstance({ configLoad: { runDir: '/other-worktree/.run' } }, '/repo/.run', { normalize: identity }),
+    false,
+  );
+});
+
+test('isOwnServerInstance: missing configLoad (unexpected /api/health shape) is NOT this instance', () => {
+  assert.equal(isOwnServerInstance({}, '/repo/.run', { normalize: identity }), false);
+  assert.equal(isOwnServerInstance(null, '/repo/.run', { normalize: identity }), false);
+});
+
+// Castwright#3030 round 2 (finding F2) — an fs-1 upgrade restart launches the
+// NEW release while the OLD release's server may still be shutting down. The
+// two releases have DIFFERENT server/ cwd but the SAME runDir (APP_RUN_DIR is
+// set identically across every release of one install), so the old server
+// must still be recognized as this install's own.
+test('isOwnServerInstance: same runDir across different release directories (upgrade restart) IS this install', () => {
+  assert.equal(
+    isOwnServerInstance(
+      { configLoad: { cwd: '/srv/audiobook/releases/v1.14.0/server', runDir: '/srv/audiobook/.run' } },
+      '/srv/audiobook/.run',
+      { normalize: identity },
+    ),
+    true,
+  );
+});
+
+test('isOwnServerInstance: uses the injected normalize on BOTH sides (case-insensitive win32 stand-in)', () => {
+  const foldCase = (p) => p.toLowerCase();
+  assert.equal(
+    isOwnServerInstance({ configLoad: { runDir: 'C:\\Repo\\.run' } }, 'c:\\repo\\.run', { normalize: foldCase }),
+    true,
+  );
+});
+
+test('defaultNormalizePathForCompare: on win32, folds case; elsewhere, exact', () => {
+  const a = defaultNormalizePathForCompare('C:\\Nonexistent\\Path\\.run');
+  const b = defaultNormalizePathForCompare('c:\\nonexistent\\path\\.run');
+  if (process.platform === 'win32') {
+    assert.equal(a, b);
+  } else {
+    assert.notEqual(a, b);
+  }
+});
+
+// Castwright#3030 round 2 (finding F1) — once a rebind is possible, the
+// launcher must confirm success by IDENTITY (this worktree's own runDir
+// answering /api/health), not by a bare TCP-connect to an assumed port: per
+// the srv-60 auto-rebind design doc, the actual bound port is the single
+// source of truth every consumer must read. These spin up real HTTP servers
+// (plain http, not TLS) answering /api/health with a controllable
+// configLoad.runDir, exactly the shape probeServed()/getJson() parse.
+function makeHealthServer(runDir) {
+  return http.createServer((req, res) => {
+    if (req.url === '/api/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, configLoad: { runDir } }));
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+}
+
+async function listenOnFreePort(server) {
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  return server.address().port;
+}
+
+test('waitForOwnServer: resolves immediately when OUR OWN server already answers on startPort', async () => {
+  const server = makeHealthServer('/repo/.run');
+  const port = await listenOnFreePort(server);
+  try {
+    const found = await waitForOwnServer({
+      startPort: port,
+      maxPorts: 1,
+      timeoutMs: 2000,
+      lanHttps: false,
+      runDir: '/repo/.run',
+    });
+    assert.equal(found, port);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+// Castwright#3030 round 3 (finding N2) — maxPorts=1 is a DELIBERATE bare
+// TCP-connect, exactly matching this launcher's pre-#3030 behaviour, so the
+// ordinary (no-foreign-occupant) boot path never depends on probeServed's
+// TLS-cert resolution (findRootCa()). Identity confirmation is reserved for
+// maxPorts>1, which main() only ever uses once it has independently
+// established a rebind is genuinely possible.
+test('waitForOwnServer: maxPorts=1 resolves on ANY listener, even a foreign one (deliberate — see N2)', async () => {
+  const server = makeHealthServer('/other-worktree/.run');
+  const port = await listenOnFreePort(server);
+  try {
+    const found = await waitForOwnServer({
+      startPort: port,
+      maxPorts: 1,
+      timeoutMs: 300,
+      lanHttps: false,
+      runDir: '/repo/.run',
+    });
+    assert.equal(found, port);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+// scanForOwnServer is the identity-confirming primitive waitForOwnServer
+// uses internally for maxPorts>1, and main() also uses it directly for the
+// pre-spawn "is a stale copy of MY OWN server already rebound somewhere in
+// this range" check (Castwright#3030 round 3, finding N1).
+test('scanForOwnServer: a single pass over a FOREIGN-only range finds nothing (no polling, no false positive)', async () => {
+  const server = makeHealthServer('/other-worktree/.run');
+  const port = await listenOnFreePort(server);
+  try {
+    const found = await scanForOwnServer(port, 1, false, '/repo/.run');
+    assert.equal(found, null);
+  } finally {
+    await new Promise((r) => server.close(r));
+  }
+});
+
+test('scanForOwnServer: finds OUR OWN server anywhere in the range on the first pass', async () => {
+  const foreign = makeHealthServer('/other-worktree/.run');
+  const startPort = await listenOnFreePort(foreign);
+  const own = makeHealthServer('/repo/.run');
+  await new Promise((r) => own.listen(startPort + 1, '127.0.0.1', r));
+  try {
+    const found = await scanForOwnServer(startPort, 3, false, '/repo/.run');
+    assert.equal(found, startPort + 1);
+  } finally {
+    await Promise.all([
+      new Promise((r) => foreign.close(r)),
+      new Promise((r) => own.close(r)),
+    ]);
+  }
+});
+
+test('scanForOwnServer: an already-elapsed deadline aborts before probing the next candidate', async () => {
+  const own = makeHealthServer('/repo/.run');
+  const port = await listenOnFreePort(own);
+  try {
+    // Deadline already in the past — the very first candidate must be skipped.
+    const found = await scanForOwnServer(port, 1, false, '/repo/.run', Date.now() - 1);
+    assert.equal(found, null);
+  } finally {
+    await new Promise((r) => own.close(r));
+  }
+});
+
+test('waitForOwnServer: scans past a foreign occupant to find OUR OWN server on a rebound port', async () => {
+  const foreign = makeHealthServer('/other-worktree/.run');
+  const startPort = await listenOnFreePort(foreign);
+  const own = makeHealthServer('/repo/.run');
+  await new Promise((r) => own.listen(startPort + 1, '127.0.0.1', r));
+  try {
+    const found = await waitForOwnServer({
+      startPort,
+      maxPorts: 3,
+      timeoutMs: 2000,
+      lanHttps: false,
+      runDir: '/repo/.run',
+    });
+    assert.equal(found, startPort + 1);
+  } finally {
+    await Promise.all([
+      new Promise((r) => foreign.close(r)),
+      new Promise((r) => own.close(r)),
+    ]);
+  }
+});
+
+test('waitForOwnServer: maxPorts=1 times out when nothing listens at startPort', async () => {
+  const probe = http.createServer();
+  const port = await listenOnFreePort(probe);
+  await new Promise((r) => probe.close(r));
+  const found = await waitForOwnServer({
+    startPort: port,
+    maxPorts: 1,
+    timeoutMs: 300,
+    lanHttps: false,
+    runDir: '/repo/.run',
+  });
+  assert.equal(found, null);
+});
+
+test('waitForOwnServer: returns null when nothing answers anywhere in range', async () => {
+  // Bind + immediately release a port so we know a moment ago it was free;
+  // nothing listens there for the whole test, so every candidate refuses.
+  const probe = http.createServer();
+  const startPort = await listenOnFreePort(probe);
+  await new Promise((r) => probe.close(r));
+  const found = await waitForOwnServer({
+    startPort,
+    maxPorts: 2,
+    timeoutMs: 300,
+    lanHttps: false,
+    runDir: '/repo/.run',
+  });
+  assert.equal(found, null);
+});
+
+// decideLaunchAction is main()'s entire pre-spawn decision sequence,
+// extracted (Castwright#3030 round 4, finding R5) so it is exercised here
+// directly, with fully injected fake probes — no real sockets needed. This
+// is also what pins finding R1: the stale-own-instance scan must run
+// UNCONDITIONALLY, not only when the target port currently has a foreign
+// occupant, because a stale rebound copy of this worktree's own server can
+// outlive the very occupant that caused the rebind.
+const OWN_RUN_DIR = '/repo/.run';
+const served = (runDir, extra = {}) => ({ configLoad: { runDir, ...extra } });
+
+function fakeProbes({ listening = {}, healthByPort = {} } = {}) {
+  return {
+    probePort: async (port) => Boolean(listening[port]),
+    probeServed: async (port) => healthByPort[port] ?? null,
+  };
+}
+
+test('decideLaunchAction: target port is our own instance → skip with READY', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({ listening: { 8443: true }, healthByPort: { 8443: served(OWN_RUN_DIR) } }),
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.ok(decision.messageLines.some((l) => l.includes('[SKIP]')));
+  assert.ok(decision.messageLines.some((l) => l.includes('[READY]')));
+});
+
+test('decideLaunchAction: target port occupied by an unresponsive process → fail', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({ listening: { 8443: true }, healthByPort: {} }), // probeServed returns null
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'fail');
+  assert.match(decision.message, /does not answer \/api\/health/);
+});
+
+test('decideLaunchAction: foreign occupant on target, nothing stale, nothing on altPort → proceed with mayHaveRebound', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({
+      listening: { 8443: true },
+      healthByPort: { 8443: served('/other-worktree/.run', { cwd: '/other/server' }) },
+    }),
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'proceed');
+  assert.equal(decision.mayHaveRebound, true);
+  assert.match(decision.infoMessage, /\[INFO\]/);
+  assert.match(decision.infoMessage, /\/other\/server/);
+});
+
+// Castwright#3030 round 4, finding R1 — the exact regression: launch while a
+// sibling holds the port (rebind to :N) -> sibling stops -> the target port
+// is free again on the NEXT launch, but the rebound copy of THIS worktree's
+// own server from the earlier launch is still running on :N. Scoping the
+// stale-scan to only the "currently foreign" branch (round 3's shape) missed
+// this exactly because alreadyUp is false here.
+test('decideLaunchAction: R1 — target port now FREE, but a stale rebound copy of OUR OWN server lingers → skip, not spawn', async () => {
+  const scanCalls = [];
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({ listening: { 8080: false, 8443: false } }), // target genuinely free now
+    scanForOwnServer: async (startPort, maxPorts) => {
+      scanCalls.push({ startPort, maxPorts });
+      return 8444; // our own stale instance, rebound here on an earlier launch
+    },
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.ok(decision.messageLines.some((l) => l.includes(':8444')));
+  // The scan must have actually run even though the target port was free —
+  // this is the exact placement bug R1 found in round 3's version.
+  assert.equal(scanCalls.length, 1);
+  assert.equal(scanCalls[0].startPort, 8444); // port + 1
+  assert.equal(scanCalls[0].maxPorts, 19);
+});
+
+test('decideLaunchAction: foreign occupant AND a stale own instance elsewhere → skip at the stale instance, never spawn', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({
+      listening: { 8443: true },
+      healthByPort: { 8443: served('/other-worktree/.run') },
+    }),
+    scanForOwnServer: async () => 8446,
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.ok(decision.messageLines.some((l) => l.includes(':8446')));
+});
+
+test('decideLaunchAction: target free, nothing stale, our own instance already on altPort → skip', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({
+      listening: { 8443: false, 8080: true },
+      healthByPort: { 8080: served(OWN_RUN_DIR) },
+    }),
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.ok(decision.messageLines.some((l) => l.includes(':8080')));
+});
+
+test('decideLaunchAction: target free, altPort held by a FOREIGN install → proceed, no rebind expected', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({
+      listening: { 8443: false, 8080: true },
+      healthByPort: { 8080: served('/other-worktree/.run') },
+    }),
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'proceed');
+  assert.equal(decision.mayHaveRebound, false);
+  assert.equal(decision.infoMessage, null);
+});
+
+test('decideLaunchAction: fully clean boot — nothing anywhere → proceed, no rebind, no info message', async () => {
+  const decision = await decideLaunchAction({
+    port: 8443,
+    altPort: 8080,
+    lanHttps: true,
+    runDir: OWN_RUN_DIR,
+    url: 'https://localhost:8443/',
+    ...fakeProbes({ listening: { 8443: false, 8080: false } }),
+    scanForOwnServer: async () => null,
+  });
+  assert.deepEqual(decision, { kind: 'proceed', mayHaveRebound: false, infoMessage: null });
 });
 
 import { bannerLine, formatBuildManifestLine } from '../start-app-prod.mjs';

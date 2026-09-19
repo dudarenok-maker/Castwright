@@ -557,17 +557,26 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 7 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**51 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**53 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-19 (claude), 51 owed, no change — both Group H rows
+> **Last change: 2026-09-19 — two lanes touched the register the same day,
+> reconciled here on merge.** This branch (chore/docs-onbox-register-decompose)
+> and a separate lane's E105/E106 additions (Castwright#3249, ops-72 Part 2)
+> both diverged from a common ancestor at 51 owed. Combined: **53 owed** — this
+> branch's own work is owed-count-neutral (see below), the other lane's
+> E105+E106 additions net +2 (51→53, Group E 7→9). `next-id` markers: Group H
+> unmoved, Group E bumped E106→E107 (unaffected by this merge — inherited as-is
+> from the other lane).
+>
+> **This branch, 2026-09-19 (claude), owed-count-neutral — both Group H rows
 > NARROWED, neither discharged.** Row **H1** (kana-trigram richness gate at
 > real-book scale for an all-kana Japanese manuscript): a real,
 > sourced-from-Wikisource, genuinely all-kana Hyakunin Isshu fixture (50
@@ -585,9 +594,8 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > real Han fixture (13 Analects chapters, ~2.25x the prior largest real
 > sample) confirms the gate holds at that intermediate scale, but true
 > book-scale (100k+ chars) remains unconfirmed. Neither `next-id` marker
-> moved (no new row minted; the owed count is unchanged at 51 because H1's
-> attempted discharge was corrected within this same round). Also this round,
-> not owed-count-affecting:
+> moved (no new row minted; H1's attempted discharge was corrected within this
+> same round). Also this round, not owed-count-affecting:
 > A6/A7 got a cross-reference sequencing note (same #3027 fix, same
 > book/cast — one on-box session expected to cover both), A10's UI-surfacing
 > reframing was already current, B1's criteria were re-derived against PR
@@ -598,6 +606,25 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > (the voice-library drag icon is confirmed structurally unreachable dead
 > code from any current call site — filed as a design-pass decision per
 > CLAUDE.md's incidental-findings protocol, not fixed silently).
+>
+> **Prior change: 2026-09-19, adding E106** (Castwright#3249, ops-72 Part 2, claude): a
+> review pass on the same PR found that the POSIX SIGINT/SIGTERM/SIGHUP forwarding added
+> to close a Ctrl+C-orphans-the-battery gap is unproven on this repo's primary (Windows)
+> dev box — `detached`, process groups, and POSIX signal delivery semantics don't exist
+> there in the shape this fix targets. 52 → 53 owed, Group E 8 → 9. `next-id` bumped
+> E106 → E107 in the same change. `npm run check:onbox-register` green.
+>
+> **Prior change: 2026-09-18, adding E105** (Castwright#3249, ops-72 Part 2, claude): the
+> `runStepProcess`/`runPipeline` async `spawn` conversion and step/pipeline time budgets
+> are unit-tested (including timeout-vs-crash-retry mutation tests) against a fast
+> throwaway fixture process tree, but `taskkill /T /F`'s own documented blind spot — a
+> fork whose parent PID link died before `/T`'s walk reached it — needs a real, deep,
+> long-lived Windows process tree (a genuine vitest fork-pool battery) to observe, the
+> same way Part 3's reaper needed one for **E104**. This lands on top of the independent
+> **A109** addition below (#3084 — a same-card endpoint's model yielding its card to Qwen
+> VoiceDesign, owed against a design rather than shipped code): 51 → 52 owed, Group E 7 → 8,
+> Group A unchanged at 35. `next-id` bumped E105 → E106 in the same change.
+> `npm run check:onbox-register` green.
 >
 > **Prior change: 2026-09-17, adding A109** (#3084, claude): the OpenAI-compatible analyzer
 > design (PR [#3245](https://github.com/dudarenok-maker/Castwright/pull/3245)) claimed that an
@@ -611,8 +638,8 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > **Unusually, this row is owed against a design rather than shipped code** — wave 4 is not built,
 > so A109 cannot be run until it merges, and wave 4's ship PR discharges or narrows it. Recorded
 > this way deliberately: the alternative was an unproven claim with nothing tracking it.
->
-> **Last change: 2026-09-10, adding A107** (#3086/#3101, claude): the unit-level fix for
+
+> **Prior change: 2026-09-10, adding A107** (#3086/#3101, claude): the unit-level fix for
 > `/load`'s Kokoro-cold-load arbiter bypass is proven with a pure-Python threading test
 > (fake Kokoro engine, no GPU); the ORIGINAL symptom — a real Kokoro `/load` racing a
 > resident VoiceDesign forward on a shared-device box — still needs a real on-box re-run,
@@ -5147,7 +5174,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E105 -->
+<!-- next-id: E107 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9/E103). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -5618,6 +5645,80 @@ the TTS sidecar's `python.exe` if it's up):
 
 *Needs:* a Windows dev box, no GPU. *Cost:* ~20 minutes across a few pushes.
 *Criteria:* the five observations above; issue #3047's acceptance list.
+
+### E105 · ops-72 step/pipeline time budgets — `taskkill /T /F`'s orphan blind spot against a real Windows process tree ([Castwright#3249](https://github.com/dudarenok-maker/Castwright/issues/3249), Part 2 of [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)) · **any Windows dev box; no GPU needed**
+
+`runStepProcess`'s timeout path is unit-tested against a real (but tiny and fast)
+process tree: a fixture npm script that never exits is killed via
+`taskkill /PID <pid> /T /F` and classified `timedOut: true`, never retried as a
+crash (`scripts/tests/verify-cache.test.mjs`'s `runStepProcess`/`runPipeline`
+timeout mutation tests). What no unit test can prove is the thing the design
+doc calls out as **load-bearing**: `taskkill /T` walks *live* parent-PID links
+at the moment it runs, so a fork whose parent already died before that walk
+reaches it is invisible to `/T` — exactly the shape of the two 390-minute
+orphans in the 2026-09-05 census that motivated this whole design doc. A
+one-line `npm run <script>` fixture that exits almost instantly never grows a
+process tree deep or long-lived enough (`cmd.exe -> npm.cmd -> node(npm) ->
+node(vitest) -> N forks`) to exhibit that specific race.
+
+**What to observe, concretely**, on a Windows dev box:
+
+- Run a genuinely slow, fork-pool-heavy step (e.g. `npm run test:server`)
+  under an artificially tiny `CASTWRIGHT_STEP_TIMEOUT_MIN` (e.g. `0.2`) and
+  confirm the console reports `[timeout]`, not a `[retry]`/crash-exhausted
+  `[fail]` — then confirm via Task Manager / `Get-Process` that the ENTIRE
+  tree (`cmd.exe`, `npm`, the vitest parent, and every fork) is gone, not
+  just the top-level `cmd.exe` `taskkill /T` was pointed at.
+- Reproduce the actual blind spot: start the same slow step, then kill one of
+  its vitest fork children's immediate parent out from under it (simulating
+  the parent-dies-before-the-walk race) before the step's own timeout fires,
+  and confirm that fork survives the subsequent `taskkill /PID <root> /T /F`
+  — then confirm `runCensus({ kill: true, killReasons:
+  ['orphaned-unreachable'] })`, invoked immediately after the kill, catches
+  and reaps that survivor (this is the sweep Part 3's reaper already proves
+  in isolation at **E104** above; this row is specifically about the
+  hand-off from Part 2's timeout kill into it, on a real tree).
+- Confirm the whole-pipeline `CASTWRIGHT_RUN_TIMEOUT_MIN` budget actually
+  bounds a real multi-step `verify` run — start one with a tiny override and
+  confirm it aborts with `[timeout]` well before the 4h34m incident figure
+  this feature exists to cap, rather than running to completion because the
+  per-step budgets alone left enough total headroom.
+
+*Needs:* a Windows dev box, no GPU. *Cost:* ~15–20 minutes.
+*Criteria:* the three observations above; issue Castwright#3249's acceptance list.
+
+### E106 · ops-72 step/pipeline time budgets — POSIX Ctrl+C/SIGTERM/SIGHUP forwarding into a detached process group ([Castwright#3249](https://github.com/dudarenok-maker/Castwright/issues/3249), Part 2 of [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)) · **a Mac or Linux dev box; no GPU needed**
+
+`runStepProcess`'s timeout-kill path spawns the step's child with
+`detached: true` on POSIX (needed to reach the whole `sh -c npm run ... ->
+npm -> node -> forks` tree via a negative-pid `SIGKILL`, since `detached`
+makes the child the leader of its own process group). That has a real
+consequence: the child is now outside the terminal's foreground process
+group, so an operator's Ctrl+C (SIGINT), a `kill` (SIGTERM), or closing the
+terminal / an SSH session dropping (SIGHUP) no longer reaches it on its own
+— `runPipeline` forwards all three into the active child's tree via a
+`process.on(sig, ...)` handler at its CLI entry point before exiting. This
+is entirely unproven on the primary dev box for this repo, which is
+Windows — `detached`, process groups, and POSIX signal delivery semantics
+do not exist there in the shape this fix targets, so nothing about it can
+be observed on a Windows box no matter how thoroughly it's exercised there.
+
+**What to observe, concretely**, on a Mac or Linux box:
+
+- Start `npm run verify` (or any step selection that includes a real
+  vitest-backed step, e.g. `--steps test:server`), press Ctrl+C mid-run,
+  and confirm BOTH: the shell prompt returns promptly, AND `pgrep -f vitest`
+  (or equivalent) shows nothing left running a few seconds later — not just
+  that the foreground process exited.
+- Repeat with `kill -TERM <pipeline's own pid>` sent from a second terminal
+  instead of Ctrl+C, confirming the same clean-tree outcome.
+- Repeat once more simulating a dropped session: start the run, then close
+  the terminal window (or, over SSH, kill the SSH connection) rather than
+  sending a signal directly, and confirm — from a still-open second
+  session — that no vitest/npm/node processes from that run remain.
+
+*Needs:* a Mac or Linux dev box, no GPU. *Cost:* ~10 minutes.
+*Criteria:* the three observations above; issue Castwright#3249's acceptance list.
 
 ## Group G — GitHub Actions itself
 
