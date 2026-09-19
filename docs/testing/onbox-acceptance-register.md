@@ -2329,6 +2329,51 @@ Still owed — deliberately left untouched, not silently attempted:
   would disturb their GPU state mid-run — a contention risk, not a hardware
   gap. Needs a dedicated, uncontended window.
 
+> **2026-09-20 (#3296, uncontended 2-card window) — the owed bullet ran for
+> real: a respawn finds the pinned card across an enumeration-order change.**
+> Box: RTX 4070 Laptop GPU (`1831b67f-…`) + RTX 5070 Ti
+> (`73e7270e-…`). Each boot spawned the real sidecar module fresh with
+> respawn-shaped env — the raw `QWEN_DEVICE=cuda-uuid:<bare uuid>` literal
+> `buildSidecarEnv` sends post-#1870, never a translated `cuda:N` — so import-time
+> `_engine_env_pin` → `_resolve_uuid_to_index` → `_validate_cuda_index` ran
+> exactly as a supervisor respawn runs it, with the model never loaded (no
+> weights read, no VRAM moved, other lanes undisturbed).
+>
+> - Default order (`0=4070, 1=5070 Ti`): the 5070 Ti's UUID resolved `cuda:1`,
+>   landed on the 5070 Ti, `validate=ok`, admission key `cuda:1`; codec pin →
+>   `cuda:0` (4070). Repeat boot: byte-identical — respawn is deterministic.
+> - **Reversed order** (`0=5070 Ti, 1=4070`): the same literal resolved `cuda:0`
+>   and **still landed on the 5070 Ti** — the UUID torch reports for the landing
+>   device equals the pin — `validate=ok`; codec followed to `cuda:1`, still the
+>   4070. No `_validate_cuda_index` failure, no wrong card. **Pass.**
+> - Counterfactuals, so the row has teeth: `cuda:1` frozen from the default-order
+>   boot replayed under the reversed order lands on the **4070** with
+>   `validate=ok` — a stale in-range index is silently the wrong card and the
+>   guard cannot catch it — and against a one-card view it raises `ValueError:
+>   cuda:1 out of range; only 1 CUDA device(s) visible`. Both are the shapes
+>   #1870 exists to prevent. An unresolvable UUID → `auto` +
+>   `uuid_unresolved` (codec → `cpu`), no crash.
+> - Two box facts worth keeping. **`CUDA_DEVICE_ORDER` does not renumber these
+>   two cards** — `PCI_BUS_ID` and `FASTEST_FIRST` both yield
+>   `0=4070, 1=5070 Ti`, so the lever named in the bullet above is inert on this
+>   hardware pairing; the order was changed instead by permuting the visible
+>   device list (`CUDA_VISIBLE_DEVICES=1,0`), which inverts the uuid↔index map
+>   without a reboot or a hot-plug. And the pin's canonical form is the **bare
+>   UUID**: a `GPU-`-prefixed string copied from `nvidia-smi -L` does not resolve
+>   (→ `auto`), consistent with `toUuidForm()`
+>   (`server/src/routes/gpu-uuid.ts:32-43`) storing the sidecar's own string — a
+>   hand-edit footgun in `tts.qwen.device`, recorded not filed.
+> - Scope: the `PUT /api/config` → forced respawn → `GET /health` leg on both
+>   cards was already discharged by the 2026-09-08 run above; what was owed was
+>   the order-change variable, which is decided entirely inside the sidecar
+>   process at import, and is what this run drove. Re-driving it through the
+>   shared dev server would have meant restarting the server under a permuted
+>   device list while other lanes are live — not done, stated plainly.
+>
+> Transcript + boot matrix:
+> `docs/testing/onbox-2card-pinokio-batch-results/a12-enumeration-2026-09-20.md`.
+> **A12's remaining bullet: CLOSED — row fully discharged; counts unchanged.**
+
 *Needs:* both cards, and the ability to change enumeration order between boots
 (the eGPU is not hot-pluggable). *Cost:* short.
 
