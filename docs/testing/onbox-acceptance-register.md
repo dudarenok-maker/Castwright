@@ -559,24 +559,35 @@ setup rather than repeatedly loading and evicting models.
 | **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 7 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
-| **H** | No hardware — needs a real CJK manuscript (full-length Han; the all-kana ja row H1 discharged 2026-09-19), not yet in this repo's corpus | 1 |
+| **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**50 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**51 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-19 (claude), 51 → 50 — Group H 2 → 1.** Row **H1**
-> (kana-trigram richness gate at real-book scale for an all-kana Japanese
-> manuscript) discharged: a real, sourced-from-Wikisource, genuinely all-kana
-> Hyakunin Isshu fixture now runs through `detectManuscriptLanguageFromChapters`
-> in `detect-language.test.ts` and confirms the gate holds. Row **H2** (Han
+> **Last change: 2026-09-19 (claude), 51 owed, no change — both Group H rows
+> NARROWED, neither discharged.** Row **H1** (kana-trigram richness gate at
+> real-book scale for an all-kana Japanese manuscript): a real,
+> sourced-from-Wikisource, genuinely all-kana Hyakunin Isshu fixture (50
+> poems, 1,572 kana chars) now runs through `detectManuscriptLanguageFromChapters`
+> in `detect-language.test.ts` and confirms the gate holds (`guiraudR` ≈
+> 29.015). A pr-review-gate pass caught that this sample is real progress but
+> too small to answer the row's own question — the gate can pass on a small
+> sample for the same reason a synthetic one used to (finding B4's "the
+> separation only appears at length"): flipping `KANA_NGRAM_SIZE` 3→2 makes
+> the pre-existing finding-3(b) test go red while this new test stays green,
+> proving 1,572 kana chars doesn't lock in the regression it's presented as
+> locking. So H1 stays **narrowed, not discharged** — an initial pass on this
+> same PR incorrectly discharged it; corrected before merge. Row **H2** (Han
 > lexical-richness floor at book scale) NARROWED but stays owed — a larger
 > real Han fixture (13 Analects chapters, ~2.25x the prior largest real
 > sample) confirms the gate holds at that intermediate scale, but true
 > book-scale (100k+ chars) remains unconfirmed. Neither `next-id` marker
-> moved (no new row minted). Also this round, not owed-count-affecting:
+> moved (no new row minted; the owed count is unchanged at 51 because H1's
+> attempted discharge was corrected within this same round). Also this round,
+> not owed-count-affecting:
 > A6/A7 got a cross-reference sequencing note (same #3027 fix, same
 > book/cast — one on-box session expected to cover both), A10's UI-surfacing
 > reframing was already current, B1's criteria were re-derived against PR
@@ -5828,26 +5839,79 @@ needs no GPU, sidecar, or analyzer; it is a pure function over chapter text,
 runnable on any machine (`npx tsx` against a real manuscript's chapters, or a
 dry-run `npm run repair:book-language` pass over a real imported book).
 
-> **H1 DISCHARGED 2026-09-19 (decomposition pass), row removed.** A real,
+### H1 · Kana-trigram richness gate holds at real-book scale for an all-kana (no kanji) Japanese manuscript (#2256 round 3, finding 3(b)/C5)
+
+`server/src/tts/prose-units.ts`'s kana tokenizer (overlapping character
+trigrams, replacing per-character tokenization) is verified only against an
+own hand-authored synthetic all-kana fixture — 30 distinct hiragana base
+words composed into 1,500 sentences, `detect-language.test.ts`'s
+`finding 3(b)` fixture — not a genuine all-kana book. The fix closes the
+SPECIFIC real
+failure the original #2256 finding reported (a real book at N≈4,843
+characters, old per-character scheme measured R=1.72, refused) using the
+finding's own reported number as an anchor, but this repo cannot reproduce
+that exact book to re-measure it directly, and the synthetic fixture's
+margin is known to be vocabulary-dependent and thinner than Han-based CJK's
+(round-3 finding C5 additionally found the richness gate is close to inert
+for kana beyond what `dedupeProseUnits` already catches — see
+`prose-units.ts`'s own finding-3(b) block for the honest numbers, all of
+which round 4 re-measured against the fixture actually in the tree).
+
+**What to observe, once a real all-kana Japanese manuscript is available**
+(a children's book or early-reader text with no kanji at all is the
+realistic shape — this repo's two real Coalfall Commission translations at
+`C:\AudiobookWorkspace\books\Castwright\Standalones\{煤落的委托,
+コールフォールの依頼}\manuscript.md` are real CJK text but MIXED kanji+kana,
+not the all-kana case this row is about):
+
+1. Run the manuscript's chapters through `detectManuscriptLanguageFromChapters`
+   (or a full `POST /api/import`) and record the result — expected:
+   `{ language: 'ja', supported: true, fallback: false }`.
+2. Separately call `guiraudR` on the same (deduped, per
+   `dedupeProseUnits`) winning sample and record the actual value against
+   `LEXICAL_RICHNESS_FLOOR` (3) — a real number at real scale, not the
+   30-word synthetic fixture's.
+3. If the book has multiple chapters, note the total combined character
+   count the richness gate actually saw (no cap applies post-#2256 round 3 —
+   see `prose-units.ts`'s finding-3(a) retraction) — the margin at that
+   real scale is the actual thing this row exists to confirm.
+
+*Needs:* a real, legally usable all-kana (no kanji) Japanese manuscript, at
+real book scale (thousands to tens of thousands of kana characters, not a
+few dozen poems) — no GPU, sidecar, or analyzer.
+*Cost:* one `detectManuscriptLanguageFromChapters` call plus recording the
+observed `R`/`digitTokenShare` numbers here.
+*Discharges when:* a real all-kana manuscript AT BOOK SCALE has been run
+through detection, the result and the observed `R` are recorded in this row
+(or a dedicated run sheet this row is updated to point at), and either the
+current trigram fix is confirmed sufficient at real scale or a follow-up
+issue is filed with the real numbers that show it isn't.
+
+> **2026-09-19 — NARROWED, not discharged (decomposition pass).** A real,
 > genuinely all-kana (no kanji) Japanese fixture is now in the tree —
 > `server/src/__fixtures__/hyakunin-isshu-1-50.ja.md`, the first 50 poems of
 > the Ogura Hyakunin Isshu (小倉百人一首, 13th century, public domain),
 > rendered in the standard all-hiragana karuta reading-card (読み札) form —
 > the conventional no-kanji transcription of this anthology, sourced from
 > Wikisource (ja.wikisource.org/wiki/小倉百人一首), not an invented one.
-> `detect-language.test.ts`'s new `describe('detectManuscriptLanguageFromChapters
-> — Group H real-manuscript CJK fixtures (register rows H1/H2)')` block runs
-> the fixture (split into 5 chapters of 10 poems each) through
+> `detect-language.test.ts`'s new Group-H describe block runs the fixture
+> (split into 5 chapters of 10 poems each) through
 > `detectManuscriptLanguageFromChapters` and asserts
 > `{ language: 'ja', supported: true, fallback: false }`, asserts the sample
 > is genuinely kanji-free (no `一-鿿` characters at all — the entire
 > point of this row), and asserts `guiraudR` clears `LEXICAL_RICHNESS_FLOOR`.
-> Observed at real (if modest, per this genre's own "small" precedent — see
-> the row's own former text) scale: **1,572 combined kana characters**,
-> `guiraudR` comfortably above the floor, current trigram tokenizer holds.
-> The row's own discharge criterion — "a real all-kana manuscript has been
-> run through detection, the result and the observed R are recorded" — is
-> met; no follow-up issue is needed since the gate held.
+> Observed at real (if modest) scale: **1,572 combined kana characters**,
+> `guiraudR` ≈ **29.015** — comfortably above the floor of 3, current trigram
+> tokenizer holds. **This is real progress, not a discharge**: an initial
+> pass of this same PR discharged H1 outright, but a pr-review-gate pass
+> caught that 1,572 characters is far too small a sample to answer this
+> row's actual question — flipping `KANA_NGRAM_SIZE` from 3 to 2 makes the
+> pre-existing finding-3(b) test fail while this new test stays green,
+> meaning this sample doesn't lock in the same richness-decay regression
+> finding B4 already found insufficient at small scale. Corrected before
+> merge: H1 stays owed, narrowed rather than discharged. *Needs* is
+> unchanged: a genuinely full-length (not five-poem-chapter-scale) real
+> all-kana manuscript.
 
 ### H2 · Lexical-richness floor still clears on a FULL-LENGTH real Han (Chinese) book (#2256 round 4, finding B3)
 
@@ -5889,15 +5953,10 @@ one to two orders of magnitude short of a book.
    `V` in `V / sqrt(N)` and it is the whole question: at N = 400,000, R
    clears the floor only if V is above ~1,900.
 
-**2026-09-19 update (chore/docs-onbox-register-decompose):** the largest real
-Han sample reachable in-repo was pushed from 4,425 → **9,948** characters (13
-of the Analects' 20 chapters, `server/src/__fixtures__/analects-xueer-yongye.zh.md`,
-sourced from Wikisource, public domain) — R≈10.97, comfortably clear of the
-floor, exercised by `server/src/tts/detect-language.test.ts`. That is real
-progress but still 1–2 orders of magnitude short of book scale (N~400,000), so
-this row **stays owed, narrowed rather than discharged**. Sourcing a genuine
-full-length PD Chinese manuscript is tracked as
-[#3270](https://github.com/dudarenok-maker/Castwright/issues/3270).
+Sourcing a genuine full-length PD Chinese manuscript is tracked as
+[#3270](https://github.com/dudarenok-maker/Castwright/issues/3270); see the
+2026-09-19 note below for the real (narrower) progress made against this row
+already.
 
 *Needs:* one real, legally usable full-length Chinese (Han) manuscript —
 no GPU, sidecar, or analyzer.
@@ -5906,10 +5965,11 @@ no GPU, sidecar, or analyzer.
 detection and its N, V and R are recorded in this row — either confirming
 the uncapped gate clears the floor at book scale, or showing it does not,
 in which case a follow-up issue owns re-introducing a length correction
+that is NOT a chapter-order-dependent prefix.
 
 > **2026-09-19 — NARROWED, not discharged (decomposition pass).** A larger
 > real Han fixture is now in the tree —
-> `server/src/__fixtures__/analects-xueer-yongye.zh.md`, 13 of the
+> `server/src/__fixtures__/analects-xueer-zilu.zh.md`, 13 of the
 > Analects' (論語) 20 chapters (學而 through 子路), sourced verbatim from
 > Wikisource (zh.wikisource.org/wiki/論語), public domain (~5th century
 > BCE). `detect-language.test.ts`'s new Group-H describe block runs it
@@ -5929,7 +5989,6 @@ in which case a follow-up issue owns re-introducing a length correction
 > question this row exists to answer — does a real 100k+-character novel
 > keep V growing fast enough — remains open. *Needs* is unchanged: a
 > genuinely full-length (not classical-text-scale) real Han manuscript.
-that is NOT a chapter-order-dependent prefix.
 
 ---
 

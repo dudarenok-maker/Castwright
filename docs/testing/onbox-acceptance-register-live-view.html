@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">50</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">51</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -215,7 +215,7 @@
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
       <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->7<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
-      <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real, full-length Han manuscript this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->1<!-- END GENERATED:glance:H --></td></tr>
+      <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real, full-length Han manuscript this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
   </table>
   </div>
@@ -1189,9 +1189,18 @@
   <!-- H -->
   <section class="group is-soft" id="gh">
     <header>
-      <h3 class="gtitle"><span class="gtag">H</span> No hardware — a real CJK manuscript this corpus lacks <span class="gcount">1 row</span></h3>
-      <p class="setup">Not a hardware prerequisite at all: the blocker is a real-book fixture. <code>detectManuscriptLanguageFromChapters</code> is a pure function over chapter text — no GPU, no sidecar, no analyzer. Runnable on any machine the moment the right book exists. Row H1 (kana trigram gate) discharged 2026-09-19 — see the register's own changelog.</p>
+      <h3 class="gtitle"><span class="gtag">H</span> No hardware — a real CJK manuscript this corpus lacks <span class="gcount">2 rows</span></h3>
+      <p class="setup">Not a hardware prerequisite at all: the blocker is a real-book fixture. <code>detectManuscriptLanguageFromChapters</code> is a pure function over chapter text — no GPU, no sidecar, no analyzer. Runnable on any machine the moment the right book exists. Both rows NARROWED 2026-09-19, neither discharged — see the register's own changelog.</p>
     </header>
+    <details class="item">
+      <summary><span class="num">H1</span><span class="iname">Kana-trigram richness gate holds at real-book scale for an all-kana (no kanji) Japanese manuscript (#2256 round 3, finding 3(b)/C5)</span><span class="risk">Narrowed 2026-09-19 — book scale still unconfirmed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>server/src/tts/prose-units.ts</code>'s kana tokenizer (overlapping character trigrams, replacing per-character tokenization) is verified only against a hand-authored synthetic all-kana fixture — 30 distinct hiragana base words composed into 1,500 sentences, <code>detect-language.test.ts</code>'s <code>finding 3(b)</code> fixture — not a genuine all-kana book. The fix closes the specific real failure the original #2256 finding reported (a real book at N ≈ 4,843 characters, old per-character scheme measured R = 1.72, refused) using that number as an anchor, but this repo cannot reproduce the exact book to re-measure it directly, and the synthetic fixture's margin is known to be vocabulary-dependent and thinner than Han-based CJK's.</p>
+        <p>What to observe, once a real all-kana Japanese manuscript is available (a children's book or early-reader text with no kanji at all is the realistic shape): run its chapters through <code>detectManuscriptLanguageFromChapters</code>, record the result, separately call <code>guiraudR</code> on the same deduped winning sample against <code>LEXICAL_RICHNESS_FLOOR</code> (3), and note the total combined character count the gate actually saw — the margin at real scale is the thing this row exists to confirm.</p>
+        <p class="flag"><b>NARROWED 2026-09-19, not discharged.</b> A real, genuinely all-kana fixture is now in the tree — the first 50 poems of the Ogura Hyakunin Isshu (小倉百人一首, 13th century, public domain), sourced from Wikisource, rendered in the standard all-hiragana karuta reading-card form. Detection confirms <code>{ language: 'ja', supported: true, fallback: false }</code>, the sample is genuinely kanji-free, and <code>guiraudR</code> measures <b>≈ 29.015</b> at <b>1,572 combined kana characters</b> — comfortably above the floor of 3. <b>An initial pass of this same PR discharged H1 outright; a pr-review-gate pass caught that 1,572 characters is too small a sample to answer this row's real question</b> — flipping <code>KANA_NGRAM_SIZE</code> from 3 to 2 makes the pre-existing finding-3(b) test fail while this new test stays green, meaning the sample doesn't lock in the same richness-decay regression finding B4 already found insufficient at small scale. Corrected before merge: this row stays owed, narrowed rather than discharged.</p>
+        <p class="src">A real, legally usable all-kana Japanese manuscript at real book scale (thousands to tens of thousands of kana characters, not a few dozen poems). No GPU, sidecar or analyzer · <a href="https://github.com/dudarenok-maker/Castwright/issues/2256">#2256</a> round 3, finding 3(b)/C5</p>
+      </div>
+    </details>
     <details class="item">
       <summary><span class="num">H2</span><span class="iname">Richness floor on a full-length real Han book</span><span class="risk">Narrowed 2026-09-19 — book scale still unconfirmed</span><span class="chev">›</span></summary>
       <div class="body">
