@@ -6081,9 +6081,13 @@ that is NOT a chapter-order-dependent prefix.
 > chars / 795 distinct / R=12.078). At this new scale, `guiraudR` measures
 > **~10.97** (raw joined sample; the pipeline's own dedupe runs internally
 > during detection, which is what the `fallback:false` result actually
-> certifies) — still comfortably above `LEXICAL_RICHNESS_FLOOR` (3), and the
-> decay trend from 4,425→9,948 chars (R 12.078→10.97, V 795→1,096) is gentle,
-> consistent with the row's own concern rather than contradicting it.
+> certifies) — still comfortably above `LEXICAL_RICHNESS_FLOOR` (3). Note the
+> two samples being compared (R 12.078→10.97, V 795→1,096 at 4,425→9,948
+> chars) are a modern Chinese translation and a ~5th-century-BCE classical
+> text respectively — different genres with different vocabularies, not two
+> points on one book's growth curve, so this pair doesn't itself establish a
+> length-decay trend; it's cited only as the two largest real samples
+> reachable, not as evidence the decay is gentle.
 > **This is real progress, not a discharge: 9,948 characters is still one to
 > two orders of magnitude short of book scale** (the row's own N=400,000
 > concern, where V needs to clear ~1,900 distinct for R to hold). The
