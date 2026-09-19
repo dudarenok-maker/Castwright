@@ -5889,6 +5889,16 @@ one to two orders of magnitude short of a book.
    `V` in `V / sqrt(N)` and it is the whole question: at N = 400,000, R
    clears the floor only if V is above ~1,900.
 
+**2026-09-19 update (chore/docs-onbox-register-decompose):** the largest real
+Han sample reachable in-repo was pushed from 4,425 → **9,948** characters (13
+of the Analects' 20 chapters, `server/src/__fixtures__/analects-xueer-yongye.zh.md`,
+sourced from Wikisource, public domain) — R≈10.97, comfortably clear of the
+floor, exercised by `server/src/tts/detect-language.test.ts`. That is real
+progress but still 1–2 orders of magnitude short of book scale (N~400,000), so
+this row **stays owed, narrowed rather than discharged**. Sourcing a genuine
+full-length PD Chinese manuscript is tracked as
+[#3270](https://github.com/dudarenok-maker/Castwright/issues/3270).
+
 *Needs:* one real, legally usable full-length Chinese (Han) manuscript —
 no GPU, sidecar, or analyzer.
 *Cost:* one detection call plus recording three numbers here.
