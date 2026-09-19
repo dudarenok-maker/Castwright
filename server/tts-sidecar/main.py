@@ -5103,10 +5103,14 @@ class PlacementController:
         ASR load measured via `_observed_mb` reads whatever residual torch
         activity happened to be co-resident — a plausible source of the
         contaminated 3707 MB `asr` figure that motivated #2094 in the first
-        place. (#2682: a resident "asr.warm" forward is measured via
-        `_observed_mb` instead — see `reservation()`'s `finally` — since its
-        own torch-side activity, unlike CTranslate2's weights, is enough for
-        the allocator peak to see; this method is COLD-`asr`-only now.)
+        place. (#2682: a resident "asr.warm" forward was moved off this
+        method onto `_observed_mb`, on the theory that its own torch-side
+        activity, unlike CTranslate2's weights, is enough for the allocator
+        peak to see; #2930/#3012 disproved that on real hardware and #3036
+        tried an NVML per-process reading instead. As of #3266 the resident
+        case is back HERE — a device-wide free-memory delta with the same
+        foreign-PID/concurrent-reservation guards the cold case uses, so this
+        method serves BOTH `asr` branches and no longer cold-only.)
 
         A before/after DELTA of this device-wide free-memory reading — not a
         single snapshot — is what `_resolve_admission`/`reservation()` use for
@@ -5164,7 +5168,16 @@ class PlacementController:
         yields usable own-process numbers at all is exactly what #3265's
         on-box run exists to find out. Never raises: same
         `nvmlInit`/try/`finally: nvmlShutdown`/broad-except shape as
-        `_foreign_pid_holds_device`."""
+        `_foreign_pid_holds_device`.
+
+        #3265's answer to that last question was NO: on this 4070-Laptop box
+        WDDM reports `usedGpuMemory=None` for our own PID even with hundreds
+        of MB of live CUDA memory, so every delta this fed was discarded.
+        #3266 therefore rewired `reservation()`'s warm-ASR branch to
+        `_device_free_mb`, so THIS method is no longer called from production
+        code. It is kept, tested and working, deliberately: deleting it is a
+        separate human decision, explicitly out of #3266's scope. See
+        docs/testing/onbox-3036-results/step-1-nvml.md for the evidence."""
         if not device_key or not device_key.startswith("cuda:"):
             return None
         pynvml = _load_pynvml()
@@ -5270,15 +5283,19 @@ class PlacementController:
         at this SAME snapshot point — `False` for every non-ASR engine;
         `reservation()` ORs it with an equivalent after-snapshot check so a
         foreign process present at either end of the window discards the
-        sample. `warm_before_mb` (#3036) is the RESIDENT-`asr` counterpart
-        of `mem_before_mb`: the `_own_process_used_mb` NVML own-process
-        reading taken at this SAME point for `engine == "asr"` when the
+        sample. `warm_before_mb` (#3036; technique changed by #3266) is the
+        RESIDENT-`asr` counterpart of `mem_before_mb`: a second
+        `_device_free_mb` device-wide free-VRAM reading taken at this SAME
+        point for `engine == "asr"` when the
         model is ALREADY resident — `None` for every other engine, for a
         cold load, and when the reading itself failed. It is a separate
         element rather than an overload of `mem_before_mb` because the two
-        measure different things (per-process used-bytes vs device-wide
-        free bytes) on mutually exclusive branches; `reservation()` pairs it
-        with an after-reading into the `asr.warm` delta."""
+        branches are mutually exclusive (a reservation is either cold or
+        resident, never both) — NOT because they measure different things:
+        since #3266 both read device-wide free bytes and both set
+        `foreign_before` from `_foreign_pid_holds_device` at this same point.
+        `reservation()` pairs it with an after-reading into the `asr.warm`
+        delta."""
         resident = self.is_resident(engine)
         # #2094 — consult residency BEFORE booking: an already-resident engine
         # (currently only distinguished for "asr", see `FootprintTable._key`)
@@ -5395,14 +5412,23 @@ class PlacementController:
                 if mem_before_mb is not None:
                     foreign_before = self._foreign_pid_holds_device(held[0]) is not False
             elif engine == "asr" and resident is not None:
-                # #3036 — the RESIDENT ("asr.warm") counterpart of the cold
-                # snapshot above: this process's own NVML used-bytes reading,
-                # taken at the SAME point `_reset_peak_mb` brackets from, so
-                # `reservation()`'s `finally` can pair it with an after-
-                # reading into a per-process delta. `None` (couldn't
-                # measure) is not an error here — it routes the sample to
-                # the same discard fall-through as a failed cold snapshot.
-                warm_before_mb = self._own_process_used_mb(held[0])
+                # #3036/#3266 — the RESIDENT ("asr.warm") counterpart of the
+                # cold snapshot above: the SAME device-wide free-VRAM reading,
+                # taken at the SAME point `_reset_peak_mb` brackets from, and
+                # with the SAME foreign-PID guard. Child 1 (#3265) wired this
+                # branch to the `_own_process_used_mb` NVML per-process
+                # reading instead; that is retired here (see `reservation()`'s
+                # `finally` for why). `None` (couldn't measure) is not an error
+                # — it routes the sample to the same discard fall-through as a
+                # failed cold snapshot.
+                warm_before_mb = self._device_free_mb(held[0])
+                # Mirrors the cold branch exactly: only bother querying NVML
+                # when the snapshot itself succeeded, since a failed snapshot
+                # already discards downstream. `True` (foreign PID present) AND
+                # `None` (couldn't determine) both mean "discard"; only a
+                # positive `False` clears this snapshot.
+                if warm_before_mb is not None:
+                    foreign_before = self._foreign_pid_holds_device(held[0]) is not False
         elif cpu_capable and not heavy:
             admission = {"device": "cpu"}
         else:
@@ -5465,8 +5491,9 @@ class PlacementController:
                 # still includes it and the "any OTHER engine" check below is
                 # correct) and BEFORE the generic torch-allocator path runs.
                 # `mem_before_mb` is only ever non-None for a COLD ASR load
-                # (see `_resolve_admission`) — #2682 moved the RESIDENT
-                # ("asr.warm") case off this path entirely (below).
+                # (see `_resolve_admission`) — the RESIDENT ("asr.warm") case
+                # is measured separately below, but since #3266 with the SAME
+                # `_device_free_mb` technique and the SAME guard set.
                 asr_observed_mb: Optional[int] = None
                 asr_warm_mb: Optional[int] = None
                 if engine == "asr" and mem_before_mb is not None:
@@ -5502,20 +5529,54 @@ class PlacementController:
                     # stays None -> record() below sees 0 via the `or 0` and
                     # its own `<= 0` guard drops it) rather than attributed to
                     # ASR.
-                # #3036 — RESIDENT ("asr.warm") own-process NVML DELTA, the
-                # warm sibling of the cold block above. `warm_before_mb` is
-                # only ever non-None for a resident ASR load (see
-                # `_resolve_admission`); the after-reading is taken HERE,
-                # before releasing our own hold, so both snapshots bracket
-                # the forward the same way the cold pair brackets the load.
-                # A `None` after-reading (NVML went away mid-window, the own
-                # entry vanished under WDDM) discards the sample exactly like
-                # a failed cold snapshot; a non-positive delta falls through
-                # to `record()`'s own `<= 0` guard — no second guard here.
+                # #3036/#3266 — RESIDENT ("asr.warm") DEVICE-WIDE free-memory
+                # DELTA, the warm sibling of the cold block above and now
+                # measured by the SAME technique with the SAME guard set.
+                # Child 1 (#3265) built this branch on the `_own_process_used_mb`
+                # NVML per-process delta instead; that method stays in the
+                # codebase, tested and working, but is no longer called from
+                # here — on this box Windows' WDDM driver returns
+                # `usedGpuMemory=None` for OUR OWN PID even with hundreds of MB
+                # of live CUDA allocations, so every warm sample was discarded
+                # and `asr.warm` could never move off its seed
+                # (docs/testing/onbox-3036-results/step-1-nvml.md). The theory
+                # this retry tests (#3036's Direction 2, first tried at #2094
+                # and abandoned by #2682): the earlier device-wide warm delta
+                # lacked the foreign-PID / concurrent-reservation guards the
+                # cold path has today, so contamination — not driver-level
+                # noise on the delta — may have been what suppressed it.
+                # `warm_before_mb` is only ever non-None for a resident ASR
+                # load (see `_resolve_admission`), where it is now a
+                # `_device_free_mb` reading; the after-reading is taken HERE,
+                # before releasing our own hold, so both snapshots bracket the
+                # forward the same way the cold pair brackets the load. A
+                # non-positive delta falls through to `record()`'s own `<= 0`
+                # guard — no second guard here.
                 if engine == "asr" and resident and warm_before_mb is not None:
-                    warm_after_mb = self._own_process_used_mb(device_key)
-                    if warm_after_mb is not None:
-                        asr_warm_mb = warm_after_mb - warm_before_mb
+                    warm_after_mb = self._device_free_mb(device_key)
+                    warm_other_engines = self.ledger.engines_holding(device_key) - {engine}
+                    # Same before/after bracketing as the cold block: a foreign
+                    # PID present at EITHER end of the window contaminates a
+                    # device-wide delta, because it may have allocated or freed
+                    # anywhere in between. `warm_before_mb is not None` already
+                    # implies `foreign_before` was queried for this branch.
+                    warm_foreign_after = (
+                        self._foreign_pid_holds_device(device_key) is not False
+                    )
+                    if (
+                        warm_after_mb is not None
+                        and not warm_other_engines
+                        and not foreign_before
+                        and not warm_foreign_after
+                    ):
+                        asr_warm_mb = warm_before_mb - warm_after_mb
+                    # else: the after-snapshot failed, another engine held a
+                    # concurrent reservation on this device, or a foreign
+                    # (non-sidecar) PID was seen at either snapshot point — the
+                    # reading is contaminated or unattributable, so it is
+                    # discarded (asr_warm_mb stays None -> record() below sees 0
+                    # via the `or 0` and its own `<= 0` guard drops it) rather
+                    # than attributed to a warm ASR forward.
                 self.ledger.release(held)
                 # `resident` (#2094) is the PRE-op snapshot `_resolve_admission`
                 # booked the reservation under — recording under that same key
@@ -5523,12 +5584,14 @@ class PlacementController:
                 # the bucket its own peak_mb() estimate came from. Three-way
                 # per-engine measurement: a COLD ASR load uses the device-wide
                 # free-memory delta above (or is dropped, per the guards
-                # there); a RESIDENT ("asr.warm") ASR forward uses the NVML
-                # own-process delta (#3036 — this branch used to fall through
-                # to the torch-allocator peak, which #2930/#3012 proved reads
-                # structurally 0 for a CTranslate2-backed engine, pinning the
-                # learned estimate at its seed forever); every other engine
-                # keeps the torch-allocator peak.
+                # there); a RESIDENT ("asr.warm") ASR forward uses the SAME
+                # device-wide free-memory delta with the SAME guard set
+                # (#3266 — child 1's NVML own-process delta (#3036) is no
+                # longer called from here, and the pre-#3036 fall-through to
+                # the torch-allocator peak stays out: #2930/#3012 proved it
+                # reads structurally 0 for a CTranslate2-backed engine,
+                # pinning the learned estimate at its seed forever); every
+                # other engine keeps the torch-allocator peak.
                 if engine == "asr" and not resident:
                     observed_mb = asr_observed_mb
                 elif engine == "asr" and resident:
