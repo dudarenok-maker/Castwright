@@ -23,10 +23,11 @@
 //      but misses a live-parented battery that is truly wedged.
 // The "two samples" for test 1 are NOT two queries in one invocation (the
 // hook budget is up to TWO Win32_Process queries — one initial, one retry on
-// a genuine transient-empty result, no pool) — they are THIS census and the
-// immediately-preceding one, read back from the append-only log. That is also
-// why the log records each root's command line: it is the dataset, not a
-// debugging aid (see the design doc's "Deferred work" section).
+// a genuine transient-empty result OR a spawnSync timeout, no pool, no
+// stacked retries) — they are THIS census and the immediately-preceding one,
+// read back from the append-only log. That is also why the log records each
+// root's command line: it is the dataset, not a debugging aid (see the
+// design doc's "Deferred work" section).
 
 import { spawnSync } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, renameSync, statSync } from 'node:fs';
@@ -564,10 +565,18 @@ export function rowsToProcesses(rows) {
  *  pre-push census. Measured live (PR #3063 review pass 2, N1): ~694ms for
  *  a single query, and ~0.8-3.5s for a whole runCensus on a 415-root box — NOT
  *  the "~300ms" earlier drafts of this file, the hook, and the release note
- *  all claimed. The invariant that matters is unchanged and is the one the
- *  hook guard actually enforces: NO POOL. Single spawn on success or
- *  genuine failure, up to one retry spawn on a genuine transient-empty result
- *  (#3238). Returns [] (never throws) on a non-Windows host or any PowerShell
+ *  all claimed. That ~694ms/~0.8-3.5s figure is still the typical case (the
+ *  common, non-timeout retry path). Since #3331 added a retry on a genuine
+ *  `spawnSync` timeout as well as on empty rows, the worst case is much
+ *  higher: each attempt is bounded by the 15000ms `spawnSync` timeout, plus a
+ *  ~250ms inter-attempt wait, so a run where the first attempt times out and
+ *  the second is slow (or itself times out) can take up to roughly
+ *  2 * 15000ms + 250ms (~30.25s) before returning. The invariant that matters
+ *  is unchanged and is the one the hook guard actually enforces: NO POOL.
+ *  Single spawn on success or genuine failure, up to one retry spawn on a
+ *  genuine transient-empty result (#3238) OR a genuine spawnSync timeout
+ *  (#3331) — never both retried in the same run; at most 2 spawn calls
+ *  total. Returns [] (never throws) on a non-Windows host or any PowerShell
  *  failure — a census that can't run must never block a push.
  *
  *  `CreationEpochMs` is computed INSIDE PowerShell via `[DateTimeOffset]` and
@@ -601,11 +610,19 @@ export function collectProcessSnapshot({
       timeout: 15000,
       windowsHide: true,
     });
+    // A spawnSync timeout sets result.error with code 'ETIMEDOUT'. This is a
+    // transient failure (the runner was slow, not broken), so it gets the
+    // retry. Return a distinguishable outcome carrying the error code so the
+    // caller can log it (#3331).
+    if (result.error?.code === 'ETIMEDOUT') {
+      return { success: false, data: null, transient: true, errorCode: result.error.code };
+    }
     // Distinguish between genuine failure and "no data returned".
     // Genuine failure: error set, non-zero status, or parse failure — these never retry.
-    if (result.error || result.status !== 0) return { success: false, data: null };
+    if (result.error || result.status !== 0) {
+      return { success: false, data: null, error: result.error, status: result.status };
+    }
     // Empty stdout is a genuine transient: WMI returned zero rows (empty result set).
-    // Timeouts are caught above and never reach here.
     if (!result.stdout) return { success: true, data: null };
     try {
       const parsed = JSON.parse(result.stdout);
@@ -613,36 +630,83 @@ export function collectProcessSnapshot({
       return { success: true, data: rows };
     } catch {
       // Parse failure is a genuine failure, not a transient.
-      return { success: false, data: null };
+      return { success: false, data: null, error: { code: 'PARSE_ERROR' }, status: result.status };
     }
   };
 
-  const firstAttempt = attempt();
-  // Genuine failure (error, non-zero status, or parse error) — return [] immediately, no retry.
-  if (!firstAttempt.success) return [];
+  // Single bounded retry loop — at most 2 spawn calls total, covering BOTH
+  // timeouts (#3331) and the empty-rows transient (#3238). A first attempt
+  // that times out and a second that returns empty rows still makes exactly
+  // two spawn calls; there is no stacked second retry (#3331).
+  const MAX_ATTEMPTS = 2;
+  let lastFailReason = null; // { kind: 'timeout', errorCode } | { kind: 'empty' } | null
 
-  const firstProcesses = rowsToProcesses(firstAttempt.data ?? []);
-  // If we got rows after filtering, return them.
-  if (firstProcesses.length > 0) return firstProcesses;
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    if (i > 0) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+    }
+    const a = attempt();
 
-  // No rows made it through filtering (either raw data was empty, or all rows
-  // were filtered out by rowsToProcesses). This is a transient empty result —
-  // retry once after a short delay (#3238).
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
-  const retryAttempt = attempt();
-  // If the retry genuinely failed, return [].
-  if (!retryAttempt.success) return [];
+    // Permanent failures (error, non-zero status, or parse error) — return []
+    // immediately, no retry. Timeouts have transient: true and fall through.
+    if (!a.success && !a.transient) {
+      // Log why, even when this is the second attempt after a first-attempt
+      // timeout — otherwise that ordering (timeout, then a genuine permanent
+      // failure) discards lastFailReason and returns [] with zero output.
+      if (lastFailReason?.kind === 'timeout') {
+        console.warn(
+          `collectProcessSnapshot: returning [] — first Win32_Process query timed out ` +
+            `(error code ${lastFailReason.errorCode}), then retry hit a permanent failure ` +
+            `(error code ${a.error?.code ?? 'n/a'}, status ${a.status ?? 'n/a'})`,
+        );
+      } else {
+        console.warn(
+          `collectProcessSnapshot: returning [] — Win32_Process query hit a permanent failure ` +
+            `(error code ${a.error?.code ?? 'n/a'}, status ${a.status ?? 'n/a'})`,
+        );
+      }
+      return [];
+    }
 
-  const retryProcesses = rowsToProcesses(retryAttempt.data ?? []);
-  if (retryProcesses.length > 0) {
-    console.warn(
-      'collectProcessSnapshot: recovered on retry — first Win32_Process query returned empty rows',
-    );
-    return retryProcesses;
+    // Timeout is transient — record the error code and continue to the next
+    // attempt (the retry, if any remaining).
+    if (!a.success && a.transient) {
+      lastFailReason = { kind: 'timeout', errorCode: a.errorCode };
+      continue;
+    }
+
+    // Success: check if we got rows after filtering.
+    const processes = rowsToProcesses(a.data ?? []);
+    if (processes.length > 0) {
+      if (i > 0) {
+        if (lastFailReason?.kind === 'timeout') {
+          console.warn(
+            `collectProcessSnapshot: recovered on retry — first Win32_Process query timed out (error code ${lastFailReason.errorCode})`,
+          );
+        } else {
+          console.warn(
+            'collectProcessSnapshot: recovered on retry — first Win32_Process query returned empty rows',
+          );
+        }
+      }
+      return processes;
+    }
+
+    // No rows made it through filtering (raw data was empty, or all rows were
+    // filtered out by rowsToProcesses). This is a transient empty result.
+    lastFailReason = { kind: 'empty' };
   }
-  console.warn(
-    'collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)',
-  );
+
+  // All attempts exhausted — log the reason and return [].
+  if (lastFailReason?.kind === 'timeout') {
+    console.warn(
+      `collectProcessSnapshot: still failing after retry — returning [] (Win32_Process query timed out, error code ${lastFailReason.errorCode})`,
+    );
+  } else {
+    console.warn(
+      'collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)',
+    );
+  }
   return [];
 }
 

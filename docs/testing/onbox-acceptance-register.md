@@ -5628,8 +5628,11 @@ design doc's Part 4 (`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-de
 11-battery fixture (`scripts/tests/reap-stale-batteries.test.mjs`), and every guard
 in it is mutation-verified (deletion → a named test reddens → restored). What no
 test in the repo can prove is the thing this row exists for: that
-`collectProcessSnapshot()`'s single `Get-CimInstance Win32_Process` query, run
-against REAL processes on a real box, actually reports the shapes `classify()`
+`collectProcessSnapshot()`'s `Get-CimInstance Win32_Process` query — one spawn on
+success or genuine failure, up to one retry on a transient empty result (#3238)
+or a genuine `spawnSync` timeout (#3331), never both, so at most 2 spawn calls
+total — run against REAL processes on a real box, actually reports the shapes
+`classify()`
 assumes — `ParentProcessId` correctly reflecting a live parent vs. a dead/reused
 one, `CreationDate` parsing to the right relative ordering for the PID-reuse guard,
 and `UserModeTime`/`KernelModeTime` actually growing at the CPU-s/min rates the

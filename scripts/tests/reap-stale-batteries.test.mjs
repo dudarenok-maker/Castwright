@@ -1470,7 +1470,9 @@ test('#3238: collectProcessSnapshot does NOT retry on a genuine PowerShell failu
   let callCount = 0;
   const fakeSpawn = () => {
     callCount += 1;
-    return { error: new Error('spawn ENOENT'), status: null, stdout: '' };
+    const error = new Error('spawn ENOENT');
+    error.code = 'ENOENT';
+    return { error, status: null, stdout: '' };
   };
   const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
   assert.equal(callCount, 1, 'must have called spawn only once — no retry on genuine failure');
@@ -1573,4 +1575,171 @@ test('#3238: collectProcessSnapshot retries when rowsToProcesses filters all row
   );
   assert.ok(result.length > 0, 'must return the recovered rows from the retry');
   assert.equal(result[0].pid, PLAUSIBLE_ROW.ProcessId);
+});
+
+// ---------------------------------------------------------------------------
+// #3331 — collectProcessSnapshot retry on Win32_Process query timeout
+// (#3237 reopen). A spawnSync timeout sets result.error with code 'ETIMEDOUT'.
+// Before #3331 that landed in the permanent-failure branch and returned []
+// immediately, before the retry was ever reached. These tests extend the
+// DI-based approach from #3238 to cover the timeout shape.
+// ---------------------------------------------------------------------------
+
+const timeoutSpawn = () => ({
+  error: Object.assign(new Error('spawnSync powershell ETIMEDOUT'), { code: 'ETIMEDOUT' }),
+  status: null,
+  signal: 'SIGTERM',
+  stdout: '',
+});
+
+test('#3331: collectProcessSnapshot retries on timeout and recovers when the second attempt returns real data', () => {
+  let callCount = 0;
+  const fakeSpawn = (_cmd, _args, _opts) => {
+    callCount += 1;
+    return callCount === 1 ? timeoutSpawn() : realRowSpawn();
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(callCount, 2, 'must have called spawn exactly twice (first timeout, then retry)');
+  assert.ok(result.length > 0, 'must return the recovered rows from the retry');
+  assert.equal(result[0].pid, PLAUSIBLE_ROW.ProcessId);
+});
+
+test('#3331: collectProcessSnapshot returns [] (not throws) when BOTH attempts time out, and logs a still-failing warning containing ETIMEDOUT', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return timeoutSpawn();
+  };
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+    assert.equal(callCount, 2, 'must have called spawn twice (initial timeout + retry timeout)');
+    assert.deepEqual(result, [], 'must return [] when both attempts time out');
+    assert.ok(
+      warnings.some((w) => /still failing after retry/.test(w)),
+      `expected a "still failing after retry" warning, got: ${JSON.stringify(warnings)}`,
+    );
+    assert.ok(
+      warnings.some((w) => /ETIMEDOUT/.test(w)),
+      `the still-failing warning must contain ETIMEDOUT, got: ${JSON.stringify(warnings)}`,
+    );
+    assert.ok(
+      !warnings.some((w) => /recovered on retry/.test(w)),
+      'must NOT log a recovery message when the retry also timed out',
+    );
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('#3331: collectProcessSnapshot calls spawn exactly 2 times when first attempt times out and second returns empty rows (no stacked retry)', () => {
+  let callCount = 0;
+  const fakeSpawn = (_cmd, _args, _opts) => {
+    callCount += 1;
+    // First attempt times out, second returns empty rows.
+    return callCount === 1 ? timeoutSpawn() : emptyArraySpawn();
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(
+    callCount,
+    2,
+    'must call spawn exactly 2 times — a timeout then empty rows must NOT trigger a third spawn',
+  );
+  assert.deepEqual(result, [], 'must return [] when both attempts fail transiently');
+});
+
+test('#3331: collectProcessSnapshot logs a recovery warning containing the error code when retry succeeds after a timeout', () => {
+  let callCount = 0;
+  const fakeSpawn = (_cmd, _args, _opts) => {
+    callCount += 1;
+    return callCount === 1 ? timeoutSpawn() : realRowSpawn();
+  };
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+    assert.ok(
+      warnings.some((w) => /recovered on retry/.test(w)),
+      `expected a "recovered on retry" warning, got: ${JSON.stringify(warnings)}`,
+    );
+    assert.ok(
+      warnings.some((w) => /ETIMEDOUT/.test(w)),
+      `the recovery warning must contain ETIMEDOUT, got: ${JSON.stringify(warnings)}`,
+    );
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('#3331: collectProcessSnapshot does NOT retry on a non-zero exit status (timeout-aware path)', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return { status: 1, stdout: '', stderr: 'some error' };
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(callCount, 1, 'must have called spawn only once — no retry on non-zero exit');
+  assert.deepEqual(result, [], 'must return [] on non-zero exit');
+});
+
+test('#3331: collectProcessSnapshot does NOT retry on a JSON parse failure (timeout-aware path)', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return { status: 0, stdout: 'not valid json{{{', stderr: '' };
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(callCount, 1, 'must have called spawn only once — no retry on parse failure');
+  assert.deepEqual(result, [], 'must return [] on parse failure');
+});
+
+test('#3331: collectProcessSnapshot does NOT retry on a non-timeout error (e.g. ENOENT)', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    const error = new Error('spawn ENOENT');
+    error.code = 'ENOENT';
+    return { error, status: null, stdout: '' };
+  };
+  const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  assert.equal(callCount, 1, 'must have called spawn only once — no retry on non-timeout error');
+  assert.deepEqual(result, [], 'must return [] on non-timeout error');
+});
+
+test('#3331: collectProcessSnapshot logs a warning when the first attempt times out and the retry hits a genuine permanent failure', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    // First attempt: transient timeout. Second attempt: genuine permanent
+    // failure (non-zero status) — this ordering must still produce a
+    // warning explaining why [] came back, even though the retry's own
+    // failure isn't a timeout.
+    if (callCount === 1) return timeoutSpawn();
+    return { status: 1, stdout: '', stderr: 'some error' };
+  };
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+    assert.equal(callCount, 2, 'must have called spawn twice (timeout, then permanent failure)');
+    assert.deepEqual(result, [], 'must return [] when the retry hits a genuine permanent failure');
+    assert.ok(
+      warnings.length > 0,
+      'must log a warning explaining why [] was returned instead of silently discarding the timeout',
+    );
+    assert.ok(
+      warnings.some((w) => /timed out/.test(w) && /ETIMEDOUT/.test(w)),
+      `expected the warning to mention the first attempt's timeout, got: ${JSON.stringify(warnings)}`,
+    );
+    assert.ok(
+      warnings.some((w) => /permanent failure/.test(w)),
+      `expected the warning to mention the permanent failure, got: ${JSON.stringify(warnings)}`,
+    );
+  } finally {
+    console.warn = origWarn;
+  }
 });
