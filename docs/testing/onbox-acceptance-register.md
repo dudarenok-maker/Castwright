@@ -4763,6 +4763,60 @@ log instrumentation, a VRAM-fill scenario to construct the discriminating placem
 `GPU_RESERVE_MB`, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the
 run sheet's pin/stale-cache scenarios.
 
+> **PARTIAL on-box sitting 2026-09-20 (~03:58–04:01Z, ~15:58–16:01 local; cline-qwen-cloud /
+> OE claim `3298`, issue #3298) — Criterion 1 DISCHARGED; row stays OPEN for Criteria 2–5.**
+> Box: 2-card (8 GB RTX 4070 Laptop `cuda:0` + 16 GB RTX 5070 Ti `cuda:1`), cold Coqui, no
+> `COQUI_DEVICE` pin, server booted 11:42 local that day.
+> Fixture: throwaway book *A21 Clone Readiness Gate QA v2*
+> (`a21-qa__standalones__a21-clone-readiness-gate-qa-v2-throwaway`), character Aria on the
+> **designed** Coqui voice `xtts-01e278d6-b1a2-410b-9953-15a08c0f5cd6`, artifact deleted. Real
+> trigger: `POST /api/books/:bookId/generation` (`{"modelKey":"coqui-xtts-v2","force":true}`),
+> not a manual sidecar call. Criterion 1 evidence chain, `logs/tts.err.log`:
+> `15:58:46.443 Coqui model unloaded.` → `15:58:49.099 [A106-C1-TEMP] device_hint=cuda:1`
+> (temporary one-line instrumentation in `main.py`'s clone handler, per the run sheet —
+> **since removed**) → `15:58:49.101 Loading Coqui model=…xtts_v2 on device=cuda:1 half=True`
+> (cold load on the hinted card) → `15:59:09.847 Cloned + cached Coqui voice
+> 'xtts-01e278d6-…' from caller clip.` → `16:00:23` render completed with Aria segments on
+> `xtts-01e278d6-…`. **Criterion 2 was NOT discharged by this run** — the unhinted cold
+> control (`POST /xtts/clone-voice` with an identical idle 2-card box, no `X-Device-Hint`
+> header, `16:12:05` → also `Loading Coqui … on device=cuda:1`, HTTP 200, `.pt` recreated
+> `16:12:39`) landed on the *same* card as the hinted `15:58` derive, exactly as this row's
+> warning above predicts: in the box's normal idle state `best_fit` already favors the 16 GB
+> `cuda:1`, so the hinted placement proves the header parses and is accepted, not that it
+> *moved* anything. (The earlier `15:49:36` unhinted load on `cuda:0` was not a clean control:
+> Whisper ASR was resident on `cuda:1` at that moment and idle-evicted at `15:53:38`.)
+> Criterion 2's discriminating fill-band scenario additionally cannot be constructed on this
+> box right now: `cuda:0` free ≈ 5.4 GB sits below the run sheet's live-computed fill target
+> (~6.4 GB), so the row's "insufficient headroom" Result escape applies — recorded here rather
+> than forcing a pass. `POST /unload {engine:"coqui"}` provided the cold-load precondition
+> without touching the operator's processes. The hint was produced by the shipped lazy path
+> itself — `lazyCoquiDeriveDeviceHint()` (`clone-voice-resolver.ts:933-935`:
+> `ensureGpuDeviceListWarm()` then `some(d => d.idx === 1) ? 'cuda:1' : undefined`) — with the
+> sidecar's `GET /devices` probe returning both cards.
+>
+> **Fixture bug found and fixed while landing this (why earlier sittings produced no
+> hint-bearing derive at all):** the earlier provenance flip wrote the voice manifest with PowerShell
+> `Set-Content -Encoding UTF8`, which prepends a UTF-8 BOM (`EF BB BF`); Node's `JSON.parse`
+> rejects it, so `workspace/voice-library.ts`'s `readEntry` returned `null` and
+> `resolveDesignedVoicesForChapter` removed the coqui slot with
+> `has no voice-library entry backing it (entry missing)` *before ever reaching the
+> hint-bearing derive* — the chapter silently rendered on stock voices (two `server.err.log`
+> occurrences at 15:49:36 and 15:50:44, plus the 11:57 render, all pre-fix). BOM stripped
+> byte-exact (962→959 B, content unchanged, `provenance: "designed"` verified parseable); any
+> future manifest flip must write BOM-free UTF-8.
+>
+> **Not covered by this sitting (honest scope):** Criteria 2–5 — the discriminating
+> hinted-vs-unhinted fill-band scenario (Criterion 2, per the control result above and the
+> headroom escape), unsatisfiable-hint fallback (3), operator-pin override (4), and
+> stale-device-list harmlessness (5) were not exercised; the 75%-tolerance check (#3097) was
+> consequently not observed doing real work either (the hinted card was never the
+> *less*-preferred winner). `.env` restore (re-pin `COQUI_DEVICE=cuda:1`,
+> `QWEN_DEVICE=cuda:1`) and removal of the `.a106bak`/`.a106c2` artifacts remain with the
+> next operator sitting; the temporary `main.py` log line has already been stripped
+> (`git diff` on `main.py` is empty against the committed state) and the sidecar restarted
+> cleanly on the clean file (supervisor respawn, pid 9700, `16:05:54`).
+
+
 ### A107 · `/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter ([#3086](https://github.com/dudarenok-maker/Castwright/issues/3086), [#3101](https://github.com/dudarenok-maker/Castwright/issues/3101), PR [#3142](https://github.com/dudarenok-maker/Castwright/pull/3142)) · **single 8 GB GPU card, DirectML profile, real Kokoro weights**
 
 #3086 observed a raw Kokoro `/synthesize` call completing while a VoiceDesign forward was
