@@ -4440,8 +4440,10 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # #3266 (child 2 of the #3036 chain) built that fallback: the warm
     # branch now measures `asr.warm` through the SAME device-wide
     # `_device_free_mb` delta as the COLD "asr" key above, carrying the
-    # full foreign-PID / concurrent-reservation guard set that #2094's
-    # original warm attempt lacked. REAL ON-BOX OUTCOME: ALSO DID NOT
+    # full foreign-PID / concurrent-reservation guard set #2094's original
+    # warm attempt already had — #2682 dropped it for warm when it narrowed
+    # this measurement to cold-only (see the #2682 paragraph above); #3266
+    # restores it. REAL ON-BOX OUTCOME: ALSO DID NOT
     # CONVERGE on this 4070-Laptop box. On a provably uncontaminated
     # window (card idle at precheck, no foreign PID at either snapshot,
     # no other engine holding the device, and the cold "asr" key took its
@@ -4450,9 +4452,13 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
     # CTranslate2 allocates its arena at load and reuses it per forward,
     # so device-wide free VRAM does not measurably move across a warm
     # forward, and non-positive deltas are dropped by `record()`'s own
-    # `<= 0` guard. #2682's contamination theory for the earlier failure
-    # is thus disproven on this box — guards were in place and changed
-    # nothing. BOTH directions from #3036 have now been tried on real
+    # `<= 0` guard. This CONFIRMS #2682's own noise-floor conclusion — the
+    # instrument's noise floor exceeds this model's actual warm VRAM delta,
+    # independent of guards — rather than disproving a contamination
+    # theory: #2682 never claimed contamination, and the guards were
+    # already in place before #2682 narrowed the measurement to cold-only;
+    # restoring them here changed nothing. BOTH directions from #3036 have
+    # now been tried on real
     # hardware and documented non-viable (step-1-nvml.md,
     # step-2-device-delta.md). This seed therefore REMAINS AUTHORITATIVE:
     # no measurement technique currently available on this box can move
@@ -5569,10 +5575,14 @@ class PlacementController:
                 # and `asr.warm` could never move off its seed
                 # (docs/testing/onbox-3036-results/step-1-nvml.md). The theory
                 # this retry tests (#3036's Direction 2, first tried at #2094
-                # and abandoned by #2682): the earlier device-wide warm delta
-                # lacked the foreign-PID / concurrent-reservation guards the
-                # cold path has today, so contamination — not driver-level
-                # noise on the delta — may have been what suppressed it.
+                # and narrowed to cold-only by #2682): the earlier device-wide
+                # warm delta already carried the foreign-PID / concurrent-
+                # reservation guards the cold path has today — #2682 dropped
+                # them for warm specifically, on the theory that the signal
+                # itself, not contamination, was the problem. This retry
+                # restores those guards to see whether it was contamination,
+                # rather than driver-level noise on the delta, that had
+                # actually suppressed it.
                 # `warm_before_mb` is only ever non-None for a resident ASR
                 # load (see `_resolve_admission`), where it is now a
                 # `_device_free_mb` reading; the after-reading is taken HERE,

@@ -160,10 +160,14 @@ across a warm 2-second forward; whatever movement remains is other system proces
 at WDDM's reporting granularity, i.e. zero or negative — dropped by `record()`'s
 `<= 0` guard.
 
-This DISPROVES #3036's direction-2 theory on this box: the device-wide warm delta did
-not fail before #3036 for lack of the foreign-PID/concurrent-reservation guards. The
-guards were built and applied here (#3266) and changed nothing — there was no positive
-signal for them to separate from contamination.
+This CONFIRMS #2682's own noise-floor conclusion, not a contamination theory: the
+foreign-PID/concurrent-reservation guards were already present on the device-wide warm
+delta before #2682 narrowed the measurement to cold-only — #2682 did not fail for lack
+of guards, it dropped an existing guard set for warm when it moved off this path, and
+#3266 restores it here. With the guards active and no positive signal for them to
+separate from contamination, this is exactly the outcome #2682's noise-floor theory
+predicted: the instrument's own noise floor exceeds this model's actual warm VRAM
+delta, independent of guards.
 
 ## Focused unit tests after this child's change (verbatim, exit code 0)
 
