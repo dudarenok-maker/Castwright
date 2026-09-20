@@ -171,24 +171,41 @@ conservative, UNMEASURED cold-start prior (no on-box observation exists yet
 for this specific incremental figure) rather than a measured value like the
 design-family pair above.
 
-Unlike the other seeds on this page, `asr.warm` previously had no real path
-to being *learned* from: the peak-observation mechanism reads torch's own
-caching-allocator peak (`torch.cuda.max_memory_allocated`), but faster-
-whisper's CTranslate2 backend allocates entirely outside it, so a warm
-forward measured that way read ~0 MB (silently dropped by the `<= 0`
-observation guard) and never accumulated real samples. `reservation()`
-measures ASR specifically via a device-wide free-memory DELTA instead
-(`PlacementController._device_free_mb`, `torch.cuda.mem_get_info`), which
-DOES see CTranslate2's allocations. Two guards keep that delta honest rather
-than optimistic: a reading is discarded outright when any other engine holds
-a concurrent reservation on the same device (the ledger's own contamination
-signal), and a WARM reading above the `asr` cold seed is discarded as
+Unlike the other seeds on this page, `asr.warm` has no real path to being
+*learned* from, and on-box acceptance (#3036, discharging register row A25)
+reached that as a CONCLUSIVE negative result, not an open question. The
+peak-observation mechanism reads torch's own caching-allocator peak
+(`torch.cuda.max_memory_allocated`), but faster-whisper's CTranslate2 backend
+allocates entirely outside it, so a warm forward measured that way read ~0 MB
+(silently dropped by the `<= 0` observation guard) and never accumulated real
+samples. `reservation()` measures ASR specifically via a device-wide
+free-memory DELTA instead (`PlacementController._device_free_mb`,
+`torch.cuda.mem_get_info`), which DOES see CTranslate2's allocations. Four
+guards keep that delta honest rather than optimistic: an after-reading must
+be present at all; a reading is discarded outright when any other engine
+holds a concurrent reservation on the same device (the ledger's own
+contamination signal); a foreign, non-sidecar process seen at EITHER the
+before- or the after-snapshot discards it too (the residual gap this
+paragraph used to flag is closed — this guard restores exactly that
+coverage); and a WARM reading above the `asr` cold seed is discarded as
 implausible (a resident forward should never need more than a cold load
-would). With those in place, `asr.warm` genuinely does learn its own p95 the
-same way every other key here does, once real observations accumulate — the
-residual: a foreign, non-sidecar process holding VRAM on the same card is
-still invisible to the ledger-based contamination guard, so an isolated,
-uncontended box is what makes a learned `asr.warm` figure trustworthy.
+would). Even with all four guards in place and a provably uncontended card
+(0 MiB used, no compute processes at precheck), real on-box runs
+(`docs/testing/onbox-3036-results/step-2-device-delta.md`) recorded ZERO
+accepted warm samples across 6 real `/transcribe` calls, while the cold
+`asr` key recorded a sample in the same session — proving the guards and the
+reading path are both alive. The reason is structural, not a guard gap:
+CTranslate2 allocates its arena once at load and reuses it per forward, so
+device-wide free VRAM never measurably moves across a warm forward. `asr.warm`
+therefore CANNOT converge under any measurement technique available on this
+box — an own-process NVML delta was also tried (#3265) and failed for an
+unrelated reason (Windows' WDDM driver returns `usedGpuMemory=None` for our
+own PID). `SEED_FOOTPRINTS_MB["asr.warm"]`'s 128 MB stays the authoritative
+value, not a placeholder awaiting more observations, now protected by the
+guard set above against a same-process sibling reservation (e.g. a Kokoro
+`/load` or a Qwen `/design-voice`/`/mint`) that opens and closes entirely
+inside the measurement window, which none of the four guards can see on its
+own.
 
 <!-- footprint:kokoro=1200 -->
 <!-- footprint:qwen=3072 -->

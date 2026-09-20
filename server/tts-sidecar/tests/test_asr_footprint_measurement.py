@@ -475,13 +475,14 @@ def test_asr_warm_reservation_keeps_a_delta_within_the_seed_ceiling(monkeypatch)
 
 
 def test_asr_cold_measurement_is_not_capped(monkeypatch) -> None:
-    """#2682 removed the implausible-delta "warm ceiling" entirely — it only
-    ever applied to the RESIDENT case, which no longer takes this
-    (`_device_free_mb`-delta) path at all (see
-    `test_asr_warm_measurement_uses_the_torch_allocator_path`). A cold
-    observation — even an unusually large one — is NOT capped here;
-    FootprintTable's own p95 windowing is what tames a cold-side outlier,
-    matching every other key's "up OR down" learning philosophy.
+    """The COLD path (this test) has never had a ceiling — only the
+    RESIDENT ("asr.warm") case does (#3282's restored guard, see
+    `test_asr_warm_reservation_discards_a_delta_above_the_seed_ceiling`
+    above). Both cases now take the same `_device_free_mb`-delta path
+    (#3266); a cold observation — even an unusually large one — is NOT
+    capped here regardless. FootprintTable's own p95 windowing is what
+    tames a cold-side outlier, matching every other key's "up OR down"
+    learning philosophy.
 
     Mutation that must fail it — breaks the PRODUCER: reintroduce a ceiling
     that discards a large cold delta. A cold 3707 MB delta would then be

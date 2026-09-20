@@ -5298,8 +5298,9 @@ class PlacementController:
         (plan 273, T4) — extracted so `reservation()` can run it under
         `_admit_lock` while keeping the `yield`/`finally` (release) OUTSIDE
         the lock. Returns `(admission, held, resident, mem_before_mb,
-        foreign_before)`; `held` is the ledger token `reservation()` must
-        release on exit, or None (cpu / noCapacity — nothing was held).
+        foreign_before, warm_before_mb)`; `held` is the ledger token
+        `reservation()` must release on exit, or None (cpu / noCapacity —
+        nothing was held).
         `resident` (#2094) is whether `engine` was already loaded BEFORE this
         reservation — `reservation()` threads it through to
         `footprints.record()` so the observation lands in the same peak-mb
