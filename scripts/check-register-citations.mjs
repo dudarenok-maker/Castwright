@@ -11,27 +11,49 @@
 // claim living on several surfaces, with only some of them corrected. This
 // script exists to make that mechanical instead of eyeballed.
 //
-// WIRING STATUS (updated 2026-09-10, PR #3134): `package.json`'s
-// `check:register-citations` script is now invoked from TWO places:
-// (1) `scripts/tests/check-register-citations.test.mjs`'s CLI-integration
-// tests, run as part of `npm run test:hooks`; and
-// (2) `.github/workflows/verify.yml`'s unconditional `check:register-citations`
-// step (PR #3134 closes the CI-wiring gap at #3122; other surfaces remain at #3140).
+// WIRING STATUS (updated 2026-09-19, issue #3271): `package.json`'s
+// `check:register-citations` script is now invoked from THREE places:
+// (1) `scripts/verify-cache.mjs`'s `runUnconditionalLocalChecks`, called at the
+// head of `runPipeline()` on every full `npm run verify` — uncached and
+// unscope-gated; (2) `scripts/tests/check-register-citations.test.mjs`'s
+// CLI-integration tests, run as part of `npm run test:hooks`; and
+// (3) `.github/workflows/verify.yml`'s unconditional `check:register-citations`
+// step (PR #3134 closed the CI-wiring gap at #3122; #3271 closed the remaining
+// local-wiring gap at #3140).
 //
 // CI WIRING (closed): The dedicated `.github/workflows/verify.yml` "Register
 // citation check" step now exists; it runs unconditionally on every PR,
 // including docs-only diffs, because citations can live in any file and
 // diff-scope cannot reliably predict whether one broke.
 //
-// LOCAL WIRING (open, tracked at #3140): The checker IS reachable locally via
-// two paths: (1) `npm run verify` reaches it via `test:hooks` (which is scope-gated
-// in verify-cache.mjs, so it can be marked `[cached]`/skipped on out-of-scope diffs);
-// and (2) `npm run test:all` and `npm run verify:quick` invoke test:hooks directly
+// LOCAL WIRING (closed, issue #3271): The checker is reachable
+// locally via three paths, the first of which is new and unconditional:
+// (0) `npm run verify` now runs `npm run check:register-citations` directly, at
+// the head of `runPipeline()` in verify-cache.mjs, on EVERY full run — outside
+// `STEPS[]`, outside the content-hash cache (so it can never print `[cached]`)
+// and outside the `--scope-branch`/`--scope-staged` scope filter (so it can
+// never print `[skip] ... (out of scope)`). It cannot be a `STEPS[]` entry:
+// scripts/ci-scope.mjs auto-derives a `step_<slug>` scope key for every such
+// entry and scripts/tests/workflow-wiring.test.mjs requires that key be
+// referenced by an `if:` in verify.yml, which would contradict that same file's
+// "register citation check: must be unconditional" test (#3122). A `--steps`
+// run (e.g. package.json's verify:fast* scripts, or `.husky/pre-push`'s own
+// `--steps test:sidecar --scope-branch` call) deliberately does NOT run it —
+// those filters are narrow by design. That exemption has a real gap, not a
+// covered one: a `src/**`-only diff that breaks a citation, run through
+// `verify:fast:branch`, prints `[skip] test:hooks (out of scope)` (its globs
+// don't match `src/**`), so the checker runs zero times locally in that
+// shape — CI's unconditional step above is what actually catches it;
+// (1) `npm run verify` also still reaches it via `test:hooks`, which remains
+// scope-gated and content-hash-cached — path (0) exists precisely because that
+// caching could print `test:hooks [cached]` on a diff touching a file outside
+// the step's globs, leaving a broken citation stale-green locally (#3140); and
+// (2) `npm run test:all` and `npm run verify:quick` invoke test:hooks directly
 // with NO caching, so the checker runs unconditionally as part of every local
-// `test:all`/`verify:quick` invocation. The actual decision at #3140 is narrower:
-// whether `npm run verify` itself (beyond test:all) should also have an
-// unconditional/uncached local leg (independent of scope-gating), and whether
-// a git hook should wire it.
+// `test:all`/`verify:quick` invocation.
+//
+// The remaining half of the #3140 decision — wiring a git hook — was declined;
+// see the decision comment on #3140. Do not add one.
 //
 // Scanned file set, and how it is read: the checker reads every non-frozen,
 // non-self-referential git-tracked file (see `gitLsFiles` /
