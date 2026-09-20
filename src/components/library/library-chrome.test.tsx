@@ -2,8 +2,8 @@
    plan 73. The orchestrator owns the state; this test exercises the
    purely-presentational wiring against passed-in callbacks. */
 
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { LibraryChrome } from './library-chrome';
 
 function renderChrome(
@@ -131,5 +131,47 @@ describe('LibraryChrome — clear-filters affordance (plan 73)', () => {
     renderChrome({ activeTags: ['favourite'], clearFilters });
     fireEvent.click(screen.getByTestId('library-clear-filters'));
     expect(clearFilters).toHaveBeenCalled();
+  });
+});
+
+describe('LibraryChrome — workspace path row copy button', () => {
+  let writeText: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it('clears the copied-confirmation timeout on unmount to prevent setState after unmount', async () => {
+    /* Regression: the setTimeout flipping the copy button's label back from
+       "copied" to "copy" was never cleared on unmount — the same
+       unguarded-timer shape fixed elsewhere in this PR (AccountView,
+       ModelSettingsForm, ModelManagerView, ShareLinkModal,
+       PairDeviceModal's CopyRow, SettingsAccordionWithNav, and
+       EditBookMetaModal's tag-suggestions close). Capture the exact
+       setTimeout(..., 1500) call's id via a spy and assert clearTimeout is
+       invoked with THAT id on unmount. */
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const { unmount } = renderChrome({
+      workspace: { root: '/w/audiobook-workspace', booksRoot: '/w/audiobook-workspace/books', source: 'env' },
+    });
+
+    fireEvent.click(screen.getByText('copy'));
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('/w/audiobook-workspace');
+    });
+
+    const resetCallIndex = setTimeoutSpy.mock.calls.findIndex((call) => call[1] === 1500);
+    expect(resetCallIndex).toBeGreaterThanOrEqual(0);
+    const resetTimeoutId = setTimeoutSpy.mock.results[resetCallIndex]?.value;
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(resetTimeoutId);
   });
 });

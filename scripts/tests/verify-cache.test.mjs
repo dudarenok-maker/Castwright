@@ -42,6 +42,8 @@ import {
   isVitestPoolCrash,
   runStepProcess,
   runPipeline,
+  runUnconditionalLocalChecks,
+  UNCONDITIONAL_LOCAL_CHECK_SCRIPTS,
   branchDiffFiles,
   stagedDiffFiles,
   sidecarFingerprint,
@@ -2342,4 +2344,262 @@ test('#3018: [fail] line reports attempt count when step crashes all retries', a
   } finally {
     console.log = originalLog;
   }
+});
+
+// --- Unconditional local checks (#3271, closing #3140's local-wiring gap) ---
+//
+// `npm run verify` must reach `check:register-citations` UNCONDITIONALLY — never
+// `[cached]`, never scope-skipped, and never through a `STEPS[]` entry. Shape
+// mirrors the CI-side precedent test at
+// scripts/tests/workflow-wiring.test.mjs:1496 ("register citation check: must be
+// unconditional (no if: guard) — issue #3122"), which pins the
+// `.github/workflows/verify.yml` step for this exact check; these tests are the
+// local half of that same guarantee.
+//
+// WHY it cannot be a `STEPS[]` entry: scripts/ci-scope.mjs's
+// `computeScopes`/`slugFor` auto-derives a `step_<slug>` scope key for EVERY
+// `STEPS[]` entry, and workflow-wiring.test.mjs's "every emitted scope key is
+// referenced by the workflow" test then requires that key be referenced by some
+// `if:` in verify.yml — while the CI-side test above requires the
+// register-citation step to have no `if:` at all. A `STEPS[]` entry would drive
+// those two tests into direct contradiction.
+//
+// WHY it is uncached rather than merely unconditional: the checker scans the
+// WHOLE git-tracked tree for register-row citations, so neither a diff-scope nor
+// any `inputs.globs` set can predict whether a citation broke. Reached only via
+// `test:hooks` (the pre-#3271 state), a diff touching any file outside that
+// step's globs printed `test:hooks [cached]` and left a broken citation
+// stale-green locally.
+//
+// These tests are written to go RED on the plausible reverts, not just on a
+// total deletion of the feature: dropping the script from
+// UNCONDITIONAL_LOCAL_CHECK_SCRIPTS (source pin + behavioural), adding a second
+// STEPS[] entry for it (source pin), wrapping the call in a cache-hash check or
+// a scope gate (source pin), skipping it under
+// `--scope-branch`/`--scope-staged` (source pin), restricting it to some other
+// subset of full runs (behavioural), and losing the early return that makes a
+// broken citation fail the whole run (source pin + behavioural).
+
+// The check this issue wires must be the one the checker script actually
+// answers to. Named once, so renaming the npm script fails loudly here instead
+// of silently un-pinning the assertions below.
+const CHECK_SCRIPT = 'check:register-citations';
+
+test('#3271: check:register-citations is an unconditional local check, not a STEPS[] entry', () => {
+  assert.deepEqual(
+    [...UNCONDITIONAL_LOCAL_CHECK_SCRIPTS],
+    [CHECK_SCRIPT],
+    'UNCONDITIONAL_LOCAL_CHECK_SCRIPTS must name exactly the register-citation check — ' +
+      'removing it here silently restores the #3140 gap (the check then only runs via ' +
+      'test:hooks, which is cache-hash-skipped and scope-gated)',
+  );
+
+  assert.ok(
+    STEPS.every((s) => s.name !== CHECK_SCRIPT),
+    `${CHECK_SCRIPT} must NOT appear in STEPS[]: scripts/ci-scope.mjs auto-derives a ` +
+      'step_<slug> scope key for every STEPS[] entry, and workflow-wiring.test.mjs ' +
+      'requires that key be referenced by an `if:` in verify.yml — contradicting its own ' +
+      '"register citation check: must be unconditional" test (#3122)',
+  );
+});
+
+function runPipelineBody() {
+  const match = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/);
+  assert.ok(match, "could not locate runPipeline's function body in verify-cache.mjs");
+  return match[0];
+}
+
+test('#3271: runPipeline calls the unconditional checks unguarded, outside the cache and scope paths', () => {
+  const body = runPipelineBody();
+
+  assert.match(
+    body,
+    /runUnconditionalLocalChecks\(\{\s*cwd,\s*env\s*\}\)/,
+    'runPipeline must call runUnconditionalLocalChecks({ cwd, env }) directly',
+  );
+
+  assert.match(
+    body,
+    /if \(!flags\.steps \|\| flags\.steps\.length === 0\) \{\s*\n\s*const checkCode = await runUnconditionalLocalChecks\(/,
+    'the call must be gated only on "this is a full run" (`!flags.steps`) — the same ' +
+      'condition the step-selection block above uses to tell "full" from "--steps"-filtered',
+  );
+
+  assert.match(
+    body,
+    /if \(checkCode !== 0\) return checkCode;/,
+    'a non-zero exit from the unconditional checks must fail the WHOLE run (early return), ' +
+      'exactly like a failed step',
+  );
+
+  // The failure modes this test exists to catch: a future "optimisation" that
+  // routes the call back through the same machinery that caused #3140.
+  assert.doesNotMatch(
+    body,
+    /decide\(\{[\s\S]{0,200}?stepName: \u0027[^\u0027]*register-citations\u0027/,
+    'the register-citation check must not be routed through decide() (the cache-hash ' +
+      'skip) — a cached citation check is the #3140 bug itself',
+  );
+  assert.doesNotMatch(
+    body,
+    /stepTouchedByDiff\([^)]*register-citations/,
+    'the register-citation check must not be scope-filtered — it scans the whole tracked tree',
+  );
+  assert.doesNotMatch(
+    body,
+    /if \(scopeDiff !== null && !scopeShared[\s\S]{0,400}?runUnconditionalLocalChecks/,
+    'the unconditional checks must not be moved under a scopeDiff/scopeShared guard — ' +
+      'that is exactly the `--scope-branch`/`--scope-staged` skip this issue removes',
+  );
+});
+
+test('#3271: runUnconditionalLocalChecks spawns via the existing runStepProcess helper', () => {
+  const match = src.match(/export async function runUnconditionalLocalChecks\([\s\S]*?\n\}\n/);
+  assert.ok(match, 'could not locate runUnconditionalLocalChecks in verify-cache.mjs');
+  const body = match[0];
+
+  assert.match(
+    body,
+    /await runStepProcess\(/,
+    'must spawn through the existing runStepProcess helper rather than inventing a new ' +
+      'spawn path (same retry/`shell: true`/windowsHide semantics as every STEPS[] step)',
+  );
+  assert.match(
+    body,
+    /\[fail\] \$\{script\} \(exit \$\{code\}, took \$\{formatSecs\(dt\)\}\)/,
+    'the failure line must match the existing step-output shape ' +
+      '`[fail] <name> (exit <n>, took <n>s)`',
+  );
+  assert.match(
+    body,
+    /return code;/,
+    'must return the failing exit code so runPipeline can fail the run',
+  );
+});
+
+// The source pins above are cheap but blind to the wiring actually executing.
+// These behavioural tests drive runPipeline's real code path against a throwaway
+// git repo whose `check:register-citations` script is a one-line node invocation
+// (not vitest, so fast).
+function writeRegisterCitationFixture(dir, { passing = true } = {}) {
+  const marker = join(dir, 'citations-attempts.txt');
+  writeFileSync(
+    join(dir, 'citations-fixture.mjs'),
+    passing
+      ? `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(marker)}, 'x');\nprocess.exit(0);\n`
+      : `import { appendFileSync } from 'node:fs';\nappendFileSync(${JSON.stringify(marker)}, 'x');\nprocess.stderr.write('register citation broken: A99 cites a row that does not exist\\n');\nprocess.exit(1);\n`,
+    'utf8',
+  );
+  const pkgPath = join(dir, 'package.json');
+  const pkg = existsSync(pkgPath)
+    ? JSON.parse(readFileSync(pkgPath, 'utf8'))
+    : { name: 'citations-fixture', private: true, scripts: {} };
+  pkg.scripts[CHECK_SCRIPT] = 'node citations-fixture.mjs';
+  writeFileSync(pkgPath, JSON.stringify(pkg), 'utf8');
+  return marker;
+}
+
+async function captureLogs(fn) {
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    return { result: await fn(), logs };
+  } finally {
+    console.log = originalLog;
+  }
+}
+
+test('#3271: a full run executes the citation check every time, and never reports it [cached]', async () => {
+  const dir = makeGitFixture();
+  const marker = writeRegisterCitationFixture(dir);
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+  const env = { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' };
+
+  // Two consecutive full runs with nothing changed in between — the exact shape
+  // that printed `test:hooks [cached]` before #3271.
+  for (const run of [1, 2]) {
+    const { logs } = await captureLogs(() => runPipeline({ argv: [], cwd: dir, env }));
+
+    assert.ok(
+      logs.some((l) => l.startsWith(`[run] ${CHECK_SCRIPT} (unconditional)`)),
+      `run ${run}: a full run must print the unconditional [run] line for ${CHECK_SCRIPT}`,
+    );
+    assert.ok(
+      logs.some((l) => l.startsWith(`[pass] ${CHECK_SCRIPT}`)),
+      `run ${run}: expected a [pass] line for ${CHECK_SCRIPT} — got:\n${logs.join('\n')}`,
+    );
+    assert.ok(
+      !logs.some((l) => l.includes('[cached]') && l.includes(CHECK_SCRIPT)),
+      `run ${run}: the citation check must NEVER be reported [cached] — the checker scans ` +
+        'the whole tracked tree, so no input hash can say it is unchanged (#3140)',
+    );
+    assert.ok(
+      !logs.some((l) => l.includes('[skip]') && l.includes(CHECK_SCRIPT)),
+      `run ${run}: the citation check must never be scope-skipped`,
+    );
+    assert.equal(
+      readFileSync(marker, 'utf8').length,
+      run,
+      `run ${run}: the checker must have been spawned exactly once per full run`,
+    );
+  }
+});
+
+test('#3271: a broken citation fails the whole run with the checker error visible', async () => {
+  const dir = makeGitFixture();
+  const marker = writeRegisterCitationFixture(dir, { passing: false });
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+  const env = { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' };
+
+  const { result, logs } = await captureLogs(() => runPipeline({ argv: [], cwd: dir, env }));
+
+  assert.equal(result, 1, 'runPipeline must return the failure exit code');
+  assert.equal(readFileSync(marker, 'utf8').length, 1, 'the checker must have run once');
+  const failLine = logs.find((l) => l.startsWith(`[fail] ${CHECK_SCRIPT}`));
+  assert.ok(
+    failLine,
+    `expected a [fail] line for ${CHECK_SCRIPT} matching the existing step shape — got:\n${logs.join('\n')}`,
+  );
+  assert.match(failLine, /\(exit 1, took /);
+  // `result === 1` alone doesn't prove the early return fired: STEPS[0] is
+  // `lint`, which also fails (with "Missing script") in this throwaway
+  // fixture repo, so a deleted `if (checkCode !== 0) return checkCode;`
+  // would still leave `result` at 1 for the wrong reason. Assert `lint`
+  // never ran (runPipeline logs `[run] ${step.name}` per step) so this only
+  // passes when the early return actually short-circuited the pipeline.
+  assert.ok(
+    !logs.some((l) => l.startsWith('[run] lint')),
+    'the early return must short-circuit before any STEPS[] entry runs — got:\n' +
+      logs.join('\n'),
+  );
+});
+
+test('#3271: a --steps run is left alone (the deliberate narrow developer/hook filter)', async () => {
+  const dir = makeGitFixture();
+  const marker = writeRegisterCitationFixture(dir);
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+  const env = { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' };
+
+  // The pre-commit hook and package.json's verify:fast* scripts are narrow
+  // `--steps` filters, and test:hooks already covers the checker there. Widening
+  // them would silently change what the hook costs.
+  assert.equal(await runUnconditionalLocalChecks({ cwd: dir, env }), 0);
+  assert.equal(readFileSync(marker, 'utf8').length, 1);
+
+  const { logs } = await captureLogs(() =>
+    runPipeline({ argv: ['--steps', 'test:hooks'], cwd: dir, env }),
+  );
+  assert.ok(
+    !logs.some((l) => l.startsWith(`[run] ${CHECK_SCRIPT} (unconditional)`)),
+    'a --steps run must not run the unconditional local leg',
+  );
+  assert.equal(
+    readFileSync(marker, 'utf8').length,
+    1,
+    'the checker must not have been spawned again by the --steps run',
+  );
 });

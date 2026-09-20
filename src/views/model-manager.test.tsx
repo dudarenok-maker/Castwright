@@ -852,6 +852,42 @@ describe('ModelManagerView — per-model keep-alive control', () => {
       await screen.findByTestId('keepalive-saved-ollama:qwen36-castwright:latest'),
     ).toBeInTheDocument();
   });
+
+  it('clears the keep-alive-saved confirmation timeout on unmount to prevent setState after unmount', async () => {
+    /* Regression: the setTimeout flashing/clearing the keep-alive-saved
+       confirmation was never cleared on unmount — the same unguarded-timer
+       shape fixed elsewhere in this PR (AccountView, ModelSettingsForm,
+       ShareLinkModal, WorkspacePathRow, PairDeviceModal's CopyRow,
+       SettingsAccordionWithNav, and EditBookMetaModal's tag-suggestions
+       close). This is the row vitest itself named when the original leak
+       crashed the pre-fix CI run. Capture the exact setTimeout(..., 2000)
+       call's id via a spy and assert clearTimeout is invoked with THAT id
+       on unmount. */
+    mockInventory.mockResolvedValue({
+      ...INVENTORY,
+      items: [
+        ...INVENTORY.items,
+        { ...ANALYZER_ITEM_FIXTURE, keepAliveSeconds: 0, keepAliveIsOverride: false },
+      ],
+    });
+    putUserSettings.mockResolvedValue(SETTINGS_FIXTURE);
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const { unmount } = renderManager();
+
+    const field = await screen.findByTestId('keepalive-ollama:qwen36-castwright:latest');
+    fireEvent.change(field, { target: { value: '90' } });
+    fireEvent.blur(field);
+    await waitFor(() => expect(putUserSettings).toHaveBeenCalled());
+
+    const savedCallIndex = setTimeoutSpy.mock.calls.findIndex((call) => call[1] === 2000);
+    expect(savedCallIndex).toBeGreaterThanOrEqual(0);
+    const savedTimeoutId = setTimeoutSpy.mock.results[savedCallIndex]?.value;
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(savedTimeoutId);
+  });
 });
 
 describe('ModelManagerView — back-to-Admin breadcrumb', () => {
