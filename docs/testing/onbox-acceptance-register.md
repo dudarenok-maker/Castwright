@@ -2873,6 +2873,26 @@ an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
 > box (or a smaller model pairing) with enough headroom that the race doesn't
 > also OOM the card. Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
+>
+> **2026-09-20 · exact race hit, no OOM — row fully met**
+> ([#3301](https://github.com/dudarenok-maker/Castwright/issues/3301); evidence
+> `docs/testing/onbox-mechanical-batch1-results/a17-clean-retry-2026-09-20.md` + raw files under
+> `a17-clean-retry-2026-09-20/`). A dedicated sidecar started from the branch tree
+> (`chore/ops-onbox-batch-1` @ `5dd2d622`) on port 9101, pinned `CUDA_VISIBLE_DEVICES=0` (one GPU in
+> `gpus[]`, default `SEG_CAPACITY_ADMISSION=1`): `/qwen/design-voice` warmed a VoiceDesign (200,
+> 291,840 B real PCM @ 24 kHz, 36.1 s; `qwen_design_resident:true` confirmed before the race),
+> `/qwen/clone-voice` then held the 1.7B-Base forward in flight, and `POST /load {"engine":"coqui"}`
+> fired **89 ms after a poll showing `qwen_design_resident:true` + `inflight_synth:1` at the same
+> instant** — the exact #1919 three-way race, against a card with the design still resident. Outcome:
+> `/load` → **200 `{"status":"ready"}`** (the eviction genuinely freed capacity; not a 503
+> `noCapacity`); `/health` across the window: **62 polls / 0 errors, worst single call 129.13 ms,
+> worst inter-response-start gap 258.7 ms, p50 5.89 ms** — inside the ~500 ms target (previous best
+> max single call was 2092.92 ms); no CUDA OOM, no `vram-spill`/`evict-declined`/`poison` line
+> anywhere in the sidecar log, final state `poisoned:false`, `inflight:0`, 23 MB reserved after
+> controlled unload. All four row items met (the app-level chapter-render variant of the first
+> admission was not re-run — its step-4 `vram-spill` observation stands for A10; the sidecar-level
+> forward holds the same `_synth_lock` the race guards). The optional ASR-on-CUDA pass was not run.
+
 
 ### A18 · Cloned-voice derive on Coqui no longer needs torchcodec ([#1967](https://github.com/dudarenok-maker/Castwright/issues/1967)) · **single 8 GB card + a real static-FFmpeg box**
 
