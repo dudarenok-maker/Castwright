@@ -65,9 +65,11 @@ const ALLOWED_LINE_PATTERNS = [
   /^printf '%s\\n' "\$PUSH_REFS" \| node scripts\/guard-protected-push\.mjs "\$@" \|\| exit 1$/,
   /^printf '%s\\n' "\$PUSH_REFS" \| node scripts\/guard-commit-subjects\.mjs "\$@" \|\| exit 1$/,
   // ops-71 (#3047): the census is ONE Win32_Process query (no pool) that
-  // appends a log entry and kills only provably-orphaned trees; up to one retry
-  // on a transient empty result (#3238); its own CLI always exits 0, so it is
-  // never itself a source of a blocked push.
+  // appends a log entry and kills only provably-orphaned trees; up to one
+  // retry, on either a transient empty result (#3238) or a spawnSync timeout
+  // (#3331) — never both in the same run, so at most 2 spawn calls total;
+  // its own CLI always exits 0, so it is never itself a source of a blocked
+  // push.
   /^node scripts\/reap-stale-batteries\.mjs --pre-push$/,
   /^if printf '%s\\n' "\$PUSH_REFS" \| node scripts\/is-docs-only-push\.mjs "\$@"; then$/,
   /^exit [01]$/,

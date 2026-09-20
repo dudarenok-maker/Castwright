@@ -1470,7 +1470,9 @@ test('#3238: collectProcessSnapshot does NOT retry on a genuine PowerShell failu
   let callCount = 0;
   const fakeSpawn = () => {
     callCount += 1;
-    return { error: new Error('spawn ENOENT'), status: null, stdout: '' };
+    const error = new Error('spawn ENOENT');
+    error.code = 'ENOENT';
+    return { error, status: null, stdout: '' };
   };
   const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
   assert.equal(callCount, 1, 'must have called spawn only once — no retry on genuine failure');
@@ -1698,9 +1700,46 @@ test('#3331: collectProcessSnapshot does NOT retry on a non-timeout error (e.g. 
   let callCount = 0;
   const fakeSpawn = () => {
     callCount += 1;
-    return { error: new Error('spawn ENOENT'), status: null, stdout: '' };
+    const error = new Error('spawn ENOENT');
+    error.code = 'ENOENT';
+    return { error, status: null, stdout: '' };
   };
   const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
   assert.equal(callCount, 1, 'must have called spawn only once — no retry on non-timeout error');
   assert.deepEqual(result, [], 'must return [] on non-timeout error');
+});
+
+test('#3331: collectProcessSnapshot logs a warning when the first attempt times out and the retry hits a genuine permanent failure', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    // First attempt: transient timeout. Second attempt: genuine permanent
+    // failure (non-zero status) — this ordering must still produce a
+    // warning explaining why [] came back, even though the retry's own
+    // failure isn't a timeout.
+    if (callCount === 1) return timeoutSpawn();
+    return { status: 1, stdout: '', stderr: 'some error' };
+  };
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+    assert.equal(callCount, 2, 'must have called spawn twice (timeout, then permanent failure)');
+    assert.deepEqual(result, [], 'must return [] when the retry hits a genuine permanent failure');
+    assert.ok(
+      warnings.length > 0,
+      'must log a warning explaining why [] was returned instead of silently discarding the timeout',
+    );
+    assert.ok(
+      warnings.some((w) => /timed out/.test(w) && /ETIMEDOUT/.test(w)),
+      `expected the warning to mention the first attempt's timeout, got: ${JSON.stringify(warnings)}`,
+    );
+    assert.ok(
+      warnings.some((w) => /permanent failure/.test(w)),
+      `expected the warning to mention the permanent failure, got: ${JSON.stringify(warnings)}`,
+    );
+  } finally {
+    console.warn = origWarn;
+  }
 });
