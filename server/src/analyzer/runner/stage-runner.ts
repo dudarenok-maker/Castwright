@@ -6,7 +6,7 @@ import { writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../../handoff/protocol.js';
 import type { StageCall } from '../types.js';
-import { mapFinish } from './finish.js';
+import { mapFinish, withThinkEvidence } from './finish.js';
 import { parseAndValidate, persistResponse, summariseDetail } from './parse.js';
 import { buildSystemInstruction, estimateInputTokens, loadSkill, type SkillName } from './prompt.js';
 import type { ValidationRetryPolicy } from './retry-policy.js';
@@ -192,7 +192,7 @@ export class StageRunner {
         onEvalTiming: withEvalTiming ? call.onEvalTiming : undefined,
       },
     });
-    return mapFinish(result, { kind: this.transport.kind, model: this.transport.model });
+    return mapFinish(withThinkEvidence(result), { kind: this.transport.kind, model: this.transport.model });
   }
 }
 

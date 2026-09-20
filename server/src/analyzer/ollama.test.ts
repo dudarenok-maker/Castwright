@@ -1565,6 +1565,24 @@ describe('OllamaAnalyzer — runner characterisation (#3084 wave 1)', () => {
   });
 });
 
+describe('OllamaAnalyzer — a leading <think> block no longer costs a retry (#3084)', () => {
+  afterEach(async () => {
+    await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_ollama_think-stage1-ch1.md'), { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_ollama_think-stage1-ch1.json'), { force: true });
+  });
+
+  it('validates on the first attempt when the model prefixes its JSON with <think>…</think>', async () => {
+    fetchMock.mockResolvedValueOnce(
+      okResponse(ndjsonStream(chunksOf(`<think>\nWho speaks in this chapter?\n</think>\n${VALID_RESPONSE}`, 32))),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    const result = await analyzer.runStage1Chapter('m_ollama_think', 1, '# prompt', {});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'wren']);
+  });
+});
+
 afterAll(async () => {
   /* Tidy test inbox/outbox files. */
   for (const id of [

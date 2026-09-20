@@ -3,6 +3,7 @@
    pre-extraction order exactly (ollama.ts chat() :830-844, gemini.ts
    generate() :783-818 on 80be2f1d). Wave 2 adds the reasoning-overflow rule. */
 import { AnalyzerTruncatedError, GeminiContentBlockedError, type TransportKind } from '../errors.js';
+import { stripThink } from './parse.js';
 import type { TransportResult } from './transport.js';
 
 export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model: string }): string {
@@ -20,4 +21,12 @@ export function mapFinish(r: TransportResult, ctx: { kind: TransportKind; model:
     throw new AnalyzerTruncatedError(ctx.kind, r.finishReason ?? 'length', r.receivedBytes, r.usage?.outputTokens);
   }
   return r.text;
+}
+
+/** An unterminated leading <think> is reasoning evidence even when the
+    transport saw no reasoning deltas (wave 2's reasoning-overflow rule reads
+    reasoningSeen). Returns the same object when nothing changes. */
+export function withThinkEvidence(r: TransportResult): TransportResult {
+  if (r.reasoningSeen || !stripThink(r.text).unterminated) return r;
+  return { ...r, reasoningSeen: true };
 }

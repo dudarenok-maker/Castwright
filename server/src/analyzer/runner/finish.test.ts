@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mapFinish } from './finish.js';
+import { mapFinish, withThinkEvidence } from './finish.js';
 import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../errors.js';
 import type { TransportResult } from './transport.js';
 
@@ -71,5 +71,17 @@ describe('mapFinish — wave 1 reproduces each engine\'s pre-W1 finish handling'
 
   it('gemini stop returns the text', () => {
     expect(mapFinish(res({ text: 'x', receivedBytes: 1 }), GEMINI)).toBe('x');
+  });
+});
+
+describe('withThinkEvidence (#3084)', () => {
+  it('marks reasoningSeen for an unterminated leading <think>', () => {
+    expect(withThinkEvidence(res({ text: '<think>hmm', finish: 'length', receivedBytes: 10 })).reasoningSeen).toBe(true);
+  });
+  it('returns the same object for a terminated block or plain text', () => {
+    const terminated = res({ text: '<think>x</think>{}' });
+    const plain = res({ text: '{}' });
+    expect(withThinkEvidence(terminated)).toBe(terminated);
+    expect(withThinkEvidence(plain)).toBe(plain);
   });
 });
