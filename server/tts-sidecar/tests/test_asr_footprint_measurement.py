@@ -408,6 +408,72 @@ def test_asr_warm_reservation_does_not_double_guard_non_positive_deltas(monkeypa
     assert fp.records == [("asr", None, {}, -100, True)]
 
 
+def test_asr_warm_reservation_discards_a_delta_above_the_seed_ceiling(monkeypatch) -> None:
+    """#3282 review — the three guards above (after-reading present, no
+    OTHER sidecar engine holding the device, no foreign PID at either end)
+    only catch a hold that spans the WHOLE measurement window. A same-process
+    sibling reservation (e.g. a Kokoro `/load` or a Qwen `/design-voice`/
+    `/mint`) that opens AND closes entirely INSIDE this window is invisible
+    to all three: `warm_other_engines` is read only at the tail of the
+    window, and no foreign (non-sidecar) PID is ever involved. Left
+    unguarded, that free-memory swing gets attributed whole to `asr.warm`,
+    inflating the learned footprint into the thousands of MB and making
+    ordinary VRAM-capacity checks reject requests they shouldn't.
+
+    A device-wide delta above the `asr` cold seed (400 MB) is implausible for
+    a resident forward — it should never need more than a cold load would —
+    so it must be discarded (recorded 0) exactly like the other contamination
+    guards, not attributed to ASR.
+
+    Mutation that must fail it — breaks the PRODUCER: drop the warm-ceiling
+    check (always accept `warm_delta_mb`). The 2000 MB delta would then be
+    recorded verbatim instead of discarded.
+    """
+    devices = [dev(total=16000, free=16000)]
+    pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    # before=10000 free, after=8000 free -> a 2000 MB delta, well above the
+    # 400 MB "asr" cold seed used as the warm ceiling.
+    _patch_free_mb(monkeypatch, [10000, 8000])
+
+    async def body():
+        async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=False):
+            pass
+        return _RAN
+
+    run_case(body())
+
+    assert fp.records == [("asr", None, {}, 0, True)]
+
+
+def test_asr_warm_reservation_keeps_a_delta_within_the_seed_ceiling(monkeypatch) -> None:
+    """Non-regression twin of the ceiling test above: a genuine warm delta
+    AT OR BELOW the `asr` cold seed (400 MB) must still be recorded normally
+    — the new guard must not over-discard a plausible resident-forward
+    reading.
+
+    Mutation that must fail it — tighten the ceiling comparison (e.g. `>=`
+    instead of `>`, or cap at some value below the real 400 MB delta used
+    here). The genuine 400 MB delta would then be discarded (recorded 0)
+    instead of kept.
+    """
+    devices = [dev(total=16000, free=16000)]
+    pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    # before=2500 free, after=2100 free -> a 400 MB delta, exactly at the
+    # "asr" cold seed ceiling — must still be kept, not discarded.
+    _patch_free_mb(monkeypatch, [2500, 2100])
+
+    async def body():
+        async with pc.reservation("asr", None, {}, cpu_capable=False, heavy=False):
+            pass
+        return _RAN
+
+    run_case(body())
+
+    assert fp.records == [("asr", None, {}, 400, True)]
+
+
 def test_asr_cold_measurement_is_not_capped(monkeypatch) -> None:
     """#2682 removed the implausible-delta "warm ceiling" entirely — it only
     ever applied to the RESIDENT case, which no longer takes this

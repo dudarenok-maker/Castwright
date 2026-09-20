@@ -5579,7 +5579,8 @@ class PlacementController:
                 # before releasing our own hold, so both snapshots bracket the
                 # forward the same way the cold pair brackets the load. A
                 # non-positive delta falls through to `record()`'s own `<= 0`
-                # guard — no second guard here.
+                # guard; a delta above the `asr` seed ceiling is discarded by
+                # the warm-ceiling check below (docs/local-llm.md).
                 if engine == "asr" and resident and warm_before_mb is not None:
                     warm_after_mb = self._device_free_mb(device_key)
                     warm_other_engines = self.ledger.engines_holding(device_key) - {engine}
@@ -5597,7 +5598,20 @@ class PlacementController:
                         and not foreign_before
                         and not warm_foreign_after
                     ):
-                        asr_warm_mb = warm_before_mb - warm_after_mb
+                        warm_delta_mb = warm_before_mb - warm_after_mb
+                        # A same-process sibling reservation (e.g. Kokoro
+                        # `/load` or Qwen `/design-voice`/`/mint`) that opens
+                        # AND closes entirely inside this measurement window
+                        # is invisible to the three guards above — they only
+                        # catch a foreign PID or a hold that spans the whole
+                        # window. A WARM reading above the `asr` cold seed is
+                        # implausible (a resident forward should never need
+                        # more than a cold load would), so it is discarded
+                        # rather than attributed to ASR (docs/local-llm.md's
+                        # `asr.warm` section documents this ceiling).
+                        warm_ceiling_mb = SEED_FOOTPRINTS_MB.get("asr", 0)
+                        if not (warm_ceiling_mb > 0 and warm_delta_mb > warm_ceiling_mb):
+                            asr_warm_mb = warm_delta_mb
                     # else: the after-snapshot failed, another engine held a
                     # concurrent reservation on this device, or a foreign
                     # (non-sidecar) PID was seen at either snapshot point — the
