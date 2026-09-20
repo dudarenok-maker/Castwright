@@ -12,7 +12,14 @@ import { GoogleGenAI } from '@google/genai';
 import { configValue } from '../../config/resolver.js';
 import { AnalysisAbortedError } from '../errors.js';
 import { geminiRateLimiter } from '../rate-limit.js';
-import { isRetryable5xx, parseRetryDelayMs, type RetryClassifier } from '../runner/transport-retry.js';
+import {
+  BACKOFFS_MS,
+  isRetryable5xx,
+  parseRetryDelayMs,
+  withTransportRetry,
+  type RetryClassifier,
+} from '../runner/transport-retry.js';
+
 import type { ChatTransport, TransportRequest, TransportResult } from '../runner/transport.js';
 import type { StageChunkInfo } from '../types.js';
 
@@ -104,7 +111,35 @@ export class GeminiTransport implements ChatTransport {
     this.model = opts.model;
   }
 
-  async send(req: TransportRequest): Promise<TransportResult> {
+  /* Every wire call — including the escalation pass — goes through the shared
+     per-model rate limiter and the transport-level retry policy. This wrapper
+     is the pre-#3084 `generateWithLimiter` behaviour (rate-limit acquisition,
+     classification, backoff, daily-quota blocking) and lives here rather than
+     in StageRunner so `ChatTransport` stays engine-agnostic: only the engine
+     that needs a limiter carries one (#3343). */
+  send(req: TransportRequest): Promise<TransportResult> {
+    return withTransportRetry(() => this.generate(req), {
+      model: this.model,
+      limiter: geminiRateLimiter,
+      estimatedInputTokens: req.estimatedInputTokens,
+      classifier: GEMINI_RETRY_CLASSIFIER,
+      signal: req.signal,
+      onThrottle: req.call.onThrottle,
+      maxAttempts: 3,
+      maxTotalMs: 90_000,
+      backoffsMs: BACKOFFS_MS,
+      /* Pre-W1 reconciled only on a returned text; a truncated or blocked
+         response was thrown and never reconciled. */
+      recordActualTokens: (r) => (r.finish === 'stop' ? r.usage?.inputTokens : undefined),
+      logTag: 'gemini',
+      displayName: 'Gemini',
+    });
+  }
+
+  /* One wire attempt. Throws aborted / idle / HTTP / quota errors so the
+     retry wrapper above can classify and retry them; never throws for a
+     completed response. */
+  private async generate(req: TransportRequest): Promise<TransportResult> {
     const contents = req.messages.map((m) => ({
       role: m.role === 'assistant' ? ('model' as const) : ('user' as const),
       parts: [{ text: m.content }],
@@ -238,13 +273,10 @@ export class GeminiTransport implements ChatTransport {
         finish = 'length';
       }
 
-      /* Reconcile the limiter only on a clean finish — the old code only
-         reconciled a returned (non-throwing) text, which maps to
-         finish === 'stop'. Truncated/blocked responses may have
-         inaccurate token counts. */
-      if (finish === 'stop' && promptTokenCount !== undefined) {
-        geminiRateLimiter.recordActualTokens(this.model, promptTokenCount);
-      }
+      /* Limiter reconciliation for a clean finish happens in `send`, via
+         withTransportRetry's `recordActualTokens` option — a finish of
+         'length'/'blocked' is reported here and deliberately never
+         reconciled (pre-W1 only reconciled a returned text; #3343). */
 
       const resultUsage: TransportResult['usage'] = {};
       if (promptTokenCount !== undefined) resultUsage.inputTokens = promptTokenCount;

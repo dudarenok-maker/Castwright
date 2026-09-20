@@ -433,7 +433,7 @@ describe('fs-2 — languagePreamble + estimateInputTokens', () => {
   });
 });
 
-describe('GeminiAnalyzer.generateWithLimiter — retry policy', () => {
+describe('GeminiAnalyzer — transport retry policy (GeminiTransport + withTransportRetry)', () => {
   /* Build an SDK-shaped ApiError so isRetryable5xx and parseRetryDelayMs
      find what they expect. */
   function apiError(status: number, body: object): Error {
