@@ -1,4 +1,5 @@
-/* Local Ollama analyzer. Header + chat() moved to transports/ollama-transport.ts (#3084 wave 1b). */
+/* Local Ollama analyzer. Header + OllamaTransport.send moved to
+   transports/ollama-transport.ts (#3084 wave 1b). */
 
 import { fetch as undiciFetch, Agent } from 'undici';
 import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-concurrency.js';
@@ -60,7 +61,7 @@ export class OllamaAnalyzer extends TransportAnalyzer {
 }
 
 /** One-shot freeform Ollama call for persona generation. Unlike
-    OllamaAnalyzer.chat() this sends NO response `format` (freeform text),
+    OllamaTransport.send() this sends NO response `format` (freeform text),
     does not stream, and is GPU-plan aware:
       - onCpu  → num_gpu:0 (system RAM only) AND skip the GPU semaphore
                  (a CPU call must not queue behind GPU synthesis).
@@ -96,7 +97,7 @@ export async function generatePersonaViaOllama(
   };
 
   /* ANALYZER_DISPATCHER disables undici's header/body timeouts, so SOMETHING
-     else must bound this call — and unlike chat() (whose StageCall carries the
+     else must bound this call — and unlike OllamaTransport.send() (whose request carries the
      analysis signal) and warmOllamaModel (which builds its own controller from
      warmTimeoutMs), nothing upstream of here supplies one: voice-style.ts
      passes only { onCpu, keepAlive }. Without this, a daemon wedged in the
@@ -128,7 +129,7 @@ export async function generatePersonaViaOllama(
     const signal = opts.signal ? AbortSignal.any([budget, opts.signal]) : budget;
     let response: Awaited<ReturnType<typeof undiciFetch>>;
     try {
-      /* Same ANALYZER_DISPATCHER as chat(), and this call needs it MORE:
+      /* Same ANALYZER_DISPATCHER as OllamaTransport.send(), and this call needs it MORE:
          `stream: false` above means Ollama withholds response headers until
          the ENTIRE generation is finished, so undici's 300s default would
          cover load + prefill + full decode rather than prefill alone. The

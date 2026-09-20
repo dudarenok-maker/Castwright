@@ -20,7 +20,7 @@ Two stages, both pure JSON-in / JSON-out, both schema-constrained:
   sentence tagged with which character speaks it (or `narrator`). This is the
   load-bearing one — it runs N times per book and dominates wall-clock.
 
-The dispatch lives in `server/src/analyzer/ollama.ts:117` (`OllamaAnalyzer`).
+The dispatch lives in `server/src/analyzer/ollama.ts` (`OllamaAnalyzer`, a `TransportAnalyzer` over `server/src/analyzer/transports/ollama-transport.ts`).
 Both stages share the same retry loop, the same Zod-derived JSON schema, and
 the same streaming-NDJSON read path.
 
@@ -41,7 +41,7 @@ XTTS. Reasons:
 The Node ↔ Ollama interface is plain `POST /api/chat` with `stream: true`.
 No SDK. Errors are classified into "daemon unreachable" (→ Gemini fallback)
 vs. "daemon up but misbehaving" (→ hard-fail and surface the error). The
-classifier is `classifyConnectError` at `server/src/analyzer/ollama.ts:441`
+classifier is `classifyConnectError` in `server/src/analyzer/transports/ollama-transport.ts`
 and the policy is documented at the top of the same file.
 
 ## The VRAM budget — the actual constraint
@@ -70,7 +70,7 @@ before generation starts. So the question is **not** "fit both at once" but
 
 We mediate the switch in two places:
 
-1. **`keepAliveFor()`** at `server/src/analyzer/ollama.ts`. Each model's
+1. **`keepAliveFor()`** in `server/src/analyzer/ollama-settings.ts`. Each model's
    `keep_alive` (an integer number of seconds) is resolved per model —
    a user override set in the Model Manager, else a coded default
    (`DEFAULT_KEEP_ALIVE_SECONDS`, `300` for the four models Castwright ships
@@ -86,7 +86,7 @@ We mediate the switch in two places:
    swap happen.
 
 The `/load` endpoint is subtle: it **must** warm with the same `num_ctx` the
-analyzer uses on real calls (`ANALYZER_NUM_CTX = 16384`), because Ollama keys
+analyzer uses on real calls (`resolveAnalyzerNumCtx()`, knob `analyzer.ollama.numCtx`, default 32768), because Ollama keys
 the in-VRAM model on `(model, num_ctx)`. Warming with the default 2048 and
 then running analysis at 16384 triggers a silent full reload mid-stream,
 which used to surface as "Analysis stream ended without a result event" with
@@ -284,7 +284,7 @@ Two complementary levers pin the analyzer to GPU-only:
    restarting Ollama; neither bakes anything into the model weights.
 
 2. **`ANALYZER_NUM_GPU` in the request body** — see
-   `server/src/analyzer/ollama.ts` (the constant lives next to
+   `server/src/analyzer/ollama-settings.ts` (the constant lives next to
    `ANALYZER_NUM_CTX`). We thread `num_gpu: 999` into both
    `/api/chat` (analyzer calls) and `/api/generate` (the in-app `/load`
    warm-up). 999 is the standard "all layers" idiom — Ollama clamps to the
@@ -329,8 +329,8 @@ Three reasons, in order of weight:
    own working set. We can take a chapter spike (long chapter, big sentence
    list) without paging.
 2. **Schema-constrained decoding makes the "smarter model" gain shrink.** We
-   pass each Zod schema through Zod 4's native `z.toJSONSchema` (`runStage` in
-   `server/src/analyzer/ollama.ts`) and Ollama's sampler is constrained
+   pass each Zod schema through Zod 4's native `z.toJSONSchema` (`StageRunner` in
+   `server/src/analyzer/runner/stage-runner.ts`) and Ollama's sampler is constrained
    to only emit tokens that keep the output a valid prefix of a value
    matching that schema. The 4B can't go off the rails structurally; the
    remaining variance is semantic, which is where bigger models help — but
@@ -391,7 +391,7 @@ If the goal is **"keep the analyzer resident across the loop, with a real
 - **qwen3.5:9b held resident across the loop.** 6.6 GB weights + ~1.5 GB KV
   at 16K = 8.1 GB. Over budget. Either drop to `num_ctx: 8192` (smaller KV,
   but we picked 16K specifically because chapters were brushing the limit at
-  8K — see `ANALYZER_NUM_CTX` at `server/src/analyzer/ollama.ts:115`) or
+  8K — see `ANALYZER_NUM_CTX` in `server/src/analyzer/ollama-settings.ts`) or
   accept the per-call reload tax.
 - **Anything plus XTTS at the same time.** Not a new constraint — the
   pipeline is already sequential. Worth re-stating because every model size

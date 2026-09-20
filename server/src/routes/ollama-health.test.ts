@@ -505,8 +505,8 @@ describe('POST /api/ollama/load', () => {
     // analysis model qwen3.5:4b (no override), resolved via resolveKeepAliveSeconds.
     expect(body?.keep_alive).toBe(30);
     /* CRITICAL: warming must use the same num_ctx AND num_gpu the
-       analyzer's runStage path passes (ANALYZER_NUM_CTX, ANALYZER_NUM_GPU
-       in server/src/analyzer/ollama.ts). Either drifting triggers a
+       analyzer's stage runner passes (ANALYZER_NUM_CTX, ANALYZER_NUM_GPU
+       in server/src/analyzer/ollama-settings.ts). Either drifting triggers a
        full model reload on the first real analysis call and the SSE
        dies mid-stream — the "Try Again" infinite-loop bug. */
     expect((body?.options as { num_ctx?: number })?.num_ctx).toBe(32768);
@@ -561,7 +561,7 @@ describe('POST /api/ollama/unload', () => {
 
     expect(res.status).toBe(200);
     /* keep_alive: 0 is the documented Ollama idiom for "drop this model from
-       VRAM now" — see analyzer/ollama.ts:92 for the equivalent on real chat
+       VRAM now" — see keepAliveFor in analyzer/ollama-settings.ts for the equivalent on real chat
        calls. If the literal 0 changes (e.g. to "0s") the eviction stops
        being immediate, which silently breaks auto-evict-before-TTS. */
     const genCalls = fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/api/generate'));

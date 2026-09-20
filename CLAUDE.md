@@ -869,7 +869,7 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
     "TTS / Analyzer unloaded to free VRAM" banner). Endpoints:
     `POST /api/sidecar/{load,unload}` (60 s / 2 s budgets),
     `POST /api/ollama/{load,unload}` (uses Ollama's `keep_alive` idiom,
-    see `server/src/analyzer/ollama.ts:179` (`keepAliveFor`) for the equivalent in-band
+    see `server/src/analyzer/ollama-settings.ts` (`keepAliveFor`) for the equivalent in-band
     evict on real chat calls).
   - **Qwen has TWO models with split lifecycles** (`QwenEngine`,
     `server/tts-sidecar/main.py`): the **Base 0.6B** synth model is the

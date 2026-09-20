@@ -1,9 +1,8 @@
-/* Gemini analyzer — sends the same prompts the human would have run by hand
-   through google.generativeai's free tier. Writes the prompt to inbox and the
-   raw response to outbox for traceability (both gitignored), validates with
-   the shared Zod schemas, and retries ONCE with the validation errors fed
-   back as a follow-up turn before giving up. Drives the SSE progress bar
-   via a setInterval ticking onWaiting while the API call is in flight. */
+/* GeminiAnalyzer — a TransportAnalyzer over transports/gemini-transport.ts
+   (free-tier Google API via @google/genai). Prompt building, inbox/outbox
+   traceability, validation with the shared Zod schemas and the single
+   validation retry live in runner/stage-runner.ts; this engine's retry shape
+   is GEMINI_RETRY_POLICY (runner/retry-policy.ts). */
 
 import { GeminiTransport } from './transports/gemini-transport.js';
 import { TransportAnalyzer } from './runner/transport-analyzer.js';
