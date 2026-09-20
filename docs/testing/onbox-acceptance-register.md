@@ -2136,6 +2136,24 @@ The original blocker: `start.ps1` absorbed code-43 exits internally in its resta
 
 A forced card-specific three-exits-in-ten-minutes streak was run for real before this fix and did not reach `runAutoRevert` — but now the supervised path should observe and respond to individual code-43 exits. **Owed:** re-run the hardware trigger on real 2-card hardware to confirm the auto-revert trip now fires and resolves the cascade, then record the outcome. Tracked as [#3121](https://github.com/dudarenok-maker/Castwright/issues/3121).
 
+> **2026-09-20 (#3295, on-box re-run) — the owed hardware trigger ran for
+> real: trip fires, cascade resolves.** On this 2-card box,
+> `SIDECAR_VRAM_FREE_FLOOR_MB=999999` produced three individually-observed
+> `code=43` exits in ~90 s (the visibility gap #3148 fixed is gone), the
+> streak trip logged with the breach card's real UUID, respawn stopped
+> (0 listeners on the sidecar port at trip — the original pile-up symptom is
+> resolved), `GET /api/gpu/trip-status` answered live with
+> `status: "unrevertable"` + the card-specific toast, and the trip breadcrumb
+> recorded card/residentEngines. **A live `reverted` decision (pin actually
+> rewritten on hardware) remains owed and is structurally uninducible on this
+> machine**: the per-card floor breach only fires on torch-*inactive* cards,
+> so a breached card can never have a revertible engine resident/pinned on it
+> while every engine here fits either card comfortably (a reserved-ceiling
+> threshold low enough to breach would ping-pong). Full run records, including
+> the failed Run C attempt and the general law for future boxes:
+> `docs/testing/onbox-2card-pinokio-batch-results/a3-rerun-2026-09-20.md`.
+> Row stays owed (narrowed); counts unchanged.
+
 ### A4 · Audition engine + tier fidelity ([#1849](https://github.com/dudarenok-maker/Castwright/pull/1849))
 
 Verified by tests and CI; never listened to except where noted below.
@@ -2413,6 +2431,51 @@ Still owed — deliberately left untouched, not silently attempted:
   other live lanes concurrently, and swapping enumeration order (or a reboot)
   would disturb their GPU state mid-run — a contention risk, not a hardware
   gap. Needs a dedicated, uncontended window.
+
+> **2026-09-20 (#3296, uncontended 2-card window) — the owed bullet ran for
+> real: a respawn finds the pinned card across an enumeration-order change.**
+> Box: RTX 4070 Laptop GPU (`1831b67f-…`) + RTX 5070 Ti
+> (`73e7270e-…`). Each boot spawned the real sidecar module fresh with
+> respawn-shaped env — the raw `QWEN_DEVICE=cuda-uuid:<bare uuid>` literal
+> `buildSidecarEnv` sends post-#1870, never a translated `cuda:N` — so import-time
+> `_engine_env_pin` → `_resolve_uuid_to_index` → `_validate_cuda_index` ran
+> exactly as a supervisor respawn runs it, with the model never loaded (no
+> weights read, no VRAM moved, other lanes undisturbed).
+>
+> - Default order (`0=4070, 1=5070 Ti`): the 5070 Ti's UUID resolved `cuda:1`,
+>   landed on the 5070 Ti, `validate=ok`, admission key `cuda:1`; codec pin →
+>   `cuda:0` (4070). Repeat boot: byte-identical — respawn is deterministic.
+> - **Reversed order** (`0=5070 Ti, 1=4070`): the same literal resolved `cuda:0`
+>   and **still landed on the 5070 Ti** — the UUID torch reports for the landing
+>   device equals the pin — `validate=ok`; codec followed to `cuda:1`, still the
+>   4070. No `_validate_cuda_index` failure, no wrong card. **Pass.**
+> - Counterfactuals, so the row has teeth: `cuda:1` frozen from the default-order
+>   boot replayed under the reversed order lands on the **4070** with
+>   `validate=ok` — a stale in-range index is silently the wrong card and the
+>   guard cannot catch it — and against a one-card view it raises `ValueError:
+>   cuda:1 out of range; only 1 CUDA device(s) visible`. Both are the shapes
+>   #1870 exists to prevent. An unresolvable UUID → `auto` +
+>   `uuid_unresolved` (codec → `cpu`), no crash.
+> - Two box facts worth keeping. **`CUDA_DEVICE_ORDER` does not renumber these
+>   two cards** — `PCI_BUS_ID` and `FASTEST_FIRST` both yield
+>   `0=4070, 1=5070 Ti`, so the lever named in the bullet above is inert on this
+>   hardware pairing; the order was changed instead by permuting the visible
+>   device list (`CUDA_VISIBLE_DEVICES=1,0`), which inverts the uuid↔index map
+>   without a reboot or a hot-plug. And the pin's canonical form is the **bare
+>   UUID**: a `GPU-`-prefixed string copied from `nvidia-smi -L` does not resolve
+>   (→ `auto`), consistent with `toUuidForm()`
+>   (`server/src/routes/gpu-uuid.ts:32-43`) storing the sidecar's own string — a
+>   hand-edit footgun in `tts.qwen.device`, recorded not filed.
+> - Scope: the `PUT /api/config` → forced respawn → `GET /health` leg on both
+>   cards was already discharged by the 2026-09-08 run above; what was owed was
+>   the order-change variable, which is decided entirely inside the sidecar
+>   process at import, and is what this run drove. Re-driving it through the
+>   shared dev server would have meant restarting the server under a permuted
+>   device list while other lanes are live — not done, stated plainly.
+>
+> Transcript + boot matrix:
+> `docs/testing/onbox-2card-pinokio-batch-results/a12-enumeration-2026-09-20.md`.
+> **A12's remaining bullet: CLOSED — row fully discharged; counts unchanged.**
 
 *Needs:* both cards, and the ability to change enumeration order between boots
 (the eGPU is not hot-pluggable). *Cost:* short.
@@ -4462,6 +4525,48 @@ load that splits, one genuinely-too-big load that doesn't, one
 > a code gap, and this row should stay open until run from such a box rather
 > than being narrowed further from here.
 
+> **2026-09-20 ([#3297](https://github.com/dudarenok-maker/Castwright/issues/3297)) —
+> split precondition finally satisfied live on this box; the [N/A] short-circuit
+> re-confirmed under the new engine; the remaining bullets are now demonstrably
+> unreachable here, not merely unrun.** Two environment facts changed since
+> 09-09. (1) The shared tray daemon now serves with `CUDA_VISIBLE_DEVICES=1`
+> (`server.log` 07:10:43 "user overrode visible devices", and the same pin on
+> the 10:22 `llama-server.exe` subprocess env; it comes from the tray app's
+> own state — no `Environment` registry key under HKCU/HKLM carries it and
+> ordinary shells don't have it), so on that daemon an oversized model spills
+> to CPU rather than to a second card: `gemma4-cw-26B-A4B` @131072 sat at
+> `16% CPU / 84% GPU` with `/api/ps` `size_vram` 13,144,990,677 vs `size`
+> 15,557,648,708. (2) The engine is ollama 0.34.2's new per-model
+> `llama-server.exe` runner on driver 616.92 / CUDA 13.4. To actually satisfy
+> this row's "genuine split" precondition I unloaded the 11434 copy and
+> started a throwaway `ollama serve` on `127.0.0.1:11435` with explicit
+> `CUDA_VISIBLE_DEVICES=0,1`, then loaded the same model at `num_ctx=131072`:
+> a real two-card split at 100% GPU (runner log: `offloaded 31/31 layers to
+> GPU`; CUDA0 model buffer 4221.94 MiB + CUDA1 9036.01 MiB; per-card KV
+> 329.38 + 1190.00 MiB; compute buffers 1112.32 MiB each; `ollama ps`: 16 GB
+> `100% GPU` ctx 131072; `/api/ps`: `size_vram == size` = 16,401,794,332;
+> card occupancy 5796/2153 and 11567/4429 MiB), and
+> `--query-compute-apps` returned precisely the shape the detector wants —
+> ONE PID (32828, `...\Programs\Ollama\lib\ollama\llama-server.exe`) on BOTH
+> GPU UUIDs — with `used_memory` `[N/A]` on both rows. Live in-process
+> `detectOllamaGpuSplit({fresh: true})` (unmocked `tsx`, throwaway probe file
+> deleted after the run) against that resident split returned exactly
+> `{reachable:true, split:false, deviceIndices:[], totalUsedMb:0,
+> wouldFitSingleDevice:false, dataUnavailable:true}` — the same code path
+> traced 09-09 (`[N/A]` rows routed to `unparseableProcessNames`, `/ollama/i`
+> matching the runner's full path, `ollamaRows.length === 0` short-circuit).
+> The positive-split bullet is therefore *unsatisfiable*, not "not yet run",
+> on this box: WDDM gives the code no numeric per-process-VRAM channel at all
+> no matter what Ollama really does. The no-split and device-mismatch bullets
+> gate on the same parsed rows and fare identically; the analyzer/UI
+> `dataUnavailable` suppression (source-checked 09-09) is unchanged under the
+> new engine — `advanced.tsx` will keep showing "can't determine GPU split
+> status", which is the correct behaviour here. No defect found, nothing
+> filed. Standalone daemon stopped, its model unloaded, 11434 returned to its
+> pre-session (no-resident-model) state. Row stays open per the 09-09
+> guidance: the three live bullets need a Linux/non-WDDM box where
+> `nvidia-smi --query-compute-apps` reports numeric `used_memory`.
+
 ### A105 · Qwen base17 eviction guard and _DEVICE_LEDGER serialization ([#2752](https://github.com/dudarenok-maker/Castwright/issues/2752), PR [#2790](https://github.com/dudarenok-maker/Castwright/pull/2790)) · **single 8 GB GPU card, Qwen VoiceDesign 1.7B resident, real sidecar with base17 weights**
 
 PR #2790 (two rounds of independent review) improves base17 co-residency safety in `design_voice()`:
@@ -4657,6 +4762,60 @@ log instrumentation, a VRAM-fill scenario to construct the discriminating placem
 (the fill target is now computed live from the box's own measured `peak` and
 `GPU_RESERVE_MB`, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the
 run sheet's pin/stale-cache scenarios.
+
+> **PARTIAL on-box sitting 2026-09-20 (~03:58–04:01Z, ~15:58–16:01 local; cline-qwen-cloud /
+> OE claim `3298`, issue #3298) — Criterion 1 DISCHARGED; row stays OPEN for Criteria 2–5.**
+> Box: 2-card (8 GB RTX 4070 Laptop `cuda:0` + 16 GB RTX 5070 Ti `cuda:1`), cold Coqui, no
+> `COQUI_DEVICE` pin, server booted 11:42 local that day.
+> Fixture: throwaway book *A21 Clone Readiness Gate QA v2*
+> (`a21-qa__standalones__a21-clone-readiness-gate-qa-v2-throwaway`), character Aria on the
+> **designed** Coqui voice `xtts-01e278d6-b1a2-410b-9953-15a08c0f5cd6`, artifact deleted. Real
+> trigger: `POST /api/books/:bookId/generation` (`{"modelKey":"coqui-xtts-v2","force":true}`),
+> not a manual sidecar call. Criterion 1 evidence chain, `logs/tts.err.log`:
+> `15:58:46.443 Coqui model unloaded.` → `15:58:49.099 [A106-C1-TEMP] device_hint=cuda:1`
+> (temporary one-line instrumentation in `main.py`'s clone handler, per the run sheet —
+> **since removed**) → `15:58:49.101 Loading Coqui model=…xtts_v2 on device=cuda:1 half=True`
+> (cold load on the hinted card) → `15:59:09.847 Cloned + cached Coqui voice
+> 'xtts-01e278d6-…' from caller clip.` → `16:00:23` render completed with Aria segments on
+> `xtts-01e278d6-…`. **Criterion 2 was NOT discharged by this run** — the unhinted cold
+> control (`POST /xtts/clone-voice` with an identical idle 2-card box, no `X-Device-Hint`
+> header, `16:12:05` → also `Loading Coqui … on device=cuda:1`, HTTP 200, `.pt` recreated
+> `16:12:39`) landed on the *same* card as the hinted `15:58` derive, exactly as this row's
+> warning above predicts: in the box's normal idle state `best_fit` already favors the 16 GB
+> `cuda:1`, so the hinted placement proves the header parses and is accepted, not that it
+> *moved* anything. (The earlier `15:49:36` unhinted load on `cuda:0` was not a clean control:
+> Whisper ASR was resident on `cuda:1` at that moment and idle-evicted at `15:53:38`.)
+> Criterion 2's discriminating fill-band scenario additionally cannot be constructed on this
+> box right now: `cuda:0` free ≈ 5.4 GB sits below the run sheet's live-computed fill target
+> (~6.4 GB), so the row's "insufficient headroom" Result escape applies — recorded here rather
+> than forcing a pass. `POST /unload {engine:"coqui"}` provided the cold-load precondition
+> without touching the operator's processes. The hint was produced by the shipped lazy path
+> itself — `lazyCoquiDeriveDeviceHint()` (`clone-voice-resolver.ts:933-935`:
+> `ensureGpuDeviceListWarm()` then `some(d => d.idx === 1) ? 'cuda:1' : undefined`) — with the
+> sidecar's `GET /devices` probe returning both cards.
+>
+> **Fixture bug found and fixed while landing this (why earlier sittings produced no
+> hint-bearing derive at all):** the earlier provenance flip wrote the voice manifest with PowerShell
+> `Set-Content -Encoding UTF8`, which prepends a UTF-8 BOM (`EF BB BF`); Node's `JSON.parse`
+> rejects it, so `workspace/voice-library.ts`'s `readEntry` returned `null` and
+> `resolveDesignedVoicesForChapter` removed the coqui slot with
+> `has no voice-library entry backing it (entry missing)` *before ever reaching the
+> hint-bearing derive* — the chapter silently rendered on stock voices (two `server.err.log`
+> occurrences at 15:49:36 and 15:50:44, plus the 11:57 render, all pre-fix). BOM stripped
+> byte-exact (962→959 B, content unchanged, `provenance: "designed"` verified parseable); any
+> future manifest flip must write BOM-free UTF-8.
+>
+> **Not covered by this sitting (honest scope):** Criteria 2–5 — the discriminating
+> hinted-vs-unhinted fill-band scenario (Criterion 2, per the control result above and the
+> headroom escape), unsatisfiable-hint fallback (3), operator-pin override (4), and
+> stale-device-list harmlessness (5) were not exercised; the 75%-tolerance check (#3097) was
+> consequently not observed doing real work either (the hinted card was never the
+> *less*-preferred winner). `.env` restore (re-pin `COQUI_DEVICE=cuda:1`,
+> `QWEN_DEVICE=cuda:1`) and removal of the `.a106bak`/`.a106c2` artifacts remain with the
+> next operator sitting; the temporary `main.py` log line has already been stripped
+> (`git diff` on `main.py` is empty against the committed state) and the sidecar restarted
+> cleanly on the clean file (supervisor respawn, pid 9700, `16:05:54`).
+
 
 ### A107 · `/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter ([#3086](https://github.com/dudarenok-maker/Castwright/issues/3086), [#3101](https://github.com/dudarenok-maker/Castwright/issues/3101), PR [#3142](https://github.com/dudarenok-maker/Castwright/pull/3142)) · **single 8 GB GPU card, DirectML profile, real Kokoro weights**
 
