@@ -172,8 +172,8 @@ for this specific incremental figure) rather than a measured value like the
 design-family pair above.
 
 Unlike the other seeds on this page, `asr.warm` has no real path to being
-*learned* from, and on-box acceptance (#3036, discharging register row A25)
-reached that as a CONCLUSIVE negative result, not an open question. The
+*learned* from, and on-box acceptance (#3036, register row A25 discharged
+2026-09-20) reached that as a CONCLUSIVE negative result, not an open question. The
 peak-observation mechanism reads torch's own caching-allocator peak
 (`torch.cuda.max_memory_allocated`), but faster-whisper's CTranslate2 backend
 allocates entirely outside it, so a warm forward measured that way read ~0 MB

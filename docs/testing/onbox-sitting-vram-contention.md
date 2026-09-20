@@ -3,9 +3,10 @@
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
 > register rows **A5, A13, A17, A19, A24, A25** — the rows that
 > only mean something when the single 8 GB card is genuinely full — and nothing
-> else. (Three rows this sitting pack originally covered — A19/A16/A31 in
-> their pre-2026-08-26 numbering — are discharged and removed from the
-> register; their sections below are kept for the historical run record.)
+> else. (Four rows this sitting pack originally covered — A19/A16/A31 in
+> their pre-2026-08-26 numbering, plus A25 (2026-09-20, #3036) — are discharged
+> and removed from the register; their sections below are kept for the
+> historical run record.)
 > Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule of
 > §6 was applied to every row (see
@@ -323,6 +324,13 @@ up.
     - Result:
 
 ### A25 · ASR warm-reservation figure vs. a real resident `/transcribe` peak (#2094) — step 12
+
+> **Row A25 is DISCHARGED and removed from the register** (2026-09-20, #3036,
+> PR #3282) — the run below was superseded by two later real-hardware attempts
+> (`docs/testing/onbox-3036-results/step-1-nvml.md`,
+> `docs/testing/onbox-3036-results/step-2-device-delta.md`) that reached a
+> conclusive negative: `asr.warm` cannot converge on this box, so the seed
+> stays authoritative. Kept below for the historical run record only.
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2088-2127`;
 > the `asr.warm` seed comment in `SEED_FOOTPRINTS_MB` and `_device_free_mb`'s
