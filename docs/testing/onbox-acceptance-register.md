@@ -4505,6 +4505,48 @@ load that splits, one genuinely-too-big load that doesn't, one
 > a code gap, and this row should stay open until run from such a box rather
 > than being narrowed further from here.
 
+> **2026-09-20 ([#3297](https://github.com/dudarenok-maker/Castwright/issues/3297)) —
+> split precondition finally satisfied live on this box; the [N/A] short-circuit
+> re-confirmed under the new engine; the remaining bullets are now demonstrably
+> unreachable here, not merely unrun.** Two environment facts changed since
+> 09-09. (1) The shared tray daemon now serves with `CUDA_VISIBLE_DEVICES=1`
+> (`server.log` 07:10:43 "user overrode visible devices", and the same pin on
+> the 10:22 `llama-server.exe` subprocess env; it comes from the tray app's
+> own state — no `Environment` registry key under HKCU/HKLM carries it and
+> ordinary shells don't have it), so on that daemon an oversized model spills
+> to CPU rather than to a second card: `gemma4-cw-26B-A4B` @131072 sat at
+> `16% CPU / 84% GPU` with `/api/ps` `size_vram` 13,144,990,677 vs `size`
+> 15,557,648,708. (2) The engine is ollama 0.34.2's new per-model
+> `llama-server.exe` runner on driver 616.92 / CUDA 13.4. To actually satisfy
+> this row's "genuine split" precondition I unloaded the 11434 copy and
+> started a throwaway `ollama serve` on `127.0.0.1:11435` with explicit
+> `CUDA_VISIBLE_DEVICES=0,1`, then loaded the same model at `num_ctx=131072`:
+> a real two-card split at 100% GPU (runner log: `offloaded 31/31 layers to
+> GPU`; CUDA0 model buffer 4221.94 MiB + CUDA1 9036.01 MiB; per-card KV
+> 329.38 + 1190.00 MiB; compute buffers 1112.32 MiB each; `ollama ps`: 16 GB
+> `100% GPU` ctx 131072; `/api/ps`: `size_vram == size` = 16,401,794,332;
+> card occupancy 5796/2153 and 11567/4429 MiB), and
+> `--query-compute-apps` returned precisely the shape the detector wants —
+> ONE PID (32828, `...\Programs\Ollama\lib\ollama\llama-server.exe`) on BOTH
+> GPU UUIDs — with `used_memory` `[N/A]` on both rows. Live in-process
+> `detectOllamaGpuSplit({fresh: true})` (unmocked `tsx`, throwaway probe file
+> deleted after the run) against that resident split returned exactly
+> `{reachable:true, split:false, deviceIndices:[], totalUsedMb:0,
+> wouldFitSingleDevice:false, dataUnavailable:true}` — the same code path
+> traced 09-09 (`[N/A]` rows routed to `unparseableProcessNames`, `/ollama/i`
+> matching the runner's full path, `ollamaRows.length === 0` short-circuit).
+> The positive-split bullet is therefore *unsatisfiable*, not "not yet run",
+> on this box: WDDM gives the code no numeric per-process-VRAM channel at all
+> no matter what Ollama really does. The no-split and device-mismatch bullets
+> gate on the same parsed rows and fare identically; the analyzer/UI
+> `dataUnavailable` suppression (source-checked 09-09) is unchanged under the
+> new engine — `advanced.tsx` will keep showing "can't determine GPU split
+> status", which is the correct behaviour here. No defect found, nothing
+> filed. Standalone daemon stopped, its model unloaded, 11434 returned to its
+> pre-session (no-resident-model) state. Row stays open per the 09-09
+> guidance: the three live bullets need a Linux/non-WDDM box where
+> `nvidia-smi --query-compute-apps` reports numeric `used_memory`.
+
 ### A105 · Qwen base17 eviction guard and _DEVICE_LEDGER serialization ([#2752](https://github.com/dudarenok-maker/Castwright/issues/2752), PR [#2790](https://github.com/dudarenok-maker/Castwright/pull/2790)) · **single 8 GB GPU card, Qwen VoiceDesign 1.7B resident, real sidecar with base17 weights**
 
 PR #2790 (two rounds of independent review) improves base17 co-residency safety in `design_voice()`:
