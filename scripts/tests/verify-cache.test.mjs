@@ -2564,6 +2564,17 @@ test('#3271: a broken citation fails the whole run with the checker error visibl
     `expected a [fail] line for ${CHECK_SCRIPT} matching the existing step shape — got:\n${logs.join('\n')}`,
   );
   assert.match(failLine, /\(exit 1, took /);
+  // `result === 1` alone doesn't prove the early return fired: STEPS[0] is
+  // `lint`, which also fails (with "Missing script") in this throwaway
+  // fixture repo, so a deleted `if (checkCode !== 0) return checkCode;`
+  // would still leave `result` at 1 for the wrong reason. Assert `lint`
+  // never ran (runPipeline logs `[run] ${step.name}` per step) so this only
+  // passes when the early return actually short-circuited the pipeline.
+  assert.ok(
+    !logs.some((l) => l.startsWith('[run] lint')),
+    'the early return must short-circuit before any STEPS[] entry runs — got:\n' +
+      logs.join('\n'),
+  );
 });
 
 test('#3271: a --steps run is left alone (the deliberate narrow developer/hook filter)', async () => {

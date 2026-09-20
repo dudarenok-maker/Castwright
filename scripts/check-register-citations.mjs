@@ -11,7 +11,7 @@
 // claim living on several surfaces, with only some of them corrected. This
 // script exists to make that mechanical instead of eyeballed.
 //
-// WIRING STATUS (updated 2026-09-19, PR #3271): `package.json`'s
+// WIRING STATUS (updated 2026-09-19, issue #3271): `package.json`'s
 // `check:register-citations` script is now invoked from THREE places:
 // (1) `scripts/verify-cache.mjs`'s `runUnconditionalLocalChecks`, called at the
 // head of `runPipeline()` on every full `npm run verify` — uncached and
@@ -26,7 +26,7 @@
 // including docs-only diffs, because citations can live in any file and
 // diff-scope cannot reliably predict whether one broke.
 //
-// LOCAL WIRING (closed, PR #3271 / issue #3271): The checker is reachable
+// LOCAL WIRING (closed, issue #3271): The checker is reachable
 // locally via three paths, the first of which is new and unconditional:
 // (0) `npm run verify` now runs `npm run check:register-citations` directly, at
 // the head of `runPipeline()` in verify-cache.mjs, on EVERY full run — outside
@@ -37,9 +37,13 @@
 // entry and scripts/tests/workflow-wiring.test.mjs requires that key be
 // referenced by an `if:` in verify.yml, which would contradict that same file's
 // "register citation check: must be unconditional" test (#3122). A `--steps`
-// run (package.json's verify:fast*, which the pre-commit hook uses) deliberately
-// does NOT run it — those filters are narrow by design, and path (2) below
-// already covers them;
+// run (e.g. package.json's verify:fast* scripts, or `.husky/pre-push`'s own
+// `--steps test:sidecar --scope-branch` call) deliberately does NOT run it —
+// those filters are narrow by design. That exemption has a real gap, not a
+// covered one: a `src/**`-only diff that breaks a citation, run through
+// `verify:fast:branch`, prints `[skip] test:hooks (out of scope)` (its globs
+// don't match `src/**`), so the checker runs zero times locally in that
+// shape — CI's unconditional step above is what actually catches it;
 // (1) `npm run verify` also still reaches it via `test:hooks`, which remains
 // scope-gated and content-hash-cached — path (0) exists precisely because that
 // caching could print `test:hooks [cached]` on a diff touching a file outside

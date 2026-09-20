@@ -1685,11 +1685,13 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   // Unconditional local checks (#3140) — run at the HEAD of the pipeline, so a
   // broken citation fails the run before any cached/skipped step can report
   // [pass] on stale evidence. Full runs only: a `--steps` run is a
-  // deliberately narrow developer/hook filter (package.json's verify:fast*,
-  // which the pre-commit hook uses), and the same `flags.steps` condition the
-  // selection block above uses is what distinguishes "full" from "filtered".
-  // Deliberately NOT wrapped in a cache check or a scope check — see
-  // runUnconditionalLocalChecks' own header for why both are impossible here.
+  // deliberately narrow filter — package.json's verify:fast* scripts (manual,
+  // developer-invoked) and `.husky/pre-push`'s own `--steps test:sidecar
+  // --scope-branch` call both use it — and the same `flags.steps` condition
+  // the selection block above uses is what distinguishes "full" from
+  // "filtered". Deliberately NOT wrapped in a cache check or a scope check —
+  // see runUnconditionalLocalChecks' own header for why both are impossible
+  // here.
   if (!flags.steps || flags.steps.length === 0) {
     const checkCode = await runUnconditionalLocalChecks({ cwd, env });
     if (checkCode !== 0) return checkCode;
