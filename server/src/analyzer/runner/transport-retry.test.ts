@@ -10,7 +10,7 @@ const classifier: RetryClassifier = {
   retryAfterMs: (err) => (err as { retryAfter?: number | null }).retryAfter ?? null,
 };
 function fakeLimiter() {
-  return { acquire: vi.fn(async () => undefined), recordActualTokens: vi.fn(), recordRejection: vi.fn() };
+  return { acquire: vi.fn(async (_model: string, _tokens: number) => undefined), recordActualTokens: vi.fn(), recordRejection: vi.fn() };
 }
 function opts(limiter: ReturnType<typeof fakeLimiter>, over: Record<string, unknown> = {}) {
   return {
