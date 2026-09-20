@@ -1,0 +1,11 @@
+{
+  "started": "2026-09-21T02:42:22",
+  "box": {
+    "compute_apps": "33988, C:\\Users\\dudar\\AppData\\Local\\Programs\\Python\\Python312\\python.exe, [N/A]",
+    "gpu": "0, NVIDIA GeForce RTX 4070 Laptop GPU, 0 MiB, 8188 MiB"
+  },
+  "strand_exp2c_loadfail": false,
+  "strand_exp2b_renderoom": false,
+  "strand_exp2a_badvoice": false,
+  "finished": "2026-09-21T02:51:31"
+}

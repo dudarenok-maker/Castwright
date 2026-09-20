@@ -1,0 +1,178 @@
+{
+  "tag": "post-unload",
+  "health": {
+    "ok": true,
+    "protocol_version": 1,
+    "__version__": "1.14.0",
+    "engines": [
+      "coqui",
+      "kokoro",
+      "qwen"
+    ],
+    "model_loaded": false,
+    "loading": false,
+    "kokoro_loaded": false,
+    "kokoro_loading": false,
+    "qwen_loaded": false,
+    "qwen_base17_loaded": false,
+    "qwen_design_ever_loaded": false,
+    "qwen_design_resident": false,
+    "qwen_device_key": null,
+    "qwen_loading": false,
+    "qwen_package_installed": true,
+    "qwen_weights_present": true,
+    "qwen_base17_weights_present": true,
+    "qwen_install_state": "ready",
+    "coqui_package_installed": true,
+    "coqui_import_ok": true,
+    "coqui_weights_present": true,
+    "coqui_version": "0.27.5",
+    "kokoro_package_installed": true,
+    "whisper_package_installed": true,
+    "kokoro_import_ok": null,
+    "qwen_import_ok": null,
+    "whisper_import_ok": null,
+    "asr_loaded": false,
+    "asr_device": "cpu",
+    "spk_loaded": false,
+    "spk_device": "cpu",
+    "devices": {
+      "kokoro": "cuda",
+      "coqui": "cuda",
+      "qwen": "cuda"
+    },
+    "gpus": [
+      {
+        "uuid": "1831b67f-ccc0-c3fc-9167-cff059c3224c",
+        "idx": 0,
+        "name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+        "total_mb": 8585,
+        "free_mb": 7411,
+        "torch_reserved_mb": 0,
+        "free_floor_mb": 1024.0,
+        "reserved_ceiling_mb": 8413.3,
+        "resident": []
+      }
+    ],
+    "devices_state": "ready",
+    "device": null,
+    "poisoned": false,
+    "cuda_verified": null,
+    "cuda_verification_detail": null,
+    "recycle_pending": false,
+    "inflight_synth": 0,
+    "committed_mb": 3208.62208,
+    "vram_reserved_mb": 0.0,
+    "vram_total_mb": 8585.216,
+    "vram_reserved_mb_by_device": {
+      "cuda:0": {
+        "reserved_mb": 0.0,
+        "total_mb": 8585.216
+      }
+    },
+    "mem_restart_mb": 47582.758092799995,
+    "vram_restart_mb": 8413.51168
+  },
+  "debug_memory": {
+    "process": {
+      "rss_mb": 1505.488896,
+      "vms_mb": 3208.62208,
+      "private_mb": 3208.62208,
+      "committed_mb": 3208.62208
+    },
+    "gc": {
+      "counts": [
+        3,
+        2,
+        1
+      ],
+      "garbage": 0,
+      "tracked_objects": 780983
+    },
+    "inflight_synth": 0,
+    "engines": {
+      "qwen": {
+        "base_loaded": false,
+        "design_loaded": false,
+        "base17_loaded": false,
+        "prompt_cache_entries": 0
+      },
+      "coqui": {
+        "model_loaded": false
+      },
+      "kokoro": {
+        "model_loaded": false
+      },
+      "whisper": {
+        "model_loaded": false,
+        "device": "cpu"
+      }
+    },
+    "cuda": {
+      "allocated_mb": 0.0,
+      "reserved_mb": 0.0,
+      "total_mb": 8585.216,
+      "host_pinned_owned_mb": 0.0,
+      "host_pinned_active_mb": 0.0
+    },
+    "memory_stats": {
+      "cuda:0": {
+        "reserved": 0,
+        "allocated": 0,
+        "inactive_split": 0,
+        "num_alloc_retries": 0
+      }
+    },
+    "footprints": {
+      "asr": {
+        "seed_mb": 400,
+        "learned_mb": 0,
+        "sample_count": 0
+      },
+      "asr.warm": {
+        "seed_mb": 128,
+        "learned_mb": 0,
+        "sample_count": 0
+      },
+      "coqui": {
+        "seed_mb": 3584,
+        "learned_mb": 0,
+        "sample_count": 1
+      },
+      "kokoro": {
+        "seed_mb": 1200,
+        "learned_mb": 0,
+        "sample_count": 0
+      },
+      "qwen": {
+        "seed_mb": 3072,
+        "learned_mb": 0,
+        "sample_count": 0
+      },
+      "qwen.1.7b": {
+        "seed_mb": 6144,
+        "learned_mb": 0,
+        "sample_count": 0
+      },
+      "qwen.1.7b.design": {
+        "seed_mb": 6144,
+        "learned_mb": 0,
+        "sample_count": 0
+      },
+      "qwen.1.7b.mint": {
+        "seed_mb": 6144,
+        "learned_mb": 0,
+        "sample_count": 0
+      },
+      "spk": {
+        "seed_mb": 200,
+        "learned_mb": 0,
+        "sample_count": 0
+      }
+    }
+  },
+  "nvidia": {
+    "compute_apps": "33988, C:\\Users\\dudar\\AppData\\Local\\Programs\\Python\\Python312\\python.exe, [N/A]\n18272, C:\\Users\\dudar\\AppData\\Local\\Programs\\Python\\Python312\\python.exe, [N/A]",
+    "gpu": "0, NVIDIA GeForce RTX 4070 Laptop GPU, 0 MiB, 8188 MiB"
+  }
+}

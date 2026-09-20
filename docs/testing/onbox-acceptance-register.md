@@ -3038,6 +3038,52 @@ which already stages a mixed-engine render on this same card.
 > now, both clean) is the next thing to try. Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
 
+> **2026-09-21 — fourth and fifth attempts, this time against the shapes the
+> last note itself asked for (issue #3302, probe harness): still no strand, and
+> the mid-render `/recycle` question is answered structurally.** A purpose-built
+> harness (`docs/testing/onbox-mechanical-batch1-results/a19-strand-probe-2026-09-21/`,
+> README there explains the layout) drove four previously-untested triggers
+> against a dedicated fresh sidecar on port 9101 of this laptop (RTX 4070 Laptop
+> 8 GB — the box #1976 itself measured on), two complete runs, and read
+> `vram_reserved_mb_by_device` after an explicit `POST /unload` (strand = ≥800 MiB
+> reserved with nothing resident):
+>
+> 1. **`/recycle` mid-render — the shape the 2026-09-06 note called "the next
+>    thing to try":** `POST /recycle` accepted 202 while a 16-chapter batch was
+>    inflight → drain waited → the in-flight batch returned **200** inside the
+>    180 s grace → sidecar self-exited **rc 43** → `nvidia-smi --query-compute-apps`
+>    afterward showed the card at **0 MiB** with no surviving process. That is a
+>    structural answer, not just a data point: a mid-render `/recycle` *is* a
+>    process death, and the CUDA context owning the allocator dies with it, so
+>    this trigger cannot leave a pool outliving the unload. Confirmed identical
+>    in both runs.
+> 2. **Forced Coqui load failure (external VRAM filler):** XTTS `/load`
+>    **succeeded** even beside a 6.5 GB external `cudaMalloc` filler (also at
+>    3.8 GB) — this box's WDDM stack never let us force a genuine mid-load OOM.
+>    The explicit unload after that load left reserved **0.0 MB**.
+> 3. **Forced mid-render OOM (filler grown during a qwen batch, 4.5→5.2 GB):**
+>    both batches returned **200** (96–204 s) — pressure never bit — and the
+>    explicit unload left reserved **46.1 MB**.
+> 4. **Bad-voice fallback shape (unknown cloned voice id in a batch):** hard
+>    **500 `Internal error.`** in ~0.47 s, both runs — a side-finding worth its
+>    own note: the expected fallback did not engage; the sidecar survived and
+>    stayed otherwise healthy. Explicit unload after: reserved **23.1 MB**.
+>
+> No strand in any shape, so the #1993 guard tests (bullets 2–3 above) again
+> could not be exercised — the harness's `exp3` phase exists and would have run
+> automatically had any pool survived. Honest caveats: run 1's `strand_read`
+> events mis-parsed the nested health payload as `null` (fixed before run 2; the
+> raw `snapshot` events in run 1 carry the same clean values quoted here), and
+> the box was not fully quiet either run — one unrelated `python.exe` compute
+> app was resident throughout, which affects absolute `nvidia-smi` MiB but not
+> the per-process allocator reservations the verdicts use. Across five
+> unload-survival measurements on three days (#1976's original ~3.9 GB shape has
+> never appeared on this box, clean completion, crash, recycle, load-pressure or
+> batch-error alike), the evidence says the ordinary unload path on this
+> hardware does not strand; what remains owed for this row is either a box that
+> *does* produce the shape organically or the #1976 follow-up lever (the
+> render/unload-completion reclaim), not more of the same negatives.
+
 ---
 
 ### A20 · Golden-audio bless guards don't rubber-stamp an honest bless, and `_make_kokoro` exercises a real engine (PR [#2032](https://github.com/dudarenok-maker/Castwright/pull/2032), closes [#1995](https://github.com/dudarenok-maker/Castwright/issues/1995), [#2003](https://github.com/dudarenok-maker/Castwright/issues/2003), [#1987](https://github.com/dudarenok-maker/Castwright/issues/1987)) · **Kokoro weights present; single 8 GB card is enough**
