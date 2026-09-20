@@ -2557,6 +2557,32 @@ operation on real hardware, and whether the 30 s TTL is tuned for real chapter g
 > gaps. Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
 
+> **2026-09-20 — sidecar-level re-run (#3300 verification batch, worktree
+> `wt-onbox-batch-1` @ `chore/ops-onbox-batch-1`): mechanism CONFIRMED at the API
+> boundary; the pressure-triggered auto-free and bullet 3 cadence remain partially
+> untried.** Pinned `CUDA_VISIBLE_DEVICES=0` to the 4070 Laptop 8 GB (this is the
+> same dual-GPU 4070 + 5070 Ti box the bullet 1 warning describes), server run from
+> `dist/index.js` on :8100, sidecar driven directly on :9020. `COQUI_IDLE_TTL` is
+> **unset in this box's `.env`; the effective default read from the sidecar source
+> is 30 s, and that is the recommendation — keep 30 s.** Cold `xtts_v2` load took
+> **15 s** with weights already on disk (58 speakers in manifest — the "~90 s per
+> reload" estimate is cache-cold only, not this box), warm synths 1–2 s
+> (RTF 0.36–0.48), residency across calls confirmed. Idle 77 s (> TTL) with an
+> external `torch` hog pushing device use to 7818/8188 MiB: the next Coqui synth
+> still **fitted** (residual delta reserve) and completed **without** being freed —
+> behavioral confirmation that the TTL is enforced only inside the
+> admission-retry loop, never on a background timer, so an idle resident model is
+> left alone while its card still admits it. The explicit `POST /unload` issued
+> immediately after logged **`Coqui model unloaded.`** (`logs/tts.err.log`,
+> 21:47:48) and dropped sidecar `vram_reserved` 2015 → 40 MiB; the following synth
+> cold-reloaded and rendered again in seconds — the exact line the 2026-09-06
+> attempt never captured, this time on the worktree sidecar. Not exercised: a real
+> Qwen render whose reserve actually *fails* against the idle-resident Coqui (the
+> automatic `freed (idle)` branch shares this `unload()` path but has a different
+> caller), and a multi-chapter mixed-book cadence. Evidence:
+> `%TEMP%\oe-run-3300-cline-qwen-cloud-202609201059\jobs\a13-evidence.txt` plus the
+> worktree's `logs/tts.log` / `logs/tts.err.log`.
+
 **Run this with A5** (A5 was discharged 2026-09-06 and removed from the register — co-schedule against its run sheet section rather than a live row) — same card, same mixed-cast book, and a mixed Qwen+Coqui
 render already stages the co-residency this row's first bullet needs.
 
