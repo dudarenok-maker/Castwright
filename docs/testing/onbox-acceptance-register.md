@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,11 +563,114 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**53 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**52 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-19 — two lanes touched the register the same day,
+> **Last change: 2026-09-20, A25 DISCHARGED and removed** (#3036, PR
+> [#3282](https://github.com/dudarenok-maker/Castwright/pull/3282), claude): the
+> row's bullet 1 (no `noCapacity` refusals on a real resident `/transcribe`) was
+> already reconfirmed twice (wave 6, wave 7); bullet 2 (record what `asr.warm`'s
+> learned p95 converges to) is now answered a second and third time over, on real
+> CUDA hardware, with the same "cannot converge" conclusion wave 7 first reached and
+> filed as [#2682](https://github.com/dudarenok-maker/Castwright/issues/2682) — this
+> chain went on to try both directions #2682's filing left open (see #3036's issue
+> body) and found both structurally dead on this box: child 1
+> (`docs/testing/onbox-3036-results/step-1-nvml.md`) drove 1 cold + 6 warm real
+> `/transcribe` calls against a resident `faster-whisper` `base`/`int8_float16` model
+> and found the NVML own-process `usedGpuMemory` delta reads `None` for our own PID
+> under this box's Windows WDDM driver even with hundreds of MB of live CUDA memory,
+> so every warm sample is discarded before it can be recorded; child 2
+> (`docs/testing/onbox-3036-results/step-2-device-delta.md`) reran the SAME
+> device-wide free-VRAM delta the cold `asr` key already uses, now carrying its full
+> foreign-PID/concurrent-reservation guard set, on a provably uncontended card (0 MiB
+> used, no compute processes at precheck) — the cold `asr` key recorded a sample in
+> the same session (`sample_count: 1`, proving the guards and the reading path are
+> both alive), yet all 6 warm deltas still produced `sample_count: 0`: CTranslate2
+> allocates its arena once at load and reuses it per forward, so device-wide free
+> VRAM never measurably moves across a warm 2-second forward, confirming #2682's
+> noise-floor theory rather than its contamination theory. Bullet 3 (foreign
+> non-sidecar contamination) is answered the same way #2682 already found it to be —
+> moot, since no sample survives long enough to be contaminated, now re-confirmed on
+> a card known clean at precheck. This discharges the row on the same "cannot
+> converge as claimed" basis the analogous E12 register row was discharged on (cited
+> directly in #3036's own filing) — not a fix, a conclusive negative result reached
+> via two independent real-hardware techniques. `SEED_FOOTPRINTS_MB["asr.warm"]`'s
+> comment in `server/tts-sidecar/main.py` now carries this full history and states
+> the 128 MB seed is authoritative, additionally protected by this PR's restored
+> ceiling guard against contamination in both directions; #3036 itself stays OPEN,
+> tracking the still-missing CTranslate2-side memory query or driver-level
+> accounting as future scope, not this row's on-box acceptance debt.
+> **Not yet done:** `docs/local-llm.md`'s footprint-table paragraph (named in this
+> row's own Criteria) described the pre-this-PR optimistic expectation that
+> `asr.warm` "genuinely does learn its own p95 ... once real observations
+> accumulate" — now superseded by this run's conclusive negative; already corrected
+> in this same PR's follow-up cleanup commit (`fd45c966`), alongside its other 🟡
+> findings. This branch diverged from the register at 53 owed (Group A 35, after the
+> other lane's A109/E105/E106 additions had already landed) — A25's discharge is
+> this branch's only register effect: 53 → 52 owed, Group A 35 → 34. `next-id`
+> markers unaffected (allocate-once — A25 retires, not reused).
+
+> **Prior change: 2026-09-19 — two lanes touched the register the same day,
+> reconciled here on merge.** This branch (chore/docs-onbox-register-decompose)
+> and a separate lane's E105/E106 additions (Castwright#3249, ops-72 Part 2)
+> both diverged from a common ancestor at 51 owed. Combined: **53 owed** — this
+> branch's own work is owed-count-neutral (see below), the other lane's
+> E105+E106 additions net +2 (51→53, Group E 7→9). `next-id` markers: Group H
+> unmoved, Group E bumped E106→E107 (unaffected by this merge — inherited as-is
+> from the other lane).
+>
+> **This branch, 2026-09-19 (claude), owed-count-neutral — both Group H rows
+> NARROWED, neither discharged.** Row **H1** (kana-trigram richness gate at
+> real-book scale for an all-kana Japanese manuscript): a real,
+> sourced-from-Wikisource, genuinely all-kana Hyakunin Isshu fixture (50
+> poems, 1,572 kana chars) now runs through `detectManuscriptLanguageFromChapters`
+> in `detect-language.test.ts` and confirms the gate holds (`guiraudR` ≈
+> 29.015). A pr-review-gate pass caught that this sample is real progress but
+> too small to answer the row's own question — the gate can pass on a small
+> sample for the same reason a synthetic one used to (finding B4's "the
+> separation only appears at length"): flipping `KANA_NGRAM_SIZE` 3→2 makes
+> the pre-existing finding-3(b) test go red while this new test stays green,
+> proving 1,572 kana chars doesn't lock in the regression it's presented as
+> locking. So H1 stays **narrowed, not discharged** — an initial pass on this
+> same PR incorrectly discharged it; corrected before merge. Row **H2** (Han
+> lexical-richness floor at book scale) NARROWED but stays owed — a larger
+> real Han fixture (13 Analects chapters, ~2.25x the prior largest real
+> sample) confirms the gate holds at that intermediate scale, but true
+> book-scale (100k+ chars) remains unconfirmed. Neither `next-id` marker
+> moved (no new row minted; H1's attempted discharge was corrected within this
+> same round). Also this round, not owed-count-affecting:
+> A6/A7 got a cross-reference sequencing note (same #3027 fix, same
+> book/cast — one on-box session expected to cover both), A10's UI-surfacing
+> reframing was already current, B1's criteria were re-derived against PR
+> #2518 (row stays owed — criteria fix only), A23's live-view HTML was
+> already in sync with the register (publish still owed to the operator),
+> and E5 narrowed its DevTools-smoke-check target from 3 controls to 2
+> pending [#3268](https://github.com/dudarenok-maker/Castwright/issues/3268)
+> (the voice-library drag icon is confirmed structurally unreachable dead
+> code from any current call site — filed as a design-pass decision per
+> CLAUDE.md's incidental-findings protocol, not fixed silently).
+>
+> **Prior change: 2026-09-19, adding E106** (Castwright#3249, ops-72 Part 2, claude): a
+> review pass on the same PR found that the POSIX SIGINT/SIGTERM/SIGHUP forwarding added
+> to close a Ctrl+C-orphans-the-battery gap is unproven on this repo's primary (Windows)
+> dev box — `detached`, process groups, and POSIX signal delivery semantics don't exist
+> there in the shape this fix targets. 52 → 53 owed, Group E 8 → 9. `next-id` bumped
+> E106 → E107 in the same change. `npm run check:onbox-register` green.
+>
+> **Prior change: 2026-09-18, adding E105** (Castwright#3249, ops-72 Part 2, claude): the
+> `runStepProcess`/`runPipeline` async `spawn` conversion and step/pipeline time budgets
+> are unit-tested (including timeout-vs-crash-retry mutation tests) against a fast
+> throwaway fixture process tree, but `taskkill /T /F`'s own documented blind spot — a
+> fork whose parent PID link died before `/T`'s walk reached it — needs a real, deep,
+> long-lived Windows process tree (a genuine vitest fork-pool battery) to observe, the
+> same way Part 3's reaper needed one for **E104**. This lands on top of the independent
+> **A109** addition below (#3084 — a same-card endpoint's model yielding its card to Qwen
+> VoiceDesign, owed against a design rather than shipped code): 51 → 52 owed, Group E 7 → 8,
+> Group A unchanged at 35. `next-id` bumped E105 → E106 in the same change.
+> `npm run check:onbox-register` green.
+>
+> **Prior change: 2026-09-17, adding A109** (#3084, claude): the OpenAI-compatible analyzer
 > reconciled here on merge.** This branch (chore/docs-onbox-register-decompose)
 > and a separate lane's E105/E106 additions (Castwright#3249, ops-72 Part 2)
 > both diverged from a common ancestor at 51 owed. Combined: **53 owed** — this
@@ -3714,89 +3817,6 @@ above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
 > different mechanism from the Base17 contention path A105 bullet 5 exercised
 > (`_BASE17_CONTENTION_WAIT_S_DEFAULT`/`Base17ContentionTimeoutError`) and was not
 > attempted anywhere in this 18-run session.
-
-### A25 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
-
-Unit tests (`test_footprints.py`, `test_transcribe_embed_admission.py`,
-`test_asr_footprint_measurement.py`) pin that a resident ASR reservation now
-books the separate `asr.warm` key (128 MB seed) instead of the cold `asr` key
-(400 MB), that `admit()`/`reservation()` agree, and that the MEASUREMENT
-mechanism itself (a device-wide free-memory delta via
-`PlacementController._device_free_mb`, not the torch-allocator peak
-CTranslate2 sits outside of) is real and correctly guarded against
-contamination — all proven with a scripted `_device_free_mb` sequence, no
-real allocator. Not yet observed: whether 128 MB is actually enough headroom
-for a real resident Whisper `base`/int8_float16 forward's activation memory
-on a contended card (too low → a real, avoidable `noCapacity` refusal that
-this fix was supposed to eliminate), and whether the learned `asr.warm` p95
-converges to something sane once real device-wide-free-memory observations
-accumulate on a box that ISN'T contended by a foreign process (the one
-contamination vector `ledger.engines_holding` can't see, since it only knows
-this process's own reservations).
-
-- With `ASR_DEVICE=cuda` and content-QA enabled (`SEG_ASR_ENABLED=1`), render
-  a chapter so ASR loads and goes resident, then trigger several more
-  `/transcribe` calls back-to-back (a re-record round is the natural trigger).
-  Confirm none of them 503 `noCapacity` on a card that has genuine room.
-- Watch `FootprintTable`'s learned `asr.warm` p95 settle after ≥5 real
-  observations (`_FOOTPRINT_MIN_SAMPLES`) — record what it converges to, so
-  the 128 MB seed can be revisited with evidence rather than left as a guess
-  indefinitely. A sane figure (double digits to low hundreds of MB) confirms
-  the measurement mechanism is producing real signal on a clean box; a
-  suspiciously large one (hundreds of MB to GB) points at contamination the
-  ledger-based guard couldn't see (a process outside this sidecar).
-- The device-wide contamination question #2094's own filing raised is now
-  PARTIALLY addressed (the ledger-based guard discards a reading when another
-  SIDECAR engine holds a concurrent reservation) but not fully closed — a
-  foreign, non-sidecar process on the same card remains invisible to it. This
-  row is where that residual gets its first real evidence.
-
-*Needs:* `ASR_DEVICE=cuda`, `SEG_ASR_ENABLED=1`, a real book render with
-content-QA on, ideally on an UNCONTENDED card (no other process holding VRAM)
-for the cleanest read. *Criteria:* the `asr.warm` seed comment in
-`SEED_FOOTPRINTS_MB` and `_device_free_mb`'s docstring (`server/tts-sidecar/main.py`)
-and `docs/local-llm.md`'s footprint table. *Cost:* short — rides along with
-any other GPU-ASR session (A13 already needs `ASR_DEVICE=cuda`-adjacent
-capacity behaviour; batch together).
-
-> **PARTIALLY run 2026-08-26 (wave 6) — no refusals observed across two renders, but the
-> ≥5-observation `asr.warm` p95 convergence (bullet 2) was not tracked.** With
-> `ASR_DEVICE=cuda`, `SEG_ASR_ENABLED=1` and content-QA on, ASR went resident
-> (`asrLoaded: true`) during a chapter render on an uncontended `cuda:0` and no
-> `/transcribe` call 503'd `noCapacity` across two independent full-chapter renders (252
-> lines each, ASR sampling every sentence per `SEG_ASR_SAMPLE_EVERY=1`) — bullet 1
-> confirmed. Bullet 2 (watch `FootprintTable`'s learned `asr.warm` p95 settle and record
-> what it converges to) and bullet 3 (the residual foreign-process contamination case)
-> were not exercised — this round didn't read the sidecar's internal footprint state, only
-> the absence of refusals. **Still owed:** re-run reading `asr.warm`'s learned value
-> directly (via whatever internal endpoint or log line exposes `FootprintTable`) after
-> ≥5 real `/transcribe` observations.
-
-> **RUN 2026-08-26 (wave 7) — bullet 1 reconfirmed; bullet 2 answered, and the answer is
-> "it structurally can't converge" — filed as [#2682](https://github.com/dudarenok-maker/Castwright/issues/2682).**
-> Instrumented `FootprintTable.record` directly (temporary, reverted) and drove 15 direct
-> `POST /transcribe` calls against a real resident `faster-whisper` `base`/`int8_float16`
-> model — 8 with Qwen still co-resident on the same card (bullet-1 contamination-guard
-> check), 7 with Qwen unloaded and nothing else resident (the clean read bullet 2 asks
-> for). All 15 returned `200` — zero `noCapacity` refusals, reconfirming bullet 1 a
-> second time. The 8 contaminated calls recorded `observed_mb=0` every time — expected,
-> since `other_engines` (Qwen) was non-empty and the guard is designed to discard exactly
-> that. The 7 CLEAN calls (no other engine resident, no foreign PID) *also* recorded
-> `observed_mb=0` every single time — the device-wide free-memory delta the warm key is
-> measured by never comes back positive for this model/precision combination, so the
-> `<= 0` guard in `record()` silently discards every one of them regardless of
-> contamination. **This means `asr.warm`'s learned p95 can never move off its 128 MB seed
-> in practice** — not "hasn't converged yet," but structurally can't, because the
-> instrument's own noise floor exceeds a `base`/`int8_float16` forward's actual VRAM
-> delta. Bullet 3 (foreign non-sidecar contamination) is now moot as originally scoped —
-> the measurement never accumulates a real sample to contaminate in the first place, on
-> ANY box, clean or not. This needs a design decision, not a fix: leave the seed as a
-> permanent floor (harmless if `128 MB` is already generous for this model), switch the
-> warm-key instrument to something with a finer noise floor (e.g. the torch allocator's
-> own peak, the way every other engine's key is measured), or accept and document that
-> this key is unfalsifiable for small ASR models. Filed rather than fixed under the
-> "needs a design pass" carve-out — more than one defensible fix exists and nothing here
-> picks one.
 
 ### A26 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
 
