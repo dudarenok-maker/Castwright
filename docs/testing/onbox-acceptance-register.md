@@ -3448,6 +3448,33 @@ already-analysed book.
 > given the banner already reads correctly. Full evidence:
 > `docs/testing/onbox-human-checkpoint-results/step2-a22-a23.md`.
 
+> **2026-09-21 — Castwright#3305 (phase 1): bullet 1's finding re-verified
+> against source and dispositioned — a genuine defect, fix issue filed, not a
+> cosmetic gap.** The 2026-09-06 root cause still holds exactly:
+> `finalize-chapter-write.ts:287` builds `speakingIds` from the raw
+> `segment.characterId`; `character-snapshots.ts:49` gates on exact-string
+> `speakingIds.has(c.id)`; `normaliseIdKey` (`util/character-id.ts:8`) is
+> consulted only by the read-side resolver (`store/cast-resolve.ts:206`), so
+> the snapshot write path never normalises and a normalised-id-only character
+> can never match. Not cosmetic, because the snapshots are load-bearing per
+> `character-snapshots.ts`'s own header: a character with no entry is invisible
+> to the `routes/revisions.ts` drift detector — a future re-voice of a Torment-
+> class character will not flag the affected chapters stale — and the Voices
+> Designed-vs-Generated split, the srv-36 audition centroid, and
+> `render-integrity/aggregate.ts`'s keep-flags all lose the character; the same
+> raw keying defeats `fallbackByChar`/`voiceNameByChar` (lines 288–301) and the
+> C1 carry-forward (line 316). Disposition per CLAUDE.md's incidental-findings
+> protocol: the fix has a two-sided design decision (snapshot keyed under the
+> cast's canonical id vs the raw segment id the render used; resolution via
+> `buildCastResolver` vs bare `normaliseIdKey`) and is named explicitly in fix
+> issue **Castwright#3362** (`bug`) — this round files, it does not fix. No new
+> render: bullets 2–4 stay CONFIRMED from 2026-09-06; bullet 1's literal
+> `characterSnapshots` criterion stays open pending #3362. Row status marker
+> and the Status Dashboard are deliberately left unchanged — this run discharges
+> nothing. *Note on the brief:* issue #3305 cited lines 3040–3111 for this row;
+> the row has moved and lives at lines 3381–3452 (3040–3111 is now A19/A20
+> bullet text).
+
 ---
 
 ### A23 · Cast/analysis `characterId` drift — Wave 3 repair pass `--apply` run ([#2040](https://github.com/dudarenok-maker/Castwright/issues/2040), [implementation plan](../superpowers/plans/2026-08-01-cast-character-identity.md)) · **no GPU needed; real workspace + server stopped**
