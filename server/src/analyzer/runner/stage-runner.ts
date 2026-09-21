@@ -164,7 +164,16 @@ export class StageRunner {
     const mode = this.settings().structuredOutput;
     if (mode !== 'schema') return { mode };
     const draft07 = z.toJSONSchema(grammarSchema, { target: 'draft-07', reused: 'inline' }) as Record<string, unknown>;
-    return { mode: 'schema', name: String(key).replace(/[^A-Za-z0-9_-]/g, '_'), schema: this.adaptSchema(draft07).schema };
+    const adapted = this.adaptSchema(draft07);
+    /* identitySchemaAdapter (wave 1's only adapter) always returns dropped:[]
+       — a provider-specific adapter (wave 3) that narrows the schema for its
+       own constrained-decoding dialect can drop keys draft-07 offered but the
+       provider can't express. Surface it now rather than leaving the field
+       write-only until wave 3 needs it (pr-review-gate pass 1 finding 7). */
+    if (adapted.dropped.length > 0) {
+      console.warn(`[${this.transport.kind}] ${this.transport.model} ${key} schema adapter dropped: ${adapted.dropped.join(', ')}`);
+    }
+    return { mode: 'schema', name: String(key).replace(/[^A-Za-z0-9_-]/g, '_'), schema: adapted.schema };
   }
 
   private async send(

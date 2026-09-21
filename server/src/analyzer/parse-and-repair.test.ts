@@ -506,15 +506,20 @@ describe('repairStructuralPunctuation', () => {
 describe('stripThink + parseAndValidate — leading <think> block (#3084)', () => {
   const schema = z.object({ a: z.number() });
 
-  it('strips a leading <think>…</think> (case-insensitive, after whitespace) and parses the answer', () => {
+  it('strips a leading <think>…</think> (case-insensitive, after whitespace) and parses the answer — repaired stays false, since nothing about the JSON itself needed fixing (pr-review-gate pass 1 finding 6)', () => {
     const raw = '  <THINK>\nthe user wants {"a": 2}\n</think>\n{"a":1}';
     expect(stripThink(raw)).toEqual({ text: '{"a":1}', unterminated: false });
-    expect(parseAndValidate(raw, schema)).toEqual({ ok: true, value: { a: 1 }, repaired: true });
+    expect(parseAndValidate(raw, schema)).toEqual({ ok: true, value: { a: 1 }, repaired: false });
   });
 
   it('leaves input with no leading block byte-identical (repaired stays false)', () => {
     expect(stripThink('{"a":1}')).toEqual({ text: '{"a":1}', unterminated: false });
     expect(parseAndValidate('{"a":1}', schema)).toEqual({ ok: true, value: { a: 1 }, repaired: false });
+  });
+
+  it('a leading <think> block AND a markdown fence together still report repaired:true — the fence strip is real repair work', () => {
+    const raw = '<think>reasoning</think>```json\n{"a":1}\n```';
+    expect(parseAndValidate(raw, schema)).toEqual({ ok: true, value: { a: 1 }, repaired: true });
   });
 
   it('an unterminated leading <think> yields no answer text and reports it', () => {

@@ -52,7 +52,14 @@ export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseRes
      `stripCodeFences` ALWAYS runs first because backticks confuse every
      downstream walker; it's deterministic and detects its own opt-out
      (no leading fence → byte-identical return). */
-  const stripped = stripCodeFences(stripThink(raw).text);
+  /* `repaired` (below) reports whether the JSON-repair pipeline — fence
+     strip, prose trim, structural-punctuation/quote repair — actually did
+     something, distinct from stripThink's own leading-<think>-block removal.
+     A thinking model that returns `<think>…</think>{valid json}` should not
+     warn "required JSON cleanup (markdown fence and/or unescaped quotes)" —
+     nothing of the sort happened (pr-review-gate pass 1 finding 6). */
+  const afterThink = stripThink(raw).text;
+  const stripped = stripCodeFences(afterThink);
 
   /* Build the candidate list and dedupe so each parse is attempted at
      most once. */
@@ -88,7 +95,7 @@ export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseRes
   if (winner === null) {
     return { ok: false, kind: 'invalid-json', detail: lastErrorMessage };
   }
-  const repaired = winner !== raw;
+  const repaired = winner !== afterThink;
 
   const result = schema.safeParse(parsed);
   if (!result.success) {

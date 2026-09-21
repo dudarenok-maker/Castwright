@@ -132,4 +132,67 @@ describe('GeminiTransport (#3084 wave 1)', () => {
     expect(await t.send(req())).toMatchObject({ finish: 'blocked', blockReason: 'RECITATION' });
     expect(await t.send(req())).toMatchObject({ finish: 'length', finishReason: 'SAFETY', receivedBytes: 5 });
   });
+
+  it('a non-empty truncation (finish length) logs [gemini] output truncated — pr-review-gate pass 1 finding 3', async () => {
+    generateContentStream.mockResolvedValueOnce(
+      stream([
+        {
+          text: '{"a":',
+          usageMetadata: { candidatesTokenCount: 8192 },
+          candidates: [{ finishReason: 'MAX_TOKENS' }],
+        },
+      ]),
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { GeminiTransport } = await import('./gemini-transport.js');
+    const r = await new GeminiTransport({ apiKey: 'k', model: 'gemma-gt-truncwarn' }).send(req());
+    expect(r).toMatchObject({ finish: 'length', finishReason: 'MAX_TOKENS', receivedBytes: 5 });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/^\[gemini\] output truncated reason=MAX_TOKENS bytes=5 tokens=8192 model=gemma-gt-truncwarn$/),
+    );
+  });
+
+  it('empty-buffer MAX_TOKENS (finish length, 0 bytes) also logs the truncation warning, at bytes=0', async () => {
+    generateContentStream.mockResolvedValueOnce(
+      stream([{ text: '', usageMetadata: { candidatesTokenCount: 8192 }, candidates: [{ finishReason: 'MAX_TOKENS' }] }]),
+    );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { GeminiTransport } = await import('./gemini-transport.js');
+    await new GeminiTransport({ apiKey: 'k', model: 'gemma-gt-emptymaxtok' }).send(req());
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/^\[gemini\] output truncated reason=MAX_TOKENS bytes=0 tokens=8192 model=gemma-gt-emptymaxtok$/),
+    );
+  });
+
+  it('finish blocked (content block, never a truncation) does NOT log a truncation warning', async () => {
+    generateContentStream.mockResolvedValueOnce(stream([{ text: '', candidates: [{ finishReason: 'RECITATION' }] }]));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { GeminiTransport } = await import('./gemini-transport.js');
+    const r = await new GeminiTransport({ apiKey: 'k', model: 'gemma-gt-blockednowarn' }).send(req());
+    expect(r.finish).toBe('blocked');
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('a no-retry error logs the structured [gemini] generate failed dump before rethrowing — pr-review-gate pass 1 finding 2', async () => {
+    const upstream = Object.assign(new Error('{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"bad request"}}'), {
+      status: 400,
+      name: 'ApiError',
+    });
+    generateContentStream.mockRejectedValueOnce(upstream);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { GeminiTransport } = await import('./gemini-transport.js');
+    await expect(
+      new GeminiTransport({ apiKey: 'k', model: 'gemma-gt-noretrylog' }).send(req({ messages: [{ role: 'user', content: 'x'.repeat(300) }] })),
+    ).rejects.toBe(upstream);
+    expect(errorSpy).toHaveBeenCalledWith('[gemini] generate failed', {
+      model: 'gemma-gt-noretrylog',
+      status: 400,
+      name: 'ApiError',
+      message: upstream.message,
+      userTurnLength: 300,
+      userTurnHead: 'x'.repeat(200),
+    });
+    /* withTransportRetry classifies 400 as no-retry — exactly one wire call. */
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+  });
 });

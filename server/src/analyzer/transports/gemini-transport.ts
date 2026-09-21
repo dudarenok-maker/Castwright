@@ -282,6 +282,19 @@ export class GeminiTransport implements ChatTransport {
       if (promptTokenCount !== undefined) resultUsage.inputTokens = promptTokenCount;
       if (candidatesTokenCount !== undefined) resultUsage.outputTokens = candidatesTokenCount;
 
+      /* Truncation is a transport SUCCESS here (mapFinish/finish.ts raises the
+         classified AnalyzerTruncatedError centrally) — but pre-W1 logged this
+         at the point of detection, and mirrors OllamaTransport's own
+         transport-layer warn (ollama-transport.ts), so restore it here rather
+         than relying on the (silent) central throw. */
+      if (finish === 'length') {
+        console.warn(
+          `[gemini] output truncated reason=${finishReason ?? 'unknown'} bytes=${buf.length}` +
+            (resultUsage.outputTokens ? ` tokens=${resultUsage.outputTokens}` : '') +
+            ` model=${this.model}`,
+        );
+      }
+
       return {
         text: buf,
         reasoningSeen,
@@ -303,6 +316,24 @@ export class GeminiTransport implements ChatTransport {
           `Gemini ${this.model} stream aborted (paused or client disconnected).`,
         );
       }
+      /* The SDK's ApiError keeps the upstream body inside `.message` as a
+         JSON envelope, so a bare rethrow only shows the stack + the start of
+         the message. Force a structured dump so the server log carries the
+         upstream `status` ('INTERNAL', 'INVALID_ARGUMENT', …) and any
+         `details[]` payload — the only useful diagnostic for a 5xx/4xx that
+         withTransportRetry classifies 'no-retry' or exhausts its retries on.
+         Moved from pre-W1 generate()'s own catch (gemini.ts:710-726). */
+      const status = (err as { status?: number })?.status;
+      const message = (err as Error)?.message ?? String(err);
+      const userTurn = contents[contents.length - 1]?.parts[0]?.text ?? '';
+      console.error('[gemini] generate failed', {
+        model: this.model,
+        status,
+        name: (err as Error)?.name,
+        message,
+        userTurnLength: userTurn.length,
+        userTurnHead: userTurn.slice(0, 200),
+      });
       throw err;
     } finally {
       disarmIdleTimer();

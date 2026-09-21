@@ -28,7 +28,12 @@ export interface TransportRequest {
   maxOutputTokens?: number;
   estimatedInputTokens: number;
   signal?: AbortSignal;
-  call: Pick<StageCall, 'onChunk' | 'onWaiting' | 'onThrottle' | 'onEvalTiming'>;
+  /* 'onWaiting' deliberately excluded: StageRunner owns the waiting tick
+     itself (stage-runner.ts's own setInterval) and no transport reads it off
+     the request — a typed field a future transport would read straight off
+     and always get undefined from, with no type error to catch it
+     (pr-review-gate pass 1 finding 5). */
+  call: Pick<StageCall, 'onChunk' | 'onThrottle' | 'onEvalTiming'>;
 }
 
 export interface TransportUsage {

@@ -78,6 +78,29 @@ describe('StageRunner (#3084 wave 1)', () => {
     expect(existsSync(outbox('m_sr_first', '.json'))).toBe(true);
   });
 
+  it('an adapter that drops keys logs them — pr-review-gate pass 1 finding 7 (dropped was computed and discarded)', async () => {
+    const t = new FakeTransport(['{"a":"ok"}']);
+    const adapt = vi.fn((s: Record<string, unknown>) => ({ schema: { adapted: true, from: s.type }, dropped: ['additionalProperties', 'minLength'] }));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await makeRunner(t, OLLAMA_RETRY_POLICY, SCHEMA_MODE, adapt).runStage(spec('m_sr_dropped'), {});
+      expect(warnSpy).toHaveBeenCalledWith('[ollama] fake:1 1-ch1 schema adapter dropped: additionalProperties, minLength');
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('identitySchemaAdapter drops nothing — no warning', async () => {
+    const t = new FakeTransport(['{"a":"ok"}']);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await makeRunner(t, OLLAMA_RETRY_POLICY, SCHEMA_MODE, identitySchemaAdapter).runStage(spec('m_sr_nodrop'), {});
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it('json mode sends { mode: "json" } and never builds a schema', async () => {
     const t = new FakeTransport(['{"a":"ok"}']);
     const adapt = vi.fn(identitySchemaAdapter);
