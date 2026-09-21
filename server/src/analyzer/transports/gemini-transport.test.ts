@@ -173,6 +173,22 @@ describe('GeminiTransport (#3084 wave 1)', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  it('finish blocked logs the structured [gemini] generate failed dump — pr-review-gate pass 2 finding 3', async () => {
+    generateContentStream.mockResolvedValueOnce(stream([{ text: '', candidates: [{ finishReason: 'RECITATION' }] }]));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { GeminiTransport } = await import('./gemini-transport.js');
+    const r = await new GeminiTransport({ apiKey: 'k', model: 'gemma-gt-blockedlog' }).send(
+      req({ messages: [{ role: 'user', content: 'y'.repeat(300) }] }),
+    );
+    expect(r.finish).toBe('blocked');
+    expect(errorSpy).toHaveBeenCalledWith('[gemini] generate failed', {
+      model: 'gemma-gt-blockedlog',
+      blockReason: 'RECITATION',
+      userTurnLength: 300,
+      userTurnHead: 'y'.repeat(200),
+    });
+  });
+
   it('a no-retry error logs the structured [gemini] generate failed dump before rethrowing — pr-review-gate pass 1 finding 2', async () => {
     const upstream = Object.assign(new Error('{"error":{"code":400,"status":"INVALID_ARGUMENT","message":"bad request"}}'), {
       status: 400,

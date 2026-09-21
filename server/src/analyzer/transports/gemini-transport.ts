@@ -295,6 +295,25 @@ export class GeminiTransport implements ChatTransport {
         );
       }
 
+      /* A content block is a transport SUCCESS here too (mapFinish/finish.ts
+         raises the classified GeminiContentBlockedError centrally) — but
+         pre-W1 threw it inline, which fell into the SAME catch as every
+         other failure and got the full structured dump below (gemini.ts
+         671 -> 710-726). Restore that dump at the point of detection, same
+         as the 'length' restoration just above, so an operator isn't blind
+         to a content block the way #3349 pass-2 review found: the B101
+         on-box criterion ("no `[gemini] generate failed` line") had gone
+         silently unable to fail for this case specifically. */
+      if (finish === 'blocked') {
+        const userTurn = contents[contents.length - 1]?.parts[0]?.text ?? '';
+        console.error('[gemini] generate failed', {
+          model: this.model,
+          blockReason,
+          userTurnLength: userTurn.length,
+          userTurnHead: userTurn.slice(0, 200),
+        });
+      }
+
       return {
         text: buf,
         reasoningSeen,

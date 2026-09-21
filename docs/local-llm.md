@@ -88,7 +88,7 @@ We mediate the switch in two places:
 The `/load` endpoint is subtle: it **must** warm with the same `num_ctx` the
 analyzer uses on real calls (`resolveAnalyzerNumCtx()`, knob `analyzer.ollama.numCtx`, default 32768), because Ollama keys
 the in-VRAM model on `(model, num_ctx)`. Warming with the default 2048 and
-then running analysis at 16384 triggers a silent full reload mid-stream,
+then running analysis at 32768 triggers a silent full reload mid-stream,
 which used to surface as "Analysis stream ended without a result event" with
 no other signal. The reasoning is at `server/src/routes/ollama-health.ts:161`.
 

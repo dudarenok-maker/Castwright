@@ -2613,7 +2613,13 @@ function buildAheadBaselineText(registerText, letter, newRowNumber, title) {
   // e.g. immediately after a row was minted at the exact allocation floor
   // (reproduced: Group B's real next-id sat exactly at max+1 once B101 was
   // minted at the prior floor, which is correct allocation, not a bug).
-  const nextIdRegex = new RegExp(`(<!--\\s*next-id:\\s*${letter})(\\d+)(\\s*-->)`);
+  //
+  // ANCHORED, same as check-onbox-register.mjs's own parseNextIdMarker (line
+  // ~227) — an unanchored pattern matches the how-to prose's own inline-code
+  // example marker (e.g. "`<!-- next-id: A101 -->`" in this file's header
+  // comment) before it ever reaches a group's real marker, for whichever
+  // letter that example happens to use. Reproduced for letter 'A'.
+  const nextIdRegex = new RegExp(`^(<!--\\s*next-id:\\s*${letter})(\\d+)(\\s*-->\\s*\\r?)$`, 'm');
   assert.ok(
     nextIdRegex.test(result),
     `fixture setup: the "<!-- next-id: ${letter}N -->" marker must be found`,
