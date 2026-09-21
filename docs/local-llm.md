@@ -133,7 +133,7 @@ speaker-embedding model (`SPK`) are standalone singletons outside that map
 | Qwen 0.6B-Base                | ~1.2 GB           | `PRELOAD_QWEN=false` — button-driven           | none; explicit `/unload` only                |
 | Qwen 1.7B-Base                | ~3.4 GB           | `PRELOAD_QWEN_BASE17=false`                    | `QWEN_BASE17_IDLE_TTL` (default 120s)         |
 | Qwen 1.7B-VoiceDesign          | ~4–5 GB           | never preloaded; always transient              | `QWEN_DESIGN_IDLE_TTL` (default 120s), or freed immediately at the next real `/synthesize` |
-| Whisper ASR                   | 0 on CPU / ~150–400 MB on CUDA | `SEG_ASR_ENABLED=false`, `ASR_DEVICE=cpu` | `ASR_IDLE_TTL` (default 120s), CUDA mode only |
+| Whisper ASR                   | 0 on CPU / ~150–400 MB (tiny/base/small) or ~2560 MB (large-v3-class) on CUDA | `SEG_ASR_ENABLED=false`, `ASR_DEVICE=cpu` | `ASR_IDLE_TTL` (default 120s), CUDA mode only |
 
 (Env-var defaults + comments: `server/src/config/registry.ts:462-682`; sidecar
 watchdog wiring: `main.py:3416-3538`. Correction vs. an old note that had
@@ -162,14 +162,19 @@ Both are measured on-box (8 GB 4070, per-op allocated peak): mint ~5654 MB
 so the shared 6144 seed keeps a ~9-13% margin over both and admits on a bare
 8 GB card before either window warms.
 
-`asr` similarly splits by residency, not model (#2094): a COLD `/transcribe`
-(no Whisper model loaded yet) books the full `asr` cold-load peak (400 MB —
-weights materialisation + first-call warmup); an ALREADY-RESIDENT one books
-the separate `asr.warm` key instead — the forward-only activation cost, not
-the weight load a resident model has already paid. `asr.warm`'s 128 MB is a
-conservative, UNMEASURED cold-start prior (no on-box observation exists yet
-for this specific incremental figure) rather than a measured value like the
-design-family pair above.
+`asr` splits by residency (#2094) AND, on the cold path, by model tier
+(#3347/#3352): a COLD `/transcribe` (no Whisper model loaded yet) books the
+`asr` cold-load peak (400 MB — weights materialisation + first-call warmup —
+for `tiny`/`base`/`small`-tagged `ASR_MODEL` values, bumped to 2560 MB for
+any other configured model, e.g. `large-v3`); an ALREADY-RESIDENT one books
+the separate `asr.warm` key instead, unconditionally on model — the
+forward-only activation cost, not the weight load a resident model has
+already paid. `asr.warm`'s 128 MB is a conservative, UNMEASURED cold-start
+prior (no on-box observation exists yet for this specific incremental
+figure) rather than a measured value like the design-family pair above; the
+large-model cold bump (2560 MB) is equally conservative and unmeasured —
+pending a real on-box `large-v3` cold-load measurement, tracked as follow-up
+work, not owed by #3352.
 
 Unlike the other seeds on this page, `asr.warm` has no real path to being
 *learned* from, and on-box acceptance (#3036, register row A25 discharged

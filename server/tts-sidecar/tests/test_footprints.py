@@ -155,6 +155,19 @@ def test_asr_warm_and_cold_windows_learn_independently():
     assert t.peak_mb("asr", None, {}, resident=True) == 90  # not dragged up to 3707
 
 
+def test_asr_cold_seed_is_model_tier_aware():
+    # #3347/#3352: the cold "asr" seed must not use one flat number for every
+    # ASR_MODEL size. Small-tagged models (and no model at all, i.e. every
+    # existing call site that still passes model=None) keep the original
+    # 400 MB seed; a large model bumps it.
+    t = main.FootprintTable()
+    assert t.peak_mb("asr", "base", {}) == main.SEED_FOOTPRINTS_MB["asr"]
+    assert t.peak_mb("asr", None, {}) == main.SEED_FOOTPRINTS_MB["asr"]
+    large = t.peak_mb("asr", "large-v3", {})
+    assert large == main._ASR_LARGE_MODEL_SEED_MB
+    assert large > main.SEED_FOOTPRINTS_MB["asr"]
+
+
 def test_seed_parity_with_local_llm_doc():
     # REAL parity: parse the numbers out of the maintained doc and compare.
     doc = REPO_ROOT.joinpath("docs/local-llm.md").read_text(encoding="utf8")

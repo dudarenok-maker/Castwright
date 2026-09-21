@@ -124,6 +124,30 @@ def test_transcribe_gpu_no_fit_returns_503(monkeypatch, asr_client) -> None:
     assert body["neededMb"] == 400
 
 
+LARGE_MODEL_PROBE = [{"kind": "cuda", "index": 0, "label": "g0", "totalMb": 8000, "freeMb": 900}]
+
+
+def test_transcribe_gpu_large_model_cold_seed_bumped(monkeypatch, asr_client) -> None:
+    """#3347/#3352 — with ASR_MODEL=large-v3, the cold admission call must
+    thread the actually-configured model into the reservation (main.py:12726
+    used to pass `None`, throwing model identity away) so the model-tier-aware
+    seed bump (`FootprintTable._seed_mb`) applies. `LARGE_MODEL_PROBE` is sized
+    to fit the OLD flat 400 MB seed (headroom ~500 MB after the 5%/500-cap
+    reserve) but NOT the new large-model seed, so a pre-fix run would wrongly
+    return 200 here."""
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.setenv("ASR_MODEL", "large-v3")
+    _swap_asr(monkeypatch, "cuda")
+    monkeypatch.setattr(main._placement, "probe", lambda: LARGE_MODEL_PROBE)
+
+    r = asr_client.post("/transcribe", content=_pcm(), headers={"X-Sample-Rate": "24000"})
+
+    assert r.status_code == 503
+    body = r.json()
+    assert body["noCapacity"] is True
+    assert body["neededMb"] == main._ASR_LARGE_MODEL_SEED_MB
+
+
 def test_transcribe_gpu_resident_reserves_incremental_not_cold_peak(monkeypatch, asr_client) -> None:
     """#2094 — an ALREADY-RESIDENT ASR model must reserve its incremental
     per-forward footprint (the `asr.warm` seed, 128 MB), not the 400 MB

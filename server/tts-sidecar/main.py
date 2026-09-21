@@ -4479,6 +4479,15 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
 _QWEN_WIDE_TOKEN_BUDGET = 4800
 _QWEN_WIDE_PEAK_MB = 6144
 
+# The cold "asr" seed above (400 MB) is sized for the small default tiers
+# (tiny/base/small). It is not a reasonable cold-load prior for large(-v3):
+# faster-whisper/CTranslate2 large-v3 typically needs well over 1x what
+# tiny/base need. Deliberately conservative, not on-box measured — same
+# caveat as asr.warm's 128 MB entry above (#2094) — pending a real on-box
+# large-v3 cold-load measurement (out of scope for this fix).
+_ASR_SMALL_MODEL_TAGS = ("tiny", "base", "small")
+_ASR_LARGE_MODEL_SEED_MB = 2560
+
 # FootprintTable's learned-estimate tuning: a bounded ring of recent per-op
 # observations per key, and the percentile used to summarize it. p95 (not
 # max) so a single outlier spike ages out of the window instead of pinning
@@ -4526,11 +4535,15 @@ class FootprintTable:
         return engine
 
     @staticmethod
-    def _seed_mb(key: str, engine: str, cfg: Optional[dict]) -> int:
+    def _seed_mb(key: str, engine: str, cfg: Optional[dict], model: Optional[str] = None) -> int:
         seed = SEED_FOOTPRINTS_MB.get(key, 0)
         cfg = cfg or {}
         if engine == "qwen" and key == "qwen" and cfg.get("tokenBudget", 0) >= _QWEN_WIDE_TOKEN_BUDGET:
             seed = max(seed, _QWEN_WIDE_PEAK_MB)
+        if engine == "asr" and key == "asr":
+            model_str = (model or "").lower()
+            if model_str and not any(tag in model_str for tag in _ASR_SMALL_MODEL_TAGS):
+                seed = max(seed, _ASR_LARGE_MODEL_SEED_MB)
         return seed
 
     def _learned_mb(self, key: str) -> int:
@@ -4548,7 +4561,7 @@ class FootprintTable:
         learned = self._learned_mb(key)
         if learned > 0:
             return learned
-        return self._seed_mb(key, engine, cfg)
+        return self._seed_mb(key, engine, cfg, model)
 
     def record(
         self, engine: str, model: Optional[str], cfg: Optional[dict], observed_mb: int, resident: bool = False,
@@ -12723,7 +12736,7 @@ async def transcribe(req: Request) -> Response:
         on_gpu = _parse_device(ASR._device)[0] in ("cuda", "rocm")
         if on_gpu and _capacity_admission_enabled():
             async with _placement.reservation(
-                "asr", None, {},
+                "asr", ASR._model_name, {},
                 cpu_capable=False, heavy=False,
                 pinned=_engine_env_pin("asr"),
             ) as adm:
