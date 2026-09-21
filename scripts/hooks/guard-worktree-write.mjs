@@ -142,7 +142,10 @@ function resolveAssignedRoot(cwd, knownRoots) {
 
 // Absolute Windows path literal, same shape the #3263/#3340 measurement
 // parser matched — no shell expansion, both separator spellings.
-const TRANSCRIPT_PATH_RE = /[A-Za-z]:[\\/][^\s"'`<>|*?\r\n]+/g;
+// Quote/backtick chars in the exclusion set are \uXXXX-escaped, not literal,
+// so this regex literal doesn't desync spawn-windows-hide.test.ts's own
+// comment/string scanner (#2747).
+const TRANSCRIPT_PATH_RE = /[A-Za-z]:[\\/][^\s\u0022\u0027\u0060<>|*?\r\n]+/g;
 
 /** The user/prompt text of one transcript entry, for either message.content
  *  shape — mirrors the measurement parser's `promptText()`. */
