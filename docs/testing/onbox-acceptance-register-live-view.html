@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="31" data-publish-id="6b11c1b69d35"></div>
+  <div hidden data-published-as="32" data-publish-id="13de5588aaa8"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -745,7 +745,7 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A110</span><span class="iname">Model-tier-aware cold ASR admission seed ([#3347](https://github.com/dudarenok-maker/Castwright/issues/3347), PR [#3357](https://github.com/dudarenok-maker/Castwright/pull/3357)) · **single GPU card, `ASR_DEVICE=cuda`, `ASR_MODEL=large-v3` (or another non-`tiny`/`base`/`small` tag), a squeezable card (able to be driven down to ~500-900 MB free)**</span><span class="risk">Not yet published</span><span class="chev">›</span></summary>
+      <summary><span class="num">A110</span><span class="iname">Model-tier-aware cold ASR admission seed</span><span class="risk">single GPU card, ASR_DEVICE=cuda, ASR_MODEL=large-v3 (or another non-tiny/base/small tag), squeezable to ~500-900 MB free</span><span class="chev">›</span></summary>
       <div class="body">
         <p>#3347 found <code>denials_503: 0</code> across ten on-box rounds — capacity admission for a cold <code>/transcribe</code> was booking the flat 400 MB <code>asr</code> seed regardless of the actually-configured <code>ASR_MODEL</code>, so a real <code>large-v3</code> cold load (which needs far more than 400 MB) could be wrongly admitted and then OOM instead of being refused up front. This PR threads the configured model into <code>FootprintTable._seed_mb</code> and bumps the cold seed to 2560 MB for any non-small-tagged model. Both new claims are unprovable by the PR's own tests (they monkeypatch <code>main._placement.probe</code> and stub <code>faster_whisper.WhisperModel</code> — they pin the arithmetic, not real hardware behaviour):</p>
         <ol>
