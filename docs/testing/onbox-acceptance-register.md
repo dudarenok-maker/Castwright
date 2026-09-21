@@ -3222,6 +3222,54 @@ weights can prove, and neither was exercised on real hardware for this PR:
 > and remains unconfirmed; the next run needs either a forced-flags run with
 > `-s` that reaches a clean accept, or a direct read of the guard's own
 > `print(...)`/log output.
+>
+> **2026-09-21 — accept-path echo OBSERVED on a clean-accept bless — DISCHARGED**
+> (Castwright#3303, `cline-qwen-cloud`). Three real bless runs on this dev box
+> (two-GPU, Windows 11), each `node scripts/run-powershell.mjs
+> server/tts-sidecar/run-golden-tests.ps1 -s` with `GOLDEN_BLESS=1` — the
+> `npm run test:golden-audio -- --bless --sidecar-only` path plus the missing
+> `-s` (confirmed `Get-GoldenBlessPytestArgs` forwards caller args verbatim, so
+> `-s` survives and the bare-bless `-k 'not qwen_duration'` default still
+> applies). **Run 1 (routine, unflagged): the `rtf_max` noise-driven refusal
+> RECURRED** — `refusing to bless: tolerances would move beyond epsilon 0.0
+> (rtf_max: 0.5500) -- was {..., 'rtf_max': 1.0}, now {..., 'rtf_max': 1.55}`
+> (measured `rtf` ≈ 1.033 vs blessed 0.5089); a sibling agent had real GPU work
+> in flight this session, but the 2026-09-06 note reproduced the same refusal on
+> a confirmed-idle box, so this is recorded as a recurrence, still not chased to
+> a fix. The Kokoro bless again wrote through the same comma ASR-noise
+> transcript diff, flagless, plus three new whisper-lineage metadata fields
+> (`faster_whisper_version`/`ctranslate2_version`/`whisper_model_revision`).
+> **Run 2 (`GOLDEN_REBLESS_THRESHOLDS=1`):** tolerances gate cleared; refused
+> next on `loudness_dbfs` beyond ε 0.4 (angry ±2.68, whisper ±1.91, excited
+> ±1.15, neutral ±0.77, sad ±0.18 dB) — on this contended box the loudness
+> noise routinely exceeds the measurement epsilon, so reaching a clean accept
+> took both flags, not just the tolerances one. **Run 3 (both forced flags):
+> exit 0 — clean accept, echo printed**, verbatim through the real
+> `run-golden-tests.ps1` pytest (`-s`), which is the falsifiable signal the
+> prior note owed: `[golden-bless] tolerances moved BEYOND epsilon 0.0 (FORCED
+> by GOLDEN_REBLESS_THRESHOLDS) -- rtf_max: +/-1.4000` / `[golden-bless]
+> identity moved within epsilon 0.005 (noise -- reference unchanged) --
+> cosine.sad: +/-0.0014, cosine.excited: +/-0.0009, cosine.angry: +/-0.0004,
+> cosine.whisper: +/-0.0001, max: +/-0.0001` / `[golden-bless] loudness_dbfs
+> moved BEYOND epsilon 0.4 (FORCED by GOLDEN_REBLESS_MEASUREMENTS) -- angry:
+> +/-3.5000, excited: +/-1.6500, neutral: +/-1.6300, sad: +/-1.1700, whisper:
+> +/-0.9200`. The second line is the exact shape owed: a within-epsilon noise
+> echo fired while the `identity` block stayed byte-identical in the written
+> file (only the forced fields moved). #2066 follow-up from these runs: every
+> per-leaf identity delta this session was ≤ 0.0014 — the 2026-09-06
+> `angry` +0.0052 clearance did NOT recur, so this run adds no evidence that
+> `IDENTITY_COSINE_EPSILON` is too tight for identity (loudness noise, by
+> contrast, ±0.9–3.5 dB under sibling load, blows past its 0.4 ε
+> routinely). All baseline writes from the forced bless (`instruct-baseline`'s
+> `rtf_max`→2.4, `rtf.batched`→1.5841, new loudness figures) and the Kokoro
+> re-bless were reverted before committing — the commit here is docs-only.
+> Honest caveat kept: the box was NOT quiet this session (sibling heartbeat
+> agents held GPU compute throughout), so bullet 1's uncontended-routine-bless
+> completing with zero flags remains undemonstrated on this box — both of
+> today's unflagged-or-partially-forced attempts refused before the echo point,
+> exactly the known `rtf_max` noise behavior. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/a20-accept-echo-2026-09-21.md`
+> + raw run logs under `a20-accept-echo-2026-09-21/`.
 
 *Needs:* Kokoro weights on disk, a box quiet enough that `--bless` measures a
 stable, reproducible value (no concurrent GPU work), and permission to
