@@ -2524,20 +2524,18 @@ function computeMaxRowNumber(registerText, letter) {
     `fixture setup: Group ${letter} must have at least one row in the register`,
   );
   const max = Math.max(...numbers);
-  // Callers use `max + 1` as "an ID that does not exist yet". Under the
-  // allocation-floor check (4b) that candidate must sit STRICTLY BELOW the
-  // group's own next-id marker — it does today by a wide margin, but assert
-  // it anyway. When this eventually breaks, the tempting repair is to loosen
-  // the fixture, and that is exactly how the allocation floor gets quietly
-  // weakened.
+  // Callers use `max + 1` as "an ID that does not exist yet", inserting it
+  // as a synthetic row via buildAheadBaselineText for the "ahead baseline"
+  // fixtures. That helper now bumps ITS OWN copy's next-id marker past the
+  // row it inserts (see its own comment), so the result stays
+  // checkRegister-consistent regardless of how much headroom THIS
+  // (unmutated) register text's next-id currently has — headroom here is no
+  // longer a precondition for correctness. Only the marker's presence is
+  // still required, for callers that read it directly.
   const nextId = parseNextIdMarker(registerText, letter);
   assert.ok(
     nextId !== null,
     `fixture setup: Group ${letter} must have a "<!-- next-id: ${letter}N -->" marker`,
-  );
-  assert.ok(
-    max + 1 < nextId,
-    `fixture ID ${letter}${max + 1} must be below next-id (${letter}${nextId})`,
   );
   return max;
 }
@@ -2604,7 +2602,28 @@ function buildAheadBaselineText(registerText, letter, newRowNumber, title) {
   const insertion = `\n### ${letter}${newRowNumber} · ${title}\n\nBody text (test fixture).\n`;
   const mutatedSection =
     section.slice(0, lastDividerIdx) + insertion + section.slice(lastDividerIdx);
-  return text.slice(0, groupHeadingIdx) + mutatedSection + text.slice(sectionEnd);
+  let result = text.slice(0, groupHeadingIdx) + mutatedSection + text.slice(sectionEnd);
+
+  // The synthetic row above models "another lane already merged this row" —
+  // a real merge like that always bumps the group's own next-id marker past
+  // the newly-minted row too, or the merged register would immediately trip
+  // 4b's own "row at or above next-id" check. Bump it here so this baseline
+  // stays checkRegister-consistent regardless of how much headroom the real
+  // register's next-id marker happens to have right now — it can be zero,
+  // e.g. immediately after a row was minted at the exact allocation floor
+  // (reproduced: Group B's real next-id sat exactly at max+1 once B101 was
+  // minted at the prior floor, which is correct allocation, not a bug).
+  const nextIdRegex = new RegExp(`(<!--\\s*next-id:\\s*${letter})(\\d+)(\\s*-->)`);
+  assert.ok(
+    nextIdRegex.test(result),
+    `fixture setup: the "<!-- next-id: ${letter}N -->" marker must be found`,
+  );
+  result = result.replace(nextIdRegex, (_, pre, n, post) => {
+    const bumped = Math.max(Number(n), newRowNumber + 1);
+    return `${pre}${bumped}${post}`;
+  });
+
+  return result;
 }
 
 // #1931 review round 3: the FIRST version of this mode reported checkLiveView's
