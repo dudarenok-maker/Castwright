@@ -4946,6 +4946,11 @@ card that can be driven down to the ~500-900 MB free range (e.g. holding a
 Qwen or Coqui model resident alongside), and one cold `/transcribe` call in
 each state. No golden-audio comparison.
 
+*Note:* `medium`'s own cold-load peak is a related but distinct open
+question — these criteria only measure `large-v3`. `docs/local-llm.md`'s
+tier table flags `medium`'s reservation as likely ~2x over-sized; that gap
+is not covered by this row and isn't tracked elsewhere.
+
 ## Group B — local Ollama analyzer only
 
 <!-- next-id: B101 -->

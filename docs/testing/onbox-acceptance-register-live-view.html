@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="32" data-publish-id="13de5588aaa8"></div>
+  <div hidden data-published-as="33" data-publish-id="59fc883699ca"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -757,6 +757,7 @@
           <li>With <code>ASR_MODEL=large-v3</code> and <code>ASR_DEVICE=cuda</code>, trigger a cold <code>/transcribe</code> (no Whisper model yet resident) on a card driven down to roughly 500–900 MB free. Observe a real <code>503 {"noCapacity": true, "neededMb": 2560}</code> — the squeeze #3347 reported as a silent <code>denials_503: 0</code> grant must now be a real refusal.</li>
           <li>On the same box, with more headroom available, observe the actual measured peak VRAM a real <code>large-v3</code> cold load draws (weights materialisation + first-call warmup), and record that number here. If it comes in meaningfully above or below 2560 MB, <code>_ASR_LARGE_MODEL_SEED_MB</code> (<code>server/tts-sidecar/main.py</code>) and <code>docs/local-llm.md</code>&#39;s matching <code>&lt;!-- footprint:asr.large=2560 --&gt;</code> anchor need a follow-up correction.</li>
         </ol>
+        <p><em>Note:</em> <code>medium</code>&#39;s own cold-load peak is a related but distinct open question — these criteria only measure <code>large-v3</code>. <code>docs/local-llm.md</code>&#39;s tier table flags <code>medium</code>&#39;s reservation as likely ~2x over-sized; that gap is not covered by this row and isn&#39;t tracked elsewhere.</p>
         <p class="src">single GPU card, <code>ASR_DEVICE=cuda</code>, <code>ASR_MODEL=large-v3</code> (or another non-<code>tiny</code>/<code>base</code>/<code>small</code> tag), a squeezable card (able to be driven down to ~500–900 MB free) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3347">#3347</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/3357">#3357</a> &#183; no separate run sheet &#183; medium — needs <code>faster-whisper</code>&#39;s <code>large-v3</code> weights installed, a GPU card that can be driven down to the ~500–900 MB free range (e.g. holding a Qwen or Coqui model resident alongside), and one cold <code>/transcribe</code> call in each state. No golden-audio comparison.</p>
       </div>
     </details>
