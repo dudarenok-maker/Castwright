@@ -1,5 +1,12 @@
 # Castwright#3339 — measuring `transcript_path` extraction feasibility (#3263 direction A)
 
+> Re-verified and corrected under **#3340**. The parser this doc pasted in its
+> first revision rejected real paths as escape debris (`\tasks`, `\node_modules`,
+> `\temp`), so four of its numbers were not what the pasted source prints. The
+> corrected source is pasted at the bottom and every number below is now what
+> that script outputs; what moved, and the one-line change, are in
+> **Re-verification after #3340**.
+
 Empirical findings only. No guard change, no fix, and — per the ticket's own
 Output section — **no design recommendation anywhere in this doc**: the
 Conclusion states what the numbers are and explicitly declines to choose.
@@ -40,17 +47,29 @@ not itself read).
 - Worktree: `C:\Claude\Projects\wt-3263-transcript-extraction`, branch
   `docs/docs-3263-transcript-extraction`, created by this spike, branched from
   `main` at `cb83a362`. This spike made exactly one commit on it.
-- Parser: `parse-transcripts.mjs`, kept **outside every repo checkout** under
-  the OS temp scratch directory
-  (`C:\Users\dudar\AppData\Local\Temp\open-engine-scratch\cline-3339-20260920-105131\parse-transcripts.mjs`),
+- Parser: `parse-transcripts-fixed.mjs` — #3339's `parse-transcripts.mjs` with
+  the one-predicate fix described under `## Re-verification after #3340` — kept
+  **outside every repo checkout** under the OS temp scratch directory
+  (`C:\Users\dudar\AppData\Local\Temp\open-engine-scratch\cline-3340-20260920-225641\parse-transcripts-fixed.mjs`),
   never committed — same idiom as #3325's `hook-logger.mjs` and #3333's probe
   scripts. It is reproduced in full at the bottom of this doc; that paste is
   this doc's only reproducibility guarantee, which is why acceptance item 4
-  exists.
+  exists. #3339's own revision of the same file still lives at
+  `…\open-engine-scratch\cline-3339-20260920-105131\parse-transcripts.mjs`, and
+  the **corrected** revision — the one whose single changed line is quoted under
+  **Re-verification after #3340** — is what is pasted at the bottom.
 - Verbatim run (from the scratch directory), **observed** output: `node
-  parse-transcripts.mjs` → exit code `0`, `194` lines. Scoping one transcript
-  also switches the parser into its verbose per-path mode:
-  `node parse-transcripts.mjs b5a1be31` → exit code `0`.
+  parse-transcripts-fixed.mjs` → exit code `0`, `182` lines. Scoping one
+  transcript also switches the parser into its verbose per-path mode:
+  `node parse-transcripts-fixed.mjs c6bb424b` → exit code `0`. (#3339 recorded
+  `194` lines for its revision; that revision resolved 19 known checkout roots
+  and this one resolves 7, and the 12-line difference is exactly those 12
+  `ROOT` lines — `182 + 12 = 194`.) The corrected file was re-run end to end on
+  2026-09-21 and reproduced its own earlier output byte for byte, and the paste
+  re-extracted from **this** doc was run separately and reproduced that same
+  output a third time the same day — so the block at the bottom is the script
+  that produced every number in this doc, verified by running the paste itself
+  rather than the file it was copied from.
 - Corpus: **7 transcripts in 2 project directories**, all real sessions from
   the two preceding spikes — 526 KB–564 KB each, 25–35 JSONL entries each.
   Ground truth is taken from those two docs, which state what each session was
@@ -76,14 +95,41 @@ not itself read).
   `PRIMARY_CHECKOUT_ROOT = 'C:\\Claude\\Projects\\Audiobook-Generator'` and
   `listKnownCheckoutRoots()`, which spawns `git worktree list --porcelain`
   (guard source lines 30 and 43–45). The parser calls the same command the same
-  way; **observed** run: 19 roots today (18 worktrees + the primary checkout),
-  listed in full in the parser's output.
+  way, so the set is resolved from **whatever directory the parser is run in**,
+  and it is therefore a property of the run, not a constant. **Observed**:
+  #3339 recorded 19 roots (18 worktrees + the primary checkout); the #3340
+  re-verification run, launched from the scratch directory the doc specifies,
+  resolved **7**. Both are reported because either one is reproducible only
+  together with its working directory, and the difference does not touch any
+  answerable transcript: `guardRootsCovered=0` on all three of them and on
+  three of the four `n/a` ones, and the remaining transcript's own checkout is
+  simultaneously a `cwd` root, so it stays covered under either set.
+
 - Path shape: a candidate is any absolute Windows path literal
   (`[A-Za-z]:[\\/]…`) with **no** shell expansion, a trailing-separator strip,
-  and a minimum of two separators. **Observed**: without that minimum the regex
-  matches JSON-escape debris — the parser's own counter reports
-  `PATH_SHAPE_REJECTS total=56`, e.g. `U:\`, `C:\Program`, `g:\n\n`,
-  `s:\n\n-`. All 56 rejects are non-paths; none is a checkout root.
+  and a minimum of two separators — **plus**, after #3340, an escape-debris
+  rule that only fires when a `\[nrt]` pair is *not* followed by a name
+  character. `\tasks`, `\node_modules` and `\temp` are then read as separator +
+  directory name (real paths), while `\n\n` and `\n-` stay debris.
+  **Observed**: the parser's own counter reports `PATH_SHAPE_REJECTS total=84`,
+  e.g. `U:\`, `C:\Program`, `g:\n\n`, `s:\n\n-`. That counter is **not
+  deduplicated** — it increments once per rejected candidate per pass and the
+  parser sweeps the whole corpus twice — so `84` is 42 occurrences of four
+  genuine debris candidates per transcript (28 distinct in all), and after
+  #3340's fix every one of them is genuine debris. Two counts that shipped with
+  #3339 are **not** what the source it pasted prints; #3340 measured all three
+  revisions rather than re-deriving them (full table under **Re-verification
+  after #3340** below):
+  - the pasted (unfixed) source prints `PATH_SHAPE_REJECTS total=94`, and among
+    its rejects are **4 occurrences of one real absolute path** — `c6bb424b`'s
+    `…\tasks\ac0a05b49edbd8d64.output`, dropped only because `\t` begins
+    `tasks` — so "all 56 rejects are non-paths" was false;
+  - `56` is what that same doubled counter prints for a revision with **no**
+    escape filter at all (`U:\` and `C:\Program` only: 4 occurrences × 7
+    transcripts × 2 passes), i.e. the count of a revision the doc does not
+    paste. Deleted outright, this filter is still wrong: it re-admits `g:\n\n`
+    and `s:\n\n-` as paths, which is how that revision reaches
+    `pathsDistinct=17` instead of `15` on `9eeee2f0`.
 - The extraction heuristics scored in Finding 2, each named as it is reported.
   Every one of them is **blind to the ground-truth `briefed` value** (observed:
   `briefed` is read only in `score()`):
@@ -102,6 +148,7 @@ not itself read).
      `Worktree:`, `assigned worktree`, `working directory`, `cwd`, `dir`,
      searched in the most recent prompt-bearing turn first and then across the
      whole transcript.
+
 ## Finding 1 (Q1) — is the originating instruction reliably findable, and what distinguishes it?
 
 **Observed: yes, it is findable, but not by position — and `promptSource` is
@@ -245,10 +292,15 @@ rather than pooled:**
    two-turn case arriving in Q2.
 2. `9eeee2f0` / `5193fe70` / `c6bb424b`, **H3 and H4** — one identical cause in
    all three: the most frequently mentioned path is the session's **own**
-   checkout (`wt-3263-guard-gap-spike`, 20/21/23 mentions), because every tool
+   checkout (`wt-3263-guard-gap-spike`, 26/27/29 occurrences), because every tool
    call in the transcript is stamped with it, while the briefed tree is
-   mentioned once, in prose. Frequency measures *where the session ran* — the
-   very signal #3325 and #3333 showed is **not** the assigned root.
+   mentioned 7/5/5 times, in prose. Frequency measures *where the session ran* —
+   the very signal #3325 and #3333 showed is **not** the assigned root.
+   (**Corrected by #3340**: `#3339` printed 20/21/23 and "mentioned once",
+   which came from the same path-shape filter — see **Re-verification after
+   #3340**. The correction shrinks the mention margin from roughly 20:1 to
+   roughly 4:1, and does not change the outcome: H3 and H4 still pick the
+   session's own checkout, not the assigned tree, on all three.)
 3. All three, **H5** — the label rule returns the path following a label, and
    the label that actually occurs is X's own path inside tool text
    (`…\wt-3263-guard-gap-spike\CLAUDE.md`), not a label naming the assigned
@@ -262,10 +314,23 @@ rather than pooled:**
    and found inert rather than quietly dropped from the table.
 
 **Observed, and deliberately stated outside the hit-rate columns:** the
-per-transcript path counts behind H3 are `pathsDistinct=17/17/19` for
-`9eeee2f0`/`5193fe70`/`c6bb424b`, with the session's own checkout counting
-20/21/23 and the briefed tree 1 — so the gap between the winning and losing
-candidate is not a near-tie that a better tie-break could settle.
+per-transcript distinct-path counts behind H3 are `pathsDistinct=15/15/17` for
+`9eeee2f0`/`5193fe70`/`c6bb424b`, and in every one of the three the H3 winner is
+the session's own checkout (`C:\Claude\Projects\wt-3263-guard-gap-spike`) — the
+very signal #3325 and #3333 showed is **not** the assigned root. (**Corrected by
+#3340**: `#3339` printed `pathsDistinct=17/17/19` here, because its path-shape
+filter was dropping real candidates — see **Re-verification after #3340**.)
+
+**Mention counts are rule-dependent, so both rules are named wherever a count
+appears.** *Distinct* counts a parsed path once (that is what `assignedPathAmongPaths=YES (1)`
+reports); *occurrences* counts every mention, subpaths included. The two rules
+disagree on this corpus — the briefed tree is 1 distinct path but 7/5/5
+occurrences — so any ratio between the two trees is only meaningful with its rule
+attached. Under **occurrences** the session's own checkout leads by roughly 4:1,
+not the roughly 20:1 `#3339` reported from the distinct rule; it still leads on
+all three, so the H3/H4 outcome is unchanged, but the margin that #3339's text
+described as unreachable by "a better tie-break" is four times narrower than it
+said.
 
 ## Finding 3 (Q3) — containment: is the assigned root always among the roots mentioned, and how many others are there?
 
@@ -274,33 +339,135 @@ candidate is not a near-tie that a better tie-break could settle.
 
 | transcript | assigned root among all mentioned paths? | times mentioned | other known checkout roots also mentioned | paths under no known root |
 |---|---|---|---|---|
-| `9eeee2f0` (#3325 d1) | **YES** | 1 | 0 | 15 |
-| `5193fe70` (#3325 d2) | **YES** | 1 | 0 | 15 |
-| `c6bb424b` (#3325 d3) | **YES** | 1 | 0 | 17 |
-| `b5a1be31`, `41eacf8a`, `380c8b4c`, `913df6a5` (#3333 ×4) | n/a — no assignment | — | 1 each (P1 only) | 14–15 |
+| `9eeee2f0` (#3325 d1) | **YES** | 7 (1 distinct) | 0 | 15 |
+| `5193fe70` (#3325 d2) | **YES** | 5 (1 distinct) | 0 | 15 |
+| `c6bb424b` (#3325 d3) | **YES** | 5 (1 distinct) | 0 | 15 |
+| `b5a1be31`, `41eacf8a`, `380c8b4c`, `913df6a5` (#3333 ×4) | n/a — no assignment | — | 1 each (P1 only) | 12–13 |
 
 **Containment holds on 3 of 3 answerable transcripts.** The assigned root is
-present in the transcript, and **no other known checkout root is mentioned
-alongside it** in any of the three (`otherGuardRootsMentioned=0`,
-`otherCwdRootsMentioned=0`). The set of known roots resolved the way the guard
-resolves it — `PRIMARY_CHECKOUT_ROOT` plus `git worktree list --porcelain`, 19
-roots on this run (`18 worktrees + primary`) — is the denominator for that
-"other roots" count.
+present in the transcript, and **no other known checkout root from the guard's
+own list is mentioned alongside it** in any of the three
+(`otherGuardRootsMentioned=0`). The `cwd`-root variant of the same question
+answers **1**, not 0 (`otherCwdRootsMentioned=1`): a transcript's own `cwd` — the
+dispatching checkout X — is a `cwd` root and is mentioned, so it is counted there
+even though it is not a second *worktree*. The set of known roots is resolved the
+way the guard resolves it — `PRIMARY_CHECKOUT_ROOT` plus
+`git worktree list --porcelain` — and because the parser runs that command in
+whatever directory it is launched from, the set is a property of the run:
+#3339's run saw **19** roots (`18 worktrees + primary`), the #3340 re-verification
+run saw **7**. Both are reported because either is reproducible only together
+with its working directory; the difference moves no answer above, since
+`guardRootsCovered=0` on all three answerable transcripts under either set.
 
 **The distinguishing number is the co-signal, not the containment.** On all
-three, the briefed tree is mentioned exactly **once**, while the *session's own*
-checkout is mentioned **20–23 times**, and the session's own checkout is not
-"another worktree" — it is the dispatching tree X itself, which the guard's
-root list does contain. So `otherGuardRootsMentioned=0` is true only in the
-narrow sense that no *second* worktree is named; a reader who takes "other
-roots" to mean "other checkout-like roots than the assigned one" must count X,
-and then the number is **1 on all three**, with X outnumbering the assigned tree
-20:1 to 23:1 in mentions.
+three, the briefed tree accounts for **1 distinct path** and **5–7 occurrences**,
+while the *session's own* checkout is mentioned **26–29 times**, and the session's
+own checkout is not "another worktree" — it is the dispatching tree X itself,
+which the guard's root list does contain. So `otherGuardRootsMentioned=0` is true
+only in the narrow sense that no *second* worktree is named; a reader who takes
+"other roots" to mean "other checkout-like roots than the assigned one" must count
+X, and then the number is **1 on all three**, with X outnumbering the assigned tree
+by roughly 4:1 to 5:1 in occurrence mentions (`26:7`, `27:5`, `29:5`). (**Corrected
+by #3340**: #3339 printed "mentioned exactly once" and `20–23` here, both from the
+path-shape filter that was dropping real candidates — see **Re-verification after
+#3340**.)
 
 **There is no line here that says which of the two is the assignment.** Q2 and
 Q3 are reported separately, as instructed, and they disagree in the way the
 ticket anticipated: containment is **3/3** while the best non-positional
 extraction heuristic is **0/3** and the best positional one is 2/3.
+
+## Re-verification after #3340
+
+**What was wrong, stated as a rule rather than a symptom.** The path-shape filter
+in the source #3339 pasted read:
+
+```javascript
+    const escapedWs = /\\[nrt]/.test(cleaned);
+    if (cleaned.length > 3 && seps >= MIN_SEPARATORS && !escapedWs) {
+```
+
+so a candidate was discarded if a backslash followed by `n`, `r` or `t` appeared
+**anywhere** inside it. That is the right test for JSON-escape debris —
+`rationalizing:\n\n` leaves the literal characters `g:\n\n`, and
+`instructions:\n\n- Codex:` leaves `s:\n\n-` — but it is not a test for *those*
+artifacts specifically, and any real path containing a directory whose name
+begins with one of those three letters matches it just as well (`\tasks`,
+`\node_modules`, `\temp`, `\new`). **Observed in this corpus**: four occurrences
+of one real absolute path were dropped for exactly that reason — `c6bb424b`'s
+subagent-notification path `…\tasks\ac0a05b49edbd8d64.output`, rejected because
+`\t` begins `tasks`.
+
+**The fix — one predicate, quoted verbatim from the source pasted below:**
+
+```javascript
+    const escapedWs = /\\[nrt](?![A-Za-z0-9_])/.test(cleaned);
+```
+
+A control character never begins a path-name run, so `\[nrt]` immediately
+followed by a name character is separator + name (`\tasks`), while `\[nrt]`
+followed by a non-name character is separator + escape (`g:\n\n`, `s:\n\n-`).
+
+**Observed — six cases run against the predicate itself, both classes, `fail=0`**
+(`predicate-check.mjs`, a throwaway harness kept in the same scratch directory):
+
+| input | class | `#3339` rule | `#3340` rule |
+|---|---|---|---|
+| `g:\n\n` (from `rationalizing:\n\n`) | JSON-escape debris | rejects | rejects |
+| `s:\n\n-` (from `instructions:\n\n- Codex:`) | JSON-escape debris | rejects | rejects |
+| `…\claude\x\tasks\ac0a05b49edbd8d64.output` | real path, real `\tasks` dir | **rejects** | accepts |
+| `C:\Claude\Projects\Axiom\node_modules\pkg\i.js` | real path, real `\node_modules` dir | **rejects** | accepts |
+| `C:\Users\a\temp\f.txt` | real path, real `\temp` dir | **rejects** | accepts |
+| `C:\Users\dudar\AppData\Local\Temp\x\t` | boundary: path *ends* in a one-character name | rejects | rejects |
+
+The last row is a **residual, not a pass**: admitting `…\x\t` would require
+knowing that `x\t` is a real directory name rather than an escape, and nothing in
+the string says so. No such path occurs in this corpus, so it moves no number
+here; it is listed because the fix narrows the old rule rather than proving the
+class closed, and **Not tested** says so again from the other direction.
+
+**Observed — all three revisions run over the whole corpus.** "No filter" is the
+same source with the `!escapedWs` clause deleted, "#3339" is the predicate quoted
+above, "#3340" is the source pasted below:
+
+| revision | escape predicate | `PATH_SHAPE_REJECTS` | `pathsDistinct` `9eeee2f0`/`5193fe70`/`c6bb424b` | `pathsDistinct`, four `#3333` | `c6bb424b` H1 |
+|---|---|---|---|---|---|
+| no filter | none | `total=56` | `17/17/19` | `17/17/16/16` | `…\tasks\ac0a05b49edbd8d64.output` → **MISS** |
+| #3339, as pasted then | `/\\[nrt]/` | `total=94` | `15/15/16` | `15/15/14/14` | `(none)` → no pick |
+| #3340, pasted below | `/\\[nrt](?![A-Za-z0-9_])/` | `total=84` | `15/15/17` | `15/15/14/14` | `…\tasks\ac0a05b49edbd8d64.output` → **MISS** |
+
+`56` is exactly the debris-only count (`U:\` and `C:\Program`, 4 occurrences × 7
+transcripts × 2 passes), so **deleting** the filter is not the fix either: it
+re-admits `g:\n\n` and `s:\n\n-`, which is how it reaches `pathsDistinct=17` on
+`9eeee2f0` where the correct count is `15`. `84` is `42 × 2` — 42 debris
+occurrences (6 per transcript × 7), 28 distinct candidates (4 per transcript) —
+measured with a separate per-candidate probe rather than read off the counter.
+The counter is **not** an occurrence count: it increments once per rejected
+candidate per pass and the parser sweeps the corpus more than once, so the same
+candidates print as `56` under one rule and `94` under another, and for `#3339`
+the measured occurrence count is 46 (28 debris candidates plus 4 occurrences of
+the real `.output` path in `c6bb424b`, each counted once per candidate).
+
+**Observed — the fix moves exactly one transcript.** Diffing the `#3339` output
+against the `#3340` output over all seven transcripts changes four lines, all in
+`c6bb424b`'s block: the `TURN idx=30` line (`paths=0` → `paths=1`), its `Q2
+pathsDistinct` (`16` → `17`), its `pathsUnderNoRoot` (`14` → `15`), and its `Q2
+H1_lastTurnFirstPath` (`(none) => no pick` → that notification's `.output` path
+`=> MISS`) — plus the counter total. The other six transcripts' blocks are
+byte-identical between the two revisions, and H2's pick is unaffected either way.
+
+**What this changes in the rest of the doc, and what it does not.** Four numbers
+moved, all traceable to this one predicate: the reject-counter (Setup bullet and
+the table above); `c6bb424b`'s H1 cell, which stops being a no-pick and becomes a
+**MISS** with a measured cause (Finding 2, Misses item 1); the per-transcript
+`pathsDistinct` line in Finding 2; and the two mention counts (the session's own
+checkout `20/21/23` → `26/27/29` occurrences, the briefed tree "mentioned once" →
+`7/5/5` occurrences but still `1` distinct path) in Finding 2 and Finding 3.
+**Unchanged:** every rate in Finding 2's hit-rate table (H1 2/3, H2 3/3, H2r 0/3
+inert, H3/H4/H5 0/3), the H3/H4/H5 winners and their causes, containment 3/3 in
+Finding 3, and every transcript count in Finding 1. The correction narrows the
+mention margin between the two trees from roughly 20:1 to roughly 4:1 without
+changing which tree wins.
 
 ## Not tested
 
@@ -331,6 +498,14 @@ extraction heuristic is **0/3** and the best positional one is 2/3.
   rather than a top-level user turn) was not exercised — this corpus's one
   hand-back entry (`b5a1be31` index 21, Finding 1) belongs to a transcript
   with no assignment to extract at all, so it does not test that case.
+- **The path-shape false-reject bug this rework fixed was found by a
+  spot-check, not by a test, and no check exists that the class is closed.**
+  The corrected rule (`\[nrt]` counts as debris only when it is *not* followed
+  by a name character) is justified against the real instances of both classes
+  in this corpus, but a transcript carrying a different escape artifact, or a
+  real directory name whose escape-lookalike segment is followed by a
+  non-name character, is not represented here. See **Re-verification after
+  #3340**.
 
 ## Conclusion
 
@@ -374,12 +549,19 @@ own Output instruction.**
 ## Parser source
 
 Pasted in full, exactly as run to produce every number above (acceptance
-item 4). Kept outside every repo checkout, at
-`C:\Users\dudar\AppData\Local\Temp\open-engine-scratch\cline-3339-20260920-105131\parse-transcripts.mjs`;
-reproduced here verbatim.
+item 4). The **corrected** revision is kept outside every repo checkout at
+`C:\Users\dudar\AppData\Local\Temp\open-engine-scratch\cline-3340-20260920-225641\parse-transcripts-fixed.mjs`
+(`sha256 48B392E3B3140580A5315B889E47CC136A405D7BDE50E1F2AF42FD109165502C`);
+reproduced here verbatim. #3339's own revision of the same file — the one whose
+`escapedWs` predicate this pastes over — is at
+`…\open-engine-scratch\cline-3339-20260920-105131\parse-transcripts.mjs`, and it
+is the revision that printed the four counts corrected under
+**Re-verification after #3340**. The paste below was re-extracted from this doc
+and run on its own, and it reproduces every number in this doc.
 
 ```javascript
-// Castwright#3339 - throwaway spike tooling. Kept OUTSIDE every repo checkout
+// Castwright#3340 - same throwaway spike tooling as #3339, with the path-shape
+// false-reject in extractPaths() fixed (see `escapedWs` below). Kept OUTSIDE every checkout
 // (OS temp scratch), same idiom as #3325's and #3333's probe scripts. Prints the
 // Q1/Q2/Q3 numbers used by docs/ops/3263-transcript-extraction-feasibility.md.
 //
@@ -455,8 +637,15 @@ function extractPaths(text) {
     const cleaned = raw.replace(/[.,;:)\]}]+$/, '');
     const seps = (cleaned.match(/[\\/]/g) || []).length;
     // `g:\n\n` and friends are false positives from JSON-escaped whitespace:
-    // a literal backslash followed by n/r/t sits inside a longer match.
-    const escapedWs = /\\[nrt]/.test(cleaned);
+    // a literal backslash followed by n/r/t sits inside a longer match - but
+    // ONLY when that `\[nrt]` is not the start of a real directory name.
+    // Corpus evidence, both classes: every genuine instance is followed by a
+    // further escape (`g:\n\n`, `s:\n\n-`, from `rationalizing:\n\n` and
+    // `instructions:\n\n- Codex:`), while a rejected-until-now real path
+    // continues as an ordinary identifier (`...\tasks\ac0a05b49edbd8d64.output`,
+    // i.e. `\t` + `a`). A control character never begins a path-name run, so
+    // `\[nrt]` immediately followed by a name character is separator + name.
+    const escapedWs = /\\[nrt](?![A-Za-z0-9_])/.test(cleaned);
     if (cleaned.length > 3 && seps >= MIN_SEPARATORS && !escapedWs) {
       found.push(cleaned);
     } else if (rejectedExamples.length < 12) {
