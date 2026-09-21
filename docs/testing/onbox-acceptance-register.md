@@ -3298,6 +3298,41 @@ deliberately-broken Kokoro run; well under an hour total.
 > playback tool was available to this agent, so the resolved-storage-key +
 > `status:ready` evidence stands in for it, which the run sheet itself flags
 > as not sufficient on its own.
+> **2026-09-21 — §4's ear-check re-derived, and it has slipped further: the audio it was
+> owed against no longer exists on this box. Hand-off recorded, not discharged (#3304).**
+> Only the §4 "listened, sounds like the clone" sub-check is still open on this row; every
+> mechanical step (1–7, both CTAs and the Coqui control) is already CONFIRMED/PASS on the
+> 2026-09-06 note and in the run sheet, so nothing there was re-attempted. Two new findings,
+> both from the production workspace state rather than from any render this run:
+>
+> - **The derived Qwen artifact is gone and was never restored.** §5 of the run sheet forced
+>   its `derive-failed` by *deleting* the real `qwen-01e278d6-b1a2-410b-9953-15a08c0f5cd6.pt`,
+>   and §5's **Retry derive** cleared the stamp without re-deriving. That directory now holds
+>   only the 960,044-byte `__master.wav` (2026-09-07 07:55:03) and the 439-byte sidecar
+>   `.json` — no `.pt`. So a Qwen render of this clone today must re-derive from scratch
+>   first; the render is a *precondition* of the ear-check, not a substitute for it.
+> - **The chapter audio on disk is the Coqui control, not the clone.** `state.json` reads
+>   `audioModelKey: "coqui-xtts-v2"`, `audioEngines: {"coqui": 2}`, `audioRenderedAt:
+>   "2026-09-20T06:00:23.628Z"`; `characterSnapshots.aria` resolves to
+>   `xtts-01e278d6-...`; and all nine verdicts in `01-chapter-1.render-integrity.json` carry
+>   `expectedEngine`/`renderedEngine: "coqui"`. This throwaway fixture was re-rendered on
+>   2026-09-20 by later batch rows (`01-chapter-1.mp3` 508,653 B @ 16:00:23,
+>   `01-chapter-1.previous.mp3` @ 15:51:41), overwriting the 2026-09-06 Qwen render. There is
+>   consequently **no listenable Qwen-clone audio anywhere in the workspace** — a filesystem
+>   sweep for `*01e278d6*` under `voices/` returns the master clip and the Coqui `.pt` only.
+>
+> Server (`:8443`) and sidecar (`127.0.0.1:9000`) were both down at read time, so no fresh
+> render was driven. That is not the binding constraint anyway: the remaining half of this
+> check is an audio judgment only a person can make, and per this batch's own rule it is
+> recorded and filed rather than attempted here — the same disposition A11/A23 received.
+> **Clips queued for the listen**, once the clone is re-derived and chapter 1 is re-rendered
+> on Qwen (`modelKey: qwen3-tts-0.6b`, `force: true`) with the stack up: the `aria` lines in
+> `audio/01-chapter-1.mp3` of `A21 Clone Readiness Gate QA v2 (throwaway)`, compared directly
+> against `voices/qwen/qwen-01e278d6-b1a2-410b-9953-15a08c0f5cd6__master.wav`. Tracking:
+> #3360. Row status marker and the Status Dashboard are deliberately left unchanged — this
+> run discharges nothing. *Note on the brief:* issue #3304 cited lines 2978–3039 for this row;
+> the row has moved and lives at lines 3284–3344 (2978–3039 is now A19's bullet text).
+
 
 The gate's *verdict* is heavily tested — a fixture table, a co-oracle contract
 test binding it to the render's own oracle, an e2e walkthrough. What no suite
