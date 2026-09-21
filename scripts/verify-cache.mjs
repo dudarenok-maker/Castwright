@@ -1456,10 +1456,12 @@ export function computeStepBudgetMs(cache, stepName, floorMs, multiplier) {
  *  calibratable, treated as null/uncalibrated per computeBudgetMs). The floor
  *  is widened by `multiplier` ONLY when a qualified baseline exists; an
  *  uncalibrated run keeps the flat, unwidened floor regardless of any
- *  throttle (Castwright#3272, decision C — the per-step budgets are the layer
- *  that protects individual steps under contention, so this pipeline-level
- *  floor is only the outer, incident-bounding backstop and stays at
- *  DEFAULT_RUN_TIMEOUT_MIN even under contention). */
+ *  throttle (Castwright#3272, decision C — for that uncalibrated case, the
+ *  per-step budgets are the layer that protects individual steps under
+ *  contention, so this pipeline-level floor stays at DEFAULT_RUN_TIMEOUT_MIN
+ *  even under contention). The CALIBRATED branch is untouched by decision C:
+ *  a warm-cache throttled run still widens this floor by `multiplier`, same
+ *  as before this fix. */
 export function computeRunBudgetMs(qualifiedRunDurationMs, floorMs, multiplier) {
   const qualified = qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null;
   const effectiveFloorMs = qualified === null ? floorMs : floorMs * multiplier;
@@ -1805,11 +1807,17 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   // widening this floor lands the whole-pipeline budget at 2x
   // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle — past the 273.8-min
   // incident this budget exists to bound, defeating the feature's own stated
-  // goal. What protects individual steps from false-positive timeouts under
-  // throttle is the PER-STEP budget (computeStepBudgetMs, still widened by
-  // the same multiplier, untouched by this decision); this pipeline-level
-  // number is only the outer, incident-bounding backstop, and 180 min
-  // unthrottled is already comfortably under that 273.8-min figure.
+  // goal. This is scoped to the UNCALIBRATED case only: the CALIBRATED branch
+  // (qualifiedRunDurationMs > 0, i.e. at least one active step has a qualified
+  // baseline) is untouched by this decision and still widens by `multiplier`
+  // exactly as before this fix, so a warm-cache throttled run can still reach
+  // the pre-existing 2x DEFAULT_RUN_TIMEOUT_MIN floor. In that calibrated case
+  // — and only there — the PER-STEP budget (computeStepBudgetMs, also widened
+  // by the same multiplier) is what actually protects an individual step from
+  // a false-positive timeout, though it is not fully independent protection:
+  // the `Math.min(...)` clamp on stepBudgetMs below also caps it at whatever
+  // remains of the pipeline deadline, so a per-step budget can only ever be as
+  // generous as the pipeline-level number leaves room for.
   const contentionBudgetMultiplier =
     affectedByContention && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
   const runBudgetMs = computeRunBudgetMs(qualifiedRunDurationMs, runTimeoutFloorMs, contentionBudgetMultiplier);

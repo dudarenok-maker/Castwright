@@ -1640,6 +1640,20 @@ test('computeRunBudgetMs widens the FLOOR, not the calibrated branch, for a CALI
   assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a calibrated pipeline baseline either');
 });
 
+test('computeRunBudgetMs still widens the calibrated floor by `multiplier` under throttle — #3272 decision C left this branch untouched', () => {
+  // A tiny qualified duration so the floor term dominates max(F x mult, k x
+  // duration) — pins the calibrated branch's actual value directly, unlike
+  // the test above (whose large baseline makes the floor term irrelevant and
+  // only proves an inequality). Fails if the calibrated arm is ever changed
+  // to skip widening (e.g. `effectiveFloorMs = floorMs` unconditionally).
+  const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000; // 180 min
+  assert.equal(
+    computeRunBudgetMs(60_000, floorMs, 2),
+    floorMs * 2,
+    'a calibrated (qualifiedRunDurationMs > 0) throttled run must still land on floorMs x multiplier, unchanged by #3272',
+  );
+});
+
 test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {
   const dir = makeGitFixture();
   writeHangingFixture(dir, 'test:server');
