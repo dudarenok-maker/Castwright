@@ -1616,24 +1616,22 @@ test('computeStepBudgetMs widens the FLOOR, not the calibrated (K x lastGreenDur
   assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a baseline the prior throttled run already absorbed');
 });
 
-test('computeRunBudgetMs widening the uncalibrated pipeline floor is a documented open question, not fixed here (B10)', () => {
-  // This test does NOT assert a fix — it pins the current, known-incomplete
-  // behavior so a future change to it is deliberate, not silent.
-  // computeBudgetMs(null, F) returns F verbatim regardless of k, so
-  // multiplying the floor before vs. after that null-duration call is
-  // mathematically IDENTICAL: the uncalibrated whole-pipeline floor under
-  // throttle is unchanged by this PR (still 2x DEFAULT_RUN_TIMEOUT_MIN).
-  // Whether that number is safe against the 273.8-min incident this budget
-  // exists to bound is a real, separate, unresolved question — argued
-  // against that figure, not derived from the fork-pool ratio — tracked as
-  // Castwright#3272 rather than picked here.
+test('computeRunBudgetMs leaves the uncalibrated pipeline floor UNWIDENED under throttle (#3272, decision C)', () => {
+  // #3272 decision C: an uncalibrated run (no qualified/calibrated pipeline
+  // baseline) keeps the flat, unwidened floor even under contention throttle.
+  // The old shape widened it by multiplying floorMs BEFORE computeBudgetMs —
+  // algebraically identical to multiplying the result, since
+  // computeBudgetMs(null, F) returns F verbatim regardless of k — which put
+  // the whole-pipeline budget at 2x DEFAULT_RUN_TIMEOUT_MIN (360 min) under
+  // throttle, past the 273.8-min incident this budget exists to bound. The
+  // per-step budgets (still widened by the same `multiplier`) are always
+  // subordinate to the pipeline deadline via runPipeline's own `Math.min(...)`
+  // clamp — that subordination bites hardest right here, in the uncalibrated
+  // case decision C just tightened; this pipeline-level floor is only the
+  // outer, incident-bounding backstop and stays at 180 min.
   const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000;
-  assert.equal(computeRunBudgetMs(0, floorMs, 2), floorMs * 2);
-  assert.equal(
-    computeRunBudgetMs(0, floorMs, 2),
-    computeBudgetMs(null, floorMs) * 2,
-    'uncalibrated: multiplying the floor before vs. after computeBudgetMs is identical — not a fix for this case',
-  );
+  assert.equal(computeRunBudgetMs(0, floorMs, 2), floorMs, 'uncalibrated: throttle must not widen the pipeline floor');
+  assert.equal(computeRunBudgetMs(0, floorMs, 1), floorMs, 'sanity: unthrottled uncalibrated floor is unchanged');
 });
 
 test('computeRunBudgetMs widens the FLOOR, not the calibrated branch, for a CALIBRATED pipeline baseline (B5, the case this PR does fix)', () => {
@@ -1642,6 +1640,20 @@ test('computeRunBudgetMs widens the FLOOR, not the calibrated branch, for a CALI
   const oldBuggyShape = computeBudgetMs(throttledBaselineMs, floorMs) * 2;
   const fixed = computeRunBudgetMs(throttledBaselineMs, floorMs, 2);
   assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a calibrated pipeline baseline either');
+});
+
+test('computeRunBudgetMs still widens the calibrated floor by `multiplier` under throttle — #3272 decision C left this branch untouched', () => {
+  // A tiny qualified duration so the floor term dominates max(F x mult, k x
+  // duration) — pins the calibrated branch's actual value directly, unlike
+  // the test above (whose large baseline makes the floor term irrelevant and
+  // only proves an inequality). Fails if the calibrated arm is ever changed
+  // to skip widening (e.g. `effectiveFloorMs = floorMs` unconditionally).
+  const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000; // 180 min
+  assert.equal(
+    computeRunBudgetMs(60_000, floorMs, 2),
+    floorMs * 2,
+    'a calibrated (qualifiedRunDurationMs > 0) throttled run must still land on floorMs x multiplier, unchanged by #3272',
+  );
 });
 
 test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {
