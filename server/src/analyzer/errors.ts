@@ -58,7 +58,7 @@ export class AnalyzerHttpError extends Error {
   }
 }
 
-/* Thrown by an engine (Gemini / Ollama) when the model stopped because it hit
+/* Raised by the stage runner (runner/finish.ts) when the model stopped because it hit
    its OUTPUT budget mid-response, not because it finished — Gemini surfaces
    this as `finishReason: 'MAX_TOKENS'`, Ollama as `done_reason: 'length'`.
    Pre-fix, both engines silently returned the truncated buffer, which then
@@ -66,8 +66,8 @@ export class AnalyzerHttpError extends Error {
    the client as a bare ECONNRESET (issue #528).
 
    Two consumers key off the type:
-     - the per-engine retry loop re-throws it immediately (replaying the same
-       oversized prompt just truncates again — retrying in place is futile),
+     - transports report it as finish:'length' and it is raised without a retry
+       (replaying the same oversized prompt just truncates again),
      - the stage-2 chunking runner (`stage2-chunk.ts`) CATCHES it and splits the
        offending span into smaller sub-bodies so each call fits under the cap.
 
@@ -94,7 +94,7 @@ export class AnalyzerTruncatedError extends Error {
   }
 }
 
-/* Thrown by GeminiAnalyzer when the stream finishes with ZERO text — the
+/* Raised by runner/finish.ts when the Gemini transport reports a stream that finished with ZERO text — the
    signature of a content-filter block. On a `gemini-*` model the usual cause is
    RECITATION (Google refuses memorised/copyrighted source) or SAFETY; the model
    returns a candidate carrying only the stop reason, or rejects the prompt via

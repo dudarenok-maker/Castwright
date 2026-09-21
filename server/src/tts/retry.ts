@@ -99,7 +99,7 @@ function jitterMs(base: number): number {
 }
 
 /* Abort-aware setTimeout. Resolves after `ms`, or rejects promptly if
-   `signal` fires. Modeled after analyzer/gemini.ts's `sleep`. */
+   `signal` fires. Modeled after analyzer/runner/transport-retry.ts's `sleep`. */
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {

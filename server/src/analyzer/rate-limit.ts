@@ -170,7 +170,7 @@ function utcDayKey(now = Date.now()): string {
   return new Date(now).toISOString().slice(0, 10); // 'YYYY-MM-DD'
 }
 
-function nextUtcMidnight(now = Date.now()): Date {
+export function nextUtcMidnight(now = Date.now()): Date {
   const d = new Date(now);
   d.setUTCHours(24, 0, 0, 0);
   return d;
