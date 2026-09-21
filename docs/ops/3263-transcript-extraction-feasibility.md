@@ -524,16 +524,20 @@ own Output instruction.**
   variant (H1, ignoring `promptSource`) hit 2 of 3, missing exactly the case
   Q1 flagged. The four remaining heuristics (H2r, H3, H4, H5), which all
   either filter to declared roots or rank by mention frequency, hit 0 of 3 —
-  the session's own dispatching checkout is mentioned 20–23 times against
-  the assigned root's 1 mention, so frequency and root-membership both point
-  at the wrong tree on this corpus. 4 of the 7 transcripts carry no
-  assignment at all and are reported `n/a` rather than folded into any rate.
+  the session's own dispatching checkout is mentioned 26–29 times against
+  the assigned root's 5–7 occurrences, so frequency and root-membership both
+  point at the wrong tree on this corpus. (**Corrected by #3340**: this bullet
+  printed `20–23` against `1`, the counts the pre-fix path-shape filter
+  produced; no rate changed — see **Re-verification after #3340**.) 4 of the 7
+  transcripts carry no assignment at all and are reported `n/a` rather than
+  folded into any rate.
 - **Q3 (containment):** on all 3 answerable transcripts, the assigned root
-  is present in the transcript (mentioned exactly once each), and no
-  *second* worktree beyond the assigned root and the session's own
-  dispatching checkout is mentioned. Whether the dispatching checkout counts
-  as an "other" root is a labeling choice, not a number this spike can
-  settle — reported both ways in Finding 3.
+  is present in the transcript (1 distinct path each, 5–7 occurrences under
+  the occurrence rule Finding 3 names), and no *second* worktree beyond the
+  assigned root and the session's own dispatching checkout is mentioned.
+  Whether the dispatching checkout counts as an "other" root is a labeling
+  choice, not a number this spike can settle — reported both ways in
+  Finding 3.
 - **Where Q2 and Q3 diverge:** containment holds 3/3 while extraction's best
   score is 3/3 only for one specific heuristic (H2) and 0/3 for four others;
   the two properties are not interchangeable, and a design that assumes
