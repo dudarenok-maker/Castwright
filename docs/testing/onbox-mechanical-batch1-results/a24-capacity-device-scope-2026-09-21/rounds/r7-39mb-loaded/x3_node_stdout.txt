@@ -1,0 +1,34 @@
+{
+  "started_ms_after_design": 2842,
+  "elapsed_ms": 2011,
+  "total_posts": 1,
+  "denials_503": 0,
+  "first_posts": [
+    {
+      "n": 1,
+      "at_ms": 4851,
+      "status": 200
+    }
+  ],
+  "last_posts": [
+    {
+      "n": 1,
+      "at_ms": 4851,
+      "status": 200
+    }
+  ],
+  "outcome": {
+    "kind": "response",
+    "status": 200,
+    "body_head": "{\"text\":\"\",\"language\":\"en\",\"avg_logprob\":null,\"no_speech_prob\":null,\"compression_ratio\":null,\"words\":null}"
+  },
+  "health_at_end": {
+    "qwenLoaded": true,
+    "qwenBase17Loaded": false,
+    "qwenDesignEverLoaded": true,
+    "qwenDesignResident": true,
+    "qwenDeviceKey": "cuda:0",
+    "vramReservedMb": 5746.19648
+  },
+  "verdict": "UNEXPECTED — inspect fields (check sidecar_stderr6 tail + x2_saturation.json)"
+}

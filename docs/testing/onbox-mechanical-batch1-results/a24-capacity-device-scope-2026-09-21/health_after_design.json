@@ -1,0 +1,47 @@
+{
+  "ok": true,
+  "qwen_design_resident": false,
+  "qwen_device_key": "cuda:0",
+  "qwen_loaded": true,
+  "qwen_design_ever_loaded": true,
+  "gpus": [
+    {
+      "uuid": "1831b67f-ccc0-c3fc-9167-cff059c3224c",
+      "idx": 0,
+      "name": "NVIDIA GeForce RTX 4070 Laptop GPU",
+      "total_mb": 8585,
+      "free_mb": 5482,
+      "torch_reserved_mb": 1890,
+      "free_floor_mb": 1024.0,
+      "reserved_ceiling_mb": 8413.3,
+      "resident": []
+    },
+    {
+      "uuid": "73e7270e-ff5b-d1a2-de93-bc83af87699d",
+      "idx": 1,
+      "name": "NVIDIA GeForce RTX 5070 Ti",
+      "total_mb": 17066,
+      "free_mb": 15767,
+      "torch_reserved_mb": 0,
+      "free_floor_mb": 1024.0,
+      "reserved_ceiling_mb": 16724.68,
+      "resident": []
+    },
+    {
+      "uuid": null,
+      "idx": -1,
+      "name": "unindexed (cpu / ORT / CT2)",
+      "total_mb": 0,
+      "free_mb": 0,
+      "torch_reserved_mb": 0,
+      "resident": [
+        {
+          "engine": "qwen",
+          "actual_card": null
+        }
+      ],
+      "free_floor_mb": 1024.0,
+      "reserved_ceiling_mb": 0.0
+    }
+  ]
+}

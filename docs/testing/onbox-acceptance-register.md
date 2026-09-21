@@ -3973,6 +3973,63 @@ above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
 > (`_BASE17_CONTENTION_WAIT_S_DEFAULT`/`Base17ContentionTimeoutError`) and was not
 > attempted anywhere in this 18-run session.
 
+> **2026-09-21 (batch-1 child Castwright#3299, cline/qwen-cloud) — bullet 5's live
+> squeeze attempted for real on the 2-card boot and found genuinely impractical on
+> this box+build. Recorded negative per the child brief, not a failure to attempt:
+> 10 squeeze rounds (r0–r9 plus the earlier f/s6/seq phases) driven headless against
+> a live sidecar, all artifacts under
+> `docs/testing/onbox-mechanical-batch1-results/a24-capacity-device-scope-2026-09-21/`
+> (drivers, per-round `x_result.json`, sidecar stdout logs, Node retry harness).**
+> What every round showed: **`denials_503: 0` — the sidecar never once emitted a real
+> `noCapacity` 503 on this machine.** Two independent mechanical reasons, both new
+> root-cause here over the 2026-09-06/09 note's qualitative "asymmetric card sizes":
+>
+> 1. **The bullet's exact shape (resident design on one card, Base 0.6B render DENIED
+>    on the other) is unconstructible via config.** The whole qwen tier — design and
+>    Base alike — shares a single device pin (`_engine_env_pin` env map, `main.py`
+>    4127–4132: `"qwen": "QWEN_DEVICE"`; there is no design-vs-base split). Pinning
+>    `QWEN_DEVICE=cuda:1` puts the design on `cuda:1` too, so any Base denial there
+>    carries `deviceKey == qwenDeviceKey` — that's bullet 4's SAME-card case, already
+>    confirmed. Leaving `auto` co-locates both tiers on whichever card the planner
+>    likes best; squeezing that card denies with the design's own key, squeezing the
+>    other card just gets routed around by `best_fit`. No lever exists to split the
+>    pair across cards short of a code change (per-tier pin), which is out of scope
+>    for a read-and-record child.
+> 2. **The ASR fallback (`/transcribe`, pinned `asr_device=cuda:1` while a design is
+>    resident on `cuda:0` — the cross-device shape this row's squeeze DOES have a pin
+>    for) never produced its denial either.** Warm-path rounds (r6–r8) returned 200
+>    in ~2 s because ASR was already resident and only the `asr.warm` reservation
+>    applied — permanently stuck at its 128 MB seed (#2930/#3012/#3265,
+>    `main.py:4410–4421`), which fits any squeeze. The one genuinely-cold round (r9)
+>    was GRANTED admission at 573 MB free on `cuda:1` — below the 400 MB cold `asr`
+>    seed (`main.py:4386`) and the device's 1024 MB `free_floor_mb` — then the load
+>    itself died mid weight-fetch (`WinError 1314` symlink call in `snapshot_download`
+>    for the configured `large-v3`, empty HF cache on this account) → HTTP 500, 98 s,
+>    still zero 503s. The grant-below-floor admission arithmetic is a real suspected
+>    defect, filed as **Castwright#3347** per the incidental-findings protocol (had it
+>    refused correctly, the squeeze's denial half would have existed at last).
+>
+> The wait-extension precondition half of the pair WAS live throughout: every round's
+> `health_at_end` shows `qwenDesignResident: true`, `qwenDeviceKey: "cuda:0"` (captured
+> while the design sat warm mid-squeeze), and the Node harness (`a24_node_retry.ts`)
+> drove the real `withCapacityRetry` loop — its deviceKey-qualified
+> `defaultIsDesignResident` consultation (`capacity-retry.ts:302–319`, engine-agnostic)
+> is the exact code the bullet asks about, but with zero real 503s it could only ever
+> exercise the no-denial branch (`outcome.kind:"response"`, status 200/500). One
+> harness-fidelity note for any re-runner: it labels the wrapped fetch `engine:'qwen'`
+> where production's transcribe path uses `engine:'asr'`
+> (`server/src/tts/transcribe-client.ts:120`); `opts.engine` only labels the eventual
+> `NoCapacityError`, not the control flow at 302–319, but the mismatch would have made
+> even a successful round imprecise.
+>
+> **Verdict: bullet 5's status is unchanged from the 2026-09-06/09 note — still
+> confirmed only via `capacity-retry.test.ts` against a simulated health provider, not
+> live — but "impractical on this box" now has named, evidenced causes (single qwen
+> device pin; non-denying ASR gate, #3347) instead of card asymmetry alone.** Revisiting
+> the live squeeze requires either a per-tier qwen pin or #3347 fixed plus cached ASR
+> weights; either is fix-agent work, not this batch's. Bullets 1–4 and 6 untouched here
+> (out of scope per the child brief); the still-owed wedged-design bullet 3 remains owed.
+
 ### A26 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
 
 `classifyTranscript`'s new logic is fully pinned in
