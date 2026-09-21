@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { decideGuardVerdict, listKnownCheckoutRoots, PRIMARY_CHECKOUT_ROOT } from '../hooks/guard-worktree-write.mjs';
 
 const WORKTREE = 'C:\\Claude\\Projects\\wt-3044-worktree-write-guard';
@@ -291,4 +294,75 @@ test('listKnownCheckoutRoots falls back to just the primary root when git fails'
 test('listKnownCheckoutRoots falls back to just the primary root on a non-zero git exit', () => {
   const roots = listKnownCheckoutRoots({ spawn: () => ({ status: 1, stdout: '' }) });
   assert.deepEqual(roots, [PRIMARY_CHECKOUT_ROOT]);
+});
+
+// === transcriptPath H2 extraction fallback (Castwright#3355) ===============
+// #3263: `cwd` alone is wrong whenever a dispatched agent's process `cwd`
+// doesn't match the tree it was actually briefed at. H2 (the first absolute
+// path in the most recent sdk/user-sourced transcript turn) is layered as a
+// PREFERENCE over cwd, not a replacement — see decideGuardVerdict's doc
+// comment. These tests exercise both directions of that fail-open contract.
+
+/** Writes a minimal single-turn JSONL fixture transcript whose one sdk-
+ *  sourced turn names `assignedPath`, mirroring the real brief shape
+ *  recorded in docs/ops/3263-fix-agent-dispatch-transcript-findings.md
+ *  ("You are briefed to work at the existing worktree <path> (this worktree
+ *  already exists...)"). Caller is responsible for cleaning up `dir`. */
+function makeFixtureTranscript(assignedPath) {
+  const dir = mkdtempSync(join(tmpdir(), 'guard-worktree-write-h2-'));
+  const file = join(dir, 'transcript.jsonl');
+  const turn = {
+    type: 'user',
+    promptSource: 'sdk',
+    turnOrigin: 'sdk',
+    isSidechain: false,
+    message: {
+      role: 'user',
+      content: `You are briefed to work at the existing worktree ${assignedPath} (this worktree already exists and is checked out).`,
+    },
+  };
+  writeFileSync(file, `${JSON.stringify(turn)}\n`, 'utf8');
+  return { dir, file };
+}
+
+test('a Write is resolved via transcriptPath H2 extraction to an ALLOW when cwd reports the WRONG root (the exact #3263 failure shape)', () => {
+  const { dir, file } = makeFixtureTranscript(`${WORKTREE}\\src\\module.mjs`);
+  try {
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      // cwd reports the PRIMARY checkout — today's cwd-only logic would deny
+      // this write to WORKTREE outright, reproducing #3263's documented
+      // production failure.
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(verdict.deny, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the same cwd-wrong-root Write is still denied without a transcriptPath (baseline for the test above)', () => {
+  const verdict = decideGuardVerdict({
+    toolName: 'Write',
+    cwd: PRIMARY_CHECKOUT_ROOT,
+    toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+    knownRoots: KNOWN_ROOTS,
+  });
+  assert.equal(verdict.deny, true);
+  assert.match(verdict.reason, /outside the assigned worktree/);
+});
+
+test('a transcriptPath pointing at a nonexistent file fails open to the cwd-derived root, identical to omitting transcriptPath', () => {
+  const verdict = decideGuardVerdict({
+    toolName: 'Write',
+    toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\RELEASE_NOTES.md`, content: 'x' },
+    cwd: WORKTREE,
+    transcriptPath: 'C:\\does\\not\\exist\\transcript.jsonl',
+    knownRoots: KNOWN_ROOTS,
+  });
+  assert.equal(verdict.deny, true);
+  assert.match(verdict.reason, /outside the assigned worktree/);
 });

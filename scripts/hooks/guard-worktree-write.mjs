@@ -1,9 +1,14 @@
 #!/usr/bin/env node
 // PreToolUse guard for a dispatched fix-agent's Write/Edit/NotebookEdit/
 // Bash/PowerShell calls (Castwright#3044, option 2 — see #3044's "Decision
-// (2026-09-06)" comment). KNOWN GAP: see decideGuardVerdict's doc comment
-// and Castwright#3263 — this guard is not currently a full replacement for
-// the manual before/after `git status --porcelain` check.
+// (2026-09-06)" comment). Castwright#3263's transcript-extraction fallback
+// (see decideGuardVerdict's doc comment) has landed as of #3355 — the
+// assigned-worktree signal now prefers a transcript-derived root over raw
+// `cwd` when extraction confidently finds one, failing open to the original
+// cwd-only behaviour otherwise. Separately still open: whether a denial
+// should be terminal (#3263's 2026-09-21 design-pass comment, parked, not
+// addressed here) — this guard is not currently a full replacement for the
+// manual before/after `git status --porcelain` check.
 //
 // Wired via the `hooks:` frontmatter key on `.claude/agents/fix-agent.md`,
 // per #3246's empirical findings (docs/ops/3044-hook-mechanism-findings.md):
@@ -135,19 +140,100 @@ function resolveAssignedRoot(cwd, knownRoots) {
   return knownRoots.find((root) => isUnderRoot(cwd, root)) ?? cwd;
 }
 
+// Absolute Windows path literal, same shape the #3263/#3340 measurement
+// parser matched — no shell expansion, both separator spellings.
+const TRANSCRIPT_PATH_RE = /[A-Za-z]:[\\/][^\s"'`<>|*?\r\n]+/g;
+
+/** The user/prompt text of one transcript entry, for either message.content
+ *  shape — mirrors the measurement parser's `promptText()`. */
+function transcriptPromptText(entry) {
+  const content = entry && entry.message ? entry.message.content : undefined;
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((block) => block && block.type === 'text' && typeof block.text === 'string')
+      .map((block) => block.text)
+      .join('\n');
+  }
+  return '';
+}
+
+/** H2 from #3263's transcript-extraction-feasibility measurement
+ *  (docs/ops/3263-transcript-extraction-feasibility.md) — the only one of six
+ *  heuristics that hit the assigned root on 3/3 answerable transcripts.
+ *  Finds the most recent transcript turn sourced from `sdk` or `user`
+ *  (filtering out later `system` turns, e.g. task_notification, which the
+ *  naive last-turn-first-path variant — H1 — picked instead and missed on
+ *  1 of 3), and returns the first absolute Windows path it contains, or
+ *  `null` if no such turn or path exists. Throws on an unreadable or
+ *  malformed file — the caller wraps this in its own try/catch so a bad
+ *  transcript falls back to the `cwd`-derived root instead of failing the
+ *  whole guard open. */
+function extractAssignedRootFromTranscript(transcriptPath) {
+  const raw = readFileSync(transcriptPath, 'utf8');
+  const entries = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      entries.push(JSON.parse(trimmed));
+    } catch {
+      // malformed line: skipped, same as the measurement parser's loadEntries().
+    }
+  }
+
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (!entry || entry.type !== 'user') continue;
+    const text = transcriptPromptText(entry);
+    if (!text.trim()) continue;
+    const source = entry.promptSource || 'user';
+    if (source !== 'sdk' && source !== 'user') continue;
+
+    const candidates = text.match(TRANSCRIPT_PATH_RE);
+    if (!candidates) return null;
+    for (const candidate of candidates) {
+      // Corrected (#3340) escape-debris predicate, copied verbatim — a
+      // `\[nrt]` immediately followed by a name character is separator +
+      // real directory name (`\tasks`), not JSON-escape debris (`g:\n\n`).
+      const cleaned = candidate.replace(/[.,;:)\]}]+$/, '');
+      const seps = (cleaned.match(/[\\/]/g) || []).length;
+      const escapedWs = /\\[nrt](?![A-Za-z0-9_])/.test(cleaned);
+      if (cleaned.length > 3 && seps >= 2 && !escapedWs) return cleaned;
+    }
+    return null;
+  }
+  return null;
+}
+
 /** Pure decision function. Never throws — a hook that crashes on a payload
  *  shape it did not expect must fail OPEN (allow), not open a window where a
  *  parse bug blocks every tool call from every subagent.
  *
- *  KNOWN GAP (Castwright#3263, filed from PR #3261's own review pass):
- *  "assigned worktree" is defined here as the root `cwd` resolves to, which
- *  is NOT independently verified — it is whatever the harness happened to
- *  start this subagent process in. #3044's own incident record describes a
- *  brief that correctly named the worktree while the agent's process
- *  nonetheless ran with `cwd` pointed at the wrong root; in that shape this
- *  guard protects the wrong root, not the right one. Fixing that needs an
- *  independent per-dispatch signal this hook does not currently have —
- *  tracked in #3263, not fixed here.
+ *  ASSIGNED-ROOT RESOLUTION (Castwright#3263, filed from PR #3261's own review
+ *  pass; extraction fallback landed under #3355). "Assigned worktree" was
+ *  originally defined purely as the root `cwd` resolves to, which is NOT
+ *  independently verified — it is whatever the harness happened to start this
+ *  subagent process in. #3044's own incident record describes a brief that
+ *  correctly named the worktree while the agent's process nonetheless ran
+ *  with `cwd` pointed at the wrong root; in that shape the guard protected
+ *  the wrong root, not the right one.
+ *
+ *  Fix: when an optional `transcriptPath` is supplied, `decideGuardVerdict`
+ *  additionally tries H2 extraction (`extractAssignedRootFromTranscript` —
+ *  the one heuristic of six that hit the assigned root on 3/3 answerable
+ *  transcripts in `docs/ops/3263-transcript-extraction-feasibility.md`,
+ *  re-confirmed against the harder pre-existing-worktree dispatch shape in
+ *  `docs/ops/3263-fix-agent-dispatch-transcript-findings.md`) against that
+ *  transcript, and PREFERS the extracted root over the `cwd`-derived one —
+ *  but only when the extracted path resolves under a KNOWN checkout root.
+ *  This is layered as a preference, not a replacement: fail-open to today's
+ *  `cwd`-based behaviour whenever `transcriptPath` is absent, unreadable,
+ *  malformed, or extraction finds nothing that resolves under a known root.
+ *  No new code path can produce a MORE restrictive or MORE permissive
+ *  verdict than before unless extraction genuinely finds a different known
+ *  root. Still open, separately: whether a denial should be terminal
+ *  (parked on #3263's 2026-09-21 design-pass comment, not addressed here).
  *
  *  Write/Edit/NotebookEdit: resolve the target path (tool_input.file_path
  *  for Write/Edit, tool_input.notebook_path for NotebookEdit) against the
@@ -175,9 +261,23 @@ function resolveAssignedRoot(cwd, knownRoots) {
  *  elsewhere, an environment expansion, or a path assembled at runtime — is
  *  not caught. Only a literal absolute path substring, in one of its known
  *  spellings, is detected. */
-export function decideGuardVerdict({ toolName, toolInput, cwd, knownRoots = listKnownCheckoutRoots() }) {
+export function decideGuardVerdict({ toolName, toolInput, cwd, transcriptPath, knownRoots = listKnownCheckoutRoots() }) {
   try {
-    const assignedRoot = resolveAssignedRoot(cwd, knownRoots);
+    const cwdRoot = resolveAssignedRoot(cwd, knownRoots);
+
+    // Local try/catch, not just the outer one: an unreadable/malformed
+    // transcript must fall back to the cwd-derived root, not blanket-allow
+    // (or blanket-deny) whatever the cwd-only logic below would have decided.
+    let extractedRoot = null;
+    if (transcriptPath) {
+      try {
+        const extractedPath = extractAssignedRootFromTranscript(transcriptPath);
+        extractedRoot = extractedPath ? (knownRoots.find((root) => isUnderRoot(extractedPath, root)) ?? null) : null;
+      } catch {
+        extractedRoot = null;
+      }
+    }
+    const assignedRoot = extractedRoot ?? cwdRoot;
 
     if (toolName === 'Write' || toolName === 'Edit' || toolName === 'NotebookEdit') {
       const filePath = toolName === 'NotebookEdit' ? toolInput?.notebook_path : toolInput?.file_path;
@@ -235,6 +335,7 @@ if (isDirectlyInvoked(import.meta.url)) {
     toolName: payload.tool_name,
     toolInput: payload.tool_input,
     cwd: payload.cwd,
+    transcriptPath: payload.transcript_path,
   });
 
   if (verdict.deny) {
