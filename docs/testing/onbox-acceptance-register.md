@@ -4301,8 +4301,8 @@ than a real render.
 > (drive committed RAM toward the 70% ceiling and confirm the sidecar
 > self-exits with code 43) — no host-memory push was made this run at all.
 
-> **RAM hard-restart bullet DRIVEN for real 2026-09-21 (batch 1 step 4,
-> cline-qwen-cloud, [#3307](https://github.com/dudarenok-maker/Castwright/issues/3307))
+> **RAM hard-restart bullet DRIVEN for real 2026-09-21 (Castwright#3307,
+> cline-qwen-cloud)
 > — the bullet that 2026-09-09 recorded as "not even attempted" now has a real
 > code-43 self-exit observed, and the bullet's prescribed METHOD is wrong.** Real
 > hardware, real `main.py`, no mocks of the decision.
