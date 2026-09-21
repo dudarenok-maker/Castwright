@@ -1624,9 +1624,11 @@ test('computeRunBudgetMs leaves the uncalibrated pipeline floor UNWIDENED under 
   // computeBudgetMs(null, F) returns F verbatim regardless of k — which put
   // the whole-pipeline budget at 2x DEFAULT_RUN_TIMEOUT_MIN (360 min) under
   // throttle, past the 273.8-min incident this budget exists to bound. The
-  // per-step budgets (still widened) are what protects individual steps under
-  // throttle; this pipeline-level floor is only the outer, incident-bounding
-  // backstop and stays at 180 min.
+  // per-step budgets (still widened by the same `multiplier`) are always
+  // subordinate to the pipeline deadline via runPipeline's own `Math.min(...)`
+  // clamp — that subordination bites hardest right here, in the uncalibrated
+  // case decision C just tightened; this pipeline-level floor is only the
+  // outer, incident-bounding backstop and stays at 180 min.
   const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000;
   assert.equal(computeRunBudgetMs(0, floorMs, 2), floorMs, 'uncalibrated: throttle must not widen the pipeline floor');
   assert.equal(computeRunBudgetMs(0, floorMs, 1), floorMs, 'sanity: unthrottled uncalibrated floor is unchanged');
