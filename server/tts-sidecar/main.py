@@ -4479,6 +4479,43 @@ SEED_FOOTPRINTS_MB: dict[str, int] = {
 _QWEN_WIDE_TOKEN_BUDGET = 4800
 _QWEN_WIDE_PEAK_MB = 6144
 
+# The cold "asr" seed above (400 MB) is sized for the small default tiers
+# (tiny/base/small). It is not a reasonable cold-load prior for large(-v3):
+# faster-whisper/CTranslate2 large-v3 typically needs well over 1x what
+# tiny/base need. Deliberately conservative, not on-box measured — same
+# caveat as asr.warm's 128 MB entry above (#2094) — pending a real on-box
+# large-v3 cold-load measurement (register row A110, see
+# docs/testing/onbox-acceptance-register.md — #3347/#3357).
+_ASR_SMALL_MODEL_TAGS = ("tiny", "base", "small")
+_ASR_LARGE_MODEL_SEED_MB = 2560
+
+
+def _asr_model_is_small_tier(model: Optional[str]) -> bool:
+    """True when `model` (as configured via `ASR_MODEL`/the `qa.asr.model`
+    registry key) names a small-tier Whisper size (tiny/base/small, including
+    `.en` variants). `qa.asr.model` is free-form — no `pattern`, unlike its
+    sibling `qa.asr.device` — and `WhisperModel` itself accepts a converted
+    CTranslate2 model directory or an HF repo id as well as a bare size name.
+    A naive substring scan over the whole string (the original #3357 shape)
+    misclassifies a path like `D:\\whisper-models\\base\\faster-whisper-
+    large-v3-ct2` as small-tier, because "base" appears as a directory
+    component. Only the basename is inspected, and a tag must match a whole
+    token split on non-alphanumerics — not an arbitrary substring — so an
+    unrelated large-model path can't accidentally contain one of the three
+    tags. A "large"/"medium" token anywhere in the basename wins outright
+    over a coincidental small-tag token elsewhere in the same basename (e.g.
+    an HF repo id like `org/base-of-large-v3-models`) — the larger tier is
+    the safer misread for an admission gate, so ambiguity resolves toward
+    NOT bumping down."""
+    if not model:
+        return False
+    basename = re.split(r"[\\/]", model.strip().lower())[-1]
+    tokens = set(re.split(r"[^a-z0-9]+", basename))
+    if "large" in tokens or "medium" in tokens:
+        return False
+    return any(tag in tokens for tag in _ASR_SMALL_MODEL_TAGS)
+
+
 # FootprintTable's learned-estimate tuning: a bounded ring of recent per-op
 # observations per key, and the percentile used to summarize it. p95 (not
 # max) so a single outlier spike ages out of the window instead of pinning
@@ -4526,11 +4563,14 @@ class FootprintTable:
         return engine
 
     @staticmethod
-    def _seed_mb(key: str, engine: str, cfg: Optional[dict]) -> int:
+    def _seed_mb(key: str, engine: str, cfg: Optional[dict], model: Optional[str] = None) -> int:
         seed = SEED_FOOTPRINTS_MB.get(key, 0)
         cfg = cfg or {}
         if engine == "qwen" and key == "qwen" and cfg.get("tokenBudget", 0) >= _QWEN_WIDE_TOKEN_BUDGET:
             seed = max(seed, _QWEN_WIDE_PEAK_MB)
+        if engine == "asr" and key == "asr":
+            if model and not _asr_model_is_small_tier(model):
+                seed = max(seed, _ASR_LARGE_MODEL_SEED_MB)
         return seed
 
     def _learned_mb(self, key: str) -> int:
@@ -4548,7 +4588,7 @@ class FootprintTable:
         learned = self._learned_mb(key)
         if learned > 0:
             return learned
-        return self._seed_mb(key, engine, cfg)
+        return self._seed_mb(key, engine, cfg, model)
 
     def record(
         self, engine: str, model: Optional[str], cfg: Optional[dict], observed_mb: int, resident: bool = False,
@@ -4570,8 +4610,17 @@ class FootprintTable:
         out: dict[str, dict[str, Any]] = {}
         for key in sorted(keys):
             dq = self._obs.get(key)
+            # Route through `_seed_mb` (not a raw `SEED_FOOTPRINTS_MB` lookup)
+            # so a model-tier bump (#3347/#3352) is reflected here too — a
+            # flat lookup reports the seed admission USED TO use, not the one
+            # it actually booked. `model` is only knowable for "asr": the
+            # engine is a process-wide singleton (`ASR._model_name`), unlike
+            # "qwen"'s bump, which is keyed off a per-request `cfg` this
+            # snapshot has no call to reconstruct — that key still reports
+            # its unbumped base seed, same as before this change.
+            model = ASR._model_name if key == "asr" else None
             out[key] = {
-                "seed_mb": SEED_FOOTPRINTS_MB.get(key, 0),
+                "seed_mb": self._seed_mb(key, key, {}, model),
                 "learned_mb": self._learned_mb(key),
                 "sample_count": len(dq) if dq is not None else 0,
             }
@@ -5619,8 +5668,23 @@ class PlacementController:
                         # implausible (a resident forward should never need
                         # more than a cold load would), so it is discarded
                         # rather than attributed to ASR (docs/local-llm.md's
-                        # `asr.warm` section documents this ceiling).
-                        warm_ceiling_mb = SEED_FOOTPRINTS_MB.get("asr", 0)
+                        # `asr.warm` section documents this ceiling). The cold
+                        # seed itself is model-tier-aware (#3347/#3352:
+                        # `FootprintTable._seed_mb` bumps it for a non-small
+                        # `ASR_MODEL`), so the ceiling must go through the same
+                        # function rather than the flat `SEED_FOOTPRINTS_MB`
+                        # lookup — otherwise a large-model ceiling stays
+                        # pinned to the small-model seed and rejects a
+                        # perfectly plausible large-model warm delta.
+                        # `FootprintTable._seed_mb` is called directly (not
+                        # via `self.footprints`) because `self.footprints`
+                        # can be a test double with only `peak_mb`/`record`
+                        # (`_RecordingFootprints`, test_asr_footprint_
+                        # measurement.py) — the seed lookup itself has no
+                        # per-instance state, so the real function is always
+                        # the right one to call regardless of what's
+                        # injected for `peak_mb`/`record`.
+                        warm_ceiling_mb = FootprintTable._seed_mb("asr", "asr", cfg, model)
                         if not (warm_ceiling_mb > 0 and warm_delta_mb > warm_ceiling_mb):
                             asr_warm_mb = warm_delta_mb
                     # else: the after-snapshot failed, another engine held a
@@ -12723,7 +12787,7 @@ async def transcribe(req: Request) -> Response:
         on_gpu = _parse_device(ASR._device)[0] in ("cuda", "rocm")
         if on_gpu and _capacity_admission_enabled():
             async with _placement.reservation(
-                "asr", None, {},
+                "asr", ASR._model_name, {},
                 cpu_capable=False, heavy=False,
                 pinned=_engine_env_pin("asr"),
             ) as adm:

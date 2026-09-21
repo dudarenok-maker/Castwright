@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,11 +563,21 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**52 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**53 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-20, A25 DISCHARGED and removed** (#3036, PR
+> **Last change: 2026-09-21, A110 ADDED** (#3347, PR
+> [#3357](https://github.com/dudarenok-maker/Castwright/pull/3357), claude, fix-up
+> round after `pr-review-gate` pass 1): the PR bumps the cold `asr` capacity-admission
+> seed from a flat 400 MB to a model-tier-aware 2560 MB for any `ASR_MODEL` outside
+> `tiny`/`base`/`small` (closing #3347's silent `denials_503: 0` under-admission), but
+> both the adequacy of 2560 MB for a real `large-v3` cold load and the claim that the
+> original squeeze now produces a real refusal are unprovable by the PR's own
+> monkeypatched tests. 52 → 53 owed, Group A 34 → 35. `next-id` bumped A110 → A111 in
+> the same change.
+
+> **Prior change: 2026-09-20, A25 DISCHARGED and removed** (#3036, PR
 > [#3282](https://github.com/dudarenok-maker/Castwright/pull/3282), claude): the
 > row's bullet 1 (no `noCapacity` refusals on a real resident `/transcribe`) was
 > already reconfirmed twice (wave 6, wave 7); bullet 2 (record what `asr.warm`'s
@@ -1485,7 +1495,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A110 -->
+<!-- next-id: A111 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -4896,6 +4906,50 @@ server's model must actually release the card so a 1.7B VoiceDesign load succeed
 
 *Cost:* medium — needs a real third-party server installed and pinned to the same card,
 plus one cast design and one chapter render. No golden-audio comparison.
+
+### A110 · Model-tier-aware cold ASR admission seed ([#3347](https://github.com/dudarenok-maker/Castwright/issues/3347), PR [#3357](https://github.com/dudarenok-maker/Castwright/pull/3357)) · **single GPU card, `ASR_DEVICE=cuda`, `ASR_MODEL=large-v3` (or another non-`tiny`/`base`/`small` tag), a squeezable card (able to be driven down to ~500-900 MB free)**
+
+#3347 found `denials_503: 0` across ten on-box rounds — capacity admission for a
+cold `/transcribe` was booking the flat 400 MB `asr` seed regardless of the
+actually-configured `ASR_MODEL`, so a real `large-v3` cold load (which needs far
+more than 400 MB) could be wrongly admitted and then OOM instead of being
+refused up front. This PR threads the configured model into
+`FootprintTable._seed_mb` and bumps the cold seed to 2560 MB for any
+non-small-tagged model. Both new claims are unprovable by the PR's own tests
+(they monkeypatch `main._placement.probe` and stub `faster_whisper.WhisperModel`
+— they pin the arithmetic, not real hardware behaviour):
+
+1. **That 2560 MB is an adequate — not too small, not needlessly large — cold-load
+   reservation for a real `large-v3` load.** Too small reproduces #3347's OOM;
+   too large produces false `noCapacity` 503s that make Node's
+   `withCapacityRetry` evict a resident synth model mid-generation for no real
+   reason.
+2. **That the #3347 squeeze now actually emits a real `noCapacity` 503.** The
+   fixed arithmetic alone plausibly closes it, but nothing before this row
+   demonstrates it on real hardware.
+
+*Criteria:*
+1. With `ASR_MODEL=large-v3` and `ASR_DEVICE=cuda`, trigger a cold `/transcribe`
+   (no Whisper model yet resident) on a card driven down to roughly 500-900 MB
+   free. Observe a real `503 {"noCapacity": true, "neededMb": 2560}` — the
+   squeeze #3347 reported as a silent `denials_503: 0` grant must now be a real
+   refusal.
+2. On the same box, with more headroom available, observe the actual measured
+   peak VRAM a real `large-v3` cold load draws (weights materialisation +
+   first-call warmup), and record that number here. If it comes in
+   meaningfully above or below 2560 MB, `_ASR_LARGE_MODEL_SEED_MB`
+   (`server/tts-sidecar/main.py`) and `docs/local-llm.md`'s matching
+   `<!-- footprint:asr.large=2560 -->` anchor need a follow-up correction.
+
+*Cost:* medium — needs `faster-whisper`'s `large-v3` weights installed, a GPU
+card that can be driven down to the ~500-900 MB free range (e.g. holding a
+Qwen or Coqui model resident alongside), and one cold `/transcribe` call in
+each state. No golden-audio comparison.
+
+*Note:* `medium`'s own cold-load peak is a related but distinct open
+question — these criteria only measure `large-v3`. `docs/local-llm.md`'s
+tier table flags `medium`'s reservation as likely ~2x over-sized; that gap
+is not covered by this row and isn't tracked elsewhere.
 
 ## Group B — local Ollama analyzer only
 

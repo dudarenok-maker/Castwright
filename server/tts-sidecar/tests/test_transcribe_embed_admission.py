@@ -111,8 +111,17 @@ def test_transcribe_cpu_default_never_probes(monkeypatch, asr_client, flag) -> N
 
 def test_transcribe_gpu_no_fit_returns_503(monkeypatch, asr_client) -> None:
     """ASR_DEVICE=cuda + flag ON + a no-fit probe -> 503 noCapacity, needing
-    the seeded 400 MB asr footprint, before the (cold) transcribe ever runs."""
+    the seeded 400 MB asr footprint, before the (cold) transcribe ever runs.
+
+    #3357 S3: pins ASR_MODEL explicitly (small-tier) rather than leaving it
+    to whatever's ambient in the shell/CI env -- `_swap_asr` constructs a
+    fresh `WhisperEngine()`, whose `__init__` reads `ASR_MODEL` straight from
+    `os.environ`, and the route now threads that value into the reservation
+    (#3347/#3352). Without this pin, a box/CI run with ASR_MODEL=large-v3 (or
+    another non-small tag) exported resolves neededMb to 2560, not 400, and
+    this assertion fails."""
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.delenv("ASR_MODEL", raising=False)
     _swap_asr(monkeypatch, "cuda")
     monkeypatch.setattr(main._placement, "probe", lambda: NO_FIT_PROBE)
 
@@ -122,6 +131,30 @@ def test_transcribe_gpu_no_fit_returns_503(monkeypatch, asr_client) -> None:
     body = r.json()
     assert body["noCapacity"] is True
     assert body["neededMb"] == 400
+
+
+LARGE_MODEL_PROBE = [{"kind": "cuda", "index": 0, "label": "g0", "totalMb": 8000, "freeMb": 900}]
+
+
+def test_transcribe_gpu_large_model_cold_seed_bumped(monkeypatch, asr_client) -> None:
+    """#3347/#3352 — with ASR_MODEL=large-v3, the cold admission call must
+    thread the actually-configured model into the reservation (main.py:12726
+    used to pass `None`, throwing model identity away) so the model-tier-aware
+    seed bump (`FootprintTable._seed_mb`) applies. `LARGE_MODEL_PROBE` is sized
+    to fit the OLD flat 400 MB seed (headroom ~500 MB after the 5%/500-cap
+    reserve) but NOT the new large-model seed, so a pre-fix run would wrongly
+    return 200 here."""
+    monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
+    monkeypatch.setenv("ASR_MODEL", "large-v3")
+    _swap_asr(monkeypatch, "cuda")
+    monkeypatch.setattr(main._placement, "probe", lambda: LARGE_MODEL_PROBE)
+
+    r = asr_client.post("/transcribe", content=_pcm(), headers={"X-Sample-Rate": "24000"})
+
+    assert r.status_code == 503
+    body = r.json()
+    assert body["noCapacity"] is True
+    assert body["neededMb"] == main._ASR_LARGE_MODEL_SEED_MB
 
 
 def test_transcribe_gpu_resident_reserves_incremental_not_cold_peak(monkeypatch, asr_client) -> None:
@@ -159,7 +192,13 @@ def test_transcribe_gpu_steers_to_roomier_device(monkeypatch, asr_client) -> Non
     """ASR_DEVICE=cuda (unindexed, so unpinned) + flag ON + a probe favouring
     cuda:1 -> the reservation admits onto cuda:1 and that card is threaded into
     the cold load as a `device` PARAMETER (#1730 gap 2), not pre-mutated onto
-    the shared ASR._device. Post-load ASR._device reflects it for /health."""
+    the shared ASR._device. Post-load ASR._device reflects it for /health.
+
+    #3357 S3: pins ASR_MODEL explicitly (small-tier) for the same reason
+    `test_transcribe_gpu_no_fit_returns_503` does -- ROOMY_PROBE's headroom
+    happens to fit either seed today, but the test shouldn't depend on that
+    coincidence holding as the probe/seed values evolve."""
+    monkeypatch.delenv("ASR_MODEL", raising=False)
     _swap_asr(monkeypatch, "cuda")
     monkeypatch.setenv("SEG_CAPACITY_ADMISSION", "1")
     monkeypatch.setattr(main._placement, "probe", lambda: ROOMY_PROBE)

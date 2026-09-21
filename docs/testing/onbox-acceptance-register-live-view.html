@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="30" data-publish-id="8563ef385d6b"></div>
+  <div hidden data-published-as="33" data-publish-id="59fc883699ca"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">52</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">53</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->34<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->35<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->1<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">34 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">35 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -742,6 +742,23 @@
           <li>Neither path leaves the card stranded &#8212; after both complete, a subsequent chapter render on that card succeeds.</li>
         </ul>
         <p class="src">Single 8 GB card, a real OpenAI-compatible server (llama.cpp/llama-swap or LM Studio) holding a model on that same card, Qwen VoiceDesign &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; no separate run sheet &#183; medium &#8212; needs a real third-party server installed and pinned to the same card, plus one cast design and one chapter render. No golden-audio comparison.</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A110</span><span class="iname">Model-tier-aware cold ASR admission seed</span><span class="risk">single GPU card, ASR_DEVICE=cuda, ASR_MODEL=large-v3 (or another non-tiny/base/small tag), squeezable to ~500-900 MB free</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>#3347 found <code>denials_503: 0</code> across ten on-box rounds — capacity admission for a cold <code>/transcribe</code> was booking the flat 400 MB <code>asr</code> seed regardless of the actually-configured <code>ASR_MODEL</code>, so a real <code>large-v3</code> cold load (which needs far more than 400 MB) could be wrongly admitted and then OOM instead of being refused up front. This PR threads the configured model into <code>FootprintTable._seed_mb</code> and bumps the cold seed to 2560 MB for any non-small-tagged model. Both new claims are unprovable by the PR's own tests (they monkeypatch <code>main._placement.probe</code> and stub <code>faster_whisper.WhisperModel</code> — they pin the arithmetic, not real hardware behaviour):</p>
+        <ol>
+          <li><b>That 2560 MB is an adequate — not too small, not needlessly large — cold-load reservation for a real <code>large-v3</code> load.</b> Too small reproduces #3347&#39;s OOM; too large produces false <code>noCapacity</code> 503s that make Node&#39;s <code>withCapacityRetry</code> evict a resident synth model mid-generation for no real reason.</li>
+          <li><b>That the #3347 squeeze now actually emits a real <code>noCapacity</code> 503.</b> The fixed arithmetic alone plausibly closes it, but nothing before this row demonstrates it on real hardware.</li>
+        </ol>
+        <p><em>Criteria:</em></p>
+        <ol>
+          <li>With <code>ASR_MODEL=large-v3</code> and <code>ASR_DEVICE=cuda</code>, trigger a cold <code>/transcribe</code> (no Whisper model yet resident) on a card driven down to roughly 500–900 MB free. Observe a real <code>503 {"noCapacity": true, "neededMb": 2560}</code> — the squeeze #3347 reported as a silent <code>denials_503: 0</code> grant must now be a real refusal.</li>
+          <li>On the same box, with more headroom available, observe the actual measured peak VRAM a real <code>large-v3</code> cold load draws (weights materialisation + first-call warmup), and record that number here. If it comes in meaningfully above or below 2560 MB, <code>_ASR_LARGE_MODEL_SEED_MB</code> (<code>server/tts-sidecar/main.py</code>) and <code>docs/local-llm.md</code>&#39;s matching <code>&lt;!-- footprint:asr.large=2560 --&gt;</code> anchor need a follow-up correction.</li>
+        </ol>
+        <p><em>Note:</em> <code>medium</code>&#39;s own cold-load peak is a related but distinct open question — these criteria only measure <code>large-v3</code>. <code>docs/local-llm.md</code>&#39;s tier table flags <code>medium</code>&#39;s reservation as likely ~2x over-sized; that gap is not covered by this row and isn&#39;t tracked elsewhere.</p>
+        <p class="src">single GPU card, <code>ASR_DEVICE=cuda</code>, <code>ASR_MODEL=large-v3</code> (or another non-<code>tiny</code>/<code>base</code>/<code>small</code> tag), a squeezable card (able to be driven down to ~500–900 MB free) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3347">#3347</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/3357">#3357</a> &#183; no separate run sheet &#183; medium — needs <code>faster-whisper</code>&#39;s <code>large-v3</code> weights installed, a GPU card that can be driven down to the ~500–900 MB free range (e.g. holding a Qwen or Coqui model resident alongside), and one cold <code>/transcribe</code> call in each state. No golden-audio comparison.</p>
       </div>
     </details>
 
