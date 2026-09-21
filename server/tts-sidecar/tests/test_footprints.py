@@ -166,6 +166,48 @@ def test_asr_cold_seed_is_model_tier_aware():
     large = t.peak_mb("asr", "large-v3", {})
     assert large == main._ASR_LARGE_MODEL_SEED_MB
     assert large > main.SEED_FOOTPRINTS_MB["asr"]
+    # Pin the actual number, not just "the branch fired" -- a silent
+    # constant change (e.g. 2560 -> 3072) must fail this test even though
+    # the `== main._ASR_LARGE_MODEL_SEED_MB` assertion above can't catch it
+    # (the doc/code parity test in test_seed_parity_with_local_llm_doc is
+    # the OTHER half of that guard).
+    assert large == 2560
+    # "medium" isn't small-tagged either, so it bumps too -- surprising
+    # given the doc's table historically only called out large-v3, but this
+    # is the code's actual, intentional behaviour (every non-small tier
+    # gets the conservative large-model reservation).
+    assert t.peak_mb("asr", "medium", {}) == main._ASR_LARGE_MODEL_SEED_MB
+    # "distil-small.en" tokenises to {"distil", "small", "en"} -- "small" is
+    # a whole token, so this stays small-tier and does NOT bump.
+    assert t.peak_mb("asr", "distil-small.en", {}) == main.SEED_FOOTPRINTS_MB["asr"]
+    # #3357 M1: a locally converted model directory whose path happens to
+    # contain "base" as a PATH COMPONENT, not as the model's own tag, must
+    # not be misclassified as small-tier by a naive substring scan.
+    large_path = t.peak_mb(
+        "asr", r"D:\whisper-models\base\faster-whisper-large-v3-ct2", {}
+    )
+    assert large_path == main._ASR_LARGE_MODEL_SEED_MB
+
+
+def test_asr_model_is_small_tier_matches_whole_tokens_not_substrings():
+    # #3357 M1: `qa.asr.model` is free-form (no `pattern`, unlike its sibling
+    # `qa.asr.device`) and accepts a converted-model directory or an HF repo
+    # id as well as a bare size name, so the small-tier check must not be
+    # fooled by an unrelated substring match.
+    assert main._asr_model_is_small_tier("base")
+    assert main._asr_model_is_small_tier("small.en")
+    assert main._asr_model_is_small_tier("Tiny")  # case-insensitive
+    assert not main._asr_model_is_small_tier("large-v3")
+    assert not main._asr_model_is_small_tier("medium")
+    assert not main._asr_model_is_small_tier(None)
+    assert not main._asr_model_is_small_tier("")
+    # The M1 hole itself: "base" as a directory component, not the model's
+    # own tag.
+    assert not main._asr_model_is_small_tier(
+        r"D:\whisper-models\base\faster-whisper-large-v3-ct2"
+    )
+    # And the forward-slash/HF-repo-id spelling of the same hole.
+    assert not main._asr_model_is_small_tier("org/base-of-large-v3-models")
 
 
 def test_seed_parity_with_local_llm_doc():
@@ -174,5 +216,11 @@ def test_seed_parity_with_local_llm_doc():
     # the doc carries a machine-parseable block, e.g. "<!-- footprint:qwen=6144 -->"
     parsed = {m[0]: int(m[1]) for m in re.findall(r"<!--\s*footprint:([\w.]+)=(\d+)\s*-->", doc)}
     assert parsed, "doc must carry footprint:<engine>=<mb> anchors"
+    # `asr.large` isn't a `FootprintTable._key()` route -- it's the
+    # model-tier bump `_seed_mb` applies on top of the "asr" seed for a
+    # non-small-tagged `ASR_MODEL` (#3347/#3352), so it has no entry in
+    # `SEED_FOOTPRINTS_MB` and needs its own lookup here.
+    named_constants = {"asr.large": main._ASR_LARGE_MODEL_SEED_MB}
     for k, v in parsed.items():
-        assert main.SEED_FOOTPRINTS_MB[k] == v, f"{k}: seed {main.SEED_FOOTPRINTS_MB[k]} != doc {v}"
+        actual = named_constants[k] if k in named_constants else main.SEED_FOOTPRINTS_MB[k]
+        assert actual == v, f"{k}: seed {actual} != doc {v}"
