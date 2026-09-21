@@ -554,7 +554,7 @@ setup rather than repeatedly loading and evicting models.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
@@ -563,9 +563,13 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**53 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**54 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
+
+> **Last change: 2026-09-21 (#3084 wave 1b), 53 → 54.** Row **B101** added
+> (stage-runner extraction smoke — local Ollama + Gemini). Group B: 1 → 2.
+> `next-id` bumped B101 → B102 in the same change.
 
 > **Last change: 2026-09-19 — two lanes touched the register the same day,
 > reconciled here on merge.** This branch (chore/docs-onbox-register-decompose)
@@ -4720,7 +4724,7 @@ plus one cast design and one chapter render. No golden-audio comparison.
 
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B101 -->
+<!-- next-id: B102 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -4800,6 +4804,14 @@ at K=4 with a monotonic per-phase bar.
 > here was ever confirmed against real hardware in the first place, so there
 > is no baseline number this correction needs to preserve. The row's run is
 > still owed; only the trustworthiness of its criteria changed.
+
+### B101 · Stage-runner extraction behaves identically on a real Ollama daemon and a real Gemini key ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR [#3349](https://github.com/dudarenok-maker/Castwright/pull/3349)) · **local Ollama; the Gemini half needs the `GEMINI_API_KEY` from the primary checkout**
+
+Analyse chapter 1 of *The Coalfall Commission* (`server/src/__fixtures__/the-coalfall-commission.md`) from the primary checkout on `main` after this PR, once with `qwen3.5:4b` (local) and once with a `gemma-*` model (Gemini), and compare against the same run on the merge's first parent:
+- both runs finish with the same character count and the same number of attributed sentences;
+- local: the analysing view's per-pass eval stats (tokens/s) populate — proves `onEvalTiming` still fires off a real `done` line — and `server/handoff/outbox/<id>-stage1-ch1.json` is written;
+- Gemini: no `[gemini] generate failed` line in `logs/server.log`; a throttle chip appears only when the limiter actually waits;
+- if a local thinking tag that emits a leading `<think>` block is installed, its chapter validates on the first attempt (no `attempt1.raw.txt` for that key).
 
 ---
 
