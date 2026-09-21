@@ -580,6 +580,25 @@ def test_debug_memory_endpoint_shape(monkeypatch):
             assert body["cuda"]["host_pinned_active_mb"] >= 0
 
 
+def test_debug_memory_footprints_asr_seed_reflects_configured_model(monkeypatch):
+    """#3357 N2 regression (S1) — /debug/memory's `footprints.asr.seed_mb`
+    must report the seed admission actually books for the CONFIGURED
+    `ASR_MODEL`, not the flat unconfigured base seed. Before this PR's fix,
+    `FootprintTable.snapshot()` read `SEED_FOOTPRINTS_MB.get(key, 0)`
+    directly and always reported 400 MB for "asr" regardless of the model in
+    force — silently disagreeing with the model-tier-aware admission path
+    (#3347/#3352)."""
+    monkeypatch.delitem(main.ENGINES, "kokoro", raising=False)
+    monkeypatch.setitem(main.ENGINES, "qwen", main.QwenEngine())
+    monkeypatch.setattr(main.ASR, "_model_name", "large-v3")
+    with TestClient(main.app) as client:
+        r = client.get("/debug/memory")
+    assert r.status_code == 200
+    body = r.json()
+    assert "footprints" in body
+    assert body["footprints"]["asr"]["seed_mb"] == main._ASR_LARGE_MODEL_SEED_MB == 2560
+
+
 # --- #2423: per-device memory_stats() diagnostics + bare-reclaim endpoint ---
 
 
