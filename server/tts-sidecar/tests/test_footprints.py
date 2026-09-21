@@ -189,6 +189,25 @@ def test_asr_cold_seed_is_model_tier_aware():
     assert large_path == main._ASR_LARGE_MODEL_SEED_MB
 
 
+def test_snapshot_asr_seed_reflects_configured_model_tier(monkeypatch):
+    # #3357 N2 regression (S1): `snapshot()` (the /debug/memory readout) must
+    # report the SEED ACTUALLY BOOKED for "asr" -- i.e. route through
+    # `_seed_mb` with the process's configured `ASR._model_name`, not a raw
+    # `SEED_FOOTPRINTS_MB.get(key, 0)` lookup that ignores the model
+    # entirely. Revert `FootprintTable.snapshot()`'s
+    # `self._seed_mb(key, key, {}, model)` back to a flat lookup and this
+    # reddens: it would report the small-tier 400 MB base seed even though
+    # `peak_mb`/admission are booking 2560 for a configured large-v3 model.
+    monkeypatch.setattr(main.ASR, "_model_name", "large-v3")
+    t = main.FootprintTable()
+    snap = t.snapshot()
+    assert snap["asr"]["seed_mb"] == main._ASR_LARGE_MODEL_SEED_MB == 2560
+    # Must agree with what admission actually books, not just be non-default.
+    assert snap["asr"]["seed_mb"] == t.peak_mb("asr", "large-v3", {})
+    assert snap["asr"]["learned_mb"] == 0
+    assert snap["asr"]["sample_count"] == 0
+
+
 def test_asr_model_is_small_tier_matches_whole_tokens_not_substrings():
     # #3357 M1: `qa.asr.model` is free-form (no `pattern`, unlike its sibling
     # `qa.asr.device`) and accepts a converted-model directory or an HF repo
