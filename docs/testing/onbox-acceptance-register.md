@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,15 +563,64 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**54 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**53 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-21 (#3084 wave 1b), 53 → 54.** Row **B101** added
+> **Last change: 2026-09-21 (#3084 wave 1b), 52 → 53.** Row **B101** added
 > (stage-runner extraction smoke — local Ollama + Gemini). Group B: 1 → 2.
-> `next-id` bumped B101 → B102 in the same change.
+> `next-id` bumped B101 → B102 in the same change. This branch diverged from
+> the register at 53 owed / Group A 35 (before A25's discharge below landed
+> on `main`); reconciled here on merge against `main`'s current 52 owed /
+> Group A 34 — this branch's own work nets +1 (Group B only), independent of
+> A25's -1 (Group A only). Combined: 52 → 53, Group A unchanged at 34, Group
+> B 1 → 2.
 
-> **Last change: 2026-09-19 — two lanes touched the register the same day,
+> **Prior change: 2026-09-20, A25 DISCHARGED and removed** (#3036, PR
+> [#3282](https://github.com/dudarenok-maker/Castwright/pull/3282), claude): the
+> row's bullet 1 (no `noCapacity` refusals on a real resident `/transcribe`) was
+> already reconfirmed twice (wave 6, wave 7); bullet 2 (record what `asr.warm`'s
+> learned p95 converges to) is now answered a second and third time over, on real
+> CUDA hardware, with the same "cannot converge" conclusion wave 7 first reached and
+> filed as [#2682](https://github.com/dudarenok-maker/Castwright/issues/2682) — this
+> chain went on to try both directions #2682's filing left open (see #3036's issue
+> body) and found both structurally dead on this box: child 1
+> (`docs/testing/onbox-3036-results/step-1-nvml.md`) drove 1 cold + 6 warm real
+> `/transcribe` calls against a resident `faster-whisper` `base`/`int8_float16` model
+> and found the NVML own-process `usedGpuMemory` delta reads `None` for our own PID
+> under this box's Windows WDDM driver even with hundreds of MB of live CUDA memory,
+> so every warm sample is discarded before it can be recorded; child 2
+> (`docs/testing/onbox-3036-results/step-2-device-delta.md`) reran the SAME
+> device-wide free-VRAM delta the cold `asr` key already uses, now carrying its full
+> foreign-PID/concurrent-reservation guard set, on a provably uncontended card (0 MiB
+> used, no compute processes at precheck) — the cold `asr` key recorded a sample in
+> the same session (`sample_count: 1`, proving the guards and the reading path are
+> both alive), yet all 6 warm deltas still produced `sample_count: 0`: CTranslate2
+> allocates its arena once at load and reuses it per forward, so device-wide free
+> VRAM never measurably moves across a warm 2-second forward, confirming #2682's
+> noise-floor theory rather than its contamination theory. Bullet 3 (foreign
+> non-sidecar contamination) is answered the same way #2682 already found it to be —
+> moot, since no sample survives long enough to be contaminated, now re-confirmed on
+> a card known clean at precheck. This discharges the row on the same "cannot
+> converge as claimed" basis the analogous E12 register row was discharged on (cited
+> directly in #3036's own filing) — not a fix, a conclusive negative result reached
+> via two independent real-hardware techniques. `SEED_FOOTPRINTS_MB["asr.warm"]`'s
+> comment in `server/tts-sidecar/main.py` now carries this full history and states
+> the 128 MB seed is authoritative, additionally protected by this PR's restored
+> ceiling guard against contamination in both directions; #3036 itself stays OPEN,
+> tracking the still-missing CTranslate2-side memory query or driver-level
+> accounting as future scope, not this row's on-box acceptance debt.
+> **Not yet done:** `docs/local-llm.md`'s footprint-table paragraph (named in this
+> row's own Criteria) described the pre-this-PR optimistic expectation that
+> `asr.warm` "genuinely does learn its own p95 ... once real observations
+> accumulate" — now superseded by this run's conclusive negative; already corrected
+> in this same PR's follow-up cleanup commit (`fd45c966`), alongside its other 🟡
+> findings. This branch diverged from the register at 53 owed (Group A 35, after the
+> other lane's A109/E105/E106 additions had already landed) — A25's discharge is
+> this branch's only register effect: 53 → 52 owed, Group A 35 → 34. `next-id`
+> markers unaffected (allocate-once — A25 retires, not reused).
+
+> **Prior change: 2026-09-19 — two lanes touched the register the same day,
 > reconciled here on merge.** This branch (chore/docs-onbox-register-decompose)
 > and a separate lane's E105/E106 additions (Castwright#3249, ops-72 Part 2)
 > both diverged from a common ancestor at 51 owed. Combined: **53 owed** — this
@@ -2037,6 +2086,24 @@ The original blocker: `start.ps1` absorbed code-43 exits internally in its resta
 
 A forced card-specific three-exits-in-ten-minutes streak was run for real before this fix and did not reach `runAutoRevert` — but now the supervised path should observe and respond to individual code-43 exits. **Owed:** re-run the hardware trigger on real 2-card hardware to confirm the auto-revert trip now fires and resolves the cascade, then record the outcome. Tracked as [#3121](https://github.com/dudarenok-maker/Castwright/issues/3121).
 
+> **2026-09-20 (#3295, on-box re-run) — the owed hardware trigger ran for
+> real: trip fires, cascade resolves.** On this 2-card box,
+> `SIDECAR_VRAM_FREE_FLOOR_MB=999999` produced three individually-observed
+> `code=43` exits in ~90 s (the visibility gap #3148 fixed is gone), the
+> streak trip logged with the breach card's real UUID, respawn stopped
+> (0 listeners on the sidecar port at trip — the original pile-up symptom is
+> resolved), `GET /api/gpu/trip-status` answered live with
+> `status: "unrevertable"` + the card-specific toast, and the trip breadcrumb
+> recorded card/residentEngines. **A live `reverted` decision (pin actually
+> rewritten on hardware) remains owed and is structurally uninducible on this
+> machine**: the per-card floor breach only fires on torch-*inactive* cards,
+> so a breached card can never have a revertible engine resident/pinned on it
+> while every engine here fits either card comfortably (a reserved-ceiling
+> threshold low enough to breach would ping-pong). Full run records, including
+> the failed Run C attempt and the general law for future boxes:
+> `docs/testing/onbox-2card-pinokio-batch-results/a3-rerun-2026-09-20.md`.
+> Row stays owed (narrowed); counts unchanged.
+
 ### A4 · Audition engine + tier fidelity ([#1849](https://github.com/dudarenok-maker/Castwright/pull/1849))
 
 Verified by tests and CI; never listened to except where noted below.
@@ -2314,6 +2381,51 @@ Still owed — deliberately left untouched, not silently attempted:
   other live lanes concurrently, and swapping enumeration order (or a reboot)
   would disturb their GPU state mid-run — a contention risk, not a hardware
   gap. Needs a dedicated, uncontended window.
+
+> **2026-09-20 (#3296, uncontended 2-card window) — the owed bullet ran for
+> real: a respawn finds the pinned card across an enumeration-order change.**
+> Box: RTX 4070 Laptop GPU (`1831b67f-…`) + RTX 5070 Ti
+> (`73e7270e-…`). Each boot spawned the real sidecar module fresh with
+> respawn-shaped env — the raw `QWEN_DEVICE=cuda-uuid:<bare uuid>` literal
+> `buildSidecarEnv` sends post-#1870, never a translated `cuda:N` — so import-time
+> `_engine_env_pin` → `_resolve_uuid_to_index` → `_validate_cuda_index` ran
+> exactly as a supervisor respawn runs it, with the model never loaded (no
+> weights read, no VRAM moved, other lanes undisturbed).
+>
+> - Default order (`0=4070, 1=5070 Ti`): the 5070 Ti's UUID resolved `cuda:1`,
+>   landed on the 5070 Ti, `validate=ok`, admission key `cuda:1`; codec pin →
+>   `cuda:0` (4070). Repeat boot: byte-identical — respawn is deterministic.
+> - **Reversed order** (`0=5070 Ti, 1=4070`): the same literal resolved `cuda:0`
+>   and **still landed on the 5070 Ti** — the UUID torch reports for the landing
+>   device equals the pin — `validate=ok`; codec followed to `cuda:1`, still the
+>   4070. No `_validate_cuda_index` failure, no wrong card. **Pass.**
+> - Counterfactuals, so the row has teeth: `cuda:1` frozen from the default-order
+>   boot replayed under the reversed order lands on the **4070** with
+>   `validate=ok` — a stale in-range index is silently the wrong card and the
+>   guard cannot catch it — and against a one-card view it raises `ValueError:
+>   cuda:1 out of range; only 1 CUDA device(s) visible`. Both are the shapes
+>   #1870 exists to prevent. An unresolvable UUID → `auto` +
+>   `uuid_unresolved` (codec → `cpu`), no crash.
+> - Two box facts worth keeping. **`CUDA_DEVICE_ORDER` does not renumber these
+>   two cards** — `PCI_BUS_ID` and `FASTEST_FIRST` both yield
+>   `0=4070, 1=5070 Ti`, so the lever named in the bullet above is inert on this
+>   hardware pairing; the order was changed instead by permuting the visible
+>   device list (`CUDA_VISIBLE_DEVICES=1,0`), which inverts the uuid↔index map
+>   without a reboot or a hot-plug. And the pin's canonical form is the **bare
+>   UUID**: a `GPU-`-prefixed string copied from `nvidia-smi -L` does not resolve
+>   (→ `auto`), consistent with `toUuidForm()`
+>   (`server/src/routes/gpu-uuid.ts:32-43`) storing the sidecar's own string — a
+>   hand-edit footgun in `tts.qwen.device`, recorded not filed.
+> - Scope: the `PUT /api/config` → forced respawn → `GET /health` leg on both
+>   cards was already discharged by the 2026-09-08 run above; what was owed was
+>   the order-change variable, which is decided entirely inside the sidecar
+>   process at import, and is what this run drove. Re-driving it through the
+>   shared dev server would have meant restarting the server under a permuted
+>   device list while other lanes are live — not done, stated plainly.
+>
+> Transcript + boot matrix:
+> `docs/testing/onbox-2card-pinokio-batch-results/a12-enumeration-2026-09-20.md`.
+> **A12's remaining bullet: CLOSED — row fully discharged; counts unchanged.**
 
 *Needs:* both cards, and the ability to change enumeration order between boots
 (the eGPU is not hot-pluggable). *Cost:* short.
@@ -3719,89 +3831,6 @@ above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
 > (`_BASE17_CONTENTION_WAIT_S_DEFAULT`/`Base17ContentionTimeoutError`) and was not
 > attempted anywhere in this 18-run session.
 
-### A25 · ASR warm-reservation figure vs. a real resident `/transcribe` peak ([#2094](https://github.com/dudarenok-maker/Castwright/issues/2094)) · **`ASR_DEVICE=cuda`, single 8 GB card**
-
-Unit tests (`test_footprints.py`, `test_transcribe_embed_admission.py`,
-`test_asr_footprint_measurement.py`) pin that a resident ASR reservation now
-books the separate `asr.warm` key (128 MB seed) instead of the cold `asr` key
-(400 MB), that `admit()`/`reservation()` agree, and that the MEASUREMENT
-mechanism itself (a device-wide free-memory delta via
-`PlacementController._device_free_mb`, not the torch-allocator peak
-CTranslate2 sits outside of) is real and correctly guarded against
-contamination — all proven with a scripted `_device_free_mb` sequence, no
-real allocator. Not yet observed: whether 128 MB is actually enough headroom
-for a real resident Whisper `base`/int8_float16 forward's activation memory
-on a contended card (too low → a real, avoidable `noCapacity` refusal that
-this fix was supposed to eliminate), and whether the learned `asr.warm` p95
-converges to something sane once real device-wide-free-memory observations
-accumulate on a box that ISN'T contended by a foreign process (the one
-contamination vector `ledger.engines_holding` can't see, since it only knows
-this process's own reservations).
-
-- With `ASR_DEVICE=cuda` and content-QA enabled (`SEG_ASR_ENABLED=1`), render
-  a chapter so ASR loads and goes resident, then trigger several more
-  `/transcribe` calls back-to-back (a re-record round is the natural trigger).
-  Confirm none of them 503 `noCapacity` on a card that has genuine room.
-- Watch `FootprintTable`'s learned `asr.warm` p95 settle after ≥5 real
-  observations (`_FOOTPRINT_MIN_SAMPLES`) — record what it converges to, so
-  the 128 MB seed can be revisited with evidence rather than left as a guess
-  indefinitely. A sane figure (double digits to low hundreds of MB) confirms
-  the measurement mechanism is producing real signal on a clean box; a
-  suspiciously large one (hundreds of MB to GB) points at contamination the
-  ledger-based guard couldn't see (a process outside this sidecar).
-- The device-wide contamination question #2094's own filing raised is now
-  PARTIALLY addressed (the ledger-based guard discards a reading when another
-  SIDECAR engine holds a concurrent reservation) but not fully closed — a
-  foreign, non-sidecar process on the same card remains invisible to it. This
-  row is where that residual gets its first real evidence.
-
-*Needs:* `ASR_DEVICE=cuda`, `SEG_ASR_ENABLED=1`, a real book render with
-content-QA on, ideally on an UNCONTENDED card (no other process holding VRAM)
-for the cleanest read. *Criteria:* the `asr.warm` seed comment in
-`SEED_FOOTPRINTS_MB` and `_device_free_mb`'s docstring (`server/tts-sidecar/main.py`)
-and `docs/local-llm.md`'s footprint table. *Cost:* short — rides along with
-any other GPU-ASR session (A13 already needs `ASR_DEVICE=cuda`-adjacent
-capacity behaviour; batch together).
-
-> **PARTIALLY run 2026-08-26 (wave 6) — no refusals observed across two renders, but the
-> ≥5-observation `asr.warm` p95 convergence (bullet 2) was not tracked.** With
-> `ASR_DEVICE=cuda`, `SEG_ASR_ENABLED=1` and content-QA on, ASR went resident
-> (`asrLoaded: true`) during a chapter render on an uncontended `cuda:0` and no
-> `/transcribe` call 503'd `noCapacity` across two independent full-chapter renders (252
-> lines each, ASR sampling every sentence per `SEG_ASR_SAMPLE_EVERY=1`) — bullet 1
-> confirmed. Bullet 2 (watch `FootprintTable`'s learned `asr.warm` p95 settle and record
-> what it converges to) and bullet 3 (the residual foreign-process contamination case)
-> were not exercised — this round didn't read the sidecar's internal footprint state, only
-> the absence of refusals. **Still owed:** re-run reading `asr.warm`'s learned value
-> directly (via whatever internal endpoint or log line exposes `FootprintTable`) after
-> ≥5 real `/transcribe` observations.
-
-> **RUN 2026-08-26 (wave 7) — bullet 1 reconfirmed; bullet 2 answered, and the answer is
-> "it structurally can't converge" — filed as [#2682](https://github.com/dudarenok-maker/Castwright/issues/2682).**
-> Instrumented `FootprintTable.record` directly (temporary, reverted) and drove 15 direct
-> `POST /transcribe` calls against a real resident `faster-whisper` `base`/`int8_float16`
-> model — 8 with Qwen still co-resident on the same card (bullet-1 contamination-guard
-> check), 7 with Qwen unloaded and nothing else resident (the clean read bullet 2 asks
-> for). All 15 returned `200` — zero `noCapacity` refusals, reconfirming bullet 1 a
-> second time. The 8 contaminated calls recorded `observed_mb=0` every time — expected,
-> since `other_engines` (Qwen) was non-empty and the guard is designed to discard exactly
-> that. The 7 CLEAN calls (no other engine resident, no foreign PID) *also* recorded
-> `observed_mb=0` every single time — the device-wide free-memory delta the warm key is
-> measured by never comes back positive for this model/precision combination, so the
-> `<= 0` guard in `record()` silently discards every one of them regardless of
-> contamination. **This means `asr.warm`'s learned p95 can never move off its 128 MB seed
-> in practice** — not "hasn't converged yet," but structurally can't, because the
-> instrument's own noise floor exceeds a `base`/`int8_float16` forward's actual VRAM
-> delta. Bullet 3 (foreign non-sidecar contamination) is now moot as originally scoped —
-> the measurement never accumulates a real sample to contaminate in the first place, on
-> ANY box, clean or not. This needs a design decision, not a fix: leave the seed as a
-> permanent floor (harmless if `128 MB` is already generous for this model), switch the
-> warm-key instrument to something with a finer noise floor (e.g. the torch allocator's
-> own peak, the way every other engine's key is measured), or accept and document that
-> this key is unfalsifiable for small ASR models. Filed rather than fixed under the
-> "needs a design pass" carve-out — more than one defensible fix exists and nothing here
-> picks one.
-
 ### A26 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
 
 `classifyTranscript`'s new logic is fully pinned in
@@ -4446,6 +4475,48 @@ load that splits, one genuinely-too-big load that doesn't, one
 > a code gap, and this row should stay open until run from such a box rather
 > than being narrowed further from here.
 
+> **2026-09-20 ([#3297](https://github.com/dudarenok-maker/Castwright/issues/3297)) —
+> split precondition finally satisfied live on this box; the [N/A] short-circuit
+> re-confirmed under the new engine; the remaining bullets are now demonstrably
+> unreachable here, not merely unrun.** Two environment facts changed since
+> 09-09. (1) The shared tray daemon now serves with `CUDA_VISIBLE_DEVICES=1`
+> (`server.log` 07:10:43 "user overrode visible devices", and the same pin on
+> the 10:22 `llama-server.exe` subprocess env; it comes from the tray app's
+> own state — no `Environment` registry key under HKCU/HKLM carries it and
+> ordinary shells don't have it), so on that daemon an oversized model spills
+> to CPU rather than to a second card: `gemma4-cw-26B-A4B` @131072 sat at
+> `16% CPU / 84% GPU` with `/api/ps` `size_vram` 13,144,990,677 vs `size`
+> 15,557,648,708. (2) The engine is ollama 0.34.2's new per-model
+> `llama-server.exe` runner on driver 616.92 / CUDA 13.4. To actually satisfy
+> this row's "genuine split" precondition I unloaded the 11434 copy and
+> started a throwaway `ollama serve` on `127.0.0.1:11435` with explicit
+> `CUDA_VISIBLE_DEVICES=0,1`, then loaded the same model at `num_ctx=131072`:
+> a real two-card split at 100% GPU (runner log: `offloaded 31/31 layers to
+> GPU`; CUDA0 model buffer 4221.94 MiB + CUDA1 9036.01 MiB; per-card KV
+> 329.38 + 1190.00 MiB; compute buffers 1112.32 MiB each; `ollama ps`: 16 GB
+> `100% GPU` ctx 131072; `/api/ps`: `size_vram == size` = 16,401,794,332;
+> card occupancy 5796/2153 and 11567/4429 MiB), and
+> `--query-compute-apps` returned precisely the shape the detector wants —
+> ONE PID (32828, `...\Programs\Ollama\lib\ollama\llama-server.exe`) on BOTH
+> GPU UUIDs — with `used_memory` `[N/A]` on both rows. Live in-process
+> `detectOllamaGpuSplit({fresh: true})` (unmocked `tsx`, throwaway probe file
+> deleted after the run) against that resident split returned exactly
+> `{reachable:true, split:false, deviceIndices:[], totalUsedMb:0,
+> wouldFitSingleDevice:false, dataUnavailable:true}` — the same code path
+> traced 09-09 (`[N/A]` rows routed to `unparseableProcessNames`, `/ollama/i`
+> matching the runner's full path, `ollamaRows.length === 0` short-circuit).
+> The positive-split bullet is therefore *unsatisfiable*, not "not yet run",
+> on this box: WDDM gives the code no numeric per-process-VRAM channel at all
+> no matter what Ollama really does. The no-split and device-mismatch bullets
+> gate on the same parsed rows and fare identically; the analyzer/UI
+> `dataUnavailable` suppression (source-checked 09-09) is unchanged under the
+> new engine — `advanced.tsx` will keep showing "can't determine GPU split
+> status", which is the correct behaviour here. No defect found, nothing
+> filed. Standalone daemon stopped, its model unloaded, 11434 returned to its
+> pre-session (no-resident-model) state. Row stays open per the 09-09
+> guidance: the three live bullets need a Linux/non-WDDM box where
+> `nvidia-smi --query-compute-apps` reports numeric `used_memory`.
+
 ### A105 · Qwen base17 eviction guard and _DEVICE_LEDGER serialization ([#2752](https://github.com/dudarenok-maker/Castwright/issues/2752), PR [#2790](https://github.com/dudarenok-maker/Castwright/pull/2790)) · **single 8 GB GPU card, Qwen VoiceDesign 1.7B resident, real sidecar with base17 weights**
 
 PR #2790 (two rounds of independent review) improves base17 co-residency safety in `design_voice()`:
@@ -4641,6 +4712,60 @@ log instrumentation, a VRAM-fill scenario to construct the discriminating placem
 (the fill target is now computed live from the box's own measured `peak` and
 `GPU_RESERVE_MB`, not tuned by hand — see the run sheet's Criterion 2 step 4), plus the
 run sheet's pin/stale-cache scenarios.
+
+> **PARTIAL on-box sitting 2026-09-20 (~03:58–04:01Z, ~15:58–16:01 local; cline-qwen-cloud /
+> OE claim `3298`, issue #3298) — Criterion 1 DISCHARGED; row stays OPEN for Criteria 2–5.**
+> Box: 2-card (8 GB RTX 4070 Laptop `cuda:0` + 16 GB RTX 5070 Ti `cuda:1`), cold Coqui, no
+> `COQUI_DEVICE` pin, server booted 11:42 local that day.
+> Fixture: throwaway book *A21 Clone Readiness Gate QA v2*
+> (`a21-qa__standalones__a21-clone-readiness-gate-qa-v2-throwaway`), character Aria on the
+> **designed** Coqui voice `xtts-01e278d6-b1a2-410b-9953-15a08c0f5cd6`, artifact deleted. Real
+> trigger: `POST /api/books/:bookId/generation` (`{"modelKey":"coqui-xtts-v2","force":true}`),
+> not a manual sidecar call. Criterion 1 evidence chain, `logs/tts.err.log`:
+> `15:58:46.443 Coqui model unloaded.` → `15:58:49.099 [A106-C1-TEMP] device_hint=cuda:1`
+> (temporary one-line instrumentation in `main.py`'s clone handler, per the run sheet —
+> **since removed**) → `15:58:49.101 Loading Coqui model=…xtts_v2 on device=cuda:1 half=True`
+> (cold load on the hinted card) → `15:59:09.847 Cloned + cached Coqui voice
+> 'xtts-01e278d6-…' from caller clip.` → `16:00:23` render completed with Aria segments on
+> `xtts-01e278d6-…`. **Criterion 2 was NOT discharged by this run** — the unhinted cold
+> control (`POST /xtts/clone-voice` with an identical idle 2-card box, no `X-Device-Hint`
+> header, `16:12:05` → also `Loading Coqui … on device=cuda:1`, HTTP 200, `.pt` recreated
+> `16:12:39`) landed on the *same* card as the hinted `15:58` derive, exactly as this row's
+> warning above predicts: in the box's normal idle state `best_fit` already favors the 16 GB
+> `cuda:1`, so the hinted placement proves the header parses and is accepted, not that it
+> *moved* anything. (The earlier `15:49:36` unhinted load on `cuda:0` was not a clean control:
+> Whisper ASR was resident on `cuda:1` at that moment and idle-evicted at `15:53:38`.)
+> Criterion 2's discriminating fill-band scenario additionally cannot be constructed on this
+> box right now: `cuda:0` free ≈ 5.4 GB sits below the run sheet's live-computed fill target
+> (~6.4 GB), so the row's "insufficient headroom" Result escape applies — recorded here rather
+> than forcing a pass. `POST /unload {engine:"coqui"}` provided the cold-load precondition
+> without touching the operator's processes. The hint was produced by the shipped lazy path
+> itself — `lazyCoquiDeriveDeviceHint()` (`clone-voice-resolver.ts:933-935`:
+> `ensureGpuDeviceListWarm()` then `some(d => d.idx === 1) ? 'cuda:1' : undefined`) — with the
+> sidecar's `GET /devices` probe returning both cards.
+>
+> **Fixture bug found and fixed while landing this (why earlier sittings produced no
+> hint-bearing derive at all):** the earlier provenance flip wrote the voice manifest with PowerShell
+> `Set-Content -Encoding UTF8`, which prepends a UTF-8 BOM (`EF BB BF`); Node's `JSON.parse`
+> rejects it, so `workspace/voice-library.ts`'s `readEntry` returned `null` and
+> `resolveDesignedVoicesForChapter` removed the coqui slot with
+> `has no voice-library entry backing it (entry missing)` *before ever reaching the
+> hint-bearing derive* — the chapter silently rendered on stock voices (two `server.err.log`
+> occurrences at 15:49:36 and 15:50:44, plus the 11:57 render, all pre-fix). BOM stripped
+> byte-exact (962→959 B, content unchanged, `provenance: "designed"` verified parseable); any
+> future manifest flip must write BOM-free UTF-8.
+>
+> **Not covered by this sitting (honest scope):** Criteria 2–5 — the discriminating
+> hinted-vs-unhinted fill-band scenario (Criterion 2, per the control result above and the
+> headroom escape), unsatisfiable-hint fallback (3), operator-pin override (4), and
+> stale-device-list harmlessness (5) were not exercised; the 75%-tolerance check (#3097) was
+> consequently not observed doing real work either (the hinted card was never the
+> *less*-preferred winner). `.env` restore (re-pin `COQUI_DEVICE=cuda:1`,
+> `QWEN_DEVICE=cuda:1`) and removal of the `.a106bak`/`.a106c2` artifacts remain with the
+> next operator sitting; the temporary `main.py` log line has already been stripped
+> (`git diff` on `main.py` is empty against the committed state) and the sidecar restarted
+> cleanly on the clean file (supervisor respawn, pid 9700, `16:05:54`).
+
 
 ### A107 · `/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter ([#3086](https://github.com/dudarenok-maker/Castwright/issues/3086), [#3101](https://github.com/dudarenok-maker/Castwright/issues/3101), PR [#3142](https://github.com/dudarenok-maker/Castwright/pull/3142)) · **single 8 GB GPU card, DirectML profile, real Kokoro weights**
 
@@ -5620,8 +5745,11 @@ design doc's Part 4 (`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-de
 11-battery fixture (`scripts/tests/reap-stale-batteries.test.mjs`), and every guard
 in it is mutation-verified (deletion → a named test reddens → restored). What no
 test in the repo can prove is the thing this row exists for: that
-`collectProcessSnapshot()`'s single `Get-CimInstance Win32_Process` query, run
-against REAL processes on a real box, actually reports the shapes `classify()`
+`collectProcessSnapshot()`'s `Get-CimInstance Win32_Process` query — one spawn on
+success or genuine failure, up to one retry on a transient empty result (#3238)
+or a genuine `spawnSync` timeout (#3331), never both, so at most 2 spawn calls
+total — run against REAL processes on a real box, actually reports the shapes
+`classify()`
 assumes — `ParentProcessId` correctly reflecting a live parent vs. a dead/reused
 one, `CreationDate` parsing to the right relative ordering for the PID-reuse guard,
 and `UserModeTime`/`KernelModeTime` actually growing at the CPU-s/min rates the

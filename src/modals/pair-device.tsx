@@ -243,11 +243,24 @@ export function PairDeviceModal({ open, onClose }: PairDeviceModalProps) {
 /** A labelled value with a copy-to-clipboard button. */
 function CopyRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   const [copied, setCopied] = useState(false);
+  const copiedTimeoutRef = useRef<number | null>(null);
+
+  /* Clean up the copied-confirmation timeout if the row unmounts before it
+     fires (mirrors AccountView / ModelSettingsForm's own fix). */
+  useEffect(() => {
+    return () => {
+      if (copiedTimeoutRef.current !== null) {
+        clearTimeout(copiedTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const copy = async () => {
     try {
       await navigator.clipboard?.writeText(value);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
+      if (copiedTimeoutRef.current !== null) clearTimeout(copiedTimeoutRef.current);
+      copiedTimeoutRef.current = window.setTimeout(() => setCopied(false), 1500);
     } catch {
       /* clipboard blocked — the value is still visible to copy by hand */
     }

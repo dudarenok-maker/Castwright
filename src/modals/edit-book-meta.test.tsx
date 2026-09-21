@@ -211,6 +211,34 @@ describe('EditBookMetaModal — tag suggestions (plan 73)', () => {
     fireEvent.mouseDown(screen.getByTestId('tag-suggestion-draft'));
     expect(screen.getByTestId('tag-chip-draft')).toBeInTheDocument();
   });
+
+  it('clears the deferred suggestions-close timeout on unmount to prevent setState after unmount', () => {
+    /* Regression: the setTimeout deferring the suggestions-dropdown close on
+       blur (needed so a mouse-down on a suggestion still fires before blur
+       clears the dropdown) was never cleared on unmount — the same
+       unguarded-timer shape fixed elsewhere in this PR (AccountView,
+       ModelSettingsForm, ModelManagerView, ShareLinkModal,
+       WorkspacePathRow, PairDeviceModal's CopyRow,
+       SettingsAccordionWithNav). Capture the exact setTimeout(..., 120)
+       call's id via a spy and assert clearTimeout is invoked with THAT id
+       on unmount — precise regardless of how many other timers exist, and
+       false before the fix (no cleanup effect existed). */
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const { unmount } = renderModal();
+    const input = screen.getByLabelText('Add tag') as HTMLInputElement;
+
+    fireEvent.focus(input);
+    fireEvent.blur(input);
+
+    const closeCallIndex = setTimeoutSpy.mock.calls.findIndex((call) => call[1] === 120);
+    expect(closeCallIndex).toBeGreaterThanOrEqual(0);
+    const closeTimeoutId = setTimeoutSpy.mock.results[closeCallIndex]?.value;
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(closeTimeoutId);
+  });
 });
 
 describe('EditBookMetaModal — language guard (Task 9)', () => {

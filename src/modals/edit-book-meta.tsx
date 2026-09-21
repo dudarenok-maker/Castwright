@@ -8,7 +8,7 @@
    Plan 73 — also owns the per-book tag chip editor. Tags round-trip
    through the same `slice: 'state'` PUT path as the other fields. */
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconClose, IconPencil } from '../lib/icons';
 import { PrimaryButton, Checkbox } from '../components/primitives';
 import { useAppSelector } from '../store';
@@ -181,6 +181,17 @@ export function EditBookMetaModal({
   const [tagInput, setTagInput] = useState('');
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const tagInputRef = useRef<HTMLInputElement | null>(null);
+  const suggestionsCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* Clean up the deferred suggestions-close timeout if the modal unmounts
+     before it fires (mirrors AccountView / ModelSettingsForm's own fix). */
+  useEffect(() => {
+    return () => {
+      if (suggestionsCloseTimeoutRef.current !== null) {
+        clearTimeout(suggestionsCloseTimeoutRef.current);
+      }
+    };
+  }, []);
   /* Task 9 — the language row, kept as the raw code or `null` (Unset). The
      select's sentinel value '' maps to null on save. */
   const [language, setLanguage] = useState<string | null>(initial.language);
@@ -433,7 +444,15 @@ export function EditBookMetaModal({
                   /* Defer close so a mouse-down on a suggestion still
                      fires its onMouseDown handler before blur clears
                      the dropdown. */
-                  onBlur={() => setTimeout(() => setSuggestionsOpen(false), 120)}
+                  onBlur={() => {
+                    if (suggestionsCloseTimeoutRef.current !== null) {
+                      clearTimeout(suggestionsCloseTimeoutRef.current);
+                    }
+                    suggestionsCloseTimeoutRef.current = setTimeout(
+                      () => setSuggestionsOpen(false),
+                      120,
+                    );
+                  }}
                   aria-label="Add tag"
                   placeholder={tags.length === 0 ? 'Add tags (Enter or comma to add)' : ''}
                   className="flex-1 min-w-[120px] bg-transparent text-sm text-ink focus:outline-hidden py-0.5"

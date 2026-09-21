@@ -1,0 +1,47 @@
+### A12 drive v2 - 2026-09-20 09:39:17 - enumeration order changed via CUDA_VISIBLE_DEVICES permutation ###
+=== BOOT B1 both cards, default order | QWEN_DEVICE=cuda-uuid:73e7270e-ff5b-d1a2-de93-bc83af87699d | QWEN_CODEC_DEVICE=cuda-uuid:1831b67f-ccc0-c3fc-9167-cff059c3224c | CUDA_DEVICE_ORDER= | CUDA_VISIBLE_DEVICES= ===
+  enumeration : 0=NVIDIA GeForce RTX 4070 Laptop GPU|1831b67f-ccc0-c3fc-9167-cff059c3224c ;; 1=NVIDIA GeForce RTX 5070 Ti|73e7270e-ff5b-d1a2-de93-bc83af87699d
+  qwen pin    : cuda:1 -> lands on NVIDIA GeForce RTX 5070 Ti [73e7270e-ff5b-d1a2-de93-bc83af87699d] | validate=ok | admission=cuda:1 | uuid_ok=True
+  codec pin   : cuda:0 -> cuda:0 -> lands on NVIDIA GeForce RTX 4070 Laptop GPU | validate=ok | weights loaded at import: 
+=== BOOT B2 REVERSED enumeration (1,0) | QWEN_DEVICE=cuda-uuid:73e7270e-ff5b-d1a2-de93-bc83af87699d | QWEN_CODEC_DEVICE=cuda-uuid:1831b67f-ccc0-c3fc-9167-cff059c3224c | CUDA_DEVICE_ORDER= | CUDA_VISIBLE_DEVICES=1,0 ===
+  enumeration : 0=NVIDIA GeForce RTX 5070 Ti|73e7270e-ff5b-d1a2-de93-bc83af87699d ;; 1=NVIDIA GeForce RTX 4070 Laptop GPU|1831b67f-ccc0-c3fc-9167-cff059c3224c
+  qwen pin    : cuda:0 -> lands on NVIDIA GeForce RTX 5070 Ti [73e7270e-ff5b-d1a2-de93-bc83af87699d] | validate=ok | admission=cuda:0 | uuid_ok=True
+  codec pin   : cuda:1 -> cuda:1 -> lands on NVIDIA GeForce RTX 4070 Laptop GPU | validate=ok | weights loaded at import: 
+=== BOOT B3 both cards, default order again | QWEN_DEVICE=cuda-uuid:73e7270e-ff5b-d1a2-de93-bc83af87699d | QWEN_CODEC_DEVICE=cuda-uuid:1831b67f-ccc0-c3fc-9167-cff059c3224c | CUDA_DEVICE_ORDER= | CUDA_VISIBLE_DEVICES= ===
+  enumeration : 0=NVIDIA GeForce RTX 4070 Laptop GPU|1831b67f-ccc0-c3fc-9167-cff059c3224c ;; 1=NVIDIA GeForce RTX 5070 Ti|73e7270e-ff5b-d1a2-de93-bc83af87699d
+  qwen pin    : cuda:1 -> lands on NVIDIA GeForce RTX 5070 Ti [73e7270e-ff5b-d1a2-de93-bc83af87699d] | validate=ok | admission=cuda:1 | uuid_ok=True
+  codec pin   : cuda:0 -> cuda:0 -> lands on NVIDIA GeForce RTX 4070 Laptop GPU | validate=ok | weights loaded at import: 
+--- counterfactual: 'cuda:1' frozen out of B1 and replayed under B2's enumeration (the pre-#1870 shape) ---
+=== BOOT B4 stale index under reversed enumeration | QWEN_DEVICE=cuda:1 | QWEN_CODEC_DEVICE=cuda:1 | CUDA_DEVICE_ORDER= | CUDA_VISIBLE_DEVICES=1,0 ===
+  enumeration : 0=NVIDIA GeForce RTX 5070 Ti|73e7270e-ff5b-d1a2-de93-bc83af87699d ;; 1=NVIDIA GeForce RTX 4070 Laptop GPU|1831b67f-ccc0-c3fc-9167-cff059c3224c
+  qwen pin    : cuda:1 -> lands on NVIDIA GeForce RTX 4070 Laptop GPU [1831b67f-ccc0-c3fc-9167-cff059c3224c] | validate=ok | admission=cuda:1 | uuid_ok=
+  codec pin   : cuda:1 -> cuda:1 -> lands on NVIDIA GeForce RTX 4070 Laptop GPU | validate=ok | weights loaded at import: 
+  pinned card is idx=0 (NVIDIA GeForce RTX 5070 Ti); 'cuda:1' landed on idx=1 (NVIDIA GeForce RTX 4070 Laptop GPU) -> wrong card: True
+  note: uuid_ok for the UUID form in this same order was: True
+--- counterfactual: frozen index that has no slot at all on the new boot ---
+=== BOOT B5 stale index, single visible card | QWEN_DEVICE=cuda:1 | QWEN_CODEC_DEVICE=cuda:1 | CUDA_DEVICE_ORDER= | CUDA_VISIBLE_DEVICES=1 ===
+  enumeration : 0=NVIDIA GeForce RTX 5070 Ti|73e7270e-ff5b-d1a2-de93-bc83af87699d
+  qwen pin    : cuda:1 -> lands on  [] | validate=ValueError: cuda:1 out of range; only 1 CUDA device(s) visible | admission=cuda:1 | uuid_ok=
+  codec pin   : cuda:1 -> cuda:1 -> lands on  | validate=ValueError: cuda:1 out of range; only 1 CUDA device(s) visible | weights loaded at import: 
+  (only the 5070 Ti visible; 'cuda:1' points past the end of the list)
+--- control: uuid the box cannot see at all ---
+=== BOOT B6 uuid_unresolved | QWEN_DEVICE=cuda-uuid:00000000-0000-0000-0000-000000000000 | QWEN_CODEC_DEVICE=cuda-uuid:00000000-0000-0000-0000-000000000000 | CUDA_DEVICE_ORDER= | CUDA_VISIBLE_DEVICES=1 ===
+  enumeration : 0=NVIDIA GeForce RTX 5070 Ti|73e7270e-ff5b-d1a2-de93-bc83af87699d
+  qwen pin    : auto -> lands on  [] | validate=ok | admission= | uuid_ok=False
+  codec pin   : cpu ->  -> lands on  | validate=n/a (cpu) | weights loaded at import: 
+--- control: nvidia-smi-style GPU- prefixed uuid (NOT what toUuidForm stores) ---
+=== BOOT B7 GPU- prefixed form | QWEN_DEVICE=cuda-uuid:GPU-73e7270e-ff5b-d1a2-de93-bc83af87699d | QWEN_CODEC_DEVICE=cuda-uuid:GPU-73e7270e-ff5b-d1a2-de93-bc83af87699d | CUDA_DEVICE_ORDER= | CUDA_VISIBLE_DEVICES= ===
+  enumeration : 0=NVIDIA GeForce RTX 4070 Laptop GPU|1831b67f-ccc0-c3fc-9167-cff059c3224c ;; 1=NVIDIA GeForce RTX 5070 Ti|73e7270e-ff5b-d1a2-de93-bc83af87699d
+  qwen pin    : auto -> lands on  [] | validate=ok | admission= | uuid_ok=False
+  codec pin   : cpu ->  -> lands on  | validate=n/a (cpu) | weights loaded at import: 
+--- CUDA_DEVICE_ORDER on this box: does it renumber at all? ---
+=== BOOT B8 PCI_BUS_ID | QWEN_DEVICE=cuda-uuid:73e7270e-ff5b-d1a2-de93-bc83af87699d | QWEN_CODEC_DEVICE=cuda-uuid:1831b67f-ccc0-c3fc-9167-cff059c3224c | CUDA_DEVICE_ORDER=PCI_BUS_ID | CUDA_VISIBLE_DEVICES= ===
+  enumeration : 0=NVIDIA GeForce RTX 4070 Laptop GPU|1831b67f-ccc0-c3fc-9167-cff059c3224c ;; 1=NVIDIA GeForce RTX 5070 Ti|73e7270e-ff5b-d1a2-de93-bc83af87699d
+  qwen pin    : cuda:1 -> lands on NVIDIA GeForce RTX 5070 Ti [73e7270e-ff5b-d1a2-de93-bc83af87699d] | validate=ok | admission=cuda:1 | uuid_ok=True
+  codec pin   : cuda:0 -> cuda:0 -> lands on NVIDIA GeForce RTX 4070 Laptop GPU | validate=ok | weights loaded at import: 
+=== BOOT B9 FASTEST_FIRST | QWEN_DEVICE=cuda-uuid:73e7270e-ff5b-d1a2-de93-bc83af87699d | QWEN_CODEC_DEVICE=cuda-uuid:1831b67f-ccc0-c3fc-9167-cff059c3224c | CUDA_DEVICE_ORDER=FASTEST_FIRST | CUDA_VISIBLE_DEVICES= ===
+  enumeration : 0=NVIDIA GeForce RTX 4070 Laptop GPU|1831b67f-ccc0-c3fc-9167-cff059c3224c ;; 1=NVIDIA GeForce RTX 5070 Ti|73e7270e-ff5b-d1a2-de93-bc83af87699d
+  qwen pin    : cuda:1 -> lands on NVIDIA GeForce RTX 5070 Ti [73e7270e-ff5b-d1a2-de93-bc83af87699d] | validate=ok | admission=cuda:1 | uuid_ok=True
+  codec pin   : cuda:0 -> cuda:0 -> lands on NVIDIA GeForce RTX 4070 Laptop GPU | validate=ok | weights loaded at import: 
+### drive complete ###
+A12-DRIVE-DONE

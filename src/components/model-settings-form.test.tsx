@@ -124,6 +124,39 @@ describe('ModelSettingsForm — Cloud fallback toggle (Part 1)', () => {
       );
     });
   });
+
+  it('clears the save-confirmation timeout on unmount to prevent setState after unmount', async () => {
+    /* Regression: the setTimeout inside onSave was never cleared here (unlike
+       the sibling AccountView, which already guards this) — the timeout kept
+       running after the component unmounted and tried to call setShowSaved on
+       jsdom's window after it had been torn down for a later test file.
+       A timer-count assertion is too fragile here: sibling effects (readiness
+       polling, etc.) own unrelated timers that come and go independently, so
+       counting the total proves nothing about THIS timeout specifically.
+       Instead, capture the exact setTimeout(..., 2400) call's id and assert
+       clearTimeout is invoked with THAT id on unmount — precise regardless of
+       how many other timers exist, and false before the fix (no cleanup
+       effect existed, so this id is never passed to clearTimeout at all). */
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    vi.mocked(api.putUserSettings).mockImplementation(
+      async (patch) => ({ ...accountSlice.getInitialState(), ...(patch as object) }) as never,
+    );
+    const { unmount } = renderForm();
+
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => {
+      expect(vi.mocked(api.putUserSettings)).toHaveBeenCalled();
+    });
+
+    const confirmCallIndex = setTimeoutSpy.mock.calls.findIndex((call) => call[1] === 2400);
+    expect(confirmCallIndex).toBeGreaterThanOrEqual(0);
+    const confirmTimeoutId = setTimeoutSpy.mock.results[confirmCallIndex]?.value;
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(confirmTimeoutId);
+  });
 });
 
 describe('ModelSettingsForm — Voice engine URL sublabel (#2632 N22)', () => {

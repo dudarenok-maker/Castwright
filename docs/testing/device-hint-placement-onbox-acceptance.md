@@ -111,7 +111,11 @@ this criterion exists to prove the derive now warms it itself.
 and the chapter renders** — a successful un-hinted derive is precisely the
 pre-#3058 behaviour, and the whole feature is then inert.
 
-Result:
+Result: **PASS (2026-09-20 sitting, cline-qwen-cloud / OE claim `3298`)** — real
+chapter-render-triggered lazy derive emitted `X-Device-Hint: cuda:1`; temporary `main.py`
+log line printed `[A106-C1-TEMP] device_hint=cuda:1` at `15:58:49.099` local, immediately
+followed by `Loading Coqui … on device=cuda:1` (cold load after explicit `POST /unload`).
+Full evidence chain recorded in the A106 dated note in `onbox-acceptance-register.md`.
 
 ---
 
@@ -315,7 +319,14 @@ hinted half is not a control and does not discharge this criterion.
 **Fail:** either run lands on the same card as the other, or the derive
 fails/stalls in either state.
 
-Result:
+Result: **NOT DISCHARGED (2026-09-20 sitting, cline-qwen-cloud / OE claim `3298`)** — the
+discriminating band could not be constructed: `cuda:0` idle free ≈ 5.4 GB, below this
+criterion's live-computed fill target (≈ 6.4 GB), and the box's room-escape clause in the
+register row applies. An unhinted cold control derive (`POST /xtts/clone-voice`, no header,
+16:12:05 local, fully idle 2-card box) landed on `cuda:1` — the same card as the hinted
+15:58:49 derive — so placement under the box's normal state is non-discriminating exactly as
+predicted. Box `peak`/`GPU_RESERVE_MB` at the time: sidecar profile reserved ≈ 3.5 GB
+(`requiredMb` 3584), Coqui resident set 2,150–2,511 MiB post-load.
 
 ---
 

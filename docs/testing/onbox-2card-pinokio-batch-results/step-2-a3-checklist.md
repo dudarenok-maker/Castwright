@@ -354,6 +354,26 @@ consumes `tripEvent()`.
 Item 1's premise held (real per-card UUIDs); nothing about this box makes
 `DeviceLedger`'s renumber-detection a no-op.
 
+**Superseded for items 5/6 by the 2026-09-20 post-#3148 re-run below — the
+streak-trip now fires for real on this box.**
+
+## 2026-09-20 post-#3148 re-run (issue #3295) — items 5/6: trip fires, cascade resolves
+
+PR #3148 removed the `start.ps1`/`start.sh` restart loop, so
+`sidecar-supervisor.ts` now owns respawn and observes individual exits — the
+exact blocker this checklist's items 5/6 found. Re-ran the item-5 trigger
+(card-specific `SIDECAR_VRAM_FREE_FLOOR_MB=999999`, isolated ports/settings,
+fresh build): three `code=43` exits individually logged by the supervisor in
+~90 s, streak trip fired with the breach card's real UUID
+(`driver_free_floor`, card 0 `GPU-1831b67f-…`), TTS held down with no further
+respawn, 0 sidecar listeners at trip, `/api/gpu/trip-status` answered live
+(`unrevertable` + card-specific toast), trip breadcrumb written. **Items 5 (and
+the trip half of 6) now pass.** A live `reverted` (pin rewritten by
+`runAutoRevert`) is structurally uninducible on this all-fit 2-card box — the
+floor breach only fires on torch-inactive cards; full record incl. the failed
+Run C attempt: `a3-rerun-2026-09-20.md` (same directory) and the A3 row note in
+`docs/testing/onbox-acceptance-register.md`.
+
 ## Not attempted / out of scope
 
 - Rows outside A3's own 10 items (A2, A12, E7, E11, A18) — separate register

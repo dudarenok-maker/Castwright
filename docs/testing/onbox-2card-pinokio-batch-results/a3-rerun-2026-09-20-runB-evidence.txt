@@ -1,0 +1,47 @@
+START 2026-09-20T08:56:32.8481826+10:00  trigger=SIDECAR_VRAM_FREE_FLOOR_MB=999999 (card-specific)
+wait done 2026-09-20T09:05:33.8803096+10:00 breaches=0 sawTripLog=False
+TRIP_STATUS_JSON={"status":"unrevertable","toast":"Voice engine kept crash-looping on a specific GPU card, but no TTS engine was resident there � manual investigation needed.","seq":1}
+BREADCRUMB={"card": {"uuid": "1831b67f-ccc0-c3fc-9167-cff059c3224c", "idx": 0, "reason": "driver_free_floor", "metric_mb": 7411, "threshold_mb": 999999.0}, "reason": "card 0 driver_free_floor", "residentEngines": [], "devices": [{"uuid": "1831b67f-ccc0-c3fc-9167-cff059c3224c", "idx": 0, "name": "NVIDIA GeForce RTX 4070 Laptop GPU", "total_mb": 8585, "free_mb": 7411}, {"uuid": "73e7270e-ff5b-d1a2-de93-bc83af87699d", "idx": 1, "name": "NVIDIA GeForce RTX 5070 Ti", "total_mb": 17066, "free_mb": 15767}], "ts": 1789858696.0025504}
+===== tts.err.log =====
+===== server console (relevant) =====
+2026-09-20 08:56:51.957 [sidecar] spawned pid=40796 (PRELOAD_COQUI=0, PRELOAD_QWEN=sidecar-default, PRELOAD_KOKORO=sidecar-default, modelKey=qwen3-tts-0.6b)
+2026-09-20 08:57:27.468 [sidecar] supervisor: child exited (code=43 signal=null); respawning in 2000ms (attempt 1/5).
+2026-09-20 08:57:29.481 [sidecar] spawned pid=12740 (PRELOAD_COQUI=0, PRELOAD_QWEN=sidecar-default, PRELOAD_KOKORO=sidecar-default, modelKey=qwen3-tts-0.6b)
+2026-09-20 08:57:51.041 [sidecar] supervisor: child exited (code=43 signal=null); respawning in 5000ms (attempt 2/5).
+2026-09-20 08:57:56.053 [sidecar] spawned pid=13212 (PRELOAD_COQUI=0, PRELOAD_QWEN=sidecar-default, PRELOAD_KOKORO=sidecar-default, modelKey=qwen3-tts-0.6b)
+2026-09-20 08:57:27.466 [sidecar] child exited (code=43, signal=null) at 2026-09-20 08:57:27.466
+2026-09-20 08:57:51.040 [sidecar] child exited (code=43, signal=null) at 2026-09-20 08:57:51.040
+2026-09-20 08:58:17.218 [sidecar] child exited (code=43, signal=null) at 2026-09-20 08:58:17.218
+2026-09-20 08:58:17.220 [sidecar] supervisor: 3 code-43 self-exits in 10 minutes (card={"uuid":"1831b67f-ccc0-c3fc-9167-cff059c3224c","idx":0,"reason":"driver_free_floor","metric_mb":7411,"threshold_mb":999999}) — this device assignment looks structurally too small. Holding TTS down (no further respawn attempts) until the assignment changes and the server restarts.
+2026-09-20 08:58:47.151 [tts:catalog-audit] Could not reach http://127.0.0.1:9080/speakers within 120s — skipping audit. Start the sidecar and run `curl http://127.0.0.1:9080/api/sidecar/catalog-audit` (or restart the server) to retry.
+port9080_listeners_at_trip=0
+sidecar_tree_procs_at_trip=0
+SETTINGS_AFTER={
+  "configOverrides": {},
+  "displayName": "Castwright",
+  "defaultAnalysisModel": "qwen3.5:4b",
+  "defaultTtsEngine": "local",
+  "defaultTtsModelKey": "kokoro-v1",
+  "defaultTtsModelKeyExplicit": false,
+  "sidecarUrl": "http://localhost:9000",
+  "analysisEngine": "local",
+  "allowCloudFallback": true,
+  "workspaceDirOverride": null,
+  "exportSyncFolder": null,
+  "minorCastMinLines": 3,
+  "coverPickerDefaultTab": "search",
+  "defaultThemePreference": "system",
+  "autoStartSidecar": true,
+  "dualModelEnabled": false,
+  "generationWorkers": 1,
+  "geminiApiKey": null,
+  "backupEnabled": true,
+  "backupCadence": "daily",
+  "backupRetention": 14,
+  "analyzerKeepAliveByModel": {},
+  "lastSeenAppVersion": "1.14.0"
+}
+kill: SUCCESS: The process with PID 22472 (child process of PID 17808) has been terminated.
+kill: SUCCESS: The process with PID 17808 (child process of PID 21132) has been terminated.
+port9080_final=0
+DONE 2026-09-20T09:05:52.0698163+10:00

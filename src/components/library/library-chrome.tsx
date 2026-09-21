@@ -9,7 +9,7 @@
    the book-library.tsx orchestrator; the chrome is purely
    presentational. */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { IconPlus, IconFolder, IconCopy, IconClose, IconDownload } from '../../lib/icons';
 import { SectionLabel, MixedHeading, PrimaryButton } from '../primitives';
 import { formatHours } from '../../lib/time';
@@ -278,6 +278,18 @@ export function LibraryChrome({
 
 function WorkspacePathRow({ info }: { info: WorkspaceInfo }) {
   const [copied, setCopied] = useState(false);
+  const copiedTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /* Clean up the copied-confirmation timeout if the row unmounts before it
+     fires (mirrors AccountView / ModelSettingsForm's own fix). */
+  useEffect(() => {
+    return () => {
+      if (copiedTimeoutRef.current !== null) {
+        clearTimeout(copiedTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const onCopy = () => {
     /* navigator.clipboard is async + secure-context-gated. The local dev
        server runs on http://localhost which Chrome treats as secure, so this
@@ -286,7 +298,8 @@ function WorkspacePathRow({ info }: { info: WorkspaceInfo }) {
       .writeText(info.root)
       .then(() => {
         setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
+        if (copiedTimeoutRef.current !== null) clearTimeout(copiedTimeoutRef.current);
+        copiedTimeoutRef.current = setTimeout(() => setCopied(false), 1500);
       })
       .catch(() => {});
   };

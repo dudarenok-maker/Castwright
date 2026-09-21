@@ -43,6 +43,40 @@ describe('PairDeviceModal (QR redesign)', () => {
     expect(screen.getByText('J4XQ2A7BWZ9K3M5R')).toBeInTheDocument();
   });
 
+  it('clears a CopyRow copied-confirmation timeout on unmount to prevent setState after unmount', async () => {
+    /* Regression: the setTimeout flipping a CopyRow's icon back from
+       "copied" to the copy icon was never cleared on unmount — the same
+       unguarded-timer shape fixed elsewhere in this PR (AccountView,
+       ModelSettingsForm, ModelManagerView, ShareLinkModal,
+       WorkspacePathRow, SettingsAccordionWithNav, and EditBookMetaModal's
+       tag-suggestions close). Capture the exact setTimeout(..., 1500)
+       call's id via a spy and assert clearTimeout is invoked with THAT id
+       on unmount. */
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText },
+      configurable: true,
+      writable: true,
+    });
+    vi.spyOn(api, 'createPairSession').mockResolvedValue(SESSION);
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout');
+    const { unmount } = render(<PairDeviceModal open onClose={() => {}} />);
+    generate();
+    await waitFor(() => expect(screen.getByTestId('pair-qr-image')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText('Copy Server'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(SESSION.hostPort));
+
+    const resetCallIndex = setTimeoutSpy.mock.calls.findIndex((call) => call[1] === 1500);
+    expect(resetCallIndex).toBeGreaterThanOrEqual(0);
+    const resetTimeoutId = setTimeoutSpy.mock.results[resetCallIndex]?.value;
+
+    unmount();
+
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(resetTimeoutId);
+  });
+
   it('shows the unavailable state when the session 409s', async () => {
     vi.spyOn(api, 'createPairSession').mockRejectedValue(new Error('pair session failed (409): not-lan-https'));
     render(<PairDeviceModal open onClose={() => {}} />);

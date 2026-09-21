@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="30" data-publish-id="3ff5c784c0ce"></div>
+  <div hidden data-published-as="30" data-publish-id="8563ef385d6b"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">54</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">53</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->35<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->34<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->2<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">35 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">34 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -575,20 +575,6 @@
           <li><b>(added post-#2678/PR #2797)</b> With a caller that carries its own shorter abort budget (e.g. <code>POST /api/sidecar/load</code>'s 90s <code>AbortController</code>), confirm that if its signal fires while <code>withCapacityRetry</code> is still inside the extended design-wait budget, the caller sees the same <code>NoCapacityError</code> it would have seen at <code>designMaxAttempts</code> — not a raw <code>AbortError</code> misread as a generic stuck process. Only a caller opted in via <code>createHardTimeoutAbortReason()</code> (currently just <code>/api/sidecar/load</code>) gets this conversion (re-review finding N3) — separately confirm a real user Pause or regen-displacement mid-design-wait on the synthesis path still surfaces as a plain, recognisable <code>AbortError</code> and is NOT converted to <code>NoCapacityError</code>/<code>vram-spill</code>.</li>
         </ul>
         <p class="src">A live sidecar with Qwen VoiceDesign installed, and a way to trigger two overlapping requests (a second browser tab/session is enough); the cross-device bullet additionally needs the 2-card boot · <a href="https://github.com/dudarenok-maker/Castwright/issues/2070">#2070</a> · <a href="https://github.com/dudarenok-maker/Castwright/issues/2678">#2678</a> · <a href="https://github.com/dudarenok-maker/Castwright/pull/2797">PR #2797</a> · criteria: <code>unload_design</code>'s docstring in <code>server/tts-sidecar/main.py</code>; sizing rationale is the <code>_DESIGN_CONTENTION_WAIT_S_DEFAULT</code> comment immediately above <code>class QwenEngine</code>; for the three added bullets, <code>withCapacityRetry</code> in <code>server/src/gpu/capacity-retry.ts</code> and PR #2797's description · short — one overlapped request pair per bullet</p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">A25</span><span class="iname">ASR warm-reservation figure vs. a real resident /transcribe peak</span><span class="risk">Structurally can't converge — filed #2682</span><span class="chev">›</span></summary>
-      <div class="body">
-        <div class="flag"><b>RUN 2026-08-26 (wave 7) — bullet 2 answered: it structurally can't converge, filed as <a href="https://github.com/dudarenok-maker/Castwright/issues/2682">#2682</a>.</b> Drove 15 direct <code>/transcribe</code> calls against a real resident <code>faster-whisper</code> <code>base</code>/<code>int8_float16</code> model — 8 with Qwen co-resident, 7 on a genuinely clean card (nothing else resident). All 15 recorded <code>observed_mb &lt;= 0</code> and were silently dropped, including all 7 CLEAN samples. The device-wide free-memory delta this key is measured by never comes back positive for this model/precision combo, so <code>asr.warm</code>'s learned p95 can never move off its 128 MB seed in practice — not unconverged yet, structurally unfalsifiable with this instrument. Needs a design decision (leave the seed, switch to the torch-allocator instrument other keys use, or document the limitation) — filed rather than fixed.</div>
-        <div class="flag"><b>PARTIALLY run 2026-08-26 (wave 6) — no refusals observed across two renders, but the ≥5-observation <code>asr.warm</code> p95 convergence was not tracked.</b> With <code>ASR_DEVICE=cuda</code>, <code>SEG_ASR_ENABLED=1</code> and content-QA on, ASR went resident during a chapter render on an uncontended <code>cuda:0</code> and no <code>/transcribe</code> call 503'd <code>noCapacity</code> across two independent full-chapter renders (252 lines each, ASR sampling every sentence) — bullet 1 confirmed. Bullet 2 (watch the learned <code>asr.warm</code> p95 settle and record what it converges to) and bullet 3 (the residual foreign-process contamination case) were not exercised — this round only confirmed the absence of refusals, not the internal footprint state. <b>Still owed:</b> read <code>asr.warm</code>'s learned value directly after ≥5 real <code>/transcribe</code> observations.</div>
-        <p>Unit tests (<code>test_footprints.py</code>, <code>test_transcribe_embed_admission.py</code>, <code>test_asr_footprint_measurement.py</code>) pin that a resident ASR reservation books the separate <code>asr.warm</code> key (128 MB seed), that <code>admit()</code>/<code>reservation()</code> agree, and that the MEASUREMENT mechanism itself — a device-wide free-memory delta (<code>PlacementController._device_free_mb</code>), not the torch-allocator peak CTranslate2 sits outside of — is real and correctly guarded against contamination, all proven with a scripted sequence, no real allocator. Not yet observed: whether 128 MB is enough headroom for a real resident Whisper forward on a contended card, and whether the learned <code>asr.warm</code> p95 converges to something sane on a box the ledger-based contamination guard can't fully protect (a foreign, non-sidecar process on the same card is still invisible to it).</p>
-        <ul>
-          <li>With <code>ASR_DEVICE=cuda</code> and content-QA enabled (<code>SEG_ASR_ENABLED=1</code>), render a chapter so ASR loads and goes resident, then trigger several more <code>/transcribe</code> calls back-to-back (a re-record round is the natural trigger). Confirm none of them 503 <code>noCapacity</code> on a card that has genuine room.</li>
-          <li>Watch <code>FootprintTable</code>'s learned <code>asr.warm</code> p95 settle after ≥5 real observations — record what it converges to. A sane figure (double digits to low hundreds of MB) confirms real signal; a suspiciously large one points at contamination the ledger guard couldn't see.</li>
-          <li>The device-wide contamination question #2094's own filing raised is now PARTIALLY addressed (discards a reading when another SIDECAR engine holds a concurrent reservation) but not fully closed — a foreign process is still invisible to it. This row is where that residual gets its first real evidence.</li>
-        </ul>
-        <p class="src"><code>ASR_DEVICE=cuda</code>, <code>SEG_ASR_ENABLED=1</code>, a real book render with content-QA on, ideally on an UNCONTENDED card · <a href="https://github.com/dudarenok-maker/Castwright/issues/2094">#2094</a> · criteria: the <code>asr.warm</code> seed comment + <code>_device_free_mb</code>'s docstring in <code>server/tts-sidecar/main.py</code> and <code>docs/local-llm.md</code>'s footprint table · short — rides along with any other GPU-ASR session (batch with <a href="#ga">A13</a>)</p>
       </div>
     </details>
     <details class="item">

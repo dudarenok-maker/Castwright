@@ -7,7 +7,7 @@
 
    The moved form sections land in step A7 (alongside the Account surgery). */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { MixedHeading } from '../components/primitives';
 import { DevicePanel } from '../components/device-panel';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -591,6 +591,18 @@ function ModelRow({
   const dispatch = useAppDispatch();
   const [installerOpen, setInstallerOpen] = useState(false);
   const [keepAliveSaved, setKeepAliveSaved] = useState(false);
+  const keepAliveSavedTimeoutRef = useRef<number | null>(null);
+
+  /* Clean up the keep-alive-saved confirmation timeout if the row unmounts
+     before it fires (mirrors AccountView / ModelSettingsForm's own fix). */
+  useEffect(() => {
+    return () => {
+      if (keepAliveSavedTimeoutRef.current !== null) {
+        clearTimeout(keepAliveSavedTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const hasInstaller = INSTALLER_IDS.has(item.id);
   const engine = TTS_ENGINE_BY_ID[item.id];
   const loadModel = TTS_LOAD_MODEL_BY_ID[item.id];
@@ -648,7 +660,10 @@ function ModelRow({
   const saveKeepAlive = (next: Record<string, number>) => {
     void dispatch(saveAccountSettings({ analyzerKeepAliveByModel: next })).then(() => {
       setKeepAliveSaved(true);
-      window.setTimeout(() => setKeepAliveSaved(false), 2000);
+      if (keepAliveSavedTimeoutRef.current !== null) {
+        clearTimeout(keepAliveSavedTimeoutRef.current);
+      }
+      keepAliveSavedTimeoutRef.current = window.setTimeout(() => setKeepAliveSaved(false), 2000);
       onChanged();
     });
   };

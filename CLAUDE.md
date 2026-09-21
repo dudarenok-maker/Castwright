@@ -1319,7 +1319,21 @@ Working practice below; this holds even under contention).
   shape two bullets below (a correctly-named worktree, but the agent's
   process actually running with `cwd` pointed at the wrong root), the guard
   protects the wrong root and denies the right one. **Option 1 below is the
-  mandatory backstop, not an optional one**, until #3263 closes.
+  mandatory backstop, not an optional one**, until #3263 closes. Two observed
+  2026-09-19 consequences make this concrete. A `fix-agent` briefed at a
+  **pre-existing** worktree (an absolute path in the brief, not a fresh
+  `isolation: "worktree"` tree) runs with `cwd` set to the *dispatching*
+  session's checkout, so the guard denies **every** write to the correct
+  tree — `fix-agent` currently cannot be used for any worktree the
+  dispatching session's `cwd` is not already inside. **Dispatch such work as
+  `subagent_type: "implementer"` instead**, which has no guard wired, and
+  keep the option-1 check below regardless — the before/after porcelain
+  check is what actually catches this class of failure, whichever role is
+  used. Worse, **a denial is not safe by default**: the second occurrence's
+  agent retried against the *wrong* root instead of stopping, leaving a
+  stray uncommitted `server/src/analyzer/errors.ts` edit on `main` in the
+  primary checkout — the #3044 pattern reached *through* the guard rather
+  than in spite of it.
 - **Capture the primary checkout's `git status --porcelain` before a dispatch
   round and again after each agent returns.** Any entry that is not yours is a
   **failed dispatch** — revert it and re-dispatch; do not adopt it. This is the

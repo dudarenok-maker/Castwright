@@ -1453,9 +1453,21 @@ export function computeStepBudgetMs(cache, stepName, floorMs, multiplier) {
 /** The real whole-pipeline budget computation runPipeline uses — same
  *  extraction rationale as computeStepBudgetMs. `qualifiedRunDurationMs` is
  *  the SUM of the active steps' own qualified baselines (0 when nothing is
- *  calibratable, treated as null/uncalibrated per computeBudgetMs). */
+ *  calibratable, treated as null/uncalibrated per computeBudgetMs). The floor
+ *  is widened by `multiplier` ONLY when a qualified baseline exists; an
+ *  uncalibrated run keeps the flat, unwidened floor regardless of any
+ *  throttle (Castwright#3272, decision C). The per-step budget
+ *  (computeStepBudgetMs) is widened by the same `multiplier` in both the
+ *  calibrated and uncalibrated case, but it is always subordinate to the
+ *  pipeline deadline via the `Math.min(...)` clamp in runPipeline — that
+ *  subordination bites hardest in the uncalibrated case specifically, since
+ *  decision C is what just tightened the pipeline-level floor there. The
+ *  CALIBRATED branch is untouched by decision C: a warm-cache throttled run
+ *  still widens this floor by `multiplier`, same as before this fix. */
 export function computeRunBudgetMs(qualifiedRunDurationMs, floorMs, multiplier) {
-  return computeBudgetMs(qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null, floorMs * multiplier);
+  const qualified = qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null;
+  const effectiveFloorMs = qualified === null ? floorMs : floorMs * multiplier;
+  return computeBudgetMs(qualified, effectiveFloorMs);
 }
 
 // Cap on the tail-keeping stderr accumulator below — mirrors spawnSync's old
@@ -1623,6 +1635,48 @@ export async function runStepProcess(
   return { code: lastRes.code, attempts: MAX_POOL_ATTEMPTS, timedOut: false };
 }
 
+// Unconditional local checks (#3140) --------------------------------------
+//
+// These scripts run on EVERY full `npm run verify` - never `[cached]`, never
+// scope-skipped, and never as a `STEPS[]` entry. WHY they cannot live in
+// STEPS[]: `scripts/ci-scope.mjs` auto-derives a `step_<slug>` scope key for
+// every STEPS[] entry (computeScopes/slugFor), and
+// scripts/tests/workflow-wiring.test.mjs's "every emitted scope key is
+// referenced by the workflow" test then requires that key to be referenced by
+// an `if:` condition in .github/workflows/verify.yml - while that same file's
+// "register citation check: must be unconditional (no if: guard) - #3122" test
+// requires the CI step for this exact check to have NO `if:` at all. A STEPS[]
+// entry would force those two tests into direct contradiction.
+//
+// WHY unconditional-and-uncached rather than a step: the checker
+// (scripts/check-register-citations.mjs) scans the WHOLE git-tracked tree for
+// register-row citations, so no diff-scope and no input-glob set can predict
+// whether one broke. Reached only via `test:hooks`, a diff touching any file
+// outside that step's globs printed `test:hooks [cached]` and left a broken
+// citation stale-green locally - #3140's local-wiring gap (#1847 is the same
+// trap shape, one step further out).
+export const UNCONDITIONAL_LOCAL_CHECK_SCRIPTS = Object.freeze(['check:register-citations']);
+
+// Runs each UNCONDITIONAL_LOCAL_CHECK_SCRIPTS entry through the SAME spawn
+// mechanism (`runStepProcess`) the STEPS[] loop uses, and reports the SAME
+// [run]/[pass]/[fail] shape - only the cache-hash and scope-filter machinery
+// is absent. Returns the first non-zero exit code, failing the whole run
+// exactly like a failed step; 0 when every check passed.
+export async function runUnconditionalLocalChecks({ cwd, env }) {
+  for (const script of UNCONDITIONAL_LOCAL_CHECK_SCRIPTS) {
+    console.log(`[run] ${script} (unconditional)`);
+    const t0 = Date.now();
+    const { code } = await runStepProcess(script, { cwd, env, retryKey: script });
+    const dt = Date.now() - t0;
+    if (code !== 0) {
+      console.log(`[fail] ${script} (exit ${code}, took ${formatSecs(dt)})`);
+      return code;
+    }
+    console.log(`[pass] ${script} (took ${formatSecs(dt)})`);
+  }
+  return 0;
+}
+
 export async function runPipeline({ argv = [], cwd = process.cwd(), env = process.env } = {}) {
   const flags = parseFlags(argv);
   const validNames = STEPS.map((s) => s.name);
@@ -1638,6 +1692,21 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     }
     const selected = new Set(flags.steps);
     activeSteps = STEPS.filter((s) => selected.has(s.name));
+  }
+
+  // Unconditional local checks (#3140) — run at the HEAD of the pipeline, so a
+  // broken citation fails the run before any cached/skipped step can report
+  // [pass] on stale evidence. Full runs only: a `--steps` run is a
+  // deliberately narrow filter — package.json's verify:fast* scripts (manual,
+  // developer-invoked) and `.husky/pre-push`'s own `--steps test:sidecar
+  // --scope-branch` call both use it — and the same `flags.steps` condition
+  // the selection block above uses is what distinguishes "full" from
+  // "filtered". Deliberately NOT wrapped in a cache check or a scope check —
+  // see runUnconditionalLocalChecks' own header for why both are impossible
+  // here.
+  if (!flags.steps || flags.steps.length === 0) {
+    const checkCode = await runUnconditionalLocalChecks({ cwd, env });
+    if (checkCode !== 0) return checkCode;
   }
 
   // Contention guard — if a generation run is hammering the GPU, throttle the
@@ -1731,16 +1800,29 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   // conditions produced that baseline, so multiplying its RESULT double-
   // counts a throttle a prior throttled run's own baseline already absorbed
   // (measured: a baseline recorded throttled at 2x, multiplied again here,
-  // gave 4x instead of the intended 2x — now correctly gives 2x). This DOES
-  // NOT touch the uncalibrated pipeline floor (PR #3260 review pass 3, B10):
-  // computeBudgetMs(null, F) returns F verbatim regardless of k, so
-  // "multiply the result" and "multiply the floor input" are algebraically
-  // IDENTICAL — both still land the whole-pipeline floor at 2x
-  // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle, past the 273.8-min
-  // incident this budget exists to bound. What widened uncalibrated pipeline
-  // floor is actually safe under contention is a real open question, argued
-  // against that 273.8-min figure rather than derived from the fork-pool
-  // ratio — tracked as Castwright#3272 rather than picked here.
+  // gave 4x instead of the intended 2x — now correctly gives 2x).
+  //
+  // The UNCALIBRATED pipeline floor is deliberately left UNWIDENED under
+  // throttle — settled, not open (PR #3260 review pass 3 raised it as B10;
+  // Castwright#3272 decision C picked this direction). With no qualified
+  // baseline there is nothing for `multiplier` to calibrate against, and
+  // widening this floor lands the whole-pipeline budget at 2x
+  // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle — past the 273.8-min
+  // incident this budget exists to bound, defeating the feature's own stated
+  // goal. This is scoped to the UNCALIBRATED case only: the CALIBRATED branch
+  // (qualifiedRunDurationMs > 0, i.e. at least one active step has a qualified
+  // baseline) is untouched by this decision and still widens by `multiplier`
+  // exactly as before this fix, so a warm-cache throttled run can still reach
+  // the pre-existing 2x DEFAULT_RUN_TIMEOUT_MIN floor. The PER-STEP budget
+  // (computeStepBudgetMs, also widened by the same multiplier) is widened in
+  // BOTH branches, calibrated and uncalibrated alike — but it is never fully
+  // independent protection: the `Math.min(...)` clamp on stepBudgetMs below
+  // also caps it at whatever remains of the pipeline deadline, so a per-step
+  // budget can only ever be as generous as the pipeline-level number leaves
+  // room for. That subordination bites hardest in the UNCALIBRATED case
+  // specifically, since decision C is what just tightened the pipeline-level
+  // floor there (Castwright#3361 tracks whether the calibrated branch's own
+  // floor term should be revisited too).
   const contentionBudgetMultiplier =
     affectedByContention && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
   const runBudgetMs = computeRunBudgetMs(qualifiedRunDurationMs, runTimeoutFloorMs, contentionBudgetMultiplier);
