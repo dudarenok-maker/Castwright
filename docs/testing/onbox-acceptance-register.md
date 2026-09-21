@@ -3316,7 +3316,7 @@ deliberately-broken Kokoro run; well under an hour total.
 >   "2026-09-20T06:00:23.628Z"`; `characterSnapshots.aria` resolves to
 >   `xtts-01e278d6-...`; and all nine verdicts in `01-chapter-1.render-integrity.json` carry
 >   `expectedEngine`/`renderedEngine: "coqui"`. This throwaway fixture was re-rendered on
->   2026-09-20 by later batch rows (`01-chapter-1.mp3` 508,653 B @ 16:00:23,
+>   2026-09-20 by other work on this box (`01-chapter-1.mp3` 508,653 B @ 16:00:23,
 >   `01-chapter-1.previous.mp3` @ 15:51:41), overwriting the 2026-09-06 Qwen render. There is
 >   consequently **no listenable Qwen-clone audio anywhere in the workspace** — a filesystem
 >   sweep for `*01e278d6*` under `voices/` returns the master clip and the Coqui `.pt` only.
