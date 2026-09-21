@@ -4301,6 +4301,71 @@ than a real render.
 > (drive committed RAM toward the 70% ceiling and confirm the sidecar
 > self-exits with code 43) — no host-memory push was made this run at all.
 
+> **RAM hard-restart bullet DRIVEN for real 2026-09-21 (batch 1 step 4,
+> cline-qwen-cloud, [#3307](https://github.com/dudarenok-maker/Castwright/issues/3307))
+> — the bullet that 2026-09-09 recorded as "not even attempted" now has a real
+> code-43 self-exit observed, and the bullet's prescribed METHOD is wrong.** Real
+> hardware, real `main.py`, no mocks of the decision.
+>
+> **Correction to the bullet's method (the important finding).** This trip keys on
+> the sidecar process's **own** committed-private bytes — `_process_commit_mb()`
+> reads `_PROC.memory_info().private` where `_PROC` is `psutil.Process(os.getpid())`
+> (`main.py:9644-9661`) — never on system-wide commit. So "a synthetic host-memory
+> hog alongside the sidecar", which is what this bullet and the *Needs* paragraph
+> prescribe, **cannot fire this trip at all**: a hog in another process raises the
+> box's commit without touching the sidecar's private counter. Demonstrated live,
+> not argued from the source: system commit sat at 49.95 GB while the running
+> sidecar's own `committed_mb` read 10,391 MB — two unrelated quantities. The push
+> has to originate *inside* the sidecar process.
+>
+> **The auto ceiling is genuinely live in a running process (not merely computed at
+> startup).** The production sidecar on port 9020, launched with all three vars
+> absent, reports `mem_restart_mb=47582.7580928` on `/health` = exactly 0.70 ×
+> 67,975,368,704 bytes. A float of that shape is only producible by the formula,
+> which is the proof the auto branch was reached rather than an override being in
+> effect; recomputed independently with psutil here to 47582.758093. Same process
+> reports `vram_restart_mb=8413.51168` = 0.98 × its 8585.216 MB card. This
+> strengthens 2026-09-09's startup-log reading into a live-process observation.
+>
+> **The crossing and the exit, driven for real.** This worktree's `main.py` was
+> imported into a real Python 3.12.10 process; its own private commit measured
+> 547.4 MB, a ceiling pinned just above that (1,347.4 MB), then +1,600 MB of
+> *touched* pages allocated to drive private bytes to 2,228.5 MB, and the module's
+> real `_memory_watchdog()` coroutine run. It sampled its own private bytes,
+> `_should_restart` returned True, `_schedule_restart_exit` logged the real trip
+> ("committed memory 2229MB breached the restart limit 1347MB — draining 0
+> in-flight synth … then self-exiting (code 43)"), the drain thread logged
+> "in-flight synth drained — self-exiting now", and the process died via
+> `os._exit(43)`. **The OS exit code was read directly off the terminated process:
+> 43.** The trip also wrote `.run/last-restart-trip.json` carrying
+> `"card": null, "reason": "committed memory"` — the host-RAM trigger's signature,
+> since `_schedule_restart_exit` passes `card=None` for the host branch. The
+> artifact is gitignored (`.gitignore:79`) and was deleted afterwards; the lane
+> finished with a clean `git status`.
+>
+> **Limitation, stated plainly.** The trip fired against an explicitly-set ceiling
+> (1,347 MB), *not* against this box's auto 47,583 MB value, because driving a
+> single process to 47.6 GB of private commit here would exceed the box's commit
+> headroom (29.44 GB physical free, commit 49.95/72.81 GB) and take the box — and
+> every other lane on it — down. So the auto *value* is confirmed live and the hard
+> branch's *reaction* is confirmed genuine, but **a crossing at the auto-scaled
+> number itself remains undriven**, and this row stays open on that seam. 2026-09-09's
+> "a synthetic hog alongside" instruction should be discarded by whoever picks this
+> up again: it must be in-process.
+>
+> **No false trip / no thrash from the now-live ceiling.** Pre-crossing check
+> `_should_restart(547.4, 1347.4) = False`, and the production sidecar held 10,391
+> MB against its 47,583 MB ceiling with `recycle_pending=False` both before and
+> after this test — ordinary idle load does not recycle. **VRAM soft/hard legs
+> still NOT attempted**, unchanged from 2026-09-09's reasoning: GPU 0 carries other
+> lanes' live work, and its real reading here (`cuda:0` 1,889.5/8,585.2 MB
+> reserved) sits far under both the 7,727 MB soft and 8,413 MB hard.
+>
+> Minor drift in this row's own citations: the three threshold functions are at
+> `main.py:9880-9911` and `:9991-10010` in this checkout, not the `:8265-8284` /
+> `:8154-8185` the *Criteria* paragraph names, and the row itself sits at line
+> 4225 rather than the 3883 the tasking referenced.
+
 ---
 
 ### A30 · The in-app upgrade path applies the marker on a real installed release ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md)) · **no GPU needed, sidecar venv only; not one of the design doc's six criteria**
