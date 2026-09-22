@@ -4563,6 +4563,30 @@ reproducing the degenerate collapse.
 > design (no fix exists or is expected), so the practical stakes are low —
 > recorded for a future `coqui-tts` upgrade to compare against.
 
+> **2026-09-23 — human-listen hand-off verified on this box; row stays OPEN pending a human ear
+> (#3312, branch `chore/ops-onbox-batch-1`).** Everything this row owes a machine was already
+> discharged on 2026-09-06/07 (bullets 1-2 and the guard-does-not-fire half of bullet 3, in
+> `docs/testing/onbox-batch-results/a31.md`) and is deliberately NOT re-attempted here. What this
+> pass checked is whether the audio a human still owes is actually openable -- #3360 found the A21
+> equivalent had been overwritten out from under its reviewer -- and it is: all 23 files under
+> `docs/testing/onbox-batch-results/a31-audio/` are tracked at HEAD *and* present on disk (23/23
+> `git cat-file -e HEAD:<path>` pass, zero 0-byte files, 2,706,132 bytes total), they entered git at
+> `a1b87321` (2026-09-06 20:45:12 +1000), and `ffprobe` confirms each named listen as `pcm_s16le`
+> 24 kHz mono: `m3-teploe-more-5.wav` 1.707333 s (blob `27ed26180f4d1aba06a6c1930b0f4333131e0454`),
+> `m4-horoshee-pismo.wav` 3.200667 s (blob `f864fb47d3c18c1aed5e41955827205425a0b6ed`),
+> `m2-05-horoshee-olovo.wav` and `m3-horoshee-olovo-6.wav` both 2.592667 s (blobs
+> `5b1b6c6910847d3a38f51bca873769502f160ecc`, `0af3636b55823f6f8e5a3b90df497af28e8779b1`). Those
+> blob SHAs equal the ones `a31.md` recorded on the day of the run, so a reviewer hears the same
+> bytes that were measured. **No new audio was rendered in this pass and none is needed**: the only
+> thing left is an ear judgment, which this row's own gate forbids delegating to a machine check.
+> Tracking issue for both listens:
+> [Castwright#3374](https://github.com/dudarenok-maker/Castwright/issues/3374) -- the collapse-repro
+> listen settles `docs/testing/onbox-batch-results/a31.md:156-165` ("STAGED FOR HUMAN REVIEW",
+> bullet 3), the neuter `-ее` listen settles
+> `docs/testing/onbox-batch-results/a31.md:210-220` ("Verdict: STAGED FOR HUMAN REVIEW", bullet 4).
+> The parent batch #3294 remains open until #3374 is answered; child #3312 closes as a *hand-off*,
+> not as a completed row.
+
 ### A32 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
 
 PR shipped `decodeNamedEntities` (`server/src/parsers/html-utils.ts`), widening
