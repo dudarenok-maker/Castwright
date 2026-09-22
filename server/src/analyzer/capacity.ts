@@ -12,8 +12,8 @@
    Ollama's contextTokens is num_ctx AS SENT — deliberately not clamped to
    /api/show's native context before on-box measurement (register row
    "Capacity recalibration"). Endpoints (context family + optional cap) arrive
-   in wave 3. Must not import ollama.ts: ollama.ts's settings provider imports
-   this module. */
+   in wave 3. Must not import ollama.ts: ollama.ts's settings provider will
+   import this module in a later wave. */
 import { configValue } from '../config/resolver.js';
 import { resolveMaxInputTokensPerRequest } from './token-budget.js';
 
