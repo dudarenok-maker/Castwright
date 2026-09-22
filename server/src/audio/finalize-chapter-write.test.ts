@@ -462,6 +462,47 @@ describe('finalizeChapterAudioWrite resolvedVoiceName strips the emotion-variant
   });
 });
 
+/* #3362 — the snapshot map must be keyed by the canonical cast id even when a
+   segment's raw characterId only reaches the cast row through the resolver's
+   normalised-id tier, and a REJECTED pair must still produce no entry. */
+describe('finalizeChapterAudioWrite characterSnapshots canonical-id keying (#3362)', () => {
+  it('stamps the snapshot under the canonical cast id when the segment id only matches via the normalised-id tier', async () => {
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [
+        { groupIndex: 0, characterId: 'the-torment', sentenceIds: [1], startSec: 0, endSec: 1.0, voiceName: 'kokoro-the-torment' },
+      ],
+      cast: [{ id: 'the_torment', name: 'The Torment', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots['the_torment']).toBeDefined();
+    expect(segFile.characterSnapshots['the-torment']).toBeUndefined();
+  });
+
+  it('produces NO snapshot entry under either key when the only path from the segment id to the cast row is a rejected pair', async () => {
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      // isWellFormedHistory (#2166) demands schema===1 AND a present
+      // supersededBy object; a malformed file degrades the WHOLE history to
+      // empty, silently losing the rejected pair.
+      JSON.stringify({ schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'the-torment', to: 'the_torment' }] }),
+    );
+
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [
+        { groupIndex: 0, characterId: 'the-torment', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+      ],
+      cast: [{ id: 'the_torment', name: 'The Torment', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots['the_torment']).toBeUndefined();
+    expect(segFile.characterSnapshots['the-torment']).toBeUndefined();
+  });
+});
+
 describe('finalizeChapterAudioWrite castHistorySeq stamp (#2128)', () => {
   const segPath = () => join(audioRoot, `${SLUG}.segments.json`);
 

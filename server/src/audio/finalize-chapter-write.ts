@@ -33,6 +33,8 @@ import { evaluateChapterQa, type ChapterQaVerdict } from '../tts/audio-qa.js';
 import type { ChapterSegment, CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine, TtsModelKey } from '../tts/index.js';
 import { buildCharacterSnapshots } from './character-snapshots.js';
+import { buildCastResolver } from '../store/cast-resolve.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
 import {
   engineBreakdownFromSnapshots,
   effectiveAudioModelKey,
@@ -284,7 +286,18 @@ export async function finalizeChapterAudioWrite(
         }
       : baseQa;
 
-  const speakingIds = new Set(segments.map((s) => s.characterId));
+  /* #3362 — resolve each raw segment characterId through the Wave-1 cast
+     resolver so speakingIds / fallbackByChar / voiceNameByChar carry the
+     CANONICAL cast id (e.g. segment 'the-torment' -> cast 'the_torment' via
+     the normalised-id tier), which is the key buildCharacterSnapshots and the
+     C1 carry-forward below match on. A genuinely unresolvable or rejected id
+     falls back to the raw id — no live cast entry carries that key, so it
+     produces no snapshot entry exactly as before the fix. */
+  const castIdHistory = await loadCastIdHistory(bookDir);
+  const castResolver = buildCastResolver(cast, castIdHistory);
+  const resolveSpeakingId = (rawId: string): string =>
+    castResolver.resolve(rawId)?.character.id ?? rawId;
+  const speakingIds = new Set(segments.map((s) => resolveSpeakingId(s.characterId)));
   const fallbackByChar = new Map<string, string>();
   /* #1972 — the voice ACTUALLY sent to the provider per character, read back
      from this render's own segments rather than re-derived from the cast
@@ -295,9 +308,9 @@ export async function finalizeChapterAudioWrite(
      `__<emotion>`-suffixed name stamped as its resolved voice. */
   const voiceNameByChar = new Map<string, string>();
   for (const s of segments) {
-    if (s.renderedFallbackEngine) fallbackByChar.set(s.characterId, s.renderedFallbackEngine);
+    if (s.renderedFallbackEngine) fallbackByChar.set(resolveSpeakingId(s.characterId), s.renderedFallbackEngine);
     const voiceName = s.baseVoiceName ?? s.voiceName;
-    if (voiceName) voiceNameByChar.set(s.characterId, voiceName);
+    if (voiceName) voiceNameByChar.set(resolveSpeakingId(s.characterId), voiceName);
   }
   /* C1 (#1972 follow-up) — a character can be "speaking" this render (it has
      segments in `segments`) without this run having synthesised a single new
