@@ -35,6 +35,41 @@ should be judged on:
 The mechanism the review identified is nonetheless real, and it is what this
 measurement confirms and quantifies.
 
+## Which file this is about — read this before any number below
+
+Every figure here describes **the subagent's own transcript**,
+`…\<project>\<session-id>\subagents\agent-<agent_id>.jsonl`.
+
+That is not the file the PreToolUse payload hands you. `transcript_path` names
+the **dispatching session's** transcript, `…\<project>\<session-id>.jsonl` —
+verbatim in both real `fix-agent` payloads ever captured
+([`3263-dispatch-cwd-findings.md`](3263-dispatch-cwd-findings.md),
+[`3263-guard-assignment-signal-findings.md`](3263-guard-assignment-signal-findings.md)),
+whose `session_id` matches that filename while `agent_id` appears nowhere in
+it. **PR #3358 shipped two review rounds' worth of work scanning the wrong
+file before pass 3 caught it**, which is why this section is first.
+
+The difference is not a matter of degree. Same scan, same corpus, 626
+ground-truthed dispatches:
+
+| file scanned | precision when firing | wrong-**worktree** picks | no-fire |
+|---|---|---|---|
+| subagent's own transcript | **99.1%** | 0.8% | 9.1% |
+| dispatching session's transcript | **17.8%** | **25.9%** | 68.5% |
+
+25.9% is the one error class fail-open does not cover: it turns a loud false
+denial into a silent false allow into a live sibling checkout — the #3044 harm
+the guard exists to prevent. The cause is structural. In the dispatcher's
+transcript the subagent's brief is not a candidate at all — it lives inside an
+`Agent` tool_use on an `assistant` turn, which the scan correctly refuses to
+read — so every turn the scan *can* see is about some other piece of work, and
+"keep scanning" has nothing correct to reach.
+
+`guard-worktree-write.mjs` therefore derives the subagent transcript from
+`transcript_path` + `agent_id` (`resolveOwnTranscriptPath`) and returns `null`
+rather than ever falling back to the session file. The layout was verified
+present, with the matching `agent_id`, for both recorded payloads.
+
 ## Method
 
 - **Population:** every `…\<project>\<session-id>\subagents\agent-*.jsonl`
@@ -98,9 +133,11 @@ convention leads with the prohibition —
 — so "first path wins" reads the explicitly forbidden root as the assigned
 one. The better the brief warns the agent off the primary checkout, the more
 confidently a polarity-blind rule hands it over. Skipping primary-rooted
-candidates is not a tuning constant; it is the invariant
-`guard-worktree-write.mjs` already asserts at `PRIMARY_CHECKOUT_ROOT`'s
-declaration.
+candidates is not a tuning constant; it follows from how briefs are written.
+
+It is **not**, however, licensed by an absolute rule that the primary can never
+be assigned — an earlier revision of this section said so, citing guard text
+that has since been deleted for being false. See Result 4.
 
 Skipping alone would only convert those 123 wrong picks into no-picks (row 2:
 100% precise but fires on 55% of dispatches). Continuing the scan — through the

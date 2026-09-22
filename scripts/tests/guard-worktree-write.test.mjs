@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { decideGuardVerdict, listKnownCheckoutRoots, PRIMARY_CHECKOUT_ROOT } from '../hooks/guard-worktree-write.mjs';
+import { decideGuardVerdict, listKnownCheckoutRoots, resolveOwnTranscriptPath, PRIMARY_CHECKOUT_ROOT } from '../hooks/guard-worktree-write.mjs';
 
 const WORKTREE = 'C:\\Claude\\Projects\\wt-3044-worktree-write-guard';
 const SIBLING_WORKTREE = 'C:\\Claude\\Projects\\wt-2997-commit-gate';
@@ -349,12 +349,42 @@ const SKILL_PREAMBLE_TURN = {
   },
 };
 
-/** Writes a JSONL transcript from the given turn objects. Caller cleans up. */
-function writeTranscript(turns) {
+const AGENT_ID = 'a5672e0bf6137163a';
+
+/** Lays out a transcript pair the way the harness really does, because the
+ *  guard now derives one path from the other and a fixture that skips the
+ *  layout cannot exercise that (PR #3358 review pass 3, N7):
+ *
+ *      <dir>\<session>.jsonl                              <- transcript_path
+ *      <dir>\<session>\subagents\agent-<agent_id>.jsonl   <- what is scanned
+ *
+ *  `turns` go in the SUBAGENT file. `sessionTurns` go in the session file and
+ *  default to a decoy naming a different worktree — so any test that silently
+ *  started reading the wrong file would pick the decoy up and fail. Returns
+ *  the SESSION path, since that is what a real payload carries.
+ *  Caller cleans up `dir`. */
+function writeTranscript(turns, sessionTurns) {
   const dir = mkdtempSync(join(tmpdir(), 'guard-worktree-write-transcript-'));
-  const file = join(dir, 'transcript.jsonl');
-  writeFileSync(file, turns.map((t) => JSON.stringify(t)).join('\n') + '\n', 'utf8');
-  return { dir, file };
+  const session = 'b5a1be31-7f94-4441-b986-c1cebda324f3';
+  const file = join(dir, `${session}.jsonl`);
+  const subagentDir = join(dir, session, 'subagents');
+  mkdirSync(subagentDir, { recursive: true });
+  const serialise = (list) => list.map((t) => JSON.stringify(t)).join('\n') + '\n';
+  writeFileSync(
+    file,
+    serialise(
+      sessionTurns ?? [
+        {
+          type: 'user',
+          promptSource: 'user',
+          message: { role: 'user', content: `Decoy: the dispatching session is working in ${SIBLING_WORKTREE}.` },
+        },
+      ],
+    ),
+    'utf8',
+  );
+  writeFileSync(join(subagentDir, `agent-${AGENT_ID}.jsonl`), serialise(turns), 'utf8');
+  return { dir, file, agentId: AGENT_ID };
 }
 
 /** The realistic dispatch: prohibition-first brief, then a later
@@ -372,6 +402,7 @@ test('a legitimate write to the assigned worktree is ALLOWED on a realistic mult
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, false);
@@ -391,6 +422,7 @@ test('the #3044 stray edit into the primary checkout is DENIED on that same real
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\server\\src\\analyzer\\errors.ts`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, true);
@@ -410,6 +442,7 @@ test('a Bash command committing in the primary checkout is DENIED on that same r
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { command: `git -C ${PRIMARY_CHECKOUT_ROOT} commit -am wip` },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, true);
@@ -427,6 +460,7 @@ test('a Bash command inside the extracted worktree is ALLOWED even though cwd re
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { command: `git -C ${WORKTREE} status --porcelain` },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, false);
@@ -443,6 +477,7 @@ test('a PowerShell command referencing a sibling worktree is still DENIED when t
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { command: `Remove-Item -Recurse ${SIBLING_WORKTREE}\\node_modules` },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, true);
@@ -462,6 +497,7 @@ test('a transcript whose only absolute paths are under the primary checkout yiel
       cwd: WORKTREE,
       toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\RELEASE_NOTES.md`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     const without = decideGuardVerdict({
@@ -489,6 +525,7 @@ test('a primary-rooted path in the NEWEST turn does not stop the scan reaching t
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${WORKTREE}\\docs\\note.md`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, false);
@@ -523,15 +560,19 @@ test('a transcriptPath pointing at a nonexistent file fails open to the cwd-deri
 });
 
 test('a wholly malformed transcript fails open to the cwd-derived root rather than throwing', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'guard-worktree-write-transcript-'));
-  const file = join(dir, 'transcript.jsonl');
-  writeFileSync(file, `not json at all\n{"type":"user",\n]]}{\n`, 'utf8');
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE)]);
+  writeFileSync(
+    join(dir, 'b5a1be31-7f94-4441-b986-c1cebda324f3', 'subagents', `agent-${AGENT_ID}.jsonl`),
+    `not json at all\n{"type":"user",\n]]}{\n`,
+    'utf8',
+  );
   try {
     const verdict = decideGuardVerdict({
       toolName: 'Write',
       cwd: WORKTREE,
       toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\RELEASE_NOTES.md`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, true);
@@ -542,17 +583,20 @@ test('a wholly malformed transcript fails open to the cwd-derived root rather th
 });
 
 test('a malformed line does not discard the valid turns around it', () => {
-  const { dir: d0 } = writeTranscript([]);
-  rmSync(d0, { recursive: true, force: true });
-  const dir = mkdtempSync(join(tmpdir(), 'guard-worktree-write-transcript-'));
-  const file = join(dir, 'transcript.jsonl');
-  writeFileSync(file, `${JSON.stringify(fixAgentBriefTurn(WORKTREE))}\n{ broken\n`, 'utf8');
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE), { broken: true }]);
+  // Replace the second (valid) line with an unparseable one, in place.
+  writeFileSync(
+    join(dir, 'b5a1be31-7f94-4441-b986-c1cebda324f3', 'subagents', `agent-${AGENT_ID}.jsonl`),
+    `${JSON.stringify(fixAgentBriefTurn(WORKTREE))}\n{ broken\n`,
+    'utf8',
+  );
   try {
     const verdict = decideGuardVerdict({
       toolName: 'Write',
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, false);
@@ -571,6 +615,7 @@ test('an extracted path that resolves under NO known root is ignored, not truste
       cwd: WORKTREE,
       toolInput: { file_path: 'C:\\Somewhere\\Else\\not-a-worktree\\x.ts', content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, true);
@@ -590,6 +635,7 @@ test('a turn with no prompt text at all is skipped rather than ending the scan',
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, false);
@@ -600,7 +646,7 @@ test('a turn with no prompt text at all is skipped rather than ending the scan',
 
 // --- the accepted residual risk, locked in so it stays visible ------------
 
-test('KNOWN LIMIT: a confident pick of the WRONG known worktree inverts the guard (measured 0.9%, accepted)', () => {
+test('KNOWN LIMIT: a confident pick of the WRONG known worktree inverts the guard (measured 0-2 of ~630, accepted)', () => {
   // Not a bug report — this is the residual risk the doc comment names,
   // asserted so that anyone who later closes it sees this test go red and
   // knows to update the contract rather than discovering the change by
@@ -613,6 +659,7 @@ test('KNOWN LIMIT: a confident pick of the WRONG known worktree inverts the guar
       cwd: WORKTREE,
       toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(legitimate.deny, true, 'a write to the truly-assigned tree is wrongly denied');
@@ -621,6 +668,7 @@ test('KNOWN LIMIT: a confident pick of the WRONG known worktree inverts the guar
       cwd: WORKTREE,
       toolInput: { file_path: `${SIBLING_WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(foreign.deny, false, 'a write to the mis-extracted tree is wrongly allowed');
@@ -650,6 +698,7 @@ test('text the AGENT produced cannot name the assigned root — assistant turns 
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${SIBLING_WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, true);
@@ -675,6 +724,7 @@ test('text inside a tool_result block cannot name the assigned root — only tex
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${SIBLING_WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, true);
@@ -700,6 +750,7 @@ test('the scan runs NEWEST turn first — a re-assignment supersedes the origina
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${SIBLING_WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(toNewest.deny, false);
@@ -708,6 +759,7 @@ test('the scan runs NEWEST turn first — a re-assignment supersedes the origina
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(toOriginal.deny, true);
@@ -741,6 +793,7 @@ test('JSON-escape debris is skipped even when its HEAD resolves to a known root 
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, false);
@@ -772,6 +825,7 @@ test('a brief that assigns the PRIMARY checkout and names no other root is handl
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\scripts\\verify-cache.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, false);
@@ -804,6 +858,7 @@ test('KNOWN LIMIT: a PRIMARY-assigned brief that also mentions a live worktree i
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\scripts\\verify-cache.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(legitimate.deny, true, 'the truly-assigned primary checkout is wrongly denied');
@@ -812,9 +867,169 @@ test('KNOWN LIMIT: a PRIMARY-assigned brief that also mentions a live worktree i
       cwd: PRIMARY_CHECKOUT_ROOT,
       toolInput: { file_path: `${SIBLING_WORKTREE}\\src\\module.mjs`, content: 'x' },
       transcriptPath: file,
+      agentId: AGENT_ID,
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(foreign.deny, false, 'the incidentally-mentioned tree is wrongly allowed');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- which file gets scanned (PR #3358 review pass 3, N7) -----------------
+// The payload's `transcript_path` names the DISPATCHING SESSION's transcript.
+// Scanning it is not a weaker signal, it is a harmful one: 17.8% precise with
+// 25.9% wrong-WORKTREE picks, versus 99.1% on the subagent's own transcript.
+// These tests pin the derivation and, crucially, that the session file is
+// never read — `writeTranscript` seeds it with a decoy naming a different
+// worktree for exactly that reason.
+
+test('resolveOwnTranscriptPath derives the subagent transcript from the session path plus agent_id', () => {
+  // The layout verified against both real recorded fix-agent payloads.
+  assert.equal(
+    resolveOwnTranscriptPath(
+      'C:\\Users\\dudar\\.claude\\projects\\C--Claude-Projects-wt-x\\b5a1be31-7f94-4441-b986-c1cebda324f3.jsonl',
+      'a5672e0bf6137163a',
+    ),
+    'C:\\Users\\dudar\\.claude\\projects\\C--Claude-Projects-wt-x\\b5a1be31-7f94-4441-b986-c1cebda324f3\\subagents\\agent-a5672e0bf6137163a.jsonl',
+  );
+});
+
+test('resolveOwnTranscriptPath returns null rather than falling back to the session transcript', () => {
+  const session = 'C:\\Users\\dudar\\.claude\\projects\\p\\s.jsonl';
+  // No agent_id: a main-session call, not a dispatched subagent.
+  assert.equal(resolveOwnTranscriptPath(session, undefined), null);
+  assert.equal(resolveOwnTranscriptPath(session, ''), null);
+  // No transcript_path.
+  assert.equal(resolveOwnTranscriptPath(undefined, 'abc'), null);
+  // Not a .jsonl path — the layout assumption does not hold, so do not guess.
+  assert.equal(resolveOwnTranscriptPath('C:\\Users\\dudar\\.claude\\projects\\p\\s.txt', 'abc'), null);
+});
+
+test('resolveOwnTranscriptPath refuses an agent_id that is not a bare token (path-traversal guard)', () => {
+  const session = 'C:\\Users\\dudar\\.claude\\projects\\p\\s.jsonl';
+  for (const hostile of ['..\\..\\evil', 'a/b', 'a\\b', '../x', 'a b', 'a.b', '']) {
+    assert.equal(resolveOwnTranscriptPath(session, hostile), null, `should refuse ${JSON.stringify(hostile)}`);
+  }
+});
+
+test('the DISPATCHING SESSION transcript is never scanned, even when the subagent one is absent', () => {
+  // The session file names SIBLING_WORKTREE. If it were read, the assigned
+  // root would become SIBLING_WORKTREE and this write would be allowed.
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE)]);
+  rmSync(join(dir, 'b5a1be31-7f94-4441-b986-c1cebda324f3'), { recursive: true, force: true });
+  try {
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: WORKTREE,
+      toolInput: { file_path: `${SIBLING_WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      agentId: AGENT_ID,
+      knownRoots: KNOWN_ROOTS,
+    });
+    // Falls back to cwd — the pre-#3263 behaviour — not to the session file.
+    assert.equal(verdict.deny, true);
+    assert.match(verdict.reason, /outside the assigned worktree/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a transcriptPath with no agentId scans nothing and falls back to cwd', () => {
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE)]);
+  try {
+    const withoutAgentId = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      knownRoots: KNOWN_ROOTS,
+    });
+    const noSignal = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.deepEqual(withoutAgentId, noSignal);
+    assert.equal(withoutAgentId.deny, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- filters that were mutable without the suite noticing (N6) ------------
+
+test('a trailing comma or paren on a path candidate is stripped, not carried into the root match', () => {
+  // `(worktree: C:\...\wt-x),` — the real brief shape. Without the strip the
+  // candidate is `…wt-x),` which resolves under no known root and is skipped,
+  // so the scan would miss an assignment it should find.
+  const turn = {
+    type: 'user',
+    promptSource: 'sdk',
+    message: { role: 'user', content: `Work in the assigned tree (worktree: ${WORKTREE}), branch fix/x.` },
+  };
+  const { dir, file } = writeTranscript([turn]);
+  try {
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      agentId: AGENT_ID,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(verdict.deny, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a turn with no promptSource is treated as a prompt turn, not as a system turn', () => {
+  // The `|| 'user'` default. Flipping it to 'system' silently drops every
+  // turn the harness records without an explicit source — which is most of
+  // them — collapsing coverage without failing anything.
+  const noSource = {
+    type: 'user',
+    message: { role: 'user', content: `Continue in ${WORKTREE} please.` },
+  };
+  const { dir, file } = writeTranscript([noSource]);
+  try {
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      agentId: AGENT_ID,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(verdict.deny, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a bare drive-root candidate is skipped and the scan reaches the real assignment', () => {
+  // `C:\Claude` is a parent of every checkout root, not one of them, so the
+  // membership check rejects it and the scan continues. This is the case the
+  // old `seps < 2` floor was carrying; the floor was removed as unreachable
+  // (PR #3358 review pass 3, N6) and this pins the behaviour that replaced it.
+  const turn = {
+    type: 'user',
+    promptSource: 'sdk',
+    message: { role: 'user', content: `Checkouts live under C:\\Claude. Work in ${WORKTREE}.` },
+  };
+  const { dir, file } = writeTranscript([turn]);
+  try {
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      agentId: AGENT_ID,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(verdict.deny, false);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

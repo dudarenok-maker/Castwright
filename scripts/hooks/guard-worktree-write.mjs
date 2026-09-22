@@ -3,16 +3,20 @@
 // Bash/PowerShell calls (Castwright#3044, option 2 — see #3044's "Decision
 // (2026-09-06)" comment). Castwright#3263's transcript-derived assignment
 // signal (see decideGuardVerdict's doc comment) has landed — the assigned
-// root is now the one a transcript scan finds, falling back to `cwd` when
-// the scan finds nothing. That is a correction, not an enhancement: `cwd`
-// alone named the right root in 6.7% of 715 measured dispatches.
-// REMAINING GAPS, all real: the scan finds nothing on ~8% of dispatches and
-// falls back to `cwd`, which is usually wrong, so the old failure mode still
-// reaches ~7.7% of them; a wrong-but-confident extraction still protects the
-// wrong tree and can ALLOW a write to it; and the Bash/PowerShell check stays
-// coarse. Separately still open: whether a
+// root is the one a scan of THE SUBAGENT'S OWN TRANSCRIPT finds, falling back
+// to `cwd` when the scan finds nothing. That is a correction, not an
+// enhancement: `cwd` alone named the right root in 6.7% of 715 measured
+// dispatches. Which file is scanned is load-bearing and is NOT the payload's
+// `transcript_path` — see resolveOwnTranscriptPath.
+//
+// REMAINING GAPS, all real and all measured: the scan finds nothing on ~8% of
+// dispatches and falls back to `cwd`, which is usually wrong, so the old
+// failure mode still reaches ~7.7% of them; a wrong-but-confident extraction
+// still protects the wrong tree and can ALLOW a write to it; a brief that
+// assigns the primary checkout directly is skipped by the polarity rule; and
+// the Bash/PowerShell check stays coarse. Separately still open: whether a
 // denial should be terminal (#3263's 2026-09-21 design-pass comment, parked,
-// tracked as its own issue). So this guard remains a layer, NOT a full
+// tracked as #3369). So this guard remains a layer, NOT a full
 // replacement for the manual before/after `git status --porcelain` check.
 //
 // Wired via the `hooks:` frontmatter key on `.claude/agents/fix-agent.md`,
@@ -21,7 +25,7 @@
 // delivers the PreToolUse JSON payload on stdin (tool_name, tool_input, cwd),
 // and a confirmed-working deny is exit code 2 with a stderr message.
 //
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { win32 } from 'node:path';
 import { isDirectlyInvoked } from '../lib/is-main-module.mjs';
@@ -166,6 +170,48 @@ function resolveAssignedRoot(cwd, knownRoots) {
 // comment/string scanner (#2747).
 const TRANSCRIPT_PATH_RE = /[A-Za-z]:[\\/][^\s\u0022\u0027\u0060<>|*?\r\n]+/g;
 
+/** The PreToolUse payload's `transcript_path` names the DISPATCHING SESSION's
+ *  transcript, NOT the subagent's own — `…\<project>\<session-id>.jsonl`. Both
+ *  real `fix-agent` payloads ever captured say so verbatim
+ *  (`docs/ops/3263-dispatch-cwd-findings.md`,
+ *  `docs/ops/3263-guard-assignment-signal-findings.md`), and their
+ *  `session_id` matches that filename while `agent_id` does not appear in it
+ *  at all.
+ *
+ *  **Reading that file is not a weaker version of reading the right one — it
+ *  is actively harmful**, and PR #3358's review pass 3 is where this was
+ *  caught, after two passes and a 715-transcript measurement had scored the
+ *  wrong file. Scored over 626 ground-truthed dispatches, the same scan gets
+ *  99.1% on the subagent's own transcript and **17.8% on the dispatching
+ *  session's, with 25.9% naming a wrong WORKTREE** — the one error class
+ *  fail-open does not cover, because it converts a loud false denial into a
+ *  silent false allow into a live sibling checkout. The reason is structural,
+ *  not statistical: in the dispatcher's transcript the subagent's brief is not
+ *  a candidate at all (it lives inside an `Agent` tool_use on an `assistant`
+ *  turn, which the scan correctly refuses to read), so every turn the scan CAN
+ *  see is about some other piece of work.
+ *
+ *  So the subagent's own transcript is derived instead, from two fields the
+ *  payload does carry. The layout is `<session-transcript-minus-.jsonl>\
+ *  subagents\agent-<agent_id>.jsonl`, verified present with the matching
+ *  `agent_id` for both recorded payloads. Deriving it this way also answers
+ *  "does this transcript belong to THIS dispatch?" by construction rather than
+ *  by trust.
+ *
+ *  Returns `null` — never the session transcript as a fallback — when either
+ *  field is missing, when `transcriptPath` is not a `.jsonl` path, or when
+ *  `agentId` is not a bare token. That last check is a path-traversal guard:
+ *  `agent_id` is interpolated into a filesystem path, so anything carrying a
+ *  separator or `..` is refused rather than normalised. A `null` here means
+ *  the caller falls back to `cwd`, i.e. exactly the pre-#3263 behaviour. */
+export function resolveOwnTranscriptPath(transcriptPath, agentId) {
+  if (!transcriptPath || !agentId) return null;
+  if (!/^[A-Za-z0-9_-]+$/.test(String(agentId))) return null;
+  const raw = String(transcriptPath);
+  if (!/\.jsonl$/i.test(raw)) return null;
+  return `${raw.slice(0, -'.jsonl'.length)}${sep}subagents${sep}agent-${agentId}.jsonl`;
+}
+
 /** The user/prompt text of one transcript entry, for either message.content
  *  shape — mirrors the measurement parser's `promptText()`. */
 function transcriptPromptText(entry) {
@@ -180,7 +226,9 @@ function transcriptPromptText(entry) {
   return '';
 }
 
-/** Transcript-derived assignment signal (#3263 direction (a)). Walks prompt
+/** Transcript-derived assignment signal for #3263 — note this is NOT that
+ *  issue's "direction (a)", which named a coordinator-set per-dispatch signal
+ *  (an env var or an `agent_id`-keyed marker file). Walks prompt
  *  turns newest-first — turns sourced from `sdk` or `user`, skipping later
  *  `system` turns (e.g. task_notification) — and returns the first absolute
  *  Windows path that resolves to a known checkout root OTHER THAN the
@@ -217,8 +265,9 @@ function transcriptPromptText(entry) {
  *      PR's review brief) naming a live tree the agent was not assigned, and
  *      the scan takes it. 0–2 of ~630 picks depending on whose root
  *      reconstruction you use; the review's independent re-derivation put it
- *      at 0–1, i.e. this comment's own earlier "6 of 658 (0.9%)" OVER-stated
- *      it. Of those 6, 3 were the scan being RIGHT and the agent being wrong
+ *      at 0–1, i.e. an earlier revision of this comment claiming "6 of 658
+ *      (0.9%)" OVER-stated it. Of those 6, 3 were the scan being RIGHT and
+ *      the agent being wrong
  *      (it wrote into the primary against its brief — #3044's own incident
  *      shape) and 3 were artifacts of the measurement's reconstructed root
  *      list.
@@ -241,6 +290,13 @@ function transcriptPromptText(entry) {
  *  caller wraps the call in its own try/catch either way, so a bad transcript
  *  falls back to the `cwd`-derived root rather than failing the guard open. */
 function extractAssignedRootFromTranscript(transcriptPath, knownRoots) {
+  // Size guard: this runs before EVERY guarded tool call, and a transcript is
+  // an append-only log with no upper bound. Subagent transcripts on this box
+  // run to ~10 MB at the top end (median ~750 KB, ~4 ms), so 32 MB is far
+  // above anything observed — it exists to stop a pathological file turning
+  // the guard into a per-call stall, not to filter real ones. Over the bound,
+  // fail open to `cwd` like any other unreadable transcript.
+  if (statSync(transcriptPath).size > 32 * 1024 * 1024) return null;
   const raw = readFileSync(transcriptPath, 'utf8');
   const entries = [];
   for (const line of raw.split('\n')) {
@@ -267,9 +323,17 @@ function extractAssignedRootFromTranscript(transcriptPath, knownRoots) {
       // `\[nrt]` immediately followed by a name character is separator +
       // real directory name (`\tasks`), not JSON-escape debris (`g:\n\n`).
       const cleaned = candidate.replace(/[.,;:)\]}]+$/, '');
-      const seps = (cleaned.match(/[\\/]/g) || []).length;
+      // Only the escape-debris term survives from #3340's three-part
+      // predicate. The other two — a minimum length and a two-separator floor
+      // — existed to stop a fragment being RETURNED as a path, which this
+      // function no longer does: it returns a known checkout root, so the
+      // membership check below already rejects anything a length or separator
+      // floor would have. Keeping them meant carrying two branches no test
+      // could make fail (PR #3358 review pass 3, N6). The debris term is not
+      // redundant: a `wt-A\nwt-B`-style candidate's HEAD does resolve to a
+      // known root, so without it the scan returns the wrong one.
       const escapedWs = /\\[nrt](?![A-Za-z0-9_])/.test(cleaned);
-      if (cleaned.length <= 3 || seps < 2 || escapedWs) continue;
+      if (escapedWs) continue;
 
       const root = knownRoots.find((known) => isUnderRoot(cleaned, known));
       // Rules 1 and 2, in one line: unknown roots and the primary checkout
@@ -296,9 +360,12 @@ function extractAssignedRootFromTranscript(transcriptPath, knownRoots) {
  *  with `cwd` pointed at the wrong root; in that shape the guard protected
  *  the wrong root, not the right one.
  *
- *  Fix: when an optional `transcriptPath` is supplied, `decideGuardVerdict`
- *  additionally runs `extractAssignedRootFromTranscript` against it and
- *  PREFERS the root that returns over the `cwd`-derived one. Preferring it
+ *  Fix: given `transcriptPath` and `agentId`, `decideGuardVerdict` derives the
+ *  subagent's OWN transcript (`resolveOwnTranscriptPath` — never the
+ *  dispatching session's, which is what `transcript_path` actually names and
+ *  which scores 17.8% with 25.9% wrong-worktree picks), runs
+ *  `extractAssignedRootFromTranscript` against that, and PREFERS the root it
+ *  returns over the `cwd`-derived one. Preferring it
  *  outright — rather than intersecting the two — is deliberate and is what
  *  the measurement supports: across 715 real subagent transcripts the
  *  recorded `cwd` named the root the agent actually wrote to just 48 times
@@ -317,8 +384,10 @@ function extractAssignedRootFromTranscript(transcriptPath, knownRoots) {
  *  What fail-open does NOT cover, stated plainly because the first cut of
  *  this change (#3355) claimed a safety property it did not have: a
  *  WRONG-BUT-CONFIDENT pick. When extraction names a live known worktree that
- *  is not the assigned one (measured at 6/658, 0.9% — a later turn naming
- *  another PR's tree), the guard both wrongly DENIES a write to the true tree
+ *  is not the assigned one (0–2 of ~630 picks, ≤0.3% — a later turn naming
+ *  another PR's tree; see the residual-risk paragraph on
+ *  extractAssignedRootFromTranscript for why the range rather than a single
+ *  number), the guard both wrongly DENIES a write to the true tree
  *  and wrongly ALLOWS one to the mis-extracted tree. That is a real, accepted
  *  residual risk, not an impossibility; it is the reason the manual
  *  before/after `git status --porcelain` check stays in CLAUDE.md as a
@@ -352,17 +421,26 @@ function extractAssignedRootFromTranscript(transcriptPath, knownRoots) {
  *  elsewhere, an environment expansion, or a path assembled at runtime — is
  *  not caught. Only a literal absolute path substring, in one of its known
  *  spellings, is detected. */
-export function decideGuardVerdict({ toolName, toolInput, cwd, transcriptPath, knownRoots = listKnownCheckoutRoots() }) {
+export function decideGuardVerdict({ toolName, toolInput, cwd, transcriptPath, agentId, knownRoots = listKnownCheckoutRoots() }) {
   try {
     const cwdRoot = resolveAssignedRoot(cwd, knownRoots);
+
+    // `transcriptPath` is the payload's `transcript_path`, which names the
+    // DISPATCHING SESSION's transcript. Never scan that file — see
+    // resolveOwnTranscriptPath, which derives the subagent's own transcript
+    // from it plus `agentId`, and returns null rather than falling back to it.
+    const ownTranscript = resolveOwnTranscriptPath(transcriptPath, agentId);
 
     // Local try/catch, not just the outer one: an unreadable/malformed
     // transcript must fall back to the cwd-derived root, not blanket-allow
     // (or blanket-deny) whatever the cwd-only logic below would have decided.
+    // A subagent transcript the harness has not written (or not yet flushed)
+    // at the time of the first tool call lands here as ENOENT, which is the
+    // benign case: fall back to `cwd`, i.e. the pre-#3263 behaviour.
     let extractedRoot = null;
-    if (transcriptPath) {
+    if (ownTranscript) {
       try {
-        extractedRoot = extractAssignedRootFromTranscript(transcriptPath, knownRoots);
+        extractedRoot = extractAssignedRootFromTranscript(ownTranscript, knownRoots);
       } catch {
         extractedRoot = null;
       }
@@ -425,7 +503,10 @@ if (isDirectlyInvoked(import.meta.url)) {
     toolName: payload.tool_name,
     toolInput: payload.tool_input,
     cwd: payload.cwd,
+    // Both are needed: `transcript_path` alone names the dispatching
+    // session's transcript, which must never be scanned.
     transcriptPath: payload.transcript_path,
+    agentId: payload.agent_id,
   });
 
   if (verdict.deny) {

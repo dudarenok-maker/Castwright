@@ -1320,7 +1320,8 @@ Working practice below; this holds even under contention).
   time (`docs/ops/3263-transcript-signal-measurement.md`). The guard now
   derives the assigned root by scanning the agent's own transcript — newest
   prompt turn first, skipping any candidate that resolves to the primary
-  checkout (never a valid assignment) or to no known checkout root — and falls
+  checkout (which a brief overwhelmingly names in order to FORBID it — though
+  not always, see the limits below) or to no known checkout root — and falls
   back to `cwd` only when that finds nothing. Measured 99.1% precise on the
   same corpus. **So the 2026-09-19 consequence recorded here is mostly, not
   wholly, fixed: a `fix-agent` briefed at a pre-existing worktree is usually

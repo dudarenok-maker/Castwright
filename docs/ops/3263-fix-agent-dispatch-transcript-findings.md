@@ -259,6 +259,18 @@ directly, and is exactly the reachability question the next design pass on
 #3263 needs answered before choosing between direction (a) and the
 alternatives — not something to infer from this doc's own struture.
 
+> **Answered, 2026-09-22 (PR #3358 review pass 3).** It resolves to the
+> **dispatcher's**. Both real `fix-agent` payloads on record
+> ([`3263-dispatch-cwd-findings.md`](3263-dispatch-cwd-findings.md),
+> [`3263-guard-assignment-signal-findings.md`](3263-guard-assignment-signal-findings.md))
+> carry `transcript_path` = `…\<project>\<session-id>.jsonl` with `session_id`
+> matching that filename and `agent_id` appearing nowhere in it. Scanning that
+> file scores 17.8% with 25.9% wrong-worktree picks, against 99.1% on the
+> subagent's own — so the answer mattered, and the paragraph above was right
+> to refuse to guess it. The guard now derives the subagent transcript from
+> `transcript_path` + `agent_id` instead of reading what it is handed; see
+> [`3263-transcript-signal-measurement.md`](3263-transcript-signal-measurement.md).
+
 ## Acceptance checklist
 
 1. Real transcript named — session id `d78961ad-373f-4ae1-80f5-82286ab1c404`
