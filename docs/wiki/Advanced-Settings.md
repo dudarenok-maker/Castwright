@@ -82,7 +82,7 @@ is disabled.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
-| Stage-2 chunk char budget | Max chars per stage-2 attribution chunk before pre-emptive split; ceiling for both families — local derives min(fraction × num_ctx, this), Gemini derives min(this, token-cap-derived body) | 9000 | integer | live | medium |
+| Stage-2 chunk char budget | Max chars per stage-2 attribution chunk before pre-emptive split; ceiling for both families — local derives max(1000, min(fraction × num_ctx × ~2 chars/token, this)), Gemini derives min(this, token-cap-derived body) | 9000 | integer | live | medium |
 | Stage-2 local input fraction | Fraction of local num_ctx reserved for stage-2 INPUT; lower for a verbose local model whose output overflows the window; local (context-family) engines only, Gemini ignores it | 0.3 | 0.1–0.9, step 0.05 | live | medium |
 | Stage-1 chunk char budget | Max chars per stage-1 cast-detection chunk before split; local derives the effective budget from num_ctx, Gemini ignores it and sizes instead from the max-input-tokens-per-request knob | 24000 | integer | live | medium |
 | Stage-1 local input fraction | Fraction of local num_ctx reserved for stage-1 INPUT; lower for a verbose local model that overflows the window; local (context-family) engines only, Gemini ignores it | 0.7 | 0.1–0.9, step 0.05 | live | medium |
