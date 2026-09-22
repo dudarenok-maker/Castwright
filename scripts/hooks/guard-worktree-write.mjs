@@ -1,14 +1,17 @@
 #!/usr/bin/env node
 // PreToolUse guard for a dispatched fix-agent's Write/Edit/NotebookEdit/
 // Bash/PowerShell calls (Castwright#3044, option 2 — see #3044's "Decision
-// (2026-09-06)" comment). Castwright#3263's transcript-extraction fallback
-// (see decideGuardVerdict's doc comment) has landed as of #3355 — the
-// assigned-worktree signal now prefers a transcript-derived root over raw
-// `cwd` when extraction confidently finds one, failing open to the original
-// cwd-only behaviour otherwise. Separately still open: whether a denial
-// should be terminal (#3263's 2026-09-21 design-pass comment, parked, not
-// addressed here) — this guard is not currently a full replacement for the
-// manual before/after `git status --porcelain` check.
+// (2026-09-06)" comment). Castwright#3263's transcript-derived assignment
+// signal (see decideGuardVerdict's doc comment) has landed — the assigned
+// root is now the one a transcript scan finds, falling back to `cwd` when
+// the scan finds nothing. That is a correction, not an enhancement: `cwd`
+// alone named the right root in 6.7% of 715 measured dispatches.
+// REMAINING GAPS, both real: a wrong-but-confident extraction (measured
+// 0.9%) still protects the wrong tree and can ALLOW a write to it, and the
+// Bash/PowerShell check stays coarse. Separately still open: whether a
+// denial should be terminal (#3263's 2026-09-21 design-pass comment, parked,
+// tracked as its own issue). So this guard remains a layer, NOT a full
+// replacement for the manual before/after `git status --porcelain` check.
 //
 // Wired via the `hooks:` frontmatter key on `.claude/agents/fix-agent.md`,
 // per #3246's empirical findings (docs/ops/3044-hook-mechanism-findings.md):
@@ -161,18 +164,51 @@ function transcriptPromptText(entry) {
   return '';
 }
 
-/** H2 from #3263's transcript-extraction-feasibility measurement
- *  (docs/ops/3263-transcript-extraction-feasibility.md) — the only one of six
- *  heuristics that hit the assigned root on 3/3 answerable transcripts.
- *  Finds the most recent transcript turn sourced from `sdk` or `user`
- *  (filtering out later `system` turns, e.g. task_notification, which the
- *  naive last-turn-first-path variant — H1 — picked instead and missed on
- *  1 of 3), and returns the first absolute Windows path it contains, or
- *  `null` if no such turn or path exists. Throws on an unreadable or
- *  malformed file — the caller wraps this in its own try/catch so a bad
- *  transcript falls back to the `cwd`-derived root instead of failing the
- *  whole guard open. */
-function extractAssignedRootFromTranscript(transcriptPath) {
+/** Transcript-derived assignment signal (#3263 direction (a)). Walks prompt
+ *  turns newest-first — turns sourced from `sdk` or `user`, skipping later
+ *  `system` turns (e.g. task_notification) — and returns the first absolute
+ *  Windows path that resolves to a known checkout root OTHER THAN the
+ *  primary checkout, or `null` when no turn yields one.
+ *
+ *  TWO RULES DO THE WORK, and both were established by measurement rather
+ *  than by inspection (`docs/ops/3263-transcript-signal-measurement.md`,
+ *  715 real subagent transcripts scored against an independent ground truth
+ *  — the checkout root each agent actually wrote to):
+ *
+ *  1. POLARITY: a path under `PRIMARY_CHECKOUT_ROOT` is never an assignment,
+ *     so it is skipped rather than returned. This is not a tuning constant —
+ *     it is the invariant this file already asserts at PRIMARY_CHECKOUT_ROOT's
+ *     own declaration, and omitting it is what made the first cut of this
+ *     function (#3355) unsafe. This repo's briefing convention LEADS with the
+ *     prohibition ("primary checkout `C:\Claude\Projects\Audiobook-Generator`
+ *     — do NOT edit files in the primary checkout…"), so a first-path-wins
+ *     rule reads the explicitly forbidden root as the assigned one: measured
+ *     123 of 523 picks (23.5%), every one of them naming the primary. With
+ *     the skip, precision goes from 76.5% to 99.1% and wrong-primary picks to
+ *     zero.
+ *  2. KEEP SCANNING: every candidate in a turn is tested, and every earlier
+ *     turn is tried, instead of returning on the first syntactically-clean
+ *     candidate. Without this, rule 1 would merely convert those 123 wrong
+ *     picks into no-picks. Requiring `knownRoots` membership inside the loop
+ *     also discards the literal `C:\Claude\Projects\wt-*` glob the fix-agent
+ *     brief itself contains, which resolves under no real root.
+ *
+ *  RESIDUAL RISK, measured and accepted: 6 of 658 picks (0.9%) named a
+ *  live-but-wrong worktree — a later turn (a skill preamble, another PR's
+ *  review brief) mentioning a tree the agent was not assigned. In that shape
+ *  the guard both wrongly denies the true tree and wrongly allows the
+ *  mis-extracted one; fail-open covers "found nothing", not "found the wrong
+ *  known root". Three further apparent misses were the heuristic being RIGHT
+ *  and the agent being wrong (it wrote to the primary against its brief —
+ *  #3044's own incident shape), and are counted as errors above only because
+ *  the ground truth is "where the agent wrote".
+ *
+ *  Throws only on an unreadable file (`readFileSync`); a malformed one does
+ *  NOT throw — malformed JSON lines are skipped individually, so a wholly
+ *  malformed transcript simply yields no entries and returns `null`. The
+ *  caller wraps the call in its own try/catch either way, so a bad transcript
+ *  falls back to the `cwd`-derived root rather than failing the guard open. */
+function extractAssignedRootFromTranscript(transcriptPath, knownRoots) {
   const raw = readFileSync(transcriptPath, 'utf8');
   const entries = [];
   for (const line of raw.split('\n')) {
@@ -185,6 +221,7 @@ function extractAssignedRootFromTranscript(transcriptPath) {
     }
   }
 
+  const primary = resolve(PRIMARY_CHECKOUT_ROOT).toLowerCase();
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i];
     if (!entry || entry.type !== 'user') continue;
@@ -193,18 +230,22 @@ function extractAssignedRootFromTranscript(transcriptPath) {
     const source = entry.promptSource || 'user';
     if (source !== 'sdk' && source !== 'user') continue;
 
-    const candidates = text.match(TRANSCRIPT_PATH_RE);
-    if (!candidates) return null;
-    for (const candidate of candidates) {
+    for (const candidate of text.match(TRANSCRIPT_PATH_RE) ?? []) {
       // Corrected (#3340) escape-debris predicate, copied verbatim — a
       // `\[nrt]` immediately followed by a name character is separator +
       // real directory name (`\tasks`), not JSON-escape debris (`g:\n\n`).
       const cleaned = candidate.replace(/[.,;:)\]}]+$/, '');
       const seps = (cleaned.match(/[\\/]/g) || []).length;
       const escapedWs = /\\[nrt](?![A-Za-z0-9_])/.test(cleaned);
-      if (cleaned.length > 3 && seps >= 2 && !escapedWs) return cleaned;
+      if (cleaned.length <= 3 || seps < 2 || escapedWs) continue;
+
+      const root = knownRoots.find((known) => isUnderRoot(cleaned, known));
+      // Rules 1 and 2, in one line: unknown roots and the primary checkout
+      // are SKIPPED, not returned and not terminal — the scan continues
+      // through the rest of this turn and on into earlier turns.
+      if (!root || resolve(root).toLowerCase() === primary) continue;
+      return root;
     }
-    return null;
   }
   return null;
 }
@@ -214,8 +255,9 @@ function extractAssignedRootFromTranscript(transcriptPath) {
  *  parse bug blocks every tool call from every subagent.
  *
  *  ASSIGNED-ROOT RESOLUTION (Castwright#3263, filed from PR #3261's own review
- *  pass; extraction fallback landed under #3355). "Assigned worktree" was
- *  originally defined purely as the root `cwd` resolves to, which is NOT
+ *  pass; first cut #3355, corrected in the same PR after its review).
+ *  "Assigned worktree" was originally defined purely as the root `cwd`
+ *  resolves to, which is NOT
  *  independently verified — it is whatever the harness happened to start this
  *  subagent process in. #3044's own incident record describes a brief that
  *  correctly named the worktree while the agent's process nonetheless ran
@@ -223,20 +265,34 @@ function extractAssignedRootFromTranscript(transcriptPath) {
  *  the wrong root, not the right one.
  *
  *  Fix: when an optional `transcriptPath` is supplied, `decideGuardVerdict`
- *  additionally tries H2 extraction (`extractAssignedRootFromTranscript` —
- *  the one heuristic of six that hit the assigned root on 3/3 answerable
- *  transcripts in `docs/ops/3263-transcript-extraction-feasibility.md`,
- *  re-confirmed against the harder pre-existing-worktree dispatch shape in
- *  `docs/ops/3263-fix-agent-dispatch-transcript-findings.md`) against that
- *  transcript, and PREFERS the extracted root over the `cwd`-derived one —
- *  but only when the extracted path resolves under a KNOWN checkout root.
- *  This is layered as a preference, not a replacement: fail-open to today's
- *  `cwd`-based behaviour whenever `transcriptPath` is absent, unreadable,
- *  malformed, or extraction finds nothing that resolves under a known root.
- *  No new code path can produce a MORE restrictive or MORE permissive
- *  verdict than before unless extraction genuinely finds a different known
- *  root. Still open, separately: whether a denial should be terminal
- *  (parked on #3263's 2026-09-21 design-pass comment, not addressed here).
+ *  additionally runs `extractAssignedRootFromTranscript` against it and
+ *  PREFERS the root that returns over the `cwd`-derived one. Preferring it
+ *  outright — rather than intersecting the two — is deliberate and is what
+ *  the measurement supports: across 715 real subagent transcripts the
+ *  recorded `cwd` named the root the agent actually wrote to just 48 times
+ *  (6.7%), while naming the primary checkout instead 626 times (87.6%). The
+ *  `cwd` signal is not a conservative baseline the transcript signal is
+ *  layered on top of; on this box it is the WRONG answer in the large
+ *  majority of dispatches, which is precisely the #3263 inversion. The same
+ *  corpus scores the transcript signal at 652/658 (99.1%) with zero picks
+ *  naming the primary. Full method, corpus and per-variant scores:
+ *  `docs/ops/3263-transcript-signal-measurement.md`.
+ *
+ *  Fail-open is unchanged and total for the "no signal" case: `transcriptPath`
+ *  absent, unreadable, wholly malformed, or yielding no known non-primary
+ *  root all land on exactly today's `cwd`-derived behaviour, byte for byte.
+ *
+ *  What fail-open does NOT cover, stated plainly because the first cut of
+ *  this change (#3355) claimed a safety property it did not have: a
+ *  WRONG-BUT-CONFIDENT pick. When extraction names a live known worktree that
+ *  is not the assigned one (measured at 6/658, 0.9% — a later turn naming
+ *  another PR's tree), the guard both wrongly DENIES a write to the true tree
+ *  and wrongly ALLOWS one to the mis-extracted tree. That is a real, accepted
+ *  residual risk, not an impossibility; it is the reason the manual
+ *  before/after `git status --porcelain` check stays in CLAUDE.md as a
+ *  backstop rather than being retired by this change. Still open, separately:
+ *  whether a denial should be terminal (raised in #3263's 2026-09-21
+ *  design-pass comment, now tracked as #3369, not addressed here).
  *
  *  Write/Edit/NotebookEdit: resolve the target path (tool_input.file_path
  *  for Write/Edit, tool_input.notebook_path for NotebookEdit) against the
@@ -274,8 +330,7 @@ export function decideGuardVerdict({ toolName, toolInput, cwd, transcriptPath, k
     let extractedRoot = null;
     if (transcriptPath) {
       try {
-        const extractedPath = extractAssignedRootFromTranscript(transcriptPath);
-        extractedRoot = extractedPath ? (knownRoots.find((root) => isUnderRoot(extractedPath, root)) ?? null) : null;
+        extractedRoot = extractAssignedRootFromTranscript(transcriptPath, knownRoots);
       } catch {
         extractedRoot = null;
       }

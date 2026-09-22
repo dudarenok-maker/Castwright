@@ -3,6 +3,17 @@
 Measurement only, per the ticket's own instruction: no guard code change, no
 design recommendation. **HIT or MISS, with reasoning.**
 
+> **Superseded as shipping justification (2026-09-22).** The corpus behind this
+> doc and behind `3263-transcript-extraction-feasibility.md` is 4 transcripts,
+> all single-turn, and its "3/3 HIT" was promoted into a shipping argument for
+> PR #3358 with that caveat dropped. PR #3358's review pass caught it. The
+> guard's behaviour is now justified by
+> [`3263-transcript-signal-measurement.md`](3263-transcript-signal-measurement.md)
+> — 715 real transcripts scored against an independent ground truth — which
+> found the bare H2 rule measured here to be 76.5% precise, not 100%. Read this
+> doc as the record of one dispatch shape, not as evidence about the heuristic
+> in general.
+
 ## What this closes
 
 `docs/ops/3263-transcript-extraction-feasibility.md` (#3339/#3340/#3341,
@@ -187,13 +198,29 @@ narrowly contained regardless of dispatch shape.
    mechanically, independent of any hook firing — it is a property of how the
    harness populates `cwd` on dispatched-agent transcript entries, not
    something a hook computes.
-3. **Turn count and shape.** The 3 answerable corpus entries each had a
-   longer turn sequence (a real multi-step probe). This transcript has
-   exactly **one** prompt-bearing turn — the brief — because the task was
-   deliberately trivial (single Read, no back-and-forth). H2's "first path in
-   the most recent turn" and "first path in the only turn" collapse to the
-   same computation here, which is a degenerate case the existing corpus
-   didn't exercise but does not change the heuristic's logic.
+3. **Turn count and shape.** The 3 answerable corpus entries were themselves
+   single-turn dispatches — `docs/ops/3263-transcript-extraction-feasibility.md`'s
+   `## Not tested` section says so directly ("*all sharing the same dispatch
+   shape (a `[claude][verify]`-style single-turn dispatch…)*"), and so does
+   this doc's own `## What this closes` above. This transcript has exactly
+   **one** prompt-bearing turn too — the brief — because the task was
+   deliberately trivial (single Read, no back-and-forth). So H2's "first path
+   in the most recent turn" and "first path in the only turn" collapse to the
+   same computation, and this measurement adds a **fourth single-turn**
+   transcript rather than the multi-turn one the source doc's gap named.
+
+   **This is the load-bearing gap, not a footnote** — corrected 2026-09-22
+   after PR #3358's review pass. An earlier revision of this bullet asserted
+   the corpus entries "each had a longer turn sequence (a real multi-step
+   probe)" and concluded the single-turn case "does not change the
+   heuristic's logic". Both halves were wrong. The subsequent 715-transcript
+   measurement (`docs/ops/3263-transcript-signal-measurement.md`) found that
+   on multi-turn transcripts a newest-turn-first scan lands on a later
+   injected turn — typically a skill preamble rooted at the primary
+   checkout — rather than on the brief, and that single-vs-multi-turn is
+   precisely the variable separating "most recent turn" from "the brief". No
+   conclusion in this doc survives being generalised past the single-turn
+   shape it measured.
 4. **Path phrasing.** The assigned path in this transcript appears inside a
    sentence — "briefed to work at the existing worktree `C:\...`
    (this worktree already exists...)" — with a parenthetical immediately

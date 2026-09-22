@@ -1312,28 +1312,31 @@ Working practice below; this holds even under contention).
   forward-slash, Git Bash's `/c/...`, WSL's `/mnt/c/...`). The shell-command
   check is COARSE by design — a path referenced indirectly (a shell variable,
   a relative path resolved elsewhere, a runtime-assembled string) is not
-  caught. **Known gap, tracked in
-  [#3263](https://github.com/dudarenok-maker/Castwright/issues/3263):** the
-  guard defines "assigned worktree" as the PreToolUse payload's `cwd`, which
-  is not independently verified — in exactly the "Do not rely on the brief"
-  shape two bullets below (a correctly-named worktree, but the agent's
-  process actually running with `cwd` pointed at the wrong root), the guard
-  protects the wrong root and denies the right one. **Option 1 below is the
-  mandatory backstop, not an optional one**, until #3263 closes. Two observed
-  2026-09-19 consequences make this concrete. A `fix-agent` briefed at a
-  **pre-existing** worktree (an absolute path in the brief, not a fresh
-  `isolation: "worktree"` tree) runs with `cwd` set to the *dispatching*
-  session's checkout, so the guard denies **every** write to the correct
-  tree — `fix-agent` currently cannot be used for any worktree the
-  dispatching session's `cwd` is not already inside. **Dispatch such work as
-  `subagent_type: "implementer"` instead**, which has no guard wired, and
-  keep the option-1 check below regardless — the before/after porcelain
-  check is what actually catches this class of failure, whichever role is
-  used. Worse, **a denial is not safe by default**: the second occurrence's
-  agent retried against the *wrong* root instead of stopping, leaving a
-  stray uncommitted `server/src/analyzer/errors.ts` edit on `main` in the
-  primary checkout — the #3044 pattern reached *through* the guard rather
-  than in spite of it.
+  caught. **`cwd` is no longer the guard's ground truth
+  ([#3263](https://github.com/dudarenok-maker/Castwright/issues/3263), closed
+  2026-09-22).** It never should have been: measured across 715 real subagent
+  transcripts, the recorded `cwd` named the root the agent actually wrote to
+  **6.7%** of the time and named the primary checkout instead **87.6%** of the
+  time (`docs/ops/3263-transcript-signal-measurement.md`). The guard now
+  derives the assigned root by scanning the agent's own transcript — newest
+  prompt turn first, skipping any candidate that resolves to the primary
+  checkout (never a valid assignment) or to no known checkout root — and falls
+  back to `cwd` only when that finds nothing. Measured 99.1% precise on the
+  same corpus. **So the 2026-09-19 consequence recorded here is fixed: a
+  `fix-agent` briefed at a pre-existing worktree is no longer denied every
+  write to its correct tree, and `subagent_type: "implementer"` is no longer
+  the required workaround for that shape.**
+  **Option 1 below remains mandatory anyway**, for two reasons that are not
+  going away: a wrong-but-confident extraction (measured 0.9% — a later turn
+  naming another PR's worktree) still protects the wrong tree and can ALLOW a
+  write to it, since fail-open covers "found nothing" and never "found the
+  wrong known root"; and **a denial is still not terminal**
+  ([#3369](https://github.com/dudarenok-maker/Castwright/issues/3369)) — the
+  second 2026-09-19 occurrence's agent retried against the *wrong* root
+  instead of stopping, leaving a stray uncommitted
+  `server/src/analyzer/errors.ts` edit on `main` in the primary checkout, the
+  #3044 pattern reaching *through* the guard rather than in spite of it. The
+  before/after porcelain check is what actually catches this class of failure.
 - **Capture the primary checkout's `git status --porcelain` before a dispatch
   round and again after each agent returns.** Any entry that is not yours is a
   **failed dispatch** — revert it and re-dispatch; do not adopt it. This is the
