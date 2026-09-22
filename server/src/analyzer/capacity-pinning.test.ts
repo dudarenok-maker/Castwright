@@ -15,7 +15,8 @@ import { chapterChunkBudget, OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS } from './chapte
 import { countCyrillic } from './token-budget.js';
 import { countCjkChars } from '../util/cjk.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
-import { resolveCapacity, type EngineCapacity } from './capacity.js';
+import { resolveCapacity, TODAY_LOCAL_CAPACITY, type EngineCapacity } from './capacity.js';
+import { configValue } from '../config/resolver.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANUSCRIPTS = resolve(__dirname, '..', '__fixtures__');
@@ -192,5 +193,46 @@ describe('capacity pinning — chunk budgets stay byte-identical to main (#3084 
     expect(value('chapter:script-review|gemini-3.5-flash-lite@12000|latin')).not.toBe(
       value('chapter:script-review|gemini-3.5-flash-lite@12000|han'),
     );
+  });
+});
+
+/* PR #3373 review finding: the pinning fixture above only exercises
+   ANALYZER_NUM_CTX=32768, where the num_ctx-derived term
+   (localInputFraction × numCtx × 2 chars/token) is so far above the
+   STAGE2_CHUNK_CHAR_BUDGET ceiling (9000) that every local stage-2 case in
+   the fixture simply equals the ceiling — the num_ctx term is never actually
+   the binding constraint anywhere in that suite. This leaves a regression
+   undetected: if stage-2 ever reads a larger window than num_ctx, a SMALL
+   num_ctx (a small local model, e.g. qwen3.5:4b at 8192) would wrongly get
+   the full 9000-char ceiling instead of a num_ctx-scaled budget, bringing
+   back the 2026-06-14 qwen3.5:4b output-truncation defect this module's
+   header describes — and this fixture would stay green throughout, because
+   it never probes a num_ctx below the ceiling.
+
+   This does NOT touch the pinned fixture (capacity-pinning.json) — it is a
+   second, independent capacity built directly via TODAY_LOCAL_CAPACITY(8192)
+   (below the ceiling), asserted against the resolver's own documented
+   formula, not a hand-typed constant. */
+describe('stage-2 chunk budget at a below-ceiling num_ctx (#3084 review finding)', () => {
+  it('num_ctx actually constrains the stage-2 local budget when it is below the char ceiling', () => {
+    const ceiling = configValue<number>('analyzer.stage2.chunkCharBudget');
+    const fraction = configValue<number>('analyzer.stage2.localInputFraction');
+    const numCtx = 8192;
+    // Mirrors resolveStage2ChunkCharBudget's documented local-family formula
+    // (module header + stage2ChunkBudgetForEngine in stage2-chunk.ts):
+    // min(configured ceiling, floor(numCtx × 2 chars/token × localInputFraction)),
+    // floored at 1000.
+    const expected = Math.max(1000, Math.min(ceiling, Math.floor(numCtx * 2 * fraction)));
+
+    const capacity = TODAY_LOCAL_CAPACITY(numCtx);
+    const actual = resolveStage2ChunkCharBudget(capacity);
+
+    // The regression this guards against: a resolver that ignored numCtx and
+    // just returned the ceiling would fail THIS assertion (it would equal
+    // `ceiling`, not `expected`), and the assertion below proves numCtx is
+    // actually the binding term at this value (unlike every case pinned at
+    // num_ctx=32768, where the ceiling always wins).
+    expect(actual).toBe(expected);
+    expect(actual).toBeLessThan(ceiling);
   });
 });
