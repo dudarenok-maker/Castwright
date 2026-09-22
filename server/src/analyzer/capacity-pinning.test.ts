@@ -15,6 +15,7 @@ import { chapterChunkBudget, OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS } from './chapte
 import { countCyrillic } from './token-budget.js';
 import { countCjkChars } from '../util/cjk.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import { resolveCapacity, type EngineCapacity } from './capacity.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const MANUSCRIPTS = resolve(__dirname, '..', '__fixtures__');
@@ -95,26 +96,28 @@ for (const engine of ENGINES) {
 }
 
 /* ── The ONLY part of this file Task 2.3 changes. ─────────────────────────── */
-function engineArg(engine: EngineConfig): 'local' | 'gemini' | undefined {
+function capacityArg(engine: EngineConfig): EngineCapacity | undefined {
   if (engine === 'unset') return undefined;
-  return engine.startsWith('local') ? 'local' : 'gemini';
+  return engine.startsWith('local')
+    ? resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' })
+    : resolveCapacity({ engine: 'gemini', model: 'gemini-3.5-flash-lite' });
 }
 function computeBudget(c: PinCase, body: string): number {
-  const engine = engineArg(c.engine);
+  const capacity = capacityArg(c.engine);
   switch (c.resolver) {
     case 'stage1':
-      return resolveStage1ChunkCharBudget(engine, body);
+      return resolveStage1ChunkCharBudget(capacity, body);
     case 'stage1+roster':
-      return resolveStage1ChunkCharBudget(engine, body, ROSTER);
+      return resolveStage1ChunkCharBudget(capacity, body, ROSTER);
     case 'stage2':
-      return resolveStage2ChunkCharBudget(engine, body);
+      return resolveStage2ChunkCharBudget(capacity, body);
     case 'chapter:defaults':
-      return chapterChunkBudget(engine!);
+      return chapterChunkBudget(capacity!);
     case 'chapter:emotion-instruct':
-      return chapterChunkBudget(engine!, 0, body, OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS);
+      return chapterChunkBudget(capacity!, 0, body, OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS);
     case 'chapter:script-review':
       return chapterChunkBudget(
-        engine!,
+        capacity!,
         JSON.stringify(ROSTER).length + 800,
         body,
         OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,

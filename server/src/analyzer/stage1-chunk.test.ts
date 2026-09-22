@@ -22,6 +22,9 @@ import { buildSystemInstruction, loadSkill, estimateInputTokens } from './gemini
 import { cloudBodyCharBudget } from './token-budget.js';
 import { buildStage1ChapterInbox } from '../routes/analysis.js';
 import type { CharacterOutput } from '../handoff/schemas.js';
+import { resolveCapacity } from './capacity.js';
+
+const gemini = () => resolveCapacity({ engine: 'gemini', model: 'gemma-4-31b-it' });
 
 const char = (id: string, extra: Partial<CharacterOutput> = {}): CharacterOutput => ({
   id,
@@ -135,7 +138,7 @@ describe('stage1ChunkBudgetForEngine', () => {
 
   it('cloud stage-1 sizes to the token cap, not MAX_SAFE_INTEGER', () => {
     const ruBody = 'а'.repeat(60000);
-    const budget = resolveStage1ChunkCharBudget('gemini', ruBody);
+    const budget = resolveStage1ChunkCharBudget(gemini(), ruBody);
     expect(budget).toBeLessThan(60000);
     expect(budget).toBeGreaterThan(2000);
   });
@@ -194,7 +197,7 @@ describe('#1682/#1691 — worst-case Cyrillic stage-1 request clears the Gemma T
     // Body sized exactly the way the route sizes it for a huge Cyrillic chapter,
     // with the same roster fed into the resolver so the reservation shrinks the
     // body budget by the roster's injected size (#1691).
-    const bodyBudget = resolveStage1ChunkCharBudget('gemini', 'а'.repeat(120000), roster);
+    const bodyBudget = resolveStage1ChunkCharBudget(gemini(), 'а'.repeat(120000), roster);
     const body = 'а'.repeat(bodyBudget);
 
     const inbox = buildStage1ChapterInbox(
@@ -231,8 +234,8 @@ describe('#1682/#1691 — worst-case Cyrillic stage-1 request clears the Gemma T
     // The whole point of #1691: the body budget must SHRINK as the book's cast
     // grows, else the worst-case request crosses the guard at ~130 cast.
     const cyr = 'а'.repeat(120000);
-    const budget60 = resolveStage1ChunkCharBudget('gemini', cyr, worstCaseRoster(60));
-    const budget150 = resolveStage1ChunkCharBudget('gemini', cyr, worstCaseRoster(150));
+    const budget60 = resolveStage1ChunkCharBudget(gemini(), cyr, worstCaseRoster(60));
+    const budget150 = resolveStage1ChunkCharBudget(gemini(), cyr, worstCaseRoster(150));
     expect(budget150).toBeLessThan(budget60);
   });
 });

@@ -31,6 +31,7 @@ import { AnalyzerTruncatedError } from './errors.js';
 import { configValue } from '../config/resolver.js';
 import { splitBodyIntoChunks, splitParagraphIntoSentences } from './stage2-chunk.js';
 import { cloudBodyCharBudget } from './token-budget.js';
+import type { EngineCapacity } from './capacity.js';
 
 /* Per-chunk INPUT char budget. Stage-1 output is small (a roster, not a
    per-sentence list), so the binding constraint is the input fitting num_ctx
@@ -93,16 +94,18 @@ function stage1RosterReservedChars(runningRoster: CharacterOutput[]): number {
 }
 
 export function resolveStage1ChunkCharBudget(
-  engine?: 'gemini' | 'local',
+  capacity: EngineCapacity | undefined,
   body?: string,
   runningRoster: CharacterOutput[] = [],
 ): number {
-  if (engine !== 'local') {
-    // Cloud: size the BODY to the per-request token cap MINUS stage-1's fixed
-    // system-instruction + scaffold overhead (reserved in token space so the
-    // full request — not just the body — stays under the finite TPM guard),
-    // and MINUS the injected running-roster's own char footprint (reserved in
-    // char space via the reservedChars param cloudBodyCharBudget exposes).
+  if (capacity?.family !== 'context') {
+    // Request-cap family (Gemini) — and an omitted capacity, exactly as an
+    // omitted engine behaved before #3084: size the BODY to the per-request
+    // token cap MINUS stage-1's fixed system-instruction + scaffold overhead
+    // (reserved in token space so the full request — not just the body — stays
+    // under the finite TPM guard), and MINUS the injected running-roster's own
+    // char footprint (reserved in char space via the reservedChars param
+    // cloudBodyCharBudget exposes).
     // #1691: the roster accumulates the whole book's cast, so a fixed-only
     // reservation hit a wall (~130 speaking cast — past it the total estimate
     // crossed 16000 & RequestExceedsTpmError dropped the chapter). Reserving
@@ -114,11 +117,12 @@ export function resolveStage1ChunkCharBudget(
       body ?? '',
       stage1RosterReservedChars(runningRoster),
       STAGE1_CLOUD_RESERVED_TOKENS,
+      capacity?.perRequestInputCap,
     );
   }
   return stage1ChunkBudgetForEngine(
     configValue<number>('analyzer.stage1.chunkCharBudget'),
-    configValue<number>('analyzer.ollama.numCtx'),
+    capacity.contextTokens,
     'local',
     configValue<number>('analyzer.stage1.localInputFraction'),
   );

@@ -27,6 +27,7 @@ import { AnalyzerTruncatedError } from '../errors.js';
 import { DailyQuotaExhaustedError } from '../rate-limit.js';
 import type { Analyzer, StageCall } from '../index.js';
 import type { SentenceOutput, ScriptReviewOp, ScriptReviewOutput } from '../../handoff/schemas.js';
+import { resolveCapacity, TODAY_LOCAL_CAPACITY } from '../capacity.js';
 
 const CHAPTER_ID = 1;
 const MANUSCRIPT_ID = 'm-review-run';
@@ -53,7 +54,7 @@ const serialize = (s: SentenceOutput): string =>
   JSON.stringify(buildReviewSentencesInput([s], undefined)[0]);
 function refChunksFor(sentences: SentenceOutput[]) {
   const charBudget = chapterChunkBudget(
-    'local',
+    TODAY_LOCAL_CAPACITY(),
     JSON.stringify(roster).length + 800,
     sentences.map((s) => s.text).join(' '),
     OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
@@ -113,7 +114,7 @@ describe('runReviewOverChapter — route-parity chunk loop', () => {
 
     const { ops } = await runReviewOverChapter({
       analyzer: makeStub(-1),
-      engine: 'local',
+      capacity: TODAY_LOCAL_CAPACITY(),
       manuscriptId: MANUSCRIPT_ID,
       chapterId: CHAPTER_ID,
       sentences,
@@ -141,7 +142,7 @@ describe('runReviewOverChapter — route-parity chunk loop', () => {
 
     const { ops } = await runReviewOverChapter({
       analyzer: makeStub(-1),
-      engine: 'local',
+      capacity: TODAY_LOCAL_CAPACITY(),
       manuscriptId: MANUSCRIPT_ID,
       chapterId: CHAPTER_ID,
       sentences,
@@ -159,7 +160,7 @@ describe('runReviewOverChapter — route-parity chunk loop', () => {
     const badAnchorId = sentences[0].id; // a chunk-0 core sentence
     const { ops, accepted } = await runReviewOverChapter({
       analyzer: makeStub(badAnchorId),
-      engine: 'local',
+      capacity: TODAY_LOCAL_CAPACITY(),
       manuscriptId: MANUSCRIPT_ID,
       chapterId: CHAPTER_ID,
       sentences,
@@ -202,7 +203,7 @@ describe('runReviewOverChapter — route-parity chunk loop', () => {
 
     const { ops, droppedChunks } = await runReviewOverChapter({
       analyzer: stub,
-      engine: 'local',
+      capacity: TODAY_LOCAL_CAPACITY(),
       manuscriptId: MANUSCRIPT_ID,
       chapterId: CHAPTER_ID,
       sentences,
@@ -233,7 +234,7 @@ describe('runReviewOverChapter — route-parity chunk loop', () => {
     await expect(
       runReviewOverChapter({
         analyzer: stub,
-        engine: 'gemini',
+        capacity: resolveCapacity({ engine: 'gemini', model: 'gemma-4-31b-it' }),
         manuscriptId: MANUSCRIPT_ID,
         chapterId: CHAPTER_ID,
         sentences,
@@ -296,7 +297,7 @@ describe('runReviewOverChapter — force-split retry on AnalyzerTruncatedError',
 
     const { ops } = await runReviewOverChapter({
       analyzer: stub,
-      engine: 'local',
+      capacity: TODAY_LOCAL_CAPACITY(),
       manuscriptId: MANUSCRIPT_ID,
       chapterId: CHAPTER_ID,
       sentences,
@@ -335,7 +336,7 @@ describe('runReviewOverChapter — force-split retry on AnalyzerTruncatedError',
 
     const { ops, droppedChunks } = await runReviewOverChapter({
       analyzer: makeAlwaysThrows(),
-      engine: 'local',
+      capacity: TODAY_LOCAL_CAPACITY(),
       manuscriptId: MANUSCRIPT_ID,
       chapterId: CHAPTER_ID,
       sentences,

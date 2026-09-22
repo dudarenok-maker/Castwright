@@ -65,7 +65,7 @@ is disabled.
 | Gemini max output tokens | Per-request output-token cap for Gemini | 8192 | 256–32768 | live | medium |
 | Gemini temperature | Sampling temperature for cloud Gemini/Gemma analysis | 0.2 | 0–2, step 0.1 | live | medium |
 | Gemini max input tokens per request | Per-request INPUT-token cap for cloud analyzer passes; body chunks are sized to this | 12000 | 1000–60000 | live | medium |
-| Ollama num_ctx | Context-window size sent on every /api/chat call | 32768 | integer, min 0 | live | medium |
+| Ollama num_ctx | Context-window size sent on every /api/chat call; feeds the local (context-family) chunk-budget formulas below, Gemini ignores it | 32768 | integer, min 0 | live | medium |
 | Ollama num_gpu | GPU layers for Ollama (999 = all) | 999 | integer, min 0 | live | medium |
 | Ollama analyzer concurrency (K) | Max analyzer /api/chat calls in flight at once; also set Ollama-side OLLAMA_NUM_PARALLEL >= K | 2 | integer, min 1 | live | high |
 | Ollama warm timeout (ms) | How long to wait for a cold Ollama model to load into VRAM before reporting unreachable | 120000 | integer, min 1000 | live | low |
@@ -82,11 +82,11 @@ is disabled.
 
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
-| Stage-2 chunk char budget | Max chars per stage-2 attribution chunk before pre-emptive split | 9000 | integer | live | medium |
-| Stage-2 local input fraction | Fraction of local num_ctx reserved for stage-2 INPUT; lower for a verbose local model whose output overflows the window | 0.3 | 0.1–0.9, step 0.05 | live | medium |
-| Stage-1 chunk char budget | Max chars per stage-1 cast-detection chunk before split | 24000 | integer | live | medium |
-| Stage-1 local input fraction | Fraction of local num_ctx reserved for stage-1 INPUT; lower for a verbose local model that overflows the window | 0.7 | 0.1–0.9, step 0.05 | live | medium |
-| Gemini output-heavy chunk chars | Per-chunk INPUT char budget for the output-heavy Gemini passes (script review, emotion, instruct annotation) | 32000 | integer, min 2000 | live | medium |
+| Stage-2 chunk char budget | Max chars per stage-2 attribution chunk before pre-emptive split; ceiling for both families — local derives min(fraction × num_ctx, this), Gemini derives min(this, token-cap-derived body) | 9000 | integer | live | medium |
+| Stage-2 local input fraction | Fraction of local num_ctx reserved for stage-2 INPUT; lower for a verbose local model whose output overflows the window; local (context-family) engines only, Gemini ignores it | 0.3 | 0.1–0.9, step 0.05 | live | medium |
+| Stage-1 chunk char budget | Max chars per stage-1 cast-detection chunk before split; local derives the effective budget from num_ctx, Gemini ignores it and sizes instead from the max-input-tokens-per-request knob | 24000 | integer | live | medium |
+| Stage-1 local input fraction | Fraction of local num_ctx reserved for stage-1 INPUT; lower for a verbose local model that overflows the window; local (context-family) engines only, Gemini ignores it | 0.7 | 0.1–0.9, step 0.05 | live | medium |
+| Gemini output-heavy chunk chars | Per-chunk INPUT char budget for the output-heavy Gemini passes (script review, emotion, instruct annotation); local (context-family) engines ignore it and use the stage-1 cast-detection budget instead | 32000 | integer, min 2000 | live | medium |
 | Coverage min ratio | Attributed/source word-ratio floor → treated as truncated | 0.6 | 0–1, step 0.05 | live | medium |
 | Coverage max ratio | Ratio ceiling → treated as a repeat-loop | 1.6 | 1–5, step 0.1 | live | medium |
 | Ending tail words | Trailing source words required present for "ending found" | 8 | integer | live | medium |
