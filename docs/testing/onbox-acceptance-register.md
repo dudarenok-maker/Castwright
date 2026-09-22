@@ -5198,6 +5198,43 @@ on a shared-device box — and confirm the Kokoro load now blocks until the desi
 matching the unit-level proof above.
 *Cost:* short — one concurrent repro, same shape as the unit test but against real weights.
 
+> **On-box sitting 2026-09-22, 20:24–20:26 local (cline-qwen-cloud, issue #3309) — PASS, A107
+> DISCHARGED.** The original #3086 repro — a raw cold Kokoro `/load` racing a real, resident
+> VoiceDesign forward on a shared device, against real weights — was driven through the shipped
+> `_kokoro_ensure_loaded_guarded()` path (PR #3142) and the bypass did not reproduce.
+>
+> **Box caveat (honest scope):** this box has no DirectML profile (CUDA `onnxruntime-gpu`), so
+> `_directml_selftest_or_fallback`'s one-shot forward cannot run here. That does not weaken the
+> row: the gate under test is the `/load` route's arbiter block, which is EP-agnostic (it wraps
+> `_ensure_loaded` regardless of provider), and the block is proven by timing against a real cold
+> session build. Shared-device condition met by pinning both engines to the *same* 8 GB card
+> (`QWEN_DEVICE=cuda:0`, `KOKORO_DEVICE=cuda:0`; the box's standing `cuda:1` policy unused) on a
+> freshly started cold sidecar, port 9321, `PRELOAD_KOKORO=0`, `PRELOAD_COQUI=0`, real
+> `kokoro-v1.0.onnx` + `voices-v1.0.bin` and real `Qwen3-TTS-12Hz-1.7B-VoiceDesign` weights.
+>
+> **Timeline** (sidecar's own log lines, ms-stamped; `/health` counters sampled every 5 s):
+> `20:25:15.1` `POST /qwen/design-voice` fires — arbiter `design()` span enters; `inflight_synth=1`,
+> `qwen_design_resident=True`; `Loading Qwen VoiceDesign … on cuda:0 (transient)`.
+> `20:25:24.2` raw `POST /load {"engine":"kokoro"}` arrives **mid-design** — and is then **held for
+> 43.3 s**: no Kokoro load line at all during the hold (`kokoro_loading=True`, `kokoro_loaded=False`,
+> design still inflight).
+> `20:26:06.5` `Designed + cached Qwen voice 'a107-repro'` — the design releases the arbiter.
+> `20:26:07.4` — ≈0.9 s after that release — the guard finally runs the real load:
+> `Loading Kokoro model=…kokoro-v1.0.onnx`; `20:26:09.7` `Kokoro pinned to cuda:0 … Kokoro loaded.
+> English voices: 28`, `/load` returns HTTP 200 `ready` after **45.5 s total** (real session build
+> only 2.3 s of it). `20:26:29.7` design HTTP 200, 268800-byte wav,
+> `load_ms=25930 design_fwd_ms=24645 distil_ms=849 audition_ms=23159 total_ms=74611` — the trailing
+> ~23 s is the audition synth, which runs *after* the arbiter span releases by design; #3142's gate
+> covers the load→design→distil window, and that is exactly the window the `/load` was held outside of.
+>
+> **Negative control (same process):** `POST /unload {"engine":"kokoro"}`, then a solo cold
+> `POST /load` with no design active returned in **1.9 s** — matching the blocked load's own 2.3 s
+> build phase. The ≈43 s delta is the arbiter hold, not a slow cold load.
+>
+> **Verdict:** matches the unit-level proof (`test_load_kokoro_arbiter_gate.py`) on real hardware —
+> `/load` blocks while a design holds the arbiter and returns within ~1 s of release. No
+> human-judgment items owed on this row.
+
 ### A108 · Coqui/Kokoro/Whisper installer hold-down and idle watchdog ([#3056](https://github.com/dudarenok-maker/Castwright/issues/3056), PR [#3197](https://github.com/dudarenok-maker/Castwright/pull/3197)) · **GPU box with a real sidecar, Qwen resident**
 
 Ported from #3039 (Qwen3-TTS): all four in-app TTS installers now run with the sidecar
