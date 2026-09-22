@@ -5035,6 +5035,42 @@ forced-contention run for the lock-leak criterion.
 > deeper unload-mechanism question is not and does not need re-running
 > either — it needs a sidecar log line (or a deliberately landed race) to
 > distinguish the two cases, per the source evidence above.
+>
+> **Note 2026-09-22 (#3308, cline-qwen-cloud, OE run 922, `chore/ops-onbox-batch-1`) —
+> A105 DISCHARGED: the Stop-button bullet's unload-mechanism question is RESOLVED
+> (case 2, no-op) by a deliberately landed race, and the co-residency criterion is
+> DISCHARGED by #3086's closed-completed resolution.** Co-residency half: #3086 was
+> closed 2026-09-11 as completed via the arbiter-fix chain (#3099–#3119, #3142, #3159,
+> #3166 — all closed, final corrective commits `6e31b0c`→`34f11b9`); per #3308's own
+> instruction ("anything already CONFIRMED/PASS/DISCHARGED elsewhere stays as-is — do
+> not retry") that closure is inherited here, not re-run. Unload-mechanism half, driven
+> fresh on this box against a dedicated log-captured sidecar instance (port 9417, this
+> worktree's venv, stdout/stderr to files):
+>
+> - **Source:** `POST /unload {"engine":"qwen","model":"1.7b"}` → `main.py:11746` calls
+>   `qwen.unload_base17()` with NO arguments → `wait_seconds=0.0` → only the
+>   unconditional-null branch (`main.py:6840-6850`) is reachable from the Stop route, and
+>   it early-`return`s a true no-op when `_base17` is still `None`. The bounded-wait
+>   branch (`wait_seconds>0`, which would hold up and then null a finished load) has
+>   exactly one caller — `design_voice()`'s contention guard (`main.py:7587`) — i.e. the
+>   hold-up case belongs to #3086's co-residency path, not to `/unload`.
+> - **Observation:** raced `/load` 1.7B in flight (`/health` at the instant:
+>   `qwen_loading: true`, `qwen_base17_loaded: false`, `committed≈3384MB` pre-load) →
+>   `POST /unload` returned **HTTP 200 `{"status":"idle"}` in 14.4 ms** (a hold-up case
+>   would have blocked for seconds); the racing `/load` completed uninhibited — HTTP 200
+>   `ready` in 15.95 s, log `Loading Qwen 1.7B-Base model=Qwen/Qwen3-TTS-12Hz-1.7B-Base
+>   on cuda:1 …` @ 20:03:04.621 → `Qwen 1.7B-Base loaded.` @ 20:03:20.451 — and the model
+>   was demonstrably resident afterwards, evicted only by the ordinary idle watchdog
+>   (`Qwen 1.7B-Base unloaded (idle watchdog).` @ 20:03:37.703, `committed` back to
+>   3927MB).
+> - **Verdict:** case 2 confirmed observationally on real weights — `/unload` arriving
+>   before `_base17` is assigned is a no-op that returns 200 immediately and neither
+>   aborts nor holds up the racing `/load`; no null-after-load happened (the only
+>   post-load eviction was the documented TTL watchdog). No code change needed; the
+>   "Stop always succeeds" guarantee holds. (Box was 2-card at run time; the
+>   lock-branch question is device-count-independent.) All five bullets now stand:
+>   1, 3, 5 CONFIRMED 2026-09-06/08; 2's literal 200-not-500 claim confirmed then and
+>   its mechanism question resolved above; co-residency bullet discharged by #3086.
 
 ### A106 · X-Device-Hint lazy Coqui derive request signaling ([#3058](https://github.com/dudarenok-maker/Castwright/issues/3058), PR [#3061](https://github.com/dudarenok-maker/Castwright/pull/3061)) · **2-card boot (8 GB + 16 GB), Coqui XTTS NOT yet resident (cold-load), no `COQUI_DEVICE` pin**
 
