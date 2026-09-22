@@ -1322,15 +1322,22 @@ Working practice below; this holds even under contention).
   prompt turn first, skipping any candidate that resolves to the primary
   checkout (never a valid assignment) or to no known checkout root — and falls
   back to `cwd` only when that finds nothing. Measured 99.1% precise on the
-  same corpus. **So the 2026-09-19 consequence recorded here is fixed: a
-  `fix-agent` briefed at a pre-existing worktree is no longer denied every
-  write to its correct tree, and `subagent_type: "implementer"` is no longer
-  the required workaround for that shape.**
+  same corpus. **So the 2026-09-19 consequence recorded here is mostly, not
+  wholly, fixed: a `fix-agent` briefed at a pre-existing worktree is usually
+  no longer denied every write to its correct tree.** Quantify it before
+  relying on it — the scan finds nothing on **8.3%** of dispatches and falls
+  back to `cwd`, which is wrong in nearly all of those, so **~7.7% of
+  dispatches still land in the old failure mode** (on the `fix-agent` cohort
+  specifically, 12.0%). `subagent_type: "implementer"` therefore remains the
+  reliable workaround **when a dispatch is denied**, rather than the routine
+  one.
   **Option 1 below remains mandatory anyway**, for two reasons that are not
-  going away: a wrong-but-confident extraction (measured 0.9% — a later turn
-  naming another PR's worktree) still protects the wrong tree and can ALLOW a
-  write to it, since fail-open covers "found nothing" and never "found the
-  wrong known root"; and **a denial is still not terminal**
+  going away: a wrong-but-confident extraction — a later turn naming another
+  PR's worktree, or a brief that assigns the **primary checkout** directly
+  (CLAUDE.md's own trivial-bar carve-out permits this, and the scan skips the
+  primary as an assignment candidate) — still protects the wrong tree and can
+  ALLOW a write to it, since fail-open covers "found nothing" and never
+  "found the wrong known root"; and **a denial is still not terminal**
   ([#3369](https://github.com/dudarenok-maker/Castwright/issues/3369)) — the
   second 2026-09-19 occurrence's agent retried against the *wrong* root
   instead of stopping, leaving a stray uncommitted

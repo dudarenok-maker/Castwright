@@ -628,3 +628,194 @@ test('KNOWN LIMIT: a confident pick of the WRONG known worktree inverts the guar
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- whose text counts as authoritative (PR #3358 review pass 2, N3) ------
+// These two filters decide which parts of a transcript may name the assigned
+// root. Both were mutable without turning the suite red, which meant the
+// contract "only the operator's own prompt turns are authoritative" was
+// unasserted — and an agent can put an arbitrary path into a tool result or
+// into its own assistant text, so widening either would let the guarded
+// process choose the root that guards it.
+
+test('text the AGENT produced cannot name the assigned root — assistant turns are ignored', () => {
+  const assistantTurn = {
+    type: 'assistant',
+    promptSource: 'sdk',
+    message: { role: 'assistant', content: `I will work in ${SIBLING_WORKTREE} instead.` },
+  };
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE), assistantTurn]);
+  try {
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${SIBLING_WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(verdict.deny, true);
+    assert.match(verdict.reason, new RegExp(WORKTREE.replace(/\\/g, '\\\\')));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('text inside a tool_result block cannot name the assigned root — only text blocks count', () => {
+  const toolResultTurn = {
+    type: 'user',
+    promptSource: 'sdk',
+    message: {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 't1', content: `cd ${SIBLING_WORKTREE} && ls` }],
+    },
+  };
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE), toolResultTurn]);
+  try {
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${SIBLING_WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(verdict.deny, true);
+    assert.match(verdict.reason, new RegExp(WORKTREE.replace(/\\/g, '\\\\')));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the scan runs NEWEST turn first — a re-assignment supersedes the original brief', () => {
+  // Pins the direction. It is a real choice, not an accident: the measurement
+  // scores newest-first at 99.1% and first-turn-anchored at 98.9%, and
+  // newest-first is what makes a mid-session re-assignment take effect.
+  const reassignment = {
+    type: 'user',
+    promptSource: 'sdk',
+    message: { role: 'user', content: `Change of plan — work in ${SIBLING_WORKTREE} from here on.` },
+  };
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE), reassignment]);
+  try {
+    const toNewest = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${SIBLING_WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(toNewest.deny, false);
+    const toOriginal = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(toOriginal.deny, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('JSON-escape debris is skipped even when its HEAD resolves to a known root — #3340s predicate still discriminates', () => {
+  // A candidate like `…\wt-2997-commit-gate\nC:\…\wt-3044-…` is one regex
+  // match: a literal backslash-n glues two paths together. Its head resolves
+  // cleanly under SIBLING_WORKTREE, so the knownRoots membership check alone
+  // would accept it and return the WRONG root. #3340's escape-debris
+  // predicate is what rejects it, letting the scan reach the real assignment.
+  //
+  // This is the shape the first version of this test missed: it used debris
+  // whose head matched no known root, so membership rejected it anyway and
+  // gutting the predicate left the suite green (PR #3358 review pass 2, N3).
+  const debrisTurn = {
+    type: 'user',
+    promptSource: 'sdk',
+    message: {
+      role: 'user',
+      content: `log tail: ${SIBLING_WORKTREE}\\n\\n${WORKTREE}\\src\\module.mjs`,
+    },
+  };
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE), debrisTurn]);
+  try {
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(verdict.deny, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a brief that assigns the PRIMARY checkout and names no other root is handled correctly', () => {
+  // The real primary-assigned brief shape (1 of ~1,594 measured transcripts),
+  // verbatim from the corpus. The scan finds no non-primary candidate, returns
+  // null, and `cwd` — also the primary — stands, so the write is allowed.
+  const turn = {
+    type: 'user',
+    promptSource: 'sdk',
+    message: {
+      role: 'user',
+      content:
+        `Repo: ${PRIMARY_CHECKOUT_ROOT} (Castwright). Fix two correctness findings from the PR ` +
+        `review gate. This branch is currently checked out in the primary checkout at ` +
+        `${PRIMARY_CHECKOUT_ROOT} — work there directly (it's a small single-file docs-comment ` +
+        `PR, not worth a worktree), commit, and push.`,
+    },
+  };
+  const { dir, file } = writeTranscript([turn]);
+  try {
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\scripts\\verify-cache.mjs`, content: 'x' },
+      transcriptPath: file,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(verdict.deny, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('KNOWN LIMIT: a PRIMARY-assigned brief that also mentions a live worktree inverts the guard (0 observed, accepted)', () => {
+  // The second residual-risk shape, and the only one that is a REGRESSION
+  // against pre-#3263 `cwd` behaviour rather than a failure to improve on it:
+  // rule 1 skips the real assignment and the scan takes the incidental tree.
+  // Zero occurrences in ~1,594 real transcripts, but reachable. Asserted so
+  // that closing it is deliberate. See PRIMARY_CHECKOUT_ROOT's declaration.
+  const turn = {
+    type: 'user',
+    promptSource: 'sdk',
+    message: {
+      role: 'user',
+      content:
+        `This branch is checked out in the primary checkout at ${PRIMARY_CHECKOUT_ROOT} — work ` +
+        `there directly, not worth a worktree. (For context, the related change landed in ` +
+        `${SIBLING_WORKTREE} last week.)`,
+    },
+  };
+  const { dir, file } = writeTranscript([turn]);
+  try {
+    const legitimate = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\scripts\\verify-cache.mjs`, content: 'x' },
+      transcriptPath: file,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(legitimate.deny, true, 'the truly-assigned primary checkout is wrongly denied');
+    const foreign = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${SIBLING_WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(foreign.deny, false, 'the incidentally-mentioned tree is wrongly allowed');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

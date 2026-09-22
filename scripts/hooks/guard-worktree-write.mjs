@@ -6,9 +6,11 @@
 // root is now the one a transcript scan finds, falling back to `cwd` when
 // the scan finds nothing. That is a correction, not an enhancement: `cwd`
 // alone named the right root in 6.7% of 715 measured dispatches.
-// REMAINING GAPS, both real: a wrong-but-confident extraction (measured
-// 0.9%) still protects the wrong tree and can ALLOW a write to it, and the
-// Bash/PowerShell check stays coarse. Separately still open: whether a
+// REMAINING GAPS, all real: the scan finds nothing on ~8% of dispatches and
+// falls back to `cwd`, which is usually wrong, so the old failure mode still
+// reaches ~7.7% of them; a wrong-but-confident extraction still protects the
+// wrong tree and can ALLOW a write to it; and the Bash/PowerShell check stays
+// coarse. Separately still open: whether a
 // denial should be terminal (#3263's 2026-09-21 design-pass comment, parked,
 // tracked as its own issue). So this guard remains a layer, NOT a full
 // replacement for the manual before/after `git status --porcelain` check.
@@ -33,8 +35,22 @@ import { scrubGitEnv } from '../git-env.mjs';
 // match. Pin to `path.win32` so the logic is identical on every OS.
 const { resolve, sep } = win32;
 
-// The primary checkout — never itself a valid target for a dispatched
-// fix-agent's writes, whatever tree it was assigned.
+// The primary checkout. It is the root a brief names in order to FORBID it
+// ("do NOT edit files in the primary checkout"), which is why the transcript
+// scan below skips it as an assignment candidate.
+//
+// It is NOT, however, never-assignable — that stronger claim stood here until
+// PR #3358's review pass 2 falsified it. CLAUDE.md's trivial-bar carve-out
+// sanctions working in the primary directly, and a real brief in the measured
+// corpus does exactly that ("This branch is currently checked out in the
+// primary checkout at C:\Claude\Projects\Audiobook-Generator — work there
+// directly … not worth a worktree"). Such a dispatch is rare — 1 of ~1,594
+// real transcripts — and the scan handles the observed one correctly, because
+// a brief that assigns the primary names no other checkout root for the scan
+// to find, so it returns null and `cwd` (also the primary) stands. The hazard
+// it leaves is narrow and real: a primary-assigned brief that ALSO mentions a
+// live worktree in passing would have that worktree returned instead. See the
+// residual-risk paragraph on extractAssignedRootFromTranscript.
 export const PRIMARY_CHECKOUT_ROOT = 'C:\\Claude\\Projects\\Audiobook-Generator';
 
 /** Enumerate every known checkout root: the primary checkout plus every real
@@ -175,11 +191,13 @@ function transcriptPromptText(entry) {
  *  715 real subagent transcripts scored against an independent ground truth
  *  — the checkout root each agent actually wrote to):
  *
- *  1. POLARITY: a path under `PRIMARY_CHECKOUT_ROOT` is never an assignment,
- *     so it is skipped rather than returned. This is not a tuning constant —
- *     it is the invariant this file already asserts at PRIMARY_CHECKOUT_ROOT's
- *     own declaration, and omitting it is what made the first cut of this
- *     function (#3355) unsafe. This repo's briefing convention LEADS with the
+ *  1. POLARITY: a path under `PRIMARY_CHECKOUT_ROOT` is skipped rather than
+ *     returned. Not because the primary can never be an assignment — it can,
+ *     rarely, and an earlier revision of this comment wrongly said otherwise
+ *     (PR #3358 review pass 2; see PRIMARY_CHECKOUT_ROOT's own declaration) —
+ *     but because it is overwhelmingly named in order to be FORBIDDEN, and
+ *     omitting the skip is what made the first cut of this function (#3355)
+ *     unsafe. This repo's briefing convention LEADS with the
  *     prohibition ("primary checkout `C:\Claude\Projects\Audiobook-Generator`
  *     — do NOT edit files in the primary checkout…"), so a first-path-wins
  *     rule reads the explicitly forbidden root as the assigned one: measured
@@ -193,15 +211,29 @@ function transcriptPromptText(entry) {
  *     also discards the literal `C:\Claude\Projects\wt-*` glob the fix-agent
  *     brief itself contains, which resolves under no real root.
  *
- *  RESIDUAL RISK, measured and accepted: 6 of 658 picks (0.9%) named a
- *  live-but-wrong worktree — a later turn (a skill preamble, another PR's
- *  review brief) mentioning a tree the agent was not assigned. In that shape
- *  the guard both wrongly denies the true tree and wrongly allows the
- *  mis-extracted one; fail-open covers "found nothing", not "found the wrong
- *  known root". Three further apparent misses were the heuristic being RIGHT
- *  and the agent being wrong (it wrote to the primary against its brief —
- *  #3044's own incident shape), and are counted as errors above only because
- *  the ground truth is "where the agent wrote".
+ *  RESIDUAL RISK, in two shapes, both measured and both accepted:
+ *
+ *  (a) A WRONG-BUT-CONFIDENT pick — a later turn (a skill preamble, another
+ *      PR's review brief) naming a live tree the agent was not assigned, and
+ *      the scan takes it. 0–2 of ~630 picks depending on whose root
+ *      reconstruction you use; the review's independent re-derivation put it
+ *      at 0–1, i.e. this comment's own earlier "6 of 658 (0.9%)" OVER-stated
+ *      it. Of those 6, 3 were the scan being RIGHT and the agent being wrong
+ *      (it wrote into the primary against its brief — #3044's own incident
+ *      shape) and 3 were artifacts of the measurement's reconstructed root
+ *      list.
+ *  (b) A PRIMARY-ASSIGNED dispatch whose brief also mentions a live worktree
+ *      in passing. Rule 1 skips the real assignment and the scan returns the
+ *      incidental tree. Zero observed in ~1,594 transcripts — the one real
+ *      primary-assigned brief names no other root, so the scan correctly
+ *      returns null — but it is reachable, and unlike (a) it is a REGRESSION
+ *      against the pre-#3263 `cwd` behaviour rather than a failure to
+ *      improve on it.
+ *
+ *  In either shape the guard both wrongly denies the true tree and wrongly
+ *  allows the mis-extracted one: fail-open covers "found nothing", never
+ *  "found the wrong known root". Both are pinned by `KNOWN LIMIT` tests so
+ *  that closing one is a deliberate act rather than an accident.
  *
  *  Throws only on an unreadable file (`readFileSync`); a malformed one does
  *  NOT throw — malformed JSON lines are skipped individually, so a wholly

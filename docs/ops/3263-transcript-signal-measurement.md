@@ -137,6 +137,60 @@ asserted as a test (`KNOWN LIMIT: a confident pick of the WRONG known
 worktree…`) so that closing it later is a deliberate act, and it is why the
 manual before/after `git status --porcelain` check stays in CLAUDE.md.
 
+**PR #3358's review pass 2 re-derived all of the above independently** —
+different root-resolution (structural, against `git ls-tree HEAD` top-level
+names), same ground-truth definition, no shared traversal or parser — and
+reproduced the headline figures within ~1.5 points: shipped rule 611/619
+(98.7%) at 91.7% coverage with **0** primary picks; H2 as shipped 78.1% with
+103 primary picks; `cwd` correct 2.7%. It also swept the ≥80% dominance
+filter from 0.5 to 1.0 and found it inert (precision 98.6→98.9%), and scored
+the `fix-agent` cohort alone — the only population the hook is actually wired
+to — at **296/300 (98.7%), 0 primary picks, against `cwd`'s 2/341 (0.6%)**.
+
+That pass found this section **over**-states the residual rather than
+laundering it: re-checking the 6 by hand puts the genuinely-wrong-worktree
+count at **0–1**, not 2, with 3 rule-right/agent-wrong (one of which wrote
+the same file into *both* the primary and its worktree — byte-identically
+#3044's shape) and the rest artifacts of root reconstruction.
+
+## Result 4 — the primary checkout IS assignable, rarely
+
+Added after review pass 2, which falsified the invariant this rule was
+originally justified by. `guard-worktree-write.mjs` asserted that the primary
+checkout is "never itself a valid target for a dispatched fix-agent's writes."
+That is false: CLAUDE.md's own trivial-bar carve-out sanctions working in the
+primary directly, and the corpus contains a brief that does exactly that —
+
+> Repo: `C:\Claude\Projects\Audiobook-Generator` (Castwright). Fix two
+> correctness findings from the PR review gate on PR #3233 … This branch is
+> currently checked out in the primary checkout at
+> `C:\Claude\Projects\Audiobook-Generator` — **work there directly** (it's a
+> small single-file docs-comment PR, **not worth a worktree**), commit, and
+> push.
+
+Scoped by the two decisive phrases (`not worth a worktree`, `checked out in
+the primary checkout`, `work there directly`, `no worktree needed/required`,
+minus any brief that also carries the standard prohibition), this cohort is
+**1 of ~1,594** transcripts.
+
+**The rule handles the observed one correctly**, for a reason that is luck
+rather than design: a brief that assigns the primary names no *other* checkout
+root, so the scan finds no candidate, returns null, and `cwd` — also the
+primary — stands. The hazard is the unobserved variant: a primary-assigned
+brief that also mentions a live worktree in passing. Rule 1 would skip the
+real assignment and return the incidental tree.
+
+This shape is worse than the (a)-class risk in one specific way: it is a
+**regression** against the pre-#3263 `cwd` behaviour, not merely a failure to
+improve on it. Pinned by its own `KNOWN LIMIT` test, and named at
+`PRIMARY_CHECKOUT_ROOT`'s declaration rather than left as a false invariant.
+
+Not fixed here, deliberately. Every fix considered — phrase-detecting an
+affirmative primary assignment, gating the scan on whether the brief names a
+non-primary root (measured: no effect on this cohort, 3/3 unchanged) — adds a
+heuristic to cover a hazard with zero observed occurrences, which buys less
+than it costs.
+
 ## What did not change
 
 - The fail-open contract. No `transcriptPath`, an unreadable file, a wholly
