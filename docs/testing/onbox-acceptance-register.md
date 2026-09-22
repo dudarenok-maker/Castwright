@@ -2732,6 +2732,30 @@ opportunistic.
 > the one flagged line (`a16.md` names the exact clip/segment) to judge
 > genuine synthesis glitch vs. a tight percentile-cutoff false positive on a
 > small per-character sample.
+>
+> **2026-09-22 (batch-1 child Castwright#3310, cline-qwen-cloud) — the
+> sentence-19 regression is CONFIRMED as a real TTS defect, and the "decodes
+> in English" symptom separates into two mechanisms.** Fresh full chain in
+> this worktree (server :8100 / sidecar :9020, GPU Qwen throughout): a new
+> English clone (`c8c583c7-3449-4602-850c-8701f1dfec23`) cast onto Одуван,
+> `force:true` render of the same Russian chapter (`chapter2-run3310.*`,
+> 58 segments), then clean uncontaminated QA scoring — 9/10 oduvan lines
+> `voice-match` (0.813–0.903) and **1 line `voice-mismatch` `severe`**
+> (analyzer index 20 — wave 12's "sentence 19"; the analyzer renumbered),
+> in-book cosine 0.693. Forced-`ru` vs auto-detect `/transcribe` of the
+> isolated windows settles the register's open question: the flagged line
+> stays word-salad under forced `ru` (logprob −1.19, identity 0.593 vs the
+> source clip) — the **audio itself is bad**, third independent
+> reproduction of the one-line pattern — while the *other* cloned lines'
+> "English" labels are a **Whisper auto-detect artifact** (forced-`ru`
+> restores near-correct text; s17 logprob −0.53 with identity intact).
+> Literal sentence 19 in current numbering is a clean coqui narrator line
+> (WER 0). Per the batch protocol this run files no fix — tracked on
+> [#3079](https://github.com/dudarenok-maker/Castwright/issues/3079). Full
+> trail: [`onbox-batch-results/a16.md`](onbox-batch-results/a16.md)
+> §"2026-09-22 on-box re-run"; evidence in `a16-audio/`
+> (`chapter2-run3310.*`, `s20-mismatch-window.pcm`,
+> `meas3310b-onbox-3310.txt`, `clone3310.txt`).
 
 Before this fix a cloned Qwen voice rendered **every** book, in every language, as
 English — `QwenEngine.synthesize` took the caller's language and ignored it, and a
@@ -2768,8 +2792,9 @@ every mechanism test while leaving the whole book wrong.
   character thin enough on in-book anchors to trigger the audition fallback (a
   few-line character is the easy way), so treat it as opportunistic within this same
   render rather than something to engineer.
-- **Sentence-19 cross-language regression, unconfirmed
-  ([#3079](https://github.com/dudarenok-maker/Castwright/issues/3079)).** Wave 12's
+- **Sentence-19 cross-language regression, CONFIRMED as a real TTS defect
+  ([#3079](https://github.com/dudarenok-maker/Castwright/issues/3079);
+  register question answered on-box 2026-09-22, Castwright#3310 re-run).** Wave 12's
   A16 render on the Coalfall Commission Russian chapter one, cloned Qwen voice,
   flagged one sentence (index 19) decoding in English via Whisper auto-detect on
   both attempts (identity cosine 0.704 → 0.656). Investigation
@@ -2780,12 +2805,20 @@ every mechanism test while leaving the whole book wrong.
   into every title, single-group and batched call, including the sidecar's
   per-item `language` override (`main.py:8184`, `:8261`) — and ruled out the
   #1998 whole-book English-manifest fallback (every cloned group's `cloned` flag
-  is set correctly by `buildSentenceGroups`/`resolveGroup`). Genuinely blocked
-  pending a real render: needs the same chapter re-rendered with the same cloned
-  Qwen voice, sentence 19 isolated, to confirm whether the *audio* itself renders
-  in English or whether the Whisper auto-detect measurement is the artifact —
-  this row's own withdrawn note above documents this exact row producing
-  unreliable voice-identity/language measurements before. Track separately from
+  is set correctly by `buildSentenceGroups`/`resolveGroup`). **Answered by the
+  2026-09-22 on-box re-run (Castwright#3310): the same chapter was re-rendered
+  fresh (clone `c8c583c7-3449-4602-850c-8701f1dfec23` → Одуван, `force:true`,
+  clean QA pass) and the flagged line isolated with forced-`ru` vs auto-detect
+  `/transcribe` plus `/embed` identity cosines. Result: both — the flag itself
+  is a REAL TTS defect (forced-`ru` still yields word-salad, logprob −1.19,
+  identity 0.593 vs source / 0.693 in-book `severe`, third independent
+  reproduction of the one-line pattern), while the bare "decodes as English"
+  symptom on the *unflagged* cloned lines is a Whisper auto-detect artifact
+  (forced-`ru` restores near-correct text at logprob −0.53 with matching
+  identity). Note the analyzer renumbered: wave 12's flagged sentence is index
+  20 in this run; literal sentence 19 is a clean coqui narrator line (WER 0).
+  Full trail: `onbox-batch-results/a16.md` §"2026-09-22 on-box re-run".**
+  Track separately from
   the rest of this row; do not treat as discharged by a passing chapter-level run.
 
 *Needs:* a single GPU with Qwen resident, a non-English book, and ASR available
