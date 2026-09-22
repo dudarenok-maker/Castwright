@@ -474,6 +474,35 @@ def test_asr_warm_reservation_keeps_a_delta_within_the_seed_ceiling(monkeypatch)
     assert fp.records == [("asr", None, {}, 400, True)]
 
 
+def test_asr_warm_reservation_ceiling_scales_with_configured_model_tier(monkeypatch) -> None:
+    """#3357 N2 regression (S2): the warm ceiling must scale with the
+    CONFIGURED ASR_MODEL the same way the cold seed does (#3347/#3352) — a
+    large-tier warm delta above the flat 400 MB base seed but still under
+    the large-model ceiling (2560 MB) must be KEPT, not discarded.
+
+    Mutation that must fail it — revert `main.py`'s warm-ceiling lookup
+    (`FootprintTable._seed_mb("asr", "asr", cfg, model)`) back to the flat
+    `SEED_FOOTPRINTS_MB["asr"]` (400) it replaced: the same 1800 MB delta
+    below would then exceed the flat ceiling and be discarded (recorded 0)
+    instead of kept.
+    """
+    devices = [dev(total=16000, free=16000)]
+    pc, fp = make_pc(devices, peak=128, resident=lambda e: "cuda:0")
+    monkeypatch.setattr(main.PlacementController, "_observed_mb", staticmethod(lambda device_key: 77))
+    # before=3000 free, after=1200 free -> a 1800 MB delta: above the flat
+    # 400 MB base seed, but under the large-model 2560 MB ceiling.
+    _patch_free_mb(monkeypatch, [3000, 1200])
+
+    async def body():
+        async with pc.reservation("asr", "large-v3", {}, cpu_capable=False, heavy=False):
+            pass
+        return _RAN
+
+    run_case(body())
+
+    assert fp.records == [("asr", "large-v3", {}, 1800, True)]
+
+
 def test_asr_cold_measurement_is_not_capped(monkeypatch) -> None:
     """The COLD path (this test) has never had a ceiling — only the
     RESIDENT ("asr.warm") case does (#3282's restored guard, see

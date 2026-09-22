@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, join as platformJoin, win32, posix } from 'node:path';
 import { decideGuardVerdict, listKnownCheckoutRoots, resolveOwnTranscriptPath, PRIMARY_CHECKOUT_ROOT } from '../hooks/guard-worktree-write.mjs';
 
 const WORKTREE = 'C:\\Claude\\Projects\\wt-3044-worktree-write-guard';
@@ -548,11 +548,16 @@ test('the same cwd-wrong-root Write is denied without a transcriptPath (the pre-
 });
 
 test('a transcriptPath pointing at a nonexistent file fails open to the cwd-derived root', () => {
+  // Carries an `agentId`, so the derivation runs and the ENOENT is raised by
+  // the scan itself. Without one this reached only the no-agentId branch and
+  // never touched the filesystem, so the title described a path it did not
+  // take (PR #3358 review pass 4, N16).
   const verdict = decideGuardVerdict({
     toolName: 'Write',
     toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\RELEASE_NOTES.md`, content: 'x' },
     cwd: WORKTREE,
     transcriptPath: 'C:\\does\\not\\exist\\transcript.jsonl',
+    agentId: AGENT_ID,
     knownRoots: KNOWN_ROOTS,
   });
   assert.equal(verdict.deny, true);
@@ -885,14 +890,50 @@ test('KNOWN LIMIT: a PRIMARY-assigned brief that also mentions a live worktree i
 // worktree for exactly that reason.
 
 test('resolveOwnTranscriptPath derives the subagent transcript from the session path plus agent_id', () => {
-  // The layout verified against both real recorded fix-agent payloads.
+  // The layout verified against all four real recorded fix-agent payloads.
   assert.equal(
     resolveOwnTranscriptPath(
       'C:\\Users\\dudar\\.claude\\projects\\C--Claude-Projects-wt-x\\b5a1be31-7f94-4441-b986-c1cebda324f3.jsonl',
       'a5672e0bf6137163a',
+      win32.join,
     ),
     'C:\\Users\\dudar\\.claude\\projects\\C--Claude-Projects-wt-x\\b5a1be31-7f94-4441-b986-c1cebda324f3\\subagents\\agent-a5672e0bf6137163a.jsonl',
   );
+});
+
+test('resolveOwnTranscriptPath composes with the PLATFORM separator, not the win32 pin (#3358 pass 4, N10)', () => {
+  // This is the one assertion in this file that could not be written to fail
+  // on Windows without the injected joiner: `win32.sep === platformSep` there,
+  // so the shipped bug — composing an fs path with the module's win32 pin —
+  // was green on Windows and red on 16 tests on the Ubuntu `test:hooks` leg.
+  // Driving the posix arm explicitly makes it detectable on any OS.
+  assert.equal(
+    resolveOwnTranscriptPath('/home/runner/.claude/projects/p/sess.jsonl', 'abc123', posix.join),
+    '/home/runner/.claude/projects/p/sess/subagents/agent-abc123.jsonl',
+  );
+  // No stray backslash: the whole point — on POSIX a `\` is an ordinary
+  // filename character, so a win32-composed path becomes one long basename
+  // and every statSync/readFileSync against it ENOENTs.
+  assert.ok(!resolveOwnTranscriptPath('/p/s.jsonl', 'abc', posix.join).includes('\\'));
+  // And the default really is the platform joiner, not win32.
+  assert.equal(
+    resolveOwnTranscriptPath('/p/s.jsonl', 'abc'),
+    platformJoin('/p/s', 'subagents', 'agent-abc.jsonl'),
+  );
+});
+
+test('the derived path is one the running OS can actually open (round-trip against a real fixture)', () => {
+  // The behavioural half of the test above: the fixture is created with the
+  // platform joiner and the guard must find it. Red on Ubuntu under the N10
+  // bug; green on Windows either way, which is why both tests exist.
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE)]);
+  try {
+    const derived = resolveOwnTranscriptPath(file, AGENT_ID);
+    assert.ok(statSync(derived).isFile(), `derived path should exist: ${derived}`);
+    assert.match(readFileSync(derived, 'utf8'), /wt-3044-worktree-write-guard/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('resolveOwnTranscriptPath returns null rather than falling back to the session transcript', () => {
@@ -1030,6 +1071,63 @@ test('a bare drive-root candidate is skipped and the scan reaches the real assig
       knownRoots: KNOWN_ROOTS,
     });
     assert.equal(verdict.deny, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// --- the size guard, both directions (PR #3358 review pass 4, N15) --------
+// It runs before every guarded tool call and had no test: pass 4 showed that
+// deleting it left 51/51 green, and so did shrinking it to 32 KB — which in
+// production sits BELOW the ~750 KB median transcript, i.e. it would silently
+// take the whole signal offline and revert every dispatch to the 6.7%-correct
+// `cwd`. A bound needs a test on each side or it is not a bound.
+
+test('a transcript comfortably larger than any plausible shrunken bound is still scanned', () => {
+  // ~400 KB — past 32 KB, nowhere near 32 MB. Catches a bound set too low.
+  const filler = {
+    type: 'user',
+    promptSource: 'sdk',
+    message: { role: 'user', content: `context padding ${'x'.repeat(4000)}` },
+  };
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE), ...Array(100).fill(filler)]);
+  try {
+    assert.ok(statSync(resolveOwnTranscriptPath(file, AGENT_ID)).size > 300 * 1024);
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      agentId: AGENT_ID,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(verdict.deny, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a transcript past the 32 MB bound is skipped and the verdict falls back to cwd', () => {
+  // Catches the bound being removed. The brief IS present and names WORKTREE,
+  // so without the guard the scan would resolve it and ALLOW; with the guard
+  // the file is skipped, `cwd` (the primary) stands, and the write is denied.
+  const { dir, file } = writeTranscript([fixAgentBriefTurn(WORKTREE)]);
+  const derived = resolveOwnTranscriptPath(file, AGENT_ID);
+  try {
+    // Pad past 32 MB with blank lines — skipped by the parser, so if the file
+    // were read at all the brief would still be found and the verdict flip.
+    writeFileSync(derived, `${readFileSync(derived, 'utf8')}${'\n'.repeat(33 * 1024 * 1024)}`, 'utf8');
+    assert.ok(statSync(derived).size > 32 * 1024 * 1024);
+    const verdict = decideGuardVerdict({
+      toolName: 'Write',
+      cwd: PRIMARY_CHECKOUT_ROOT,
+      toolInput: { file_path: `${WORKTREE}\\src\\module.mjs`, content: 'x' },
+      transcriptPath: file,
+      agentId: AGENT_ID,
+      knownRoots: KNOWN_ROOTS,
+    });
+    assert.equal(verdict.deny, true);
+    assert.match(verdict.reason, /outside the assigned worktree/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -8,7 +8,7 @@
 
    The Ollama daemon is mocked at undici's `fetch` — we don't need a real
    server, just a deterministic Response object per scenario. It is undici's
-   fetch rather than the global one because chat() must pass an undici
+   fetch rather than the global one because OllamaTransport.send() must pass an undici
    `Agent` as its dispatcher (see ollama.ts's ANALYZER_DISPATCHER note), and
    a dispatcher from the npm undici package is rejected by Node's built-in
    fetch — the two are separate copies. `importOriginal` keeps the real
@@ -439,9 +439,10 @@ describe('OllamaAnalyzer — stage2CallSeq reaches the handoff key (#2342 item 3
   /* runStage2Chapter is the ONLY reader of StageCall.stage2CallSeq — the whole
      point of #2324. Nothing previously exercised the seam where the sequence
      actually changes the handoff key: protocol.test.ts covers the pure
-     stage2HandoffKey() helper, but reverting ollama.ts:336 back to
-     `stage2HandoffKey(chapterId)` (dropping `call.stage2CallSeq`) left the
-     whole suite green before this test existed. */
+     stage2HandoffKey() helper, but reverting the engine's stage-2 call site
+     (now runner/transport-analyzer.ts:55) to `stage2HandoffKey(chapterId)`
+     (dropping `call.stage2CallSeq`) left the whole suite green before this
+     test existed. */
   const manuscriptId = 'm_ollama_stage2_callseq';
 
   afterEach(async () => {
@@ -1391,7 +1392,7 @@ function mockChatResponse(text: string) {
   });
 }
 
-/* generatePersonaViaOllama shares chat()'s transport: it is the second
+/* generatePersonaViaOllama shares OllamaTransport's wire path: it is the second
    /api/chat call site and also carries ANALYZER_DISPATCHER (its `stream:false`
    makes the 300s default even tighter — headers wait for the WHOLE
    generation). So these drive the same undici fetchMock, not a global spy. */
@@ -1562,6 +1563,24 @@ describe('OllamaAnalyzer — runner characterisation (#3084 wave 1)', () => {
       assignments: [],
     });
     expect(onEvalTiming).not.toHaveBeenCalled();
+  });
+});
+
+describe('OllamaAnalyzer — a leading <think> block no longer costs a retry (#3084)', () => {
+  afterEach(async () => {
+    await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_ollama_think-stage1-ch1.md'), { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_ollama_think-stage1-ch1.json'), { force: true });
+  });
+
+  it('validates on the first attempt when the model prefixes its JSON with <think>…</think>', async () => {
+    fetchMock.mockResolvedValueOnce(
+      okResponse(ndjsonStream(chunksOf(`<think>\nWho speaks in this chapter?\n</think>\n${VALID_RESPONSE}`, 32))),
+    );
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    const result = await analyzer.runStage1Chapter('m_ollama_think', 1, '# prompt', {});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'wren']);
   });
 });
 

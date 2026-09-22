@@ -553,8 +553,8 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 1 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
@@ -563,7 +563,7 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**53 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**55 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
@@ -577,10 +577,30 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > time, that the brief is already in it at the FIRST guarded tool call, and
 > that `agent_id` is populated for the wired role — and that gap is exactly
 > what let two review rounds score the wrong file before pass 3 caught it.
-> 52 → 53 owed, Group E 9 → 10. `next-id` bumped E107 → E108 in the same
-> change.
+> Reconciled against `main` at merge time: `main` stood at 54 owed after
+> #3084 wave 1b's B101, and this branch adds exactly one row, so 54 → 55,
+> Group E 9 → 10, Group B unchanged at 2. `next-id` bumped E107 → E108.
 >
-> **Previous: 2026-09-20, A25 DISCHARGED and removed** (#3036, PR
+> **Prior change: 2026-09-21 (#3084 wave 1b), 53 → 54.** Row **B101** added
+> (stage-runner extraction smoke — local Ollama + Gemini). Group B: 1 → 2.
+> `next-id` bumped B101 → B102 in the same change. This branch diverged from
+> the register at 53 owed / Group A 35; reconciled here against `main`'s
+> current 53 owed / Group A 35 — net unchanged there across A25's discharge
+> (below) and A110's addition (below) landing in between — so this branch's
+> own work nets the entire delta: +1, Group B only. Combined: 53 → 54, Group
+> A unchanged at 35, Group B 1 → 2.
+
+> **Prior change: 2026-09-21, A110 ADDED** (#3347, PR
+> [#3357](https://github.com/dudarenok-maker/Castwright/pull/3357), claude, fix-up
+> round after `pr-review-gate` pass 1): the PR bumps the cold `asr` capacity-admission
+> seed from a flat 400 MB to a model-tier-aware 2560 MB for any `ASR_MODEL` outside
+> `tiny`/`base`/`small` (closing #3347's silent `denials_503: 0` under-admission), but
+> both the adequacy of 2560 MB for a real `large-v3` cold load and the claim that the
+> original squeeze now produces a real refusal are unprovable by the PR's own
+> monkeypatched tests. 52 → 53 owed, Group A 34 → 35. `next-id` bumped A110 → A111 in
+> the same change.
+
+> **Prior change: 2026-09-20, A25 DISCHARGED and removed** (#3036, PR
 > [#3282](https://github.com/dudarenok-maker/Castwright/pull/3282), claude): the
 > row's bullet 1 (no `noCapacity` refusals on a real resident `/transcribe`) was
 > already reconfirmed twice (wave 6, wave 7); bullet 2 (record what `asr.warm`'s
@@ -625,65 +645,6 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > markers unaffected (allocate-once — A25 retires, not reused).
 
 > **Prior change: 2026-09-19 — two lanes touched the register the same day,
-> reconciled here on merge.** This branch (chore/docs-onbox-register-decompose)
-> and a separate lane's E105/E106 additions (Castwright#3249, ops-72 Part 2)
-> both diverged from a common ancestor at 51 owed. Combined: **53 owed** — this
-> branch's own work is owed-count-neutral (see below), the other lane's
-> E105+E106 additions net +2 (51→53, Group E 7→9). `next-id` markers: Group H
-> unmoved, Group E bumped E106→E107 (unaffected by this merge — inherited as-is
-> from the other lane).
->
-> **This branch, 2026-09-19 (claude), owed-count-neutral — both Group H rows
-> NARROWED, neither discharged.** Row **H1** (kana-trigram richness gate at
-> real-book scale for an all-kana Japanese manuscript): a real,
-> sourced-from-Wikisource, genuinely all-kana Hyakunin Isshu fixture (50
-> poems, 1,572 kana chars) now runs through `detectManuscriptLanguageFromChapters`
-> in `detect-language.test.ts` and confirms the gate holds (`guiraudR` ≈
-> 29.015). A pr-review-gate pass caught that this sample is real progress but
-> too small to answer the row's own question — the gate can pass on a small
-> sample for the same reason a synthetic one used to (finding B4's "the
-> separation only appears at length"): flipping `KANA_NGRAM_SIZE` 3→2 makes
-> the pre-existing finding-3(b) test go red while this new test stays green,
-> proving 1,572 kana chars doesn't lock in the regression it's presented as
-> locking. So H1 stays **narrowed, not discharged** — an initial pass on this
-> same PR incorrectly discharged it; corrected before merge. Row **H2** (Han
-> lexical-richness floor at book scale) NARROWED but stays owed — a larger
-> real Han fixture (13 Analects chapters, ~2.25x the prior largest real
-> sample) confirms the gate holds at that intermediate scale, but true
-> book-scale (100k+ chars) remains unconfirmed. Neither `next-id` marker
-> moved (no new row minted; H1's attempted discharge was corrected within this
-> same round). Also this round, not owed-count-affecting:
-> A6/A7 got a cross-reference sequencing note (same #3027 fix, same
-> book/cast — one on-box session expected to cover both), A10's UI-surfacing
-> reframing was already current, B1's criteria were re-derived against PR
-> #2518 (row stays owed — criteria fix only), A23's live-view HTML was
-> already in sync with the register (publish still owed to the operator),
-> and E5 narrowed its DevTools-smoke-check target from 3 controls to 2
-> pending [#3268](https://github.com/dudarenok-maker/Castwright/issues/3268)
-> (the voice-library drag icon is confirmed structurally unreachable dead
-> code from any current call site — filed as a design-pass decision per
-> CLAUDE.md's incidental-findings protocol, not fixed silently).
->
-> **Prior change: 2026-09-19, adding E106** (Castwright#3249, ops-72 Part 2, claude): a
-> review pass on the same PR found that the POSIX SIGINT/SIGTERM/SIGHUP forwarding added
-> to close a Ctrl+C-orphans-the-battery gap is unproven on this repo's primary (Windows)
-> dev box — `detached`, process groups, and POSIX signal delivery semantics don't exist
-> there in the shape this fix targets. 52 → 53 owed, Group E 8 → 9. `next-id` bumped
-> E106 → E107 in the same change. `npm run check:onbox-register` green.
->
-> **Prior change: 2026-09-18, adding E105** (Castwright#3249, ops-72 Part 2, claude): the
-> `runStepProcess`/`runPipeline` async `spawn` conversion and step/pipeline time budgets
-> are unit-tested (including timeout-vs-crash-retry mutation tests) against a fast
-> throwaway fixture process tree, but `taskkill /T /F`'s own documented blind spot — a
-> fork whose parent PID link died before `/T`'s walk reached it — needs a real, deep,
-> long-lived Windows process tree (a genuine vitest fork-pool battery) to observe, the
-> same way Part 3's reaper needed one for **E104**. This lands on top of the independent
-> **A109** addition below (#3084 — a same-card endpoint's model yielding its card to Qwen
-> VoiceDesign, owed against a design rather than shipped code): 51 → 52 owed, Group E 7 → 8,
-> Group A unchanged at 35. `next-id` bumped E105 → E106 in the same change.
-> `npm run check:onbox-register` green.
->
-> **Prior change: 2026-09-17, adding A109** (#3084, claude): the OpenAI-compatible analyzer
 > reconciled here on merge.** This branch (chore/docs-onbox-register-decompose)
 > and a separate lane's E105/E106 additions (Castwright#3249, ops-72 Part 2)
 > both diverged from a common ancestor at 51 owed. Combined: **53 owed** — this
@@ -1498,7 +1459,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A110 -->
+<!-- next-id: A111 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -4910,9 +4871,53 @@ server's model must actually release the card so a 1.7B VoiceDesign load succeed
 *Cost:* medium — needs a real third-party server installed and pinned to the same card,
 plus one cast design and one chapter render. No golden-audio comparison.
 
+### A110 · Model-tier-aware cold ASR admission seed ([#3347](https://github.com/dudarenok-maker/Castwright/issues/3347), PR [#3357](https://github.com/dudarenok-maker/Castwright/pull/3357)) · **single GPU card, `ASR_DEVICE=cuda`, `ASR_MODEL=large-v3` (or another non-`tiny`/`base`/`small` tag), a squeezable card (able to be driven down to ~500-900 MB free)**
+
+#3347 found `denials_503: 0` across ten on-box rounds — capacity admission for a
+cold `/transcribe` was booking the flat 400 MB `asr` seed regardless of the
+actually-configured `ASR_MODEL`, so a real `large-v3` cold load (which needs far
+more than 400 MB) could be wrongly admitted and then OOM instead of being
+refused up front. This PR threads the configured model into
+`FootprintTable._seed_mb` and bumps the cold seed to 2560 MB for any
+non-small-tagged model. Both new claims are unprovable by the PR's own tests
+(they monkeypatch `main._placement.probe` and stub `faster_whisper.WhisperModel`
+— they pin the arithmetic, not real hardware behaviour):
+
+1. **That 2560 MB is an adequate — not too small, not needlessly large — cold-load
+   reservation for a real `large-v3` load.** Too small reproduces #3347's OOM;
+   too large produces false `noCapacity` 503s that make Node's
+   `withCapacityRetry` evict a resident synth model mid-generation for no real
+   reason.
+2. **That the #3347 squeeze now actually emits a real `noCapacity` 503.** The
+   fixed arithmetic alone plausibly closes it, but nothing before this row
+   demonstrates it on real hardware.
+
+*Criteria:*
+1. With `ASR_MODEL=large-v3` and `ASR_DEVICE=cuda`, trigger a cold `/transcribe`
+   (no Whisper model yet resident) on a card driven down to roughly 500-900 MB
+   free. Observe a real `503 {"noCapacity": true, "neededMb": 2560}` — the
+   squeeze #3347 reported as a silent `denials_503: 0` grant must now be a real
+   refusal.
+2. On the same box, with more headroom available, observe the actual measured
+   peak VRAM a real `large-v3` cold load draws (weights materialisation +
+   first-call warmup), and record that number here. If it comes in
+   meaningfully above or below 2560 MB, `_ASR_LARGE_MODEL_SEED_MB`
+   (`server/tts-sidecar/main.py`) and `docs/local-llm.md`'s matching
+   `<!-- footprint:asr.large=2560 -->` anchor need a follow-up correction.
+
+*Cost:* medium — needs `faster-whisper`'s `large-v3` weights installed, a GPU
+card that can be driven down to the ~500-900 MB free range (e.g. holding a
+Qwen or Coqui model resident alongside), and one cold `/transcribe` call in
+each state. No golden-audio comparison.
+
+*Note:* `medium`'s own cold-load peak is a related but distinct open
+question — these criteria only measure `large-v3`. `docs/local-llm.md`'s
+tier table flags `medium`'s reservation as likely ~2x over-sized; that gap
+is not covered by this row and isn't tracked elsewhere.
+
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B101 -->
+<!-- next-id: B102 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -4992,6 +4997,14 @@ at K=4 with a monotonic per-phase bar.
 > here was ever confirmed against real hardware in the first place, so there
 > is no baseline number this correction needs to preserve. The row's run is
 > still owed; only the trustworthiness of its criteria changed.
+
+### B101 · Stage-runner extraction behaves identically on a real Ollama daemon and a real Gemini key ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR [#3349](https://github.com/dudarenok-maker/Castwright/pull/3349)) · **local Ollama; the Gemini half needs the `GEMINI_API_KEY` from the primary checkout**
+
+Analyse chapter 1 of *The Coalfall Commission* (`server/src/__fixtures__/the-coalfall-commission.md`) from the primary checkout on `main` after this PR, once with `qwen3.5:4b` (local) and once with a `gemma-*` model (Gemini), and compare against the same run on the merge's first parent:
+- both runs finish with the same character count and the same number of attributed sentences;
+- local: the analysing view's per-pass eval stats (tokens/s) populate — proves `onEvalTiming` still fires off a real `done` line — and `server/handoff/outbox/<id>-stage1-ch1.json` is written;
+- Gemini: no `[gemini] generate failed` line in `logs/server.log`; a throttle chip appears only when the limiter actually waits;
+- if a local thinking tag that emits a leading `<think>` block is installed, its chapter validates on the first attempt (no `attempt1.raw.txt` for that key).
 
 ---
 

@@ -27,7 +27,7 @@
 //
 import { readFileSync, statSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { win32 } from 'node:path';
+import { win32, join as platformJoin } from 'node:path';
 import { isDirectlyInvoked } from '../lib/is-main-module.mjs';
 import { scrubGitEnv } from '../git-env.mjs';
 
@@ -204,12 +204,30 @@ const TRANSCRIPT_PATH_RE = /[A-Za-z]:[\\/][^\s\u0022\u0027\u0060<>|*?\r\n]+/g;
  *  `agent_id` is interpolated into a filesystem path, so anything carrying a
  *  separator or `..` is refused rather than normalised. A `null` here means
  *  the caller falls back to `cwd`, i.e. exactly the pre-#3263 behaviour. */
-export function resolveOwnTranscriptPath(transcriptPath, agentId) {
+export function resolveOwnTranscriptPath(transcriptPath, agentId, join = platformJoin) {
   if (!transcriptPath || !agentId) return null;
   if (!/^[A-Za-z0-9_-]+$/.test(String(agentId))) return null;
   const raw = String(transcriptPath);
   if (!/\.jsonl$/i.test(raw)) return null;
-  return `${raw.slice(0, -'.jsonl'.length)}${sep}subagents${sep}agent-${agentId}.jsonl`;
+  // PLATFORM join, not the `win32` pin this module uses everywhere else. That
+  // pin exists so the Windows path LITERALS and the containment comparisons
+  // behave identically on every OS (see the note at `const { resolve, sep }`).
+  // This return value is different in kind: it is handed straight to
+  // `statSync`/`readFileSync`, so it has to be a path the running OS can
+  // actually open. Composing it with `win32.sep` made the whole thing one
+  // long basename on POSIX — `\` is an ordinary filename character there —
+  // so every lookup ENOENT'd and 16 of this file's tests went red on the
+  // Ubuntu `test:hooks` leg while staying green on Windows (PR #3358 review
+  // pass 4, N10). On Windows both separators are `\`, so production is
+  // unchanged.
+  //
+  // `join` is injectable for ONE reason: this defect is invisible to a test
+  // running on Windows, where `win32.sep === platformSep`, so a Windows-only
+  // suite cannot fail on it however it is written. That is what let it
+  // through four review rounds. The parameter lets the suite drive the
+  // `posix` arm explicitly and assert forward slashes, on any OS. Production
+  // never passes it.
+  return join(raw.slice(0, -'.jsonl'.length), 'subagents', `agent-${agentId}.jsonl`);
 }
 
 /** The user/prompt text of one transcript entry, for either message.content
@@ -266,11 +284,15 @@ function transcriptPromptText(entry) {
  *      the scan takes it. 0–2 of ~630 picks depending on whose root
  *      reconstruction you use; the review's independent re-derivation put it
  *      at 0–1, i.e. an earlier revision of this comment claiming "6 of 658
- *      (0.9%)" OVER-stated it. Of those 6, 3 were the scan being RIGHT and
- *      the agent being wrong
- *      (it wrote into the primary against its brief — #3044's own incident
- *      shape) and 3 were artifacts of the measurement's reconstructed root
- *      list.
+ *      (0.9%)" OVER-stated it. The itemisations differ because the two passes
+ *      scored different residual sets against differently-reconstructed root
+ *      lists — this comment's own 6, and the review's 8 — so rather than
+ *      reproduce either breakdown here and have it drift again, see
+ *      `docs/ops/3263-transcript-signal-measurement.md` (Result 3 and the
+ *      re-derivation note) for both, side by side. What BOTH agree on: no
+ *      pick ever named the primary checkout, and most of the apparent misses
+ *      were the scan being RIGHT while the agent wrote somewhere it should
+ *      not have — #3044's own incident shape.
  *  (b) A PRIMARY-ASSIGNED dispatch whose brief also mentions a live worktree
  *      in passing. Rule 1 skips the real assignment and the scan returns the
  *      incidental tree. Zero observed in ~1,594 transcripts — the one real
@@ -284,7 +306,9 @@ function transcriptPromptText(entry) {
  *  "found the wrong known root". Both are pinned by `KNOWN LIMIT` tests so
  *  that closing one is a deliberate act rather than an accident.
  *
- *  Throws only on an unreadable file (`readFileSync`); a malformed one does
+ *  Throws only on a file it cannot inspect or read — `statSync` first (it is
+ *  the size guard's probe, so it is the first thrower, not `readFileSync`),
+ *  then `readFileSync`. A MALFORMED file does
  *  NOT throw — malformed JSON lines are skipped individually, so a wholly
  *  malformed transcript simply yields no entries and returns `null`. The
  *  caller wraps the call in its own try/catch either way, so a bad transcript

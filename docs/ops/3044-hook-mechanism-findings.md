@@ -76,9 +76,13 @@ Confirmed real fields from the JSON above, for all three tool types tested:
   property this spike observed a subagent guarantee on its own — see
   [Castwright#3263](https://github.com/dudarenok-maker/Castwright/issues/3263),
   filed from PR #3261's own review pass, for the real failure mode this
-  arrangement doesn't rule out — measured at 87.6% of real dispatches and
-  closed 2026-09-22 by deriving the assigned root from `transcript_path`
-  instead, see `docs/ops/3263-transcript-signal-measurement.md`), `session_id`,
+  arrangement doesn't rule out — measured at 87.6% of real dispatches, and
+  addressed by deriving the assigned root from the SUBAGENT'S OWN transcript,
+  which `transcript_path` does **not** name: that field carries the
+  dispatching session's transcript, and scanning it scores 17.8% with 25.9%
+  wrong-worktree picks. The guard derives its file from `transcript_path`
+  **plus `agent_id`** instead. See
+  `docs/ops/3263-transcript-signal-measurement.md`), `session_id`,
   plus **`agent_id`** and
   **`agent_type`**,
   which were present and populated (`agent_type: "fix-agent"`) specifically

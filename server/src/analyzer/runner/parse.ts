@@ -3,6 +3,20 @@ import { writeFile } from 'node:fs/promises';
 import type { z } from 'zod';
 import { outboxPath, type HandoffKey } from '../../handoff/protocol.js';
 
+const LEADING_THINK = /^\s*<think>[\s\S]*?<\/think>\s*/i;
+const LEADING_THINK_OPEN = /^\s*<think>/i;
+
+/** Remove a leading `<think>…</think>` reasoning block (thinking models that
+    ignore think:false / reasoning_effort). A leading block with no closing tag
+    means the answer never started: no answer text, `unterminated: true`.
+    Input with no leading block is returned unchanged (same string). */
+export function stripThink(raw: string): { text: string; unterminated: boolean } {
+  const closed = LEADING_THINK.exec(raw);
+  if (closed) return { text: raw.slice(closed[0].length), unterminated: false };
+  if (LEADING_THINK_OPEN.test(raw)) return { text: '', unterminated: true };
+  return { text: raw, unterminated: false };
+}
+
 export type ParseResult<T> =
   | { ok: true; value: T; repaired: boolean }
   | { ok: false; kind: 'invalid-json'; detail: string }
@@ -22,7 +36,7 @@ export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseRes
      not `,`/`}`).
 
      Order of candidates tried:
-     0. `stripped` — fence strip only.
+     0. `stripped` — leading <think> block removed (stripThink), then fence strip.
      1. `trimTrailingProse(stripped)` — Ch44 shape.
      2. `repairStructuralPunctuation(...prev)` — Ch49 shape; missing
         comma or close brace.
@@ -38,7 +52,14 @@ export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseRes
      `stripCodeFences` ALWAYS runs first because backticks confuse every
      downstream walker; it's deterministic and detects its own opt-out
      (no leading fence → byte-identical return). */
-  const stripped = stripCodeFences(raw);
+  /* `repaired` (below) reports whether the JSON-repair pipeline — fence
+     strip, prose trim, structural-punctuation/quote repair — actually did
+     something, distinct from stripThink's own leading-<think>-block removal.
+     A thinking model that returns `<think>…</think>{valid json}` should not
+     warn "required JSON cleanup (markdown fence and/or unescaped quotes)" —
+     nothing of the sort happened (pr-review-gate pass 1 finding 6). */
+  const afterThink = stripThink(raw).text;
+  const stripped = stripCodeFences(afterThink);
 
   /* Build the candidate list and dedupe so each parse is attempted at
      most once. */
@@ -74,7 +95,7 @@ export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseRes
   if (winner === null) {
     return { ok: false, kind: 'invalid-json', detail: lastErrorMessage };
   }
-  const repaired = winner !== raw;
+  const repaired = winner !== afterThink;
 
   const result = schema.safeParse(parsed);
   if (!result.success) {

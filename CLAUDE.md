@@ -869,7 +869,7 @@ Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it aut
     "TTS / Analyzer unloaded to free VRAM" banner). Endpoints:
     `POST /api/sidecar/{load,unload}` (60 s / 2 s budgets),
     `POST /api/ollama/{load,unload}` (uses Ollama's `keep_alive` idiom,
-    see `server/src/analyzer/ollama.ts:179` (`keepAliveFor`) for the equivalent in-band
+    see `server/src/analyzer/ollama-settings.ts` (`keepAliveFor`) for the equivalent in-band
     evict on real chat calls).
   - **Qwen has TWO models with split lifecycles** (`QwenEngine`,
     `server/tts-sidecar/main.py`): the **Base 0.6B** synth model is the
@@ -1314,7 +1314,9 @@ Working practice below; this holds even under contention).
   a relative path resolved elsewhere, a runtime-assembled string) is not
   caught. **`cwd` is no longer the guard's ground truth
   ([#3263](https://github.com/dudarenok-maker/Castwright/issues/3263), closed
-  2026-09-22).** It never should have been: measured across 715 real subagent
+  by PR [#3358](https://github.com/dudarenok-maker/Castwright/pull/3358) — if
+  that PR is still open when you read this, so is the issue).** `cwd` never
+  should have been: measured across 715 real subagent
   transcripts, the recorded `cwd` named the root the agent actually wrote to
   **6.7%** of the time and named the primary checkout instead **87.6%** of the
   time (`docs/ops/3263-transcript-signal-measurement.md`). The guard now

@@ -185,10 +185,18 @@ the `fix-agent` cohort alone — the only population the hook is actually wired
 to — at **296/300 (98.7%), 0 primary picks, against `cwd`'s 2/341 (0.6%)**.
 
 That pass found this section **over**-states the residual rather than
-laundering it: re-checking the 6 by hand puts the genuinely-wrong-worktree
-count at **0–1**, not 2, with 3 rule-right/agent-wrong (one of which wrote
-the same file into *both* the primary and its worktree — byte-identically
-#3044's shape) and the rest artifacts of root reconstruction.
+laundering it. It did not re-check the 6 itemised above — it scored its own
+root reconstruction and got **8** residual errors, then itemised those:
+3 rule-right/agent-wrong (one of which wrote the same file into *both* the
+primary and its worktree — byte-identically #3044's shape), 3 artifacts of
+its own root reconstruction, 2 belonging to other repos, leaving the
+genuinely-wrong-worktree count at **0–1** rather than this section's 2.
+
+So the two itemisations are of two different sets and do not reconcile
+line-for-line; an earlier revision of this paragraph said pass 2 "re-checked
+the 6", which it did not. Both sets agree on the two things that matter: **no
+pick named the primary checkout**, and the residual wrong-worktree rate is at
+most ~0.3%, not the 0.9% first published here.
 
 ## Result 4 — the primary checkout IS assignable, rarely
 

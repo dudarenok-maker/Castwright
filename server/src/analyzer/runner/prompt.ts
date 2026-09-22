@@ -5,6 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { readPrompt } from '../../config/prompts.js';
 import { isNonEnglish, normaliseBookLanguage } from '../../tts/language.js';
 import { getLanguageEntry } from '../../tts/language-registry.js';
+import { countCjkChars } from '../../util/cjk.js';
+import {
+  LATIN_CHARS_PER_TOKEN,
+  CYRILLIC_CHARS_PER_TOKEN,
+  HAN_KANA_CHARS_PER_TOKEN,
+  countCyrillic,
+} from '../token-budget.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SKILLS_DIR = resolve(__dirname, '..', '..', '..', '..', 'skills');
@@ -141,4 +148,48 @@ export function languagePreamble(language?: string): string {
      NAMES + enum values stay English as the line above already mandates. */
   const castFields = ` When you output a character, ALWAYS include the \`tone\` object (integers 0–100 for warmth, pace, authority, emotion) estimated from how they speak — never omit it. Write the human-readable text — \`role\`, \`description\`, and each \`attributes\` tag, for every character INCLUDING the narrator — in ${where} (the manuscript's language), and always include a \`description\`.`;
   return `\n\nIMPORTANT: the manuscript text is in ${where}. Quote evidence VERBATIM from the manuscript (do not translate or transliterate it). Keep all JSON field names and enum values in English exactly as the schema shows.${castFields}${conventions}${examples}`;
+}
+
+/* Estimate input tokens for an acquire. Sums the system instruction and
+   every text part across all turns of `contents`, then divides by a
+   script-aware chars-per-token approximation, plus a flat +1,000
+   ceiling-margin for schema overhead and tokenisation surprises.
+
+   fs-2 — Latin text tokenises at ~4 chars/token; Cyrillic is far denser
+   (~2.5 chars/token), so the old flat /4 under-counted a Russian chapter by
+   ~40% and risked the rate limiter under-reserving into 429 storms. We measure
+   the Cyrillic fraction of the actual text and interpolate the divisor between
+   4 (all-Latin) and 2.5 (all-Cyrillic). Reconciled against
+   `usageMetadata.promptTokenCount` once the call returns, so the blend only has
+   to be close, not exact.
+
+   fs-59 — CJK (Han ideographs + Kana) is denser still (~1.2 chars/token), so
+   a CJK-dense prompt under-counted even worse than Cyrillic did. We measure
+   the Han/Kana fraction the same way as `countCyrillic` and fold it into the
+   same additive interpolation — Cyrillic and CJK never overlap in the same
+   codepoint, so each fraction pulls the divisor down from the Latin baseline
+   independently. Moved from gemini.ts (#3084 wave 1). */
+export function estimateInputTokens(
+  systemInstruction: string,
+  contents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }>,
+): number {
+  let chars = systemInstruction.length;
+  let cyrillic = 0;
+  let hanKana = 0;
+  cyrillic += countCyrillic(systemInstruction);
+  hanKana += countCjkChars(systemInstruction);
+  for (const turn of contents) {
+    for (const part of turn.parts) {
+      chars += part.text.length;
+      cyrillic += countCyrillic(part.text);
+      hanKana += countCjkChars(part.text);
+    }
+  }
+  const cyrillicFraction = chars > 0 ? cyrillic / chars : 0;
+  const hanKanaFraction = chars > 0 ? hanKana / chars : 0;
+  const divisor =
+    LATIN_CHARS_PER_TOKEN -
+    cyrillicFraction * (LATIN_CHARS_PER_TOKEN - CYRILLIC_CHARS_PER_TOKEN) -
+    hanKanaFraction * (LATIN_CHARS_PER_TOKEN - HAN_KANA_CHARS_PER_TOKEN);
+  return Math.ceil(chars / divisor) + 1_000;
 }

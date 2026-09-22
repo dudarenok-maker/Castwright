@@ -1453,9 +1453,21 @@ export function computeStepBudgetMs(cache, stepName, floorMs, multiplier) {
 /** The real whole-pipeline budget computation runPipeline uses — same
  *  extraction rationale as computeStepBudgetMs. `qualifiedRunDurationMs` is
  *  the SUM of the active steps' own qualified baselines (0 when nothing is
- *  calibratable, treated as null/uncalibrated per computeBudgetMs). */
+ *  calibratable, treated as null/uncalibrated per computeBudgetMs). The floor
+ *  is widened by `multiplier` ONLY when a qualified baseline exists; an
+ *  uncalibrated run keeps the flat, unwidened floor regardless of any
+ *  throttle (Castwright#3272, decision C). The per-step budget
+ *  (computeStepBudgetMs) is widened by the same `multiplier` in both the
+ *  calibrated and uncalibrated case, but it is always subordinate to the
+ *  pipeline deadline via the `Math.min(...)` clamp in runPipeline — that
+ *  subordination bites hardest in the uncalibrated case specifically, since
+ *  decision C is what just tightened the pipeline-level floor there. The
+ *  CALIBRATED branch is untouched by decision C: a warm-cache throttled run
+ *  still widens this floor by `multiplier`, same as before this fix. */
 export function computeRunBudgetMs(qualifiedRunDurationMs, floorMs, multiplier) {
-  return computeBudgetMs(qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null, floorMs * multiplier);
+  const qualified = qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null;
+  const effectiveFloorMs = qualified === null ? floorMs : floorMs * multiplier;
+  return computeBudgetMs(qualified, effectiveFloorMs);
 }
 
 // Cap on the tail-keeping stderr accumulator below — mirrors spawnSync's old
@@ -1788,16 +1800,29 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   // conditions produced that baseline, so multiplying its RESULT double-
   // counts a throttle a prior throttled run's own baseline already absorbed
   // (measured: a baseline recorded throttled at 2x, multiplied again here,
-  // gave 4x instead of the intended 2x — now correctly gives 2x). This DOES
-  // NOT touch the uncalibrated pipeline floor (PR #3260 review pass 3, B10):
-  // computeBudgetMs(null, F) returns F verbatim regardless of k, so
-  // "multiply the result" and "multiply the floor input" are algebraically
-  // IDENTICAL — both still land the whole-pipeline floor at 2x
-  // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle, past the 273.8-min
-  // incident this budget exists to bound. What widened uncalibrated pipeline
-  // floor is actually safe under contention is a real open question, argued
-  // against that 273.8-min figure rather than derived from the fork-pool
-  // ratio — tracked as Castwright#3272 rather than picked here.
+  // gave 4x instead of the intended 2x — now correctly gives 2x).
+  //
+  // The UNCALIBRATED pipeline floor is deliberately left UNWIDENED under
+  // throttle — settled, not open (PR #3260 review pass 3 raised it as B10;
+  // Castwright#3272 decision C picked this direction). With no qualified
+  // baseline there is nothing for `multiplier` to calibrate against, and
+  // widening this floor lands the whole-pipeline budget at 2x
+  // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle — past the 273.8-min
+  // incident this budget exists to bound, defeating the feature's own stated
+  // goal. This is scoped to the UNCALIBRATED case only: the CALIBRATED branch
+  // (qualifiedRunDurationMs > 0, i.e. at least one active step has a qualified
+  // baseline) is untouched by this decision and still widens by `multiplier`
+  // exactly as before this fix, so a warm-cache throttled run can still reach
+  // the pre-existing 2x DEFAULT_RUN_TIMEOUT_MIN floor. The PER-STEP budget
+  // (computeStepBudgetMs, also widened by the same multiplier) is widened in
+  // BOTH branches, calibrated and uncalibrated alike — but it is never fully
+  // independent protection: the `Math.min(...)` clamp on stepBudgetMs below
+  // also caps it at whatever remains of the pipeline deadline, so a per-step
+  // budget can only ever be as generous as the pipeline-level number leaves
+  // room for. That subordination bites hardest in the UNCALIBRATED case
+  // specifically, since decision C is what just tightened the pipeline-level
+  // floor there (Castwright#3361 tracks whether the calibrated branch's own
+  // floor term should be revisited too).
   const contentionBudgetMultiplier =
     affectedByContention && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
   const runBudgetMs = computeRunBudgetMs(qualifiedRunDurationMs, runTimeoutFloorMs, contentionBudgetMultiplier);

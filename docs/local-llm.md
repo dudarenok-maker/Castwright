@@ -20,7 +20,7 @@ Two stages, both pure JSON-in / JSON-out, both schema-constrained:
   sentence tagged with which character speaks it (or `narrator`). This is the
   load-bearing one — it runs N times per book and dominates wall-clock.
 
-The dispatch lives in `server/src/analyzer/ollama.ts:117` (`OllamaAnalyzer`).
+The dispatch lives in `server/src/analyzer/ollama.ts` (`OllamaAnalyzer`, a `TransportAnalyzer` over `server/src/analyzer/transports/ollama-transport.ts`).
 Both stages share the same retry loop, the same Zod-derived JSON schema, and
 the same streaming-NDJSON read path.
 
@@ -41,7 +41,7 @@ XTTS. Reasons:
 The Node ↔ Ollama interface is plain `POST /api/chat` with `stream: true`.
 No SDK. Errors are classified into "daemon unreachable" (→ Gemini fallback)
 vs. "daemon up but misbehaving" (→ hard-fail and surface the error). The
-classifier is `classifyConnectError` at `server/src/analyzer/ollama.ts:441`
+classifier is `classifyConnectError` in `server/src/analyzer/transports/ollama-transport.ts`
 and the policy is documented at the top of the same file.
 
 ## The VRAM budget — the actual constraint
@@ -70,7 +70,7 @@ before generation starts. So the question is **not** "fit both at once" but
 
 We mediate the switch in two places:
 
-1. **`keepAliveFor()`** at `server/src/analyzer/ollama.ts`. Each model's
+1. **`keepAliveFor()`** in `server/src/analyzer/ollama-settings.ts`. Each model's
    `keep_alive` (an integer number of seconds) is resolved per model —
    a user override set in the Model Manager, else a coded default
    (`DEFAULT_KEEP_ALIVE_SECONDS`, `300` for the four models Castwright ships
@@ -86,9 +86,9 @@ We mediate the switch in two places:
    swap happen.
 
 The `/load` endpoint is subtle: it **must** warm with the same `num_ctx` the
-analyzer uses on real calls (`ANALYZER_NUM_CTX = 16384`), because Ollama keys
+analyzer uses on real calls (`resolveAnalyzerNumCtx()`, knob `analyzer.ollama.numCtx`, default 32768), because Ollama keys
 the in-VRAM model on `(model, num_ctx)`. Warming with the default 2048 and
-then running analysis at 16384 triggers a silent full reload mid-stream,
+then running analysis at 32768 triggers a silent full reload mid-stream,
 which used to surface as "Analysis stream ended without a result event" with
 no other signal. The reasoning is at `server/src/routes/ollama-health.ts:161`.
 
@@ -133,7 +133,14 @@ speaker-embedding model (`SPK`) are standalone singletons outside that map
 | Qwen 0.6B-Base                | ~1.2 GB           | `PRELOAD_QWEN=false` — button-driven           | none; explicit `/unload` only                |
 | Qwen 1.7B-Base                | ~3.4 GB           | `PRELOAD_QWEN_BASE17=false`                    | `QWEN_BASE17_IDLE_TTL` (default 120s)         |
 | Qwen 1.7B-VoiceDesign          | ~4–5 GB           | never preloaded; always transient              | `QWEN_DESIGN_IDLE_TTL` (default 120s), or freed immediately at the next real `/synthesize` |
-| Whisper ASR                   | 0 on CPU / ~150–400 MB on CUDA | `SEG_ASR_ENABLED=false`, `ASR_DEVICE=cpu` | `ASR_IDLE_TTL` (default 120s), CUDA mode only |
+| Whisper ASR                   | 0 on CPU / ~150–400 MB (tiny/base/small) or ~2560 MB\* (medium and larger, e.g. large-v3) on CUDA | `SEG_ASR_ENABLED=false`, `ASR_DEVICE=cpu` | `ASR_IDLE_TTL` (default 120s), CUDA mode only |
+
+\* Unlike the other rows, the ~2560 MB figure is a conservative, UNMEASURED
+admission *reservation* (`_ASR_LARGE_MODEL_SEED_MB`), not a measured resident
+footprint — see register row A110, whose criteria only cover a real `large-v3`
+cold-load measurement. `medium`'s own peak is unmeasured too, and pass 1's
+estimate put it at roughly half of 2560, so `medium` likely over-reserves by
+~2x; that gap isn't covered by A110's criteria and isn't tracked elsewhere.
 
 (Env-var defaults + comments: `server/src/config/registry.ts:462-682`; sidecar
 watchdog wiring: `main.py:3416-3538`. Correction vs. an old note that had
@@ -162,14 +169,19 @@ Both are measured on-box (8 GB 4070, per-op allocated peak): mint ~5654 MB
 so the shared 6144 seed keeps a ~9-13% margin over both and admits on a bare
 8 GB card before either window warms.
 
-`asr` similarly splits by residency, not model (#2094): a COLD `/transcribe`
-(no Whisper model loaded yet) books the full `asr` cold-load peak (400 MB —
-weights materialisation + first-call warmup); an ALREADY-RESIDENT one books
-the separate `asr.warm` key instead — the forward-only activation cost, not
-the weight load a resident model has already paid. `asr.warm`'s 128 MB is a
-conservative, UNMEASURED cold-start prior (no on-box observation exists yet
-for this specific incremental figure) rather than a measured value like the
-design-family pair above.
+`asr` splits by residency (#2094) AND, on the cold path, by model tier
+(#3347/#3352): a COLD `/transcribe` (no Whisper model loaded yet) books the
+`asr` cold-load peak (400 MB — weights materialisation + first-call warmup —
+for `tiny`/`base`/`small`-tagged `ASR_MODEL` values, bumped to 2560 MB for
+any other configured model, e.g. `large-v3`); an ALREADY-RESIDENT one books
+the separate `asr.warm` key instead, unconditionally on model — the
+forward-only activation cost, not the weight load a resident model has
+already paid. `asr.warm`'s 128 MB is a conservative, UNMEASURED cold-start
+prior (no on-box observation exists yet for this specific incremental
+figure) rather than a measured value like the design-family pair above; the
+large-model cold bump (2560 MB) is equally conservative and unmeasured —
+pending a real on-box `large-v3` cold-load measurement, tracked as
+`docs/testing/onbox-acceptance-register.md` register row **A110** (#3347).
 
 Unlike the other seeds on this page, `asr.warm` has no real path to being
 *learned* from, and on-box acceptance (#3036, register row A25 discharged
@@ -215,6 +227,7 @@ own.
 <!-- footprint:coqui=3584 -->
 <!-- footprint:asr=400 -->
 <!-- footprint:asr.warm=128 -->
+<!-- footprint:asr.large=2560 -->
 <!-- footprint:spk=200 -->
 
 **Load/unload path.** `POST /api/sidecar/load` (Node proxy
@@ -301,7 +314,7 @@ Two complementary levers pin the analyzer to GPU-only:
    restarting Ollama; neither bakes anything into the model weights.
 
 2. **`ANALYZER_NUM_GPU` in the request body** — see
-   `server/src/analyzer/ollama.ts` (the constant lives next to
+   `server/src/analyzer/ollama-settings.ts` (the constant lives next to
    `ANALYZER_NUM_CTX`). We thread `num_gpu: 999` into both
    `/api/chat` (analyzer calls) and `/api/generate` (the in-app `/load`
    warm-up). 999 is the standard "all layers" idiom — Ollama clamps to the
@@ -346,8 +359,8 @@ Three reasons, in order of weight:
    own working set. We can take a chapter spike (long chapter, big sentence
    list) without paging.
 2. **Schema-constrained decoding makes the "smarter model" gain shrink.** We
-   pass each Zod schema through Zod 4's native `z.toJSONSchema` (`runStage` in
-   `server/src/analyzer/ollama.ts`) and Ollama's sampler is constrained
+   pass each Zod schema through Zod 4's native `z.toJSONSchema` (`StageRunner` in
+   `server/src/analyzer/runner/stage-runner.ts`) and Ollama's sampler is constrained
    to only emit tokens that keep the output a valid prefix of a value
    matching that schema. The 4B can't go off the rails structurally; the
    remaining variance is semantic, which is where bigger models help — but
@@ -408,7 +421,7 @@ If the goal is **"keep the analyzer resident across the loop, with a real
 - **qwen3.5:9b held resident across the loop.** 6.6 GB weights + ~1.5 GB KV
   at 16K = 8.1 GB. Over budget. Either drop to `num_ctx: 8192` (smaller KV,
   but we picked 16K specifically because chapters were brushing the limit at
-  8K — see `ANALYZER_NUM_CTX` at `server/src/analyzer/ollama.ts:115`) or
+  8K — see `ANALYZER_NUM_CTX` in `server/src/analyzer/ollama-settings.ts`) or
   accept the per-call reload tax.
 - **Anything plus XTTS at the same time.** Not a new constraint — the
   pipeline is already sequential. Worth re-stating because every model size
