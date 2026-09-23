@@ -157,7 +157,7 @@ describe('stage1ChunkBudgetForEngine', () => {
    route makes — the actual per-chapter cast-detection system instruction
    (`buildSystemInstruction` over `loadSkill('per_chapter_stage1')`, the largest
    analyzer skill) + the actual Phase-0a inbox (`buildStage1ChapterInbox`) with a
-   full body sized by `resolveStage1ChunkCharBudget('gemini', …)` and a
+   full body sized by `resolveStage1ChunkCharBudget(gemini(), …)` and a
    conservative running roster — and asserts the same `estimateInputTokens` the
    limiter uses stays under the guard with margin.
 
