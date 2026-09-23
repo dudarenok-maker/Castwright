@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="34" data-publish-id="10887f85f9cd"></div>
+  <div hidden data-published-as="35" data-publish-id="0251d56c844f"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">54</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">55</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->2<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->9<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->10<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1071,7 +1071,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">9 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">10 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1180,6 +1180,20 @@
           <li>Repeat once more simulating a dropped session: start the run, then close the terminal window (or, over SSH, kill the SSH connection) rather than sending a signal directly, and confirm &#8212; from a still-open second session &#8212; that no vitest/npm/node processes from that run remain.</li>
         </ul>
         <p class="src">A Mac or Linux dev box, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3249">Castwright#3249</a>, Part 2 of <a href="../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md">the commit-gate rebalance design</a> &#183; the three observations above; issue Castwright#3249&#39;s acceptance list &#183; ~10 minutes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E107</span><span class="iname">guard-worktree-write&#39;s transcript signal &#8212; a real <code>fix-agent</code> dispatch end to end</span><span class="risk">any dev box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The guard no longer trusts the PreToolUse payload&#39;s <code>cwd</code>. It derives the subagent&#39;s own transcript from <code>transcript_path</code> + <code>agent_id</code> (<code>resolveOwnTranscriptPath</code>), scans it for the assigned checkout root, and falls back to <code>cwd</code> only when that finds nothing. Everything about that chain is measured &#8212; 99.1% precision over 715 real transcripts &#8212; but measured <em>after the fact, on transcripts already written to disk</em>. Three links can only be observed while a dispatch is actually running, and the review chain that produced this PR got the file identity wrong for two full rounds precisely because no live payload was available to check against: that the derived path is the file that exists at hook time; that the brief is already in it at the FIRST guarded tool call (partially established — for the two timestamped payloads the brief was written 3.48&#8239;s and 2.57&#8239;s before the payload, but both are one-line probe briefs); and that <code>agent_id</code> is populated for the roles the hook is wired to.</p>
+        <ul>
+          <li>Wire a logging hook alongside the guard (the <code>docs/ops/3044-hook-mechanism-findings.md</code> recipe), dispatch a real <code>fix-agent</code> into a pre-existing worktree that is NOT the dispatching session&#39;s checkout, and capture the payload of its <strong>first</strong> guarded tool call.</li>
+          <li>Record the payload&#39;s <code>transcript_path</code> and <code>agent_id</code>, verbatim.</li>
+          <li>Confirm <code>&lt;transcript_path minus .jsonl&gt;\subagents\agent-&lt;agent_id&gt;.jsonl</code> <strong>exists at that moment</strong> &#8212; stat it from the hook, not afterwards &#8212; and that it already contains the brief (grep it for the assigned worktree path).</li>
+          <li>Confirm the guard ALLOWS a write inside the assigned worktree and DENIES one into the dispatching session&#39;s checkout, in the same dispatch: the allow proves the signal resolved, the deny proves it did not resolve to the wrong root.</li>
+        </ul>
+        <p>A negative result on the first two is not a regression &#8212; the guard fails open to <code>cwd</code>, i.e. the pre-#3263 behaviour &#8212; but it would mean the 99.1% never reaches production, and the feature would need the coordinator-set signal #3263 originally called direction (a) instead.</p>
+        <p class="src">Any dev box that can dispatch a subagent, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3263">Castwright#3263</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3358">#3358</a> &#183; the four observations above; <code>docs/ops/3263-transcript-signal-measurement.md</code> (&#8220;Which file this is about&#8221;) for why each one matters &#183; ~20 minutes</p>
       </div>
     </details>
 

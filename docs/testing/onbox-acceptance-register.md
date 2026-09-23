@@ -557,17 +557,31 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 9 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**54 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**55 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-21 (#3084 wave 1b), 53 → 54.** Row **B101** added
+> **Last change: 2026-09-22, E107 ADDED** (#3263, PR
+> [#3358](https://github.com/dudarenok-maker/Castwright/pull/3358), claude):
+> `guard-worktree-write.mjs` stopped trusting the PreToolUse payload's `cwd`
+> and now derives the subagent's own transcript from `transcript_path` +
+> `agent_id`. The decision logic is measured over 715 real transcripts, but
+> measured *after the fact*, on files already on disk. Three links can only be
+> observed while a dispatch is running — that the derived file exists at hook
+> time, that the brief is already in it at the FIRST guarded tool call, and
+> that `agent_id` is populated for the wired role — and that gap is exactly
+> what let two review rounds score the wrong file before pass 3 caught it.
+> Reconciled against `main` at merge time: `main` stood at 54 owed after
+> #3084 wave 1b's B101, and this branch adds exactly one row, so 54 → 55,
+> Group E 9 → 10, Group B unchanged at 2. `next-id` bumped E107 → E108.
+>
+> **Prior change: 2026-09-21 (#3084 wave 1b), 53 → 54.** Row **B101** added
 > (stage-runner extraction smoke — local Ollama + Gemini). Group B: 1 → 2.
 > `next-id` bumped B101 → B102 in the same change. This branch diverged from
 > the register at 53 owed / Group A 35; reconciled here against `main`'s
@@ -5365,7 +5379,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E107 -->
+<!-- next-id: E108 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9/E103). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -5913,6 +5927,62 @@ be observed on a Windows box no matter how thoroughly it's exercised there.
 
 *Needs:* a Mac or Linux dev box, no GPU. *Cost:* ~10 minutes.
 *Criteria:* the three observations above; issue Castwright#3249's acceptance list.
+
+### E107 · guard-worktree-write's transcript signal — a real `fix-agent` dispatch end to end ([Castwright#3263](https://github.com/dudarenok-maker/Castwright/issues/3263), PR [#3358](https://github.com/dudarenok-maker/Castwright/pull/3358)) · **any dev box; no GPU needed**
+
+The guard no longer trusts the PreToolUse payload's `cwd`. It derives the
+subagent's own transcript from `transcript_path` + `agent_id`
+(`resolveOwnTranscriptPath`), scans it for the assigned checkout root, and
+falls back to `cwd` only when that finds nothing. Everything about that chain
+is measured — 99.1% precision over 715 real transcripts
+(`docs/ops/3263-transcript-signal-measurement.md`) — but measured **after the
+fact, on transcripts already written to disk**. Three links in the chain can
+only be observed while a dispatch is actually running, and the review chain
+that produced this PR got the file identity wrong for two full rounds
+precisely because no live payload was available to check against:
+
+1. **The derived path is the file that exists at hook time.** The layout
+   `<transcript_path minus .jsonl>\subagents\agent-<agent_id>.jsonl` is
+   confirmed against all four recorded payloads, but every one was inspected
+   long after its run finished. A file that the harness creates lazily — or
+   flushes late — would leave the guard falling back to `cwd` on exactly the
+   early tool calls that matter most.
+2. **The brief is already in that file at the FIRST guarded tool call.** The
+   scan needs the assignment to have been written before the agent's first
+   Write/Edit/Bash. **Partially established, not fully:** for the two recorded
+   payloads that carry a timestamp, the brief was written **3.48 s and 2.57 s
+   before** the payload, and each subagent file carried only that payload's
+   own `agentId`. Both are one-line `claude -p` probe briefs naming no
+   checkout path, so they do not settle the ordering for a real multi-step
+   dispatch whose brief is long and whose first tool call comes sooner.
+3. **`agent_id` is populated for the roles the hook is wired to.** Confirmed
+   for `fix-agent` in all four recorded payloads; unconfirmed for any other role
+   the `hooks:` frontmatter might later be attached to.
+
+**What to observe, concretely.** Wire a logging hook alongside the guard (the
+`docs/ops/3044-hook-mechanism-findings.md` recipe), dispatch a real `fix-agent`
+into a pre-existing worktree that is NOT the dispatching session's checkout,
+and capture the payload of its **first** guarded tool call. Then check, in
+order:
+
+- the payload's `transcript_path` and `agent_id`, verbatim;
+- that `<transcript_path minus .jsonl>\subagents\agent-<agent_id>.jsonl`
+  **exists at that moment** (stat it from the hook, not afterwards);
+- that the file already contains the brief — grep it for the assigned
+  worktree path;
+- that the guard ALLOWS a write inside the assigned worktree and DENIES one
+  into the dispatching session's checkout. Both directions, same dispatch:
+  the allow proves the signal resolved, the deny proves it did not resolve to
+  the wrong root.
+
+A negative result on 1 or 2 is not a regression — the guard fails open to
+`cwd`, i.e. the pre-#3263 behaviour — but it would mean the 99.1% never
+reaches production, and the feature would need the coordinator-set signal
+#3263 originally called direction (a) instead.
+
+*Needs:* any dev box that can dispatch a subagent; no GPU. *Cost:* ~20 minutes.
+*Criteria:* the four observations above; `docs/ops/3263-transcript-signal-measurement.md`
+("Which file this is about") for why each one matters.
 
 ## Group G — GitHub Actions itself
 
