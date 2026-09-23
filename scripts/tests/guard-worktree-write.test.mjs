@@ -307,7 +307,9 @@ test('listKnownCheckoutRoots falls back to just the primary root on a non-zero g
 // transcript that the first cut of this feature (#3355) got wrong, and that
 // its single-turn fixture could not express:
 //   1. the brief LEADS with the prohibition, so the first absolute path in
-//      it is the primary checkout — the one root that is never an assignment;
+//      it is the primary checkout — the root a brief overwhelmingly names in
+//      order to FORBID it. NOT a root that can never be assigned: it can,
+//      rarely, and the two primary-assigned tests below cover that cohort.
 //   2. there are LATER prompt turns (skill preambles, notifications) whose
 //      own first path is also under the primary.
 // A fixture without both cannot fail on the shape that broke in production.
@@ -487,7 +489,11 @@ test('a PowerShell command referencing a sibling worktree is still DENIED when t
   }
 });
 
-// --- polarity: the primary checkout is never an assignment ----------------
+// --- polarity: a primary-rooted candidate is skipped ----------------------
+// Skipped because a brief overwhelmingly names the primary in order to FORBID
+// it — not because it can never be the assignment. See
+// PRIMARY_CHECKOUT_ROOT's own declaration, and the primary-assigned tests
+// further down, which pin the cohort where it genuinely IS the assignment.
 
 test('a transcript whose only absolute paths are under the primary checkout yields NO pick and falls open to cwd', () => {
   const { dir, file } = writeTranscript([SKILL_PREAMBLE_TURN]);
@@ -808,7 +814,8 @@ test('JSON-escape debris is skipped even when its HEAD resolves to a known root 
 });
 
 test('a brief that assigns the PRIMARY checkout and names no other root is handled correctly', () => {
-  // The real primary-assigned brief shape (1 of ~1,594 measured transcripts),
+  // The real primary-assigned brief shape (2 of ~1,604 measured transcripts;
+  // the shipped guard ALLOWs both, identical to pre-#3263 behaviour),
   // verbatim from the corpus. The scan finds no non-primary candidate, returns
   // null, and `cwd` — also the primary — stands, so the write is allowed.
   const turn = {
@@ -915,6 +922,26 @@ test('resolveOwnTranscriptPath composes with the PLATFORM separator, not the win
   // filename character, so a win32-composed path becomes one long basename
   // and every statSync/readFileSync against it ENOENTs.
   assert.ok(!resolveOwnTranscriptPath('/p/s.jsonl', 'abc', posix.join).includes('\\'));
+  // The injected-joiner assertions above cannot see a regression in the
+  // DEFAULT — swapping it back to `win32.join` with the body untouched is the
+  // same N10 defect and leaves everything above green on Windows (measured,
+  // PR #3358 review pass 5, N22). Only the Ubuntu leg catches that, and a
+  // source-text assertion. This is the source-text assertion.
+  const guardSource = readFileSync(
+    new URL('../hooks/guard-worktree-write.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    guardSource,
+    /export function resolveOwnTranscriptPath\(transcriptPath, agentId, join = platformJoin\)/,
+    'the default joiner must stay the PLATFORM one — a win32 default is N10 all over again',
+  );
+  assert.doesNotMatch(
+    guardSource,
+    /join = win32\.join|join = \{?\s*win32/,
+    'resolveOwnTranscriptPath must not default to a win32 joiner',
+  );
+
   // And the default really is the platform joiner, not win32.
   assert.equal(
     resolveOwnTranscriptPath('/p/s.jsonl', 'abc'),

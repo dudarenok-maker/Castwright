@@ -48,10 +48,11 @@ const { resolve, sep } = win32;
 // sanctions working in the primary directly, and a real brief in the measured
 // corpus does exactly that ("This branch is currently checked out in the
 // primary checkout at C:\Claude\Projects\Audiobook-Generator — work there
-// directly … not worth a worktree"). Such a dispatch is rare — 1 of ~1,594
-// real transcripts — and the scan handles the observed one correctly, because
-// a brief that assigns the primary names no other checkout root for the scan
-// to find, so it returns null and `cwd` (also the primary) stands. The hazard
+// directly … not worth a worktree"). Such a dispatch is rare — 2 of ~1,604
+// real transcripts — and the scan handles BOTH correctly (probed against the
+// shipped guard: ALLOW/ALLOW, identical to pre-#3263), because a brief that
+// assigns the primary names no other checkout root for the scan to find, so
+// it returns null and `cwd` (also the primary) stands. The hazard
 // it leaves is narrow and real: a primary-assigned brief that ALSO mentions a
 // live worktree in passing would have that worktree returned instead. See the
 // residual-risk paragraph on extractAssignedRootFromTranscript.
@@ -194,7 +195,7 @@ const TRANSCRIPT_PATH_RE = /[A-Za-z]:[\\/][^\s\u0022\u0027\u0060<>|*?\r\n]+/g;
  *  So the subagent's own transcript is derived instead, from two fields the
  *  payload does carry. The layout is `<session-transcript-minus-.jsonl>\
  *  subagents\agent-<agent_id>.jsonl`, verified present with the matching
- *  `agent_id` for both recorded payloads. Deriving it this way also answers
+ *  `agent_id` for all four recorded payloads. Deriving it this way also answers
  *  "does this transcript belong to THIS dispatch?" by construction rather than
  *  by trust.
  *
@@ -225,8 +226,15 @@ export function resolveOwnTranscriptPath(transcriptPath, agentId, join = platfor
   // running on Windows, where `win32.sep === platformSep`, so a Windows-only
   // suite cannot fail on it however it is written. That is what let it
   // through four review rounds. The parameter lets the suite drive the
-  // `posix` arm explicitly and assert forward slashes, on any OS. Production
-  // never passes it.
+  // `posix` arm explicitly and assert forward slashes without needing one.
+  // Production never passes it.
+  //
+  // SCOPE, measured rather than assumed (PR #3358 review pass 5, N22): this
+  // seam catches a regression in the BODY on Windows, not every spelling of
+  // N10. Reverting only the DEFAULT above to `win32.join`, body untouched,
+  // leaves the suite green on Windows — the same defect, and the likelier
+  // regression of the two. The Ubuntu `test:hooks` leg is what catches that
+  // one, plus the source-text assertion in the suite.
   return join(raw.slice(0, -'.jsonl'.length), 'subagents', `agent-${agentId}.jsonl`);
 }
 
@@ -290,7 +298,8 @@ function transcriptPromptText(entry) {
  *      reproduce either breakdown here and have it drift again, see
  *      `docs/ops/3263-transcript-signal-measurement.md` (Result 3 and the
  *      re-derivation note) for both, side by side. What BOTH agree on: no
- *      pick ever named the primary checkout, and most of the apparent misses
+ *      pick ever named the primary checkout, and most of the residual errors
+ *      that were not measurement artifacts
  *      were the scan being RIGHT while the agent wrote somewhere it should
  *      not have — #3044's own incident shape.
  *  (b) A PRIMARY-ASSIGNED dispatch whose brief also mentions a live worktree

@@ -42,7 +42,7 @@ Every figure here describes **the subagent's own transcript**,
 
 That is not the file the PreToolUse payload hands you. `transcript_path` names
 the **dispatching session's** transcript, `…\<project>\<session-id>.jsonl` —
-verbatim in both real `fix-agent` payloads ever captured
+verbatim in all four real `fix-agent` payloads on record
 ([`3263-dispatch-cwd-findings.md`](3263-dispatch-cwd-findings.md),
 [`3263-guard-assignment-signal-findings.md`](3263-guard-assignment-signal-findings.md)),
 whose `session_id` matches that filename while `agent_id` appears nowhere in
@@ -68,7 +68,7 @@ read — so every turn the scan *can* see is about some other piece of work, and
 `guard-worktree-write.mjs` therefore derives the subagent transcript from
 `transcript_path` + `agent_id` (`resolveOwnTranscriptPath`) and returns `null`
 rather than ever falling back to the session file. The layout was verified
-present, with the matching `agent_id`, for both recorded payloads.
+present, with the matching `agent_id`, for all four recorded payloads.
 
 ## Method
 
@@ -213,10 +213,15 @@ primary directly, and the corpus contains a brief that does exactly that —
 > small single-file docs-comment PR, **not worth a worktree**), commit, and
 > push.
 
-Scoped by the two decisive phrases (`not worth a worktree`, `checked out in
+Scoped by the decisive phrases (`not worth a worktree`, `checked out in
 the primary checkout`, `work there directly`, `no worktree needed/required`,
 minus any brief that also carries the standard prohibition), this cohort is
-**1 of ~1,594** transcripts.
+**2 of ~1,604** transcripts — the one quoted above and
+`agent-a7ee06755746ef23f` ("Work in the primary checkout at
+`C:\Claude\Projects\Audiobook-Generator`"), which an earlier revision of this
+section missed because its phrase list did not cover that wording. PR #3358's
+review pass 5 re-measured it brief-level across the corpus with a positive
+control.
 
 **The rule handles the observed one correctly**, for a reason that is luck
 rather than design: a brief that assigns the primary names no *other* checkout

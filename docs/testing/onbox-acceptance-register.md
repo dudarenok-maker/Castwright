@@ -5943,15 +5943,20 @@ precisely because no live payload was available to check against:
 
 1. **The derived path is the file that exists at hook time.** The layout
    `<transcript_path minus .jsonl>\subagents\agent-<agent_id>.jsonl` is
-   confirmed against two recorded payloads, but both were inspected long after
-   their runs finished. A file that the harness creates lazily — or flushes
-   late — would leave the guard falling back to `cwd` on exactly the early
-   tool calls that matter most.
+   confirmed against all four recorded payloads, but every one was inspected
+   long after its run finished. A file that the harness creates lazily — or
+   flushes late — would leave the guard falling back to `cwd` on exactly the
+   early tool calls that matter most.
 2. **The brief is already in that file at the FIRST guarded tool call.** The
    scan needs the assignment to have been written before the agent's first
-   Write/Edit/Bash. Nothing observed so far establishes the ordering.
+   Write/Edit/Bash. **Partially established, not fully:** for the two recorded
+   payloads that carry a timestamp, the brief was written **3.48 s and 2.57 s
+   before** the payload, and each subagent file carried only that payload's
+   own `agentId`. Both are one-line `claude -p` probe briefs naming no
+   checkout path, so they do not settle the ordering for a real multi-step
+   dispatch whose brief is long and whose first tool call comes sooner.
 3. **`agent_id` is populated for the roles the hook is wired to.** Confirmed
-   for `fix-agent` in both recorded payloads; unconfirmed for any other role
+   for `fix-agent` in all four recorded payloads; unconfirmed for any other role
    the `hooks:` frontmatter might later be attached to.
 
 **What to observe, concretely.** Wire a logging hook alongside the guard (the

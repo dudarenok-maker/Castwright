@@ -17,7 +17,8 @@ design recommendation. **HIT or MISS, with reasoning.**
 ## What this closes
 
 `docs/ops/3263-transcript-extraction-feasibility.md` (#3339/#3340/#3341,
-docs-only PR #3348, still open) validated H2 against a 7-transcript corpus, but
+docs-only PR #3348, merged 2026-09-21 — its file reaches this branch with the
+`main` merge) validated H2 against a 7-transcript corpus, but
 its own `## Not tested` section named the gap explicitly: all 3 *answerable*
 transcripts in that corpus share one dispatch shape — a single-turn probe from
 #3325's spike, dispatched into a **freshly-created** worktree. None are the
@@ -260,7 +261,7 @@ directly, and is exactly the reachability question the next design pass on
 alternatives — not something to infer from this doc's own struture.
 
 > **Answered, 2026-09-22 (PR #3358 review pass 3).** It resolves to the
-> **dispatcher's**. Both real `fix-agent` payloads on record
+> **dispatcher's**. All four real `fix-agent` payloads on record
 > ([`3263-dispatch-cwd-findings.md`](3263-dispatch-cwd-findings.md),
 > [`3263-guard-assignment-signal-findings.md`](3263-guard-assignment-signal-findings.md))
 > carry `transcript_path` = `…\<project>\<session-id>.jsonl` with `session_id`
