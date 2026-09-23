@@ -10,8 +10,8 @@
                   perRequestInputCap is analyzer.gemini.maxInputTokensPerRequest
                   alone here; PR 2b bounds it by the model's TPM.
    Ollama's contextTokens is num_ctx AS SENT — deliberately not clamped to
-   /api/show's native context before on-box measurement (register row
-   "Capacity recalibration"). Endpoints (context family + optional cap) arrive
+   /api/show's native context before on-box measurement. A register row
+   "Capacity recalibration" will track this in wave 2b. Endpoints (context family + optional cap) arrive
    in wave 3. Must not import ollama.ts: ollama.ts's settings provider will
    import this module in a later wave. */
 import { configValue } from '../config/resolver.js';
