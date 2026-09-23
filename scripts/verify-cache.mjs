@@ -1443,9 +1443,9 @@ export function qualifiedDurationFor(cache, stepName) {
  *  a wall-clock budget went flaky on a box where process-launch overhead
  *  alone — 565-698ms measured on Windows — is comparable to the fixture's
  *  own sleep duration; a formula bug like B5's should never depend on
- *  outracing real subprocess overhead to be provable). Widens the FLOOR,
- *  not computeBudgetMs' result — see runBudgetMs's own comment on why that
- *  distinction matters for a CALIBRATED baseline specifically. */
+ *  outracing real subprocess overhead to be provable). The PER-STEP budget is
+ *  the one that still widens under throttle — the whole-pipeline budget never
+ *  does (Castwright#3361; see the comment at its call site in runPipeline). */
 export function computeStepBudgetMs(cache, stepName, floorMs, multiplier) {
   return computeBudgetMs(qualifiedDurationFor(cache, stepName), floorMs * multiplier);
 }
@@ -1453,21 +1453,20 @@ export function computeStepBudgetMs(cache, stepName, floorMs, multiplier) {
 /** The real whole-pipeline budget computation runPipeline uses — same
  *  extraction rationale as computeStepBudgetMs. `qualifiedRunDurationMs` is
  *  the SUM of the active steps' own qualified baselines (0 when nothing is
- *  calibratable, treated as null/uncalibrated per computeBudgetMs). The floor
- *  is widened by `multiplier` ONLY when a qualified baseline exists; an
- *  uncalibrated run keeps the flat, unwidened floor regardless of any
- *  throttle (Castwright#3272, decision C). The per-step budget
- *  (computeStepBudgetMs) is widened by the same `multiplier` in both the
- *  calibrated and uncalibrated case, but it is always subordinate to the
- *  pipeline deadline via the `Math.min(...)` clamp in runPipeline — that
- *  subordination bites hardest in the uncalibrated case specifically, since
- *  decision C is what just tightened the pipeline-level floor there. The
- *  CALIBRATED branch is untouched by decision C: a warm-cache throttled run
- *  still widens this floor by `multiplier`, same as before this fix. */
-export function computeRunBudgetMs(qualifiedRunDurationMs, floorMs, multiplier) {
+ *  calibratable, treated as null/uncalibrated per computeBudgetMs). The
+ *  pipeline budget is never widened by throttle, calibrated or not: at this
+ *  repo's real run size the floor term dominates, and a widened floor lands
+ *  at 2x DEFAULT_RUN_TIMEOUT_MIN (360 min) — past the 273.8-min incident this
+ *  budget exists to bound (Castwright#3361) — while multiplying the
+ *  calibrated result instead double-counts a throttle a baseline recorded
+ *  under throttle already absorbed (PR #3260 review pass 2, B5: measured 4x
+ *  instead of the intended 2x). The calibration's own 2.5x headroom already
+ *  covers the 2x fork halving. The per-step budget (computeStepBudgetMs)
+ *  still widens under throttle and stays subordinate to the pipeline
+ *  deadline via the `Math.min(...)` clamp in runPipeline. */
+export function computeRunBudgetMs(qualifiedRunDurationMs, floorMs) {
   const qualified = qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null;
-  const effectiveFloorMs = qualified === null ? floorMs : floorMs * multiplier;
-  return computeBudgetMs(qualified, effectiveFloorMs);
+  return computeBudgetMs(qualified, floorMs);
 }
 
 // Cap on the tail-keeping stderr accumulator below — mirrors spawnSync's old
@@ -1793,39 +1792,19 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     const d = qualifiedDurationFor(cache, s.name);
     return d === null ? sum : sum + d;
   }, 0);
-  // Read AFTER the contention guard above so a throttle it just applied for
-  // THIS run is reflected here, not just for the next one. Widens the FLOOR,
-  // not the whole computeBudgetMs result (PR #3260 review pass 2, B5): the
-  // calibrated branch (K x lastGreenDurationMs) already reflects whatever
-  // conditions produced that baseline, so multiplying its RESULT double-
-  // counts a throttle a prior throttled run's own baseline already absorbed
-  // (measured: a baseline recorded throttled at 2x, multiplied again here,
-  // gave 4x instead of the intended 2x — now correctly gives 2x).
-  //
-  // The UNCALIBRATED pipeline floor is deliberately left UNWIDENED under
-  // throttle — settled, not open (PR #3260 review pass 3 raised it as B10;
-  // Castwright#3272 decision C picked this direction). With no qualified
-  // baseline there is nothing for `multiplier` to calibrate against, and
-  // widening this floor lands the whole-pipeline budget at 2x
+  // The whole-pipeline budget is NEVER widened by throttle, calibrated or not
+  // (Castwright#3361). Widening the floor lands the budget at 2x
   // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle — past the 273.8-min
-  // incident this budget exists to bound, defeating the feature's own stated
-  // goal. This is scoped to the UNCALIBRATED case only: the CALIBRATED branch
-  // (qualifiedRunDurationMs > 0, i.e. at least one active step has a qualified
-  // baseline) is untouched by this decision and still widens by `multiplier`
-  // exactly as before this fix, so a warm-cache throttled run can still reach
-  // the pre-existing 2x DEFAULT_RUN_TIMEOUT_MIN floor. The PER-STEP budget
-  // (computeStepBudgetMs, also widened by the same multiplier) is widened in
-  // BOTH branches, calibrated and uncalibrated alike — but it is never fully
-  // independent protection: the `Math.min(...)` clamp on stepBudgetMs below
-  // also caps it at whatever remains of the pipeline deadline, so a per-step
-  // budget can only ever be as generous as the pipeline-level number leaves
-  // room for. That subordination bites hardest in the UNCALIBRATED case
-  // specifically, since decision C is what just tightened the pipeline-level
-  // floor there (Castwright#3361 tracks whether the calibrated branch's own
-  // floor term should be revisited too).
-  const contentionBudgetMultiplier =
-    affectedByContention && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
-  const runBudgetMs = computeRunBudgetMs(qualifiedRunDurationMs, runTimeoutFloorMs, contentionBudgetMultiplier);
+  // incident this budget exists to bound — because the floor term dominates
+  // at this repo's real run size (~45 min). Multiplying the calibrated term
+  // instead double-counts a throttle a baseline recorded under throttle has
+  // already absorbed (PR #3260 review pass 2, B5: measured 4x instead of the
+  // intended 2x). The calibration's own 2.5x headroom already covers the 2x
+  // fork halving (q = 44.9 min → 112 min; a throttled q ≈ 90 min → 225 min;
+  // both under 273.8). The PER-STEP budget still widens under throttle
+  // (computeStepBudgetMs with stepContentionMultiplier in the loop below) and
+  // remains clamped by the pipeline deadline via the Math.min(...) there.
+  const runBudgetMs = computeRunBudgetMs(qualifiedRunDurationMs, runTimeoutFloorMs);
   const runDeadline = Date.now() + runBudgetMs;
 
   for (const step of activeSteps) {

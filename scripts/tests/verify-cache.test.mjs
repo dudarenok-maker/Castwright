@@ -1579,8 +1579,18 @@ test('runPipeline computes its step and pipeline budgets via computeStepBudgetMs
   );
   assert.match(
     pipelineBody,
-    /computeRunBudgetMs\(\s*qualifiedRunDurationMs,\s*runTimeoutFloorMs,\s*contentionBudgetMultiplier\s*\)/,
-    'the whole-pipeline budget must go through computeRunBudgetMs, not an inline computeBudgetMs(...) * multiplier',
+    /computeRunBudgetMs\(\s*qualifiedRunDurationMs,\s*runTimeoutFloorMs\s*\)/,
+    'the whole-pipeline budget must go through computeRunBudgetMs with the flat floor — no throttle multiplier argument (Castwright#3361)',
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /contentionBudgetMultiplier/,
+    'runPipeline must no longer compute a pipeline-level contention budget multiplier at all (Castwright#3361)',
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /floorMs \* multiplier/,
+    'runPipeline must not multiply a pipeline floor by a throttle multiplier inline (Castwright#3361)',
   );
 });
 
@@ -1616,43 +1626,38 @@ test('computeStepBudgetMs widens the FLOOR, not the calibrated (K x lastGreenDur
   assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a baseline the prior throttled run already absorbed');
 });
 
-test('computeRunBudgetMs leaves the uncalibrated pipeline floor UNWIDENED under throttle (#3272, decision C)', () => {
-  // #3272 decision C: an uncalibrated run (no qualified/calibrated pipeline
-  // baseline) keeps the flat, unwidened floor even under contention throttle.
-  // The old shape widened it by multiplying floorMs BEFORE computeBudgetMs —
-  // algebraically identical to multiplying the result, since
-  // computeBudgetMs(null, F) returns F verbatim regardless of k — which put
-  // the whole-pipeline budget at 2x DEFAULT_RUN_TIMEOUT_MIN (360 min) under
-  // throttle, past the 273.8-min incident this budget exists to bound. The
-  // per-step budgets (still widened by the same `multiplier`) are always
-  // subordinate to the pipeline deadline via runPipeline's own `Math.min(...)`
-  // clamp — that subordination bites hardest right here, in the uncalibrated
-  // case decision C just tightened; this pipeline-level floor is only the
+test('computeRunBudgetMs keeps the uncalibrated pipeline floor flat — never widened, throttle or no throttle (#3272 decision C, #3361)', () => {
+  // #3272 decision C settled that an uncalibrated run (no qualified pipeline
+  // baseline) keeps the flat floor; #3361 removed the last multiplier
+  // parameter so the pipeline-level budget can no longer be widened at all.
+  // The per-step budgets (computeStepBudgetMs, widened by
+  // stepContentionMultiplier) remain subordinate to the pipeline deadline via
+  // runPipeline's own `Math.min(...)` clamp; this pipeline-level floor is the
   // outer, incident-bounding backstop and stays at 180 min.
   const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000;
-  assert.equal(computeRunBudgetMs(0, floorMs, 2), floorMs, 'uncalibrated: throttle must not widen the pipeline floor');
-  assert.equal(computeRunBudgetMs(0, floorMs, 1), floorMs, 'sanity: unthrottled uncalibrated floor is unchanged');
+  assert.equal(computeRunBudgetMs(0, floorMs), floorMs, 'uncalibrated: the pipeline floor is the flat floorMs');
 });
 
-test('computeRunBudgetMs widens the FLOOR, not the calibrated branch, for a CALIBRATED pipeline baseline (B5, the case this PR does fix)', () => {
+test('computeRunBudgetMs returns max(floorMs, 2.5 x qualified) for a calibrated run, widened by nothing (#3361)', () => {
   const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000; // 180 min
-  const throttledBaselineMs = 200 * 60 * 1000; // exceeds the 180-min floor, so the calibrated branch dominates
-  const oldBuggyShape = computeBudgetMs(throttledBaselineMs, floorMs) * 2;
-  const fixed = computeRunBudgetMs(throttledBaselineMs, floorMs, 2);
-  assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a calibrated pipeline baseline either');
-});
-
-test('computeRunBudgetMs still widens the calibrated floor by `multiplier` under throttle — #3272 decision C left this branch untouched', () => {
-  // A tiny qualified duration so the floor term dominates max(F x mult, k x
-  // duration) — pins the calibrated branch's actual value directly, unlike
-  // the test above (whose large baseline makes the floor term irrelevant and
-  // only proves an inequality). Fails if the calibrated arm is ever changed
-  // to skip widening (e.g. `effectiveFloorMs = floorMs` unconditionally).
-  const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000; // 180 min
+  // A qualified baseline where the calibrated branch dominates: 2.5 x 90 min
+  // = 225 min > 180-min floor. The old shape doubled the FLOOR here too
+  // (max(2 x 180, 225) = 360 min — past the 273.8-min incident bound); the
+  // fix lands on 2.5 x q with no pipeline-level widening at all.
+  const qAboveFloor = 90 * 60 * 1000;
   assert.equal(
-    computeRunBudgetMs(60_000, floorMs, 2),
-    floorMs * 2,
-    'a calibrated (qualifiedRunDurationMs > 0) throttled run must still land on floorMs x multiplier, unchanged by #3272',
+    computeRunBudgetMs(qAboveFloor, floorMs),
+    2.5 * qAboveFloor,
+    'calibrated with 2.5q > floor: budget is exactly 2.5 x qualifiedRunDurationMs, not a widened floor',
+  );
+  // A qualified baseline where the floor dominates: 2.5 x 60 min = 150 min <
+  // 180-min floor. Pins the floor term directly — fails if the calibrated arm
+  // ever multiplies the floor again (the removed 2 x 180 = 360 min shape).
+  const qBelowFloor = 60 * 60 * 1000;
+  assert.equal(
+    computeRunBudgetMs(qBelowFloor, floorMs),
+    floorMs,
+    'calibrated with 2.5q < floor: budget is the FLAT floorMs — the pipeline budget is never widened under throttle',
   );
 });
 
