@@ -236,3 +236,49 @@ describe('stage-2 chunk budget at a below-ceiling num_ctx (#3084 review finding)
     expect(actual).toBeLessThan(ceiling);
   });
 });
+
+describe('stage-1 chunk budget at a below-ceiling num_ctx (#3084 review finding)', () => {
+  it('num_ctx actually constrains the stage-1 local budget when it is below the configured default', () => {
+    const configured = configValue<number>('analyzer.stage1.chunkCharBudget');
+    const fraction = configValue<number>('analyzer.stage1.localInputFraction');
+    const numCtx = 8192;
+    // Mirrors resolveStage1ChunkCharBudget's documented local-family formula
+    // (stage1ChunkBudgetForEngine in stage1-chunk.ts):
+    // max(2000, min(configured, floor(numCtx × localInputFraction × 2 chars/token))).
+    const expected = Math.max(2000, Math.min(configured, Math.floor(numCtx * fraction * 2)));
+
+    const capacity = TODAY_LOCAL_CAPACITY(numCtx);
+    const actual = resolveStage1ChunkCharBudget(capacity);
+
+    // The regression this guards against: a resolver that ignored numCtx and
+    // just returned the configured default would fail THIS assertion (it would equal
+    // `configured`, not `expected`), and the assertion below proves numCtx is
+    // actually the binding term at this value (unlike every case pinned at
+    // num_ctx=32768, where the configured value always wins).
+    expect(actual).toBe(expected);
+    expect(actual).toBeLessThan(configured);
+  });
+});
+
+describe('chapter chunk budget at a below-ceiling num_ctx (#3084 review finding)', () => {
+  it('num_ctx actually constrains the chapter local budget when it is below the configured stage-1 default', () => {
+    const configured = configValue<number>('analyzer.stage1.chunkCharBudget');
+    const fraction = configValue<number>('analyzer.stage1.localInputFraction');
+    const numCtx = 8192;
+    // chapterChunkBudget delegates to resolveStage1ChunkCharBudget for local engines,
+    // so it has the same formula:
+    // max(2000, min(configured, floor(numCtx × localInputFraction × 2 chars/token))).
+    const expected = Math.max(2000, Math.min(configured, Math.floor(numCtx * fraction * 2)));
+
+    const capacity = TODAY_LOCAL_CAPACITY(numCtx);
+    const actual = chapterChunkBudget(capacity);
+
+    // The regression this guards against: a resolver that ignored numCtx and
+    // just returned the configured default would fail THIS assertion (it would equal
+    // `configured`, not `expected`), and the assertion below proves numCtx is
+    // actually the binding term at this value (unlike every case pinned at
+    // num_ctx=32768, where the configured value always wins).
+    expect(actual).toBe(expected);
+    expect(actual).toBeLessThan(configured);
+  });
+});
