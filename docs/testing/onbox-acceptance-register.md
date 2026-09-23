@@ -2436,6 +2436,39 @@ leave the live `.pt` untouched** — plus an audible delta on approve. *First la
 > not "coherently redesigned," which only an ear can judge. Full evidence:
 > `docs/testing/onbox-human-checkpoint-results/step1-a11-a18.md`.
 
+> **2026-09-24 — audition artefacts re-confirmed intact; the listen is formally
+> queued as #3394, row STAYS OPEN.** No new GPU render was owed or made. Both clips
+> named by the note above were re-checked on this box, as committed files, not as
+> assumptions:
+>
+> - `docs/testing/onbox-human-checkpoint-results/a11-current.mp3` — 110,877 bytes,
+>   `format_name=mp3` (ID3v2.4 header), duration **12.800 s**, ~69.3 kbps,
+>   SHA-256 `942dad7cf46c9b9c10697c74680c4246984449488fb3690a97ad893236edb593`,
+>   git blob `c6d594bd9be13d3a4088c9df89dff6b2f8c00c3c`.
+> - `docs/testing/onbox-human-checkpoint-results/a11-proposed.mp3` — 96,909 bytes,
+>   `format_name=mp3` (ID3v2.4 header), duration **10.960 s**, ~70.7 kbps,
+>   SHA-256 `6d930d149cae46bcc3a0c73c01f65e38de93f2e4042abd7da73054c16a5ddc00`,
+>   git blob `cfdf3a659f0a503aa325563f959ce0259449e05a`.
+>
+> Both decode cleanly under `ffprobe` and **both are byte-identical to the blobs
+> committed in `7b4e5372` (#2994)** — `git status --porcelain` reports neither path
+> dirty — so these are exactly the bytes the **0.246** cosine above was measured from,
+> and the evidence note's figures still describe the clips a listener will actually
+> hear. The one 2026-09-06 figure that could **not** be re-derived here is the cosine
+> itself: the sidecar's `/embed` endpoint was not reachable on this box during this
+> run, so 0.246 is re-affirmed *by the immutability of its inputs*, not by a fresh
+> measurement — stated plainly rather than quietly re-quoted as if re-measured.
+>
+> **The ear judgment itself was deliberately NOT attempted.** Whether the audible delta
+> reads as a *deliberate* coherent redesign matching the persona change, or as an
+> arbitrary regeneration artifact, is a human call — this row's own framing says so, and
+> a cosine cannot substitute for it. It is now formally queued for the operator's own
+> listen as [#3394](https://github.com/dudarenok-maker/Castwright/issues/3394), which
+> names both files with their sizes, SHAs, durations and the two persona strings side by
+> side. Row A11 stays **open** pending that verdict: Cancel-path DISCHARGED,
+> audible-delta-on-approve STILL OWED, now with a named owner and a live ticket rather
+> than an untracked intention. Nothing found here is a defect, so no bug was filed.
+
 ### A12 · Device-pin resolution survives a respawn ([#1870](https://github.com/dudarenok-maker/Castwright/pull/1870), closes [#1857](https://github.com/dudarenok-maker/Castwright/issues/1857)) · **2-card boot**
 
 `buildSidecarEnv` now hands the sidecar the raw `cuda-uuid:` literal instead of a
