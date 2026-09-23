@@ -2330,6 +2330,22 @@ PR #500.
 > copy points at is a different mechanism that never got populated by either
 > action. Evidence: `docs/testing/onbox-mechanical-batch1-results/step-3-a8-a9-a10.md`.
 
+> **2026-09-23 — confirm-and-file, finding confirmed; filed as #3376.** Re-verified
+> against code at HEAD a3bcfb21: the A/B-toggle failure is real and deterministic, and
+> the root cause is *not* a frontend wiring gap. `getRevisionsForBook()` reads
+> `revisions.json` but returns a hardcoded `pending: []`
+> (`server/src/routes/revisions.ts:211`) while its own doc comment (`:10-14`) promises
+> persisted pending revisions are "surfaced verbatim". The frontend half is correctly
+> wired — `splice/startBatch` → `revisions/enqueuePending`
+> (`src/store/splice-runner-middleware.ts`, 98e55954, the PR #500 landing commit) →
+> persist rule (`revisions/enqueuePending` → `PUT /state` slice=revisions, 781d6d7d) →
+> `writeJsonAtomic(revisionsJsonPath)` — then the 30 s `applyPoll` wipes the store
+> (`s.pending = payload.pending || []`, `src/store/revisions-slice.ts:163`) and the next
+> revisions persist writes the emptied list back to disk, matching the pill + disk
+> observations above exactly. **Bug filed: #3376** (`bug`, `area:srv`; one-line echo fix
+> + regression test proposed there). Disposition: no re-render on this row — A9 stays
+> FAIL until #3376 lands; the A/B-toggle re-check belongs to that fix's verification pass.
+
 ### A10 · Structured failure taxonomy (plan 173, fs-19)
 
 "Live multi-failure acceptance owed" (`:9,45`). Force **≥2 distinct real failure
