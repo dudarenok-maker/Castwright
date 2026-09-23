@@ -184,30 +184,30 @@ describe('evalFixture', () => {
       attributeChapterStage2Spy.mockRestore();
     });
 
-    it('passes qwen engine as "local" to attributeChapterStage2', async () => {
-      // Call with engine: 'qwen', which should be mapped to 'local' when passed to attributeChapterStage2
+    it('passes qwen engine as a context-family capacity to attributeChapterStage2', async () => {
       await evalFixture({
         analyzer: fakeAnalyzer,
         manuscriptId: 'm', title: 'T', truth, roster, chapterId: 44,
         stageCall: { language: 'en' } as never,
         engine: 'qwen',
       });
-
-      // Verify that attributeChapterStage2 was called with engine: 'local'
-      expect(attributeChapterStage2Spy).toHaveBeenCalledWith(expect.objectContaining({ engine: 'local' }));
+      expect(attributeChapterStage2Spy).toHaveBeenCalledWith(
+        expect.objectContaining({ capacity: expect.objectContaining({ family: 'context' }) }),
+      );
+      expect(attributeChapterStage2Spy.mock.calls[0][0]).not.toHaveProperty('engine');
     });
 
-    it('passes gemma engine as "gemini" to attributeChapterStage2', async () => {
-      // Call with engine: 'gemma', which should be mapped to 'gemini' when passed to attributeChapterStage2
+    it('passes gemma engine as a request-cap capacity to attributeChapterStage2', async () => {
       await evalFixture({
         analyzer: fakeAnalyzer,
         manuscriptId: 'm', title: 'T', truth, roster, chapterId: 44,
         stageCall: { language: 'en' } as never,
         engine: 'gemma',
       });
-
-      // Verify that attributeChapterStage2 was called with engine: 'gemini'
-      expect(attributeChapterStage2Spy).toHaveBeenCalledWith(expect.objectContaining({ engine: 'gemini' }));
+      expect(attributeChapterStage2Spy).toHaveBeenCalledWith(
+        expect.objectContaining({ capacity: expect.objectContaining({ family: 'requestCap' }) }),
+      );
+      expect(attributeChapterStage2Spy.mock.calls[0][0]).not.toHaveProperty('engine');
     });
   });
 

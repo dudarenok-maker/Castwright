@@ -27,6 +27,7 @@ import {
   chapterChunkBudget,
   OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
 } from '../analyzer/chapter-chunker.js';
+import { resolveCapacity } from '../analyzer/capacity.js';
 import {
   buildCharsByChapter,
   chapterPacingPhaseFields,
@@ -176,7 +177,7 @@ annotateEmotionRouter.post(
         const sentences = byChapter.get(chapterId) ?? [];
         const chunks = chunkSentencesByBudget(sentences, {
           charBudget: chapterChunkBudget(
-            selection.engine,
+            resolveCapacity({ engine: selection.engine, model: selection.model }),
             0,
             sentences.map((s) => s.text).join(' '),
             OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS, // reserve system-prompt overhead so the whole request clears the Gemma TPM guard (#1682)

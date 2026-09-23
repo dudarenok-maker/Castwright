@@ -49,6 +49,7 @@ import {
   chapterChunkBudget,
   OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
 } from '../analyzer/chapter-chunker.js';
+import { resolveCapacity } from '../analyzer/capacity.js';
 import {
   buildCharsByChapter,
   chapterPacingPhaseFields,
@@ -838,7 +839,7 @@ async function runScriptReviewJob(
         : undefined;
       const chunks = chunkSentencesByBudget(byChapter.get(chapterId) ?? [], {
         charBudget: chapterChunkBudget(
-          activeSelection.engine,
+          resolveCapacity({ engine: activeSelection.engine, model: activeSelection.model }),
           JSON.stringify(roster).length + 800, // roster payload + fixed template scaffold
           (byChapter.get(chapterId) ?? []).map((s) => s.text).join(' '), // sample → chars/token
           OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS, // reserve the system-prompt overhead (skill + preamble) so the whole request clears the Gemma TPM guard

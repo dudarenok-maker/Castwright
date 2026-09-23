@@ -13,6 +13,7 @@ import { applyOpsToCharArray } from './apply-ops-chars.js';
 import { normalizeForMatch } from './review-apply-core.js';
 import { buildStructureEvidence } from '../dialogue-structure/evidence.js';
 import { configValue } from '../../config/resolver.js';
+import { resolveCapacity } from '../capacity.js';
 
 export interface FamilyBreakdown {
   correct: number;
@@ -185,9 +186,12 @@ export async function evalFixture(opts: {
     reasons: Array<{ index: number; reason: string; bucket: string }>;
   } | null = null;
 
-  // Map eval engine ('qwen'/'gemma') to the budget engine ('local'/'gemini').
-  // Used by both stage2 (chunk sizing) and review (if enabled).
-  const chunkEngine = opts.engine === 'qwen' ? 'local' : 'gemini';
+  // Map the eval engine ('qwen'/'gemma') to the chunk-budget capacity.
+  // Used by both stage 2 (chunk sizing) and review (if enabled).
+  const chunkCapacity =
+    opts.engine === 'qwen'
+      ? resolveCapacity({ engine: 'local', model: process.env.EVAL_QWEN_MODEL ?? 'qwen3.5:9b' })
+      : resolveCapacity({ engine: 'gemini', model: configValue<string>('analyzer.gemini.model') });
 
   const result = await attributeChapterStage2({
     analyzer: opts.analyzer,
@@ -197,7 +201,7 @@ export async function evalFixture(opts: {
     chapter: { id: opts.chapterId, title: `Chapter ${opts.chapterId}`, body: opts.truth.chapterText },
     stageCall: opts.stageCall,
     escalationAnalyzer: opts.escalationAnalyzer ?? null,
-    engine: chunkEngine,
+    capacity: chunkCapacity,
     onStages: (s) => { stages = s; },
   }); // no `as never` — the opts object is fully typed, so `s` gets its proper type
 
@@ -239,7 +243,7 @@ export async function evalFixture(opts: {
 
   const { ops, accepted, droppedChunks } = await runReviewOverChapter({
     analyzer: opts.analyzer,
-    engine: chunkEngine,
+    capacity: chunkCapacity,
     manuscriptId: opts.manuscriptId,
     chapterId: opts.chapterId,
     sentences: finalSentences,
