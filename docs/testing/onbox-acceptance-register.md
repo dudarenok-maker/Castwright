@@ -2304,6 +2304,8 @@ PR #500.
 > copy points at is a different mechanism that never got populated by either
 > action. Evidence: `docs/testing/onbox-mechanical-batch1-results/step-3-a8-a9-a10.md`.
 
+> **2026-09-24 — echo defect fixed (#3376, branch fix/server-3376-pending-echo).** `GET /revisions` now echoes the persisted `revisions.json` pending entries, and background bulk polls no longer clobber them — a Fix-audio or regen take stays in the Status pill's Revisions section for audition/accept/rollback. The on-box re-run of the Fix-audio → pill → audition/accept path is **still owed** — the row stays open.
+
 ### A10 · Structured failure taxonomy (plan 173, fs-19)
 
 "Live multi-failure acceptance owed" (`:9,45`). Force **≥2 distinct real failure
