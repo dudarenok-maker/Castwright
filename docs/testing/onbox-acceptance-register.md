@@ -2305,6 +2305,30 @@ measured 4.13 (below) and the ~1.2 target.
 > transcription on top of the synthesis phase — a cost outside plan 228's own
 > scope. Evidence: `docs/testing/onbox-mechanical-batch1-results/step-3-a8-a9-a10.md`.
 
+> **2026-09-24 — on-box re-run with CUDA ASR, PARTIAL (gap mostly closed; ~1.2
+> not reached).** Force-regenerated RU standalone `Заказ Коалфолла` CH 2
+> ("Глава первая — Стук", 57 lines, `modelKey=qwen3-tts-0.6b`, `force:true`) on a
+> 2-GPU box (RTX 4070 Laptop = `cuda:0`, RTX 5070 Ti = `cuda:1`). The app's own
+> per-chapter RTF was **1.80** (`synth=516.2s / audio=287.5s`; wall
+> 22:03:42Z→22:12:28Z = 526 s, 1.83x) — down from 4.13 with CPU ASR-QA, still
+> above the ~1.2 target, so this row is NOT marked pass. CUDA ASR genuinely
+> active: `[sidecar] Loading Whisper ASR model=small device=cuda:1
+> compute=float16` + `Whisper ASR loaded (model=small device=cuda:1)` and
+> `/health` `asr_loaded:true, asr_device:"cuda:1"`; the re-record loop engaged
+> (1 sentence still SUSPECT after re-record, chapter rendered regardless).
+> Isolation verdict: CPU-bound ASR-QA was the *majority* of the old gap (removed
+> ≈2.3 s/s) but not the *whole* gap — the residual ~0.6 is synth-side and
+> data-specific: this book's 13 designed Qwen voices lack Russian manifests
+> ("treating as undesigned, re-design required"), so character lines fell back to
+> Coqui XTTS loads on `cuda:0` mid-run while the resident qwen batches measured
+> RTF 1.13–2.74. A true ~1.2 reading needs a cast whose Qwen voices are
+> ru-manifested (re-design, outside this row's scope) — with CPU ASR the same
+> book class measured 4.13–5.84. Evidence: `logs/a8-sse.fail3.txt`,
+> `logs/tts.err.log` 08:03–08:12 entries, `logs/a8-server.out.log` 08:12:28
+> render line, output `audio/02-глава-первая-стук.mp3` (2,345,829 B,
+> prev kept as `.previous.mp3`). Note: this chapter is 57 lines; the older 51-line
+> figure was CH 3 "The Knock" of the English book, not this one.
+
 ### A9 · Per-character re-record / splice (plan 176)
 
 Rendered book → a character's profile → Fix audio → **+3 dB gain** — confirm the
