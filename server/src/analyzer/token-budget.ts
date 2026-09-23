@@ -43,9 +43,17 @@ export function resolveMaxInputTokensPerRequest(): number {
     - `reservedChars` — CHAR-space: subtracted AFTER the char conversion. A
       cruder approximation (it can't be right across scripts — see the header),
       kept for the existing roster-length callers (script review / output-heavy
-      passes) that already pass a char count. */
-export function cloudBodyCharBudget(body: string, reservedChars = 0, reservedTokens = 0): number {
-  const availableTokens = Math.max(0, resolveMaxInputTokensPerRequest() - reservedTokens);
+      passes) that already pass a char count.
+
+    `capTokens` — the per-request input-token cap (EngineCapacity.perRequestInputCap);
+    defaults to analyzer.gemini.maxInputTokensPerRequest. */
+export function cloudBodyCharBudget(
+  body: string,
+  reservedChars = 0,
+  reservedTokens = 0,
+  capTokens: number = resolveMaxInputTokensPerRequest(),
+): number {
+  const availableTokens = Math.max(0, capTokens - reservedTokens);
   const perRequestChars = Math.floor(availableTokens * charsPerTokenForText(body));
   return Math.max(2000, perRequestChars - reservedChars);
 }

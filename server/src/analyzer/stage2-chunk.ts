@@ -28,6 +28,7 @@ import type { EngineReport } from './dialogue-structure/types.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import { configValue } from '../config/resolver.js';
 import { cloudBodyCharBudget } from './token-budget.js';
+import type { EngineCapacity } from './capacity.js';
 import {
   runStage2WithCoverageGuard,
   validateStage2Coverage,
@@ -67,15 +68,15 @@ export function stage2ChunkBudgetForEngine(
   return Math.max(1000, Math.min(configured, numCtxDerived));
 }
 
-export function resolveStage2ChunkCharBudget(engine?: 'gemini' | 'local', body?: string): number {
+export function resolveStage2ChunkCharBudget(capacity: EngineCapacity | undefined, body?: string): number {
   const configured = configValue<number>('analyzer.stage2.chunkCharBudget');
-  if (engine !== 'local') {
-    // Cloud: min(configured, token-cap-derived).
-    return Math.min(configured, cloudBodyCharBudget(body ?? ''));
+  if (capacity?.family !== 'context') {
+    // Request-cap family (and an omitted capacity): min(configured, token-cap-derived).
+    return Math.min(configured, cloudBodyCharBudget(body ?? '', 0, 0, capacity?.perRequestInputCap));
   }
   return stage2ChunkBudgetForEngine(
     configured,
-    configValue<number>('analyzer.ollama.numCtx'),
+    capacity.contextTokens,
     'local',
     configValue<number>('analyzer.stage2.localInputFraction'),
   );
