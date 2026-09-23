@@ -4653,6 +4653,27 @@ one body-line listen if a suitable entity-laden EPUB is available.
 > this row's design spec also raises was likewise not attempted, for the same
 > time-budget reason).
 
+> **FULLY run 2026-09-23 (resumed #3310 claim, cline-qwen-cloud, batch-1
+> worktree) — the owed audio-level confirmation of the secondary (body-line)
+> bullet is now done; both bullets stand confirmed at text AND audio level.
+> Evidence: [`onbox-batch-results/a32.md`](onbox-batch-results/a32.md).**
+> Same hand-built-entity-EPUB method through the real
+> `POST /api/import` → sidecar `/synthesize` (Coqui XTTS v2, GPU, voice
+> `Damien Black`, `language:"fr"`) → `/transcribe` (faster-whisper, CUDA).
+> The decoded dash-opened line `—Ne partez pas après le dîner, dit-elle.`
+> synthesized to a character-exact ASR transcript (logprob −0.27) — accented
+> `après`/`dîner` pronounced as real letters, no "e acute", no dash spelled
+> aloud; versus an identical no-dash control the dash take is +694 ms long
+> with the clause-boundary pause 340 ms vs 60 ms (ffmpeg silencedetect +
+> whisper word timestamps), i.e. the dash renders as a prosodic break, not
+> leading silence. The decoded heading `L’Été` (real U+2019/U+00C9
+> codepoints verified in `sourceText`) re-synthesized to transcript `L'été.`.
+> Two records: (1) `chapters[0].title` mirrors the NCX navLabel, so title
+> decode must be read from `sourceText`, not the TOC field; (2) the pre-fix
+> analyzer-echo reproduction remains unattempted — needs a live stage-2
+> analyzer, out of scope of the audio path, still a finding about the
+> analyzer rather than a gate on this fix.
+
 ### A33 · Kokoro's silent-CPU-fallback alarm actually fires on a genuine CUDA→CPU fallback, and stays quiet on a ledger-admitted CPU placement and under kokoro-onnx API drift ([#2647](https://github.com/dudarenok-maker/Castwright/issues/2647)) · **single 8 GB card, live Kokoro sidecar, `KOKORO_DEVICE` settable per run**
 
 `_engine_actual_card`'s `fell_back` flag (#2631 review B3, the silent-CPU-fallback
