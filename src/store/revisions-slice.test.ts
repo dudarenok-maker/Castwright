@@ -120,6 +120,66 @@ describe('revisionsSlice — applyPoll', () => {
   });
 });
 
+describe('revisionsSlice — applyBackgroundPoll (#3376)', () => {
+  it('leaves an existing pending list unchanged', () => {
+    const start = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        pending: [rev('r1'), rev('r2')],
+        drift: [drift('a1')],
+      }),
+    );
+    const next = revisionsSlice.reducer(
+      start,
+      revisionsActions.applyBackgroundPoll({ bookId: 'book-B', drift: [] }),
+    );
+    expect(next.pending.map((r) => r.id)).toEqual(['r1', 'r2']);
+  });
+
+  it('replaces only the polled bookId drift and keeps other books drift', () => {
+    const start = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        pending: [rev('r1')],
+        drift: [drift('a1', { bookId: 'book-A' }), drift('b1', { bookId: 'book-B' })],
+      }),
+    );
+    const next = revisionsSlice.reducer(
+      start,
+      revisionsActions.applyBackgroundPoll({
+        bookId: 'book-B',
+        drift: [drift('b2', { bookId: 'book-B' })],
+      }),
+    );
+    expect(next.drift.map((d) => d.id)).toEqual(['a1', 'b2']);
+    expect(next.pending.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  it('leaves loaded unchanged — a background tick never flips it', () => {
+    const next = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyBackgroundPoll({
+        bookId: 'book-B',
+        drift: [drift('b2', { bookId: 'book-B' })],
+      }),
+    );
+    expect(next.loaded).toBe(false);
+    expect(next.drift.map((d) => d.id)).toEqual(['b2']);
+    /* And it never clears it either: once loaded by the active poll or a
+       hydrate, a background tick leaves the flag alone. */
+    const loaded = revisionsSlice.reducer(
+      next,
+      revisionsActions.applyBackgroundPoll({ bookId: 'book-C', drift: [] }),
+    );
+    expect(loaded.loaded).toBe(false);
+    const afterPoll = revisionsSlice.reducer(
+      next,
+      revisionsActions.applyPoll({ pending: [], drift: [] }),
+    );
+    expect(revisionsSlice.reducer(afterPoll, revisionsActions.applyBackgroundPoll({ bookId: 'book-D', drift: [] })).loaded).toBe(true);
+  });
+});
+
 describe('revisionsSlice — acceptRevision / rejectRevision (per-item)', () => {
   it('acceptRevision removes only the named revision from pending', () => {
     const start = revisionsSlice.reducer(

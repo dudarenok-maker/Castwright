@@ -35,6 +35,25 @@ const initialState: RevisionsState = {
   loaded: false,
 };
 
+/* Multi-book-aware drift merge shared by applyPoll and applyBackgroundPoll
+   (#3376). When the caller stamps `bookId` onto the payload, only that book's
+   drift entries are replaced — events from other concurrently-active books
+   survive the poll. Without bookId, legacy whole-list replace. */
+function mergeDriftForBook(
+  s: RevisionsState,
+  bookId: string | undefined,
+  incoming: DriftEvent[] | undefined,
+) {
+  if (bookId) {
+    s.drift = [
+      ...s.drift.filter((d) => d.bookId !== bookId),
+      ...(incoming || []).map((d) => ({ ...d, bookId: d.bookId || bookId })),
+    ];
+  } else {
+    s.drift = incoming || [];
+  }
+}
+
 export const revisionsSlice = createSlice({
   name: 'revisions',
   initialState,
@@ -147,30 +166,32 @@ export const revisionsSlice = createSlice({
         r.chapterId === a.payload.chapterId ? { ...r, playable: true } : r,
       );
     },
-    /* Runtime poll: refresh pending/drift but DON'T touch dismissed or
-       acceptedSelections — the server response (RevisionsResponse) doesn't
-       include either, and overwriting with empty would lose state until
-       the next disk hydrate.
+    /* Runtime poll (the active book's 30 s ticker): refresh pending/drift
+       but DON'T touch dismissed or acceptedSelections — the server response
+       (RevisionsResponse) doesn't include either, and overwriting with empty
+       would lose state until the next disk hydrate.
 
        Multi-book aware: when the caller stamps `bookId` onto the payload,
        only that book's drift entries are replaced — events from other
-       concurrently-active books survive the poll. `pending` is still
-       replaced wholesale (the regen/diff flow operates on the active
-       book and the server response doesn't differentiate). */
+       concurrently-active books survive the poll. `pending` is replaced
+       wholesale: this is the active book's poll and pending is single-book
+       state. The 120 s background fan-out must NOT use this action — it
+       dispatches applyBackgroundPoll so foreign books never write pending
+       (#3376). */
     applyPoll: (s, a: PayloadAction<(RevisionsResponse & { bookId?: string }) | undefined>) => {
       const payload = a.payload || ({} as RevisionsResponse & { bookId?: string });
-      const bookId = payload.bookId;
       s.pending = payload.pending || [];
-      if (bookId) {
-        const incoming = payload.drift || [];
-        s.drift = [
-          ...s.drift.filter((d) => d.bookId !== bookId),
-          ...incoming.map((d) => ({ ...d, bookId: d.bookId || bookId })),
-        ];
-      } else {
-        s.drift = payload.drift || [];
-      }
+      mergeDriftForBook(s, payload.bookId, payload.drift);
       s.loaded = true;
+    },
+    /* Background fan-out (Plan 83's 120 s bulk poll over NON-active books):
+       merge drift scoped to the polled bookId, and never touch `pending` or
+       `loaded`. Pending is single-book state — disk-hydrated per active book
+       and persisted back to the active book's revisions.json — so a
+       background tick writing it clobbered the active book's pending
+       revisions with the polled book's (#3376). */
+    applyBackgroundPoll: (s, a: PayloadAction<{ bookId: string; drift?: DriftEvent[] }>) => {
+      mergeDriftForBook(s, a.payload.bookId, a.payload.drift);
     },
     /* Disk hydrate on book open. Carries dismissed + acceptedSelections so
        subsequent edits union with prior persisted state rather than

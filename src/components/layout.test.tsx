@@ -42,6 +42,7 @@ import { scriptReviewSlice } from '../store/script-review-slice';
 
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
+const pollRevisionsBulkMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -68,9 +69,10 @@ vi.mock('../lib/api', async (importOriginal) => {
       /* The 30 s pollRevisions interval. Resolve to empty so it doesn't
          overwrite the slice between hydrate and the test's assertions. */
       pollRevisions: (...args: unknown[]) => pollRevisionsMock(...args),
-      /* Background bulk-poll fan-out across all known books — stub to
-         empty so the per-render fetch doesn't crash the test harness. */
-      pollRevisionsBulk: vi.fn(async () => ({ byBookId: {} })),
+      /* Background bulk-poll fan-out across all known books — the
+         #3376 test resolves this per-test; default to empty so the
+         per-render fetch doesn't crash the test harness. */
+      pollRevisionsBulk: (...args: unknown[]) => pollRevisionsBulkMock(...args),
       /* useTtsLifecycle polls /health on mount; resolve to unreachable so
          no pending pill state lands. */
       getSidecarHealth: vi.fn(async () => ({ status: 'unreachable', url: '(test)' })),
@@ -212,6 +214,8 @@ beforeEach(() => {
   getBookStateMock.mockReset();
   pollRevisionsMock.mockReset();
   pollRevisionsMock.mockResolvedValue({ pending: [], drift: [] });
+  pollRevisionsBulkMock.mockReset();
+  pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
 });
 
 describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
@@ -1709,3 +1713,109 @@ describe('Layout — settings-corruption banner (#3175 layer 3)', () => {
     });
   });
 });
+
+/* #3376 — the 120 s background bulk fan-out (Plan 83) polls every analysed
+   NON-active book. Before the fix it dispatched `applyPoll` per book, so the
+   polled book's `pending` (empty, or that other book's own list) replaced the
+   ACTIVE book's disk-hydrated pending. It must now dispatch
+   `applyBackgroundPoll`: drift merges per bookId, pending is never written. */
+describe('Layout — background revisions poll keeps the active book pending (#3376)', () => {
+  function makeBgLibraryBook(bookId: string): LibraryBook {
+    return {
+      bookId,
+      title: `Book ${bookId}`,
+      author: 'Della Renwick',
+      series: 'The Hollow Tide',
+      seriesPosition: 1,
+      isStandalone: false,
+      status: 'complete',
+      chapterCount: 1,
+      completedChapters: 1,
+      characterCount: 1,
+      voiceCount: 1,
+      lastWorkedOn: 'today',
+      coverGradient: ['#000', '#fff'],
+      tags: [],
+    } as LibraryBook;
+  }
+
+  it('active book pending survives a non-active book bulk poll tick', async () => {
+    /* null = nothing persisted on disk, so the per-book hydrate effect
+       early-returns and cannot touch the seeded pending. The route lands
+       on the cast (confirm) stage, not 'ready', so the active 30 s poll
+       effect stays silent too — same guards the other openBook-driven
+       tests in this file rely on. */
+    getBookStateMock.mockResolvedValue(null);
+    /* book-B answers the bulk tick with an EMPTY pending (the exact shape
+       that used to clobber) plus one drift event of its own. */
+    pollRevisionsBulkMock.mockResolvedValue({
+      byBookId: {
+        'book-B-slug': {
+          pending: [],
+          drift: [
+            {
+              id: 'd-b2',
+              bookId: 'book-B-slug',
+              characterId: 'eliza',
+              chapterId: 1,
+              chapterTitle: 'Chapter 1',
+              severity: 'severe',
+              factor: 'voice',
+            } as DriftEvent,
+          ],
+        },
+      },
+    });
+
+    const store = makeStore();
+    store.dispatch(
+      librarySlice.actions.hydrate({
+        authors: [
+          {
+            name: 'Della Renwick',
+            series: [
+              {
+                name: 'The Hollow Tide',
+                books: [makeBgLibraryBook('book-A-slug'), makeBgLibraryBook('book-B-slug')],
+              },
+            ],
+          },
+        ],
+      } as LibraryResponse),
+    );
+    store.dispatch(uiActions.openBook({ id: 'book-A-slug', status: 'cast_pending' }));
+    /* The active book's disk-hydrated pending — this is what must survive. */
+    store.dispatch(
+      revisionsActions.hydrateFromBookState({
+        bookId: 'book-A-slug',
+        pending: [{ id: 'r-active', chapterId: 3, characterId: 'eliza', segments: [] }],
+        drift: [],
+      }),
+    );
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/book-A-slug/cast']}>
+          <Routes>
+            <Route path="/books/:bookId/cast" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* The background effect fetches immediately on mount, and book-A (the
+       active book) must be excluded from the fan-out. */
+    await waitFor(() => {
+      expect(pollRevisionsBulkMock).toHaveBeenCalledWith({ bookIds: ['book-B-slug'] });
+    });
+    /* After the tick: book-B's drift merged in, and the active book's
+       pending untouched. Under the old applyPoll dispatch the empty
+       byBookId pending would have replaced ['r-active'] here. */
+    await waitFor(() => {
+      const s = store.getState();
+      expect(s.revisions.drift.map((d) => d.id)).toContain('d-b2');
+      expect(s.revisions.pending.map((r) => r.id)).toEqual(['r-active']);
+    });
+  });
+});
+
