@@ -53,18 +53,27 @@ async function runBatch(mw: MiddlewareAPI, req: SpliceBatchRequest): Promise<voi
   for (const chapterId of req.chapterIds) {
     if (controller.signal.aborted) break;
     const revisionId = `splice-${req.bookId}-${chapterId}-${req.characterId}`;
-    dispatch(
-      revisionsActions.enqueuePending({
-        id: revisionId,
-        chapterId,
-        characterId: req.characterId,
-        playable: false,
-        hasPreviousAudio: true,
-        triggeredBy:
-          req.mode === 'remix' ? `Loudness fix (${firstName})` : `Re-record (${firstName})`,
-        segments: [],
-      }),
-    );
+    /* Guarded like the `chapters.markChapterAudioUpdated` dispatch below and
+       generation-stream-runner's `sliceMatchesHandle`: `pending` is a single
+       list for whichever book is currently active (persistence-middleware
+       writes it to THAT book's revisions.json), never keyed per-book. If the
+       user has navigated to a different book mid-batch, dispatching here
+       would enqueue book A's splice revision into book B's `pending` list
+       and it would persist there permanently (#3376 finding 2). */
+    if (mw.getState().chapters.currentBookId === req.bookId) {
+      dispatch(
+        revisionsActions.enqueuePending({
+          id: revisionId,
+          chapterId,
+          characterId: req.characterId,
+          playable: false,
+          hasPreviousAudio: true,
+          triggeredBy:
+            req.mode === 'remix' ? `Loudness fix (${firstName})` : `Re-record (${firstName})`,
+          segments: [],
+        }),
+      );
+    }
 
     let ok = false;
     await api.streamSplice({
@@ -98,14 +107,18 @@ async function runBatch(mw: MiddlewareAPI, req: SpliceBatchRequest): Promise<voi
         }
         if (ev.type === 'splice_complete') {
           ok = true;
-          dispatch(revisionsActions.markRevisionPlayable({ chapterId }));
           /* Refresh the Listen row: re-record changes duration, a gain remix
              doesn't — the renderedAt stamp is what cache-busts the audio. Guarded on
              `currentBookId`, matching qa-repair-runner-middleware: `chapters` is keyed by
              bare `chapterId` alone (ids repeat 1..N across every book), so a splice that
              finishes after the user has navigated to a DIFFERENT book would otherwise
-             stamp that other book's same-numbered chapter with this splice's duration. */
+             stamp that other book's same-numbered chapter with this splice's duration.
+             `markRevisionPlayable` shares the same guard for the same reason: `pending`
+             is a single list for whichever book is currently active, so flipping it here
+             unguarded would mark a same-numbered chapter playable in a book the splice
+             never touched (#3376 finding 2). */
           if (mw.getState().chapters.currentBookId === req.bookId) {
+            dispatch(revisionsActions.markRevisionPlayable({ chapterId }));
             dispatch(
               chaptersActions.markChapterAudioUpdated({
                 chapterId,

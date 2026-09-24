@@ -217,4 +217,77 @@ describe('spliceRunnerMiddleware', () => {
     expect(chapter1.audioRenderedAt).toBeUndefined();
     expect(chapter1.duration).toBe('2:00'); /* Original duration, unchanged. */
   });
+
+  it('never writes a splice revision into a book the user switched to mid-batch (#3376)', async () => {
+    /* Repro from PR #3395 review finding 2: start a Fix-audio batch on book
+       bk1, then open bk2 before the batch finishes. Unlike the audio-stamp
+       guard above (which only covers markChapterAudioUpdated), enqueuePending
+       and markRevisionPlayable had NO book guard, so bk1's splice revision
+       for chapter 2 would be enqueued straight into bk2's `pending` list —
+       and, since `pending` is client-owned and persisted per active book,
+       bk2 would keep it forever while bk1 never got it. This pins both
+       call sites: (1) enqueuePending must not fire once the active book has
+       moved on, and (2) markRevisionPlayable must not flip an entry that was
+       enqueued before the switch either, since the slice's `pending` list no
+       longer represents bk1 once the user has navigated away. */
+    const resolvers: Array<() => void> = [];
+    streamSpliceSpy.mockImplementation(
+      (args: SpliceArgs) =>
+        new Promise<void>((resolve) => {
+          resolvers.push(() => {
+            args.onTick({
+              type: 'splice_complete',
+              chapterId: args.chapterId,
+              characterId: args.characterId,
+              mode: args.mode,
+              durationSec: 111,
+              segmentCount: 1,
+              hasPreviousAudio: true,
+            } as SpliceTick);
+            resolve();
+          });
+        }),
+    );
+
+    const store = makeStore('bk1');
+    store.dispatch(
+      spliceActions.startBatch({
+        id: 'b6',
+        bookId: 'bk1',
+        characterId: 'castor',
+        characterName: 'Castor',
+        mode: 'remix',
+        gainDb: 1,
+        chapterIds: [1, 2],
+      }),
+    );
+    await flush();
+
+    /* Chapter 1's enqueue happened while bk1 was still active — it's the
+       user's own book, so it should be present. */
+    expect(store.getState().revisions.pending).toEqual([
+      expect.objectContaining({ id: 'splice-bk1-1-castor', playable: false }),
+    ]);
+
+    /* Navigate to bk2 before chapter 1's splice resolves. */
+    store.dispatch({ type: 'chapters/setCurrentBookId', payload: 'bk2' });
+
+    /* Resolve chapter 1 (fires splice_complete while bk2 is active) and let
+       the loop advance to chapter 2 (its enqueuePending also fires while
+       bk2 is active). */
+    expect(resolvers).toHaveLength(1);
+    resolvers[0]();
+    await flush();
+    expect(resolvers).toHaveLength(2);
+    resolvers[1]();
+    await flush();
+
+    const pending = store.getState().revisions.pending;
+    /* bk2's pending list must stay exactly as it was before the batch ever
+       touched it — no bk1 revision leaked in, for either chapter. */
+    expect(pending.some((r) => r.id === 'splice-bk1-2-castor')).toBe(false);
+    expect(pending).toEqual([
+      expect.objectContaining({ id: 'splice-bk1-1-castor', playable: false }),
+    ]);
+  });
 });
