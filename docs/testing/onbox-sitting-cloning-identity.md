@@ -232,9 +232,10 @@ last, alone, since it deliberately crashes the sidecar twice.
 
 26. Run §8.7 — re-render *Заказ Коалфолла* chapter 2 (the `mayrin`/`coalfall`
     orphaned chapter) and confirm the fresh `segments.json` gains
-    `characterSnapshots` entries for `mayrin`/`coalfall` naming their own
-    live voices, not the narrator. **Listen** to confirm audibly — this is
-    the criterion, not just the JSON.
+    `characterSnapshots` entries keyed by the canonical cast ids
+    `mairin`/`coalfall-dragon` (what `mayrin`/`coalfall` retire to) naming
+    their own live voices, not the narrator. **Listen** to confirm
+    audibly — this is the criterion, not just the JSON.
     - Result:
 
 ### A32 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), PR #2316)
