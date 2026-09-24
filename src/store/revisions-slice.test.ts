@@ -77,7 +77,7 @@ describe('distinctDriftChapterCount — headline count dedupes to chapters', () 
 });
 
 describe('revisionsSlice — applyPoll', () => {
-  it('hydrates pending + drift and flips loaded', () => {
+  it('hydrates drift and flips loaded, but never touches pending', () => {
     const next = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
@@ -85,12 +85,15 @@ describe('revisionsSlice — applyPoll', () => {
         drift: [drift('d1')],
       }),
     );
-    expect(next.pending.map((r) => r.id)).toEqual(['r1', 'r2']);
+    /* `pending` is client-owned — even a payload that carries a `pending`
+       list (the server still echoes one; see book-state.ts) must not land
+       in the slice from a poll. */
+    expect(next.pending).toEqual([]);
     expect(next.drift.map((d) => d.id)).toEqual(['d1']);
     expect(next.loaded).toBe(true);
   });
 
-  it('falls back to empty arrays when payload omits pending or drift', () => {
+  it('falls back to an empty drift array when payload omits drift', () => {
     const next = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({} as RevisionsResponse),
@@ -100,22 +103,25 @@ describe('revisionsSlice — applyPoll', () => {
     expect(next.loaded).toBe(true);
   });
 
-  it('replaces prior content on each poll', () => {
+  it('replaces prior drift on each poll, and never overwrites an existing pending list (#3376 round 2)', () => {
+    /* Regression for the active-book-poll variant of #3376: a poll landing
+       mid-debounce used to echo disk's (older) pending list over a pending
+       entry the user had just enqueued locally, silently dropping it once
+       the 500ms persistence debounce fired and wrote the reverted list back
+       to disk. See src/components/layout.test.tsx for the full end-to-end
+       repro through the real store + persistence middleware. */
     let s = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
-        pending: [rev('r1')],
-        drift: [drift('d1')],
-      }),
+      revisionsActions.hydrateFromBookState({ pending: [rev('r1')], drift: [drift('d1')] }),
     );
     s = revisionsSlice.reducer(
       s,
       revisionsActions.applyPoll({
-        pending: [rev('r2')],
+        pending: [rev('r1')],
         drift: [],
       }),
     );
-    expect(s.pending.map((r) => r.id)).toEqual(['r2']);
+    expect(s.pending.map((r) => r.id)).toEqual(['r1']);
     expect(s.drift).toEqual([]);
   });
 });
@@ -124,7 +130,7 @@ describe('revisionsSlice — applyBackgroundPoll (#3376)', () => {
   it('leaves an existing pending list unchanged', () => {
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1'), rev('r2')],
         drift: [drift('a1')],
       }),
@@ -139,7 +145,7 @@ describe('revisionsSlice — applyBackgroundPoll (#3376)', () => {
   it('replaces only the polled bookId drift and keeps other books drift', () => {
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1')],
         drift: [drift('a1', { bookId: 'book-A' }), drift('b1', { bookId: 'book-B' })],
       }),
@@ -184,7 +190,7 @@ describe('revisionsSlice — acceptRevision / rejectRevision (per-item)', () => 
   it('acceptRevision removes only the named revision from pending', () => {
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1'), rev('r2'), rev('r3')],
         drift: [],
       }),
@@ -199,7 +205,7 @@ describe('revisionsSlice — acceptRevision / rejectRevision (per-item)', () => 
   it('acceptRevision records the per-segment selection map keyed by revision id', () => {
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1')],
         drift: [],
       }),
@@ -215,7 +221,7 @@ describe('revisionsSlice — acceptRevision / rejectRevision (per-item)', () => 
   it('rejectRevision removes only the named revision from pending and records no selection', () => {
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1'), rev('r2')],
         drift: [],
       }),
@@ -233,7 +239,7 @@ describe('revisionsSlice — acceptRevision / rejectRevision (per-item)', () => 
        braces — happens in practice if the modal stays open across a poll. */
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1')],
         drift: [],
       }),
@@ -251,7 +257,7 @@ describe('revisionsSlice — acceptAllPending / rejectAllPending', () => {
   it('acceptAllPending clears the pending queue', () => {
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1'), rev('r2')],
         drift: [drift('d1')],
       }),
@@ -265,7 +271,7 @@ describe('revisionsSlice — acceptAllPending / rejectAllPending', () => {
   it('rejectAllPending clears the pending queue', () => {
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1')],
         drift: [drift('d1')],
       }),
@@ -394,7 +400,7 @@ describe('revisionsSlice — plan 55 timeline', () => {
   it('acceptRevision appends an `accepted` timeline entry keyed by chapterId', () => {
     let s = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1', { chapterId: 3, characterId: 'halloran' })],
         drift: [],
       }),
@@ -417,7 +423,7 @@ describe('revisionsSlice — plan 55 timeline', () => {
   it('rejectRevision appends a `rejected` timeline entry', () => {
     let s = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r2', { chapterId: 5, characterId: 'wren' })],
         drift: [],
       }),
@@ -436,7 +442,7 @@ describe('revisionsSlice — plan 55 timeline', () => {
   it('subsequent accept on the same chapter flips the prior reversible entry off', () => {
     let s = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [
           rev('r1', { chapterId: 3, characterId: 'a' }),
           rev('r2', { chapterId: 3, characterId: 'b' }),
@@ -468,7 +474,7 @@ describe('revisionsSlice — plan 55 timeline', () => {
   it('rolledBack flips the targeted entry to `rolled-back-from` and appends a new `rolled-back` entry', () => {
     let s = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1', { chapterId: 2 })],
         drift: [],
       }),
@@ -916,7 +922,7 @@ describe('revisionsSlice — enqueuePending', () => {
   it('appends a new pending revision', () => {
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({ pending: [rev('r1')], drift: [] }),
+      revisionsActions.hydrateFromBookState({ pending: [rev('r1')], drift: [] }),
     );
     const next = revisionsSlice.reducer(
       start,
@@ -949,7 +955,7 @@ describe('revisionsSlice — markRevisionPlayable', () => {
   it('flips playable=true for matching chapterId', () => {
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [
           rev('r1', { chapterId: 1, playable: false }),
           rev('r2', { chapterId: 2, playable: false }),
@@ -971,7 +977,7 @@ describe('revisionsSlice — markRevisionPlayable', () => {
        per chapter; both should flip. */
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [
           rev('r1', { chapterId: 3, characterId: 'a', playable: false }),
           rev('r2', { chapterId: 3, characterId: 'b', playable: false }),
@@ -989,7 +995,7 @@ describe('revisionsSlice — markRevisionPlayable', () => {
   it('is a no-op when no revision targets the chapter', () => {
     const start = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.hydrateFromBookState({
         pending: [rev('r1', { chapterId: 1, playable: false })],
         drift: [],
       }),

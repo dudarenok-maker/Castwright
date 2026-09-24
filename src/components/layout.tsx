@@ -1001,8 +1001,9 @@ export function Layout() {
      (i.e. books that have actual chapter audio to drift). Excludes the
      active book (covered by the 30 s ticker above). Cadence is 120 s to
      conserve free-tier server quotas; the slice's applyBackgroundPoll
-     action merges drift per bookId and never writes pending, so a foreign
-     book's poll can't clobber the active book's (#3376). */
+     action merges drift per bookId and never writes pending — like the
+     active-book applyPoll above, neither poll path touches `pending`
+     (client-owned, #3376). */
   const bgBookIds = useMemo(() => {
     return library.books
       .filter(

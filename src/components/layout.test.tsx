@@ -1819,3 +1819,62 @@ describe('Layout — background revisions poll keeps the active book pending (#3
   });
 });
 
+/* #3376 round 2 — review pass 1 on PR #3395 found the ACTIVE book's own 30 s
+   poll still overwrote client-owned `pending`: applyPoll echoed whatever
+   `pollRevisions` returned, and a poll landing while the persistence
+   middleware's 500 ms debounce hadn't yet flushed the user's own
+   enqueuePending/markRevisionPlayable/accept/reject edits would revert them
+   in the store — then the NEXT debounced write would persist that reverted
+   list to disk, permanently losing the edit. `pending` is now seeded exactly
+   once, from the one-shot disk hydrate above, and the active poll (like the
+   background one) never touches it again. */
+describe('Layout — active book poll never overwrites client-owned pending (#3376 round 2)', () => {
+  it('a stale/empty pollRevisions response does not clobber pending set locally after hydrate', async () => {
+    /* null = nothing persisted on disk for this fetch; the seeded pending
+       below stands in for a disk-hydrated value the user has since mutated
+       locally (e.g. markRevisionPlayable after a regen completed) that
+       hasn't reached the server's revisions.json yet. */
+    getBookStateMock.mockResolvedValue(null);
+    /* The active book's 30 s ticker answers with a response reflecting an
+       OLDER disk snapshot than what the client already holds — exactly the
+       shape a poll lands with when it started before the client's own
+       debounced persist reached disk. */
+    pollRevisionsMock.mockResolvedValue({
+      pending: [{ id: 'r-old', chapterId: 1, characterId: 'halloran', segments: [] }],
+      drift: [],
+    });
+
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' }));
+    store.dispatch(
+      revisionsActions.hydrateFromBookState({
+        bookId: 'b1',
+        pending: [{ id: 'r-client', chapterId: 2, characterId: 'eliza', segments: [] }],
+        drift: [],
+      }),
+    );
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1']}>
+          <Routes>
+            <Route path="/books/:bookId" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* The active 30 s ticker fetches immediately on mount. */
+    await waitFor(() => {
+      expect(pollRevisionsMock).toHaveBeenCalledWith({ bookId: 'b1' });
+    });
+
+    /* Under the pre-fix `applyPoll` (which wrote `s.pending = payload.pending`),
+       this would now read ['r-old'] — the client's own pending edit lost. */
+    await waitFor(() => {
+      const s = store.getState();
+      expect(s.revisions.pending.map((r) => r.id)).toEqual(['r-client']);
+    });
+  });
+});
+

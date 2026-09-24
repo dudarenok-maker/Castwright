@@ -1927,14 +1927,15 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
      accumulates entries from each book separately, which is what
      happens when `applyPoll` is called once per book.
 
-     NOTE: `pending` is returned for every book — the active book's 30 s
-     poll applies it via `applyPoll`, which replaces `pending` wholesale.
-     Since #3376 the 120 s background bulk fan-out dispatches
-     `applyBackgroundPoll` and never touches `pending`, so a non-active
-     book's value here is inert; the every-book shape is kept so the mock
-     mirrors the server's per-book endpoint. The fe-15 profile-regen-preview
-     spec clears `pending` itself before opening its preview stub to avoid
-     the phantom-revision collision. */
+     NOTE: `pending` is returned for every book, but as of #3376 round 2
+     neither poll path writes it — `pending` is client-owned once a book is
+     open (seeded only by the one-shot disk hydrate on book-open), and both
+     the active book's 30 s `applyPoll` and the 120 s background fan-out's
+     `applyBackgroundPoll` merge drift only. `pending` here is inert for
+     both; the every-book shape is kept so the mock mirrors the server's
+     per-book endpoint. The fe-15 profile-regen-preview spec clears
+     `pending` itself before opening its preview stub to avoid the
+     phantom-revision collision. */
   /* Quality Gate marketing/wiki screenshots (#1286) — under DEMO_CAPTURE,
      stop the dev-only PENDING_REVISIONS fixture (an Eliza/book-`sb` revision
      with no bookId field, so it always matched every book before) from
@@ -1943,10 +1944,11 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
      bulk poll (layout.tsx) reaches every non-active marketing book, and
      `applyPoll` (which the bulk fan-out used before #3376 moved it to
      `applyBackgroundPoll`) replaced `pending` wholesale regardless of
-     bookId, so a partial scope wouldn't have fully closed the bleed
-     (adversarial review round 2 caught this when an earlier fix scoped it
-     to hollow-tide-* only); the every-book filter is kept so both poll
-     paths see the same scoped mock shape. */
+     bookId at the time, so a partial scope wouldn't have fully closed the
+     bleed (adversarial review round 2 caught this when an earlier fix
+     scoped it to hollow-tide-* only). Since #3376 round 2 neither poll path
+     writes `pending` at all, but the every-book filter is kept so both poll
+     paths see the same scoped mock shape regardless. */
   if (DEMO_CAPTURE) {
     return {
       pending: [],
