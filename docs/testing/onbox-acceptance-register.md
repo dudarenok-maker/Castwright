@@ -6564,19 +6564,28 @@ the TTS sidecar's `python.exe` if it's up):
 >   `3749c515..ec76aa01`), the census itself measuring **2.8 s** over 391–392 roots — in
 >   band with the ~0.8–3.5 s on a 415-root box this row cites; `git push` still
 >   non-blocking on every census outcome. `logs/reaper-census.jsonl` gained exactly one
->   entry per census/push (31 → 34 across this session's three censuses + push #1 + the
->   `--kill` pass), each with the per-root `verdict`/`reasons` plus what was actually DONE
+>   entry per census/push (29 → 35: the three `doctor` censuses plus each real push),
+>   each with the per-root `verdict`/`reasons` plus what was actually DONE
 >   (`killed`/`refusalReason`/`killFailed`). Command lines are recorded for every root
 >   `Win32_Process` exposes one for (169 of 392 roots are system pseudo-processes whose
 >   `CommandLine` is null in WMI — those cannot be present for ANY census, not this tool's
 >   omission); every battery-shaped root, mine and the organic one, carried its full
 >   command line. Push #1's census caught a fresh mid-burn orphan and printed its action
 >   on stderr — `reap-stale-batteries: KILL FAILED pid=38780 reasons=orphaned-unreachable
->   :: …npx-cli.js" vitest run` — the battery exiting naturally in the enumeration-to-kill
->   window; the tool distinguished attempted-but-failed from silent success exactly as
->   designed (`killFailed=True` in that push's log entry). Push #2 (this note's
->   finalization) was driven with the orphan guaranteed mid-suite at census time and
->   printed the clean `KILLED stale battery pid=…` form — see below.
+>   :: …npx-cli.js" vitest run` — the tree sweep landing while the exit code reported
+>   failure; the tool distinguished attempted-but-unverified from silent success exactly as
+>   designed (`killFailed=True` in that push's log entry). Push #2 reproduced the shape —
+>   `KILL FAILED pid=23792 reasons=orphaned-unreachable :: …vitest run`, `EXIT=0` in
+>   6.4 s — and in BOTH cases the kill had actually landed: the orphan's 16-process vitest
+>   tree was at zero processes seconds after each push's census, while the namer-only
+>   process stayed untouched throughout. Finding worth the record: `taskkill /T` can return
+>   a non-zero exit even after its tree sweep has killed every member (self-exiting
+>   processes mid-sweep), and the tool then prints the honest `KILL FAILED` rather than an
+>   unverified `KILLED` — exactly the conservative rule this row states ("nothing was ever
+>   printed as killed on the strength of an unverified signal"). The clean `[KILLED]` print
+>   form is on record from the `doctor -- --kill` pass:
+>   `reap pid=37736 rate=0.02 reasons=stalled-rate [KILLED]` and
+>   `reap pid=33640 reasons=orphaned-unreachable [KILLED]`, both trees verified gone.
 > - **Rate calibration cross-check:** the watch subtree accumulated ~139.8 CPU-s over its
 >   ~93.4 s first run (~90 s/min, inside the 30–100 s/min healthy band) and ~0.1 CPU-s
 >   over the 10.2-min idle window (0.02 s/min ≤ the 2.0 dead-rate) — real
