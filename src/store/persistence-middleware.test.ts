@@ -662,6 +662,86 @@ describe('persistenceMiddleware — payload shape', () => {
   });
 });
 
+describe('persistenceMiddleware — per-book debounce isolation (#3395 pass 4, S4)', () => {
+  /* Repro 1 (revisions): accept on book A → open book B within the debounce
+     window → a B revisions write fires. Before the fix, the debounce timer
+     and pending-patch map were keyed by SLICE alone, so B's write canceled
+     and overwrote A's still-queued write for the same slice — only B's PUT
+     went out and A's accept was silently lost. */
+  it('does not drop book A\'s queued revisions write when book B writes the same slice within the debounce window', async () => {
+    const state: Record<string, unknown> = baseState({
+      revisions: { pending: [{ id: 'a1' }], drift: [], bookId: 'book-1', hydratedFor: 'book-1' },
+    });
+    const next = vi.fn((x) => x);
+    const mw = persistenceMiddleware(makeStore(state))(next);
+
+    // Book A: accept schedules A's debounced revisions write.
+    mw({ type: 'revisions/acceptAllPending' });
+
+    // Within the debounce window, the user opens book B and B's revisions
+    // slice writes too (mutating the shared state object in place, as the
+    // real store would after a bookId/revisions switch).
+    await advance(200);
+    state.ui = { stage: { bookId: 'book-2' } };
+    state.revisions = { pending: [{ id: 'b1' }], drift: [], bookId: 'book-2', hydratedFor: 'book-2' };
+    mw({ type: 'revisions/dismissDrift' });
+
+    await advance(500);
+
+    // Both books' writes must land — A's PUT with A's pending, B's PUT with
+    // B's pending. Before the fix, only the book-2 PUT fired.
+    expect(putBookState).toHaveBeenCalledWith(
+      'book-1',
+      expect.objectContaining({ slice: 'revisions', patch: expect.objectContaining({ pending: [{ id: 'a1' }] }) }),
+    );
+    expect(putBookState).toHaveBeenCalledWith(
+      'book-2',
+      expect.objectContaining({ slice: 'revisions', patch: expect.objectContaining({ pending: [{ id: 'b1' }] }) }),
+    );
+    // No cross-contamination: book-2's PUT must never carry book-1's pending.
+    expect(putBookState).not.toHaveBeenCalledWith(
+      'book-2',
+      expect.objectContaining({ patch: expect.objectContaining({ pending: [{ id: 'a1' }] }) }),
+    );
+  });
+
+  /* Repro 2 (cast): rename a character on book A → open book B within the
+     debounce window (every full hydrate re-sends cast.json via
+     cast/setCharacters) → before the fix, only B's cast PUT fired and A's
+     rename was never saved. */
+  it('does not drop book A\'s queued cast write when opening book B re-sends cast/setCharacters within the debounce window', async () => {
+    const state: Record<string, unknown> = baseState({ cast: { characters: [{ id: 'bob', name: 'Bob (renamed)' }] } });
+    const next = vi.fn((x) => x);
+    const mw = persistenceMiddleware(makeStore(state))(next);
+
+    // Book A: rename schedules A's debounced cast write.
+    mw({ type: 'cast/renameCharacter' });
+
+    // Within the debounce window, the user opens book B; the full hydrate
+    // re-sends cast.json for B via cast/setCharacters.
+    await advance(200);
+    state.ui = { stage: { bookId: 'book-2' } };
+    state.cast = { characters: [{ id: 'alice' }] };
+    mw({ type: 'cast/setCharacters' });
+
+    await advance(500);
+
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'cast',
+      patch: { characters: [{ id: 'bob', name: 'Bob (renamed)' }] },
+    });
+    expect(putBookState).toHaveBeenCalledWith('book-2', {
+      slice: 'cast',
+      patch: { characters: [{ id: 'alice' }] },
+    });
+    // No cross-contamination: book-2's PUT must never carry book-1's rename.
+    expect(putBookState).not.toHaveBeenCalledWith(
+      'book-2',
+      expect.objectContaining({ patch: expect.objectContaining({ characters: [{ id: 'bob', name: 'Bob (renamed)' }] }) }),
+    );
+  });
+});
+
 describe('persistenceMiddleware — error handling', () => {
   it('logs but does not rethrow when api.putBookState rejects', async () => {
     putBookState.mockRejectedValueOnce(new Error('boom'));

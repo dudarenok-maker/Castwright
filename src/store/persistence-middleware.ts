@@ -319,9 +319,22 @@ function revisionsPatch(s: PersistableRootState, bookId: string) {
   };
 }
 
+/* S4 (#3395 pass 4) — the debounce/flush maps below are keyed by this
+   composite `${bookId}:${slice}` key, not bare `slice`. Keying by slice alone
+   meant a write scheduled for book A shared its timer/pending-patch/generation
+   slots with a same-slice write for book B: opening B within A's debounce
+   window canceled A's queued timer and clobbered its pending patch, so only
+   B's PUT ever went out and A's edit was silently lost. Composite keys give
+   each book's queued write its own independent slot, so it flushes to its own
+   book regardless of what other books do in the meantime. */
+type FlushKey = string;
+function flushKey(bookId: string, slice: StateSlice): FlushKey {
+  return `${bookId}:${slice}`;
+}
+
 export const persistenceMiddleware: Middleware = (store) => {
-  const timers = new Map<StateSlice, ReturnType<typeof setTimeout>>();
-  const pending = new Map<StateSlice, unknown>();
+  const timers = new Map<FlushKey, ReturnType<typeof setTimeout>>();
+  const pending = new Map<FlushKey, unknown>();
   /* Slices whose currently-pending write was (at least once this debounce
      window) triggered by a toast-worthy action. Last-wins on the patch means
      the flush persists the latest slice state regardless, so if it fails that
@@ -329,23 +342,24 @@ export const persistenceMiddleware: Middleware = (store) => {
      an unrelated edit also rode along in the same window. Carries the handler
      so the toast text can be per-action (bulk-reassign copy vs the server's own
      refused-rename sentence) and any rollback can fire. */
-  const toastPending = new Map<StateSlice, PersistFailureHandler>();
-  /* #2230 — monotonically-increasing counter per slice, bumped every time a
+  const toastPending = new Map<FlushKey, PersistFailureHandler>();
+  /* #2230 — monotonically-increasing counter per key, bumped every time a
      write is (re)scheduled. A flush captures the counter at fire time; its
      success/failure effects (snapshot prune / rollback / toast) only run if it
-     is still the LATEST flush for the slice. This prevents an OLDER in-flight
+     is still the LATEST flush for the key. This prevents an OLDER in-flight
      PUT from prematurely pruning or rolling back the shared rollback snapshot
      that a NEWER in-flight PUT (started while the first was still pending) still
      needs — closing the overlapping-in-flight-PUT data-loss race. */
-  const generation = new Map<StateSlice, number>();
+  const generation = new Map<FlushKey, number>();
 
   const flush = (bookId: string, slice: StateSlice) => {
-    const patch = pending.get(slice);
-    pending.delete(slice);
-    timers.delete(slice);
-    const handler = toastPending.get(slice);
-    toastPending.delete(slice);
-    const gen = generation.get(slice) ?? 0;
+    const key = flushKey(bookId, slice);
+    const patch = pending.get(key);
+    pending.delete(key);
+    timers.delete(key);
+    const handler = toastPending.get(key);
+    toastPending.delete(key);
+    const gen = generation.get(key) ?? 0;
     if (patch === undefined) return;
     api
       .putBookState(bookId, { slice, patch })
@@ -354,7 +368,7 @@ export const persistenceMiddleware: Middleware = (store) => {
            newer write has since been scheduled (gen advanced), a fresh snapshot
            belongs to it and must not be cleared by this older, superseded
            flush. */
-        if (handler?.onSuccess && gen === (generation.get(slice) ?? 0)) {
+        if (handler?.onSuccess && gen === (generation.get(key) ?? 0)) {
           store.dispatch(handler.onSuccess(bookId));
         }
       })
@@ -364,7 +378,7 @@ export const persistenceMiddleware: Middleware = (store) => {
            failure is superseded by a newer in-flight write (which owns the
            snapshot and the user's current draft), so don't toast/roll back for
            it — that would wrongly revert the newer edit. */
-        if (handler && gen === (generation.get(slice) ?? 0)) {
+        if (handler && gen === (generation.get(key) ?? 0)) {
           store.dispatch(
             notificationsActions.pushToast({
               kind: 'error',
@@ -417,14 +431,15 @@ export const persistenceMiddleware: Middleware = (store) => {
     )
       return result;
 
-    pending.set(rule.slice, rule.build(after, bookId));
-    /* #2230 — bump the per-slice generation so this becomes the LATEST write;
-       in-flight older flushes keep their captured (lower) generation and are
-       therefore gated out of prune/rollback in flush. */
-    generation.set(rule.slice, (generation.get(rule.slice) ?? 0) + 1);
+    const key = flushKey(bookId, rule.slice);
+    pending.set(key, rule.build(after, bookId));
+    /* #2230 — bump the per-(book, slice) generation so this becomes the LATEST
+       write; in-flight older flushes keep their captured (lower) generation
+       and are therefore gated out of prune/rollback in flush. */
+    generation.set(key, (generation.get(key) ?? 0) + 1);
     const failHandler = TOAST_ON_PERSIST_FAILURE[type];
     if (failHandler) {
-      toastPending.set(rule.slice, failHandler);
+      toastPending.set(key, failHandler);
     } else if (rule.slice === 'state' && type !== 'bookMeta/commitDraft') {
       /* #2230 — the `state` slice is shared by ui/confirmCast and
          bookMeta/commitDraft (PERSIST_RULES above). When a non-bookMeta `state`
@@ -434,12 +449,12 @@ export const persistenceMiddleware: Middleware = (store) => {
          nor roll back book-meta for an op that isn't book-meta. (Manuscript's
          ride-along semantics are intentionally left untouched — only the shared
          `state` slice has the cross-action mismatch.) */
-      toastPending.delete(rule.slice);
+      toastPending.delete(key);
     }
-    const prev = timers.get(rule.slice);
+    const prev = timers.get(key);
     if (prev) clearTimeout(prev);
     timers.set(
-      rule.slice,
+      key,
       setTimeout(() => flush(bookId, rule.slice), debounceMs(after)),
     );
     return result;
