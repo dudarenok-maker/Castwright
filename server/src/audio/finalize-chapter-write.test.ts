@@ -480,6 +480,30 @@ describe('finalizeChapterAudioWrite characterSnapshots canonical-id keying (#336
 
     const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
     expect(segFile.characterSnapshots['the_torment']).toBeDefined();
+    expect(segFile.characterSnapshots['the_torment'].resolvedVoiceName).toBe('kokoro-the-torment');
+    expect(segFile.characterSnapshots['the-torment']).toBeUndefined();
+  });
+
+  it('stamps the fallback engine under the canonical cast id when the segment id only matches via the normalised-id tier', async () => {
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [
+        {
+          groupIndex: 0,
+          characterId: 'the-torment',
+          sentenceIds: [1],
+          startSec: 0,
+          endSec: 1.0,
+          voiceName: 'kokoro-the-torment',
+          renderedFallbackEngine: 'kokoro',
+        },
+      ],
+      cast: [{ id: 'the_torment', name: 'The Torment', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots['the_torment']).toBeDefined();
+    expect(segFile.characterSnapshots['the_torment'].renderedFallbackEngine).toBe('kokoro');
     expect(segFile.characterSnapshots['the-torment']).toBeUndefined();
   });
 
