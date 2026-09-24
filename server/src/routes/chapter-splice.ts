@@ -498,6 +498,10 @@ chapterSpliceRouter.post(
         durationSec: spliced.durationSec,
         segments: spliced.segments,
         cast: cast.characters,
+        /* #3362 finding 3 — the same `castIdHistory` loaded above (this
+           render's own resolver input), not a fresh re-read — see
+           FinalizeChapterAudioInput.castIdHistory's doc comment. */
+        castIdHistory,
         defaultEngine,
         modelKey: finalizeModelKey,
         audioFormat: bookStateAudioFormat(state as BookStateJson),

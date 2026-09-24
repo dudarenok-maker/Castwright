@@ -305,6 +305,7 @@ async function runPipeline(target: number): Promise<Artifacts> {
       bookId,
       bookDir,
       chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      castIdHistory: { schema: 1, supersededBy: {} },
       pcm: synth.pcm,
       sampleRate: synth.sampleRate,
       durationSec: synth.durationSec,

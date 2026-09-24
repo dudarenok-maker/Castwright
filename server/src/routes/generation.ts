@@ -1867,6 +1867,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         durationSec: result.durationSec,
         segments: result.segments,
         cast: cast.characters,
+        /* #3362 finding 3 — the same `castIdHistory` loaded above and threaded
+           into `synthesiseChapter` (this render's own resolver input), not a
+           fresh re-read — see FinalizeChapterAudioInput.castIdHistory's doc
+           comment. */
+        castIdHistory,
         defaultEngine: engine,
         modelKey,
         audioFormat,

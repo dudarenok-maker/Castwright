@@ -103,6 +103,9 @@ const baseInput = () => {
       { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
     ],
     cast: [{ id: 'amy', name: 'Amy', gender: 'female' as const, attributes: [] }],
+    /* #3362 finding 3 — the caller's own resolved history, not a disk read.
+       Tests that need a non-empty history pass their own override. */
+    castIdHistory: { schema: 1 as const, supersededBy: {} },
     defaultEngine: 'kokoro' as const,
     modelKey: 'kokoro-v1' as const,
     audioFormat: 'mp3' as const,
@@ -481,16 +484,11 @@ describe('finalizeChapterAudioWrite characterSnapshots canonical-id keying (#336
   });
 
   it('produces NO snapshot entry under either key when the only path from the segment id to the cast row is a rejected pair', async () => {
-    writeFileSync(
-      join(bookDir, '.audiobook', 'cast-id-history.json'),
-      // isWellFormedHistory (#2166) demands schema===1 AND a present
-      // supersededBy object; a malformed file degrades the WHOLE history to
-      // empty, silently losing the rejected pair.
-      JSON.stringify({ schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'the-torment', to: 'the_torment' }] }),
-    );
-
     await finalizeChapterAudioWrite({
       ...baseInput(),
+      // #3362 finding 3 — passed directly as the render's own resolved
+      // history, not written to disk for finalize to re-read.
+      castIdHistory: { schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'the-torment', to: 'the_torment' }] },
       segments: [
         { groupIndex: 0, characterId: 'the-torment', sentenceIds: [1], startSec: 0, endSec: 1.0 },
       ],
@@ -499,6 +497,39 @@ describe('finalizeChapterAudioWrite characterSnapshots canonical-id keying (#336
 
     const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
     expect(segFile.characterSnapshots['the_torment']).toBeUndefined();
+    expect(segFile.characterSnapshots['the-torment']).toBeUndefined();
+  });
+});
+
+/* #3362 finding 3 — finalize must resolve against the `castIdHistory` the
+   CALLER passes (the state the render actually resolved segments' ids
+   against), never a fresh `loadCastIdHistory(bookDir)` read of whatever is
+   on disk by the time the write tail runs. A mid-render edit (e.g. the user
+   rejecting a pair from the Cast banner while generation is still in
+   flight) can leave disk newer than the render's own resolver input; a
+   re-read would resolve against that newer, wrong state. */
+describe('finalizeChapterAudioWrite resolves against the caller-supplied history, not a fresh disk read (#3362 finding 3)', () => {
+  it('keeps the canonical-id snapshot from the history it was given, even when disk now says the pair is rejected', async () => {
+    // Disk holds a NEWER history (H1) than what this render resolved
+    // against: the pair has since been rejected.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'the-torment', to: 'the_torment' }] }),
+    );
+
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      // This render's OWN resolver input (H0): the pair is still linked,
+      // matching via the normalised-id tier.
+      castIdHistory: { schema: 1, supersededBy: {} },
+      segments: [
+        { groupIndex: 0, characterId: 'the-torment', sentenceIds: [1], startSec: 0, endSec: 1.0, voiceName: 'kokoro-the-torment' },
+      ],
+      cast: [{ id: 'the_torment', name: 'The Torment', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots['the_torment']).toBeDefined();
     expect(segFile.characterSnapshots['the-torment']).toBeUndefined();
   });
 });

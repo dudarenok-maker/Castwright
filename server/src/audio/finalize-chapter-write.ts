@@ -34,7 +34,7 @@ import type { ChapterSegment, CastCharacter } from '../tts/synthesise-chapter.js
 import type { TtsEngine, TtsModelKey } from '../tts/index.js';
 import { buildCharacterSnapshots } from './character-snapshots.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
-import { loadCastIdHistory } from '../store/cast-id-history.js';
+import type { CastIdHistory } from '../store/cast-id-history.js';
 import {
   engineBreakdownFromSnapshots,
   effectiveAudioModelKey,
@@ -86,6 +86,17 @@ export interface FinalizeChapterAudioInput {
   durationSec: number;
   segments: ChapterSegment[];
   cast: CastCharacter[];
+  /** #3362 finding 3 — the `cast-id-history.json` state THIS render actually
+      resolved its cast ids against, threaded through by the caller rather
+      than re-read here. All three callers already load this once at the top
+      of their handler (to build the render's own resolver / pass to
+      `synthesiseChapter`); re-reading it here raced a mid-render edit — a
+      pair rejected (or a retirement recorded) after synthesis started but
+      before this write landed resolved against a DIFFERENT, newer history
+      than the one the render's segments actually reflect, silently dropping
+      or misfolding a character's snapshot. Passing the same object the
+      caller resolved against closes that window. */
+  castIdHistory: CastIdHistory;
   /** Run default engine; per-character engine still wins in the snapshot. */
   defaultEngine: TtsEngine;
   modelKey: TtsModelKey;
@@ -292,9 +303,14 @@ export async function finalizeChapterAudioWrite(
      the normalised-id tier), which is the key buildCharacterSnapshots and the
      C1 carry-forward below match on. A genuinely unresolvable or rejected id
      falls back to the raw id — no live cast entry carries that key, so it
-     produces no snapshot entry exactly as before the fix. */
-  const castIdHistory = await loadCastIdHistory(bookDir);
-  const castResolver = buildCastResolver(cast, castIdHistory);
+     produces no snapshot entry exactly as before the fix.
+
+     #3362 finding 3 — `castIdHistory` comes from the caller (see
+     `FinalizeChapterAudioInput.castIdHistory`'s doc comment), NOT a fresh
+     `loadCastIdHistory(bookDir)` read here: re-reading raced a mid-render
+     edit to `cast-id-history.json` against the history the render actually
+     resolved segments' ids against. */
+  const castResolver = buildCastResolver(cast, input.castIdHistory);
   const resolveSpeakingId = (rawId: string): string =>
     castResolver.resolve(rawId)?.character.id ?? rawId;
   const speakingIds = new Set(segments.map((s) => resolveSpeakingId(s.characterId)));
