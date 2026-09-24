@@ -6430,6 +6430,60 @@ recipe, and a second checkout to run the prune from.
 *Cost:* 10–15 minutes. *Criteria:* this issue's acceptance list (#3051) and the
 design doc's Part 4 (`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`).
 
+> **2026-09-24 — E103 driven in full on-box; PASS — row DISCHARGED.** ([#3321](https://github.com/dudarenok-maker/Castwright/issues/3321),
+> agent `cline-qwen-cloud`.) Drove the whole destructive path on this box — the box whose
+> 2026-09-06 sweep found 12 of 14 registered worktrees' junctions pointed at the primary
+> checkout's real trees. Fixture: fresh throwaway worktree
+> `C:\Claude\Projects\wt-e103-throwaway` (branch `chore/ops-e103-throwaway` @ `72c044c2`,
+> 0 ahead of `main`, clean, pushed, no PR), junctioned per CLAUDE.md's worktree-setup
+> recipe with all four links (`node_modules`, `server/node_modules`,
+> `server/tts-sidecar/.venv`, `server/tts-sidecar/voices`) aimed at the PRIMARY
+> checkout's **real** trees (450 / 204 / 6 / 3 child entries respectively), each verified
+> reparse-bit-set before the sweep. Prune ran from a **second checkout** (the primary);
+> `node scripts/wt-gc.mjs` is exactly `npm run wt:gc` per `package.json:32`.
+> - **Report columns, row by row:** primary → `no (primary checkout — never pruned; the
+>   worktree this process is running from — never pruned)`; the dirty tree
+>   (`wt-3084-w2b-output-cap`, `dirty=true`) → `no (uncommitted changes; …)`; every
+>   unmerged row → `no (not merged into main…)`; unpushed rows → `N unpushed commit(s)`;
+>   no-upstream rows → `no upstream configured — cannot verify it is pushed`. Mid-round
+>   box: 10 registered worktrees, exactly **1** prunable row — the throwaway. No
+>   in-flight lane read `yes`.
+> - **`none` vs `unknown` are distinct cells, confirmed:** with `gh` working the throwaway
+>   PR cell is `none`; the same run with the `GitHub CLI` PATH entry removed rendered
+>   `unknown (gh unavailable)` on all 10 gh-consulted rows, **zero** `none` cells, and the
+>   throwaway flipped to `no (PR state could not be determined — cannot verify no PR is
+>   open)`.
+> - **Fail-closed scan, both engines, from repo root, leading `.\` included:** `pwsh` and
+>   `powershell.exe` (5.1) each printed `LOADED OK` first, then enumerated **all four**
+>   junctions — including the deep `server\tts-sidecar\.venv` shape — exit 0. Neither
+>   engine answered silently-empty; both modules loaded (no `ModuleNotFound` signature).
+> - **Locked refusal is pre-sweep, proven per this row's own criterion:** after
+>   `git worktree lock … --reason 'in flight'` the row read exactly
+>   ``no (locked by `git worktree lock`: in flight)`` and `--prune` printed
+>   ``SKIP … locked by `git worktree lock`: in flight`` — and all four junctions were
+>   re-verified **still present with the reparse bit set** afterwards. It survived *with*
+>   its `node_modules`/`.venv`/`voices`, not merely as a directory.
+> - **The real sweep:** unlocked, then every *other* worktree guard-locked (8 locks,
+>   applied and released), `--prune` printed `removed 4 junction(s)` then `removed.`.
+>   The directory is gone from disk and from `git worktree list`; remote branch and local
+>   branch both deleted afterwards; no stray dirs left under `C:\Claude\Projects`.
+> - **The one failure mode that matters is ruled out with numbers:** the primary's real
+>   trees are byte-for-byte intact — child-name-list SHA-256 BASE==AFTER on all four
+>   (`node_modules` `7a50a506…4bdeb`/450, `server/node_modules` `f104e5d3…c124cf`/204,
+>   `.venv` `bbb98409…189a`/6, `voices` `ca36f366…b7bac`/3), and every other live
+>   worktree's merged/ahead/dirty columns are identical across every pre- and post-report
+>   (`wt-onbox-batch-1` still @ `3d45f3b2`, clean).
+> No defect found; nothing filed. Two operational notes, neither a repo defect: an early
+> fixture pass created junctions under a typo'd throwaway path and the orphan directory
+> was removed junction-first per this row's own recipe (links unlinked one at a time via
+> `Directory::Delete($false)`, zero target-tree bytes touched); `Get-FileHash` was
+> unavailable in one constrained runspace and was replaced by direct .NET SHA-256.
+> Brief discrepancy per the brief's own instruction: the brief cited lines 5523–5604;
+> the committed file carries this row at 6351–6431 — the committed file was trusted.
+> Evidence: `e103-test.log`, `e103-report-{default,nogh,locked}.txt`,
+> `e103-prune-{locked,final}.txt` under
+> `%TEMP%\open-engine-scratch\cline-qwen-cloud-3321-20260924-085933\`.
+
 ### E104 · ops-71 stale-battery reaper — `Win32_Process` classification against real processes ([#3047](https://github.com/dudarenok-maker/Castwright/issues/3047), Part 3 of [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)) · **any Windows dev box; no GPU needed**
 
 `scripts/reap-stale-batteries.mjs`'s `classify()` is unit-tested against a synthetic
