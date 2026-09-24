@@ -7,13 +7,21 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import type { SpliceArgs, SpliceTick } from '../lib/api';
 
-const { streamSpliceSpy } = vi.hoisted(() => ({ streamSpliceSpy: vi.fn() }));
-vi.mock('../lib/api', () => ({ api: { streamSplice: streamSpliceSpy } }));
+const { streamSpliceSpy, putBookStateSpy } = vi.hoisted(() => ({
+  streamSpliceSpy: vi.fn(),
+  putBookStateSpy: vi.fn().mockResolvedValue(undefined),
+}));
+vi.mock('../lib/api', () => ({
+  api: { streamSplice: streamSpliceSpy, putBookState: putBookStateSpy },
+}));
 
 import { spliceSlice, spliceActions } from './splice-slice';
 import { chaptersSlice } from './chapters-slice';
 import { revisionsSlice } from './revisions-slice';
 import { notificationsSlice } from './notifications-slice';
+import { uiSlice, uiActions } from './ui-slice';
+import { revisionsScopeMiddleware } from './revisions-scope-middleware';
+import { persistenceMiddleware } from './persistence-middleware';
 import { spliceRunnerMiddleware } from './splice-runner-middleware';
 import type { Chapter } from '../lib/types';
 
@@ -29,11 +37,28 @@ function makeStore(currentBookId = 'bk1') {
       chapters: chaptersSlice.reducer,
       revisions: revisionsSlice.reducer,
       notifications: notificationsSlice.reducer,
+      ui: uiSlice.reducer,
     },
     preloadedState: {
       chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS, currentBookId },
+      /* `revisions.bookId` starts already scoped to `currentBookId`, matching
+         the real app: by the time a splice batch can start, the active book
+         has already been opened (and its hydrate, real or null, has landed)
+         so revisions-scope-middleware has already synced the two. */
+      revisions: { ...revisionsSlice.getInitialState(), bookId: currentBookId },
+      ui: {
+        ...uiSlice.getInitialState(),
+        stage: {
+          kind: 'ready' as const,
+          bookId: currentBookId,
+          view: 'cast' as const,
+          currentChapterId: 3,
+          openProfileId: null,
+        },
+      },
     },
-    middleware: (getDefault) => getDefault().concat(spliceRunnerMiddleware()),
+    middleware: (getDefault) =>
+      getDefault().concat(revisionsScopeMiddleware, persistenceMiddleware, spliceRunnerMiddleware()),
   });
 }
 
@@ -45,6 +70,7 @@ async function flush() {
 describe('spliceRunnerMiddleware', () => {
   beforeEach(() => {
     streamSpliceSpy.mockReset();
+    putBookStateSpy.mockClear();
     streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
       args.onTick({
         type: 'splice_complete',
@@ -269,8 +295,13 @@ describe('spliceRunnerMiddleware', () => {
       expect.objectContaining({ id: 'splice-bk1-1-castor', playable: false }),
     ]);
 
-    /* Navigate to bk2 before chapter 1's splice resolves. */
-    store.dispatch({ type: 'chapters/setCurrentBookId', payload: 'bk2' });
+    /* Navigate to bk2 before chapter 1's splice resolves — the PRODUCTION
+       navigation action, not the synthetic `chapters/setCurrentBookId`
+       production never dispatches on navigation (chapters.currentBookId only
+       moves once bk2's own hydrate lands). revisions-scope-middleware reacts
+       to this and re-scopes `revisions.bookId` to bk2 immediately, which is
+       what the guards below must actually key off (#3395 pass 2, N2). */
+    store.dispatch(uiActions.openBook({ id: 'bk2', status: 'complete' }));
 
     /* Resolve chapter 1 (fires splice_complete while bk2 is active) and let
        the loop advance to chapter 2 (its enqueuePending also fires while
@@ -282,12 +313,29 @@ describe('spliceRunnerMiddleware', () => {
     resolvers[1]();
     await flush();
 
+    /* revisions-scope-middleware resets `pending` to empty the instant
+       `uiActions.openBook('bk2')` lands (before either deferred completion
+       fires) — bk1's own already-enqueued entry goes with it, same as any
+       other per-book field, because `pending` no longer represents bk1 once
+       the user has navigated away. Neither guarded dispatch below can
+       re-populate it from bk1's book. */
     const pending = store.getState().revisions.pending;
-    /* bk2's pending list must stay exactly as it was before the batch ever
-       touched it — no bk1 revision leaked in, for either chapter. */
-    expect(pending.some((r) => r.id === 'splice-bk1-2-castor')).toBe(false);
-    expect(pending).toEqual([
-      expect.objectContaining({ id: 'splice-bk1-1-castor', playable: false }),
-    ]);
+    expect(pending).toEqual([]);
+
+    /* Belt-and-braces: no PUT for bk2 ever carries either of bk1's splice
+       ids — the persistence-middleware guard refuses to persist a revisions
+       patch whose `revisions.bookId` disagrees with the write's target book,
+       and the enqueue/markPlayable guards above never even dispatch for
+       bk2 in the first place. */
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const bk2RevisionsPuts = putBookStateSpy.mock.calls.filter(
+      ([bookId, body]) => bookId === 'bk2' && (body as { slice?: string }).slice === 'revisions',
+    );
+    const leaked = bk2RevisionsPuts.some(([, body]) =>
+      ((body as { patch: { pending: Array<{ id: string }> } }).patch.pending ?? []).some((r) =>
+        r.id.startsWith('splice-bk1'),
+      ),
+    );
+    expect(leaked).toBe(false);
   });
 });

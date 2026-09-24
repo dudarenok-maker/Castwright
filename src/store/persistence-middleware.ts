@@ -377,6 +377,15 @@ export const persistenceMiddleware: Middleware = (store) => {
     const after = store.getState() as PersistableRootState;
     const bookId = bookIdFromState(after);
     if (!bookId) return result;
+    /* Belt-and-braces (#3395 pass 2, N1): refuse to persist a revisions
+       patch when `revisions.bookId` (kept in lockstep with the active book
+       by revisions-scope-middleware) disagrees with the book this write
+       would target. In the normal case the two always agree by the time a
+       revisions/* action fires; this only fires if some future path manages
+       to dispatch one before scope tracking catches up, and it closes the
+       one thing that must never happen either way — writing one book's
+       pending/timeline/etc into another book's revisions.json. */
+    if (rule.slice === 'revisions' && after.revisions.bookId !== bookId) return result;
 
     pending.set(rule.slice, rule.build(after, bookId));
     /* #2230 — bump the per-slice generation so this becomes the LATEST write;

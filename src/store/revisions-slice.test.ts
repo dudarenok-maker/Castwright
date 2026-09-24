@@ -40,6 +40,7 @@ describe('revisionsSlice — initial state', () => {
       acceptedSelections: {},
       timeline: {},
       loaded: false,
+      bookId: null,
     });
   });
 });
@@ -393,6 +394,87 @@ describe('revisionsSlice — hydrateFromBookState', () => {
     );
     expect(next.dismissed).toEqual([]);
     expect(next.acceptedSelections).toEqual({});
+  });
+
+  it('ignores a hydrate response for a book already navigated away from (#3395 pass 2, N1)', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.hydrateFromBookState({
+        bookId: 'book-A',
+        pending: [rev('rA')],
+        drift: [],
+      }),
+    );
+    /* Navigation moved on to book-C before book-A's own (stale, late) fetch
+       resolved — bookScopeChanged already re-scoped the slice. */
+    s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-C'));
+    const stale = revisionsSlice.reducer(
+      s,
+      revisionsActions.hydrateFromBookState({
+        bookId: 'book-A',
+        pending: [rev('rA')],
+        drift: [],
+      }),
+    );
+    expect(stale.bookId).toBe('book-C');
+    expect(stale.pending).toEqual([]);
+  });
+
+  it('applies a bookId-carrying payload unconditionally when no book was previously scoped', () => {
+    const next = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.hydrateFromBookState({ bookId: 'book-A', pending: [rev('r1')], drift: [] }),
+    );
+    expect(next.bookId).toBe('book-A');
+    expect(next.pending.map((r) => r.id)).toEqual(['r1']);
+  });
+});
+
+describe('revisionsSlice — bookScopeChanged (#3395 pass 2, N1)', () => {
+  it('resets pending/dismissed/acceptedSelections/timeline and adopts the new bookId', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.hydrateFromBookState({
+        bookId: 'book-A',
+        pending: [rev('rA')],
+        drift: [],
+        dismissed: ['d1'],
+        acceptedSelections: { rA: { 1: 'A' } },
+      }),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.acceptRevision({ revisionId: 'rA', selection: { 1: 'A' } }),
+    );
+    expect(s.timeline[1]).toHaveLength(1);
+
+    s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-B'));
+    expect(s.bookId).toBe('book-B');
+    expect(s.pending).toEqual([]);
+    expect(s.dismissed).toEqual([]);
+    expect(s.acceptedSelections).toEqual({});
+    expect(s.timeline).toEqual({});
+  });
+
+  it('leaves drift untouched — it is already multi-book-aware', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.applyPoll({
+        bookId: 'book-A',
+        drift: [drift('d-A1', { bookId: 'book-A' })],
+      }),
+    );
+    s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-B'));
+    expect(s.drift.map((d) => d.id)).toEqual(['d-A1']);
+  });
+
+  it('is a no-op when the bookId has not actually changed', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.hydrateFromBookState({ bookId: 'book-A', pending: [rev('rA')], drift: [] }),
+    );
+    s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-A'));
+    expect(s.pending.map((r) => r.id)).toEqual(['rA']);
   });
 });
 

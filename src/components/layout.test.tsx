@@ -39,6 +39,7 @@ import { continueListeningSlice } from '../store/continue-listening-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
+import { revisionsScopeMiddleware } from '../store/revisions-scope-middleware';
 
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
@@ -207,6 +208,40 @@ function makeStore() {
       prosody: prosodySlice.reducer,
       scriptReview: scriptReviewSlice.reducer,
     },
+  });
+}
+
+/** Same shape as `makeStore()`, plus `revisionsScopeMiddleware` wired in —
+    the production store's real book-scope tracking (#3395 pass 2, N1/N2).
+    `makeStore()` itself is left alone rather than growing this middleware
+    for every test in the file; only the dedicated regression test below
+    needs the real cross-book reset behaviour. */
+function makeStoreWithScope() {
+  return configureStore({
+    reducer: {
+      ui: uiSlice.reducer,
+      account: accountSlice.reducer,
+      cast: castSlice.reducer,
+      chapters: chaptersSlice.reducer,
+      revisions: revisionsSlice.reducer,
+      manuscript: manuscriptSlice.reducer,
+      library: librarySlice.reducer,
+      voices: voicesSlice.reducer,
+      changeLog: changeLogSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
+      exports: exportsSlice.reducer,
+      analysis: analysisSlice.reducer,
+      castDesign: castDesignSlice.reducer,
+      queue: queueSlice.reducer,
+      tour: tourSlice.reducer,
+      listenProgress: listenProgressSlice.reducer,
+      settings: settingsSlice.reducer,
+      continueListening: continueListeningSlice.reducer,
+      notifications: notificationsSlice.reducer,
+      prosody: prosodySlice.reducer,
+      scriptReview: scriptReviewSlice.reducer,
+    },
+    middleware: (getDefault) => getDefault().concat(revisionsScopeMiddleware),
   });
 }
 
@@ -388,11 +423,14 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
     });
   });
 
-  it('passes null to hydrateFromBookState when revisions field is absent on the response', async () => {
+  it('hydrates with an empty patch (but a real bookId) when revisions field is absent on the response', async () => {
     /* A freshly-imported book whose revisions.json doesn't exist yet
-       returns `revisions: null` from getBookState. The slice's null
-       handler still flips `loaded` to true so the UI can distinguish
-       "nothing pending" from "still hydrating". */
+       returns `revisions: null` from getBookState. Layout still carries
+       `bookId` through to hydrateFromBookState (bare `null` would lose the
+       belt-and-braces bookId-mismatch guard's anchor — #3395 pass 2, N1),
+       so the slice's fields land empty and `loaded` flips true, same as
+       before, but `revisions.bookId` is now correctly 'b1' rather than
+       untouched. */
     getBookStateMock.mockResolvedValue({
       state: {
         bookId: 'b1',
@@ -436,7 +474,94 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       expect(s.revisions.loaded).toBe(true);
       expect(s.revisions.pending).toEqual([]);
       expect(s.revisions.drift).toEqual([]);
+      expect(s.revisions.bookId).toBe('b1');
     });
+  });
+});
+
+/* #3395 pass 2, N1 — the reviewer's exact repro, through the real Layout
+   mount effect + revisions-scope-middleware (not the plain `makeStore()`
+   the rest of this file uses, which has no book-scope tracking wired in):
+   open book A with a pending revision, navigate to book B (which has no
+   revisions.json), and confirm B never reads back A's pending — neither in
+   the store immediately after navigating, nor after B's own (null) disk
+   fetch resolves. */
+describe('Layout — revisions.bookId scope tracking through real navigation (#3395 pass 2, N1)', () => {
+  it('book B never inherits book A\'s pending revisions after uiActions.openBook(B)', async () => {
+    const minimalState = (bookId: string) => ({
+      state: {
+        bookId,
+        manuscriptId: 'mns_test',
+        title: 'Some Book',
+        author: 'Someone',
+        series: null,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [],
+        coverGradient: ['#000', '#fff'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      cast: { characters: [] },
+      manuscript: { wordCount: 0, format: 'plaintext' },
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    });
+    getBookStateMock.mockImplementation(async (bookId: string) =>
+      bookId === 'book-B' ? null : minimalState(bookId),
+    );
+
+    const store = makeStoreWithScope();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/book-A']}>
+          <Routes>
+            <Route path="/books/:bookId" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    /* Let book A's own (null-revisions) fetch settle first, then seed its
+       pending — mimicking a locally-enqueued revision arriving after the
+       initial hydrate (enqueuePending, in production). Seeding before the
+       fetch settles would just get raced by the fetch's own empty hydrate. */
+    await waitFor(() => {
+      expect(getBookStateMock).toHaveBeenCalledWith('book-A');
+      expect(store.getState().revisions.loaded).toBe(true);
+    });
+    store.dispatch(
+      revisionsActions.hydrateFromBookState({
+        bookId: 'book-A',
+        pending: [{ id: 'rA', chapterId: 1, characterId: 'nora', segments: [] }],
+        drift: [],
+      }),
+    );
+    expect(store.getState().revisions.pending.map((r) => r.id)).toEqual(['rA']);
+
+    /* Navigate to book B via the production action — the scope reset must
+       fire synchronously, before B's own getBookState(null) call even
+       starts, let alone resolves. */
+    store.dispatch(uiActions.openBook({ id: 'book-B', status: 'complete' }));
+    expect(store.getState().revisions.pending).toEqual([]);
+    expect(store.getState().revisions.bookId).toBe('book-B');
+
+    await waitFor(() => {
+      expect(getBookStateMock).toHaveBeenCalledWith('book-B');
+    });
+    /* B's own (null) fetch has now landed too — still empty, never rA. */
+    await waitFor(() => {
+      expect(store.getState().revisions.loaded).toBe(true);
+    });
+    expect(store.getState().revisions.pending).toEqual([]);
+    expect(store.getState().revisions.pending.some((r) => r.id === 'rA')).toBe(false);
   });
 });
 

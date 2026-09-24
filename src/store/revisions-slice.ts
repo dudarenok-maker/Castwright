@@ -24,6 +24,17 @@ export interface RevisionsState {
       recent reversible entry calls plan 20's existing restore endpoint. */
   timeline: Record<number, TimelineEntry[]>;
   loaded: boolean;
+  /** The book `pending`/`dismissed`/`acceptedSelections`/`timeline` belong to
+      — null when no book is active. `revisions-scope-middleware` keeps this
+      in lockstep with `ui.stage`'s bookId, resetting the four per-book
+      fields the instant the active book changes (before that book's own
+      disk hydrate, or lack of one, arrives) — closing the window where a
+      leftover book A `pending` could be read, actioned against, and
+      persisted into book B's revisions.json (#3395 pass 2, N1). `drift` is
+      NOT reset here — it's already multi-book-aware (each event carries its
+      own `bookId`, see `mergeDriftForBook`), unlike the four fields above
+      which are single-book like `pending`. */
+  bookId: string | null;
 }
 
 const initialState: RevisionsState = {
@@ -33,6 +44,7 @@ const initialState: RevisionsState = {
   acceptedSelections: {},
   timeline: {},
   loaded: false,
+  bookId: null,
 };
 
 /* Multi-book-aware drift merge shared by applyPoll and applyBackgroundPoll
@@ -141,6 +153,22 @@ export const revisionsSlice = createSlice({
         reversible: false,
       });
     },
+    /** Dispatched by `revisions-scope-middleware` whenever `ui.stage`'s
+        bookId changes (openBook, hydrateFromUrl/router nav, goHome, leaving
+        to a non-book view, ...) — watched generically off the derived
+        active-book value rather than off each individual ui-slice action, so
+        a future book-changing action doesn't need to remember to wire this
+        up too (that's exactly how N2's `chapters.currentBookId` proxy went
+        stale). Resets the four per-book fields to empty and adopts the new
+        bookId; a no-op if the book hasn't actually changed. */
+    bookScopeChanged: (s, a: PayloadAction<string | null>) => {
+      if (s.bookId === a.payload) return;
+      s.bookId = a.payload;
+      s.pending = [];
+      s.dismissed = [];
+      s.acceptedSelections = {};
+      s.timeline = {};
+    },
     dismissDrift: (s, a: PayloadAction<string>) => {
       s.drift = s.drift.filter((e) => e.id !== a.payload);
       if (!s.dismissed.includes(a.payload)) s.dismissed.push(a.payload);
@@ -226,9 +254,32 @@ export const revisionsSlice = createSlice({
     ) => {
       const payload = a.payload;
       if (!payload) {
+        /* No disk state at all for this fetch (mock fresh boot, or a book the
+           server hasn't seen). `bookScopeChanged` already reset these on
+           navigation, so in practice this is a no-op re-affirming empty —
+           but a defensive reset here too means a bare null payload can never
+           read back as "still holding the PREVIOUS book's pending" even if
+           dispatched some other way (#3395 pass 2, N1). Deliberately doesn't
+           touch `bookId` — a null payload doesn't tell us which book it was
+           for, so scope tracking stays owned by `bookScopeChanged` alone. */
+        s.pending = [];
+        s.dismissed = [];
+        s.acceptedSelections = {};
+        s.timeline = {};
         s.loaded = true;
         return;
       }
+      /* Belt-and-braces: ignore a hydrate response for a book we've since
+         navigated away from. `bookScopeChanged` already resets on
+         navigation and Layout's own per-book effect cancels a stale
+         in-flight fetch, so this should be unreachable in practice — but a
+         stray call bypassing both (a direct dispatch, a future caller) must
+         not let an old book's disk snapshot overwrite the book actually in
+         view. Only guards when both sides know a bookId; a payload with no
+         bookId (existing callers/tests) is applied unconditionally as
+         before. */
+      if (payload.bookId && s.bookId !== null && payload.bookId !== s.bookId) return;
+      if (payload.bookId) s.bookId = payload.bookId;
       s.pending = payload.pending ?? [];
       if (payload.bookId) {
         const bid = payload.bookId;

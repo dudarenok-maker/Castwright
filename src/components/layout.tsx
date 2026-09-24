@@ -820,11 +820,17 @@ export function Layout() {
             renderedInstructByChapter: res.renderedInstructByChapter,
           }),
         );
-        dispatch(
-          revisionsActions.hydrateFromBookState(
-            res.revisions ? { bookId, ...res.revisions } : null,
-          ),
-        );
+        /* Always carry `bookId` — even when `res.revisions` is null (no
+           revisions.json yet for a freshly-imported book) — so the slice's
+           belt-and-braces mismatch guard has something to check and its
+           bookId stays authoritative. `revisions-scope-middleware` has
+           already reset pending/dismissed/acceptedSelections/timeline for
+           this book by the time this fetch resolves (it fires synchronously
+           off the navigation that changed `ui.stage`'s bookId, not off this
+           fetch), so a null `res.revisions` landing here is a confirmation,
+           not the only thing standing between books' pending lists
+           (#3395 pass 2, N1). */
+        dispatch(revisionsActions.hydrateFromBookState({ bookId, ...(res.revisions ?? {}) }));
         dispatch(changeLogActions.hydrateFromBookState(res.changeLog ?? null));
         /* Editable Listen-view metadata: seed from state.json's editorial
            fields; when narratorCredit is absent the slice defaults to 'Castwright'. */
