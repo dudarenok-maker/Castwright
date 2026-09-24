@@ -62,9 +62,9 @@ is disabled.
 | Ollama temperature | Sampling temperature for the first analysis attempt | 0.2 | 0–2, step 0.1 | live | medium |
 | Ollama retry temperature | Temp used on invalid-JSON retries | 0.6 | 0–2, step 0.1 | live | medium |
 | Ollama num_predict | Output-token cap for Ollama; -1 = predict until context fills | -1 | integer, min -1 | live | medium |
-| Gemini max output tokens | Per-request output-token cap for Gemini | 8192 | 256–32768 | live | medium |
+| Gemini max output tokens | Per-request output-token cap for Gemini | 0 | 0–1048576 | live | medium |
 | Gemini temperature | Sampling temperature for cloud Gemini/Gemma analysis | 0.2 | 0–2, step 0.1 | live | medium |
-| Gemini max input tokens per request | Per-request INPUT-token cap for cloud analyzer passes; body chunks are sized to this | 12000 | 1000–60000 | live | medium |
+| Gemini max input tokens per request | Per-request INPUT-token cap for cloud analyzer passes; body chunks are sized to this | 12000 | 1000–1000000 | live | medium |
 | Ollama num_ctx | Context-window size sent on every /api/chat call; feeds the local (context-family) chunk-budget formulas below, Gemini ignores it | 32768 | integer, min 0 | live | medium |
 | Ollama num_gpu | GPU layers for Ollama (999 = all) | 999 | integer, min 0 | live | medium |
 | Ollama analyzer concurrency (K) | Max analyzer /api/chat calls in flight at once; also set Ollama-side OLLAMA_NUM_PARALLEL >= K | 2 | integer, min 1 | live | high |

@@ -12,6 +12,8 @@ import { GoogleGenAI } from '@google/genai';
 import { configValue } from '../../config/resolver.js';
 import { AnalysisAbortedError } from '../errors.js';
 import { geminiRateLimiter } from '../rate-limit.js';
+import { warmGeminiCatalog, type GeminiModelsClient } from '../catalog/gemini-catalog.js';
+import { GEMINI_FALLBACK_MAX_OUTPUT_TOKENS } from '../capacity.js';
 import {
   BACKOFFS_MS,
   isRetryable5xx,
@@ -42,11 +44,6 @@ export function resolveStreamIdleTimeoutMs(): number {
   if (!raw) return STREAM_IDLE_TIMEOUT_MS;
   const n = Number(raw);
   return Number.isFinite(n) && n > 0 ? n : STREAM_IDLE_TIMEOUT_MS;
-}
-
-export const DEFAULT_MAX_OUTPUT_TOKENS = 8192;
-export function resolveMaxOutputTokens(): number {
-  return configValue<number>('analyzer.gemini.maxOutputTokens');
 }
 
 /** Live-read the cloud analyzer sampling temperature (registry wins). */
@@ -89,6 +86,8 @@ export const GEMINI_RETRY_CLASSIFIER: RetryClassifier = {
 interface GeminiTransportOptions {
   apiKey: string;
   model: string;
+  /** A pre-built SDK client (tests inject one); production builds it from apiKey. */
+  client?: GeminiModelsClient;
 }
 
 type GeminiChunk = {
@@ -105,10 +104,19 @@ export class GeminiTransport implements ChatTransport {
   readonly kind = 'gemini' as const;
   readonly model: string;
   private readonly client: GoogleGenAI;
+  private readonly apiKey: string;
 
   constructor(opts: GeminiTransportOptions) {
-    this.client = new GoogleGenAI({ apiKey: opts.apiKey });
+    this.client = (opts.client as unknown as GoogleGenAI) ?? new GoogleGenAI({ apiKey: opts.apiKey });
+    this.apiKey = opts.apiKey;
     this.model = opts.model;
+  }
+
+  /** #3084 wave 2b — warm the model catalog (Auto max output tokens) before the
+      runner reads settings. warmGeminiCatalog never rejects, waits at most
+      10 s, and returns at once when `signal` aborts (P26). */
+  prepare(signal?: AbortSignal): Promise<void> {
+    return warmGeminiCatalog(this.apiKey, { client: this.client as unknown as GeminiModelsClient, signal });
   }
 
   /* Every wire call — including the escalation pass — goes through the shared
@@ -148,7 +156,7 @@ export class GeminiTransport implements ChatTransport {
     const config: Record<string, unknown> = {
       systemInstruction: req.system,
       temperature: req.temperature,
-      maxOutputTokens: req.maxOutputTokens ?? resolveMaxOutputTokens(),
+      maxOutputTokens: req.maxOutputTokens ?? GEMINI_FALLBACK_MAX_OUTPUT_TOKENS,
     };
     if (req.structuredOutput.mode === 'json') {
       config.responseMimeType = 'application/json';

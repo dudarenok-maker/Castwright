@@ -52,9 +52,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_MAX_OUTPUT_TOKENS',
     group: 'analyzer-sampling',
     label: 'Gemini max output tokens',
-    help: 'Per-request output-token cap for Gemini; set to match the free-tier ceiling.',
-    type: 'integer', min: 256, max: 32768,
-    default: 8192, // ← DEFAULT_MAX_OUTPUT_TOKENS in analyzer/gemini.ts
+    help: "Per-request output-token cap for Gemini, including the model's thinking tokens. 0 = Auto: the model's own output limit from Gemini's model list (8192 when the list is unavailable). A value above the model's limit is clamped to it; any other value is sent as set.",
+    type: 'integer', min: 0, max: 1_048_576,
+    default: 0, // ← 0 = Auto; resolved by resolveGeminiMaxOutputTokens() in analyzer/capacity.ts
     apply: 'live', risk: 'medium',
   },
   {
@@ -72,8 +72,8 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST',
     group: 'analyzer-sampling',
     label: 'Gemini max input tokens per request',
-    help: 'Per-request INPUT-token cap for cloud analyzer passes (stage-1, stage-2, script-review/emotion/instruct). Body chunks are sized to this; must stay below the model TPM (Gemma free tier = 16000/min) so the system prompt + roster fit. Default 12000. Feeds the request-cap family\'s body sizing directly in stage 1 (no further ceiling — cloudBodyCharBudget only floors at 2000 chars, per token-budget.ts:58); stage 2 and the output-heavy passes additionally cap the result at that pass\'s own char ceiling (analyzer.stage2.chunkCharBudget / analyzer.gemini.outputHeavyChunkChars).',
-    type: 'integer', min: 1000, max: 60000,
+    help: 'Per-request INPUT-token cap for cloud analyzer passes (stage-1, stage-2, script-review/emotion/instruct). Body chunks are sized to the smaller of this and the model TPM (Gemma free tier = 16000/min), so the system prompt + roster fit even when this is set higher than a given model allows. Raise it for a model with more headroom (Gemini 3.x accepts up to 1,000,000 input tokens). Feeds the request-cap family\'s body sizing in stage 1, stage 2 and the output-heavy passes (cloudBodyCharBudget), each bounded further by that pass\'s own char ceiling. Default 12000.',
+    type: 'integer', min: 1000, max: 1_000_000,
     default: 12000,
     apply: 'live', risk: 'medium',
   },

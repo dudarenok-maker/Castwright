@@ -10,7 +10,7 @@ import type { ChatTransport, TransportRequest, TransportResult } from './transpo
 import { AnalysisAbortedError } from '../errors.js';
 
 const HANDOFF_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'handoff');
-const IDS = ['m_sr_first', 'm_sr_json', 'm_sr_retry', 'm_sr_noraw', 'm_sr_raw', 'm_sr_single', 'm_sr_cap'];
+const IDS = ['m_sr_first', 'm_sr_json', 'm_sr_retry', 'm_sr_noraw', 'm_sr_raw', 'm_sr_single', 'm_sr_cap', 'm_sr_prepare'];
 
 class FakeTransport implements ChatTransport {
   readonly kind = 'ollama' as const;
@@ -157,5 +157,28 @@ describe('StageRunner (#3084 wave 1)', () => {
     const t = new FakeTransport(['{"a":"ok"}']);
     await makeRunner(t, GEMINI_RETRY_POLICY, { structuredOutput: 'json', maxOutputTokens: 1234 }).runStage(spec('m_sr_cap'), {});
     expect(t.requests[0].maxOutputTokens).toBe(1234);
+  });
+
+  it('awaits transport.prepare(call.signal) before reading settings, on every send (#3084 wave 2b)', async () => {
+    let warmed = false;
+    const t = Object.assign(new FakeTransport(['{"a":1}', '{"a":"ok"}']), {
+      prepare: vi.fn(async (_signal?: AbortSignal) => {
+        await new Promise((r) => setTimeout(r, 5));
+        warmed = true;
+      }),
+    });
+    const runner = new StageRunner({
+      transport: t,
+      policy: GEMINI_RETRY_POLICY,
+      settings: () => ({ structuredOutput: 'json', maxOutputTokens: warmed ? 65_536 : 8192 }),
+      adaptSchema: identitySchemaAdapter,
+    });
+    const controller = new AbortController();
+    /* '{"a":1}' fails the z.string() schema, so the runner sends twice. */
+    await expect(runner.runStage(spec('m_sr_prepare'), { signal: controller.signal })).resolves.toEqual({ a: 'ok' });
+    expect(t.prepare).toHaveBeenCalledTimes(2);
+    /* P26 — each warm-up gets the caller's signal, so pause can release it. */
+    expect(t.prepare.mock.calls.map(([signal]) => signal)).toEqual([controller.signal, controller.signal]);
+    expect(t.requests.map((r) => r.maxOutputTokens)).toEqual([65_536, 65_536]);
   });
 });

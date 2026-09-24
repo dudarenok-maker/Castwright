@@ -184,12 +184,20 @@ export class StageRunner {
     call: StageCall,
     withEvalTiming: boolean,
   ): Promise<string> {
+    /* #3084 wave 2b — warm whatever settings resolution reads synchronously
+       (the Gemini model catalog behind Auto max output tokens) BEFORE reading
+       settings, on every request. The caller's signal lets pause release a
+       warm-up (P26). structuredOutput() reads settings().structuredOutput
+       before the first send without this await, so that field must never
+       depend on prepare(). */
+    await this.transport.prepare?.(call.signal);
+    const settings = this.settings();
     const result = await this.transport.send({
       system,
       messages,
       structuredOutput,
       temperature,
-      maxOutputTokens: this.settings().maxOutputTokens,
+      maxOutputTokens: settings.maxOutputTokens,
       estimatedInputTokens: estimateInputTokens(
         system,
         messages.map((m) => ({ role: m.role === 'assistant' ? ('model' as const) : ('user' as const), parts: [{ text: m.content }] })),

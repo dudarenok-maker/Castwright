@@ -6,8 +6,9 @@
 
 import { GeminiTransport } from './transports/gemini-transport.js';
 import { TransportAnalyzer } from './runner/transport-analyzer.js';
-import { StageRunner, identitySchemaAdapter, type EngineRequestSettings } from './runner/stage-runner.js';
+import { StageRunner, identitySchemaAdapter } from './runner/stage-runner.js';
 import { GEMINI_RETRY_POLICY } from './runner/retry-policy.js';
+import { resolveGeminiMaxOutputTokens } from './capacity.js';
 
 /* Re-exports for backward compatibility — callers and tests that imported
    these from gemini.ts still resolve after the wave-1 extraction. */
@@ -17,7 +18,7 @@ export { parseAndValidate, stripCodeFences, repairUnescapedQuotes, trimTrailingP
   repairStructuralPunctuation, buildRetryMessage, summariseDetail, persistResponse,
   type ParseResult,
 } from './runner/parse.js';
-export { GeminiStreamIdleError, resolveMaxOutputTokens, resolveGeminiTemperature,
+export { GeminiStreamIdleError, resolveGeminiTemperature,
   STREAM_IDLE_TIMEOUT_MS, MAX_RESPONSE_BYTES, appendBounded, resolveStreamIdleTimeoutMs,
 } from './transports/gemini-transport.js';
 export { BACKOFFS_MS, parseRetryDelayMs } from './runner/transport-retry.js';
@@ -28,17 +29,16 @@ interface GeminiOptions {
   model: string;
 }
 
-/* W1: structured output is always 'json' (responseMimeType only, today's
-   default); wave 3 resolves it from analyzer.gemini.structuredOutput. */
-const GEMINI_W1_SETTINGS: EngineRequestSettings = { structuredOutput: 'json', maxOutputTokens: undefined };
-
 export class GeminiAnalyzer extends TransportAnalyzer {
   constructor(opts: GeminiOptions) {
     super(
       new StageRunner({
         transport: new GeminiTransport({ apiKey: opts.apiKey, model: opts.model }),
         policy: GEMINI_RETRY_POLICY,
-        settings: () => GEMINI_W1_SETTINGS,
+        /* Structured output stays 'json' (wave 3 resolves it from
+           analyzer.gemini.structuredOutput). maxOutputTokens reads the catalog
+           the transport's prepare() warmed. */
+        settings: () => ({ structuredOutput: 'json', maxOutputTokens: resolveGeminiMaxOutputTokens(opts.model) }),
         adaptSchema: identitySchemaAdapter,
       }),
     );

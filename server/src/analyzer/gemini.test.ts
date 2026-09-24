@@ -53,17 +53,22 @@ function chunksOf(text: string, size: number): string[] {
 }
 
 const generateContentStream = vi.fn();
+const listModels = vi.fn();
 
 vi.mock('@google/genai', () => {
   return {
     GoogleGenAI: class {
-      models = { generateContentStream };
+      models = { generateContentStream, list: listModels };
     },
   };
 });
 
 beforeEach(async () => {
   generateContentStream.mockReset();
+  listModels.mockReset();
+  listModels.mockRejectedValue(new Error('models.list is unavailable in tests'));
+  const { _resetGeminiCatalogForTest } = await import('./catalog/gemini-catalog.js');
+  _resetGeminiCatalogForTest();
   /* The limiter is a module singleton; reset between tests so RPM/TPM
      bookkeeping from a prior test doesn't bleed across. */
   geminiRateLimiter._reset();
@@ -770,13 +775,26 @@ describe('GeminiAnalyzer — output truncation (#528)', () => {
     expect(generateContentStream).toHaveBeenCalledTimes(1);
   });
 
-  it('sets an explicit maxOutputTokens on the request', async () => {
+  it('sends Auto max output tokens: 8192 while the model list is unavailable (#3084 wave 2b)', async () => {
     generateContentStream.mockResolvedValue(asyncFromArray([{ text: STAGE1_RESPONSE }]));
-    const { GeminiAnalyzer, resolveMaxOutputTokens } = await import('./gemini.js');
+    const { GeminiAnalyzer } = await import('./gemini.js');
     const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
     await analyzer.runStage1('m_maxtok', '# stage 1 prompt', {});
-    const cfg = generateContentStream.mock.calls[0][0].config;
-    expect(cfg.maxOutputTokens).toBe(resolveMaxOutputTokens());
+    expect(generateContentStream.mock.calls[0][0].config.maxOutputTokens).toBe(8192);
+  });
+
+  it('sends Auto max output tokens = the listed outputTokenLimit — the catalog is warmed BEFORE the request is built', async () => {
+    listModels.mockResolvedValue(
+      asyncFromArray([
+        { name: 'models/gemma-4-31b-it', supportedActions: ['generateContent'], inputTokenLimit: 131_072, outputTokenLimit: 32_768 },
+      ]),
+    );
+    generateContentStream.mockResolvedValue(asyncFromArray([{ text: STAGE1_RESPONSE }]));
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+    await analyzer.runStage1('m_maxtok_auto', '# stage 1 prompt', {});
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(generateContentStream.mock.calls[0][0].config.maxOutputTokens).toBe(32_768);
   });
 
   it('returns normally when the stream ends with finishReason STOP', async () => {
@@ -824,6 +842,8 @@ afterAll(async () => {
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_429_retry-stage1.json'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_gemini_no_tone-stage1-ch1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_gemini_no_tone-stage1-ch1.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_maxtok_auto-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_maxtok_auto-stage1.json'), { force: true });
 });
 
 describe('GeminiAnalyzer.runStage1Chapter — two-schema runStage tolerates a tone-less response (srv-45)', () => {
@@ -968,6 +988,17 @@ describe('GeminiAnalyzer.runStage3Chapter — fs-57 instruct-annotation pass', (
 describe('GeminiAnalyzer.runAttributionEscalation (srv-59 Task 9)', () => {
   const VALID_ESCALATION = JSON.stringify({
     assignments: [{ line: 12, characterId: 'wren' }],
+  });
+
+  /* An earlier describe calls vi.resetModules(), detaching this file's static
+     geminiRateLimiter import from the instance gemini.js uses (same gap the
+     'runner characterisation' describe below already works around) — reset
+     the live one so real RPM/TPM usage from earlier tests in this file (incl.
+     wave 2b's two new 'output truncation' tests, same gemma-4-31b-it model)
+     never carries into these tests. */
+  beforeEach(async () => {
+    const { geminiRateLimiter: limiter } = await import('./rate-limit.js');
+    limiter._reset();
   });
 
   it('round-trips a valid {assignments} reply and still goes through the per-model rate limiter', async () => {
