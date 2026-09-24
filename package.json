@@ -114,7 +114,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@reduxjs/toolkit": "^2.5.0",
-    "@tanstack/react-virtual": "^3.14.11",
+    "@tanstack/react-virtual": "^3.14.13",
     "@types/qrcode": "^1.5.6",
     "html-to-image": "^1.11.13",
     "multicast-dns": "^7.2.5",
@@ -122,7 +122,7 @@
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-redux": "^9.2.0",
-    "react-router": "^8.3.1",
+    "react-router": "^8.4.0",
     "redux-persist": "^6.0.0"
   },
   "devDependencies": {
@@ -133,7 +133,7 @@
     "@testing-library/react": "^16.3.3",
     "@testing-library/user-event": "^14.6.7",
     "@types/jest-axe": "^3.5.9",
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.1",
     "@types/picomatch": "^4.0.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -156,7 +156,7 @@
     "openapi-typescript": "^7.0.0",
     "picomatch": "^4.0.7",
     "postcss": "^8.5.28",
-    "prettier": "^3.9.6",
+    "prettier": "^3.9.8",
     "sharp": "^0.35.4",
     "std-env": "^4.2.0",
     "tailwindcss": "^4.3.0",
@@ -164,7 +164,7 @@
     "typescript-eslint": "^8",
     "vite": "^8.3.0",
     "vite-plugin-mkcert": "^2.0.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.1"
   },
   "overrides": {
     "js-yaml": "^4.3.2",
