@@ -1032,7 +1032,15 @@ function buildSolwayBayMockState(): BookStateResponse {
        ANALYSIS_NORTHERN_STAR, so it goes through the normal
        hydrateFromBookState path rather than an empty manuscript. */
     manuscriptEdits: { sentences: initialSentences, mergedAwayKeys: [] },
-    revisions: null,
+    /* #3376 — `pending` is client-owned, seeded only by this disk hydrate
+       (hydrateFromBookState), never by a poll. The e2e a/b-audition spec
+       (revision-diff.spec.ts) needs a pending revision on book-open to
+       reach the Status popover's "N revisions" button, so it has to live
+       here now rather than in mockPollRevisions' PENDING_REVISIONS, which
+       the poll paths no longer write into the slice. Mirrors the real
+       server's getBookState, which reads revisions.json's `pending`
+       straight off disk. */
+    revisions: { pending: PENDING_REVISIONS },
     /* Every chapter is rendered (matches the library card's
        completedChapters: 18). hydrateFromBookState then flips each
        chapter row to state: 'done', which makes them appear as
