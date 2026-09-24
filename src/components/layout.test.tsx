@@ -40,10 +40,12 @@ import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
 import { revisionsScopeMiddleware } from '../store/revisions-scope-middleware';
+import { persistenceMiddleware } from '../store/persistence-middleware';
 
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
 const pollRevisionsBulkMock = vi.fn();
+const putBookStateMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -61,6 +63,11 @@ vi.mock('../lib/api', async (importOriginal) => {
       /* The line this test is actually about. Configured per-test via
          getBookStateMock.mockResolvedValue. */
       getBookState: (...args: unknown[]) => getBookStateMock(...args),
+      /* Persistence-middleware's PUT sink — only wired into the store by the
+         tests below that use `makeStoreWithScopeAndPersistence()` (#3395
+         pass 3, R1/R2); a stub here so it's never `undefined` if the
+         middleware is ever wired into a test that doesn't configure it. */
+      putBookState: (...args: unknown[]) => putBookStateMock(...args),
       /* Cold-boot analysis state probe — return null so the analysing-pill
          rehydration short-circuits. */
       getAnalysisState: vi.fn(async () => null),
@@ -245,12 +252,50 @@ function makeStoreWithScope() {
   });
 }
 
+/** Same shape as `makeStoreWithScope()`, plus `persistenceMiddleware` — the
+    production store's real debounced PUT-on-mutation behaviour. Needed by
+    the #3395 pass 3 R1/R2 tests below, which assert on the actual patch
+    `api.putBookState` receives after a book reopens or a write races a
+    hydrate. Kept separate from `makeStoreWithScope()` (mirrors why that one
+    is kept separate from the plain `makeStore()`) so the many tests that
+    don't care about persistence aren't dragged through the debounce timers. */
+function makeStoreWithScopeAndPersistence() {
+  return configureStore({
+    reducer: {
+      ui: uiSlice.reducer,
+      account: accountSlice.reducer,
+      cast: castSlice.reducer,
+      chapters: chaptersSlice.reducer,
+      revisions: revisionsSlice.reducer,
+      manuscript: manuscriptSlice.reducer,
+      library: librarySlice.reducer,
+      voices: voicesSlice.reducer,
+      changeLog: changeLogSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
+      exports: exportsSlice.reducer,
+      analysis: analysisSlice.reducer,
+      castDesign: castDesignSlice.reducer,
+      queue: queueSlice.reducer,
+      tour: tourSlice.reducer,
+      listenProgress: listenProgressSlice.reducer,
+      settings: settingsSlice.reducer,
+      continueListening: continueListeningSlice.reducer,
+      notifications: notificationsSlice.reducer,
+      prosody: prosodySlice.reducer,
+      scriptReview: scriptReviewSlice.reducer,
+    },
+    middleware: (getDefault) => getDefault().concat(revisionsScopeMiddleware, persistenceMiddleware),
+  });
+}
+
 beforeEach(() => {
   getBookStateMock.mockReset();
   pollRevisionsMock.mockReset();
   pollRevisionsMock.mockResolvedValue({ pending: [], drift: [] });
   pollRevisionsBulkMock.mockReset();
   pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
+  putBookStateMock.mockReset();
+  putBookStateMock.mockResolvedValue(undefined);
 });
 
 describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
@@ -562,6 +607,324 @@ describe('Layout — revisions.bookId scope tracking through real navigation (#3
     });
     expect(store.getState().revisions.pending).toEqual([]);
     expect(store.getState().revisions.pending.some((r) => r.id === 'rA')).toBe(false);
+  });
+});
+
+/* #3395 pass 3 — R1/R1b/R2. Real store (revisionsScopeMiddleware +
+   persistenceMiddleware) + a route that never unmounts Layout across
+   navigation, matching production (`src/routes/index.tsx` mounts Layout
+   once at the router root; every view is its Outlet child). A route scoped
+   to just `/books/:bookId` (as the N1 describe block above uses) would
+   unmount Layout on `goHome`, which can't reproduce R1 — the whole point is
+   that manuscript/cast/chapters survive a trip to a non-book view while
+   `revisions` gets reset. */
+describe('Layout — revisions persist only after the book is hydrated (#3395 pass 3, R1/R1b/R2)', () => {
+  /* These tests are the first in this file to wire the REAL
+     persistenceMiddleware alongside a full per-book hydration (every other
+     test that uses persistenceMiddleware — persistence-middleware.test.ts —
+     dispatches its persist-triggering action directly, never through
+     Layout's own hydrate effect). A full hydrate's `castActions.setCharacters`
+     /`manuscriptActions.hydrateFromBookState`/etc. dispatches are the SAME
+     action types a live edit uses, so persistence-middleware schedules a
+     real (500 ms-debounced) PUT for them too, indistinguishable from a user
+     edit — a pre-existing quirk of the shared PERSIST_RULES map, not
+     something these tests introduce. Those timers are real `setTimeout`s
+     outside React's tree, so they aren't cancelled by anything this test
+     does — only by actually firing. A generous drain after every test in
+     this block (in excess of the 500 ms debounce) keeps a straggler from
+     firing mid-way through the NEXT test and polluting its `putBookStateMock`
+     call count, which was observed flaking exactly one of the four tests
+     below (whichever ran right after book-A's full hydrate had a late
+     dispatch close to its own final wait). */
+  afterEach(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  const minimalState = (bookId: string, overrides: Record<string, unknown> = {}) => ({
+    state: {
+      bookId,
+      manuscriptId: 'mns_test',
+      title: 'Some Book',
+      author: 'Someone',
+      series: null,
+      seriesPosition: null,
+      isStandalone: true,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: true,
+      chapters: [],
+      coverGradient: ['#000', '#fff'],
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    },
+    cast: { characters: [{ id: 'nora', name: 'Nora', role: 'character', color: 'narrator' }] },
+    manuscript: { wordCount: 0, format: 'plaintext' },
+    manuscriptEdits: null,
+    revisions: null,
+    completedSlugs: [],
+    chapterCharacters: {},
+    changeLog: null,
+    ...overrides,
+  });
+
+  function renderAt(store: ReturnType<typeof makeStoreWithScopeAndPersistence>, path: string) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={[path]}>
+          <Routes>
+            <Route path="*" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+
+  it('R1: leaving to a non-book view and back re-hydrates revisions; the next markRevisionPlayable persists pending + timeline', async () => {
+    getBookStateMock.mockImplementation(async (bookId: string) =>
+      minimalState(bookId, {
+        revisions: {
+          pending: [{ id: 'rA', chapterId: 1, characterId: 'nora' }],
+          drift: [],
+          timeline: {
+            1: [
+              {
+                id: 't1',
+                chapterId: 1,
+                eventKind: 'accepted',
+                timestamp: '2026-01-01T00:00:00Z',
+                status: 'active',
+                reversible: true,
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    renderAt(store, '/books/book-A');
+
+    await waitFor(() => {
+      expect(store.getState().revisions.hydratedFor).toBe('book-A');
+    });
+    expect(store.getState().revisions.pending.map((r) => r.id)).toEqual(['rA']);
+    expect(getBookStateMock).toHaveBeenCalledTimes(1);
+
+    /* Leave to a non-book view (Library) — revisionsScopeMiddleware resets
+       the four per-book fields; manuscript/cast/chapters are untouched.
+       Wrapped in `act` so React actually commits this intermediate
+       (bookId: null) render before the next dispatch — two raw dispatches
+       back to back with no flush in between get batched into a single
+       commit, and the effect's dep array (bookId, stageKind) would then
+       see no net change across the pair. */
+    act(() => {
+      store.dispatch(uiActions.goHome());
+    });
+    expect(store.getState().revisions.pending).toEqual([]);
+    expect(store.getState().revisions.hydratedFor).toBeNull();
+
+    /* Return to book A. Before the fix, Layout's skip-reload check only
+       looked at manuscript/cast — both still say "book A, loaded" — so
+       getBookState never fired again and `pending`/`timeline` stayed empty. */
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    });
+
+    await waitFor(() => {
+      expect(getBookStateMock).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(store.getState().revisions.hydratedFor).toBe('book-A');
+    });
+    expect(store.getState().revisions.pending.map((r) => r.id)).toEqual(['rA']);
+    expect(store.getState().revisions.timeline[1]?.[0]?.id).toBe('t1');
+
+    /* A subsequent chapter-complete flip (generation-stream-runner's real
+       write) must persist the RESTORED pending + timeline, not an empty
+       patch — the R1 defect PUT `{pending:[],dismissed:[],...}` here. */
+    store.dispatch(revisionsActions.markRevisionPlayable({ chapterId: 1 }));
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    expect(putBookStateMock).toHaveBeenCalledWith(
+      'book-A',
+      expect.objectContaining({
+        slice: 'revisions',
+        patch: expect.objectContaining({
+          pending: [expect.objectContaining({ id: 'rA', playable: true })],
+          timeline: expect.objectContaining({
+            1: expect.arrayContaining([expect.objectContaining({ id: 't1' })]),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('R1b: A -> B -> A before B\'s own getBookState resolves — A still re-hydrates revisions', async () => {
+    let resolveB: (value: unknown) => void = () => {};
+    getBookStateMock.mockImplementation(async (bookId: string) => {
+      if (bookId === 'book-B') {
+        return new Promise((resolve) => {
+          resolveB = resolve;
+        });
+      }
+      return minimalState(bookId, {
+        revisions: { pending: [{ id: 'rA', chapterId: 1, characterId: 'nora' }], drift: [] },
+      });
+    });
+
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    renderAt(store, '/books/book-A');
+
+    await waitFor(() => {
+      expect(store.getState().revisions.hydratedFor).toBe('book-A');
+    });
+    expect(store.getState().revisions.pending.map((r) => r.id)).toEqual(['rA']);
+
+    /* A -> B: B's own fetch never resolves in this test — mirrors the user
+       navigating on before it lands. manuscript/cast never move off A.
+       Each dispatch is wrapped in `act` so React commits it separately —
+       two raw dispatches with no flush in between would batch into one
+       commit, and the effect's dep array would see no net change across
+       the A -> B -> A round trip. */
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-B', status: 'complete' }));
+    });
+    expect(store.getState().revisions.bookId).toBe('book-B');
+    expect(store.getState().revisions.hydratedFor).toBeNull();
+
+    /* B -> A, before B's fetch settles. */
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    });
+    expect(store.getState().revisions.bookId).toBe('book-A');
+
+    await waitFor(() => {
+      expect(store.getState().revisions.hydratedFor).toBe('book-A');
+    });
+    expect(store.getState().revisions.pending.map((r) => r.id)).toEqual(['rA']);
+
+    /* B's stale fetch finally resolves — Layout's own cancellation flag for
+       that effect instance must suppress its dispatches; A's state must be
+       unaffected. */
+    resolveB(null);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(store.getState().revisions.bookId).toBe('book-A');
+    expect(store.getState().revisions.pending.map((r) => r.id)).toEqual(['rA']);
+  });
+
+  it('R2: a write racing book B\'s own hydrate never PUTs empty, and merges with the disk snapshot once hydrated', async () => {
+    let resolveB: (value: unknown) => void = () => {};
+    getBookStateMock.mockImplementation(async (bookId: string) => {
+      if (bookId === 'book-B') {
+        return new Promise((resolve) => {
+          resolveB = resolve;
+        });
+      }
+      return minimalState(bookId, { revisions: { pending: [], drift: [] } });
+    });
+
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-B', status: 'complete' }));
+    renderAt(store, '/books/book-B');
+
+    await waitFor(() => {
+      expect(getBookStateMock).toHaveBeenCalledWith('book-B');
+    });
+    expect(store.getState().revisions.bookId).toBe('book-B');
+    expect(store.getState().revisions.hydratedFor).toBeNull();
+
+    /* Simulates generation-stream-runner's chapter_complete handler: gated
+       on `revisions.bookId === bookId` (already true), fires regardless of
+       `hydratedFor`. */
+    store.dispatch(
+      revisionsActions.enqueuePending({
+        id: 'window-take',
+        chapterId: 5,
+        characterId: 'nora',
+        playable: false,
+        segments: [],
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(putBookStateMock).not.toHaveBeenCalled();
+
+    resolveB(minimalState('book-B', { revisions: { pending: [{ id: 'disk-take' }], drift: [] } }));
+
+    await waitFor(() => {
+      expect(store.getState().revisions.hydratedFor).toBe('book-B');
+    });
+    expect(store.getState().revisions.pending.map((r) => r.id).sort()).toEqual([
+      'disk-take',
+      'window-take',
+    ]);
+
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(putBookStateMock).toHaveBeenCalledWith(
+      'book-B',
+      expect.objectContaining({
+        slice: 'revisions',
+        patch: expect.objectContaining({
+          pending: expect.arrayContaining([
+            expect.objectContaining({ id: 'disk-take' }),
+            expect.objectContaining({ id: 'window-take' }),
+          ]),
+        }),
+      }),
+    );
+  });
+
+  it('Splice variant: two in-window splice enqueues (a Fix-audio batch) survive the hydrate merge alongside disk entries', async () => {
+    let resolveB: (value: unknown) => void = () => {};
+    getBookStateMock.mockImplementation(async (bookId: string) => {
+      if (bookId === 'book-B') {
+        return new Promise((resolve) => {
+          resolveB = resolve;
+        });
+      }
+      return minimalState(bookId, { revisions: { pending: [], drift: [] } });
+    });
+
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-B', status: 'complete' }));
+    renderAt(store, '/books/book-B');
+
+    await waitFor(() => {
+      expect(getBookStateMock).toHaveBeenCalledWith('book-B');
+    });
+
+    /* Two chapters of a Fix-audio batch enqueue while book B's own hydrate
+       is still in flight — splice-runner-middleware's real gate is the same
+       `revisions.bookId === req.bookId` check. */
+    store.dispatch(
+      revisionsActions.enqueuePending({
+        id: 'splice-B-1-nora',
+        chapterId: 1,
+        characterId: 'nora',
+        playable: false,
+        segments: [],
+      }),
+    );
+    store.dispatch(
+      revisionsActions.enqueuePending({
+        id: 'splice-B-2-nora',
+        chapterId: 2,
+        characterId: 'nora',
+        playable: false,
+        segments: [],
+      }),
+    );
+
+    resolveB(minimalState('book-B', { revisions: { pending: [{ id: 'disk-take' }], drift: [] } }));
+
+    await waitFor(() => {
+      expect(store.getState().revisions.hydratedFor).toBe('book-B');
+    });
+    expect(store.getState().revisions.pending.map((r) => r.id).sort()).toEqual([
+      'disk-take',
+      'splice-B-1-nora',
+      'splice-B-2-nora',
+    ]);
   });
 });
 

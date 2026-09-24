@@ -101,7 +101,17 @@ function debounceMs(s: PersistableRootState): number {
 /* Action types that should trigger a persist. Hydration actions
    (hydrateFromAnalysis, hydrateFromBookState, applyPoll for initial load,
    setImportCandidate) are intentionally absent — those are server-driven
-   and would create a write-loop if echoed back. */
+   and would create a write-loop if echoed back.
+
+   `revisions/persistPendingAfterHydrateMerge` is the one deliberate
+   exception, and it's a distinct action type from `hydrateFromBookState`
+   itself — not that action re-added. It's a no-op reducer (see
+   revisions-slice.ts) that `layout.tsx` dispatches immediately AFTER a
+   hydrate whose merge actually folded a pre-hydrate-window write into the
+   disk snapshot; without it that merged `pending` would live only in memory
+   until the next ordinary mutation (#3395 pass 3, R2). It doesn't create a
+   write-loop the way echoing the hydrate itself would: it only fires when
+   there was something local to merge, not on every hydrate. */
 const PERSIST_RULES: Record<
   string,
   { slice: StateSlice; build: (s: PersistableRootState, bookId: string) => unknown }
@@ -235,6 +245,9 @@ const PERSIST_RULES: Record<
      chapter completed but before the user opened the diff. */
   'revisions/enqueuePending': { slice: 'revisions', build: revisionsPatch },
   'revisions/markRevisionPlayable': { slice: 'revisions', build: revisionsPatch },
+  /* See the PERSIST_RULES doc comment above — the one deliberate hydrate-
+     adjacent exception (#3395 pass 3, R2). */
+  'revisions/persistPendingAfterHydrateMerge': { slice: 'revisions', build: revisionsPatch },
 
   /* Editorial audit trail. Persists the whole `events` array on every
      append — the log is small (one entry per user action) and the server
@@ -385,8 +398,24 @@ export const persistenceMiddleware: Middleware = (store) => {
        revisions/* action fires; this only fires if some future path manages
        to dispatch one before scope tracking catches up, and it closes the
        one thing that must never happen either way — writing one book's
-       pending/timeline/etc into another book's revisions.json. */
-    if (rule.slice === 'revisions' && after.revisions.bookId !== bookId) return result;
+       pending/timeline/etc into another book's revisions.json.
+
+       #3395 pass 3, R2: ALSO refuse until `revisions.hydratedFor` matches —
+       `bookId` flips the instant navigation targets a new book, but a write
+       queued in the gap before that book's own disk snapshot has been read
+       (a chapter_complete/splice write racing the just-opened book's
+       getBookState) must never reach disk first and clobber whatever WAS
+       already there with an empty/partial patch. `hydrateFromBookState`
+       merges any such pre-hydrate window write with the disk snapshot (see
+       `mergePendingWithWindow` in revisions-slice.ts) and
+       `persistPendingAfterHydrateMerge` — also routed through this same
+       gate, which by then passes — carries the merged result to disk once
+       hydrated. */
+    if (
+      rule.slice === 'revisions' &&
+      (after.revisions.bookId !== bookId || after.revisions.hydratedFor !== bookId)
+    )
+      return result;
 
     pending.set(rule.slice, rule.build(after, bookId));
     /* #2230 — bump the per-slice generation so this becomes the LATEST write;

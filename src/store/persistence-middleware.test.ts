@@ -28,8 +28,11 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   /* bookId matches ui.stage's default 'book-1' — persistence-middleware's
      belt-and-braces guard (#3395 pass 2, N1) refuses to persist a revisions
      patch when the two disagree; a dedicated test below covers that guard
-     with a mismatched bookId. */
-  revisions: { pending: [], drift: [], bookId: 'book-1' },
+     with a mismatched bookId. `hydratedFor` also matches 'book-1' — the
+     #3395 pass 3, R2 gate additionally refuses until this book's disk
+     snapshot has actually been read; a dedicated test below covers that gate
+     too, with `hydratedFor` behind `bookId`. */
+  revisions: { pending: [], drift: [], bookId: 'book-1', hydratedFor: 'book-1' },
   changeLog: { events: [] },
   bookMeta: { draft: null, saved: {} },
   ...overrides,
@@ -84,6 +87,73 @@ describe('persistenceMiddleware — gating', () => {
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/dismissDrift' });
     await advance(1000);
     expect(putBookState).not.toHaveBeenCalled();
+  });
+
+  it('refuses to persist a revisions patch when hydratedFor is behind bookId — the R2 pre-hydrate window (#3395 pass 3)', async () => {
+    /* `bookId` flips the instant navigation targets a new book, but the
+       disk hasn't been READ yet — `hydratedFor` still names the prior book
+       (or null). A write racing that window (e.g. a chapter_complete for
+       the just-opened book) must not PUT before the hydrate lands, or it
+       clobbers whatever was already on disk with an empty/partial patch. */
+    const state = baseState({
+      revisions: { pending: [{ id: 'r1' }], drift: [], bookId: 'book-1', hydratedFor: null },
+    });
+    const next = vi.fn((x) => x);
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/markRevisionPlayable' });
+    await advance(1000);
+    expect(putBookState).not.toHaveBeenCalled();
+  });
+
+  it('refuses to persist a revisions patch when hydratedFor names a DIFFERENT book than bookId', async () => {
+    const state = baseState({
+      revisions: { pending: [{ id: 'r1' }], drift: [], bookId: 'book-1', hydratedFor: 'book-0' },
+    });
+    const next = vi.fn((x) => x);
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/enqueuePending' });
+    await advance(1000);
+    expect(putBookState).not.toHaveBeenCalled();
+  });
+
+  it('persists once hydratedFor catches up to bookId (R2)', async () => {
+    const state = baseState({
+      revisions: { pending: [{ id: 'r1' }], drift: [], bookId: 'book-1', hydratedFor: 'book-1' },
+    });
+    const next = vi.fn((x) => x);
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/markRevisionPlayable' });
+    await advance(1000);
+    expect(putBookState).toHaveBeenCalledWith(
+      'book-1',
+      expect.objectContaining({ slice: 'revisions' }),
+    );
+  });
+
+  it('persists revisions/persistPendingAfterHydrateMerge like any other revisions rule (#3395 pass 3, R2)', async () => {
+    /* Dispatched by layout.tsx right after a hydrate whose merge folded a
+       pre-hydrate-window write into the disk snapshot — carries the merged
+       `pending` to disk since hydrateFromBookState itself is never
+       persisted. */
+    const state = baseState({
+      revisions: {
+        pending: [{ id: 'disk-only' }, { id: 'window-only' }],
+        drift: [],
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
+      },
+    });
+    const next = vi.fn((x) => x);
+    persistenceMiddleware(makeStore(state))(next)({
+      type: 'revisions/persistPendingAfterHydrateMerge',
+    });
+    await advance(1000);
+    expect(putBookState).toHaveBeenCalledWith(
+      'book-1',
+      expect.objectContaining({
+        slice: 'revisions',
+        patch: expect.objectContaining({
+          pending: [{ id: 'disk-only' }, { id: 'window-only' }],
+        }),
+      }),
+    );
   });
 });
 
@@ -208,7 +278,12 @@ describe('persistenceMiddleware — payload shape', () => {
        send only THIS book's drift to revisions.json (cross-book entries
        belong on their own books' files). */
     const state = baseState({
-      revisions: { pending: [{ id: 'r1' }], drift: [{ id: 'd1', bookId: 'book-1' }], bookId: 'book-1' },
+      revisions: {
+        pending: [{ id: 'r1' }],
+        drift: [{ id: 'd1', bookId: 'book-1' }],
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
+      },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/dismissDrift' });
     await advance(500);
@@ -236,6 +311,7 @@ describe('persistenceMiddleware — payload shape', () => {
           { id: 'd-other', bookId: 'book-2' },
         ],
         bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/dismissDrift' });
@@ -256,6 +332,7 @@ describe('persistenceMiddleware — payload shape', () => {
         acceptedSelections: {},
         timeline: { 3: [{ id: 'r0', chapterId: 3, eventKind: 'accepted' }] },
         bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/acceptRevision' });
@@ -285,6 +362,7 @@ describe('persistenceMiddleware — payload shape', () => {
         dismissed: ['d2'],
         acceptedSelections: { 'r-prev': { 4: 'B' } },
         bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/acceptRevision' });
@@ -315,6 +393,7 @@ describe('persistenceMiddleware — payload shape', () => {
         dismissed: [],
         acceptedSelections: { 'r-prev': { 4: 'B' } },
         bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/enqueuePending' });
@@ -339,6 +418,7 @@ describe('persistenceMiddleware — payload shape', () => {
         dismissed: [],
         acceptedSelections: { 'r-prev': { 4: 'B' } },
         bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/markRevisionPlayable' });
@@ -368,6 +448,7 @@ describe('persistenceMiddleware — payload shape', () => {
         dismissed: ['d2'],
         acceptedSelections: { 'r-prev': { 4: 'B' } },
         bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/rejectRevision' });
@@ -397,6 +478,7 @@ describe('persistenceMiddleware — payload shape', () => {
         acceptedSelections: { r1: { 0: 'A' } },
         timeline: {},
         bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     const mw = persistenceMiddleware(makeStore(state))(next);
@@ -443,6 +525,7 @@ describe('persistenceMiddleware — payload shape', () => {
           acceptedSelections,
           timeline,
           bookId: 'book-1',
+          hydratedFor: 'book-1',
         },
       });
       persistenceMiddleware(makeStore(state))(next)({ type });

@@ -23,6 +23,7 @@ function makeStore(timeline: Record<number, TimelineEntry[]>) {
         timeline,
         loaded: true,
         bookId: null,
+        hydratedFor: null,
       },
     },
   });

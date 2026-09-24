@@ -40,6 +40,7 @@ describe('revisionsSlice — initial state', () => {
       acceptedSelections: {},
       timeline: {},
       loaded: false,
+      hydratedFor: null,
       bookId: null,
     });
   });
@@ -434,6 +435,87 @@ describe('revisionsSlice — hydrateFromBookState', () => {
     );
     expect(next.bookId).toBe('book-A');
     expect(next.pending.map((r) => r.id)).toEqual(['r1']);
+  });
+
+  /* #3395 pass 3 — hydratedFor. */
+  it('sets hydratedFor to the payload bookId, even when the disk carried no revisions fields (R1/R2)', () => {
+    const next = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.hydrateFromBookState({ bookId: 'book-A' }),
+    );
+    expect(next.hydratedFor).toBe('book-A');
+    expect(next.pending).toEqual([]);
+  });
+
+  it('leaves hydratedFor untouched for a stale hydrate ignored by the bookId mismatch guard', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.hydrateFromBookState({ bookId: 'book-A', pending: [], drift: [] }),
+    );
+    expect(s.hydratedFor).toBe('book-A');
+    s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-C'));
+    expect(s.hydratedFor).toBeNull();
+    const stale = revisionsSlice.reducer(
+      s,
+      revisionsActions.hydrateFromBookState({ bookId: 'book-A', pending: [rev('rA')], drift: [] }),
+    );
+    expect(stale.hydratedFor).toBeNull();
+  });
+
+  it('merges a pre-hydrate-window pending entry with the disk snapshot, window entry wins on id collision (R2)', () => {
+    let s = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.bookScopeChanged('book-B'),
+    );
+    /* A splice/regen write lands for book-B while its own getBookState is
+       still in flight — gated on revisions.bookId already matching
+       (see splice-runner-middleware / generation-stream-runner), not on
+       hydratedFor. */
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.enqueuePending(rev('window-only', { playable: false })),
+    );
+    s = revisionsSlice.reducer(
+      s,
+      revisionsActions.enqueuePending(rev('collides', { playable: true, chapterId: 9 })),
+    );
+    const disk = revisionsSlice.reducer(
+      s,
+      revisionsActions.hydrateFromBookState({
+        bookId: 'book-B',
+        pending: [rev('disk-only'), rev('collides', { playable: false, chapterId: 9 })],
+        drift: [],
+      }),
+    );
+    expect(disk.hydratedFor).toBe('book-B');
+    const byId = Object.fromEntries(disk.pending.map((r) => [r.id, r]));
+    expect(Object.keys(byId).sort()).toEqual(['collides', 'disk-only', 'window-only']);
+    /* The window's write (playable: true) wins over the disk's stale
+       snapshot (playable: false) for the colliding id. */
+    expect(byId.collides.playable).toBe(true);
+  });
+
+  it('keeps the disk pending list untouched when there was no pre-hydrate window write', () => {
+    const next = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.hydrateFromBookState({
+        bookId: 'book-A',
+        pending: [rev('disk-only')],
+        drift: [],
+      }),
+    );
+    expect(next.pending.map((r) => r.id)).toEqual(['disk-only']);
+  });
+});
+
+describe('revisionsSlice — persistPendingAfterHydrateMerge (#3395 pass 3, R2)', () => {
+  it('is a no-op reducer — exists only as a PERSIST_RULES-recognised action type', () => {
+    const start = revisionsSlice.reducer(
+      undefined,
+      revisionsActions.hydrateFromBookState({ bookId: 'book-A', pending: [rev('r1')], drift: [] }),
+    );
+    const next = revisionsSlice.reducer(start, revisionsActions.persistPendingAfterHydrateMerge());
+    expect(next).toEqual(start);
   });
 });
 
