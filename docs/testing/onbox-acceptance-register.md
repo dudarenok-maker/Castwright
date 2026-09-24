@@ -4028,6 +4028,29 @@ already-analysed workspace, then one chapter re-render.
 > `coalfall-dragon` at 116.94–118.86 / 187.37–189.13 / 199.05–203.53, against
 > any narrator line in the same chapter. Full evidence:
 > `docs/testing/onbox-human-checkpoint-results/step2-a22-a23.md`.
+> **2026-09-24 — Castwright#3320: §8.7's pinned clips re-verified live and playable;
+> the by-ear half is now explicitly queued for the operator's own listen and tracked
+> as [#3396](https://github.com/dudarenok-maker/Castwright/issues/3396).** No re-render
+> attempted and none needed: the 2026-09-06 chapter audio is still on disk at
+> `C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ
+> Коалфолла\audio\02-глава-первая-стук.mp3` (2,251,029 bytes, `synthesizedAt
+> 2026-09-06T05:46:11Z`), reads cleanly under `ffprobe` (duration 255.699 s) and a full
+> `ffmpeg -f null -` decode exits 0 with zero error lines. The six pinned clips still
+> match the committed `segments.json` exactly — `mairin` (voice
+> `qwen-TP3sfCclL5WIPEhaZ9-Jd`) at `startSec` 38.94/39.98/46.14 (groupIndex 10, 11, 13)
+> and `coalfall-dragon` (voice `qwen-RJznhtTqGRaeobU0bm5XN`) at 116.94/187.37/199.05
+> (groupIndex 37, 58, 63), the last clip ending 203.53 s inside the 255.70 s file — with
+> 33 narrator segments (first at 1.50 s) in the same chapter as comparison lines.
+> **Discrepancy noted per the run brief:** the 2026-09-06 note above calls the render
+> "chapter 2", but the file carrying exactly those six pinned timestamps/groupIndex is
+> `02-глава-первая-стук.mp3` ("глава первая — стук"); the chapter-two-named file
+> `03-глава-вторая-отливка.mp3` was synthesised 2026-08-26 and its target-character
+> offsets (68.92, 140.68, …) do not match. The timestamps are trusted as the anchor;
+> nothing was re-rendered to reconcile the labels. The ear judgment itself remains
+> explicitly out of agent scope per this row's own text — #3320 re-confirmed the
+> artefacts and filed the hand-off, it did not listen. Row **stays open**; the listen,
+> the clip list, the decode evidence and the exact question to answer are all in #3396.
+
 
 ### A24 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070), [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678), PR [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797)) · **single 8 GB card; the deviceKey qualification (bullet 5) needs the 2-card boot**
 
