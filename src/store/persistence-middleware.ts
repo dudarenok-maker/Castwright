@@ -292,9 +292,10 @@ function bookIdFromState(s: PersistableRootState): string | null {
    rule above routes through this so a future persisted field can't be
    dropped by a subset of the rules (see finding 5b, PR #3395). Mirrors the
    full shape server/src/routes/revisions.ts reads back plus the two
-   write-only fields (acceptedSelections, timeline) the client alone owns;
-   the server PUT replaces revisions.json wholesale, so anything left out
-   here is lost on the next persist. */
+   fields (acceptedSelections, timeline) the client alone owns end to end —
+   written here, and read back by hydrateFromBookState on the next book
+   open; the server PUT replaces revisions.json wholesale, so anything left
+   out here is lost on the next persist. */
 function revisionsPatch(s: PersistableRootState, bookId: string) {
   return {
     pending: s.revisions.pending,

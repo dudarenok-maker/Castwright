@@ -87,8 +87,8 @@ describe('revisionsSlice — applyPoll', () => {
       }),
     );
     /* `pending` is client-owned — even a payload that carries a `pending`
-       list (the server still echoes one; see book-state.ts) must not land
-       in the slice from a poll. */
+       list (the server still echoes one; see server/src/routes/revisions.ts)
+       must not land in the slice from a poll. */
     expect(next.pending).toEqual([]);
     expect(next.drift.map((d) => d.id)).toEqual(['d1']);
     expect(next.loaded).toBe(true);
@@ -110,7 +110,14 @@ describe('revisionsSlice — applyPoll', () => {
        entry the user had just enqueued locally, silently dropping it once
        the 500ms persistence debounce fired and wrote the reverted list back
        to disk. See src/components/layout.test.tsx for the full end-to-end
-       repro through the real store + persistence middleware. */
+       repro through the real store + persistence middleware.
+
+       The poll's payload below deliberately carries a DIFFERENT `pending`
+       list (`r2`, not `r1`) than the one already hydrated — if applyPoll
+       ever wrote `payload.pending` into the slice (as it used to), this
+       assertion would catch it going red; a poll that merely echoes back
+       the same list it hydrated can't distinguish "never touches pending"
+       from "overwrites pending with an identical copy". */
     let s = revisionsSlice.reducer(
       undefined,
       revisionsActions.hydrateFromBookState({ pending: [rev('r1')], drift: [drift('d1')] }),
@@ -118,7 +125,7 @@ describe('revisionsSlice — applyPoll', () => {
     s = revisionsSlice.reducer(
       s,
       revisionsActions.applyPoll({
-        pending: [rev('r1')],
+        pending: [rev('r2')],
         drift: [],
       }),
     );

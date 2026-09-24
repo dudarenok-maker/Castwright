@@ -4940,9 +4940,11 @@ export interface components {
         };
         /**
          * @description Response of `GET /api/revisions?bookIds=...` (plan 83). Each value
-         *     is the same per-book computation as `RevisionsResponse` (minus
-         *     `timeline`, which the bulk route doesn't compute) — bookIds that
-         *     don't exist on disk are simply omitted from the map.
+         *     is the same per-book computation as `RevisionsResponse` — neither
+         *     the bulk route nor the single-book `GET /:bookId/revisions` route
+         *     computes or returns `timeline` (only the disk-hydrate response from
+         *     `GET /book-state` does) — bookIds that don't exist on disk are
+         *     simply omitted from the map.
          */
         BulkRevisionsResponse: {
             byBookId: {
