@@ -10,6 +10,7 @@ import type { Request, Response } from '../http.js';
 import { getManuscript, getOrHydrateManuscript } from '../store/manuscripts.js';
 import { safeBookId } from '../util/safe-id.js';
 import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
+import { resolveCapacity, type EngineCapacity } from '../analyzer/capacity.js';
 import { applyNarratorDefault } from '../analyzer/narrator-default.js';
 import { resetAnalyzerConcurrencyPeak, getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
 import { applyNarratorIdentity } from '../analyzer/narrator-identity.js';
@@ -2200,11 +2201,12 @@ export async function attributeChapterStage2(opts: {
   stage1: Stage1Output;
   chapter: { id: number; title: string; body: string };
   stageCall: StageCall;
-  /* Phase-1 analyzer engine — sizes the chunk budget against num_ctx for local
-     Ollama so a fat input chunk doesn't starve the output window (#528 follow-
-     up; 2026-06-14 qwen3.5:4b truncation). Defaults to the configured budget
-     when omitted. */
-  engine?: 'gemini' | 'local';
+  /* Phase-1 analyzer capacity (#3084 wave 2) — sizes the chunk budget: a
+     context-family capacity (local Ollama) derives it from num_ctx so a fat
+     input chunk doesn't starve the output window (#528 follow-up; 2026-06-14
+     qwen3.5:4b truncation). Omitted → the request-cap budget at the registry
+     cap, as an omitted engine behaved before. */
+  capacity?: EngineCapacity;
   onCoverageRetry?: (attempt: number, verdict: { issues: string[] }) => void;
   /** Fired when the coverage retry stopped early because the failure was
       reproduced exactly — deterministic, so more attempts cannot help. */
@@ -2300,7 +2302,7 @@ export async function attributeChapterStage2(opts: {
   };
   const result = await runStage2ChapterChunked({
     body: opts.chapter.body,
-    charBudget: resolveStage2ChunkCharBudget(opts.engine, opts.chapter.body),
+    charBudget: resolveStage2ChunkCharBudget(opts.capacity, opts.chapter.body),
     coverageRetries: resolveStage2CoverageRetries(),
     /* #2325 — the language's own dialogue marker, so a section that hands every
        spoken line to the narrator fails the coverage guard and is retried
@@ -4498,7 +4500,7 @@ export async function runMainAnalyzerJob(
                   runStage1ChapterChunked({
                     body: ch.body,
                     charBudget: resolveStage1ChunkCharBudget(
-                      selection.engine,
+                      resolveCapacity({ engine: selection.engine, model: selection.model }),
                       ch.body,
                       // #1691 — roster-aware reservation: the running roster
                       // grows with the whole book's cast, so the body budget must
@@ -5462,7 +5464,7 @@ export async function runMainAnalyzerJob(
         stage1: phase1Stage1,
         chapter: ch,
         stageCall: stage2Call,
-        engine: phase1Selection.engine,
+        capacity: resolveCapacity({ engine: phase1Selection.engine, model: phase1Selection.model }),
         structureBudget,
         escalationAnalyzer,
         // Section START: record this section's char count and total. Do NOT add
@@ -7113,7 +7115,7 @@ export async function runSubsetAnalyzerJob(
                 runStage1ChapterChunked({
                   body: ch.body,
                   charBudget: resolveStage1ChunkCharBudget(
-                    selection.engine,
+                    resolveCapacity({ engine: selection.engine, model: selection.model }),
                     ch.body,
                     // #1691 — roster-aware reservation, mirroring the full route.
                     Array.from(rebuildRoster().values()),
@@ -7407,7 +7409,7 @@ export async function runSubsetAnalyzerJob(
           title: record.title,
           stage1,
           chapter: ch,
-          engine: phase1Selection.engine,
+          capacity: resolveCapacity({ engine: phase1Selection.engine, model: phase1Selection.model }),
           structureBudget,
           escalationAnalyzer,
           stageCall: {

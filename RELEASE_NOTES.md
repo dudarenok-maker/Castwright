@@ -41,6 +41,8 @@
 
 - **CI's weekly quarantine check now catches when it can't read the register.** The automation that tracks which tests are known to be flaky used to parse the register's format incorrectly and silently report a false clean — now it either reads successfully or reports the failure instead, so a broken parse won't hide the problem until someone notices weeks later.
 
+- **Advanced Settings now explains what each chunk-size setting actually controls**, instead of leaving you to guess how it interacts with the others.
+
 - **Castwright's on-box acceptance register checker now catches stale content markers on test rows.** The internal tool that verifies acceptance-test artifacts against what's already published used to ignore row titles and risk badges, only checking the row body. A row whose test status changed from "20 of 60 run" to "10 of 60 run" would ship without a trace, invisible until someone glanced at the live page. Now it catches changes to either, so a test row's published state stays in sync with what you're about to ship.
 
 - **The acceptance-register citation checker now catches when a register row has been reorganised but code is still citing it by its old id.** Castwright keeps detailed internal records (the acceptance register) of on-box test results, deployments, and known gaps — every entry tagged by a unique id. When a review or reorganisation shifts entries around, citations in the code can end up pointing at the wrong row, silently. Castwright now detects that mismatch, with an exemption for reorganisations that were already documented as intentional. A false-alarm in multi-row entries — when one row of a subject was archived but others stayed — is also fixed.
