@@ -6531,6 +6531,42 @@ the TTS sidecar's `python.exe` if it's up):
 *Needs:* a Windows dev box, no GPU. *Cost:* ~20 minutes across a few pushes.
 *Criteria:* the five observations above; issue #3047's acceptance list.
 
+> **2026-09-24 — E104 driven on-box; observations 1–4 PASS, push-path observation in flight.** ([#3322](https://github.com/dudarenok-maker/Castwright/issues/3322),
+> agent `cline-qwen-cloud`.) Real `Win32_Process` output only — three live fixture trees staged
+> on this box plus one organic orphan found by the census itself:
+> - **Fixtures:** (1) `npx vitest --watch src/test/a11y.test.tsx` owned by a scheduled task
+>   (parent `svchost.exe` — live non-supervisor owner → reachable), (2) an orphaned
+>   `powershell.exe -File …\e104-tail-vitest.log.ps1` whose argv merely NAMES `vitest` (the
+>   C2 false-positive shape), (3) `npx vitest run` full-suite batteries whose task-root
+>   `cmd.exe` owner was `taskkill`ed mid-CPU-burn to recreate the 2026-09-05 shape.
+> - **Observation 1 — report-only census reads right:** `npm run doctor` over 391 roots →
+>   389 `alive`, 2 `reap`, both genuinely dead-linked: the fixture orphan (`pid=37028`,
+>   owner killed seconds earlier, 17-worker vitest pool still burning) and — organic
+>   evidence — another lane's abandoned `npx --prefix … vitest run --root
+>   …/Audiobook-Generator/…` tree (`pid=38360`) whose launcher shell had already exited.
+>   The reachable watch battery read `alive pid=37736 rate=n/a reasons=-`; no `python.exe`
+>   subtree flagged (several `protected:python`); no `git.exe` subtree flagged.
+> - **Observation 2 — stalled-rate:** ~10.2 min later (T0 census is the prior sample) the
+>   same reachable watch battery read `reap pid=37736 rate=0.02 reasons=stalled-rate` —
+>   live owner, genuinely idle since its first run, reaped only by the wider `--kill` path.
+> - **Observation 3 — orphan kill:** `npm run doctor -- --kill` printed
+>   `reap pid=37736 rate=0.02 reasons=stalled-rate [KILLED]` and
+>   `reap pid=33640 reasons=orphaned-unreachable [KILLED]` (a second mid-burn orphan);
+>   `Get-Process` re-check: 37736, 37604 (the vitest node) and 33640 all gone; N4 watch —
+>   every killed pid was the expected recorded root, none exited-and-recycled in the
+>   0.7–3.5 s enumeration-to-kill window; no misdirected `taskkill` observed.
+> - **Observation 4 — namer-only survives:** the orphaned `powershell -File
+>   …e104-tail-vitest.log.ps1` (argv contains `vitest`, resolves to no runner) stayed
+>   `alive` through both censuses and the `--kill` pass, verified still running via
+>   `Get-Process -Id 4200` afterwards.
+> - **Rate calibration cross-check:** the watch subtree accumulated ~139.8 CPU-s over its
+>   ~93.4 s first run (~90 s/min, inside the 30–100 s/min healthy band) and ~0.1 CPU-s
+>   over the 10.2-min idle window (0.02 s/min ≤ the 2.0 dead-rate) — real
+>   `UserModeTime`+`KernelModeTime` growth, as this row claims.
+> Evidence files: `census-t0.txt`, `census-t1.txt`, `doctor-kill.txt`, `timeline.txt` under
+> `%TEMP%\open-engine-scratch\cline-qwen-cloud-3322-20260924-093037\`.
+
+
 ### E105 · ops-72 step/pipeline time budgets — `taskkill /T /F`'s orphan blind spot against a real Windows process tree ([Castwright#3249](https://github.com/dudarenok-maker/Castwright/issues/3249), Part 2 of [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)) · **any Windows dev box; no GPU needed**
 
 `runStepProcess`'s timeout path is unit-tested against a real (but tiny and fast)
