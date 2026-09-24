@@ -68,7 +68,6 @@ import { configValue } from '../config/resolver.js';
 import { readVerdicts, writeVerdicts } from '../audio/render-integrity/verdicts-io.js';
 import { readCentroids, auditionCentroidUsableForCurrent, type CharacterCentroid } from '../audio/render-integrity/centroids-io.js';
 import { cosineToCentroid, scoreSegment } from '../audio/render-integrity/score.js';
-import { buildSnapshotIdResolver } from '../audio/render-integrity/aggregate.js';
 import { embedSegment } from '../tts/embed-client.js';
 import { readEmbeddings, writeEmbeddings, EMBEDDINGS_VERSION, type EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
 
@@ -193,6 +192,15 @@ chapterQaRepairRouter.post(
          *  acousticOnly is NOT set — the candidate remains signal-backed and must not
          *  be dropped by the centroid pre-filter. */
         acousticOnly?: boolean;
+        /** #3362 pass-4 fix (🟠D / owner design b) — the render-integrity
+         *  VERDICT ROW's own `characterId` (the key `scoreBook` wrote this
+         *  row under), set whenever this candidate is backed by a verdict
+         *  row (`acoustic === true`, both acoustic-only and unioned signal/
+         *  acoustic candidates). Every centroid lookup for an acoustic
+         *  candidate keys off THIS field, never a re-derived resolution of
+         *  `seg.characterId` — consistent with the pre-filter below, which
+         *  already looks centroids up by the verdict row's own key. */
+        verdictCharacterId?: string;
       }> = [];
       for (let i = 0; i < segFile.segments.length; i += 1) {
         const seg = segFile.segments[i];
@@ -249,11 +257,17 @@ chapterQaRepairRouter.post(
               // Union: the signal/ASR scan already covers this segment; mark it acoustic too.
               // acousticOnly is NOT set — the candidate is still signal-backed.
               existing.acoustic = true;
+              // #3362 pass-4 fix — stamp the verdict row's OWN key even on a
+              // union candidate, so every downstream centroid lookup for
+              // this segment keys off it too (design b), not just the
+              // acoustic-only branch below.
+              existing.verdictCharacterId = row.characterId;
             } else {
               flagged.push({
                 segmentIndex: segIdx,
                 characterId: row.characterId,
                 sentenceIds: row.sentenceIds.slice(),
+                verdictCharacterId: row.characterId,
                 reasons: [`voice-mismatch cosine ${row.cosine.toFixed(3)} < E (fixable)`],
                 acoustic: true,
                 acousticOnly: true,
@@ -425,24 +439,20 @@ chapterQaRepairRouter.post(
             );
           }),
         );
-      /* #3362 (review pass 2, 🟠B; hardened in pass 3, 🟠B continued) —
-         centroids/verdict rows are keyed by the RENDER-TIME
-         `characterSnapshots` key (see aggregate.ts's `buildSnapshotIdResolver`
-         doc comment), while `seg.characterId` below is the raw segment id
-         from segments.json, which can differ by spelling (hyphen/underscore
-         normalisation) or by a retirement recorded after this chapter
-         rendered. Resolve every raw `seg.characterId` used to look into
-         `centroids`/verdict rows through the SAME resolver aggregate.ts's
-         scoreBook uses for THIS chapter, scoped to segFile's OWN snapshot
-         keys plus castIdHistory — never the book-wide `castResolver` above,
-         which would join through EVERY chapter's retirements/merges rather
-         than only the bridges this chapter's own render actually resolved,
-         and could pull in a DIFFERENT chapter's canonical key entirely
-         (pass 3's 🟠B-continued regression). Passing the SAME `castIdHistory`
-         loaded above (not a fresh re-read) keeps this resolver's history tier
-         reading the identical state aggregate.ts's own per-chapter resolver
-         would. */
-      const resolveCentroidCharId = buildSnapshotIdResolver(segFile, castIdHistory);
+      /* #3362 pass-4 fix (🟠D / owner design b) — centroids/verdict rows are
+         keyed by whatever id `scoreBook` resolved a chapter's rows under at
+         SCORING time (see aggregate.ts's `resolveRowCharId` doc comment),
+         which can differ from `seg.characterId` (the raw segment id) by
+         spelling, or by a retirement/reject/bridge recorded between scoring
+         and this repair pass. Re-deriving that resolution here via a
+         resolver rebuilt from the CURRENT cast + cast-id-history (as this
+         route used to) can disagree with what `scoreBook` actually wrote the
+         row under the moment history changes in between (pass-4 Q2/Q3) —
+         the acoustic gate then silently misses the centroid/verdict row
+         entirely. Every centroid lookup below instead keys off the
+         CANDIDATE's own `verdictCharacterId` — the verdict row's `characterId`
+         as `scoreBook` wrote it, threaded onto `flagged` above — consistent
+         with the pre-filter just above, which already does this. */
 
       /* Edit 6 (srv-36): capture accepted re-render embeddings by segment index.
          Populated inside the synth callback; flushed to disk after finalize. */
@@ -582,8 +592,8 @@ chapterQaRepairRouter.post(
             if (!signalAndAsrOk) return false;
             // Apply acoustic term only when the candidate originated from the verdict file
             // AND a centroid is available for this character.
-            const centroidCharId = resolveCentroidCharId(seg.characterId);
-            if (cand?.acoustic && cos !== null && centroids?.[centroidCharId]) {
+            const centroidCharId = cand?.verdictCharacterId;
+            if (cand?.acoustic && cos !== null && centroidCharId && centroids?.[centroidCharId]) {
               const charCentroid = centroids[centroidCharId];
               return cos >= charCentroid.cleanMean;
             }
@@ -621,9 +631,9 @@ chapterQaRepairRouter.post(
                centroid exists for this character — avoid the sidecar round-trip for
                pure signal/ASR repairs. */
             let cos: number | null = null;
-            if (candidate?.acoustic && centroids?.[resolveCentroidCharId(seg.characterId)]) {
+            if (candidate?.acoustic && candidate.verdictCharacterId && centroids?.[candidate.verdictCharacterId]) {
               const vec = Array.from(await embedSegment(r.pcm, r.sampleRate));
-              cos = cosineToCentroid(vec, centroids[resolveCentroidCharId(seg.characterId)].centroid);
+              cos = cosineToCentroid(vec, centroids[candidate.verdictCharacterId].centroid);
             }
             const better =
               !best ||
@@ -662,7 +672,7 @@ chapterQaRepairRouter.post(
           } else {
             repaired.push(segIndex);
             /* Edit 6a (srv-36): capture the accepted take's embedding for post-finalize write. */
-            if (bestCosine !== null && candidate?.acoustic && centroids?.[resolveCentroidCharId(seg.characterId)]) {
+            if (bestCosine !== null && candidate?.acoustic && candidate.verdictCharacterId && centroids?.[candidate.verdictCharacterId]) {
               // We already have the last-computed embedding via embedSegment — but to avoid
               // storing a reference to the Float32Array from the last loop iteration (which
               // may be the best or the last non-best), recompute from `best.pcm`.
@@ -797,7 +807,11 @@ chapterQaRepairRouter.post(
           if (verdictRows) {
             for (const [segIdx, vec] of newEmbeddingsByIndex) {
               const seg = segFile.segments[segIdx];
-              const centroidCharId = seg ? resolveCentroidCharId(seg.characterId) : undefined;
+              // #3362 pass-4 fix (design b) — same verdict-row-keyed lookup
+              // as the synth callback above; find this segment's own flagged
+              // candidate to read its `verdictCharacterId` back.
+              const cand = flagged.find((f) => f.segmentIndex === segIdx);
+              const centroidCharId = cand?.verdictCharacterId;
               if (!seg || !centroidCharId || !centroids?.[centroidCharId]) continue;
               const centroid = centroids[centroidCharId];
               const newCosine = cosineToCentroid(Array.from(vec), centroid.centroid);

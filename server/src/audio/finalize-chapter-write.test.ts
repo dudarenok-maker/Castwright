@@ -594,6 +594,55 @@ describe('finalizeChapterAudioWrite characterSnapshots canonical-id keying (#336
   });
 });
 
+/* #3362 pass-4 fix (🟠D / owner design a) — finalize stamps each segment
+   with the SAME canonical id it resolved to build `characterSnapshots`, so
+   render-integrity scoring, qa-report.ts and chapter-qa-repair.ts can join a
+   row to its snapshot through the segment itself instead of re-resolving
+   the raw id through the CURRENT (mutable) cast + cast-id-history at
+   scoring/repair time. See aggregate.ts's `resolveRowCharId` doc comment. */
+describe('finalizeChapterAudioWrite stamps resolvedCharacterId on each segment (#3362 pass-4)', () => {
+  it('stamps the history-tier render-time resolution: segment "mayrin" stamped "mairin"', async () => {
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      castIdHistory: { schema: 1, supersededBy: { mayrin: 'mairin' } },
+      segments: [
+        { groupIndex: 0, characterId: 'mayrin', sentenceIds: [1], startSec: 0, endSec: 1.0, voiceName: 'kokoro-mairin' },
+      ],
+      cast: [{ id: 'mairin', name: 'Mairin', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.segments[0].characterId).toBe('mayrin');
+    expect(segFile.segments[0].resolvedCharacterId).toBe('mairin');
+    expect(segFile.characterSnapshots['mairin']).toBeDefined();
+  });
+
+  it('does NOT stamp a segment whose id never resolves into this chapter\'s own characterSnapshots', async () => {
+    // No cast row for 'amy' at all — resolveSpeakingId falls back to the raw
+    // id, which never appears as a characterSnapshots key.
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [
+        { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+      ],
+      cast: [],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.segments[0].characterId).toBe('amy');
+    expect(segFile.segments[0].resolvedCharacterId).toBeUndefined();
+    expect(segFile.characterSnapshots['amy']).toBeUndefined();
+  });
+
+  it('stamps a segment whose raw id already matches its cast id exactly, with the same (identity) value', async () => {
+    await finalizeChapterAudioWrite(baseInput());
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.segments[0].characterId).toBe('amy');
+    expect(segFile.segments[0].resolvedCharacterId).toBe('amy');
+  });
+});
+
 /* #3362 finding 3 — finalize must resolve against the `castIdHistory` the
    CALLER passes (the state the render actually resolved segments' ids
    against), never a fresh `loadCastIdHistory(bookDir)` read of whatever is

@@ -574,10 +574,12 @@ describe('scoreBook — canonical cast-id joins (#3362 review finding)', () => {
     writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
       chapterId: 1,
       modelKey: 'qwen3-tts-0.6b',
-      // segments.json's own `segments[]` entries carry the RAW id verbatim
-      // (finalize-chapter-write.ts only resolves speakingIds/snapshots, not
-      // the persisted segments array itself) — matching the embedding rows.
-      segments: rows.map((r) => ({ characterId: 'the-torment', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      // #3362 pass-4 fix — segments.json's own `segments[]` entries carry
+      // the RAW id verbatim, PLUS the `resolvedCharacterId` stamp
+      // finalize-chapter-write.ts writes (the same resolution it applied to
+      // key `characterSnapshots`), since aggregate.ts's scoring join now
+      // reads THAT stamp back instead of re-deriving it.
+      segments: rows.map((r) => ({ characterId: 'the-torment', resolvedCharacterId: 'the_torment', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
       // characterSnapshots IS canonical-keyed (#3370).
       characterSnapshots: { the_torment: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-the-torment', modelKey: 'qwen3-tts-0.6b' } },
     }));
@@ -669,9 +671,14 @@ describe('scoreBook — canonical cast-id joins (#3362 review finding)', () => {
     // normalised match for 'mayrin' against the book-wide snapshot-key set
     // (only 'mairin' is in it) and left the row raw — dropping every row,
     // writing no render-integrity.json, and falling through to a phantom
-    // audition. A per-chapter resolver that ALSO takes THIS chapter's own
-    // castIdHistory bridges 'mayrin' -> 'mairin' correctly, because 'mairin'
-    // is exactly this chapter's own snapshot key.
+    // audition. #3362 pass-4 fix (🟠D): rather than re-deriving this bridge
+    // from cast-id-history at SCORING time (which pass 3's per-chapter
+    // resolver still did, and which broke again the moment history changed
+    // AFTER render — see aggregate.test.ts's 'canonical cast-id joins survive
+    // history changes AFTER render' describe block below), the segment
+    // itself now carries the `resolvedCharacterId` stamp
+    // finalize-chapter-write.ts wrote at RENDER time, and scoring simply
+    // reads it back.
     const dir = mkdtempSync(join(tmpdir(), 'spk-history-tier-'));
     mkdirSync(join(dir, 'audio'), { recursive: true });
     mkdirSync(dotAudiobook(dir), { recursive: true });
@@ -692,7 +699,10 @@ describe('scoreBook — canonical cast-id joins (#3362 review finding)', () => {
     writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
       chapterId: 1,
       modelKey: 'qwen3-tts-0.6b',
-      segments: rows.map((r) => ({ characterId: 'mayrin', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      // #3362 pass-4 fix — the stamp finalize-chapter-write.ts wrote from
+      // resolving 'mayrin' through cast-id-history AT RENDER TIME; scoring
+      // now joins on this stamp rather than re-deriving it from a resolver.
+      segments: rows.map((r) => ({ characterId: 'mayrin', resolvedCharacterId: 'mairin', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
       characterSnapshots: { mairin: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-mairin', modelKey: 'qwen3-tts-0.6b' } },
     }));
 
@@ -752,7 +762,9 @@ describe('scoreBook — canonical cast-id joins (#3362 review finding)', () => {
     }));
 
     // ch2's SEGMENTS still say 'bob' (raw, frozen at synth time), but its
-    // SNAPSHOT (resolved through history at render time) is 'robert'.
+    // SNAPSHOT (resolved through history at render time) is 'robert' —
+    // #3362 pass-4 fix: stamped with `resolvedCharacterId: 'robert'`, the
+    // same resolution finalize-chapter-write.ts applied to key the snapshot.
     const halfPi = Math.PI / 2;
     const ch2Rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
     for (let i = 0; i < 12; i++) ch2Rows.push({ characterId: 'bob', sentenceIds: [200 + i], vec: vec(halfPi + 0.02 * i) });
@@ -760,7 +772,7 @@ describe('scoreBook — canonical cast-id joins (#3362 review finding)', () => {
     writeFileSync(join(dir, 'audio', 'ch2.segments.json'), JSON.stringify({
       chapterId: 2,
       modelKey: 'qwen3-tts-0.6b',
-      segments: ch2Rows.map((r) => ({ characterId: 'bob', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      segments: ch2Rows.map((r) => ({ characterId: 'bob', resolvedCharacterId: 'robert', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
       characterSnapshots: { robert: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-robert', modelKey: 'qwen3-tts-0.6b' } },
     }));
 
@@ -938,6 +950,278 @@ describe('scoreBook — canonical cast-id joins (#3362 review finding)', () => {
     const robertCentroid = centroids!['robert'].centroid;
     expect(bobCentroid[0]).toBeGreaterThan(0.9); // ≈ cos(0)
     expect(robertCentroid[1]).toBeGreaterThan(0.9); // ≈ sin(π/2)
+  });
+});
+
+describe('scoreBook — canonical cast-id joins survive history changes AFTER render (#3362 pass-4, 🟠D)', () => {
+  // Every test here starts from a chapter whose segments.json ALREADY
+  // carries the `resolvedCharacterId` stamp finalize-chapter-write.ts wrote
+  // at render time (the state 761d28a1's own tests pin) — then mutates
+  // cast.json/cast-id-history.json AFTER that, before calling scoreBook, to
+  // prove scoring never re-reads them for the identity join. Pass-3's
+  // per-chapter resolver (removed by this fix) re-derived the join from
+  // whatever cast-id-history.json says at SCORING time, so every one of
+  // these mutations reopened review pass 3's 🟠C phantom-audition symptom
+  // (pass-4's repro table, S4/S5/S6/S8) or left stale verdict rows behind
+  // on a re-score (S7).
+
+  it('S4: a rename recorded AFTER render does not move the scored identity off the render-time stamp', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-s4-rename-after-render-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    const rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) rows.push({ characterId: 'mayrin', sentenceIds: [i], vec: vec(0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: rows.map((r) => ({ characterId: 'mayrin', resolvedCharacterId: 'mairin', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { mairin: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-mairin', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    // AFTER render: 'mairin' is renamed to 'mairin-oakes' — cast.json and
+    // cast-id-history.json both move (retireCharacterId path-compresses the
+    // very bridge that resolved this render). Neither the segments.json nor
+    // the embedding rows change.
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'mairin-oakes', name: 'Mairin Oakes', gender: 'female', attributes: [] }] }),
+    );
+    writeFileSync(
+      castIdHistoryPath(dir),
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin-oakes', mairin: 'mairin-oakes' } }),
+    );
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    // Still 12 rows keyed 'mairin' (the render-time stamp) — never
+    // 'mairin-oakes', never dropped, never an audition (which would need a
+    // real sidecar call this test never provides — a hang/throw here would
+    // itself prove the row fell through to Option-B).
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(verdicts).not.toBeNull();
+    expect(verdicts!.length).toBe(12);
+    expect(verdicts!.every((v) => v.characterId === 'mairin')).toBe(true);
+    expect(verdicts!.every((v) => v.referenceKind === 'in-book')).toBe(true);
+
+    const centroids = await readCentroids(dir);
+    expect(centroids!['mairin'].referenceKind).toBe('in-book');
+    expect(centroids!['mairin-oakes']).toBeUndefined();
+  });
+
+  it('S5: rejecting the mayrin/mairin pair AFTER render does not move the scored identity off the render-time stamp', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-s5-reject-after-render-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    const rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) rows.push({ characterId: 'mayrin', sentenceIds: [i], vec: vec(0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: rows.map((r) => ({ characterId: 'mayrin', resolvedCharacterId: 'mairin', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { mairin: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-mairin', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    // AFTER render: a user rejects "mayrin is not Mairin" — the bridge that
+    // resolved this render is torn down via rejectedPairs and
+    // forgetSupersededId, with no replacement.
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }] }),
+    );
+    writeFileSync(
+      castIdHistoryPath(dir),
+      JSON.stringify({ schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'mayrin', to: 'mairin' }] }),
+    );
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(verdicts).not.toBeNull();
+    expect(verdicts!.length).toBe(12);
+    expect(verdicts!.every((v) => v.characterId === 'mairin')).toBe(true);
+    expect(verdicts!.every((v) => v.referenceKind === 'in-book')).toBe(true);
+  });
+
+  it('S6: renaming the SURVIVOR of an earlier merge AFTER render does not disturb either chapter\'s scored identity or pool their centroids', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-s6-survivor-rename-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    // ch1: pre-merge render, raw+stamp both 'bob' (exact match, no resolver
+    // needed — the shape the 🟠C variant test above already pins).
+    const bobRows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) bobRows.push({ characterId: 'bob', sentenceIds: [i], vec: vec(0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), bobRows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: bobRows.map((r) => ({ characterId: 'bob', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { bob: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-bob', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    // ch2: post-merge render, raw 'bob' stamped 'robert' (finalize resolved
+    // it through the bob->robert bridge at render time).
+    const halfPi = Math.PI / 2;
+    const ch2Rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) ch2Rows.push({ characterId: 'bob', sentenceIds: [200 + i], vec: vec(halfPi + 0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch2.embeddings.json'), ch2Rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch2.segments.json'), JSON.stringify({
+      chapterId: 2,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: ch2Rows.map((r) => ({ characterId: 'bob', resolvedCharacterId: 'robert', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { robert: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-robert', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    // AFTER both renders: the survivor 'robert' is itself renamed to
+    // 'roberto' — cast.json and cast-id-history.json both move again.
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'roberto', name: 'Roberto', gender: 'male', attributes: [] }] }),
+    );
+    writeFileSync(
+      castIdHistoryPath(dir),
+      JSON.stringify({ schema: 1, supersededBy: { bob: 'roberto', robert: 'roberto' } }),
+    );
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+
+    // ch1 stays 'bob', ch2 stays 'robert' — neither moves to 'roberto', and
+    // neither pools into the other (distinct centroids, own clusters).
+    const bobVerdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(bobVerdicts).not.toBeNull();
+    expect(bobVerdicts!.length).toBe(12);
+    expect(bobVerdicts!.every((v) => v.characterId === 'bob')).toBe(true);
+
+    const robertVerdicts = await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'));
+    expect(robertVerdicts).not.toBeNull();
+    expect(robertVerdicts!.length).toBe(12);
+    expect(robertVerdicts!.every((v) => v.characterId === 'robert')).toBe(true);
+
+    const centroids = await readCentroids(dir);
+    expect(centroids!['bob'].referenceKind).toBe('in-book');
+    expect(centroids!['robert'].referenceKind).toBe('in-book');
+    expect(centroids!['roberto']).toBeUndefined();
+    expect(centroids!['bob'].centroid[0]).toBeGreaterThan(0.9); // ≈ cos(0)
+    expect(centroids!['robert'].centroid[1]).toBeGreaterThan(0.9); // ≈ sin(π/2)
+  });
+
+  it('S7: re-scoring after a history change never leaves stale verdict rows behind — the stamp makes the identity stable across runs', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-s7-rescore-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    const rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) rows.push({ characterId: 'mayrin', sentenceIds: [i], vec: vec(0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: rows.map((r) => ({ characterId: 'mayrin', resolvedCharacterId: 'mairin', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { mairin: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-mairin', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }] }),
+    );
+    writeFileSync(castIdHistoryPath(dir), JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+    const firstPass = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(firstPass!.length).toBe(12);
+    expect(firstPass!.every((v) => v.characterId === 'mairin')).toBe(true);
+
+    // Between the two scoreBook calls: 'mairin' is renamed to
+    // 'mairin-oakes' — nothing else about the render changes.
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'mairin-oakes', name: 'Mairin Oakes', gender: 'female', attributes: [] }] }),
+    );
+    writeFileSync(
+      castIdHistoryPath(dir),
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin-oakes', mairin: 'mairin-oakes' } }),
+    );
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    // The stamp is unaffected by the rename, so the re-score resolves the
+    // SAME 12 rows under the SAME key ('mairin') both times —
+    // `mergeVerdictRows` drops and rewrites exactly that key's rows, never
+    // leaving a stale duplicate under a different one.
+    const secondPass = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(secondPass).not.toBeNull();
+    expect(secondPass!.length).toBe(12);
+    expect(secondPass!.every((v) => v.characterId === 'mairin')).toBe(true);
+    const sentenceIds = secondPass!.map((v) => v.sentenceIds[0]).sort((a, b) => a - b);
+    expect(new Set(sentenceIds).size).toBe(12); // no duplicates
+
+    // Discriminator (pass-4's repro table records exactly 1 audition for
+    // this scenario pre-fix): the re-score must resolve the SAME 12 rows it
+    // already has as real in-book anchors again, never falling through to
+    // Option-B — so nothing is left pending a retry.
+    expect((await readPendingAttempts(dir))?.mairin).toBeUndefined();
+    const centroids = await readCentroids(dir);
+    expect(centroids!['mairin'].referenceKind).toBe('in-book');
+  });
+
+  it('S8: a link recorded AFTER render between an orphaned narrator-voiced id and a real character never pools the orphan\'s rows into that character\'s anchors/verdicts', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-s8-late-link-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    // 12 real 'mairin' anchor rows (exact match, no stamp needed) plus 6
+    // narrator-voiced ORPHAN rows rendered under 'mayrin' — at render time
+    // 'mayrin' had NO cast/history bridge at all, so finalize never stamped
+    // `resolvedCharacterId` on them (they carry no snapshot entry either).
+    const mairinRows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) mairinRows.push({ characterId: 'mairin', sentenceIds: [i], vec: vec(0.02 * i) });
+    const orphanRows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    const halfPi = Math.PI / 2;
+    for (let i = 0; i < 6; i++) orphanRows.push({ characterId: 'mayrin', sentenceIds: [100 + i], vec: vec(halfPi + 0.02 * i) });
+    const allRows = [...mairinRows, ...orphanRows];
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), allRows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: [
+        ...mairinRows.map((r) => ({ characterId: 'mairin', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+        // No `resolvedCharacterId` — unresolvable at render time.
+        ...orphanRows.map((r) => ({ characterId: 'mayrin', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      ],
+      // No snapshot entry for 'mayrin' at all — an orphaned id has no
+      // per-character snapshot (matching the narrator-substitution shape).
+      characterSnapshots: { mairin: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-mairin', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    // AFTER render: a link is recorded ({mayrin: mairin}) — a later
+    // analysis pass decided the orphan really was Mairin after all.
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }] }),
+    );
+    writeFileSync(castIdHistoryPath(dir), JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    // Only the 12 real 'mairin' rows are scored — the 6 orphan rows never
+    // joined 'mairin's anchors (which would have forced a bimodal/audition
+    // fallback) and never appear as 'mairin' mismatches. Matching `main`'s
+    // own behaviour (and 761d28a1's): an id absent from this chapter's own
+    // snapshot stays unscored, regardless of a LATER link.
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(verdicts).not.toBeNull();
+    expect(verdicts!.length).toBe(12);
+    expect(verdicts!.every((v) => v.characterId === 'mairin')).toBe(true);
+    expect(verdicts!.every((v) => v.referenceKind === 'in-book')).toBe(true);
+
+    const centroids = await readCentroids(dir);
+    expect(centroids!['mairin'].referenceKind).toBe('in-book');
+    // The centroid stays tight around the real cluster (θ≈0) — never
+    // dragged/bimodal from the orphan's θ≈π/2 rows.
+    expect(centroids!['mairin'].centroid[0]).toBeGreaterThan(0.9);
   });
 });
 

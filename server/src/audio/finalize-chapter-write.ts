@@ -389,6 +389,22 @@ export async function finalizeChapterAudioWrite(
     voiceNameByChar,
   );
 
+  /* #3362 pass-4 fix (🟠D / owner design a) — stamp each segment with the
+     canonical id THIS render resolved it to (the same `resolveSpeakingId`
+     already computed above to build `speakingIds`/`characterSnapshots`),
+     ONLY when that id is a real key in THIS chapter's own
+     `characterSnapshots` — otherwise the raw id stands (see
+     `ChapterSegment.resolvedCharacterId`'s own doc comment). Render-integrity
+     scoring, qa-report.ts and chapter-qa-repair.ts read this stamp back
+     instead of re-resolving `characterId` through the CURRENT, mutable
+     cast-id-history at scoring/repair time — a later retirement, reject, or
+     bridge added after this render must never change which identity this
+     render's own rows score under. */
+  const stampedSegments: ChapterSegment[] = segments.map((s) => {
+    const resolved = resolveSpeakingId(s.characterId);
+    return characterSnapshots[resolved] ? { ...s, resolvedCharacterId: resolved } : s;
+  });
+
   /* Drift stamp from the ACTUAL render, not the request default (false-drift
      fix, 2026-06-07). The breakdown counts the speaking characters per engine
      they rendered in; the stamp collapses to the single engine's canonical key
@@ -407,7 +423,7 @@ export async function finalizeChapterAudioWrite(
     modelKey,
     synthesizedAt: new Date().toISOString(),
     ...(input.castHistorySeq === undefined ? {} : { castHistorySeq: input.castHistorySeq }),
-    segments,
+    segments: stampedSegments,
     characterSnapshots,
     qa: audioQa,
   };

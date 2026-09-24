@@ -77,6 +77,14 @@ export interface SegmentsFile {
     characterId?: string;
     sentenceIds?: number[];
     renderedFallbackEngine?: string | null;
+    /** #3362 pass-4 fix — the canonical id THIS render resolved `characterId`
+        to, stamped by finalize-chapter-write.ts only when it names a real key
+        in this chapter's own `characterSnapshots`. See
+        `ChapterSegment.resolvedCharacterId` (synthesise-chapter.ts) for the
+        full rationale. Absent on legacy segments — callers fall back to the
+        raw `characterId`, exact-matched against this chapter's own snapshot
+        keys, never against history. */
+    resolvedCharacterId?: string;
     /** #2023 Piece 1 — the cast character id that ACTUALLY spoke this segment
         when `characterId` above is an orphaned id (no cast entry at all) and
         the render's orphaned-characterId safety net substituted the narrator
