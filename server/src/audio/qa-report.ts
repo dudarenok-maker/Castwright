@@ -22,7 +22,11 @@ import { deriveBookOutline } from './render-integrity/verdicts-io.js';
 import { STOCHASTIC_ENGINES, resolveConfiguredEngineByChar } from './render-integrity/aggregate.js';
 import { readEmbeddings } from './render-integrity/embeddings-io.js';
 import { readCentroids } from './render-integrity/centroids-io.js';
-import { audioDir } from '../workspace/paths.js';
+import { audioDir, castJsonPath } from '../workspace/paths.js';
+import { readJson } from '../workspace/state-io.js';
+import { buildCastResolver } from '../store/cast-resolve.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
+import type { CastCharacter } from '../tts/synthesise-chapter.js';
 
 export interface AudioQaReport {
   chaptersRendered: number;
@@ -77,6 +81,23 @@ export async function buildAudioQaReport(
   // never disagree with which characters/chapters scoreBook actually scores.
   const configuredEngineByChar = resolveConfiguredEngineByChar(segFiles);
 
+  /* #3362 (review pass 1 finding) — `configuredEngineByChar` is keyed by the
+     CANONICAL cast id (sourced from characterSnapshots, canonical since
+     finalize-chapter-write #3370), but `embeddings.json` rows below carry the
+     RAW segment characterId their synth request was made under. Resolve each
+     row's raw id through the same cast + cast-id-history resolver
+     aggregate.ts's scoreBook uses before joining it against
+     `configuredEngineByChar` — otherwise a resolved character's roster
+     entry here silently disagrees with scoreBook's own (see aggregate.ts's
+     matching comment). Best-effort, like every other cast read in this
+     module: a missing/malformed cast.json yields no resolution hints, same
+     as raw-id-verbatim behaviour before #3370 introduced canonical keying. */
+  const castChars = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir)).catch(() => null);
+  const castIdHistory = await loadCastIdHistory(bookDir);
+  const castResolver = buildCastResolver(castChars?.characters ?? [], castIdHistory);
+  const resolveRowCharId = (rawId: string): string =>
+    castResolver.resolve(rawId)?.character.id ?? rawId;
+
   // srv-36 hardening — per-chapter roster sourced from embeddings.json
   // (which character actually has embeddable rows in THIS chapter), not
   // from segments.json's characterSnapshots presence — a character can
@@ -92,8 +113,9 @@ export async function buildAudioQaReport(
     if (!embResult) continue;
     const chapterChars = new Set<string>();
     for (const row of embResult.rows) {
-      const engine = configuredEngineByChar.get(row.characterId);
-      if (engine && STOCHASTIC_ENGINES.has(engine)) chapterChars.add(row.characterId);
+      const rowCharId = resolveRowCharId(row.characterId);
+      const engine = configuredEngineByChar.get(rowCharId);
+      if (engine && STOCHASTIC_ENGINES.has(engine)) chapterChars.add(rowCharId);
     }
     if (chapterChars.size > 0) rosterByChapter.set(ch.id, chapterChars);
   }

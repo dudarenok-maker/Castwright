@@ -3,7 +3,7 @@ import { mkdtemp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeJsonAtomic } from '../workspace/state-io.js';
-import { audioDir } from '../workspace/paths.js';
+import { audioDir, dotAudiobook, castJsonPath } from '../workspace/paths.js';
 import { writeVerdicts, writeAttempted, attemptedPath } from './render-integrity/verdicts-io.js';
 import { scoreBook } from './render-integrity/aggregate.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './render-integrity/embeddings-io.js';
@@ -466,5 +466,56 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
 
     const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
     expect(report.voiceDrift.chaptersEmbedFailed).toBe(1);
+  });
+});
+
+describe('buildAudioQaReport — canonical cast-id roster join (#3362 review finding)', () => {
+  it('resolves a raw embedding-row characterId to the canonical cast id before joining against configuredEngineByChar, so a fully-scored chapter reads as scored (not embed-failed)', async () => {
+    // Repro (PR #3375 review pass 1): characterSnapshots is canonical-keyed
+    // since finalize-chapter-write #3370 ('the_torment', resolved from the
+    // raw 'the-torment' via the normalised-id tier), but embeddings.json rows
+    // are frozen at synth time and still carry the RAW 'the-torment' id.
+    // `configuredEngineByChar` (built from characterSnapshots) is therefore
+    // canonical-keyed too. Before this fix, `configuredEngineByChar.get(row.
+    // characterId)` looked up the raw id and found nothing, so
+    // `rosterByChapter` for this chapter was built from the WRONG (raw) id —
+    // it could never match `verdictCharactersByChapter` (sourced from the
+    // render-integrity.json rows, which aggregate.ts's own #3362 fix now
+    // persists under the canonical id), so the chapter never counted as
+    // "fully scored" despite a real, complete verdict row existing for it.
+    const dir = await makeBook();
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    await writeJsonAtomic(castJsonPath(dir), {
+      characters: [{ id: 'the_torment', name: 'The Torment', gender: 'female', attributes: [] }],
+    });
+
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      // segments.json's own segments[] carry the RAW id, matching the
+      // embedding row below (finalize-chapter-write.ts only resolves
+      // speakingIds/characterSnapshots, never the persisted segments array).
+      segments: [seg({ characterId: 'the-torment' })],
+      // characterSnapshots IS canonical-keyed (#3370).
+      characterSnapshots: { the_torment: { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'the-torment', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    // The verdict row is stamped with the CANONICAL id — the persisted shape
+    // aggregate.ts's own #3362 fix now writes.
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'the_torment', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.chaptersEligible).toBe(1);
+    // The chapter's roster (from embeddings, resolved) matches its verdict
+    // rows (canonical) — fully scored, not stuck.
+    expect(report.voiceDrift.chaptersScored).toBe(1);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
+    expect(report.voiceDrift.charactersOnRoster).toBe(1);
+    expect(report.voiceDrift.charactersChecked).toBe(1);
   });
 });

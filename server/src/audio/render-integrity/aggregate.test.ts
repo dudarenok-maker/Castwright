@@ -8,6 +8,7 @@ import { readVerdicts, readAttempted, attemptedPath } from './verdicts-io.js';
 import { readCentroids } from './centroids-io.js';
 import { readPendingAttempts } from './pending-attempts-io.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
+import { dotAudiobook, castJsonPath } from '../../workspace/paths.js';
 
 // helper: a 2-d unit vector at angle θ, padded to length 8 (test vectors are small)
 const vec = (θ: number) => Float32Array.from([Math.cos(θ), Math.sin(θ), 0, 0, 0, 0, 0, 0]);
@@ -538,6 +539,69 @@ describe('scoreBook — incremental per-character writes (srv-36 hardening)', ()
     );
     const result = await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
     expect(result.usedQwenTiers).toEqual({ keep06: false, keep17: true });
+  });
+});
+
+describe('scoreBook — canonical cast-id joins (#3362 review finding)', () => {
+  it('resolves a raw embedding-row characterId to the canonical cast id before joining against characterSnapshots, so anchor-eligible rows are scored and no audition is triggered', async () => {
+    // Repro (PR #3375 review pass 1): finalize-chapter-write.ts (#3370) now
+    // keys characterSnapshots by the CANONICAL cast id — here 'the_torment',
+    // resolved from the segments' raw 'the-torment' via the normalised-id
+    // tier (same collapse as #2040's own repro: analyzer mints hyphens,
+    // cast-create mints underscores). Embedding rows are frozen at synth
+    // time and still carry the RAW 'the-torment' group id. Before the fix,
+    // `stochasticChars.has(row.characterId)` and the `charId` equality check
+    // in scoreAndMergeCharacter both failed on this mismatch: every row was
+    // dropped, no render-integrity.json was written, and the too-thin
+    // in-book pool fell through to the (real, network-calling) audition path.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-canon-id-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'the_torment', name: 'The Torment', gender: 'female', attributes: [] }] }),
+    );
+
+    // 12 anchor-eligible rows (>= CENTROID_MIN_N) clustered tightly — an
+    // in-book centroid resolves cleanly WITHOUT ever calling auditionCentroid,
+    // as long as the rows actually get past the characterId join.
+    const rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) rows.push({ characterId: 'the-torment', sentenceIds: [i], vec: vec(0.02 * i) });
+
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      // segments.json's own `segments[]` entries carry the RAW id verbatim
+      // (finalize-chapter-write.ts only resolves speakingIds/snapshots, not
+      // the persisted segments array itself) — matching the embedding rows.
+      segments: rows.map((r) => ({ characterId: 'the-torment', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      // characterSnapshots IS canonical-keyed (#3370).
+      characterSnapshots: { the_torment: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-the-torment', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    // The render-integrity file IS written, with all 12 rows scored — the
+    // pre-fix bug produced zero rows here (rowsForChar.length === 0 skipped
+    // the write entirely).
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(verdicts).not.toBeNull();
+    expect(verdicts!.length).toBe(12);
+    // Every persisted row is stamped with the CANONICAL id, matching what
+    // qa-report.ts's characterSnapshots-derived roster expects to find.
+    expect(verdicts!.every((v) => v.characterId === 'the_torment')).toBe(true);
+    // Every row resolved against a real in-book reference — none fell to the
+    // pre-fix 'inconclusive'/'too-short' path a dropped join would produce.
+    expect(verdicts!.every((v) => v.referenceKind === 'in-book')).toBe(true);
+    expect(verdicts!.some((v) => v.verdict === 'voice-match')).toBe(true);
+
+    // The centroid resolved from the real in-book anchors — never degraded
+    // to an audition (which would have made a real network call and, absent
+    // a sidecar, logged a transient failure / left the character unresolved).
+    const centroids = await readCentroids(dir);
+    expect(centroids!['the_torment'].referenceKind).toBe('in-book');
   });
 });
 

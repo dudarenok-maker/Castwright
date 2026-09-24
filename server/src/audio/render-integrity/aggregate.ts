@@ -556,6 +556,17 @@ export async function scoreBook(
      `.supersededBy`) so `buildCastResolver` also honours `rejected`. */
   const castIdHistory = await loadCastIdHistory(bookDir);
   const castResolver = buildCastResolver(castChars ?? [], castIdHistory);
+  /* #3362 (review pass 1 finding) — embedding rows carry the RAW segment
+     characterId their synth request was made under (frozen at render time,
+     see synthesise-chapter.ts); `stochasticChars`/`orderedChars`/
+     `voiceInfoByChar` are keyed by the CANONICAL cast id, since
+     characterSnapshots itself is now canonical-keyed (finalize-chapter-write
+     #3370). Resolve every row's raw id through the SAME cast + cast-id-history
+     resolver used above before joining it against that canonical-keyed data —
+     an unresolvable raw id falls back to itself, matching nothing, exactly
+     the behaviour before #3370 introduced the canonical keying. */
+  const resolveRowCharId = (rawId: string): string =>
+    castResolver.resolve(rawId)?.character.id ?? rawId;
   // #1951 — the language the chapters were rendered in. Read once per run and
   // stamped onto every Option-B audition below, for the same comparability
   // reason the render TIER is (see the renderKey comment further down).
@@ -622,7 +633,12 @@ export async function scoreBook(
 
   for (const cd of chapterData) {
     for (const row of cd.embRows) {
-      if (!stochasticChars.has(row.characterId)) continue;
+      // #3362 — resolve the row's raw characterId to canonical before the
+      // stochasticChars/anchorVecsByChar joins (both canonical-keyed); the
+      // segKey lookup below stays on the RAW id since segsByKey is built from
+      // segments.json's own (raw) characterId (see segKey's own callers).
+      const rowCharId = resolveRowCharId(row.characterId);
+      if (!stochasticChars.has(rowCharId)) continue;
 
       const key = segKey(row.characterId, row.sentenceIds);
       const seg = cd.segsByKey.get(key);
@@ -631,7 +647,7 @@ export async function scoreBook(
       // NOT characterSnapshots.renderedFallbackEngine which over-excludes)
       const hasFallback = seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '';
       if (!hasFallback) {
-        anchorVecsByChar.get(row.characterId)!.push(row.vec);
+        anchorVecsByChar.get(rowCharId)!.push(row.vec);
       }
     }
   }
@@ -669,7 +685,13 @@ export async function scoreBook(
     for (const cd of chapterData) {
       const rowsForChar: VerdictRow[] = [];
       for (const row of cd.embRows) {
-        if (row.characterId !== charId) continue;
+        // #3362 — same raw-to-canonical resolution as the anchor-gathering
+        // loop above; `charId` here is always canonical (from `orderedChars`).
+        // The persisted row's own `characterId` is stamped as `charId`
+        // (canonical), not the row's raw id — `deriveBookOutline`/qa-report.ts
+        // read this field back to build the canonical-keyed roster/eligibility
+        // sets, so a raw id written here would silently fail that later join.
+        if (resolveRowCharId(row.characterId) !== charId) continue;
         const key = segKey(row.characterId, row.sentenceIds);
         const seg = cd.segsByKey.get(key);
         const renderedFallback = seg?.renderedFallbackEngine ?? null;
@@ -677,7 +699,7 @@ export async function scoreBook(
 
         if (ref.referenceKind === 'too-short') {
           rowsForChar.push({
-            characterId: row.characterId, sentenceIds: row.sentenceIds, verdict: 'inconclusive',
+            characterId: charId, sentenceIds: row.sentenceIds, verdict: 'inconclusive',
             cosine: 0, severity: 'inconclusive', fixable: false,
             expectedEngine: configuredEngine, renderedEngine, referenceKind: 'too-short', windowed: false, chapterId: cd.id,
           });
@@ -688,7 +710,7 @@ export async function scoreBook(
         const fixable = verdict === 'voice-mismatch' && severity === 'severe' && STOCHASTIC_ENGINES.has(configuredEngine);
         if (verdict === 'voice-mismatch') mismatchCount++;
         rowsForChar.push({
-          characterId: row.characterId, sentenceIds: row.sentenceIds, verdict, cosine, severity, fixable,
+          characterId: charId, sentenceIds: row.sentenceIds, verdict, cosine, severity, fixable,
           expectedEngine: configuredEngine, renderedEngine, referenceKind: ref.referenceKind, windowed: false, chapterId: cd.id,
         });
       }
