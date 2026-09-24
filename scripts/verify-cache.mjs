@@ -1443,9 +1443,9 @@ export function qualifiedDurationFor(cache, stepName) {
  *  a wall-clock budget went flaky on a box where process-launch overhead
  *  alone — 565-698ms measured on Windows — is comparable to the fixture's
  *  own sleep duration; a formula bug like B5's should never depend on
- *  outracing real subprocess overhead to be provable). Widens the FLOOR,
- *  not computeBudgetMs' result — see runBudgetMs's own comment on why that
- *  distinction matters for a CALIBRATED baseline specifically. */
+ *  outracing real subprocess overhead to be provable). The PER-STEP budget is
+ *  the one that still widens under throttle — the whole-pipeline budget never
+ *  does (Castwright#3361; see the comment at its call site in runPipeline). */
 export function computeStepBudgetMs(cache, stepName, floorMs, multiplier) {
   return computeBudgetMs(qualifiedDurationFor(cache, stepName), floorMs * multiplier);
 }
@@ -1453,21 +1453,39 @@ export function computeStepBudgetMs(cache, stepName, floorMs, multiplier) {
 /** The real whole-pipeline budget computation runPipeline uses — same
  *  extraction rationale as computeStepBudgetMs. `qualifiedRunDurationMs` is
  *  the SUM of the active steps' own qualified baselines (0 when nothing is
- *  calibratable, treated as null/uncalibrated per computeBudgetMs). The floor
- *  is widened by `multiplier` ONLY when a qualified baseline exists; an
- *  uncalibrated run keeps the flat, unwidened floor regardless of any
- *  throttle (Castwright#3272, decision C). The per-step budget
- *  (computeStepBudgetMs) is widened by the same `multiplier` in both the
- *  calibrated and uncalibrated case, but it is always subordinate to the
- *  pipeline deadline via the `Math.min(...)` clamp in runPipeline — that
- *  subordination bites hardest in the uncalibrated case specifically, since
- *  decision C is what just tightened the pipeline-level floor there. The
- *  CALIBRATED branch is untouched by decision C: a warm-cache throttled run
- *  still widens this floor by `multiplier`, same as before this fix. */
-export function computeRunBudgetMs(qualifiedRunDurationMs, floorMs, multiplier) {
+ *  calibratable, treated as null/uncalibrated per computeBudgetMs). The
+ *  pipeline budget is never widened by throttle, calibrated or not: at this
+ *  repo's real run size the floor term dominates, and a widened floor lands
+ *  at 2x DEFAULT_RUN_TIMEOUT_MIN (360 min) — past the 273.8-min incident this
+ *  budget exists to bound (Castwright#3361) — while multiplying the
+ *  calibrated result instead double-counts a throttle a baseline recorded
+ *  under throttle already absorbed (PR #3260 review pass 2, B5: measured 4x
+ *  instead of the intended 2x). The calibration's own 2.5x headroom already
+ *  covers the 2x fork halving. The per-step budget (computeStepBudgetMs)
+ *  still widens under throttle and stays subordinate to the pipeline
+ *  deadline via the `Math.min(...)` clamp in runPipeline. */
+export function computeRunBudgetMs(qualifiedRunDurationMs, floorMs) {
   const qualified = qualifiedRunDurationMs > 0 ? qualifiedRunDurationMs : null;
-  const effectiveFloorMs = qualified === null ? floorMs : floorMs * multiplier;
-  return computeBudgetMs(qualified, effectiveFloorMs);
+  return computeBudgetMs(qualified, floorMs);
+}
+
+/** The whole-pipeline budget calibration sum runPipeline uses — same
+ *  extraction rationale as computeStepBudgetMs. Sums the qualified
+ *  baselines (`qualifiedDurationFor`, attempts === 1) of the steps where
+ *  `include(step)` is true; null baselines contribute 0, exactly as the
+ *  inline reduce did before this was extracted. `include` is how a run
+ *  keeps steps it will never execute out of its budget: runPipeline's
+ *  predicate excludes BOTH the steps the scope filter skips and the steps
+ *  its stepPlan pre-pass planned as `'skip'` (cached) — a scoped run whose
+ *  only in-scope step is `lint` must be calibrated on `lint`'s baseline,
+ *  and a cached step's baseline must not inflate a run that will not
+ *  execute it either (Castwright#3361, tasks 2–3). */
+export function sumQualifiedRunDurationMs(cache, steps, include) {
+  return steps.reduce((sum, s) => {
+    if (!include(s)) return sum;
+    const d = qualifiedDurationFor(cache, s.name);
+    return d === null ? sum : sum + d;
+  }, 0);
 }
 
 // Cap on the tail-keeping stderr accumulator below — mirrors spawnSync's old
@@ -1763,6 +1781,13 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     }
   }
 
+  // Will this run execute the step? The scope test is defined ONCE here —
+  // after scopeDiff/scopeShared are known — and shared by BOTH the pipeline
+  // budget sum below and the step loop's skip, so the two can never diverge
+  // (Castwright#3361: a scoped run must budget only on in-scope steps).
+  const outOfScope = (step) =>
+    scopeDiff !== null && !scopeShared && !stepTouchedByDiff(step, scopeDiff);
+
   const cachePath = join(cwd, CACHE_FILENAME);
   const fileList = gitFileList(cwd);
   const nodeVer = process.version;
@@ -1781,58 +1806,14 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     console.log('[verify-cache] git ls-files failed; running uncached');
   }
 
-  // Part 2 (ops-72) budgets — see the constants' own doc comments above for
-  // the max(FLOOR, K x lastGreenDurationMs) shape. The whole-pipeline budget
-  // is calibrated off the SUM of the active steps' own qualified baselines
-  // (falling back to the flat FLOOR when nothing is calibratable), so the
-  // per-step-total shape composes additively with this pipeline cap exactly
-  // as the design doc requires.
-  const stepTimeoutFloorMs = envMinutes(env, 'CASTWRIGHT_STEP_TIMEOUT_MIN', DEFAULT_STEP_TIMEOUT_MIN) * 60 * 1000;
-  const runTimeoutFloorMs = envMinutes(env, 'CASTWRIGHT_RUN_TIMEOUT_MIN', DEFAULT_RUN_TIMEOUT_MIN) * 60 * 1000;
-  const qualifiedRunDurationMs = activeSteps.reduce((sum, s) => {
-    const d = qualifiedDurationFor(cache, s.name);
-    return d === null ? sum : sum + d;
-  }, 0);
-  // Read AFTER the contention guard above so a throttle it just applied for
-  // THIS run is reflected here, not just for the next one. Widens the FLOOR,
-  // not the whole computeBudgetMs result (PR #3260 review pass 2, B5): the
-  // calibrated branch (K x lastGreenDurationMs) already reflects whatever
-  // conditions produced that baseline, so multiplying its RESULT double-
-  // counts a throttle a prior throttled run's own baseline already absorbed
-  // (measured: a baseline recorded throttled at 2x, multiplied again here,
-  // gave 4x instead of the intended 2x — now correctly gives 2x).
-  //
-  // The UNCALIBRATED pipeline floor is deliberately left UNWIDENED under
-  // throttle — settled, not open (PR #3260 review pass 3 raised it as B10;
-  // Castwright#3272 decision C picked this direction). With no qualified
-  // baseline there is nothing for `multiplier` to calibrate against, and
-  // widening this floor lands the whole-pipeline budget at 2x
-  // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle — past the 273.8-min
-  // incident this budget exists to bound, defeating the feature's own stated
-  // goal. This is scoped to the UNCALIBRATED case only: the CALIBRATED branch
-  // (qualifiedRunDurationMs > 0, i.e. at least one active step has a qualified
-  // baseline) is untouched by this decision and still widens by `multiplier`
-  // exactly as before this fix, so a warm-cache throttled run can still reach
-  // the pre-existing 2x DEFAULT_RUN_TIMEOUT_MIN floor. The PER-STEP budget
-  // (computeStepBudgetMs, also widened by the same multiplier) is widened in
-  // BOTH branches, calibrated and uncalibrated alike — but it is never fully
-  // independent protection: the `Math.min(...)` clamp on stepBudgetMs below
-  // also caps it at whatever remains of the pipeline deadline, so a per-step
-  // budget can only ever be as generous as the pipeline-level number leaves
-  // room for. That subordination bites hardest in the UNCALIBRATED case
-  // specifically, since decision C is what just tightened the pipeline-level
-  // floor there (Castwright#3361 tracks whether the calibrated branch's own
-  // floor term should be revisited too).
-  const contentionBudgetMultiplier =
-    affectedByContention && lowConcurrency(env) ? LOW_CONCURRENCY_BUDGET_MULTIPLIER : 1;
-  const runBudgetMs = computeRunBudgetMs(qualifiedRunDurationMs, runTimeoutFloorMs, contentionBudgetMultiplier);
-  const runDeadline = Date.now() + runBudgetMs;
-
-  for (const step of activeSteps) {
-    if (scopeDiff !== null && !scopeShared && !stepTouchedByDiff(step, scopeDiff)) {
-      console.log(`[skip] ${step.name} (out of scope)`);
-      continue;
-    }
+  // Castwright#3361 (task 3): plan every step this run could execute BEFORE the
+  // pipeline budget is fixed, so the calibration sum can exclude steps that
+  // will be skipped as `[cached]`, not only out-of-scope ones. This is the
+  // per-step hash + decision the step loop used to do inline, MOVED here
+  // verbatim — the sole call site of composeInputHash remains right here —
+  // and out-of-scope steps are never hashed. The loop below reads
+  // { currentHash, action } back out of `stepPlan` instead of recomputing.
+  function planStep(step) {
     const files = fileList ? selectStepFiles({ fileList, step }) : [];
     const entries = files.map((rel) => {
       let h = fileHashes.get(rel);
@@ -1874,6 +1855,54 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
             cache,
             noCache: flags.noCache,
           });
+
+    return { currentHash, action };
+  }
+  const stepPlan = new Map();
+  for (const step of activeSteps) {
+    if (outOfScope(step)) continue;
+    stepPlan.set(step.name, planStep(step));
+  }
+
+  // Part 2 (ops-72) budgets — see the constants' own doc comments above for
+  // the max(FLOOR, K x lastGreenDurationMs) shape. The whole-pipeline budget
+  // is calibrated off the SUM of the qualified baselines of only the steps
+  // this run will execute — active steps neither excluded by the shared
+  // `outOfScope` predicate nor planned as `'skip'` (cached) by the `stepPlan`
+  // pre-pass above (Castwright#3361) — falling back to the flat FLOOR when
+  // nothing is calibratable, so the per-step-total shape composes additively
+  // with this pipeline cap exactly as the design doc requires.
+  const stepTimeoutFloorMs = envMinutes(env, 'CASTWRIGHT_STEP_TIMEOUT_MIN', DEFAULT_STEP_TIMEOUT_MIN) * 60 * 1000;
+  const runTimeoutFloorMs = envMinutes(env, 'CASTWRIGHT_RUN_TIMEOUT_MIN', DEFAULT_RUN_TIMEOUT_MIN) * 60 * 1000;
+  const qualifiedRunDurationMs = sumQualifiedRunDurationMs(
+    cache,
+    activeSteps,
+    (s) => !outOfScope(s) && stepPlan.get(s.name).action !== 'skip',
+  );
+  // The whole-pipeline budget is NEVER widened by throttle, calibrated or not
+  // (Castwright#3361). Widening the floor lands the budget at 2x
+  // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle — past the 273.8-min
+  // incident this budget exists to bound — because the floor term dominates
+  // at this repo's real run size (~45 min). Multiplying the calibrated term
+  // instead double-counts a throttle a baseline recorded under throttle has
+  // already absorbed (PR #3260 review pass 2, B5: measured 4x instead of the
+  // intended 2x). The calibration's own 2.5x headroom already covers the 2x
+  // fork halving (q = 44.9 min → 112 min; a throttled q ≈ 90 min → 225 min;
+  // both under 273.8). The PER-STEP budget still widens under throttle
+  // (computeStepBudgetMs with stepContentionMultiplier in the loop below) and
+  // remains clamped by the pipeline deadline via the Math.min(...) there.
+  const runBudgetMs = computeRunBudgetMs(qualifiedRunDurationMs, runTimeoutFloorMs);
+  const runDeadline = Date.now() + runBudgetMs;
+
+  for (const step of activeSteps) {
+    if (outOfScope(step)) {
+      console.log(`[skip] ${step.name} (out of scope)`);
+      continue;
+    }
+    // Hash + cache decision were computed once by the stepPlan pre-pass above
+    // (Castwright#3361 task 3) so the budget sum could already see them; the
+    // loop consumes the plan rather than recomputing it.
+    const { currentHash, action } = stepPlan.get(step.name);
 
     if (action === 'skip') {
       console.log(`[cached] ${step.name} (input hash unchanged)`);

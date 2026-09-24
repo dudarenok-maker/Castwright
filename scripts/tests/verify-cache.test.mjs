@@ -51,6 +51,7 @@ import {
   computeBudgetMs,
   computeStepBudgetMs,
   computeRunBudgetMs,
+  sumQualifiedRunDurationMs,
   qualifiedDurationFor,
   DEFAULT_STEP_TIMEOUT_MIN,
   DEFAULT_RUN_TIMEOUT_MIN,
@@ -1579,8 +1580,18 @@ test('runPipeline computes its step and pipeline budgets via computeStepBudgetMs
   );
   assert.match(
     pipelineBody,
-    /computeRunBudgetMs\(\s*qualifiedRunDurationMs,\s*runTimeoutFloorMs,\s*contentionBudgetMultiplier\s*\)/,
-    'the whole-pipeline budget must go through computeRunBudgetMs, not an inline computeBudgetMs(...) * multiplier',
+    /computeRunBudgetMs\(\s*qualifiedRunDurationMs,\s*runTimeoutFloorMs\s*\)/,
+    'the whole-pipeline budget must go through computeRunBudgetMs with the flat floor — no throttle multiplier argument (Castwright#3361)',
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /contentionBudgetMultiplier/,
+    'runPipeline must no longer compute a pipeline-level contention budget multiplier at all (Castwright#3361)',
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /floorMs \* multiplier/,
+    'runPipeline must not multiply a pipeline floor by a throttle multiplier inline (Castwright#3361)',
   );
 });
 
@@ -1616,43 +1627,172 @@ test('computeStepBudgetMs widens the FLOOR, not the calibrated (K x lastGreenDur
   assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a baseline the prior throttled run already absorbed');
 });
 
-test('computeRunBudgetMs leaves the uncalibrated pipeline floor UNWIDENED under throttle (#3272, decision C)', () => {
-  // #3272 decision C: an uncalibrated run (no qualified/calibrated pipeline
-  // baseline) keeps the flat, unwidened floor even under contention throttle.
-  // The old shape widened it by multiplying floorMs BEFORE computeBudgetMs —
-  // algebraically identical to multiplying the result, since
-  // computeBudgetMs(null, F) returns F verbatim regardless of k — which put
-  // the whole-pipeline budget at 2x DEFAULT_RUN_TIMEOUT_MIN (360 min) under
-  // throttle, past the 273.8-min incident this budget exists to bound. The
-  // per-step budgets (still widened by the same `multiplier`) are always
-  // subordinate to the pipeline deadline via runPipeline's own `Math.min(...)`
-  // clamp — that subordination bites hardest right here, in the uncalibrated
-  // case decision C just tightened; this pipeline-level floor is only the
+test('computeRunBudgetMs keeps the uncalibrated pipeline floor flat — never widened, throttle or no throttle (#3272 decision C, #3361)', () => {
+  // #3272 decision C settled that an uncalibrated run (no qualified pipeline
+  // baseline) keeps the flat floor; #3361 removed the last multiplier
+  // parameter so the pipeline-level budget can no longer be widened at all.
+  // The per-step budgets (computeStepBudgetMs, widened by
+  // stepContentionMultiplier) remain subordinate to the pipeline deadline via
+  // runPipeline's own `Math.min(...)` clamp; this pipeline-level floor is the
   // outer, incident-bounding backstop and stays at 180 min.
   const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000;
-  assert.equal(computeRunBudgetMs(0, floorMs, 2), floorMs, 'uncalibrated: throttle must not widen the pipeline floor');
-  assert.equal(computeRunBudgetMs(0, floorMs, 1), floorMs, 'sanity: unthrottled uncalibrated floor is unchanged');
+  assert.equal(computeRunBudgetMs(0, floorMs), floorMs, 'uncalibrated: the pipeline floor is the flat floorMs');
 });
 
-test('computeRunBudgetMs widens the FLOOR, not the calibrated branch, for a CALIBRATED pipeline baseline (B5, the case this PR does fix)', () => {
+test('computeRunBudgetMs returns max(floorMs, 2.5 x qualified) for a calibrated run, widened by nothing (#3361)', () => {
   const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000; // 180 min
-  const throttledBaselineMs = 200 * 60 * 1000; // exceeds the 180-min floor, so the calibrated branch dominates
-  const oldBuggyShape = computeBudgetMs(throttledBaselineMs, floorMs) * 2;
-  const fixed = computeRunBudgetMs(throttledBaselineMs, floorMs, 2);
-  assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a calibrated pipeline baseline either');
-});
-
-test('computeRunBudgetMs still widens the calibrated floor by `multiplier` under throttle — #3272 decision C left this branch untouched', () => {
-  // A tiny qualified duration so the floor term dominates max(F x mult, k x
-  // duration) — pins the calibrated branch's actual value directly, unlike
-  // the test above (whose large baseline makes the floor term irrelevant and
-  // only proves an inequality). Fails if the calibrated arm is ever changed
-  // to skip widening (e.g. `effectiveFloorMs = floorMs` unconditionally).
-  const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000; // 180 min
+  // A qualified baseline where the calibrated branch dominates: 2.5 x 90 min
+  // = 225 min > 180-min floor. The old shape doubled the FLOOR here too
+  // (max(2 x 180, 225) = 360 min — past the 273.8-min incident bound); the
+  // fix lands on 2.5 x q with no pipeline-level widening at all.
+  const qAboveFloor = 90 * 60 * 1000;
   assert.equal(
-    computeRunBudgetMs(60_000, floorMs, 2),
-    floorMs * 2,
-    'a calibrated (qualifiedRunDurationMs > 0) throttled run must still land on floorMs x multiplier, unchanged by #3272',
+    computeRunBudgetMs(qAboveFloor, floorMs),
+    2.5 * qAboveFloor,
+    'calibrated with 2.5q > floor: budget is exactly 2.5 x qualifiedRunDurationMs, not a widened floor',
+  );
+  // A qualified baseline where the floor dominates: 2.5 x 60 min = 150 min <
+  // 180-min floor. Pins the floor term directly — fails if the calibrated arm
+  // ever multiplies the floor again (the removed 2 x 180 = 360 min shape).
+  const qBelowFloor = 60 * 60 * 1000;
+  assert.equal(
+    computeRunBudgetMs(qBelowFloor, floorMs),
+    floorMs,
+    'calibrated with 2.5q < floor: budget is the FLAT floorMs — the pipeline budget is never widened under throttle',
+  );
+});
+
+// Castwright#3361 (task 2): the whole-pipeline calibration sum must count
+// only the steps this run will actually execute — a scoped run whose only
+// in-scope step is `lint` must not be budgeted on the strength of `test`/
+// `test:server` baselines it will never run. Same extraction rationale as
+// the computeStepBudgetMs/computeRunBudgetMs tests above: direct value
+// assertions on the pure helper PLUS source-regex assertions that
+// runPipeline's real call sites go through it and the shared `outOfScope`
+// predicate, rather than reimplementing either inline.
+
+test('sumQualifiedRunDurationMs sums only the steps the include predicate admits (#3361)', () => {
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { durationMs: 60000, attempts: 1 },
+      test: { durationMs: 1200000, attempts: 1 },
+    },
+  };
+  const steps = [{ name: 'lint' }, { name: 'test' }];
+  assert.equal(
+    sumQualifiedRunDurationMs(cache, steps, (s) => s.name === 'lint'),
+    60000,
+    'a scoped sum must exclude the out-of-scope 20-min test baseline entirely',
+  );
+  assert.equal(
+    sumQualifiedRunDurationMs(cache, steps, () => true),
+    1260000,
+    'include-all sums every qualified baseline, exactly as the old inline reduce did',
+  );
+});
+
+test('sumQualifiedRunDurationMs: an attempts > 1 (crash-inflated) baseline contributes 0 (#3361)', () => {
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { durationMs: 60000, attempts: 1 },
+      test: { durationMs: 1200000, attempts: 2 },
+    },
+  };
+  assert.equal(
+    sumQualifiedRunDurationMs(cache, [{ name: 'lint' }, { name: 'test' }], () => true),
+    60000,
+    'the sum must honour qualifiedDurationFor\'s attempts === 1 rule: an unqualified entry adds nothing',
+  );
+});
+
+test('runPipeline budgets only in-scope steps, via one shared outOfScope predicate — sum and loop cannot diverge (#3361)', () => {
+  const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
+  assert.match(
+    pipelineBody,
+    /const outOfScope = \(step\) =>/,
+    'the scope test must be defined once inside runPipeline, after scopeDiff/scopeShared are known',
+  );
+  assert.match(
+    pipelineBody,
+    /const qualifiedRunDurationMs = sumQualifiedRunDurationMs\(\s*cache,\s*activeSteps,\s*\(s\) => !outOfScope\(s\) && stepPlan\.get\(s\.name\)\.action !== 'skip',?\s*\)/,
+    'the sum must go through sumQualifiedRunDurationMs filtered by the shared outOfScope predicate AND the stepPlan pre-pass\' planned action — never an unfiltered inline reduce',
+  );
+  assert.match(
+    pipelineBody,
+    /if \(outOfScope\(step\)\) \{/,
+    "the step loop's skip must call the SAME outOfScope predicate, not re-derive the scope test inline",
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /if \(scopeDiff !== null && !scopeShared && !stepTouchedByDiff\(step, scopeDiff\)\)/,
+    'no inline re-derivation of the scope test may remain at the loop skip',
+  );
+});
+
+// Castwright#3361 (task 3): the calibration sum must ALSO exclude steps this
+// run will skip as `[cached]`. The per-step hash + decide() moved from the
+// step loop into a stepPlan pre-pass that runs before the budget is fixed, so
+// `include` can see the planned action. Same evidence shape as task 2: a
+// direct value assertion on the pure helper (include rejects a cached step →
+// its baseline drops out) PLUS source pins that runPipeline really consults
+// the planned action and reads the loop's { currentHash, action } back out of
+// the pre-pass instead of keeping a second copy of the computation.
+
+test('sumQualifiedRunDurationMs: an include that rejects a cached step drops its baseline (#3361)', () => {
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { durationMs: 60000, attempts: 1 },
+      test: { durationMs: 1200000, attempts: 1 },
+    },
+  };
+  const steps = [{ name: 'lint' }, { name: 'test' }];
+  // Mirrors runPipeline's real wiring: every active step is in scope, but the
+  // pre-pass planned `test` as 'skip' (cached), so it must contribute nothing.
+  const outOfScope = () => false;
+  const stepPlan = new Map([
+    ['lint', { currentHash: 'hash-lint', action: 'run' }],
+    ['test', { currentHash: 'hash-test', action: 'skip' }],
+  ]);
+  assert.equal(
+    sumQualifiedRunDurationMs(
+      cache,
+      steps,
+      (s) => !outOfScope(s) && stepPlan.get(s.name).action !== 'skip',
+    ),
+    60000,
+    "a step planned as 'skip' must not inflate the budget of a run that will print [cached] for it",
+  );
+});
+
+test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum excludes cached steps (#3361 task 3)', () => {
+  const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
+  assert.match(
+    pipelineBody,
+    /function planStep\(step\) \{/,
+    'the per-step hash + decide() must live in ONE planStep helper — the loop\'s old code moved, not duplicated',
+  );
+  assert.match(
+    pipelineBody,
+    /if \(outOfScope\(step\)\) continue;\s*\n\s*stepPlan\.set\(step\.name, planStep\(step\)\);/,
+    'the pre-pass must plan every active step exactly once and never hash an out-of-scope step',
+  );
+  assert.match(
+    pipelineBody,
+    /const qualifiedRunDurationMs = sumQualifiedRunDurationMs\(\s*cache,\s*activeSteps,\s*\(s\) => !outOfScope\(s\) && stepPlan\.get\(s\.name\)\.action !== 'skip',?\s*\)/,
+    "the sum's include must consult BOTH outOfScope AND the planned action !== 'skip' — nothing later in the body may satisfy this pin",
+  );
+  assert.match(
+    pipelineBody,
+    /const \{ currentHash, action \} = stepPlan\.get\(step\.name\);/,
+    'the step loop must read currentHash/action from the pre-pass, not recompute them',
+  );
+  assert.equal(
+    (pipelineBody.match(/composeInputHash\(/g) || []).length,
+    1,
+    'exactly one composeInputHash(...) call site may remain in runPipeline — the computation was moved, not copied',
   );
 });
 
