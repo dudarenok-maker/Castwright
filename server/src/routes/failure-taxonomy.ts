@@ -23,7 +23,7 @@
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
-import { AnalyzerTruncatedError } from '../analyzer/errors.js';
+import { AnalyzerTimeoutError, AnalyzerTruncatedError } from '../analyzer/errors.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 export type FailureCode =
@@ -33,6 +33,7 @@ export type FailureCode =
   | 'analyzer-rate-limit'
   | 'analyzer-daily-quota'
   | 'analyzer-truncated'
+  | 'analyzer-timeout'
   | 'analyzer-unreachable'
   | 'analyzer-content-blocked'
   | 'attribution-incomplete'
@@ -105,6 +106,13 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     fatal: false,
     source: 'analysis',
     matchName: 'AnalyzerTruncatedError',
+    match: () => false,
+  },
+  {
+    code: 'analyzer-timeout',
+    fatal: true,
+    source: 'analysis',
+    matchName: 'AnalyzerTimeoutError',
     match: () => false,
   },
   {
@@ -530,6 +538,26 @@ export function classifyAnalysisFailure(err: unknown, modelLabel: string): Analy
       `engine=${err.engine} reason=${err.reason} bytes=${err.receivedBytes}${
         err.outputTokens ? ` tokens=${err.outputTokens}` : ''
       }`,
+    );
+  }
+  if (err instanceof AnalyzerTimeoutError) {
+    const detail = `transport=${err.transport} model=${err.model} reason=${err.reason} elapsedMs=${err.elapsedMs}`;
+    if (err.reason === 'thinking-idle') {
+      /* #3084 P5 — silence before any answer text, past the thinking window. */
+      return withCopy(
+        'analyzer-timeout',
+        `${modelLabel} sent no answer text and stayed silent longer than its thinking window, so the request was stopped after ${Math.round(err.elapsedMs / 1000)} s. Raise 'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most 290000 ms), or pick a faster model, then retry.`,
+        detail,
+      );
+    }
+    const setting =
+      err.transport === 'gemini'
+        ? "'Gemini request ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS)"
+        : "this endpoint's request ceiling";
+    return withCopy(
+      'analyzer-timeout',
+      `${modelLabel} did not finish within ${Math.round(err.elapsedMs / 1000)} s (the request ceiling). Raise ${setting}, or pick a faster model, then retry.`,
+      detail,
     );
   }
   if (err instanceof DailyQuotaExhaustedError) {

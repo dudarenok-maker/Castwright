@@ -677,6 +677,59 @@ describe('GeminiAnalyzer — transport retry policy (GeminiTransport + withTrans
       expect(generateContentStream).toHaveBeenCalledTimes(3);
     }, 5_000);
 
+    /* #3084 P5 — the thinking window is automatic per model: today's idle
+       window for a model that does not think, 120 s for a thinking model. */
+    async function* hangBeforeFirstChunk(): AsyncGenerator<{ text: string }> {
+      const hang = new AbortController();
+      hangControllers.push(hang);
+      await new Promise<void>((resolve) => {
+        if (hang.signal.aborted) resolve();
+        else hang.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      yield { text: '{' };
+    }
+
+    it('a model that does not think: a stall BEFORE the first chunk throws GeminiStreamIdleError after 3 attempts (#3084 P5)', async () => {
+      vi.resetModules();
+      const { GeminiAnalyzer, GeminiStreamIdleError } = await import('./gemini.js');
+      generateContentStream
+        .mockResolvedValueOnce(hangBeforeFirstChunk())
+        .mockResolvedValueOnce(hangBeforeFirstChunk())
+        .mockResolvedValueOnce(hangBeforeFirstChunk());
+      const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+      await expect(analyzer.runStage1('m_idle_prestall', '# prompt', {})).rejects.toBeInstanceOf(GeminiStreamIdleError);
+      expect(generateContentStream).toHaveBeenCalledTimes(3);
+    }, 5_000);
+
+    it('a thinking model: a pre-first-chunk wait longer than the idle window completes, inside its automatic 120 s thinking window (#3084 P5)', async () => {
+      vi.resetModules();
+      const { GeminiAnalyzer } = await import('./gemini.js');
+      /* asyncFromArray (:76) sleeps delayMs before each item, the first included. */
+      generateContentStream.mockResolvedValueOnce(asyncFromArray([{ text: STAGE1_RESPONSE }], 400));
+      /* gemini-2.5-flash thinks by the static id rule (Task 2.5). */
+      const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+      const result = await analyzer.runStage1('m_idle_prewait', '# prompt', {});
+      expect(result.characters).toHaveLength(3);
+      expect(generateContentStream).toHaveBeenCalledTimes(1);
+    }, 5_000);
+
+    it('a thinking model: silence past its thinking window before any answer text fails once as AnalyzerTimeoutError, through the whole analyzer (#3084 P5)', async () => {
+      process.env.GEMINI_THINKING_IDLE_MS = '300';
+      try {
+        vi.resetModules();
+        const { GeminiAnalyzer } = await import('./gemini.js');
+        generateContentStream.mockResolvedValueOnce(hangBeforeFirstChunk());
+        const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+        await expect(analyzer.runStage1('m_thinking_stall', '# prompt', {})).rejects.toMatchObject({
+          name: 'AnalyzerTimeoutError',
+          reason: 'thinking-idle',
+        });
+        expect(generateContentStream).toHaveBeenCalledTimes(1);
+      } finally {
+        delete process.env.GEMINI_THINKING_IDLE_MS;
+      }
+    }, 5_000);
+
     it('aborts in-flight stream and throws AnalysisAbortedError when caller signal fires', async () => {
       vi.resetModules();
       const { GeminiAnalyzer } = await import('./gemini.js');
@@ -822,6 +875,10 @@ describe('GeminiAnalyzer — output truncation (#528)', () => {
 
 afterAll(async () => {
   /* Tidy the test inbox/outbox we touched so the workspace stays clean. */
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_idle_prestall-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_idle_prewait-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_idle_prewait-stage1.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_thinking_stall-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_test-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_trunc-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_maxtok-stage1.md'), { force: true });

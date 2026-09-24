@@ -7120,6 +7120,7 @@ components:
         - analyzer-truncated
         - analyzer-unreachable
         - analyzer-content-blocked
+        - analyzer-timeout
         - attribution-incomplete
         - attribution-collapse
         - gpu-acceleration-unavailable

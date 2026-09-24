@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
-import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
+import { AnalyzerTimeoutError, AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
 import { UnresolvableClonedVoiceError } from '../tts/clone-voice-resolver.js';
 
 /* No copy should leak raw stack/jargon at the user — assert the message reads
@@ -403,6 +403,7 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
         'analyzer-content-blocked',
         'analyzer-daily-quota',
         'analyzer-rate-limit',
+        'analyzer-timeout',
         'analyzer-truncated',
         'analyzer-unreachable',
         'attribution-incomplete',
@@ -587,6 +588,40 @@ describe('classifyAnalysisFailure — a lock timeout is curated, everything else
     expect(classifyAnalysisFailure(env, 'm').code).toBe('analyzer-unreachable');
     expect(classifyAnalysisFailure(new Error('connect ECONNREFUSED 127.0.0.1:11434'), 'm').code).toBe(
       'analyzer-unreachable',
+    );
+  });
+});
+
+describe('AnalyzerTimeoutError (#3084 wave 2b)', () => {
+  it('→ analyzer-timeout, naming the Gemini request ceiling setting', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerTimeoutError('gemini', 'gemini-3.6-flash', 1_800_000, 'ceiling'),
+      'Gemini (gemini-3.6-flash)',
+    );
+    expect(r.code).toBe('analyzer-timeout');
+    expect(r.userMessage).toContain('Gemini (gemini-3.6-flash)');
+    expect(r.userMessage).toContain('Gemini request ceiling');
+    expect(r.detail).toContain('reason=ceiling');
+  });
+
+  it('→ analyzer-timeout naming the thinking window setting and its 290 s maximum for a thinking-idle timeout, not the ceiling', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerTimeoutError('gemini', 'gemini-3.6-flash', 120_000, 'thinking-idle'),
+      'Gemini (gemini-3.6-flash)',
+    );
+    expect(r.code).toBe('analyzer-timeout');
+    expect(r.userMessage).toContain('Gemini (gemini-3.6-flash)');
+    expect(r.userMessage).toContain('analyzer.gemini.thinkingIdleTimeoutMs');
+    expect(r.userMessage).toContain('GEMINI_THINKING_IDLE_MS');
+    expect(r.userMessage).toContain('290000');
+    expect(r.userMessage).not.toContain('request ceiling');
+    expect(r.remediation).toContain('analyzer.gemini.thinkingIdleTimeoutMs');
+    expect(r.detail).toContain('reason=thinking-idle');
+  });
+
+  it('is matched by name in the signature scan and never reads as unreachable', () => {
+    expect(classifyAnalysisError(new AnalyzerTimeoutError('gemini', 'gemini-3.6-flash', 1, 'ceiling')).code).toBe(
+      'analyzer-timeout',
     );
   });
 });

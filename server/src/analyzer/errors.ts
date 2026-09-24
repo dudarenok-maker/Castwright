@@ -132,3 +132,26 @@ export class GeminiContentBlockedError extends Error {
     this.name = 'GeminiContentBlockedError';
   }
 }
+
+/* #3084 — a request ran past a time limit without finishing (spec §1 decision
+   1c, spec §7). Wave 2 throws it from the Gemini transport for
+   analyzer.gemini.requestCeilingMs ('ceiling') and for the thinking window,
+   analyzer.gemini.thinkingIdleTimeoutMs ('thinking-idle'); wave 3 reuses it
+   for OpenAI-compatible endpoints ('connect-timeout' too). Never retried, never
+   a fallback: the upstream was reachable and did not finish. */
+export class AnalyzerTimeoutError extends Error {
+  readonly code = 'ANALYZER_TIMEOUT';
+  constructor(
+    public readonly transport: TransportKind,
+    public readonly model: string,
+    public readonly elapsedMs: number,
+    public readonly reason: 'ceiling' | 'connect-timeout' | 'thinking-idle',
+  ) {
+    super(
+      `${transport} ${model} request exceeded its ${
+        reason === 'ceiling' ? 'time ceiling' : reason === 'thinking-idle' ? 'thinking window' : 'connect timeout'
+      } after ${elapsedMs} ms.`,
+    );
+    this.name = 'AnalyzerTimeoutError';
+  }
+}

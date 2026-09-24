@@ -10,7 +10,7 @@
    errors so the retry helper can classify and retry them. */
 import { GoogleGenAI } from '@google/genai';
 import { configValue } from '../../config/resolver.js';
-import { AnalysisAbortedError } from '../errors.js';
+import { AnalysisAbortedError, AnalyzerTimeoutError } from '../errors.js';
 import { geminiRateLimiter } from '../rate-limit.js';
 import { geminiModelThinks, warmGeminiCatalog, type GeminiModelsClient } from '../catalog/gemini-catalog.js';
 import { GEMINI_FALLBACK_MAX_OUTPUT_TOKENS } from '../capacity.js';
@@ -46,6 +46,32 @@ export function resolveStreamIdleTimeoutMs(): number {
   return Number.isFinite(n) && n > 0 ? n : STREAM_IDLE_TIMEOUT_MS;
 }
 
+/* #3084 P5 — how long a THINKING Gemini model may stay silent before its answer
+   text starts. A long think can stream nothing, or only sparse thought
+   summaries, before the answer, so the 45 s idle window would kill it. The
+   knob's maximum is 290 000 ms: the SDK streams over the global fetch, whose
+   undici headers/body timeouts are fixed at 300 s. The wave 2 on-box row (run
+   sheet §1) measures real chapters to tune this default. */
+export const GEMINI_THINKING_IDLE_TIMEOUT_MS = 120_000;
+
+/** P5 — the silence allowed before a Gemini request's answer text starts: the
+    wait for the first chunk and each gap between thought parts.
+    analyzer.gemini.thinkingIdleTimeoutMs = 0 (the default) is automatic per
+    model: 120 s for a model that thinks (static id rule, P27), otherwise the
+    stream idle window. A positive value applies to every model. */
+export function resolveGeminiThinkingIdleTimeoutMs(model: string): number {
+  const configured = configValue<number>('analyzer.gemini.thinkingIdleTimeoutMs');
+  if (configured > 0) return configured;
+  return geminiModelThinks(model) ? GEMINI_THINKING_IDLE_TIMEOUT_MS : resolveStreamIdleTimeoutMs();
+}
+
+/** P5 — whether a timeout before answer text is a thinking-window timeout
+    (AnalyzerTimeoutError, not retried) rather than today's idle timeout
+    (GeminiStreamIdleError, retried): a model that thinks, or a positive knob. */
+function geminiThinkingWindowApplies(model: string): boolean {
+  return configValue<number>('analyzer.gemini.thinkingIdleTimeoutMs') > 0 || geminiModelThinks(model);
+}
+
 /** Live-read the cloud analyzer sampling temperature (registry wins). */
 export function resolveGeminiTemperature(): number {
   return configValue<number>('analyzer.gemini.temperature');
@@ -69,6 +95,10 @@ export const GEMINI_RETRY_CLASSIFIER: RetryClassifier = {
   classify(err: unknown) {
     if (err instanceof AnalysisAbortedError) return 'abort';
     if (err instanceof GeminiStreamIdleError) return 'idle';
+    /* #3084 P5 — a thinking-window or ceiling timeout already exceeds the 90 s
+       retry budget: rethrow at once, with no "retrying" warning and no
+       onThrottle announcement for an attempt the loop would never start. */
+    if (err instanceof AnalyzerTimeoutError) return 'no-retry';
     const status = (err as { status?: number })?.status;
     const message = (err as Error)?.message ?? String(err);
     if (status === 429) {
@@ -88,6 +118,9 @@ interface GeminiTransportOptions {
   model: string;
   /** A pre-built SDK client (tests inject one); production builds it from apiKey. */
   client?: GeminiModelsClient;
+  /** #3084 P5 — overrides analyzer.gemini.requestCeilingMs. A test seam: the
+      knob's minimum is 60 000 ms, so tests pass a much smaller value. */
+  requestCeilingMs?: number;
 }
 
 type GeminiChunk = {
@@ -109,11 +142,13 @@ export class GeminiTransport implements ChatTransport {
   readonly model: string;
   private readonly client: GoogleGenAI;
   private readonly apiKey: string;
+  private readonly requestCeilingMs: number | undefined;
 
   constructor(opts: GeminiTransportOptions) {
     this.client = (opts.client as unknown as GoogleGenAI) ?? new GoogleGenAI({ apiKey: opts.apiKey });
     this.apiKey = opts.apiKey;
     this.model = opts.model;
+    this.requestCeilingMs = opts.requestCeilingMs;
   }
 
   /** #3084 wave 2b — warm the model catalog (Auto max output tokens) before the
@@ -176,19 +211,42 @@ export class GeminiTransport implements ChatTransport {
 
     const watchdog = new AbortController();
     let idleFired = false;
-    const signals: AbortSignal[] = [watchdog.signal];
+    /* #3084 P5 — every Gemini request is bounded by an absolute ceiling, created
+       here inside the per-attempt call, which runs AFTER the limiter was
+       acquired, so queue time is not charged. */
+    const requestCeilingMs = this.requestCeilingMs ?? configValue<number>('analyzer.gemini.requestCeilingMs');
+    const ceiling = AbortSignal.timeout(requestCeilingMs);
+    const requestStartedAt = Date.now();
+    /* #3084 P5 — measured for the per-attempt timing line (on-box tuning). */
+    let firstChunkMs: number | null = null;
+    let firstAnswerMs: number | null = null;
+    let thoughtPartsBeforeAnswer = 0;
+
+    const signals: AbortSignal[] = [watchdog.signal, ceiling];
     if (req.signal) signals.push(req.signal);
     const combined = AbortSignal.any(signals);
     config.abortSignal = combined;
 
     const idleTimeoutMs = resolveStreamIdleTimeoutMs();
+    const thinkingIdleTimeoutMs = resolveGeminiThinkingIdleTimeoutMs(this.model);
+    const thinkingWindowApplies = geminiThinkingWindowApplies(this.model);
+    /* #3084 P5 — true while the pending timer bounds silence before the answer
+       text with the thinking window, so its expiry is a thinking-window timeout
+       (not retried) rather than an idle timeout (retried). */
+    let armedForThinking = thinkingWindowApplies;
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
-    const armIdleTimer = () => {
+    /** Until the answer text starts, every gap gets the thinking window; from
+        then on, the idle window. */
+    const armIdleTimer = (answerStarted: boolean) => {
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        idleFired = true;
-        watchdog.abort();
-      }, idleTimeoutMs);
+      armedForThinking = !answerStarted && thinkingWindowApplies;
+      idleTimer = setTimeout(
+        () => {
+          idleFired = true;
+          watchdog.abort();
+        },
+        answerStarted ? idleTimeoutMs : thinkingIdleTimeoutMs,
+      );
     };
     const disarmIdleTimer = () => {
       if (idleTimer) {
@@ -208,7 +266,8 @@ export class GeminiTransport implements ChatTransport {
     };
 
     try {
-      armIdleTimer();
+      /* #3084 P5 — no answer text yet: bounded by the thinking window. */
+      armIdleTimer(false);
       const stream = await this.client.models.generateContentStream({
         model: this.model,
         contents,
@@ -231,7 +290,7 @@ export class GeminiTransport implements ChatTransport {
           abortPromise,
         ])) as IteratorResult<GeminiChunk>;
         if (next.done) break;
-        armIdleTimer();
+        armIdleTimer(buf !== '');
         const chunk = next.value;
 
         /* Thought parts → reasoningSeen, but never enter the text buffer. */
@@ -240,6 +299,11 @@ export class GeminiTransport implements ChatTransport {
           for (const p of parts) {
             if (p.thought) reasoningSeen = true;
           }
+        }
+
+        if (firstChunkMs === null) firstChunkMs = Date.now() - requestStartedAt;
+        if (!buf) {
+          thoughtPartsBeforeAnswer += (chunk.candidates?.[0]?.content?.parts ?? []).filter((p) => p.thought === true).length;
         }
 
         const usage = chunk.usageMetadata;
@@ -278,6 +342,12 @@ export class GeminiTransport implements ChatTransport {
           continue;
         }
         buf = appendBounded(buf, text);
+        if (firstAnswerMs === null) {
+          firstAnswerMs = Date.now() - requestStartedAt;
+          /* #3084 P5 — the answer has started: from this chunk on, the 45 s
+             idle watchdog applies, as today. */
+          armIdleTimer(true);
+        }
         const now = Date.now();
         req.call.onChunk?.({
           receivedBytes: buf.length,
@@ -372,12 +442,20 @@ export class GeminiTransport implements ChatTransport {
       };
     } catch (err) {
       if (idleFired) {
+        /* #3084 P5 — silence before any answer text, past the thinking window:
+           not an idle stall to retry, but a timeout naming its setting. */
+        if (armedForThinking) {
+          throw new AnalyzerTimeoutError('gemini', this.model, Date.now() - requestStartedAt, 'thinking-idle');
+        }
         throw new GeminiStreamIdleError(this.model, idleTimeoutMs);
       }
       if (req.signal?.aborted) {
         throw new AnalysisAbortedError(
           `Gemini ${this.model} stream aborted (paused or client disconnected).`,
         );
+      }
+      if (ceiling.aborted) {
+        throw new AnalyzerTimeoutError('gemini', this.model, Date.now() - requestStartedAt, 'ceiling');
       }
       /* The SDK's ApiError keeps the upstream body inside `.message` as a
          JSON envelope, so a bare rethrow only shows the stack + the start of
@@ -401,6 +479,12 @@ export class GeminiTransport implements ChatTransport {
     } finally {
       disarmIdleTimer();
       releaseAbortListener();
+      /* #3084 P5 — one line per request attempt, for on-box tuning of the
+         thinking window. Counts and timings only: never request or response
+         content. */
+      console.info(
+        `[gemini] stream-timing model=${this.model} firstChunkMs=${firstChunkMs ?? 'none'} firstAnswerMs=${firstAnswerMs ?? 'none'} thoughtPartsBeforeAnswer=${thoughtPartsBeforeAnswer}`,
+      );
     }
   }
 }
