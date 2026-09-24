@@ -6283,6 +6283,48 @@ exists. *Criteria:* spec §On-box acceptance
 > that step itself — this note folds its verdict in per wave-5 step 6.
 > Evidence: `docs/testing/onbox-wave5-results/step-3-e9.md`.
 
+> **2026-09-24 — clean on-box re-confirmation from the batch worktree (#3319,
+> cline-qwen-cloud lane); first real-data `modelNarrator` non-zero readings
+> noted; item (3) STILL OWED, disposition unchanged.** Drove the row's own
+> steps in `C:\Claude\Projects\wt-onbox-batch-1` @ `042918ac`
+> (`chore/ops-onbox-batch-1`): `cd server && npm run build` (tsc, exit 0),
+> then `WORKSPACE_DIR=C:\AudiobookWorkspace node scripts/measure-attribution.mjs`.
+> This worktree's `server/handoff/cache/` held only one cache, so the
+> 2026-08-13 precedent was followed exactly: 35 `mns_*.json` caches copied in
+> read-only from the primary checkout (the worktree's own single file never
+> overwritten), and every copy deleted after the run — worktree cache back to
+> its one prior file, primary's 36 files verified untouched, nothing written to
+> `C:\AudiobookWorkspace` (the script's only write, its JSON report, was routed
+> out of the tree via `REPORT_PATH`). **Runs clean against real data: exit 0,
+> 30 book rows, none blank.** The corpus has grown 23 → 30 rows since the
+> 2026-08-14 discharge (new C1/C2C3/A21/A16/QA2937 throwaways live in the
+> library); 25 rows `ok`, the 5 `ok (not analysed)` are genuinely un-analysed
+> cloud-throwaway clones — not the 2026-08-13 per-checkout artifact. Every
+> spec §On-box-acceptance shape reproduced: both live CJK books at
+> `spokenTotal=128 > 0`; `dashOnlySpoken` non-zero on both Russian books
+> (`Юный дрессировщик` 17, `Ночной дозор` 1940); `unattributedSpeech` printed
+> for every book; `Ночной дозор (Tetralogy)` identical to the 2026-09-06
+> straight-pass record on every cited column (`spokenTotal` 2122,
+> `narratorIdSpoken` 229, `share` 13.0%, `unattributed` 9, `splitSpeech` 337,
+> `orphanSpoken` 32, `tagNarratorSpan` 544); Coalfall-family `orphanSpoken`
+> 0–56 across its eight language editions present here (previous note's range
+> 0–62 included an edition not re-cached since). **New observation worth
+> recording:** three caches re-analysed post-`priorCharacterId` now read
+> `modelNarrator` non-zero — `Каз Коалфолла` 10, `A16 Row Test - Delo o
+> Koalfolle` 2, `QA2937 Coalfall RU Throwaway` 2 — with `unknownOriginNarrator`
+> 0 and the whole narrator-id set landing in `modelNarrator`. This is the first
+> on-box, non-unit-fixture evidence the D18 origin field populates at all; but
+> these are QA-scale books, so **item (3) (a real book freshly re-analysed
+> post-D18) is NOT claimed discharged** — it still rides Group C's GPU session
+> exactly as before, and this run adds evidence for it rather than a verdict.
+> `demotedNarrator` remains 0 on every row. No defect found, nothing filed.
+> Brief discrepancy noted per the brief's own instruction: #3319's "What"
+> describes the item-(1) full run, which this register already marks
+> DISCHARGED (2026-08-14, reconfirmed 2026-08-23); the committed file was
+> trusted, so this run is recorded as an independent fresh re-confirmation from
+> the batch worktree plus the `modelNarrator` observation above. Row disposition
+> unchanged: only item (3) keeps E9 open.
+
 ### E103 · `scripts/wt-gc.mjs --prune` — real junction-first teardown ([#3051](https://github.com/dudarenok-maker/Castwright/issues/3051), ops-75 Part 4)
 
 Acceptance #5 of #3051: "the destructive path cannot be proven in-PR." Every unit and
