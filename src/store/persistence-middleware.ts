@@ -208,96 +208,33 @@ const PERSIST_RULES: Record<
      detector can filter ids the user has waved off (read in
      server/src/routes/revisions.ts). Without it, the slice's in-memory
      dismissals would be lost on reload and previously-dismissed events
-     would resurface on the next poll. */
-  'revisions/acceptAllPending': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
-  'revisions/rejectAllPending': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
-  'revisions/dismissDrift': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
-  /* Per-item accept also persists acceptedSelections — the slice records
-     the user's per-segment A/B choices at accept time and this patch is
-     the only way they survive a reload. Reject doesn't capture selection
-     (see revisions-slice.rejectRevision), so its patch is the same as the
-     bulk variants. */
-  'revisions/acceptRevision': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      acceptedSelections: s.revisions.acceptedSelections,
-      timeline: s.revisions.timeline,
-    }),
-  },
-  'revisions/rejectRevision': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
+     would resurface on the next poll.
+
+     Found in passing on PR #3395 (finding 5b): 6 of these 8 rules used to
+     build their own patch by hand and omitted `acceptedSelections`, while
+     the server PUT (server/src/routes/book-state.ts) replaces the whole
+     revisions.json file rather than merging — so any of those 6 firing
+     after an accept silently destroyed the recorded selections. All 8 now
+     go through `revisionsPatch` so a future persisted field can't be
+     dropped by a subset again. */
+  'revisions/acceptAllPending': { slice: 'revisions', build: revisionsPatch },
+  'revisions/rejectAllPending': { slice: 'revisions', build: revisionsPatch },
+  'revisions/dismissDrift': { slice: 'revisions', build: revisionsPatch },
+  'revisions/acceptRevision': { slice: 'revisions', build: revisionsPatch },
+  'revisions/rejectRevision': { slice: 'revisions', build: revisionsPatch },
   /* Plan 55 rollback. Reducer flips status + appends a `rolled-back` entry;
      this rule fans the timeline back out to revisions.json so a reload
      reflects the rollback. (The matching server-side audio restore is
      dispatched separately by the timeline view's click handler — plan 20's
      POST /audio/previous/restore endpoint.) */
-  'revisions/rolledBack': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      acceptedSelections: s.revisions.acceptedSelections,
-      timeline: s.revisions.timeline,
-    }),
-  },
+  'revisions/rolledBack': { slice: 'revisions', build: revisionsPatch },
   /* enqueuePending is fired by the generation-stream middleware when a
      profile-change preview chapter completes (plan 114). Persist `pending`
      so a reload rehydrates the in-flight revision stub. markRevisionPlayable
      similarly persists so the playable flip survives a reload after the
      chapter completed but before the user opened the diff. */
-  'revisions/enqueuePending': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
-  'revisions/markRevisionPlayable': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
+  'revisions/enqueuePending': { slice: 'revisions', build: revisionsPatch },
+  'revisions/markRevisionPlayable': { slice: 'revisions', build: revisionsPatch },
 
   /* Editorial audit trail. Persists the whole `events` array on every
      append — the log is small (one entry per user action) and the server
@@ -349,6 +286,23 @@ const PERSIST_RULES: Record<
 function bookIdFromState(s: PersistableRootState): string | null {
   const stage = s.ui.stage as { bookId?: string };
   return stage.bookId ?? null;
+}
+
+/* The one place that builds a revisions persist patch — every revisions/*
+   rule above routes through this so a future persisted field can't be
+   dropped by a subset of the rules (see finding 5b, PR #3395). Mirrors the
+   full shape server/src/routes/revisions.ts reads back plus the two
+   write-only fields (acceptedSelections, timeline) the client alone owns;
+   the server PUT replaces revisions.json wholesale, so anything left out
+   here is lost on the next persist. */
+function revisionsPatch(s: PersistableRootState, bookId: string) {
+  return {
+    pending: s.revisions.pending,
+    drift: s.revisions.drift.filter((d) => d.bookId === bookId),
+    dismissed: s.revisions.dismissed,
+    acceptedSelections: s.revisions.acceptedSelections,
+    timeline: s.revisions.timeline,
+  };
 }
 
 export const persistenceMiddleware: Middleware = (store) => {
