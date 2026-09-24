@@ -349,10 +349,18 @@ describe('audio-qa-repair joins centroids/verdicts by render-time snapshot key (
     expect(stillSuspect).toContain(1);
     expect(repaired).not.toContain(1);
 
-    // The acoustic check must actually have run for BOTH characters — this
-    // is the direct evidence the centroid join succeeded for the
-    // drift-spelled character too, not just the control.
-    expect(vi.mocked(embedSegment).mock.calls.length).toBeGreaterThan(0);
+    // The acoustic check must actually have run for the drift-spelled
+    // character too, not just the control — asserted as a count STRICTLY
+    // ABOVE what the control alone would produce, not merely `> 0` (#3362
+    // review pass 3, 🟡: `> 0` is satisfied by the control's own calls
+    // alone, so it cannot fail even when the drift-spelled character's
+    // centroid join is silently skipped). With SEG_QA_MAX_RERECORDS
+    // defaulting to 2 attempts per segment and `isAcceptable` never
+    // returning true in this low-cosine test (so the loop always runs the
+    // full 2 attempts), a control-only run produces exactly 2 embedSegment
+    // calls (1 segment x 2 attempts) — asserting a count above that proves
+    // the drift-spelled segment's own acoustic gate fired too.
+    expect(vi.mocked(embedSegment).mock.calls.length).toBeGreaterThan(2);
   });
 
   it('correct-voice take: drift-spelled segment is accepted and its verdict row (keyed by snapshot id) is updated', async () => {
@@ -385,6 +393,199 @@ describe('audio-qa-repair joins centroids/verdicts by render-time snapshot key (
     const tormentRows = verdicts.filter((v) => v.sentenceIds.includes(20));
     expect(tormentRows).toHaveLength(1);
     expect(tormentRows[0]!.characterId).toBe('the_torment');
+    expect(tormentRows[0]!.cosine).toBeGreaterThan(0.5);
+  });
+});
+
+// ── Transitional-book scenario (#3362 review pass 3, 🟠B continued) ─────────
+//
+// A chapter rendered BEFORE finalize-chapter-write started keying
+// characterSnapshots canonically has NO snapshot entry at all for a
+// character — neither the raw segment spelling nor a canonical one. Review
+// pass 2's fix made aggregate.ts's row-join resolver BOOK-WIDE: a chapter
+// like this one could resolve its raw row onto a canonical key a LATER,
+// UNRELATED chapter's own snapshot introduced (borrowing), producing a
+// silent disagreement with chapter-qa-repair.ts's own (already per-chapter)
+// resolver — the acoustic gate looked up the centroid under a key aggregate
+// never actually used for this chapter's rows.
+//
+// Fix (pass 3): aggregate.ts's resolver is now per-chapter too, scoped to
+// THIS chapter's own snapshot keys + castIdHistory (never another chapter's
+// keys) — the exact same construction chapter-qa-repair.ts already used.
+// With no snapshot entry at all, both consumers now agree: the raw id
+// passes through UNRESOLVED, matching `main`'s own pre-#3362 behaviour
+// (scoreBook used the raw characterId directly, with no resolver).
+//
+// This segments fixture drops the drift-spelled character's snapshot entry
+// entirely (matching the pre-PR shape) and pre-seeds verdict/centroid rows
+// keyed by the RAW id — what a per-chapter-consistent aggregate.ts would
+// have written for this chapter — plus a DECOY entry under the CANONICAL
+// key ('the_torment') that a later, unrelated chapter might use, with a
+// deliberately permissive cleanMean (0) that would wrongly ACCEPT any
+// cosine if qa-repair ever borrowed it instead of this chapter's own key.
+describe('audio-qa-repair never borrows another chapter\'s snapshot key for a chapter with no snapshot entry of its own (#3362 🟠B continued)', () => {
+  function writeTransitionalSegmentsFixture() {
+    writeFileSync(
+      join(audioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 4.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'hero', sentenceIds: [10], startSec: 0, endSec: 2.0 },
+          { groupIndex: 1, characterId: 'the-torment', sentenceIds: [20], startSec: 2.0, endSec: 4.0 },
+        ],
+        // No entry at all for 'the-torment'/'the_torment' — this chapter
+        // predates canonical snapshot keying (the transitional/pre-PR shape).
+        characterSnapshots: {
+          hero: { voiceEngine: 'kokoro' },
+        },
+      }),
+    );
+  }
+
+  function writeTransitionalVerdictFixture() {
+    writeFileSync(
+      join(audioRoot, `${SLUG}.render-integrity.json`),
+      JSON.stringify([
+        {
+          characterId: 'hero',
+          sentenceIds: [10],
+          verdict: 'voice-mismatch',
+          cosine: 0.3,
+          severity: 'severe',
+          fixable: true,
+          expectedEngine: 'qwen',
+          renderedEngine: 'qwen',
+          referenceKind: 'in-book',
+          windowed: false,
+          segmentIndex: 0,
+        },
+        {
+          // Keyed by the RAW id — this chapter's own resolver has an empty
+          // candidate cast for this character (no snapshot entry at all),
+          // so its row passes through unresolved, exactly what a
+          // per-chapter-consistent aggregate.ts writes for this chapter.
+          characterId: 'the-torment',
+          sentenceIds: [20],
+          verdict: 'voice-mismatch',
+          cosine: 0.3,
+          severity: 'severe',
+          fixable: true,
+          expectedEngine: 'qwen',
+          renderedEngine: 'qwen',
+          referenceKind: 'in-book',
+          windowed: false,
+          segmentIndex: 1,
+        },
+      ]),
+    );
+  }
+
+  function writeTransitionalCentroidFixture() {
+    writeFileSync(
+      join(audioRoot, 'render-integrity.centroids.json'),
+      JSON.stringify({
+        hero: {
+          characterId: 'hero',
+          centroid: unitVec(),
+          cleanMean: 0.7,
+          pSevere: 0.45,
+          pBand: 0.6,
+          referenceKind: 'in-book',
+        },
+        // This chapter's OWN centroid, under the RAW key — the one the
+        // acoustic gate must actually use.
+        'the-torment': {
+          characterId: 'the-torment',
+          centroid: unitVec(),
+          cleanMean: 0.7,
+          pSevere: 0.45,
+          pBand: 0.6,
+          referenceKind: 'in-book',
+        },
+        // Decoy: a LATER, UNRELATED chapter's canonical key, with a
+        // deliberately permissive cleanMean of 0 — any cosine >= 0 always
+        // passes. If qa-repair ever borrowed this entry instead of this
+        // chapter's own 'the-torment' key, segment 1 would be wrongly
+        // ACCEPTED even at a low (wrong-voice) cosine, flipping this test's
+        // outcome and exposing the borrow.
+        the_torment: {
+          characterId: 'the_torment',
+          centroid: unitVec(),
+          cleanMean: 0,
+          pSevere: 0.45,
+          pBand: 0.6,
+          referenceKind: 'in-book',
+        },
+      }),
+    );
+  }
+
+  it('wrong-voice take: the no-snapshot-entry segment is acoustically checked against its OWN raw-keyed centroid, not the decoy canonical key, and rejected', async () => {
+    writeTransitionalSegmentsFixture();
+    writeTransitionalVerdictFixture();
+    writeTransitionalCentroidFixture();
+    embedCosine = 'low'; // cosine 0.0 << cleanMean 0.7 (own key) but >= cleanMean 0 (decoy)
+    vi.mocked(embedSegment).mockClear();
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    const repaired = done!.repaired as number[];
+    const stillSuspect = done!.stillSuspect as number[];
+
+    // Control ('hero'): rejected on the acoustic check, as always.
+    expect(stillSuspect).toContain(0);
+    expect(repaired).not.toContain(0);
+
+    // The no-snapshot-entry segment must be rejected against its OWN
+    // 'the-torment' centroid (cleanMean 0.7) — if it had instead resolved
+    // onto the decoy 'the_torment' canonical key (cleanMean 0), it would be
+    // wrongly accepted here.
+    expect(stillSuspect).toContain(1);
+    expect(repaired).not.toContain(1);
+    expect(vi.mocked(embedSegment).mock.calls.length).toBeGreaterThan(2);
+  });
+
+  it('correct-voice take: the no-snapshot-entry segment is accepted and its verdict row stays keyed by the RAW id, never re-keyed onto the decoy canonical key', async () => {
+    writeTransitionalSegmentsFixture();
+    writeTransitionalVerdictFixture();
+    writeTransitionalCentroidFixture();
+    embedCosine = 'high'; // cosine 1.0 > cleanMean 0.7 (own key) — correct voice
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    const repaired = done!.repaired as number[];
+    expect(repaired).toContain(0);
+    expect(repaired).toContain(1);
+
+    const verdicts = JSON.parse(
+      readFileSync(join(audioRoot, `${SLUG}.render-integrity.json`), 'utf8'),
+    ) as Array<{ characterId: string; sentenceIds: number[]; cosine: number }>;
+
+    // Exactly one row for sentenceId 20, still keyed by the RAW id
+    // ('the-torment') the verdict file already used — never re-keyed onto
+    // the decoy canonical key ('the_torment'), and its cosine was actually
+    // refreshed by this repair.
+    const tormentRows = verdicts.filter((v) => v.sentenceIds.includes(20));
+    expect(tormentRows).toHaveLength(1);
+    expect(tormentRows[0]!.characterId).toBe('the-torment');
     expect(tormentRows[0]!.cosine).toBeGreaterThan(0.5);
   });
 });

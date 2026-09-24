@@ -27,6 +27,7 @@ import {
 import { readEmbeddings } from './render-integrity/embeddings-io.js';
 import { readCentroids } from './render-integrity/centroids-io.js';
 import { audioDir } from '../workspace/paths.js';
+import { loadCastIdHistory } from '../store/cast-id-history.js';
 
 export interface AudioQaReport {
   chaptersRendered: number;
@@ -81,19 +82,24 @@ export async function buildAudioQaReport(
   // never disagree with which characters/chapters scoreBook actually scores.
   const configuredEngineByChar = resolveConfiguredEngineByChar(segFiles);
 
-  /* #3362 (review pass 2 finding 🟠A) — `configuredEngineByChar` is keyed by
-     whatever snapshot key each chapter's own `characterSnapshots` used
-     (canonical AT THAT RENDER, since finalize-chapter-write #3370 — but
-     never rewritten by a LATER retirement/merge), while `embeddings.json`
-     rows below carry the RAW segment characterId their synth request was
-     made under. Resolve each row's raw id through the SAME history-free,
-     snapshot-key-scoped resolver aggregate.ts's scoreBook uses
-     (`buildSnapshotIdResolver`, fed the identical `segFiles` population)
-     before joining it against `configuredEngineByChar` — otherwise a
-     resolved character's roster entry here silently disagrees with
-     scoreBook's own (see `buildSnapshotIdResolver`'s doc comment for why a
-     CURRENT cast-id-history resolution is the wrong tool for this join). */
-  const resolveRowCharId = buildSnapshotIdResolver(segFiles);
+  /* #3362 (review pass 2 finding 🟠A, hardened in pass 3 🟠C/🟠B) —
+     `configuredEngineByChar` is keyed by whatever snapshot key each
+     chapter's own `characterSnapshots` used (canonical AT THAT RENDER, since
+     finalize-chapter-write #3370 — but never rewritten by a LATER
+     retirement/merge), while `embeddings.json` rows below carry the RAW
+     segment characterId their synth request was made under. Resolve each
+     row's raw id through the SAME per-chapter resolver aggregate.ts's
+     scoreBook uses (`buildSnapshotIdResolver`, one per chapter, scoped to
+     THAT chapter's own snapshot keys + castIdHistory) before joining it
+     against `configuredEngineByChar` — a book-wide resolver here would let a
+     chapter's row resolve onto a DIFFERENT chapter's canonical/
+     history-bridged key, silently disagreeing with scoreBook's own
+     per-chapter join (see `buildSnapshotIdResolver`'s doc comment for the
+     full rationale). */
+  const castIdHistory = await loadCastIdHistory(bookDir);
+  const resolveRowCharIdByChapter = new Map(
+    segFiles.map((seg) => [seg.chapterId, buildSnapshotIdResolver(seg, castIdHistory)]),
+  );
 
   // srv-36 hardening — per-chapter roster sourced from embeddings.json
   // (which character actually has embeddable rows in THIS chapter), not
@@ -108,9 +114,13 @@ export async function buildAudioQaReport(
     const embPath = join(audioDir(bookDir), `${ch.slug}.embeddings.json`);
     const embResult = await readEmbeddings(embPath);
     if (!embResult) continue;
+    const resolveRowCharId = resolveRowCharIdByChapter.get(ch.id);
     const chapterChars = new Set<string>();
     for (const row of embResult.rows) {
-      const rowCharId = resolveRowCharId(row.characterId);
+      // No matching segFile entry for this chapter id → resolver absent;
+      // fall back to the raw id, same as an empty-candidate-set resolver
+      // would (see buildSnapshotIdResolver's doc comment).
+      const rowCharId = resolveRowCharId ? resolveRowCharId(row.characterId) : row.characterId;
       const engine = configuredEngineByChar.get(rowCharId);
       if (engine && STOCHASTIC_ENGINES.has(engine)) chapterChars.add(rowCharId);
     }
@@ -171,13 +181,17 @@ export async function buildAudioQaReport(
      working) is excluded from chaptersEmbedFailed; only a chapter that was
      attempted and has an unscored roster character NOT in charactersPending
      (i.e. genuinely stuck) counts. */
-  /* review pass 2 🟡 finding 1 — a chapter can land on rosterByChapter (it
-     has embeddings rows that resolve, via buildSnapshotIdResolver's
-     book-wide id space, onto a stochastic character) without being
-     eligibleChapterIds-eligible (its OWN characterSnapshots never named that
-     character — e.g. a pre-#3362 chapter with no snapshot entry at all,
-     whose raw embeddings row happens to resolve onto a canonical id another,
-     later chapter's snapshot introduced). Left unguarded, such a chapter
+  /* review pass 2 🟡 finding 1 (still possible after pass 3's per-chapter
+     resolver, though the mechanism narrowed) — a chapter can land on
+     rosterByChapter (it has embeddings rows that resolve onto a stochastic
+     character) without being eligibleChapterIds-eligible (its OWN
+     characterSnapshots never named that character). Pass 3's fix scopes
+     `buildSnapshotIdResolver` to THIS chapter's own snapshot keys, so a row
+     can no longer resolve onto a DIFFERENT chapter's key via the resolver —
+     but a pre-#3362 chapter with no snapshot entry at all still passes its
+     raw embeddings-row id through UNRESOLVED, and that raw id can still
+     coincide, by plain string equality, with a canonical key a LATER
+     chapter's own snapshot introduced. Left unguarded, such a chapter
      could count as "scored" while never counting as "eligible", producing
      the nonsensical "2 of 1 eligible chapters scored". chaptersEligible
      can't become the roster-derived set instead — it must stay gate-

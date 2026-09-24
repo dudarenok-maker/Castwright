@@ -425,18 +425,24 @@ chapterQaRepairRouter.post(
             );
           }),
         );
-      /* #3362 (review pass 2, 🟠B) — centroids/verdict rows are keyed by the
-         RENDER-TIME `characterSnapshots` key (see aggregate.ts's
-         `buildSnapshotIdResolver` doc comment), while `seg.characterId` below
-         is the raw segment id from segments.json, which can differ by
-         spelling (hyphen/underscore normalisation). Resolve every raw
-         `seg.characterId` used to look into `centroids`/verdict rows through
-         the SAME history-free resolver aggregate.ts uses, scoped to THIS
-         chapter's own snapshot keys (segFile.characterSnapshots) — never
-         the history-aware `castResolver` above, which would join through
-         retirements/merges the render-time identity space deliberately
-         ignores. */
-      const resolveCentroidCharId = buildSnapshotIdResolver([segFile]);
+      /* #3362 (review pass 2, 🟠B; hardened in pass 3, 🟠B continued) —
+         centroids/verdict rows are keyed by the RENDER-TIME
+         `characterSnapshots` key (see aggregate.ts's `buildSnapshotIdResolver`
+         doc comment), while `seg.characterId` below is the raw segment id
+         from segments.json, which can differ by spelling (hyphen/underscore
+         normalisation) or by a retirement recorded after this chapter
+         rendered. Resolve every raw `seg.characterId` used to look into
+         `centroids`/verdict rows through the SAME resolver aggregate.ts's
+         scoreBook uses for THIS chapter, scoped to segFile's OWN snapshot
+         keys plus castIdHistory — never the book-wide `castResolver` above,
+         which would join through EVERY chapter's retirements/merges rather
+         than only the bridges this chapter's own render actually resolved,
+         and could pull in a DIFFERENT chapter's canonical key entirely
+         (pass 3's 🟠B-continued regression). Passing the SAME `castIdHistory`
+         loaded above (not a fresh re-read) keeps this resolver's history tier
+         reading the identical state aggregate.ts's own per-chapter resolver
+         would. */
+      const resolveCentroidCharId = buildSnapshotIdResolver(segFile, castIdHistory);
 
       /* Edit 6 (srv-36): capture accepted re-render embeddings by segment index.
          Populated inside the synth callback; flushed to disk after finalize. */

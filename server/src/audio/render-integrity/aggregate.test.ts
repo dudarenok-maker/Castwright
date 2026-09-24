@@ -658,6 +658,215 @@ describe('scoreBook — canonical cast-id joins (#3362 review finding)', () => {
     expect(centroids!['robert']).toBeUndefined();
   });
 
+  it('scores a row resolved through cast-id-history AT RENDER TIME under its own chapter\'s canonical snapshot key — no phantom audition (#3362 review pass 3, 🟠C)', async () => {
+    // Repro (PR #3375 review pass 3, 🟠C): the render resolves a group id
+    // through cast + history (synthesise-chapter.ts), and finalize keys the
+    // chapter's OWN characterSnapshots by that resolved id. Here cast is
+    // [mairin], history is {mayrin: mairin} — so 'mayrin' (the raw synth-time
+    // id, frozen on embedding rows and segments) resolved to 'mairin' at
+    // render time, and ch1's own characterSnapshots is keyed 'mairin'.
+    // Review pass 2's book-wide, HISTORY-FREE resolver had no exact or
+    // normalised match for 'mayrin' against the book-wide snapshot-key set
+    // (only 'mairin' is in it) and left the row raw — dropping every row,
+    // writing no render-integrity.json, and falling through to a phantom
+    // audition. A per-chapter resolver that ALSO takes THIS chapter's own
+    // castIdHistory bridges 'mayrin' -> 'mairin' correctly, because 'mairin'
+    // is exactly this chapter's own snapshot key.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-history-tier-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }] }),
+    );
+    writeFileSync(
+      castIdHistoryPath(dir),
+      JSON.stringify({ schema: 1, supersededBy: { mayrin: 'mairin' } }),
+    );
+
+    const rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) rows.push({ characterId: 'mayrin', sentenceIds: [i], vec: vec(0.02 * i) });
+
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: rows.map((r) => ({ characterId: 'mayrin', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { mairin: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-mairin', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    // The render-integrity file IS written, with all 12 rows keyed 'mairin'
+    // (this chapter's own canonical snapshot key) — never left raw as
+    // 'mayrin', and never falling through to an audition.
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(verdicts).not.toBeNull();
+    expect(verdicts!.length).toBe(12);
+    expect(verdicts!.every((v) => v.characterId === 'mairin')).toBe(true);
+    expect(verdicts!.every((v) => v.referenceKind === 'in-book')).toBe(true);
+
+    const centroids = await readCentroids(dir);
+    expect(centroids!['mairin'].referenceKind).toBe('in-book');
+    expect(centroids!['mayrin']).toBeUndefined();
+  });
+
+  it('does not let a book-wide exact key shadow another chapter\'s history-resolved key — a merged character\'s post-merge chapter keeps its own voice\'s centroid (#3362 review pass 3, 🟠C variant)', async () => {
+    // Repro (PR #3375 review pass 3, 🟠C variant): cast [robert], history
+    // {bob: robert}. ch1 rendered PRE-merge: rows, segments AND snapshot are
+    // all 'bob' (voice A, θ≈0). ch2 rendered POST-merge: its SEGMENTS still
+    // carry 'bob' (attribution retained — this is the shape the 🟠A merge
+    // fix's own test already covers when ch2's segments carry the survivor's
+    // id instead), but its SNAPSHOT is 'robert' (voice B, θ≈π/2) — i.e. the
+    // render resolved 'bob' through history to 'robert' at render time, same
+    // as the 🟠C main repro above, just on a SECOND chapter that shares a
+    // raw id with a first chapter's own UNRELATED exact key.
+    //
+    // Review pass 2's book-wide resolver had 'bob' as an EXACT key (from
+    // ch1's own snapshot) in its book-wide candidate set, so ch2's 'bob' rows
+    // resolved to ch1's book-wide 'bob' entry instead of through ch2's OWN
+    // history bridge to 'robert' — pooling two different voices' rows under
+    // one key, and leaving 'robert' with a phantom audition and 0 rows.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-history-shadow-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'robert', name: 'Robert', gender: 'male', attributes: [] }] }),
+    );
+    writeFileSync(
+      castIdHistoryPath(dir),
+      JSON.stringify({ schema: 1, supersededBy: { bob: 'robert' } }),
+    );
+
+    const bobRows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) bobRows.push({ characterId: 'bob', sentenceIds: [i], vec: vec(0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), bobRows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: bobRows.map((r) => ({ characterId: 'bob', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { bob: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-bob', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    // ch2's SEGMENTS still say 'bob' (raw, frozen at synth time), but its
+    // SNAPSHOT (resolved through history at render time) is 'robert'.
+    const halfPi = Math.PI / 2;
+    const ch2Rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) ch2Rows.push({ characterId: 'bob', sentenceIds: [200 + i], vec: vec(halfPi + 0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch2.embeddings.json'), ch2Rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch2.segments.json'), JSON.stringify({
+      chapterId: 2,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: ch2Rows.map((r) => ({ characterId: 'bob', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { robert: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-robert', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+
+    const bobVerdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(bobVerdicts).not.toBeNull();
+    expect(bobVerdicts!.length).toBe(12);
+    expect(bobVerdicts!.every((v) => v.characterId === 'bob')).toBe(true);
+
+    // ch2's rows resolve to 'robert' via ITS OWN history bridge, not to
+    // ch1's book-wide 'bob' exact key.
+    const robertVerdicts = await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'));
+    expect(robertVerdicts).not.toBeNull();
+    expect(robertVerdicts!.length).toBe(12);
+    expect(robertVerdicts!.every((v) => v.characterId === 'robert')).toBe(true);
+
+    const centroids = await readCentroids(dir);
+    expect(centroids!['bob'].referenceKind).toBe('in-book');
+    expect(centroids!['robert'].referenceKind).toBe('in-book');
+    // No pooling: bob's cluster stays near θ≈0, robert's near θ≈π/2. A
+    // pooled centroid (mixing both voices) would sit roughly between them.
+    expect(centroids!['bob'].centroid[0]).toBeGreaterThan(0.9); // ≈ cos(0)
+    expect(centroids!['robert'].centroid[1]).toBeGreaterThan(0.9); // ≈ sin(π/2)
+  });
+
+  it('never borrows a LATER, unrelated chapter\'s canonical snapshot key for a chapter with no snapshot entry at all — transitional book (#3362 review pass 3, 🟠B continued)', async () => {
+    // Repro (PR #3375 review pass 3, 🟠B continued): ch1 is a pre-#3362
+    // chapter with NO characterSnapshots entry at all for this character —
+    // rendered before finalize started keying snapshots canonically. ch2 is
+    // a post-#3362 chapter with a canonical snapshot for an UNRELATED
+    // character that happens to normalise the same as ch1's raw segment id
+    // ('the_torment' vs 'the-torment'). Review pass 2's book-wide resolver
+    // pooled ch1's raw rows onto ch2's book-wide 'the_torment' entry
+    // (aggregate.ts wrote ch1.render-integrity.json keyed 'the_torment'),
+    // which then disagreed with chapter-qa-repair.ts's own (already
+    // per-chapter) resolver — the acoustic gate looked up a centroid keyed
+    // by ch1's raw id and never found the borrowed entry, silently skipping
+    // the acoustic check for a wrong-voice take.
+    //
+    // Aggregate's per-chapter resolver (pass 3) never borrows ch2's key: ch1
+    // has an EMPTY candidate cast for this character (no snapshot entry, no
+    // history bridge target present), so its raw rows pass through
+    // unresolved and — since no chapter's OWN snapshot ever uses that raw
+    // spelling as a key — are never classified stochastic and stay
+    // unscored, exactly matching `main`'s own pre-#3362 behaviour (no
+    // resolver, raw `characterId` matched directly against raw snapshot
+    // keys) rather than borrowing a later chapter's canonical id.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-transitional-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'the_torment', name: 'The Torment', gender: 'male', attributes: [] }] }),
+    );
+
+    // ch1: pre-#3362 shape — segments/rows raw 'the-torment', NO snapshot
+    // entry for it at all.
+    const ch1Rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) ch1Rows.push({ characterId: 'the-torment', sentenceIds: [i], vec: vec(0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), ch1Rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: ch1Rows.map((r) => ({ characterId: 'the-torment', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: {},
+    }));
+
+    // ch2: post-#3362 shape — UNRELATED chapter, canonical snapshot
+    // 'the_torment', own distinct voice.
+    const halfPi = Math.PI / 2;
+    const ch2Rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) ch2Rows.push({ characterId: 'the_torment', sentenceIds: [200 + i], vec: vec(halfPi + 0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch2.embeddings.json'), ch2Rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch2.segments.json'), JSON.stringify({
+      chapterId: 2,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: ch2Rows.map((r) => ({ characterId: 'the_torment', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { the_torment: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-the-torment', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+
+    // ch1's rows are NEVER written under ch2's borrowed 'the_torment' key —
+    // and, since no chapter's own snapshot ever names the raw spelling
+    // either, ch1 stays unscored (no render-integrity.json at all),
+    // matching the "pre-PR chapters stay unscored until re-rendered" cost
+    // the fix accepts rather than silently misattributing.
+    const ch1Verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(ch1Verdicts === null || ch1Verdicts.length === 0).toBe(true);
+
+    // ch2 is scored correctly and independently, under its own key, with
+    // its own centroid — never pooled with ch1's rows.
+    const ch2Verdicts = await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'));
+    expect(ch2Verdicts).not.toBeNull();
+    expect(ch2Verdicts!.length).toBe(12);
+    expect(ch2Verdicts!.every((v) => v.characterId === 'the_torment')).toBe(true);
+
+    const centroids = await readCentroids(dir);
+    expect(centroids!['the_torment'].referenceKind).toBe('in-book');
+    // No centroid pooled from ch1's rows — the_torment's centroid stays
+    // near its own cluster (θ≈π/2), not dragged toward ch1's (θ≈0).
+    expect(centroids!['the_torment'].centroid[1]).toBeGreaterThan(0.9); // ≈ sin(π/2)
+  });
+
   it('does not pool a pre-merge character\'s rows into the surviving character\'s centroid, and writes no duplicate verdict rows per sentence (#3362 review pass 2, 🟠A merge variant)', async () => {
     // 'bob' rendered ch1 (own voice, own centroid cluster near θ≈0), then was
     // merged into 'robert', who has his OWN chapter (ch2, own voice, own

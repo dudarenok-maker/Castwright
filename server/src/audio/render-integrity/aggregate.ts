@@ -48,7 +48,7 @@ import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-ke
 import { buildHintFromCast, type CastCharacter } from '../../tts/synthesise-chapter.js';
 import { hasClonedProvenance } from '../../tts/clone-engines.js';
 import { buildCastResolver } from '../../store/cast-resolve.js';
-import { loadCastIdHistory } from '../../store/cast-id-history.js';
+import { loadCastIdHistory, type CastIdHistory } from '../../store/cast-id-history.js';
 
 // Duration proxy for embedding rows: every row passed Task 6's MIN_DURATION_SEC
 // gate at embed time, so the duration guard inside scoreSegment never fires here.
@@ -149,37 +149,62 @@ export function resolveConfiguredEngineByChar(
 
 /**
  * Build a resolver that maps a RAW embedding-row characterId to the
- * render-time snapshot key it belongs to, scoped to the `characterSnapshots`
- * keys actually present across the given segments-file views — by exact
- * match or normalised-id collapse ONLY (#2040's hyphen/underscore-style
- * spelling drift), never through cast-id-history.
+ * render-time snapshot key it belongs to, scoped to ONE chapter's own
+ * `characterSnapshots` keys — plus that chapter's own render-time
+ * `castIdHistory` bridge — by exact match, history, or normalised-id
+ * collapse (#2040's hyphen/underscore-style spelling drift). NEVER against
+ * another chapter's keys.
  *
- * Deliberately history-free (#3362 review pass 2, 🟠A): a chapter's own
- * `characterSnapshots` key is fixed the moment that chapter finalizes and is
- * never rewritten by a LATER retirement/merge. Resolving a row through the
- * book's CURRENT cast-id-history instead would move it onto whatever the
- * character resolves to TODAY — dropping a retired-only character's rows
- * entirely (nothing on the current roster carries its old id anymore) or
- * pooling a merged character's PRE-MERGE rows (rendered in its OWN, possibly
- * different voice) into the surviving character's centroid. Joining in the
- * render's own identity space avoids both: a character keeps scoring under
- * the id it actually rendered under, exactly as it did before any of this
- * cross-file joining existed — the same behaviour `main` has always had.
+ * #3362 review pass 3, 🟠C/🟠B (continued): review pass 2's fix (🟠A) made
+ * this book-wide — a candidate set pooled from EVERY chapter's snapshot
+ * keys — which let one chapter's row resolve onto a DIFFERENT chapter's
+ * canonical key. Two ways that went wrong:
+ *   - 🟠C: a row resolved through cast-id-history AT RENDER TIME (e.g.
+ *     `mayrin` → `mairin`, synthesise-chapter.ts's own `castResolver`) has
+ *     no exact or normalised match in the book-wide snapshot-key set unless
+ *     SOME chapter's snapshot happens to use the canonical spelling too — so
+ *     a history-resolved row was silently dropped (phantom audition, 0 rows
+ *     scored) even though its OWN chapter's snapshot already names it
+ *     correctly.
+ *   - 🟠B: a book-wide EXACT key from one chapter shadowed a DIFFERENT
+ *     chapter's history-resolved key — e.g. a pre-merge chapter's `bob` rows
+ *     stayed `bob` (correct), but a post-merge chapter's `bob` rows (retitled
+ *     `robert`, rendered in a DIFFERENT voice) also resolved to the
+ *     pre-merge chapter's book-wide `bob` entry instead of through its own
+ *     chapter's history bridge — pooling two voices' rows under one key.
+ *
+ * Scoping the candidate cast AND the history lookup to THIS chapter alone
+ * reproduces exactly the identity space `synthesiseChapter`/
+ * `finalizeChapterAudioWrite` resolved THIS chapter's rows into at render
+ * time (see synthesise-chapter.ts's own `castResolver`) — a history entry
+ * only bridges a row when THIS chapter's own snapshot names the bridge's
+ * target, so it can never reach across into a sibling chapter's roster.
+ *
+ * A chapter with NO snapshot entry at all for a raw row's character (a
+ * pre-#3362 chapter, rendered before finalize started keying snapshots
+ * canonically) has an EMPTY candidate cast: the raw id passes through
+ * UNRESOLVED. That matches `main`'s own pre-#3362 behaviour — `scoreBook`
+ * used the raw `characterId` directly with no resolver at all, so a
+ * character absent from every chapter's OWN snapshot was never classified
+ * stochastic and stayed unscored — rather than borrowing a LATER chapter's
+ * canonical key for it.
  *
  * Still goes through `buildCastResolver` (repo rule: no second id matcher) —
- * just with an empty history and a synthetic "cast" built from the observed
- * snapshot keys, so its normalised-id tier does the same spelling-drift
- * collapse the canonical snapshot keys already benefit from, without its
- * history tiers ever firing.
+ * with a synthetic "cast" built from THIS chapter's own observed snapshot
+ * keys and THIS chapter's own castIdHistory, so its normalised-id tier does
+ * the same spelling-drift collapse the canonical snapshot keys already
+ * benefit from, and its history tier only bridges onto a target this
+ * chapter's own snapshot actually has.
  */
 export function buildSnapshotIdResolver(
-  views: EngineClassificationSource[],
+  view: EngineClassificationSource,
+  castIdHistory: CastIdHistory,
 ): (rawId: string) => string {
-  const snapshotIds = new Set<string>();
-  for (const view of views) {
-    for (const key of Object.keys(view.characterSnapshots ?? {})) snapshotIds.add(key);
-  }
-  const resolver = buildCastResolver(Array.from(snapshotIds, (id) => ({ id })));
+  const snapshotIds = Object.keys(view.characterSnapshots ?? {});
+  const resolver = buildCastResolver(
+    snapshotIds.map((id) => ({ id })),
+    castIdHistory,
+  );
   return (rawId: string): string => resolver.resolve(rawId)?.character.id ?? rawId;
 }
 
@@ -592,22 +617,30 @@ export async function scoreBook(
      `.supersededBy`) so `buildCastResolver` also honours `rejected`. */
   const castIdHistory = await loadCastIdHistory(bookDir);
   const castResolver = buildCastResolver(castChars ?? [], castIdHistory);
-  /* #3362 (review pass 2 finding 🟠A) — embedding rows carry the RAW segment
-     characterId their synth request was made under (frozen at render time,
-     see synthesise-chapter.ts); `stochasticChars`/`orderedChars`/
-     `voiceInfoByChar` are keyed by whatever snapshot key that chapter's own
-     `characterSnapshots` used (canonical AT THAT RENDER, since
-     finalize-chapter-write #3370 — but never rewritten by a LATER
-     retirement/merge). Review pass 1's fix resolved a row through the book's
-     CURRENT cast + cast-id-history (`castResolver`, above) — correct for the
-     spelling-drift case it targeted (same render, no history involved) but
-     wrong once a character retires AFTER rendering: it moves the row onto
-     whatever the character resolves to TODAY, which either matches nothing
-     on the roster (retired-only) or pools the row into a DIFFERENT,
-     surviving character's centroid (merged-into-existing). Join in the
-     render-time identity space instead — see `buildSnapshotIdResolver`'s own
-     doc comment for the full rationale. */
-  const resolveRowCharId = buildSnapshotIdResolver(classificationSources);
+  /* #3362 (review pass 2 finding 🟠A, hardened in pass 3 🟠C/🟠B) — embedding
+     rows carry the RAW segment characterId their synth request was made
+     under (frozen at render time, see synthesise-chapter.ts);
+     `stochasticChars`/`orderedChars`/`voiceInfoByChar` are keyed by whatever
+     snapshot key that chapter's own `characterSnapshots` used (canonical AT
+     THAT RENDER, since finalize-chapter-write #3370 — but never rewritten by
+     a LATER retirement/merge). Review pass 1's fix resolved a row through
+     the book's CURRENT cast + cast-id-history (`castResolver`, above) —
+     correct for the spelling-drift case it targeted (same render, no
+     history involved) but wrong once a character retires AFTER rendering:
+     it moves the row onto whatever the character resolves to TODAY, which
+     either matches nothing on the roster (retired-only) or pools the row
+     into a DIFFERENT, surviving character's centroid (merged-into-existing).
+     Pass 2's fix (a book-wide snapshot-key resolver) closed that but
+     introduced a NEW cross-chapter join: a row could resolve onto a
+     DIFFERENT chapter's canonical/history-bridged key. Resolve each
+     chapter's rows with a resolver scoped to THAT chapter's own snapshot
+     keys + castIdHistory instead — see `buildSnapshotIdResolver`'s own doc
+     comment for the full rationale. One resolver per chapter, built once
+     here and reused by both the anchor-gathering loop and
+     `scoreAndMergeCharacter` below. */
+  const resolveRowCharIdByChapter = new Map<number, (rawId: string) => string>(
+    chapterData.map((cd) => [cd.id, buildSnapshotIdResolver({ characterSnapshots: cd.snapshots }, castIdHistory)]),
+  );
   // #1951 — the language the chapters were rendered in. Read once per run and
   // stamped onto every Option-B audition below, for the same comparability
   // reason the render TIER is (see the renderKey comment further down).
@@ -673,11 +706,13 @@ export async function scoreBook(
   for (const charId of stochasticChars) anchorVecsByChar.set(charId, []);
 
   for (const cd of chapterData) {
+    const resolveRowCharId = resolveRowCharIdByChapter.get(cd.id)!;
     for (const row of cd.embRows) {
       // #3362 — resolve the row's raw characterId into the render-time
-      // snapshot-key identity space before the stochasticChars/
-      // anchorVecsByChar joins (see buildSnapshotIdResolver's doc comment);
-      // the segKey lookup below stays on the RAW id since segsByKey is built
+      // snapshot-key identity space, scoped to THIS chapter's own resolver
+      // (never another chapter's — see buildSnapshotIdResolver's doc
+      // comment), before the stochasticChars/anchorVecsByChar joins; the
+      // segKey lookup below stays on the RAW id since segsByKey is built
       // from segments.json's own (raw) characterId (see segKey's own callers).
       const rowCharId = resolveRowCharId(row.characterId);
       if (!stochasticChars.has(rowCharId)) continue;
@@ -725,17 +760,18 @@ export async function scoreBook(
     const configuredEngine = configuredEngineByChar.get(charId) ?? '';
     let mismatchCount = 0;
     for (const cd of chapterData) {
+      const resolveRowCharId = resolveRowCharIdByChapter.get(cd.id)!;
       const rowsForChar: VerdictRow[] = [];
       for (const row of cd.embRows) {
-        // #3362 — same render-time-identity resolution as the anchor-
-        // gathering loop above; `charId` here is the snapshot key
+        // #3362 — same THIS-CHAPTER'S-OWN-resolver identity resolution as
+        // the anchor-gathering loop above; `charId` here is the snapshot key
         // `orderedChars` was built from (a chapter's own characterSnapshots
         // key at the time it rendered), not necessarily the character's
         // CURRENT cast id. The persisted row's own `characterId` is stamped
         // as this same `charId` — `deriveBookOutline`/qa-report.ts read this
         // field back to build their own roster/eligibility sets using the
-        // identical resolver, so a differently-resolved id written here
-        // would silently fail that later join.
+        // identical per-chapter resolver, so a differently-resolved id
+        // written here would silently fail that later join.
         if (resolveRowCharId(row.characterId) !== charId) continue;
         const key = segKey(row.characterId, row.sentenceIds);
         const seg = cd.segsByKey.get(key);
