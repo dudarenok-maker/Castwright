@@ -15,6 +15,7 @@ import type {
   AnalyseResponse,
   VoiceMatchResponse,
   RevisionsResponse,
+  BulkRevisionsResponse,
   ChapterAudio,
   GenerationTick,
   Character,
@@ -10249,7 +10250,7 @@ const real = {
     bookIds,
   }: {
     bookIds: string[];
-  }): Promise<{ byBookId: Record<string, RevisionsResponse> }> => {
+  }): Promise<BulkRevisionsResponse> => {
     if (bookIds.length === 0) return { byBookId: {} };
     const url = `/api/revisions?bookIds=${bookIds.map(encodeURIComponent).join(',')}`;
     const res = await fetch(url);
@@ -10496,7 +10497,7 @@ const mock = {
     bookIds,
   }: {
     bookIds: string[];
-  }): Promise<{ byBookId: Record<string, RevisionsResponse> }> => {
+  }): Promise<BulkRevisionsResponse> => {
     const entries = await Promise.all(
       bookIds.map(async (bookId) => [bookId, await mockPollRevisions({ bookId })] as const),
     );

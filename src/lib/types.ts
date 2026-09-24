@@ -77,6 +77,7 @@ export type UploadResponse = components['schemas']['UploadResponse'];
 export type AnalyseResponse = components['schemas']['AnalyseResponse'];
 export type VoiceMatchResponse = components['schemas']['VoiceMatchResponse'];
 export type RevisionsResponse = components['schemas']['RevisionsResponse'];
+export type BulkRevisionsResponse = components['schemas']['BulkRevisionsResponse'];
 export type VoiceSample = components['schemas']['VoiceSample'];
 export type VoiceSampleRequest = components['schemas']['VoiceSampleRequest'];
 export type TtsModelKey = NonNullable<VoiceSampleRequest['modelKey']>;

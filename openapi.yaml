@@ -2828,6 +2828,36 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RevisionsResponse' }
 
+  /api/revisions:
+    get:
+      summary: Bulk pending A/B revisions + voice-drift events across books (plan 83)
+      operationId: pollRevisionsBulk
+      description: |
+        Fan-out over `bookIds` for the frontend's non-active-book background
+        poll (120 s tick) — the active book keeps using `pollRevisions`
+        above. Skips any bookId that doesn't exist on disk rather than
+        404ing, so one removed book doesn't take down the whole poll.
+      parameters:
+        - in: query
+          name: bookIds
+          required: true
+          description: Comma-separated bookIds, up to 50 per request.
+          schema: { type: string }
+      responses:
+        '200':
+          description: Outstanding revisions + drift events, keyed by bookId
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BulkRevisionsResponse' }
+        '400':
+          description: bookIds query param is missing, or exceeds 50 ids
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+
   /api/books/{bookId}/qa-report:
     get:
       summary: Per-book QA report (fs-51) — acoustic, ASR, voice-drift, and config-drift signals aggregated for one book.
@@ -6746,6 +6776,19 @@ components:
           additionalProperties:
             type: array
             items: { $ref: '#/components/schemas/TimelineEntry' }
+
+    BulkRevisionsResponse:
+      description: |
+        Response of `GET /api/revisions?bookIds=...` (plan 83). Each value
+        is the same per-book computation as `RevisionsResponse` (minus
+        `timeline`, which the bulk route doesn't compute) — bookIds that
+        don't exist on disk are simply omitted from the map.
+      type: object
+      required: [byBookId]
+      properties:
+        byBookId:
+          type: object
+          additionalProperties: { $ref: '#/components/schemas/RevisionsResponse' }
 
     TimelineEntry:
       type: object
