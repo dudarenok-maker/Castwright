@@ -63,6 +63,7 @@ import { scriptReviewSlice } from './script-review-slice';
 import { prosodySlice } from './prosody-slice';
 import { voiceLibrarySlice, installVoiceLibraryFocusListener } from './voice-library-slice';
 import { persistenceMiddleware } from './persistence-middleware';
+import { revisionsScopeMiddleware } from './revisions-scope-middleware';
 import { generationStreamMiddleware } from './generation-stream-middleware';
 import { analysisStreamMiddleware } from './analysis-stream-middleware';
 import { castDesignMiddleware } from './cast-design-stream-middleware';
@@ -223,6 +224,7 @@ export const store = configureStore({
         ignoredActions: [FLUSH, REHYDRATE, PAUSE, PERSIST, PURGE, REGISTER],
       },
     }).concat(
+      revisionsScopeMiddleware,
       persistenceMiddleware,
       generationStreamMiddleware(getStreamRunner),
       analysisStreamMiddleware,

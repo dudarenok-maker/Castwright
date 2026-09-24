@@ -546,3 +546,51 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
     expect(failure?.errorCode).toBe('language-unset');
   });
 });
+
+/* #3395 pass 2, N2 — `markRevisionPlayable` must key off `revisions.bookId`
+   (kept in lockstep with the active book by revisions-scope-middleware), not
+   `chapters.currentBookId` / `sliceMatchesHandle`. `chapters.currentBookId`
+   only moves once a per-book hydrate lands — never on navigation itself — so
+   a stream completing for a book the user just navigated AWAY from could,
+   under the old guard, still land its revision in the book the user
+   navigated TO whenever the two books shared a chapterId (every book's
+   chapters are numbered 1..N, so this collides constantly). */
+describe('generation-stream-runner — markRevisionPlayable guards on revisions.bookId (#3395 pass 2, N2)', () => {
+  it('does not flip a pending revision playable when revisions.bookId names a different book than the stream', () => {
+    const { store, runner } = makeRunner();
+    /* The revisions slice is scoped to a book the stream is NOT for —
+       exactly the shape mid-navigation produces (see revisions-scope-
+       middleware: it resets revisions.bookId to the newly active book the
+       instant the user navigates, ahead of any chapter completing for the
+       book they left). */
+    store.dispatch(
+      revisionsSlice.actions.hydrateFromBookState({
+        bookId: 'bk-other',
+        pending: [{ id: 'r1', chapterId: 1, characterId: 'nora', playable: false, segments: [] }],
+        drift: [],
+      }),
+    );
+    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    onTickFor('b1', 1)({ type: 'chapter_complete', chapterId: 1 } as GenerationTick);
+    expect(store.getState().revisions.pending[0].playable).toBe(false);
+  });
+
+  it('flips a pending revision playable when revisions.bookId matches the stream, even if chapters.currentBookId does not', () => {
+    const { store, runner } = makeRunner();
+    /* chapters is still on a DIFFERENT book — the hydrate-gated
+       currentBookId the old guard used — while revisions has already
+       caught up to the streamed book. The old `sliceMatchesHandle` guard
+       would have dropped this; the fix must not. */
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('other-book'));
+    store.dispatch(
+      revisionsSlice.actions.hydrateFromBookState({
+        bookId: 'b1',
+        pending: [{ id: 'r1', chapterId: 1, characterId: 'nora', playable: false, segments: [] }],
+        drift: [],
+      }),
+    );
+    runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
+    onTickFor('b1', 1)({ type: 'chapter_complete', chapterId: 1 } as GenerationTick);
+    expect(store.getState().revisions.pending[0].playable).toBe(true);
+  });
+});

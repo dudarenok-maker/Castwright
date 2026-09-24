@@ -25,7 +25,14 @@ const baseState = (overrides: Record<string, unknown> = {}) => ({
   ui: { stage: { bookId: 'book-1' } },
   cast: { characters: [{ id: 'halloran' }] },
   manuscript: { sentences: [] },
-  revisions: { pending: [], drift: [] },
+  /* bookId matches ui.stage's default 'book-1' — persistence-middleware's
+     belt-and-braces guard (#3395 pass 2, N1) refuses to persist a revisions
+     patch when the two disagree; a dedicated test below covers that guard
+     with a mismatched bookId. `hydratedFor` also matches 'book-1' — the
+     #3395 pass 3, R2 gate additionally refuses until this book's disk
+     snapshot has actually been read; a dedicated test below covers that gate
+     too, with `hydratedFor` behind `bookId`. */
+  revisions: { pending: [], drift: [], bookId: 'book-1', hydratedFor: 'book-1' },
   changeLog: { events: [] },
   bookMeta: { draft: null, saved: {} },
   ...overrides,
@@ -67,6 +74,86 @@ describe('persistenceMiddleware — gating', () => {
     persistenceMiddleware(makeStore(baseState()))(next)({} as { type?: string });
     await advance(1000);
     expect(putBookState).not.toHaveBeenCalled();
+  });
+
+  it('refuses to persist a revisions patch when revisions.bookId disagrees with the active book (#3395 pass 2, N1)', async () => {
+    /* Belt-and-braces: revisions-scope-middleware keeps `revisions.bookId`
+       in lockstep with `ui.stage`'s bookId in the real app, so this state
+       shouldn't arise in practice — but if a revisions/* action ever fires
+       before scope tracking catches up, persisting it must never write one
+       book's pending into another book's revisions.json. */
+    const state = baseState({ revisions: { pending: [{ id: 'r1' }], drift: [], bookId: 'book-2' } });
+    const next = vi.fn((x) => x);
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/dismissDrift' });
+    await advance(1000);
+    expect(putBookState).not.toHaveBeenCalled();
+  });
+
+  it('refuses to persist a revisions patch when hydratedFor is behind bookId — the R2 pre-hydrate window (#3395 pass 3)', async () => {
+    /* `bookId` flips the instant navigation targets a new book, but the
+       disk hasn't been READ yet — `hydratedFor` still names the prior book
+       (or null). A write racing that window (e.g. a chapter_complete for
+       the just-opened book) must not PUT before the hydrate lands, or it
+       clobbers whatever was already on disk with an empty/partial patch. */
+    const state = baseState({
+      revisions: { pending: [{ id: 'r1' }], drift: [], bookId: 'book-1', hydratedFor: null },
+    });
+    const next = vi.fn((x) => x);
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/markRevisionPlayable' });
+    await advance(1000);
+    expect(putBookState).not.toHaveBeenCalled();
+  });
+
+  it('refuses to persist a revisions patch when hydratedFor names a DIFFERENT book than bookId', async () => {
+    const state = baseState({
+      revisions: { pending: [{ id: 'r1' }], drift: [], bookId: 'book-1', hydratedFor: 'book-0' },
+    });
+    const next = vi.fn((x) => x);
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/enqueuePending' });
+    await advance(1000);
+    expect(putBookState).not.toHaveBeenCalled();
+  });
+
+  it('persists once hydratedFor catches up to bookId (R2)', async () => {
+    const state = baseState({
+      revisions: { pending: [{ id: 'r1' }], drift: [], bookId: 'book-1', hydratedFor: 'book-1' },
+    });
+    const next = vi.fn((x) => x);
+    persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/markRevisionPlayable' });
+    await advance(1000);
+    expect(putBookState).toHaveBeenCalledWith(
+      'book-1',
+      expect.objectContaining({ slice: 'revisions' }),
+    );
+  });
+
+  it('persists revisions/persistPendingAfterHydrateMerge like any other revisions rule (#3395 pass 3, R2)', async () => {
+    /* Dispatched by layout.tsx right after a hydrate whose merge folded a
+       pre-hydrate-window write into the disk snapshot — carries the merged
+       `pending` to disk since hydrateFromBookState itself is never
+       persisted. */
+    const state = baseState({
+      revisions: {
+        pending: [{ id: 'disk-only' }, { id: 'window-only' }],
+        drift: [],
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
+      },
+    });
+    const next = vi.fn((x) => x);
+    persistenceMiddleware(makeStore(state))(next)({
+      type: 'revisions/persistPendingAfterHydrateMerge',
+    });
+    await advance(1000);
+    expect(putBookState).toHaveBeenCalledWith(
+      'book-1',
+      expect.objectContaining({
+        slice: 'revisions',
+        patch: expect.objectContaining({
+          pending: [{ id: 'disk-only' }, { id: 'window-only' }],
+        }),
+      }),
+    );
   });
 });
 
@@ -191,7 +278,12 @@ describe('persistenceMiddleware — payload shape', () => {
        send only THIS book's drift to revisions.json (cross-book entries
        belong on their own books' files). */
     const state = baseState({
-      revisions: { pending: [{ id: 'r1' }], drift: [{ id: 'd1', bookId: 'book-1' }] },
+      revisions: {
+        pending: [{ id: 'r1' }],
+        drift: [{ id: 'd1', bookId: 'book-1' }],
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
+      },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/dismissDrift' });
     await advance(500);
@@ -218,6 +310,8 @@ describe('persistenceMiddleware — payload shape', () => {
           { id: 'd-mine', bookId: 'book-1' },
           { id: 'd-other', bookId: 'book-2' },
         ],
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/dismissDrift' });
@@ -237,6 +331,8 @@ describe('persistenceMiddleware — payload shape', () => {
         dismissed: [],
         acceptedSelections: {},
         timeline: { 3: [{ id: 'r0', chapterId: 3, eventKind: 'accepted' }] },
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/acceptRevision' });
@@ -265,6 +361,8 @@ describe('persistenceMiddleware — payload shape', () => {
         drift: [{ id: 'd1', bookId: 'book-1' }],
         dismissed: ['d2'],
         acceptedSelections: { 'r-prev': { 4: 'B' } },
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/acceptRevision' });
@@ -280,17 +378,22 @@ describe('persistenceMiddleware — payload shape', () => {
     });
   });
 
-  it('sends pending+drift+dismissed for revisions/enqueuePending (middleware-driven regen stub)', async () => {
+  it('sends pending+drift+dismissed+acceptedSelections for revisions/enqueuePending (middleware-driven regen stub)', async () => {
     /* enqueuePending is fired by the generation-stream middleware when a
        regen kicks off. The patch must include `pending` so a mid-regen
-       reload rehydrates the in-flight stub. */
+       reload rehydrates the in-flight stub — AND, since the server PUT
+       replaces revisions.json wholesale (finding 5b, PR #3395), it must
+       also carry whatever acceptedSelections the slice already holds from
+       an earlier accept, or that record is silently destroyed. */
     const next = vi.fn((x) => x);
     const state = baseState({
       revisions: {
         pending: [{ id: 'revision:1:halloran:42' }],
         drift: [],
         dismissed: [],
-        acceptedSelections: {},
+        acceptedSelections: { 'r-prev': { 4: 'B' } },
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/enqueuePending' });
@@ -301,18 +404,21 @@ describe('persistenceMiddleware — payload shape', () => {
         pending: [{ id: 'revision:1:halloran:42' }],
         drift: [],
         dismissed: [],
+        acceptedSelections: { 'r-prev': { 4: 'B' } },
       },
     });
   });
 
-  it('sends pending+drift+dismissed for revisions/markRevisionPlayable', async () => {
+  it('sends pending+drift+dismissed+acceptedSelections for revisions/markRevisionPlayable', async () => {
     const next = vi.fn((x) => x);
     const state = baseState({
       revisions: {
         pending: [{ id: 'r1', playable: true }],
         drift: [],
         dismissed: [],
-        acceptedSelections: {},
+        acceptedSelections: { 'r-prev': { 4: 'B' } },
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/markRevisionPlayable' });
@@ -323,11 +429,17 @@ describe('persistenceMiddleware — payload shape', () => {
         pending: [{ id: 'r1', playable: true }],
         drift: [],
         dismissed: [],
+        acceptedSelections: { 'r-prev': { 4: 'B' } },
       },
     });
   });
 
-  it('sends pending+drift+dismissed (NO acceptedSelections) for revisions/rejectRevision', async () => {
+  it('sends pending+drift+dismissed+acceptedSelections for revisions/rejectRevision', async () => {
+    /* Reject doesn't itself record a NEW selection (see
+       revisions-slice.rejectRevision), but any selection already on the
+       slice from an earlier accept must still ride along — the server PUT
+       replaces revisions.json wholesale, so omitting it here would destroy
+       it (finding 5b, PR #3395). */
     const next = vi.fn((x) => x);
     const state = baseState({
       revisions: {
@@ -335,22 +447,106 @@ describe('persistenceMiddleware — payload shape', () => {
         drift: [{ id: 'd1', bookId: 'book-1' }],
         dismissed: ['d2'],
         acceptedSelections: { 'r-prev': { 4: 'B' } },
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
       },
     });
     persistenceMiddleware(makeStore(state))(next)({ type: 'revisions/rejectRevision' });
     await advance(500);
-    /* Patch shape is the same shape the existing bulk reject sends — reject
-       intentionally drops the selection, even though one might exist on the
-       slice from a prior accept. */
     expect(putBookState).toHaveBeenCalledWith('book-1', {
       slice: 'revisions',
       patch: {
         pending: [{ id: 'r1' }],
         drift: [{ id: 'd1', bookId: 'book-1' }],
         dismissed: ['d2'],
+        acceptedSelections: { 'r-prev': { 4: 'B' } },
       },
     });
   });
+
+  it('preserves acceptedSelections across an accept followed by an enqueuePending persist (finding 5b, PR #3395)', async () => {
+    /* Repro: accept r1 (writes acceptedSelections) → Fix audio fires
+       enqueuePending → before the fix, enqueuePending's hand-built patch
+       omitted acceptedSelections, and since the server PUT replaces
+       revisions.json wholesale, the flush silently destroyed the record. */
+    const next = vi.fn((x) => x);
+    const state = baseState({
+      revisions: {
+        pending: [{ id: 'r1' }],
+        drift: [],
+        dismissed: [],
+        acceptedSelections: { r1: { 0: 'A' } },
+        timeline: {},
+        bookId: 'book-1',
+        hydratedFor: 'book-1',
+      },
+    });
+    const mw = persistenceMiddleware(makeStore(state))(next);
+
+    mw({ type: 'revisions/acceptRevision' });
+    await advance(500);
+    mw({ type: 'revisions/enqueuePending' });
+    await advance(500);
+
+    expect(putBookState).toHaveBeenCalledTimes(2);
+    expect(putBookState).toHaveBeenLastCalledWith(
+      'book-1',
+      expect.objectContaining({
+        slice: 'revisions',
+        patch: expect.objectContaining({ acceptedSelections: { r1: { 0: 'A' } } }),
+      }),
+    );
+  });
+
+  it.each([
+    'revisions/acceptAllPending',
+    'revisions/rejectAllPending',
+    'revisions/dismissDrift',
+    'revisions/acceptRevision',
+    'revisions/rejectRevision',
+    'revisions/rolledBack',
+    'revisions/enqueuePending',
+    'revisions/markRevisionPlayable',
+  ])(
+    'every revisions/* persist rule carries every persisted revisions field, incl. acceptedSelections (%s)',
+    async (type) => {
+      /* Pins the CLASS, not just one rule: all 8 revisions persist rules must
+         build their patch from the same full field set the server reads back
+         out of revisions.json, or a future field can be dropped by a subset
+         again the way acceptedSelections was (finding 5b, PR #3395). */
+      const next = vi.fn((x) => x);
+      const acceptedSelections = { r1: { 0: 'A' as const } };
+      const timeline = { 3: [{ id: 't1', chapterId: 3, eventKind: 'accepted' }] };
+      const state = baseState({
+        revisions: {
+          pending: [{ id: 'r1' }],
+          drift: [{ id: 'd1', bookId: 'book-1' }],
+          dismissed: ['d2'],
+          acceptedSelections,
+          timeline,
+          bookId: 'book-1',
+          hydratedFor: 'book-1',
+        },
+      });
+      persistenceMiddleware(makeStore(state))(next)({ type });
+      await advance(500);
+
+      expect(putBookState).toHaveBeenCalledOnce();
+      expect(putBookState).toHaveBeenCalledWith(
+        'book-1',
+        expect.objectContaining({
+          slice: 'revisions',
+          patch: expect.objectContaining({
+            pending: [{ id: 'r1' }],
+            drift: [{ id: 'd1', bookId: 'book-1' }],
+            dismissed: ['d2'],
+            acceptedSelections,
+            timeline,
+          }),
+        }),
+      );
+    },
+  );
 
   it('fs-58 batch ordering: mergedAwayKeys survives a subsequent setSentenceText in the same debounce window', async () => {
     /* Regression guard for the Task-2b correctness gap: when an Apply batch
@@ -463,6 +659,86 @@ describe('persistenceMiddleware — payload shape', () => {
         mergedAwayKeys: ['3:1'],
       },
     });
+  });
+});
+
+describe('persistenceMiddleware — per-book debounce isolation (#3395 pass 4, S4)', () => {
+  /* Repro 1 (revisions): accept on book A → open book B within the debounce
+     window → a B revisions write fires. Before the fix, the debounce timer
+     and pending-patch map were keyed by SLICE alone, so B's write canceled
+     and overwrote A's still-queued write for the same slice — only B's PUT
+     went out and A's accept was silently lost. */
+  it('does not drop book A\'s queued revisions write when book B writes the same slice within the debounce window', async () => {
+    const state: Record<string, unknown> = baseState({
+      revisions: { pending: [{ id: 'a1' }], drift: [], bookId: 'book-1', hydratedFor: 'book-1' },
+    });
+    const next = vi.fn((x) => x);
+    const mw = persistenceMiddleware(makeStore(state))(next);
+
+    // Book A: accept schedules A's debounced revisions write.
+    mw({ type: 'revisions/acceptAllPending' });
+
+    // Within the debounce window, the user opens book B and B's revisions
+    // slice writes too (mutating the shared state object in place, as the
+    // real store would after a bookId/revisions switch).
+    await advance(200);
+    state.ui = { stage: { bookId: 'book-2' } };
+    state.revisions = { pending: [{ id: 'b1' }], drift: [], bookId: 'book-2', hydratedFor: 'book-2' };
+    mw({ type: 'revisions/dismissDrift' });
+
+    await advance(500);
+
+    // Both books' writes must land — A's PUT with A's pending, B's PUT with
+    // B's pending. Before the fix, only the book-2 PUT fired.
+    expect(putBookState).toHaveBeenCalledWith(
+      'book-1',
+      expect.objectContaining({ slice: 'revisions', patch: expect.objectContaining({ pending: [{ id: 'a1' }] }) }),
+    );
+    expect(putBookState).toHaveBeenCalledWith(
+      'book-2',
+      expect.objectContaining({ slice: 'revisions', patch: expect.objectContaining({ pending: [{ id: 'b1' }] }) }),
+    );
+    // No cross-contamination: book-2's PUT must never carry book-1's pending.
+    expect(putBookState).not.toHaveBeenCalledWith(
+      'book-2',
+      expect.objectContaining({ patch: expect.objectContaining({ pending: [{ id: 'a1' }] }) }),
+    );
+  });
+
+  /* Repro 2 (cast): rename a character on book A → open book B within the
+     debounce window (every full hydrate re-sends cast.json via
+     cast/setCharacters) → before the fix, only B's cast PUT fired and A's
+     rename was never saved. */
+  it('does not drop book A\'s queued cast write when opening book B re-sends cast/setCharacters within the debounce window', async () => {
+    const state: Record<string, unknown> = baseState({ cast: { characters: [{ id: 'bob', name: 'Bob (renamed)' }] } });
+    const next = vi.fn((x) => x);
+    const mw = persistenceMiddleware(makeStore(state))(next);
+
+    // Book A: rename schedules A's debounced cast write.
+    mw({ type: 'cast/renameCharacter' });
+
+    // Within the debounce window, the user opens book B; the full hydrate
+    // re-sends cast.json for B via cast/setCharacters.
+    await advance(200);
+    state.ui = { stage: { bookId: 'book-2' } };
+    state.cast = { characters: [{ id: 'alice' }] };
+    mw({ type: 'cast/setCharacters' });
+
+    await advance(500);
+
+    expect(putBookState).toHaveBeenCalledWith('book-1', {
+      slice: 'cast',
+      patch: { characters: [{ id: 'bob', name: 'Bob (renamed)' }] },
+    });
+    expect(putBookState).toHaveBeenCalledWith('book-2', {
+      slice: 'cast',
+      patch: { characters: [{ id: 'alice' }] },
+    });
+    // No cross-contamination: book-2's PUT must never carry book-1's rename.
+    expect(putBookState).not.toHaveBeenCalledWith(
+      'book-2',
+      expect.objectContaining({ patch: expect.objectContaining({ characters: [{ id: 'bob', name: 'Bob (renamed)' }] }) }),
+    );
   });
 });
 

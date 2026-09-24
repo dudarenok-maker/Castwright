@@ -74,11 +74,14 @@ function streamKey(bookId: string, chapterId: number | undefined): string {
 const IMMEDIATE_TOAST_ERROR_CODES = new Set(['voice-not-designed', 'cloned-voice-broken']);
 
 /** Minimal store surface the runner needs. Satisfied by the configured RTK
-    store; kept narrow (only `chapters`) so the runner doesn't import the
-    store's circular `RootState` and stays usable from lean test stores. */
+    store; kept narrow (`chapters` + `revisions.bookId`) so the runner
+    doesn't import the store's circular `RootState` and stays usable from
+    lean test stores. `revisions.bookId` is read by the `chapter_complete`
+    handler's `markRevisionPlayable` guard (#3395 pass 2, N2) — see
+    handleTickFor below for why that can't reuse `chapters.currentBookId`. */
 export interface StreamRunnerStore {
   dispatch: AppDispatch;
-  getState: () => { chapters: ChaptersState };
+  getState: () => { chapters: ChaptersState; revisions: { bookId: string | null } };
 }
 
 interface OpenHandle {
@@ -388,15 +391,28 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
         }),
       );
     }
-    if (ev.type === 'chapter_complete' && ev.chapterId != null && sliceMatchesHandle) {
-      /* Accumulate — do NOT dispatch a per-chapter event. The rollup goes
-         out once on close (run drain / pause). De-dupe so a retry tick or
-         re-emitted SSE message doesn't double-count. */
-      if (!handle.completedChapterIds.includes(ev.chapterId)) {
-        handle.completedChapterIds.push(ev.chapterId);
+    if (ev.type === 'chapter_complete' && ev.chapterId != null) {
+      if (sliceMatchesHandle) {
+        /* Accumulate — do NOT dispatch a per-chapter event. The rollup goes
+           out once on close (run drain / pause). De-dupe so a retry tick or
+           re-emitted SSE message doesn't double-count. */
+        if (!handle.completedChapterIds.includes(ev.chapterId)) {
+          handle.completedChapterIds.push(ev.chapterId);
+        }
       }
-      /* Flip any pending revisions for this chapter to playable. */
-      dispatch(revisionsActions.markRevisionPlayable({ chapterId: ev.chapterId }));
+      /* Flip any pending revisions for this chapter to playable — guarded on
+         `revisions.bookId` (kept in lockstep with the active book by
+         revisions-scope-middleware), NOT `sliceMatchesHandle` /
+         `chapters.currentBookId`: `pending` belongs to whichever book the
+         revisions slice currently tracks, which can diverge from chapters'
+         hydrate-gated `currentBookId` when a chapter completes mid-
+         navigation — a stale `sliceMatchesHandle` guard let a just-
+         navigated-away book's `markRevisionPlayable` land on the NEW book's
+         `pending` via a same-numbered chapterId collision across books
+         (#3395 pass 2, N2). */
+      if (after.revisions.bookId === bookId) {
+        dispatch(revisionsActions.markRevisionPlayable({ chapterId: ev.chapterId }));
+      }
     } else if (ev.type === 'chapter_failed' && ev.chapterId != null) {
       /* Record the failure UNCONDITIONALLY (not gated on sliceMatchesHandle) —
          a cross-book chapter's queue entry must still be marked `failed` even

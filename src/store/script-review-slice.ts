@@ -1,7 +1,9 @@
 /* Script-review suggestions slice — dedicated, non-polled, bookId-keyed.
-   MUST NOT be revisions.pending (that slice's applyPoll wholesale-replaces
-   `pending` and would wipe active suggestions). Each book's bucket is
-   independent so concurrent multi-book workflows coexist without collision.
+   MUST NOT be revisions.pending (that slice's hydrateFromBookState
+   wholesale-replaces `pending` on every book-open and would wipe active
+   suggestions — pending is otherwise client-owned and no poll touches it,
+   see #3376 round 2). Each book's bucket is independent so concurrent
+   multi-book workflows coexist without collision.
 
    Op key shape: `${chapterId}:${id}:${op}` — chapterId is not on the base
    ReviewOp (it lives on the SSE envelope), so we define ReviewOpWithChapter

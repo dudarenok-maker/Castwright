@@ -39,7 +39,7 @@ import {
   buildNameChangeEvent,
 } from '../lib/change-log';
 import { api, ApiError, type SeriesRosterEntry } from '../lib/api';
-import type { Character, BookExportJob } from '../lib/types';
+import type { Character, BookExportJob, Revision } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { computeReanalyseProgress } from '../lib/reanalyse-progress';
@@ -185,6 +185,13 @@ export function Layout() {
   const driftGroupsByBook = useAppSelector(selectDriftGroupsByBook);
   const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
   const pending = useAppSelector((s) => s.revisions.pending);
+  /* #3395 pass 3, R1 — whether THIS book's disk revisions snapshot has
+     actually landed (distinct from `revisions.bookId`, which flips the
+     instant navigation targets a new book). Read here, alongside `manuscript`
+     just below, so the per-book hydration effect can gate its reload
+     short-circuit on it without adding it to that effect's own dep array
+     (same established pattern as the existing manuscript/characters reads). */
+  const revisionsHydratedFor = useAppSelector((s) => s.revisions.hydratedFor);
   const manuscript = useAppSelector((s) => s.manuscript);
   const library = useAppSelector((s) => s.library);
   const voices = useAppSelector((s) => s.voices.voices);
@@ -760,71 +767,136 @@ export function Layout() {
        to the fetch so disk fills the gap. */
     const needsCast = stageKind === 'confirm' || stageKind === 'ready';
     const castReady = !needsCast || characters.length > 0;
-    if (manuscript.bookId === bookId && manuscript.manuscriptId && manuscript.title && castReady)
-      return;
+    const manuscriptReady =
+      !!(manuscript.bookId === bookId && manuscript.manuscriptId && manuscript.title) && castReady;
+    /* #3395 pass 3, R1/R1b: manuscript/cast/chapters can stay correctly
+       hydrated for this book across a trip to a non-book view (Library,
+       Voices, Admin, Settings, Help, New book — any stage with no bookId) —
+       `revisionsScopeMiddleware` only resets the `revisions` slice's four
+       per-book fields on that trip, not these slices — so `manuscriptReady`
+       alone would skip the reload below and the book would reopen with
+       everything but its pending/timeline. Same gap covers a quick
+       A → B → A: A's `hydratedFor` was cleared by the trip through B even
+       though A's own manuscript/cast never actually changed (B's fetch got
+       cancelled before it could dispatch anything). `hydratedFor` tracks
+       whether THIS book's disk snapshot has actually reached the revisions
+       slice — reset to null by the same scope-change that resets
+       `revisions.pending` (see revisions-slice.ts). */
+    const revisionsReady = revisionsHydratedFor === bookId;
+    if (manuscriptReady && revisionsReady) return;
+    /* When only revisions needs a refill, skip the full slice-by-slice
+       reload below entirely — avoids a flicker of manuscript/cast/chapters/
+       bookMeta that are already correct for this book — but still hit
+       getBookState (the only endpoint that serves revisions.json) and
+       dispatch just the revisions hydrate. */
+    const revisionsOnly = manuscriptReady && !revisionsReady;
+    /* Read the CURRENT window pending right before dispatching the hydrate —
+       not once at effect-mount time. A pre-hydrate-window write
+       (enqueuePending / markRevisionPlayable, both gated on
+       `revisions.bookId` already matching this book — see
+       generation-stream-runner.ts / splice-runner-middleware.ts) can land
+       any time between this effect starting and `getBookState` resolving,
+       so capturing it up front would miss a write that arrives during the
+       fetch itself. `mergePendingWithWindow` (revisions-slice.ts) folds it
+       into the disk snapshot; this local helper tells us whether there was
+       anything to fold, so we know whether to persist the merged result once
+       hydrated (#3395 pass 3, R2) — `hydrateFromBookState` itself is never
+       persisted (would create a write-loop), so nothing else carries it to
+       disk. */
+    const windowPendingNow = (): Revision[] => {
+      const rev = store.getState().revisions;
+      return rev.bookId === bookId ? rev.pending : [];
+    };
     let cancelled = false;
     api
       .getBookState(bookId)
       .then((res) => {
         if (cancelled) return;
         /* null = no persisted state for this book (mock fresh boot, or
-           real backend hasn't seen this book yet). Leave the per-book
-           slices on their in-memory defaults; the library-fallback
-           hydrate below seeds bookMeta from the library entry. */
-        if (res === null) return;
-        dispatch(
-          manuscriptActions.hydrateFromBookState({
-            state: res.state,
-            sentences: res.manuscriptEdits?.sentences ?? null,
-            wordCount: res.manuscript?.wordCount ?? null,
-            format: res.manuscript?.format ?? null,
-            // fs-58 — rehydrate the merge tombstone so re-analysis can't resurrect merged ids.
-            mergedAwayKeys: res.manuscriptEdits?.mergedAwayKeys,
-          }),
-        );
-        /* Always overwrite the cast slice from disk — including the empty
-           case. A reparse deletes cast.json server-side, and without this
-           the previous run's roster would survive in redux and the
-           Analysing view's "Cast so far" pill would start at 24 instead
-           of 0 as Phase 0a streams in fresh detections. */
-        dispatch(castActions.setCharacters(res.cast?.characters ?? []));
-        /* fe-16 — per-character render fallback engine (Qwen → Kokoro). Empty
-           map clears stale entries when a re-render dropped the fallback. */
-        dispatch(castActions.setRenderedFallback(res.renderedFallbackByCharacter ?? {}));
-        /* #2023 — orphaned-characterId render-time substitution. Empty map
-           clears stale entries the same way its sibling above does. */
-        dispatch(castActions.setOrphanedCharacterFallbacks(res.orphanedCharacterFallbacks ?? {}));
-        dispatch(
-          chaptersActions.hydrateFromBookState({
-            bookId,
-            chapters: res.state.chapters,
-            completedSlugs: res.completedSlugs ?? [],
-            characters: res.cast?.characters ?? [],
-            chapterCharacters: res.chapterCharacters,
-            /* Plan 77 — book-state response now carries per-chapter
-               EBU R128 sidecar payloads. Older servers omit it; the
-               slice tolerates an undefined map by leaving each row's
-               `lufs` field undefined (no-data state in the report
-               card). */
-            chapterLufs: res.chapterLufs,
-            /* #650 — render-time sentence→speaker map per chapter so the
-               Generate view can flag chapters reassigned since they rendered.
-               Older servers omit it; the slice leaves the map empty and the
-               view falls back to the time-based heuristic. */
-            renderedSpeakersByChapter: res.renderedSpeakersByChapter,
-            /* #1105 — render-time sentence→textHash map per chapter so the Generate
-               view can flag chapters whose text was edited since they rendered.
-               Older servers/renders omit it; the slice leaves the map empty and the
-               view falls back to the time-based heuristic for text edits. */
-            renderedTextByChapter: res.renderedTextByChapter,
-            renderedInstructByChapter: res.renderedInstructByChapter,
-          }),
-        );
-        dispatch(
-          revisionsActions.hydrateFromBookState(
-            res.revisions ? { bookId, ...res.revisions } : null,
-          ),
-        );
+           real backend hasn't seen this book yet). */
+        if (res === null) {
+          if (revisionsOnly) {
+            /* Still confirm the (empty) read so `hydratedFor` catches up to
+               `bookId` and this effect doesn't refetch on every render. For
+               a full reload, leave every per-book slice on its in-memory
+               defaults as before — the library-fallback hydrate below seeds
+               bookMeta from the library entry. */
+            const hadWindowPending = windowPendingNow().length > 0;
+            dispatch(revisionsActions.hydrateFromBookState({ bookId }));
+            if (hadWindowPending) {
+              dispatch(revisionsActions.persistPendingAfterHydrateMerge());
+            }
+          }
+          return;
+        }
+        if (!revisionsOnly) {
+          dispatch(
+            manuscriptActions.hydrateFromBookState({
+              state: res.state,
+              sentences: res.manuscriptEdits?.sentences ?? null,
+              wordCount: res.manuscript?.wordCount ?? null,
+              format: res.manuscript?.format ?? null,
+              // fs-58 — rehydrate the merge tombstone so re-analysis can't resurrect merged ids.
+              mergedAwayKeys: res.manuscriptEdits?.mergedAwayKeys,
+            }),
+          );
+          /* Always overwrite the cast slice from disk — including the empty
+             case. A reparse deletes cast.json server-side, and without this
+             the previous run's roster would survive in redux and the
+             Analysing view's "Cast so far" pill would start at 24 instead
+             of 0 as Phase 0a streams in fresh detections. */
+          dispatch(castActions.setCharacters(res.cast?.characters ?? []));
+          /* fe-16 — per-character render fallback engine (Qwen → Kokoro). Empty
+             map clears stale entries when a re-render dropped the fallback. */
+          dispatch(castActions.setRenderedFallback(res.renderedFallbackByCharacter ?? {}));
+          /* #2023 — orphaned-characterId render-time substitution. Empty map
+             clears stale entries the same way its sibling above does. */
+          dispatch(
+            castActions.setOrphanedCharacterFallbacks(res.orphanedCharacterFallbacks ?? {}),
+          );
+          dispatch(
+            chaptersActions.hydrateFromBookState({
+              bookId,
+              chapters: res.state.chapters,
+              completedSlugs: res.completedSlugs ?? [],
+              characters: res.cast?.characters ?? [],
+              chapterCharacters: res.chapterCharacters,
+              /* Plan 77 — book-state response now carries per-chapter
+                 EBU R128 sidecar payloads. Older servers omit it; the
+                 slice tolerates an undefined map by leaving each row's
+                 `lufs` field undefined (no-data state in the report
+                 card). */
+              chapterLufs: res.chapterLufs,
+              /* #650 — render-time sentence→speaker map per chapter so the
+                 Generate view can flag chapters reassigned since they rendered.
+                 Older servers omit it; the slice leaves the map empty and the
+                 view falls back to the time-based heuristic. */
+              renderedSpeakersByChapter: res.renderedSpeakersByChapter,
+              /* #1105 — render-time sentence→textHash map per chapter so the Generate
+                 view can flag chapters whose text was edited since they rendered.
+                 Older servers/renders omit it; the slice leaves the map empty and the
+                 view falls back to the time-based heuristic for text edits. */
+              renderedTextByChapter: res.renderedTextByChapter,
+              renderedInstructByChapter: res.renderedInstructByChapter,
+            }),
+          );
+        }
+        /* Always carry `bookId` — even when `res.revisions` is null (no
+           revisions.json yet for a freshly-imported book) — so the slice's
+           belt-and-braces mismatch guard has something to check and its
+           bookId stays authoritative. `revisions-scope-middleware` has
+           already reset pending/dismissed/acceptedSelections/timeline for
+           this book by the time this fetch resolves (it fires synchronously
+           off the navigation that changed `ui.stage`'s bookId, not off this
+           fetch), so a null `res.revisions` landing here is a confirmation,
+           not the only thing standing between books' pending lists
+           (#3395 pass 2, N1). */
+        const hadWindowPending = windowPendingNow().length > 0;
+        dispatch(revisionsActions.hydrateFromBookState({ bookId, ...(res.revisions ?? {}) }));
+        if (hadWindowPending) {
+          dispatch(revisionsActions.persistPendingAfterHydrateMerge());
+        }
+        if (revisionsOnly) return;
         dispatch(changeLogActions.hydrateFromBookState(res.changeLog ?? null));
         /* Editable Listen-view metadata: seed from state.json's editorial
            fields; when narratorCredit is absent the slice defaults to 'Castwright'. */
@@ -1000,8 +1072,10 @@ export function Layout() {
   /* Plan 83 — background fan-out across non-active books past cast-pending
      (i.e. books that have actual chapter audio to drift). Excludes the
      active book (covered by the 30 s ticker above). Cadence is 120 s to
-     conserve free-tier server quotas; the slice's applyPoll action is
-     already multi-book-aware (per-bookId event merge). */
+     conserve free-tier server quotas; the slice's applyBackgroundPoll
+     action merges drift per bookId and never writes pending — like the
+     active-book applyPoll above, neither poll path touches `pending`
+     (client-owned, #3376). */
   const bgBookIds = useMemo(() => {
     return library.books
       .filter(
@@ -1024,7 +1098,7 @@ export function Layout() {
       api.pollRevisionsBulk({ bookIds: bgBookIds }).then((res) => {
         if (cancelled) return;
         for (const [id, r] of Object.entries(res.byBookId)) {
-          dispatch(revisionsActions.applyPoll({ ...r, bookId: id }));
+          dispatch(revisionsActions.applyBackgroundPoll({ bookId: id, drift: r.drift }));
         }
       });
     fetchOnce();

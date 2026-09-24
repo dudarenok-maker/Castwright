@@ -111,7 +111,7 @@ export const revisionsRouter = Router();
    exist on disk (caller decides whether to 404 or skip it in a fan-out). */
 export async function getRevisionsForBook(
   bookId: string,
-): Promise<{ pending: never[]; drift: DriftEvent[] } | null> {
+): Promise<{ pending: unknown[]; drift: DriftEvent[] } | null> {
   const located = await findBookByBookId(bookId);
   if (!located) return null;
   return computeRevisionsForBook(bookId, located.bookDir, located.state);
@@ -126,7 +126,7 @@ export async function computeRevisionsForBook(
   bookId: string,
   bookDir: string,
   state: BookStateJson,
-): Promise<{ pending: never[]; drift: DriftEvent[] }> {
+): Promise<{ pending: unknown[]; drift: DriftEvent[] }> {
   const castFile = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
   const cast: CastCharacter[] = castFile?.characters ?? [];
   if (cast.length === 0) {
@@ -147,6 +147,10 @@ export async function computeRevisionsForBook(
 
   const persisted = await readJson<RevisionsPersisted>(revisionsJsonPath(bookDir));
   const dismissed = new Set(Array.isArray(persisted?.dismissed) ? persisted!.dismissed! : []);
+  /* #3376 part 1 — the `pending` array the frontend's regen flow persists is
+     echoed verbatim (the server never interprets it). Guard mirrors
+     `dismissed` exactly so a malformed file falls back to []. */
+  const pending = Array.isArray(persisted?.pending) ? persisted!.pending! : [];
 
   const segmentsByChapter = await loadSegmentsFiles(bookDir, state.chapters);
   /* Build a chapterId -> scan title fallback map once. `seg.chapterTitle`
@@ -208,7 +212,7 @@ export async function computeRevisionsForBook(
   }
 
   const filtered = drift.filter((d) => !dismissed.has(d.id));
-  return { pending: [], drift: filtered };
+  return { pending, drift: filtered };
 }
 
 revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) => {
@@ -225,10 +229,11 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
 /* Plan 83 — bulk endpoint for background-drift fan-out across non-active
    books. Frontend's two-tier poller (active book on 30s tick, non-active
    books on 120s tick) calls this with the cross-book id list; the response
-   is keyed by bookId so the slice's applyPoll cascade fires per-book. Skips
-   bookIds that don't exist on disk (no 404 — just omitted from response) so
-   one removed book doesn't take down the whole poll. Lives on its own
-   Router instance because it's mounted at `/api` (not `/api/books`). */
+   is keyed by bookId so the slice's applyBackgroundPoll cascade fires
+   per-book. Skips bookIds that don't exist on disk (no 404 — just omitted
+   from response) so one removed book doesn't take down the whole poll.
+   Lives on its own Router instance because it's mounted at `/api` (not
+   `/api/books`). */
 export const revisionsBulkRouter = Router();
 revisionsBulkRouter.get('/revisions', async (req: Request, res: Response) => {
   try {
@@ -243,7 +248,7 @@ revisionsBulkRouter.get('/revisions', async (req: Request, res: Response) => {
     const entries = await Promise.all(
       bookIds.map(async (id) => [id, await getRevisionsForBook(id)] as const),
     );
-    const byBookId: Record<string, { pending: never[]; drift: DriftEvent[] }> = {};
+    const byBookId: Record<string, { pending: unknown[]; drift: DriftEvent[] }> = {};
     for (const [id, result] of entries) {
       if (result) byBookId[id] = result;
     }

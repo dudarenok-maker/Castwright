@@ -24,6 +24,33 @@ export interface RevisionsState {
       recent reversible entry calls plan 20's existing restore endpoint. */
   timeline: Record<number, TimelineEntry[]>;
   loaded: boolean;
+  /** The book `pending`/`dismissed`/`acceptedSelections`/`timeline` belong to
+      — null when no book is active. `revisions-scope-middleware` keeps this
+      in lockstep with `ui.stage`'s bookId, resetting the four per-book
+      fields the instant the active book changes (before that book's own
+      disk hydrate, or lack of one, arrives) — closing the window where a
+      leftover book A `pending` could be read, actioned against, and
+      persisted into book B's revisions.json (#3395 pass 2, N1). `drift` is
+      NOT reset here — it's already multi-book-aware (each event carries its
+      own `bookId`, see `mergeDriftForBook`), unlike the four fields above
+      which are single-book like `pending`. */
+  bookId: string | null;
+  /** The book whose DISK snapshot has actually landed via
+      `hydrateFromBookState` — distinct from `bookId`, which flips the
+      instant navigation targets a new book, before that book's own
+      `getBookState` round-trip resolves. `bookScopeChanged` clears this to
+      `null` on every book change; `hydrateFromBookState` sets it once the
+      payload's bookId is adopted. `persistence-middleware` refuses to write
+      a revisions patch until this matches the book being persisted — so a
+      write can never reach disk before the disk has been READ at least once
+      for that book (#3395 pass 3, R1/R2). Layout's per-book reload effect
+      also gates its "already loaded, skip the fetch" short-circuit on this,
+      not just on manuscript/cast being present — those can stay populated
+      across a trip to a non-book view (Library, Voices, Admin, …) that
+      resets this slice's `pending`/etc, so without this field the reload
+      would be skipped and the reset four fields would never get their disk
+      snapshot back. */
+  hydratedFor: string | null;
 }
 
 const initialState: RevisionsState = {
@@ -33,7 +60,48 @@ const initialState: RevisionsState = {
   acceptedSelections: {},
   timeline: {},
   loaded: false,
+  bookId: null,
+  hydratedFor: null,
 };
+
+/** Merge in-memory `pending` accumulated during the window between a book's
+    `bookScopeChanged` (bookId already updated) and its `hydrateFromBookState`
+    landing (hydratedFor still behind) with the disk snapshot the hydrate just
+    fetched. Writes that land in that window — `enqueuePending` (a fresh
+    regen/splice stub) and `markRevisionPlayable` (a chapter_complete flip) —
+    are gated on `revisions.bookId` already matching the target book, so
+    they're for THIS book, and they're chronologically newer than the disk
+    read (the `getBookState` request was already in flight when they fired).
+    So where an id collides the window entry wins wholesale; an id only the
+    disk knows about keeps its disk shape; an id only the window created
+    (a revision enqueued before the disk read resolved) is kept too — losing
+    it would drop a regen/splice take the user is already watching render
+    (#3395 pass 3, R2). */
+function mergePendingWithWindow(windowPending: Revision[], diskPending: Revision[]): Revision[] {
+  if (windowPending.length === 0) return diskPending;
+  const byId = new Map(diskPending.map((r) => [r.id, r] as const));
+  for (const w of windowPending) byId.set(w.id, w);
+  return Array.from(byId.values());
+}
+
+/* Multi-book-aware drift merge shared by applyPoll and applyBackgroundPoll
+   (#3376). When the caller stamps `bookId` onto the payload, only that book's
+   drift entries are replaced — events from other concurrently-active books
+   survive the poll. Without bookId, legacy whole-list replace. */
+function mergeDriftForBook(
+  s: RevisionsState,
+  bookId: string | undefined,
+  incoming: DriftEvent[] | undefined,
+) {
+  if (bookId) {
+    s.drift = [
+      ...s.drift.filter((d) => d.bookId !== bookId),
+      ...(incoming || []).map((d) => ({ ...d, bookId: d.bookId || bookId })),
+    ];
+  } else {
+    s.drift = incoming || [];
+  }
+}
 
 export const revisionsSlice = createSlice({
   name: 'revisions',
@@ -122,6 +190,25 @@ export const revisionsSlice = createSlice({
         reversible: false,
       });
     },
+    /** Dispatched by `revisions-scope-middleware` whenever `ui.stage`'s
+        bookId changes (openBook, hydrateFromUrl/router nav, goHome, leaving
+        to a non-book view, ...) — watched generically off the derived
+        active-book value rather than off each individual ui-slice action, so
+        a future book-changing action doesn't need to remember to wire this
+        up too (that's exactly how N2's `chapters.currentBookId` proxy went
+        stale). Resets the four per-book fields to empty and adopts the new
+        bookId; a no-op if the book hasn't actually changed. */
+    bookScopeChanged: (s, a: PayloadAction<string | null>) => {
+      if (s.bookId === a.payload) return;
+      s.bookId = a.payload;
+      s.pending = [];
+      s.dismissed = [];
+      s.acceptedSelections = {};
+      s.timeline = {};
+      /* The new book's disk snapshot hasn't been read yet — belongs to
+         `hydrateFromBookState` alone (#3395 pass 3, R1/R2). */
+      s.hydratedFor = null;
+    },
     dismissDrift: (s, a: PayloadAction<string>) => {
       s.drift = s.drift.filter((e) => e.id !== a.payload);
       if (!s.dismissed.includes(a.payload)) s.dismissed.push(a.payload);
@@ -147,30 +234,41 @@ export const revisionsSlice = createSlice({
         r.chapterId === a.payload.chapterId ? { ...r, playable: true } : r,
       );
     },
-    /* Runtime poll: refresh pending/drift but DON'T touch dismissed or
-       acceptedSelections — the server response (RevisionsResponse) doesn't
-       include either, and overwriting with empty would lose state until
-       the next disk hydrate.
+    /* Runtime poll (the active book's 30 s ticker): refresh drift but never
+       `pending` — `pending` is CLIENT-OWNED once a book is open. It is
+       seeded from the disk hydrate (hydrateFromBookState, fired on book-open
+       in layout.tsx — and again, revisions-only, if the book was already
+       loaded but `revisions` got reset by a trip to a non-book view; see
+       `hydratedFor` above and #3395 pass 3, R1), and every
+       subsequent mutation is a local action (enqueuePending,
+       markRevisionPlayable, acceptRevision, rejectRevision, …) plus the
+       500 ms-debounced persistence-middleware write-through. A poll landing
+       mid-debounce would otherwise echo a stale disk snapshot over a
+       write that hasn't reached disk yet — reverting an in-flight accept/
+       reject or losing a revision enqueued after the poll's own snapshot
+       was taken (#3376 round 2). Also DON'T touch dismissed or
+       acceptedSelections — the server response (RevisionsResponse)
+       doesn't include either, and overwriting with empty would lose state
+       until the next disk hydrate.
 
        Multi-book aware: when the caller stamps `bookId` onto the payload,
        only that book's drift entries are replaced — events from other
-       concurrently-active books survive the poll. `pending` is still
-       replaced wholesale (the regen/diff flow operates on the active
-       book and the server response doesn't differentiate). */
+       concurrently-active books survive the poll. Same drift-merge shape as
+       applyBackgroundPoll below; the two differ only in polling cadence and
+       book scope now that neither touches `pending`. */
     applyPoll: (s, a: PayloadAction<(RevisionsResponse & { bookId?: string }) | undefined>) => {
       const payload = a.payload || ({} as RevisionsResponse & { bookId?: string });
-      const bookId = payload.bookId;
-      s.pending = payload.pending || [];
-      if (bookId) {
-        const incoming = payload.drift || [];
-        s.drift = [
-          ...s.drift.filter((d) => d.bookId !== bookId),
-          ...incoming.map((d) => ({ ...d, bookId: d.bookId || bookId })),
-        ];
-      } else {
-        s.drift = payload.drift || [];
-      }
+      mergeDriftForBook(s, payload.bookId, payload.drift);
       s.loaded = true;
+    },
+    /* Background fan-out (Plan 83's 120 s bulk poll over NON-active books):
+       merge drift scoped to the polled bookId, and never touch `pending` or
+       `loaded`. `pending` is client-owned (see applyPoll above) and never
+       written by any poll, active or background — this action additionally
+       has no business writing a foreign book's data into the active book's
+       state regardless (#3376). */
+    applyBackgroundPoll: (s, a: PayloadAction<{ bookId: string; drift?: DriftEvent[] }>) => {
+      mergeDriftForBook(s, a.payload.bookId, a.payload.drift);
     },
     /* Disk hydrate on book open. Carries dismissed + acceptedSelections so
        subsequent edits union with prior persisted state rather than
@@ -198,10 +296,42 @@ export const revisionsSlice = createSlice({
     ) => {
       const payload = a.payload;
       if (!payload) {
+        /* No disk state at all for this fetch (mock fresh boot, or a book the
+           server hasn't seen). `bookScopeChanged` already reset these on
+           navigation, so in practice this is a no-op re-affirming empty —
+           but a defensive reset here too means a bare null payload can never
+           read back as "still holding the PREVIOUS book's pending" even if
+           dispatched some other way (#3395 pass 2, N1). Deliberately doesn't
+           touch `bookId` — a null payload doesn't tell us which book it was
+           for, so scope tracking stays owned by `bookScopeChanged` alone. */
+        s.pending = [];
+        s.dismissed = [];
+        s.acceptedSelections = {};
+        s.timeline = {};
         s.loaded = true;
         return;
       }
-      s.pending = payload.pending ?? [];
+      /* Belt-and-braces: ignore a hydrate response for a book we've since
+         navigated away from. `bookScopeChanged` already resets on
+         navigation and Layout's own per-book effect cancels a stale
+         in-flight fetch, so this should be unreachable in practice — but a
+         stray call bypassing both (a direct dispatch, a future caller) must
+         not let an old book's disk snapshot overwrite the book actually in
+         view. Only guards when both sides know a bookId; a payload with no
+         bookId (existing callers/tests) is applied unconditionally as
+         before. */
+      if (payload.bookId && s.bookId !== null && payload.bookId !== s.bookId) return;
+      if (payload.bookId) {
+        s.bookId = payload.bookId;
+        /* This book's disk snapshot has now landed — including when the
+           payload carries no `revisions` fields at all (a book with no
+           revisions.json yet): the disk was still READ, there was just
+           nothing on it, and `persistence-middleware`'s gate cares about the
+           read having happened, not about it finding anything (#3395 pass 3,
+           R1/R2). */
+        s.hydratedFor = payload.bookId;
+      }
+      s.pending = mergePendingWithWindow(s.pending, payload.pending ?? []);
       if (payload.bookId) {
         const bid = payload.bookId;
         const incoming = payload.drift ?? [];
@@ -217,6 +347,16 @@ export const revisionsSlice = createSlice({
       s.timeline = normaliseTimelineKeys(payload.timeline);
       s.loaded = true;
     },
+    /** No-op state transition whose only job is to be a `PERSIST_RULES`-
+        recognised action type (#3395 pass 3, R2). `hydrateFromBookState`
+        itself is deliberately absent from `PERSIST_RULES` — persisting a
+        hydrate response would create a write-loop — but when that hydrate's
+        merge (`mergePendingWithWindow`) actually folded a pre-hydrate-window
+        write into the disk snapshot, the merged `pending` needs to reach
+        disk once; otherwise it lives only in memory until the next ordinary
+        mutation. `layout.tsx` dispatches this immediately after a hydrate
+        that had a non-empty window to merge. */
+    persistPendingAfterHydrateMerge: (_s) => {},
   },
 });
 

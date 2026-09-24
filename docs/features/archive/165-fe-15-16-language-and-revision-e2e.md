@@ -57,11 +57,13 @@ Two deferred backlog items shipped together (one PR) because they share the
 - `CastView` banner + Qwen auto-load fire ONLY when `bookLanguage !== 'en'`;
   the auto-load is one-shot (ref-guarded) and gated on the `/api/qwen/detect`
   install probe (`src/views/cast.tsx`).
-- `mockPollRevisions` returns `PENDING_REVISIONS` for every book because the
-  revisions slice's `applyPoll` replaces `pending` wholesale regardless of
-  bookId; scoping it per-book would let a background poll of an empty book wipe
-  the active book's pending. The preview e2e clears `pending` itself before
-  opening its stub (`src/lib/api.ts`, `e2e/profile-regen-preview.spec.ts`).
+- `mockPollRevisions` returns `PENDING_REVISIONS` for every book because, at
+  the time this plan shipped, the revisions slice's `applyPoll` replaced
+  `pending` wholesale regardless of bookId; scoping it per-book would let a
+  background poll of an empty book wipe the active book's pending. The
+  preview e2e clears `pending` itself before opening its stub
+  (`src/lib/api.ts`, `e2e/profile-regen-preview.spec.ts`). (Superseded by
+  #3376: no poll path writes `pending` any more — it's client-owned.)
 
 ## Test plan
 
@@ -98,7 +100,8 @@ Two deferred backlog items shipped together (one PR) because they share the
 
 - Russian UI localization (`fs-14`, react-i18next) — separate backlog item.
 - Multi-step `pending`-by-book correctness in the revisions slice — `applyPoll`
-  still replaces `pending` wholesale (pre-existing; documented above).
+  replaced `pending` wholesale at the time this plan shipped (pre-existing;
+  documented above). Closed by #3376: no poll path writes `pending` any more.
 
 ## Ship notes
 

@@ -1786,6 +1786,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Bulk pending A/B revisions + voice-drift events across books (plan 83)
+         * @description Fan-out over `bookIds` for the frontend's non-active-book background
+         *     poll (120 s tick) — the active book keeps using `pollRevisions`
+         *     above. Skips any bookId that doesn't exist on disk rather than
+         *     404ing, so one removed book doesn't take down the whole poll.
+         */
+        get: operations["pollRevisionsBulk"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/qa-report": {
         parameters: {
             query?: never;
@@ -4913,6 +4936,19 @@ export interface components {
             /** @description Per-chapter chronological log of accept / reject / rollback events written by the frontend at user-action time. Read-back by the Revision History view (plan 55). Keyed by chapterId; each chapter's value is an append-only list in insertion order (oldest first). Optional — older books without timeline entries omit it. */
             timeline?: {
                 [key: string]: components["schemas"]["TimelineEntry"][];
+            };
+        };
+        /**
+         * @description Response of `GET /api/revisions?bookIds=...` (plan 83). Each value
+         *     is the same per-book computation as `RevisionsResponse` — neither
+         *     the bulk route nor the single-book `GET /:bookId/revisions` route
+         *     computes or returns `timeline` (only the disk-hydrate response from
+         *     `GET /book-state` does) — bookIds that don't exist on disk are
+         *     simply omitted from the map.
+         */
+        BulkRevisionsResponse: {
+            byBookId: {
+                [key: string]: components["schemas"]["RevisionsResponse"];
             };
         };
         TimelineEntry: {
@@ -9531,6 +9567,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RevisionsResponse"];
+                };
+            };
+        };
+    };
+    pollRevisionsBulk: {
+        parameters: {
+            query: {
+                /** @description Comma-separated bookIds, up to 50 per request. */
+                bookIds: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Outstanding revisions + drift events, keyed by bookId */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BulkRevisionsResponse"];
+                };
+            };
+            /** @description bookIds query param is missing, or exceeds 50 ids */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error?: string;
+                    };
                 };
             };
         };

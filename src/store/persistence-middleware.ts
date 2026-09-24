@@ -101,7 +101,17 @@ function debounceMs(s: PersistableRootState): number {
 /* Action types that should trigger a persist. Hydration actions
    (hydrateFromAnalysis, hydrateFromBookState, applyPoll for initial load,
    setImportCandidate) are intentionally absent — those are server-driven
-   and would create a write-loop if echoed back. */
+   and would create a write-loop if echoed back.
+
+   `revisions/persistPendingAfterHydrateMerge` is the one deliberate
+   exception, and it's a distinct action type from `hydrateFromBookState`
+   itself — not that action re-added. It's a no-op reducer (see
+   revisions-slice.ts) that `layout.tsx` dispatches immediately AFTER a
+   hydrate whose merge actually folded a pre-hydrate-window write into the
+   disk snapshot; without it that merged `pending` would live only in memory
+   until the next ordinary mutation (#3395 pass 3, R2). It doesn't create a
+   write-loop the way echoing the hydrate itself would: it only fires when
+   there was something local to merge, not on every hydrate. */
 const PERSIST_RULES: Record<
   string,
   { slice: StateSlice; build: (s: PersistableRootState, bookId: string) => unknown }
@@ -208,96 +218,36 @@ const PERSIST_RULES: Record<
      detector can filter ids the user has waved off (read in
      server/src/routes/revisions.ts). Without it, the slice's in-memory
      dismissals would be lost on reload and previously-dismissed events
-     would resurface on the next poll. */
-  'revisions/acceptAllPending': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
-  'revisions/rejectAllPending': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
-  'revisions/dismissDrift': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
-  /* Per-item accept also persists acceptedSelections — the slice records
-     the user's per-segment A/B choices at accept time and this patch is
-     the only way they survive a reload. Reject doesn't capture selection
-     (see revisions-slice.rejectRevision), so its patch is the same as the
-     bulk variants. */
-  'revisions/acceptRevision': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      acceptedSelections: s.revisions.acceptedSelections,
-      timeline: s.revisions.timeline,
-    }),
-  },
-  'revisions/rejectRevision': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
+     would resurface on the next poll.
+
+     Found in passing on PR #3395 (finding 5b): 6 of these 8 rules used to
+     build their own patch by hand and omitted `acceptedSelections`, while
+     the server PUT (server/src/routes/book-state.ts) replaces the whole
+     revisions.json file rather than merging — so any of those 6 firing
+     after an accept silently destroyed the recorded selections. All 8 now
+     go through `revisionsPatch` so a future persisted field can't be
+     dropped by a subset again. */
+  'revisions/acceptAllPending': { slice: 'revisions', build: revisionsPatch },
+  'revisions/rejectAllPending': { slice: 'revisions', build: revisionsPatch },
+  'revisions/dismissDrift': { slice: 'revisions', build: revisionsPatch },
+  'revisions/acceptRevision': { slice: 'revisions', build: revisionsPatch },
+  'revisions/rejectRevision': { slice: 'revisions', build: revisionsPatch },
   /* Plan 55 rollback. Reducer flips status + appends a `rolled-back` entry;
      this rule fans the timeline back out to revisions.json so a reload
      reflects the rollback. (The matching server-side audio restore is
      dispatched separately by the timeline view's click handler — plan 20's
      POST /audio/previous/restore endpoint.) */
-  'revisions/rolledBack': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      acceptedSelections: s.revisions.acceptedSelections,
-      timeline: s.revisions.timeline,
-    }),
-  },
+  'revisions/rolledBack': { slice: 'revisions', build: revisionsPatch },
   /* enqueuePending is fired by the generation-stream middleware when a
      profile-change preview chapter completes (plan 114). Persist `pending`
      so a reload rehydrates the in-flight revision stub. markRevisionPlayable
      similarly persists so the playable flip survives a reload after the
      chapter completed but before the user opened the diff. */
-  'revisions/enqueuePending': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
-  'revisions/markRevisionPlayable': {
-    slice: 'revisions',
-    build: (s, bookId) => ({
-      pending: s.revisions.pending,
-      drift: s.revisions.drift.filter((d) => d.bookId === bookId),
-      dismissed: s.revisions.dismissed,
-      timeline: s.revisions.timeline,
-    }),
-  },
+  'revisions/enqueuePending': { slice: 'revisions', build: revisionsPatch },
+  'revisions/markRevisionPlayable': { slice: 'revisions', build: revisionsPatch },
+  /* See the PERSIST_RULES doc comment above — the one deliberate hydrate-
+     adjacent exception (#3395 pass 3, R2). */
+  'revisions/persistPendingAfterHydrateMerge': { slice: 'revisions', build: revisionsPatch },
 
   /* Editorial audit trail. Persists the whole `events` array on every
      append — the log is small (one entry per user action) and the server
@@ -351,9 +301,40 @@ function bookIdFromState(s: PersistableRootState): string | null {
   return stage.bookId ?? null;
 }
 
+/* The one place that builds a revisions persist patch — every revisions/*
+   rule above routes through this so a future persisted field can't be
+   dropped by a subset of the rules (see finding 5b, PR #3395). Mirrors the
+   full shape server/src/routes/revisions.ts reads back plus the two
+   fields (acceptedSelections, timeline) the client alone owns end to end —
+   written here, and read back by hydrateFromBookState on the next book
+   open; the server PUT replaces revisions.json wholesale, so anything left
+   out here is lost on the next persist. */
+function revisionsPatch(s: PersistableRootState, bookId: string) {
+  return {
+    pending: s.revisions.pending,
+    drift: s.revisions.drift.filter((d) => d.bookId === bookId),
+    dismissed: s.revisions.dismissed,
+    acceptedSelections: s.revisions.acceptedSelections,
+    timeline: s.revisions.timeline,
+  };
+}
+
+/* S4 (#3395 pass 4) — the debounce/flush maps below are keyed by this
+   composite `${bookId}:${slice}` key, not bare `slice`. Keying by slice alone
+   meant a write scheduled for book A shared its timer/pending-patch/generation
+   slots with a same-slice write for book B: opening B within A's debounce
+   window canceled A's queued timer and clobbered its pending patch, so only
+   B's PUT ever went out and A's edit was silently lost. Composite keys give
+   each book's queued write its own independent slot, so it flushes to its own
+   book regardless of what other books do in the meantime. */
+type FlushKey = string;
+function flushKey(bookId: string, slice: StateSlice): FlushKey {
+  return `${bookId}:${slice}`;
+}
+
 export const persistenceMiddleware: Middleware = (store) => {
-  const timers = new Map<StateSlice, ReturnType<typeof setTimeout>>();
-  const pending = new Map<StateSlice, unknown>();
+  const timers = new Map<FlushKey, ReturnType<typeof setTimeout>>();
+  const pending = new Map<FlushKey, unknown>();
   /* Slices whose currently-pending write was (at least once this debounce
      window) triggered by a toast-worthy action. Last-wins on the patch means
      the flush persists the latest slice state regardless, so if it fails that
@@ -361,23 +342,24 @@ export const persistenceMiddleware: Middleware = (store) => {
      an unrelated edit also rode along in the same window. Carries the handler
      so the toast text can be per-action (bulk-reassign copy vs the server's own
      refused-rename sentence) and any rollback can fire. */
-  const toastPending = new Map<StateSlice, PersistFailureHandler>();
-  /* #2230 — monotonically-increasing counter per slice, bumped every time a
+  const toastPending = new Map<FlushKey, PersistFailureHandler>();
+  /* #2230 — monotonically-increasing counter per key, bumped every time a
      write is (re)scheduled. A flush captures the counter at fire time; its
      success/failure effects (snapshot prune / rollback / toast) only run if it
-     is still the LATEST flush for the slice. This prevents an OLDER in-flight
+     is still the LATEST flush for the key. This prevents an OLDER in-flight
      PUT from prematurely pruning or rolling back the shared rollback snapshot
      that a NEWER in-flight PUT (started while the first was still pending) still
      needs — closing the overlapping-in-flight-PUT data-loss race. */
-  const generation = new Map<StateSlice, number>();
+  const generation = new Map<FlushKey, number>();
 
   const flush = (bookId: string, slice: StateSlice) => {
-    const patch = pending.get(slice);
-    pending.delete(slice);
-    timers.delete(slice);
-    const handler = toastPending.get(slice);
-    toastPending.delete(slice);
-    const gen = generation.get(slice) ?? 0;
+    const key = flushKey(bookId, slice);
+    const patch = pending.get(key);
+    pending.delete(key);
+    timers.delete(key);
+    const handler = toastPending.get(key);
+    toastPending.delete(key);
+    const gen = generation.get(key) ?? 0;
     if (patch === undefined) return;
     api
       .putBookState(bookId, { slice, patch })
@@ -386,7 +368,7 @@ export const persistenceMiddleware: Middleware = (store) => {
            newer write has since been scheduled (gen advanced), a fresh snapshot
            belongs to it and must not be cleared by this older, superseded
            flush. */
-        if (handler?.onSuccess && gen === (generation.get(slice) ?? 0)) {
+        if (handler?.onSuccess && gen === (generation.get(key) ?? 0)) {
           store.dispatch(handler.onSuccess(bookId));
         }
       })
@@ -396,7 +378,7 @@ export const persistenceMiddleware: Middleware = (store) => {
            failure is superseded by a newer in-flight write (which owns the
            snapshot and the user's current draft), so don't toast/roll back for
            it — that would wrongly revert the newer edit. */
-        if (handler && gen === (generation.get(slice) ?? 0)) {
+        if (handler && gen === (generation.get(key) ?? 0)) {
           store.dispatch(
             notificationsActions.pushToast({
               kind: 'error',
@@ -423,15 +405,41 @@ export const persistenceMiddleware: Middleware = (store) => {
     const after = store.getState() as PersistableRootState;
     const bookId = bookIdFromState(after);
     if (!bookId) return result;
+    /* Belt-and-braces (#3395 pass 2, N1): refuse to persist a revisions
+       patch when `revisions.bookId` (kept in lockstep with the active book
+       by revisions-scope-middleware) disagrees with the book this write
+       would target. In the normal case the two always agree by the time a
+       revisions/* action fires; this only fires if some future path manages
+       to dispatch one before scope tracking catches up, and it closes the
+       one thing that must never happen either way — writing one book's
+       pending/timeline/etc into another book's revisions.json.
 
-    pending.set(rule.slice, rule.build(after, bookId));
-    /* #2230 — bump the per-slice generation so this becomes the LATEST write;
-       in-flight older flushes keep their captured (lower) generation and are
-       therefore gated out of prune/rollback in flush. */
-    generation.set(rule.slice, (generation.get(rule.slice) ?? 0) + 1);
+       #3395 pass 3, R2: ALSO refuse until `revisions.hydratedFor` matches —
+       `bookId` flips the instant navigation targets a new book, but a write
+       queued in the gap before that book's own disk snapshot has been read
+       (a chapter_complete/splice write racing the just-opened book's
+       getBookState) must never reach disk first and clobber whatever WAS
+       already there with an empty/partial patch. `hydrateFromBookState`
+       merges any such pre-hydrate window write with the disk snapshot (see
+       `mergePendingWithWindow` in revisions-slice.ts) and
+       `persistPendingAfterHydrateMerge` — also routed through this same
+       gate, which by then passes — carries the merged result to disk once
+       hydrated. */
+    if (
+      rule.slice === 'revisions' &&
+      (after.revisions.bookId !== bookId || after.revisions.hydratedFor !== bookId)
+    )
+      return result;
+
+    const key = flushKey(bookId, rule.slice);
+    pending.set(key, rule.build(after, bookId));
+    /* #2230 — bump the per-(book, slice) generation so this becomes the LATEST
+       write; in-flight older flushes keep their captured (lower) generation
+       and are therefore gated out of prune/rollback in flush. */
+    generation.set(key, (generation.get(key) ?? 0) + 1);
     const failHandler = TOAST_ON_PERSIST_FAILURE[type];
     if (failHandler) {
-      toastPending.set(rule.slice, failHandler);
+      toastPending.set(key, failHandler);
     } else if (rule.slice === 'state' && type !== 'bookMeta/commitDraft') {
       /* #2230 — the `state` slice is shared by ui/confirmCast and
          bookMeta/commitDraft (PERSIST_RULES above). When a non-bookMeta `state`
@@ -441,12 +449,12 @@ export const persistenceMiddleware: Middleware = (store) => {
          nor roll back book-meta for an op that isn't book-meta. (Manuscript's
          ride-along semantics are intentionally left untouched — only the shared
          `state` slice has the cross-action mismatch.) */
-      toastPending.delete(rule.slice);
+      toastPending.delete(key);
     }
-    const prev = timers.get(rule.slice);
+    const prev = timers.get(key);
     if (prev) clearTimeout(prev);
     timers.set(
-      rule.slice,
+      key,
       setTimeout(() => flush(bookId, rule.slice), debounceMs(after)),
     );
     return result;
