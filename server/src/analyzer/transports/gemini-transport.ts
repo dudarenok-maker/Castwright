@@ -12,7 +12,7 @@ import { GoogleGenAI } from '@google/genai';
 import { configValue } from '../../config/resolver.js';
 import { AnalysisAbortedError } from '../errors.js';
 import { geminiRateLimiter } from '../rate-limit.js';
-import { warmGeminiCatalog, type GeminiModelsClient } from '../catalog/gemini-catalog.js';
+import { geminiModelThinks, warmGeminiCatalog, type GeminiModelsClient } from '../catalog/gemini-catalog.js';
 import { GEMINI_FALLBACK_MAX_OUTPUT_TOKENS } from '../capacity.js';
 import {
   BACKOFFS_MS,
@@ -92,7 +92,11 @@ interface GeminiTransportOptions {
 
 type GeminiChunk = {
   text?: string;
-  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    thoughtsTokenCount?: number;
+  };
   candidates?: Array<{
     finishReason?: string;
     content?: { parts?: Array<{ text?: string; thought?: boolean }> };
@@ -153,9 +157,14 @@ export class GeminiTransport implements ChatTransport {
       parts: [{ text: m.content }],
     }));
 
+    /* #3084 P27 — decided once per request from the static id rule, never the
+       live catalog, so a model's request shape and its reasoning evidence never
+       change between requests. */
+    const includeThoughts = geminiModelThinks(this.model);
     const config: Record<string, unknown> = {
       systemInstruction: req.system,
       temperature: req.temperature,
+      ...(includeThoughts ? { thinkingConfig: { includeThoughts: true } } : {}),
       maxOutputTokens: req.maxOutputTokens ?? GEMINI_FALLBACK_MAX_OUTPUT_TOKENS,
     };
     if (req.structuredOutput.mode === 'json') {
@@ -210,6 +219,7 @@ export class GeminiTransport implements ChatTransport {
       let buf = '';
       let promptTokenCount: number | undefined;
       let candidatesTokenCount: number | undefined;
+      let thoughtsTokenCount: number | undefined;
       let finishReason: string | undefined;
       let promptBlockReason: string | undefined;
       let reasoningSeen = false;
@@ -239,6 +249,9 @@ export class GeminiTransport implements ChatTransport {
         if (usage?.candidatesTokenCount && Number.isFinite(usage.candidatesTokenCount)) {
           candidatesTokenCount = usage.candidatesTokenCount;
         }
+        if (usage?.thoughtsTokenCount && Number.isFinite(usage.thoughtsTokenCount)) {
+          thoughtsTokenCount = usage.thoughtsTokenCount;
+        }
 
         const chunkFinish = chunk.candidates?.[0]?.finishReason;
         if (chunkFinish) finishReason = chunkFinish;
@@ -246,7 +259,24 @@ export class GeminiTransport implements ChatTransport {
         if (chunkBlock) promptBlockReason = chunkBlock;
 
         const text = chunk.text;
-        if (!text) continue;
+        if (!text) {
+          /* #3084 wave 2b (P4) — a thought-only chunk (includeThoughts) is proof
+             the model is alive: feed the route heartbeat with the answer buffer
+             unchanged, so a long think does not read as a silent stream. The
+             idle watchdog was already re-armed for this chunk above. */
+          const chunkHadThought = (chunk.candidates?.[0]?.content?.parts ?? []).some((p) => p.thought === true);
+          if (chunkHadThought) {
+            const now = Date.now();
+            req.call.onChunk?.({
+              receivedBytes: buf.length,
+              receivedText: buf,
+              sinceLastChunkMs: now - lastChunkAt,
+              elapsedMs: now - start,
+            });
+            lastChunkAt = now;
+          }
+          continue;
+        }
         buf = appendBounded(buf, text);
         const now = Date.now();
         req.call.onChunk?.({
@@ -289,6 +319,12 @@ export class GeminiTransport implements ChatTransport {
       const resultUsage: TransportResult['usage'] = {};
       if (promptTokenCount !== undefined) resultUsage.inputTokens = promptTokenCount;
       if (candidatesTokenCount !== undefined) resultUsage.outputTokens = candidatesTokenCount;
+      /* #3084 P27 — a thoughtsTokenCount is reasoning evidence only on a request
+         that asked for thoughts. Gemma asks for none, so its empty MAX_TOKENS
+         keeps the #528 split recovery even if the response reports a count. */
+      if (includeThoughts && thoughtsTokenCount !== undefined) {
+        resultUsage.reasoningTokens = thoughtsTokenCount;
+      }
 
       /* Truncation is a transport SUCCESS here (mapFinish/finish.ts raises the
          classified AnalyzerTruncatedError centrally) — but pre-W1 logged this
