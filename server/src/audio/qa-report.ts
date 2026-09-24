@@ -171,8 +171,23 @@ export async function buildAudioQaReport(
      working) is excluded from chaptersEmbedFailed; only a chapter that was
      attempted and has an unscored roster character NOT in charactersPending
      (i.e. genuinely stuck) counts. */
+  /* review pass 2 🟡 finding 1 — a chapter can land on rosterByChapter (it
+     has embeddings rows that resolve, via buildSnapshotIdResolver's
+     book-wide id space, onto a stochastic character) without being
+     eligibleChapterIds-eligible (its OWN characterSnapshots never named that
+     character — e.g. a pre-#3362 chapter with no snapshot entry at all,
+     whose raw embeddings row happens to resolve onto a canonical id another,
+     later chapter's snapshot introduced). Left unguarded, such a chapter
+     could count as "scored" while never counting as "eligible", producing
+     the nonsensical "2 of 1 eligible chapters scored". chaptersEligible
+     can't become the roster-derived set instead — it must stay gate-
+     independent (a chapter with a stochastic character but the gate never
+     run is still eligible, just unscored) — so scored is clamped to
+     eligibleChapterIds instead, keeping chaptersScored <= chaptersEligible
+     structurally true. */
   const chaptersScored = Array.from(rosterByChapter.entries())
     .filter(([chapterId, roster]) => {
+      if (!eligibleChapterIds.has(chapterId)) return false;
       const verdictChars = outline.verdictCharactersByChapter.get(chapterId);
       if (!verdictChars) return false;
       return Array.from(roster).every((id) => verdictChars.has(id));

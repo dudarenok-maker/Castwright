@@ -472,8 +472,13 @@ describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 f
   });
 
   it('#3362 finding 5 — prefers the prior snapshot stored under the exact canonical id over one reached only via a retired alias', async () => {
-    // Prior file has BOTH the canonical key itself and a retired alias for
-    // the same character — the canonical entry must win.
+    // Prior file has BOTH a retired alias and the canonical key itself for
+    // the same character, with the ALIAS listed first — the canonical entry
+    // must still win, so this only passes if the exact-key preference is
+    // actually consulted rather than "first entry seen wins" (which the
+    // canonical-first ordering used to mask, since Object.entries visits
+    // insertion order and the guard's `!has(canonicalId)` alone would have
+    // let the first-seen alias stick).
     writeFileSync(
       join(audioRoot, `${SLUG}.segments.json`),
       JSON.stringify({
@@ -486,8 +491,8 @@ describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 f
         synthesizedAt: new Date().toISOString(),
         segments: [{ groupIndex: 0, characterId: 'live_char', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
         characterSnapshots: {
-          live_char: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-live-canonical' },
           retired_char: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-retired-alias' },
+          live_char: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-live-canonical' },
         },
       }),
     );
