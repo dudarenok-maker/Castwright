@@ -229,10 +229,11 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
 /* Plan 83 — bulk endpoint for background-drift fan-out across non-active
    books. Frontend's two-tier poller (active book on 30s tick, non-active
    books on 120s tick) calls this with the cross-book id list; the response
-   is keyed by bookId so the slice's applyPoll cascade fires per-book. Skips
-   bookIds that don't exist on disk (no 404 — just omitted from response) so
-   one removed book doesn't take down the whole poll. Lives on its own
-   Router instance because it's mounted at `/api` (not `/api/books`). */
+   is keyed by bookId so the slice's applyBackgroundPoll cascade fires
+   per-book. Skips bookIds that don't exist on disk (no 404 — just omitted
+   from response) so one removed book doesn't take down the whole poll.
+   Lives on its own Router instance because it's mounted at `/api` (not
+   `/api/books`). */
 export const revisionsBulkRouter = Router();
 revisionsBulkRouter.get('/revisions', async (req: Request, res: Response) => {
   try {

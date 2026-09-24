@@ -42,8 +42,9 @@ voice change can only be applied by re-rendering whole chapters.
   `revisions/markRevisionPlayable`; when it matches `previewRegen.previewChapterId`
   it builds a **playable** stub (`buildPendingRevisionStub({ …, playable: true })`)
   and dispatches `setShowRevisionPlayer(true)`. Built fresh on completion so a
-  mid-render revisions poll (`applyPoll` replaces `pending` wholesale) can't
-  leave the gate without a revision to show.
+  mid-render revisions poll (`applyPoll` replaced `pending` wholesale, at the
+  time this plan shipped — superseded by #3376: `pending` is now client-owned
+  and no poll writes it) can't leave the gate without a revision to show.
 - **Preserved invariants:** OpenAPI is the type source of truth — no
   `openapi.yaml` / `api-types.ts` change (the `Revision` shape is unchanged; the
   preview stub reuses it). No server change at all. RTK immer reducers untouched.
