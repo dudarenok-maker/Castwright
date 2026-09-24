@@ -300,10 +300,18 @@ export async function finalizeChapterAudioWrite(
   /* #3362 — resolve each raw segment characterId through the Wave-1 cast
      resolver so speakingIds / fallbackByChar / voiceNameByChar carry the
      CANONICAL cast id (e.g. segment 'the-torment' -> cast 'the_torment' via
-     the normalised-id tier), which is the key buildCharacterSnapshots and the
-     C1 carry-forward below match on. A genuinely unresolvable or rejected id
-     falls back to the raw id — no live cast entry carries that key, so it
-     produces no snapshot entry exactly as before the fix.
+     the normalised-id tier), which is the key buildCharacterSnapshots matches
+     on. A genuinely unresolvable or rejected id falls back to the raw id — no
+     live cast entry carries that key, so it produces no snapshot entry
+     exactly as before the fix.
+
+     #3362 finding 5 — this only guarantees THIS render's own maps are keyed
+     canonically. It does NOT, by itself, make the C1 carry-forward below
+     match: that reads a PRIOR *file's* `characterSnapshots`, whose keys were
+     stamped by whatever render wrote that file — a spelling that can since
+     have been retired via `retireCharacterId`. Re-keying THIS render's ids
+     through the resolver says nothing about ids the resolver never sees. The
+     carry-forward re-resolves the prior file's own keys separately, below.
 
      #3362 finding 3 — `castIdHistory` comes from the caller (see
      `FinalizeChapterAudioInput.castIdHistory`'s doc comment), NOT a fresh
@@ -344,9 +352,31 @@ export async function finalizeChapterAudioWrite(
      to `.previous.segments.json` below. */
   if (voiceNameByChar.size < speakingIds.size) {
     const prior = await readJson<ChapterSegmentsFile>(segPath).catch(() => null);
+    /* #3362 finding 5 — the prior file's `characterSnapshots` keys were
+       stamped by whatever render wrote that file, which can predate a
+       retirement recorded since (`retireCharacterId`): a snapshot the prior
+       render wrote under 'old' is invisible to a `speakingIds.has(id)` lookup
+       once cast-id-history has since folded 'old' into 'new', even though
+       'old'/'new' are the same character. Re-key the prior snapshots through
+       the same resolver used above so a snapshot stored under a retired (or
+       otherwise non-canonical) id is still found under its canonical id.
+       Two prior keys can resolve to the same canonical id (the canonical id
+       itself, still present verbatim, plus a retired alias for the same
+       character) — prefer the exact canonical-key entry over a resolved
+       alias, since it's the one the prior render itself wrote under the
+       character's own id rather than reached only by reading through
+       history. */
+    const priorSnapshotsByCanonicalId = new Map<string, CharacterSnapshot>();
+    for (const [rawKey, snapshot] of Object.entries(prior?.characterSnapshots ?? {})) {
+      const canonicalId = castResolver.resolve(rawKey)?.character.id ?? rawKey;
+      const isExactKey = canonicalId === rawKey;
+      if (isExactKey || !priorSnapshotsByCanonicalId.has(canonicalId)) {
+        priorSnapshotsByCanonicalId.set(canonicalId, snapshot);
+      }
+    }
     for (const id of speakingIds) {
       if (voiceNameByChar.has(id)) continue;
-      const priorVoice = prior?.characterSnapshots?.[id]?.resolvedVoiceName;
+      const priorVoice = priorSnapshotsByCanonicalId.get(id)?.resolvedVoiceName;
       if (priorVoice) voiceNameByChar.set(id, priorVoice);
     }
   }

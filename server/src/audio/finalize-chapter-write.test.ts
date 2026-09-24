@@ -438,6 +438,70 @@ describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 f
     expect(segFile.characterSnapshots.amy.resolvedVoiceName).toBe('kokoro-amy-legacy');
     expect(segFile.characterSnapshots.wren.resolvedVoiceName).toBe('kokoro-wren-FRESH');
   });
+
+  it('#3362 finding 5 — carries forward a prior snapshot stored under a since-retired id, found via the canonical id it now resolves to', async () => {
+    // Prior render wrote the snapshot under 'retired_char' — the id it had
+    // BEFORE `retireCharacterId` folded it into 'live_char'.
+    writeFileSync(
+      join(audioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [{ groupIndex: 0, characterId: 'retired_char', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
+        characterSnapshots: { retired_char: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-retired-legacy' } },
+      }),
+    );
+
+    // This run's segment already carries the raw pre-#1972 shape (a remix of
+    // a legacy chapter): its characterId resolves to 'live_char' through the
+    // retirement, but carries no voiceName of its own.
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      castIdHistory: { schema: 1, supersededBy: { retired_char: 'live_char' } },
+      segments: [{ groupIndex: 0, characterId: 'retired_char', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
+      cast: [{ id: 'live_char', name: 'Live Char', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots.live_char.resolvedVoiceName).toBe('kokoro-retired-legacy');
+  });
+
+  it('#3362 finding 5 — prefers the prior snapshot stored under the exact canonical id over one reached only via a retired alias', async () => {
+    // Prior file has BOTH the canonical key itself and a retired alias for
+    // the same character — the canonical entry must win.
+    writeFileSync(
+      join(audioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [{ groupIndex: 0, characterId: 'live_char', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
+        characterSnapshots: {
+          live_char: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-live-canonical' },
+          retired_char: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-retired-alias' },
+        },
+      }),
+    );
+
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      castIdHistory: { schema: 1, supersededBy: { retired_char: 'live_char' } },
+      segments: [{ groupIndex: 0, characterId: 'live_char', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
+      cast: [{ id: 'live_char', name: 'Live Char', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots.live_char.resolvedVoiceName).toBe('kokoro-live-canonical');
+  });
 });
 
 describe('finalizeChapterAudioWrite resolvedVoiceName strips the emotion-variant suffix (M1, #1972 follow-up)', () => {
