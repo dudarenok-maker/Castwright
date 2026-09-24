@@ -5901,6 +5901,38 @@ The Qwen VoiceDesign pipeline is merged, but the **zh/ja** Coalfall placeholder
 artifacts were never produced. Run the shipped pipeline against them. Distinct from
 D1's five languages, which are done.
 
+> **2026-09-24 — pipeline run: zh/ja VoiceDesign artifacts now exist, 26/26 verified on
+> disk. This row's gap is CLOSED on the machine axis; the per-voice native-ear listen is
+> queued under #1600.** Drove the shipped bulk `POST /books/:id/cast/design` (SSE) against
+> the lane server from this checkout (`:8100`; tier `qwen3-tts-1.7b`; persona engine
+> `local` → `qwen38-cw-iq3-80k:latest` via Ollama, both confirmed live in `/api/config`):
+>
+> - **zh** `castwright__standalones__煤落的委托`: ran 09:57–10:21 — 752-line SSE, 13 ×
+>   `character_designed`, 0 × `character_failed`, closed with
+>   `idle done=13 total=13 skipped=0 failures=[]`; job now inactive.
+> - **ja** `castwright__standalones__コールフォールの依頼`: ran 10:22–10:46 — 714-line SSE,
+>   13 × `character_designed`, 0 × `character_failed`, closed with
+>   `idle done=13 total=13 skipped=0 failures=[]`; job now inactive.
+> - **The artifacts this row asked for**: for every one of the 26 designed voice ids the
+>   full triple exists under `castwright-workspace/voices/qwen/` — `.json` persona sidecar,
+>   `.pt` speaker embedding, `__master.wav` reference clip — `pt=13 json=13 masterWav=13`,
+>   **missing = ∅** on both books. Each book's `cast.json` carries a non-empty `voiceStyle`
+>   persona and `overrideTtsVoices.qwen.name` for 13/13 characters (zh mtime 10:21:53,
+>   18,066 B; ja mtime 10:46:06, 16,543 B).
+> - **Usable now**: 13 fresh audition `.mp3` renders per book (inside each run window) sit in
+>   `server/audio/voices/` — the deterministic cache the Voices tab's "Play 12s" button
+>   reads — so every designed voice was rendered once at design time and is playable in the
+>   UI today.
+>
+> Full machine dump (per-character overrides, per-file sizes and timestamps, SSE tails):
+> `docs/testing/onbox-human-checkpoint-results/2026-09-24-d2-zhja-design-evidence.txt`,
+> committed alongside this note.
+> **What is NOT claimed here:** that each voice *sounds right* to a native zh/ja ear — that
+> verdict is machine-unverifiable. The 26 auditions above are the listen queue and stay
+> tracked under #1600. This row's own question — was the pipeline ever run against these
+> two samples, do their artifacts exist — is answered yes with file-level evidence.
+
+
 ---
 
 ## Group E — not the GPU box
