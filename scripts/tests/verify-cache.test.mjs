@@ -51,6 +51,7 @@ import {
   computeBudgetMs,
   computeStepBudgetMs,
   computeRunBudgetMs,
+  sumQualifiedRunDurationMs,
   qualifiedDurationFor,
   DEFAULT_STEP_TIMEOUT_MIN,
   DEFAULT_RUN_TIMEOUT_MIN,
@@ -1658,6 +1659,75 @@ test('computeRunBudgetMs returns max(floorMs, 2.5 x qualified) for a calibrated 
     computeRunBudgetMs(qBelowFloor, floorMs),
     floorMs,
     'calibrated with 2.5q < floor: budget is the FLAT floorMs — the pipeline budget is never widened under throttle',
+  );
+});
+
+// Castwright#3361 (task 2): the whole-pipeline calibration sum must count
+// only the steps this run will actually execute — a scoped run whose only
+// in-scope step is `lint` must not be budgeted on the strength of `test`/
+// `test:server` baselines it will never run. Same extraction rationale as
+// the computeStepBudgetMs/computeRunBudgetMs tests above: direct value
+// assertions on the pure helper PLUS source-regex assertions that
+// runPipeline's real call sites go through it and the shared `outOfScope`
+// predicate, rather than reimplementing either inline.
+
+test('sumQualifiedRunDurationMs sums only the steps the include predicate admits (#3361)', () => {
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { durationMs: 60000, attempts: 1 },
+      test: { durationMs: 1200000, attempts: 1 },
+    },
+  };
+  const steps = [{ name: 'lint' }, { name: 'test' }];
+  assert.equal(
+    sumQualifiedRunDurationMs(cache, steps, (s) => s.name === 'lint'),
+    60000,
+    'a scoped sum must exclude the out-of-scope 20-min test baseline entirely',
+  );
+  assert.equal(
+    sumQualifiedRunDurationMs(cache, steps, () => true),
+    1260000,
+    'include-all sums every qualified baseline, exactly as the old inline reduce did',
+  );
+});
+
+test('sumQualifiedRunDurationMs: an attempts > 1 (crash-inflated) baseline contributes 0 (#3361)', () => {
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { durationMs: 60000, attempts: 1 },
+      test: { durationMs: 1200000, attempts: 2 },
+    },
+  };
+  assert.equal(
+    sumQualifiedRunDurationMs(cache, [{ name: 'lint' }, { name: 'test' }], () => true),
+    60000,
+    'the sum must honour qualifiedDurationFor\'s attempts === 1 rule: an unqualified entry adds nothing',
+  );
+});
+
+test('runPipeline budgets only in-scope steps, via one shared outOfScope predicate — sum and loop cannot diverge (#3361)', () => {
+  const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
+  assert.match(
+    pipelineBody,
+    /const outOfScope = \(step\) =>/,
+    'the scope test must be defined once inside runPipeline, after scopeDiff/scopeShared are known',
+  );
+  assert.match(
+    pipelineBody,
+    /const qualifiedRunDurationMs = sumQualifiedRunDurationMs\(\s*cache,\s*activeSteps,\s*\(s\) => !outOfScope\(s\)\s*\)/,
+    'the sum must go through sumQualifiedRunDurationMs filtered by the shared outOfScope predicate, not an unfiltered inline reduce',
+  );
+  assert.match(
+    pipelineBody,
+    /if \(outOfScope\(step\)\) \{/,
+    "the step loop's skip must call the SAME outOfScope predicate, not re-derive the scope test inline",
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /if \(scopeDiff !== null && !scopeShared && !stepTouchedByDiff\(step, scopeDiff\)\)/,
+    'no inline re-derivation of the scope test may remain at the loop skip',
   );
 });
 

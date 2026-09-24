@@ -1469,6 +1469,23 @@ export function computeRunBudgetMs(qualifiedRunDurationMs, floorMs) {
   return computeBudgetMs(qualified, floorMs);
 }
 
+/** The whole-pipeline budget calibration sum runPipeline uses — same
+ *  extraction rationale as computeStepBudgetMs. Sums the qualified
+ *  baselines (`qualifiedDurationFor`, attempts === 1) of the steps where
+ *  `include(step)` is true; null baselines contribute 0, exactly as the
+ *  inline reduce did before this was extracted. `include` is how a scoped
+ *  run keeps steps it will never execute out of its budget: a run whose
+ *  only in-scope step is `lint` must be calibrated on `lint`'s baseline,
+ *  not on the `test`/`test:server` baselines the scope filter skips
+ *  (Castwright#3361). */
+export function sumQualifiedRunDurationMs(cache, steps, include) {
+  return steps.reduce((sum, s) => {
+    if (!include(s)) return sum;
+    const d = qualifiedDurationFor(cache, s.name);
+    return d === null ? sum : sum + d;
+  }, 0);
+}
+
 // Cap on the tail-keeping stderr accumulator below — mirrors spawnSync's old
 // `maxBuffer: 64 * 1024 * 1024` for the retriable/piped-capture shape.
 const MAX_STDERR_BUFFER = 64 * 1024 * 1024;
@@ -1762,6 +1779,13 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     }
   }
 
+  // Will this run execute the step? The scope test is defined ONCE here —
+  // after scopeDiff/scopeShared are known — and shared by BOTH the pipeline
+  // budget sum below and the step loop's skip, so the two can never diverge
+  // (Castwright#3361: a scoped run must budget only on in-scope steps).
+  const outOfScope = (step) =>
+    scopeDiff !== null && !scopeShared && !stepTouchedByDiff(step, scopeDiff);
+
   const cachePath = join(cwd, CACHE_FILENAME);
   const fileList = gitFileList(cwd);
   const nodeVer = process.version;
@@ -1782,16 +1806,15 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
 
   // Part 2 (ops-72) budgets — see the constants' own doc comments above for
   // the max(FLOOR, K x lastGreenDurationMs) shape. The whole-pipeline budget
-  // is calibrated off the SUM of the active steps' own qualified baselines
-  // (falling back to the flat FLOOR when nothing is calibratable), so the
-  // per-step-total shape composes additively with this pipeline cap exactly
-  // as the design doc requires.
+  // is calibrated off the SUM of the qualified baselines of only the steps
+  // this run will execute — active steps not excluded by the shared
+  // `outOfScope` predicate above (Castwright#3361) — falling back to the
+  // flat FLOOR when nothing is calibratable, so the per-step-total shape
+  // composes additively with this pipeline cap exactly as the design doc
+  // requires.
   const stepTimeoutFloorMs = envMinutes(env, 'CASTWRIGHT_STEP_TIMEOUT_MIN', DEFAULT_STEP_TIMEOUT_MIN) * 60 * 1000;
   const runTimeoutFloorMs = envMinutes(env, 'CASTWRIGHT_RUN_TIMEOUT_MIN', DEFAULT_RUN_TIMEOUT_MIN) * 60 * 1000;
-  const qualifiedRunDurationMs = activeSteps.reduce((sum, s) => {
-    const d = qualifiedDurationFor(cache, s.name);
-    return d === null ? sum : sum + d;
-  }, 0);
+  const qualifiedRunDurationMs = sumQualifiedRunDurationMs(cache, activeSteps, (s) => !outOfScope(s));
   // The whole-pipeline budget is NEVER widened by throttle, calibrated or not
   // (Castwright#3361). Widening the floor lands the budget at 2x
   // DEFAULT_RUN_TIMEOUT_MIN (360 min) under throttle — past the 273.8-min
@@ -1808,7 +1831,7 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   const runDeadline = Date.now() + runBudgetMs;
 
   for (const step of activeSteps) {
-    if (scopeDiff !== null && !scopeShared && !stepTouchedByDiff(step, scopeDiff)) {
+    if (outOfScope(step)) {
       console.log(`[skip] ${step.name} (out of scope)`);
       continue;
     }
