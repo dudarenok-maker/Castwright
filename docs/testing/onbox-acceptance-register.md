@@ -2281,10 +2281,13 @@ measured 4.13 (below) and the ~1.2 target.
 
 ### A9 · Per-character re-record / splice (plan 176)
 
-Rendered book → a character's profile → Fix audio → **+3 dB gain** — confirm the
-promised A/B audition actually populates the Revisions panel (currently wired to
-a different, drift-detection-only mechanism; see below). *Merged* 2026-06-03,
-PR #500.
+Rendered book → a character's profile → **a multi-chapter Fix-audio batch that
+spans a 30s active-revisions poll tick** — confirm every chapter's A/B revision
+appears in the Status pill's Revisions panel and stays auditable/playable
+(nothing reverts to "No pending revisions" mid-batch), then reload the app and
+confirm the entries persist. Switching books mid-batch is a known gap (#3397,
+design owed) — record what was observed there rather than treating it as an A9
+fail. *Merged* 2026-06-03, PR #500.
 
 > **2026-09-06 — on-box run, PARTIAL.** Loudness (+3 dB, Master Oduvan, CH 3):
 > `.previous.mp3`/`.previous.segments.json` written; his own lines measured
@@ -2304,7 +2307,13 @@ PR #500.
 > copy points at is a different mechanism that never got populated by either
 > action. Evidence: `docs/testing/onbox-mechanical-batch1-results/step-3-a8-a9-a10.md`.
 
-> **2026-09-24 — echo defect fixed (#3376, branch fix/server-3376-pending-echo).** `GET /revisions` now echoes the persisted `revisions.json` pending entries, and background bulk polls no longer clobber them — a Fix-audio or regen take stays in the Status pill's Revisions section for audition/accept/rollback. The on-box re-run of the Fix-audio → pill → audition/accept path is **still owed** — the row stays open.
+> **2026-09-24 — echo defect fixed (PR #3395, closes #3376).** `GET /revisions`
+> now echoes the persisted `revisions.json` pending entries, and background
+> bulk polls no longer clobber them — a Fix-audio or regen take stays in the
+> Status pill's Revisions section for audition/accept/rollback. Known
+> remaining gap: a batch interrupted by a book switch can leave an entry
+> stuck or lost (#3397, design owed). The on-box re-run above is **still
+> owed** — the row stays open.
 
 ### A10 · Structured failure taxonomy (plan 173, fs-19)
 

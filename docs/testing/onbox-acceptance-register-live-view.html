@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="35" data-publish-id="0251d56c844f"></div>
+  <div hidden data-published-as="36" data-publish-id="9786a73813cf"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -333,10 +333,11 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A9</span><span class="iname">Per-character re-record / splice (plan 176)</span><span class="risk hot">A/B toggle FAILs</span><span class="chev">›</span></summary>
+      <summary><span class="num">A9</span><span class="iname">Per-character re-record / splice (plan 176)</span><span class="risk hot">Multi-chapter batch re-run owed</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>Rendered book → a character's profile → Fix audio → <b>+3 dB gain</b> — confirm the promised A/B audition actually populates the Revisions panel.</p>
-        <div class="flag"><b>2026-09-06 — PARTIAL.</b> Loudness (+1.63 dB measured on the character's own lines), duration-unchanged, <code>.previous.*</code> backup, and chapter-loudness-holds-at-target are all confirmed with real numbers, as is re-record timing integrity (every segment boundary contiguous, no seam, no doubled content). <b>A/B toggle — FAIL:</b> the Fix-audio dialog promises review "in the revisions panel," but the Status pill's Revisions list read "No pending revisions" and <code>revisions.json</code> stayed empty after both actions — that panel is wired to a different, drift-detection-only mechanism.</div>
+        <p>Rendered book → a character's profile → <b>a multi-chapter Fix-audio batch that spans a 30s active-revisions poll tick</b> — confirm every chapter's A/B revision appears in the Status pill's Revisions panel and stays auditable/playable (nothing reverts to "No pending revisions" mid-batch), then reload the app and confirm the entries persist. Switching books mid-batch is a known gap (#3397, design owed) — record what was observed there rather than treating it as an A9 fail.</p>
+        <div class="flag"><b>2026-09-06 — PARTIAL.</b> Loudness (+1.63 dB measured on the character's own lines), duration-unchanged, <code>.previous.*</code> backup, and chapter-loudness-holds-at-target are all confirmed with real numbers, as is re-record timing integrity (every segment boundary contiguous, no seam, no doubled content). <b>A/B toggle — FAIL:</b> the Fix-audio dialog promised review "in the revisions panel," but the Status pill's Revisions list read "No pending revisions" and <code>revisions.json</code> stayed empty after both actions — <code>GET /revisions</code> never echoed the persisted pending entries.</div>
+        <div class="flag"><b>2026-09-24 — echo defect fixed (PR #3395, closes #3376).</b> <code>GET /revisions</code> now echoes the persisted <code>revisions.json</code> pending entries, and background bulk polls no longer clobber them — a Fix-audio or regen take stays in the Status pill's Revisions section for audition/accept/rollback. Known remaining gap: a batch interrupted by a book switch can leave an entry stuck or lost (#3397, design owed). The on-box re-run above is still owed — the row stays open.</div>
         <p class="src">Merged 2026-06-03 (PR #500); still <code>active</code> as of a 2026-07-24 commit saying “Still owed: live-GPU re-record acceptance” · <code>plan 176:50,55,59</code></p>
       </div>
     </details>
