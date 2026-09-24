@@ -68,6 +68,7 @@ import { configValue } from '../config/resolver.js';
 import { readVerdicts, writeVerdicts } from '../audio/render-integrity/verdicts-io.js';
 import { readCentroids, auditionCentroidUsableForCurrent, type CharacterCentroid } from '../audio/render-integrity/centroids-io.js';
 import { cosineToCentroid, scoreSegment } from '../audio/render-integrity/score.js';
+import { buildSnapshotIdResolver } from '../audio/render-integrity/aggregate.js';
 import { embedSegment } from '../tts/embed-client.js';
 import { readEmbeddings, writeEmbeddings, EMBEDDINGS_VERSION, type EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
 
@@ -424,6 +425,18 @@ chapterQaRepairRouter.post(
             );
           }),
         );
+      /* #3362 (review pass 2, 🟠B) — centroids/verdict rows are keyed by the
+         RENDER-TIME `characterSnapshots` key (see aggregate.ts's
+         `buildSnapshotIdResolver` doc comment), while `seg.characterId` below
+         is the raw segment id from segments.json, which can differ by
+         spelling (hyphen/underscore normalisation). Resolve every raw
+         `seg.characterId` used to look into `centroids`/verdict rows through
+         the SAME history-free resolver aggregate.ts uses, scoped to THIS
+         chapter's own snapshot keys (segFile.characterSnapshots) — never
+         the history-aware `castResolver` above, which would join through
+         retirements/merges the render-time identity space deliberately
+         ignores. */
+      const resolveCentroidCharId = buildSnapshotIdResolver([segFile]);
 
       /* Edit 6 (srv-36): capture accepted re-render embeddings by segment index.
          Populated inside the synth callback; flushed to disk after finalize. */
@@ -563,8 +576,9 @@ chapterQaRepairRouter.post(
             if (!signalAndAsrOk) return false;
             // Apply acoustic term only when the candidate originated from the verdict file
             // AND a centroid is available for this character.
-            if (cand?.acoustic && cos !== null && centroids?.[seg.characterId]) {
-              const charCentroid = centroids[seg.characterId];
+            const centroidCharId = resolveCentroidCharId(seg.characterId);
+            if (cand?.acoustic && cos !== null && centroids?.[centroidCharId]) {
+              const charCentroid = centroids[centroidCharId];
               return cos >= charCentroid.cleanMean;
             }
             return true;
@@ -601,9 +615,9 @@ chapterQaRepairRouter.post(
                centroid exists for this character — avoid the sidecar round-trip for
                pure signal/ASR repairs. */
             let cos: number | null = null;
-            if (candidate?.acoustic && centroids?.[seg.characterId]) {
+            if (candidate?.acoustic && centroids?.[resolveCentroidCharId(seg.characterId)]) {
               const vec = Array.from(await embedSegment(r.pcm, r.sampleRate));
-              cos = cosineToCentroid(vec, centroids[seg.characterId].centroid);
+              cos = cosineToCentroid(vec, centroids[resolveCentroidCharId(seg.characterId)].centroid);
             }
             const better =
               !best ||
@@ -642,7 +656,7 @@ chapterQaRepairRouter.post(
           } else {
             repaired.push(segIndex);
             /* Edit 6a (srv-36): capture the accepted take's embedding for post-finalize write. */
-            if (bestCosine !== null && candidate?.acoustic && centroids?.[seg.characterId]) {
+            if (bestCosine !== null && candidate?.acoustic && centroids?.[resolveCentroidCharId(seg.characterId)]) {
               // We already have the last-computed embedding via embedSegment — but to avoid
               // storing a reference to the Float32Array from the last loop iteration (which
               // may be the best or the last non-best), recompute from `best.pcm`.
@@ -777,8 +791,9 @@ chapterQaRepairRouter.post(
           if (verdictRows) {
             for (const [segIdx, vec] of newEmbeddingsByIndex) {
               const seg = segFile.segments[segIdx];
-              if (!seg || !centroids?.[seg.characterId]) continue;
-              const centroid = centroids[seg.characterId];
+              const centroidCharId = seg ? resolveCentroidCharId(seg.characterId) : undefined;
+              if (!seg || !centroidCharId || !centroids?.[centroidCharId]) continue;
+              const centroid = centroids[centroidCharId];
               const newCosine = cosineToCentroid(Array.from(vec), centroid.centroid);
               // Update the verdict row that matches this segment's sentenceIds.
               const vRowIdx = verdictRows.findIndex(
