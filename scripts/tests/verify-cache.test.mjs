@@ -1716,8 +1716,8 @@ test('runPipeline budgets only in-scope steps, via one shared outOfScope predica
   );
   assert.match(
     pipelineBody,
-    /const qualifiedRunDurationMs = sumQualifiedRunDurationMs\(\s*cache,\s*activeSteps,\s*\(s\) => !outOfScope\(s\)\s*\)/,
-    'the sum must go through sumQualifiedRunDurationMs filtered by the shared outOfScope predicate, not an unfiltered inline reduce',
+    /const qualifiedRunDurationMs = sumQualifiedRunDurationMs\(\s*cache,\s*activeSteps,\s*\(s\) => !outOfScope\(s\) && stepPlan\.get\(s\.name\)\.action !== 'skip',?\s*\)/,
+    'the sum must go through sumQualifiedRunDurationMs filtered by the shared outOfScope predicate AND the stepPlan pre-pass\' planned action — never an unfiltered inline reduce',
   );
   assert.match(
     pipelineBody,
@@ -1728,6 +1728,71 @@ test('runPipeline budgets only in-scope steps, via one shared outOfScope predica
     pipelineBody,
     /if \(scopeDiff !== null && !scopeShared && !stepTouchedByDiff\(step, scopeDiff\)\)/,
     'no inline re-derivation of the scope test may remain at the loop skip',
+  );
+});
+
+// Castwright#3361 (task 3): the calibration sum must ALSO exclude steps this
+// run will skip as `[cached]`. The per-step hash + decide() moved from the
+// step loop into a stepPlan pre-pass that runs before the budget is fixed, so
+// `include` can see the planned action. Same evidence shape as task 2: a
+// direct value assertion on the pure helper (include rejects a cached step →
+// its baseline drops out) PLUS source pins that runPipeline really consults
+// the planned action and reads the loop's { currentHash, action } back out of
+// the pre-pass instead of keeping a second copy of the computation.
+
+test('sumQualifiedRunDurationMs: an include that rejects a cached step drops its baseline (#3361)', () => {
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { durationMs: 60000, attempts: 1 },
+      test: { durationMs: 1200000, attempts: 1 },
+    },
+  };
+  const steps = [{ name: 'lint' }, { name: 'test' }];
+  // Mirrors runPipeline's real wiring: every active step is in scope, but the
+  // pre-pass planned `test` as 'skip' (cached), so it must contribute nothing.
+  const outOfScope = () => false;
+  const stepPlan = new Map([
+    ['lint', { currentHash: 'hash-lint', action: 'run' }],
+    ['test', { currentHash: 'hash-test', action: 'skip' }],
+  ]);
+  assert.equal(
+    sumQualifiedRunDurationMs(
+      cache,
+      steps,
+      (s) => !outOfScope(s) && stepPlan.get(s.name).action !== 'skip',
+    ),
+    60000,
+    "a step planned as 'skip' must not inflate the budget of a run that will print [cached] for it",
+  );
+});
+
+test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum excludes cached steps (#3361 task 3)', () => {
+  const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
+  assert.match(
+    pipelineBody,
+    /function planStep\(step\) \{/,
+    'the per-step hash + decide() must live in ONE planStep helper — the loop\'s old code moved, not duplicated',
+  );
+  assert.match(
+    pipelineBody,
+    /if \(outOfScope\(step\)\) continue;\s*\n\s*stepPlan\.set\(step\.name, planStep\(step\)\);/,
+    'the pre-pass must plan every active step exactly once and never hash an out-of-scope step',
+  );
+  assert.match(
+    pipelineBody,
+    /const qualifiedRunDurationMs = sumQualifiedRunDurationMs\(\s*cache,\s*activeSteps,\s*\(s\) => !outOfScope\(s\) && stepPlan\.get\(s\.name\)\.action !== 'skip',?\s*\)/,
+    "the sum's include must consult BOTH outOfScope AND the planned action !== 'skip' — nothing later in the body may satisfy this pin",
+  );
+  assert.match(
+    pipelineBody,
+    /const \{ currentHash, action \} = stepPlan\.get\(step\.name\);/,
+    'the step loop must read currentHash/action from the pre-pass, not recompute them',
+  );
+  assert.equal(
+    (pipelineBody.match(/composeInputHash\(/g) || []).length,
+    1,
+    'exactly one composeInputHash(...) call site may remain in runPipeline — the computation was moved, not copied',
   );
 });
 
