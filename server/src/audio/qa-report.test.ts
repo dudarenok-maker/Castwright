@@ -518,4 +518,43 @@ describe('buildAudioQaReport — canonical cast-id roster join (#3362 review fin
     expect(report.voiceDrift.charactersOnRoster).toBe(1);
     expect(report.voiceDrift.charactersChecked).toBe(1);
   });
+
+  it('keeps a chapter rendered under a character id retired AFTER rendering scored under its render-time identity, not embed-failed (#3362 review pass 2, 🟠A)', async () => {
+    // ch1 rendered as 'bob'; a later cast merge retires 'bob' in favour of
+    // 'robert' (cast.json now only has 'robert'). Resolving the embedding
+    // row through the book's CURRENT cast + cast-id-history (review pass 1's
+    // fix) would move it onto 'robert', which `configuredEngineByChar`
+    // (sourced from ch1's own, still-'bob'-keyed characterSnapshots) has no
+    // entry for — the roster join fails, and the chapter reads as
+    // embed-failed despite a real, complete verdict row existing for it.
+    const dir = await makeBook();
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    await writeJsonAtomic(castJsonPath(dir), {
+      characters: [{ id: 'robert', name: 'Robert', gender: 'male', attributes: [] }],
+    });
+    await writeJsonAtomic(join(dotAudiobook(dir), 'cast-id-history.json'), {
+      schema: 1, supersededBy: { bob: 'robert' },
+    });
+
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'bob' })],
+      characterSnapshots: { bob: { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'bob', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'bob', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.chaptersEligible).toBe(1);
+    expect(report.voiceDrift.chaptersScored).toBe(1);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
+    expect(report.voiceDrift.charactersOnRoster).toBe(1);
+    expect(report.voiceDrift.charactersChecked).toBe(1);
+  });
 });

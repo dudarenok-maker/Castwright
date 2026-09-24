@@ -9,6 +9,7 @@ import { readCentroids } from './centroids-io.js';
 import { readPendingAttempts } from './pending-attempts-io.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 import { dotAudiobook, castJsonPath } from '../../workspace/paths.js';
+import { castIdHistoryPath } from '../../store/cast-id-history.js';
 
 // helper: a 2-d unit vector at angle θ, padded to length 8 (test vectors are small)
 const vec = (θ: number) => Float32Array.from([Math.cos(θ), Math.sin(θ), 0, 0, 0, 0, 0, 0]);
@@ -602,6 +603,132 @@ describe('scoreBook — canonical cast-id joins (#3362 review finding)', () => {
     // a sidecar, logged a transient failure / left the character unresolved).
     const centroids = await readCentroids(dir);
     expect(centroids!['the_torment'].referenceKind).toBe('in-book');
+  });
+
+  it('scores a chapter rendered under a character id retired AFTER rendering, under the render-time identity — no regression vs main (#3362 review pass 2, 🟠A)', async () => {
+    // Repro (PR #3375 review pass 2): ch1 rendered while 'bob' was still the
+    // live cast id — characterSnapshots/segments both carry 'bob'. AFTER that
+    // render, a cast merge/rename retires 'bob' in favour of 'robert'
+    // (cast.json now only has 'robert'; cast-id-history.json records
+    // bob -> robert). Resolving the row through the book's CURRENT resolver
+    // (review pass 1's fix) moves it onto 'robert', which matches nothing in
+    // ch1's own raw-keyed `stochasticChars`/`orderedChars` (sourced from
+    // ch1's own `characterSnapshots`, still keyed 'bob') — every row is
+    // dropped, no render-integrity.json is written, and the too-thin pool
+    // falls through to a (real, network-calling) audition. `main` never had
+    // this problem: it scores 'bob' under its own render-time identity,
+    // regardless of any later retirement.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-retired-after-render-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'robert', name: 'Robert', gender: 'male', attributes: [] }] }),
+    );
+    writeFileSync(
+      castIdHistoryPath(dir),
+      JSON.stringify({ schema: 1, supersededBy: { bob: 'robert' } }),
+    );
+
+    const rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) rows.push({ characterId: 'bob', sentenceIds: [i], vec: vec(0.02 * i) });
+
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), rows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: rows.map((r) => ({ characterId: 'bob', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { bob: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-bob', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+
+    // The render-integrity file IS written, with all 12 rows scored under
+    // 'bob' — matching `main`'s behaviour exactly, despite the retirement.
+    const verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(verdicts).not.toBeNull();
+    expect(verdicts!.length).toBe(12);
+    expect(verdicts!.every((v) => v.characterId === 'bob')).toBe(true);
+    // Resolved from real in-book anchors — never degraded to an audition.
+    expect(verdicts!.every((v) => v.referenceKind === 'in-book')).toBe(true);
+
+    const centroids = await readCentroids(dir);
+    expect(centroids!['bob'].referenceKind).toBe('in-book');
+    expect(centroids!['robert']).toBeUndefined();
+  });
+
+  it('does not pool a pre-merge character\'s rows into the surviving character\'s centroid, and writes no duplicate verdict rows per sentence (#3362 review pass 2, 🟠A merge variant)', async () => {
+    // 'bob' rendered ch1 (own voice, own centroid cluster near θ≈0), then was
+    // merged into 'robert', who has his OWN chapter (ch2, own voice, own
+    // cluster near θ≈π/2 — deliberately far from bob's so pooling would be
+    // detectable both by count AND by centroid direction). A naive full
+    // current-resolver join would fold bob's ch1 rows into 'robert' (since
+    // 'robert' already exists as a roster entry from ch2), corrupting
+    // robert's centroid with a different voice's embeddings and duplicating
+    // rows per sentence when ch2's own robert-rendered rows are ALSO scored
+    // under 'robert'.
+    const dir = mkdtempSync(join(tmpdir(), 'spk-merge-no-pool-'));
+    mkdirSync(join(dir, 'audio'), { recursive: true });
+    mkdirSync(dotAudiobook(dir), { recursive: true });
+
+    writeFileSync(
+      castJsonPath(dir),
+      JSON.stringify({ characters: [{ id: 'robert', name: 'Robert', gender: 'male', attributes: [] }] }),
+    );
+    writeFileSync(
+      castIdHistoryPath(dir),
+      JSON.stringify({ schema: 1, supersededBy: { bob: 'robert' } }),
+    );
+
+    const bobRows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    for (let i = 0; i < 12; i++) bobRows.push({ characterId: 'bob', sentenceIds: [i], vec: vec(0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), bobRows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+      chapterId: 1,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: bobRows.map((r) => ({ characterId: 'bob', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { bob: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-bob', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    const robertRows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+    const halfPi = Math.PI / 2;
+    for (let i = 0; i < 12; i++) robertRows.push({ characterId: 'robert', sentenceIds: [200 + i], vec: vec(halfPi + 0.02 * i) });
+    await writeEmbeddings(join(dir, 'audio', 'ch2.embeddings.json'), robertRows, EMBEDDINGS_VERSION);
+    writeFileSync(join(dir, 'audio', 'ch2.segments.json'), JSON.stringify({
+      chapterId: 2,
+      modelKey: 'qwen3-tts-0.6b',
+      segments: robertRows.map((r) => ({ characterId: 'robert', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+      characterSnapshots: { robert: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-robert', modelKey: 'qwen3-tts-0.6b' } },
+    }));
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+
+    const bobVerdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(bobVerdicts).not.toBeNull();
+    expect(bobVerdicts!.length).toBe(12);
+    expect(bobVerdicts!.every((v) => v.characterId === 'bob')).toBe(true);
+
+    const robertVerdicts = await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'));
+    expect(robertVerdicts).not.toBeNull();
+    expect(robertVerdicts!.length).toBe(12);
+    expect(robertVerdicts!.every((v) => v.characterId === 'robert')).toBe(true);
+    // No duplicate rows per sentence — bob's rows never land in ch2's file
+    // and vice versa.
+    const robertSentenceIds = robertVerdicts!.map((v) => v.sentenceIds[0]).sort((a, b) => a - b);
+    expect(new Set(robertSentenceIds).size).toBe(12);
+
+    const centroids = await readCentroids(dir);
+    expect(centroids!['bob'].referenceKind).toBe('in-book');
+    expect(centroids!['robert'].referenceKind).toBe('in-book');
+    // Distinct centroids — bob's cluster (θ≈0) never pooled into robert's
+    // (θ≈π/2). A pooled centroid would sit roughly between the two clusters
+    // (cosine ≈ 0 against both original clusters); the real, unpooled
+    // centroids stay close to their own cluster's direction.
+    const bobCentroid = centroids!['bob'].centroid;
+    const robertCentroid = centroids!['robert'].centroid;
+    expect(bobCentroid[0]).toBeGreaterThan(0.9); // ≈ cos(0)
+    expect(robertCentroid[1]).toBeGreaterThan(0.9); // ≈ sin(π/2)
   });
 });
 
