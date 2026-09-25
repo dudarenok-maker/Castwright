@@ -3183,21 +3183,27 @@ which already stages a mixed-engine render on this same card.
 > `tolerances.rtf_max` twice: 2026-09-06, on a box the same note records as
 > confirmed-idle, and again 2026-09-21. **The cause is a real throughput
 > level shift, not noise, and it is not yet diagnosed.** Measured `rtf` ≈
-> 1.0–1.033 is about 2× the blessed `rtf.batched` 0.5089 and above
+> 0.87–1.03 across the four recorded `rtf_max` values (2026-09-06's 1.5 /
+> 1.35 / 1.55 and 2026-09-21's 1.55; `rtf_max` is `max(1.0, rtf × 1.5)`
+> rounded UP to 0.05, so they imply `rtf` in (0.967, 1.0], (0.867, 0.9],
+> (1.0, 1.033] and (1.0, 1.033]). That is about 1.7–2× the blessed
+> `rtf.batched` 0.5089 and above
 > `compare.py`'s ~0.667 pin point (`rtf_max = max(1.0, rtf × 1.5)`): below
 > it `rtf_max` stays pinned at 1.0 and "no amount of `rtf` noise moves it";
 > above it, `compare.py` says "a `rtf` regression or a slower box … the
 > guard refuses exactly as designed". `tolerances` is compared at
 > `epsilon=0.0` (exact equality, by design), so there is no epsilon to
-> blame. At that `rtf` the non-bless assert run also fails
-> (`test_instruct_golden.py`: "throughput regressed", since 1.033 >
-> `rtf_max` 1.0). **A second blocker:** the 2026-09-21 run 2 below, with
+> blame. The non-bless assert run fails only when `rtf` lands above 1.0
+> (`test_instruct_golden.py`: strict `rtf > rtf_max`, "throughput
+> regressed", against the blessed `rtf_max` 1.0) — true of the two 1.55
+> runs, not of the 1.5 or 1.35 ones, so a single assert run that draws
+> `rtf` ≈ 0.9 passes without refuting the shift. **A second blocker:** the 2026-09-21 run 2 below, with
 > `GOLDEN_REBLESS_THRESHOLDS=1` forced, then refused on `loudness_dbfs`
 > beyond ε 0.4 — so a routine bless is currently blocked on two fields, not
 > one. **The owed step is to diagnose the level shift before any re-bless:**
 > a genuine throughput regression, or a slower box/config than the one the
 > baseline was blessed on. Forcing `GOLDEN_REBLESS_THRESHOLDS` (which would
-> write `rtf_max` ≈ 1.55 — the #1995 loosening this row exists to catch)
+> write `rtf_max` ≈ 1.35–1.55 — the #1995 loosening this row exists to catch)
 > or widening the `tolerances` epsilon is **not** the fix.
 
 PR #2032 (hardened further by the independent pre-merge review that produced
@@ -5015,17 +5021,23 @@ load that splits, one genuinely-too-big load that doesn't, one
 > only on-box re-run since (A107) drove a single design against a raw
 > `/load`, not the observed co-residency path or the two-overlapping-designs
 > refcount shape this bullet asks for. No on-box PASS exists for bullet 4.
-> **The 2026-09-08 FAIL itself is unconfirmed at the arbiter level.** It
-> rests on the premise (2026-09-06/08 note below) that each design's HTTP
-> completion bounds how long it held the arbiter. A107's measured timeline
+> **The two-overlapping-designs (refcount) reading of the 2026-09-08 FAIL
+> is unconfirmed at the arbiter level; a single-design violation remains the
+> likelier reading.** Both readings rest on the premise (2026-09-06/08 note
+> below) that each design's HTTP completion bounds how long it held the
+> arbiter. A107's measured timeline
 > contradicts that premise: the design released the arbiter at `20:26:06.5`
 > (`Designed + cached Qwen voice`) but its HTTP 200 landed at `20:26:29.7`,
 > about 23 s later (`audition_ms=23159` — the audition synth runs after the
 > arbiter span releases, by design). A107's row is gone from this register;
 > its last text is at `origin/main` `a8b0fcc6` (the register's A107 section)
 > and in [#3309](https://github.com/dudarenok-maker/Castwright/issues/3309).
-> So a design whose HTTP completion landed ~20 s after the Kokoro call may
-> already have released the arbiter before Kokoro finished. **Bullet 4 stays
+> Kokoro finished ~01:32:20; design E's HTTP 200 landed ~01:32:41 (~21 s
+> later), so on a ~23 s tail E had already released (~01:32:18) and the
+> two-design overlap is not shown. Design F's HTTP 200 landed ~01:33:10
+> (~50 s after Kokoro), putting its release ~01:32:47, about 27 s *after*
+> Kokoro finished; F clears only if its own post-release tail exceeded
+> ~50 s, which was never measured. **Bullet 4 stays
 > owed, and its re-run must be timed from the sidecar's own arbiter
 > enter/release log lines (or from `nvidia-smi` / the device log), never from
 > HTTP completion.**

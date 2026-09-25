@@ -18,9 +18,9 @@
 > single boot with the card connected; any step that needs a swapped enumeration
 > is a second 2-card boot, not a live replug.
 >
-> **Running time total (recomputed 2026-08-21, stale — A8 discharged
+> **Running time total (recomputed 2026-08-21, stale — old A8 discharged
 > 2026-08-27):** was ~110 minutes of runnable acceptance — A2 step 9 ≈ 20,
-> A3 ≈ 45, A8 ≈ 25, A12 ≈ 20 — now **~85 minutes** with A8's 25 min removed.
+> A3 ≈ 45, A8 ≈ 25, A12 ≈ 20 — now **~85 minutes** with old A8's 25 min removed.
 > A2 step 3 is
 > observe-only/N-A (cannot be forced on OcuLink). **A2 rows 6–8 (steps
 > 6–8, formerly conditional) are removed from this pack** — the repo owner
@@ -42,13 +42,13 @@ Stated once for the sitting; do not repeat per row.
 - [ ] **Two shells** open: one for server control / `gh api` / `curl`, one for `nvidia-smi` / `ollama ps` observation.
 - [ ] **Engines available:** Ollama `qwen3.5:9b` analyzer installed; Coqui/Kokoro/Qwen TTS weights installed; ASR with `ASR_DEVICE=cuda` available for A2 step 8.
 - [ ] **Know which card is which** before pinning — the 8 GB internal card and the 16 GB eGPU, by both index and UUID.
-- [ ] **Cold start at A8.1** — no engine resident unless a step says otherwise.
+- [ ] **Cold start at A3 step 11** (the first runnable step; old A8.1 is discharged) — no engine resident unless a step says otherwise.
 
 ## Procedure
 
 Ordered so shared setup happens once and engine swaps happen as few times as
-possible. A8 steps 1–4 run first while the Ollama analyzer is the resident engine
-on the 8 GB card; A8 step 5 and A2 step 9 exercise the roomier/2-card paths; A3 is
+possible. Old A8 steps 1–4 run first while the Ollama analyzer is the resident engine
+on the 8 GB card; old A8 step 5 and A2 step 9 exercise the roomier/2-card paths; A3 is
 the multi-GPU Wave 2 checklist; A12 is the device-pin respawn set, done last
 because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 2-card config.
@@ -57,17 +57,17 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 
 > **Criteria source:** [`../features/archive/222-gpu-residency-and-analysing-honesty.md`](../features/archive/222-gpu-residency-and-analysing-honesty.md) §"Manual acceptance walkthrough" at `:54-59` — discharged 2026-08-27, kept for the concrete observation. Distinct from B1/plan 216 (that one is the device probe).
 >
-> **Step attribution (this row is mixed):** steps 1–4 need only the **8 GB card** (the internal card, present in this 2-card boot) and could equivalently ride with a single-card sitting; step 5 needs the **12/16 GB card** and belongs **only** to this 2-card sitting. All five are run here in one pass so no separate sitting is owed for A8.
+> **Step attribution (this row is mixed):** steps 1–4 need only the **8 GB card** (the internal card, present in this 2-card boot) and could equivalently ride with a single-card sitting; step 5 needs the **12/16 GB card** and belongs **only** to this 2-card sitting. All five are run here in one pass so no separate sitting is owed for old A8.
 
-1. **(A8.1) 8 GB card, analyzer `qwen3.5:9b` resident:** run analysis on a multi-chapter book. Observe: VRAM holds ~steady (no per-section sawtooth on `nvidia-smi`); `ollama ps` shows the 9B resident throughout; no mid-stream "no response" stalls; the analysing chip reads "Qwen3.5 9B (local)" (not 4B); large chapters show "section M/N".
+1. **(old A8.1) 8 GB card, analyzer `qwen3.5:9b` resident:** run analysis on a multi-chapter book. Observe: VRAM holds ~steady (no per-section sawtooth on `nvidia-smi`); `ollama ps` shows the 9B resident throughout; no mid-stream "no response" stalls; the analysing chip reads "Qwen3.5 9B (local)" (not 4B); large chapters show "section M/N".
    - Result: **PASS (owner-confirmed 2026-08-27)** — observed in day-to-day use on the 8 GB dev box; VRAM steady, no sawtooth.
-2. **(A8.2) 8 GB, analysis finished → start generation (Qwen TTS):** observe the server evicts the 9B before the sidecar loads (≤ ~8 GB peak, no OOM).
+2. **(old A8.2) 8 GB, analysis finished → start generation (Qwen TTS):** observe the server evicts the 9B before the sidecar loads (≤ ~8 GB peak, no OOM).
    - Result: **PASS (owner-confirmed 2026-08-27)** — eviction observed before sidecar load, no OOM.
-3. **(A8.3) 8 GB, start generation WHILE an analysis runs on another book:** observe a clear **409 "GPU busy with analysis"** refusal, not an OOM.
+3. **(old A8.3) 8 GB, start generation WHILE an analysis runs on another book:** observe a clear **409 "GPU busy with analysis"** refusal, not an OOM.
    - Result: **PASS (owner-confirmed 2026-08-27)** — clean 409 refusal observed, not an OOM.
-4. **(A8.4) 8 GB, voice design:** observe — while analysis is idle, eviction then design proceeds; while analysis is busy, a 409.
+4. **(old A8.4) 8 GB, voice design:** observe — while analysis is idle, eviction then design proceeds; while analysis is busy, a 409.
    - Result: **PASS (owner-confirmed 2026-08-27)** — eviction-then-design observed.
-5. **(A8.5) 12/16 GB eGPU:** observe **no eviction** — analyzer + TTS coexist (set `GPU_SAFE_COEXIST_MB` if the detected total straddles the default 11000).
+5. **(old A8.5) 12/16 GB eGPU:** observe **no eviction** — analyzer + TTS coexist (set `GPU_SAFE_COEXIST_MB` if the detected total straddles the default 11000).
    - Result: **PASS (owner-confirmed 2026-08-27)** — no eviction observed, analyzer + TTS coexisted on the 12/16 GB box.
 
 ### A2 · Capacity-aware GPU placement (plan 264) — step 9, step 3 (N-A) — DISCHARGED and removed from the register 2026-09-08

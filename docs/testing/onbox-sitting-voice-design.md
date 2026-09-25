@@ -25,6 +25,10 @@
 > matching the plan of record's stated total for this pack
 > ([`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1) exactly — all seven
 > rows re-resolved as still owed, so nothing changed the arithmetic.
+>
+> This dated 2026-08-20 line uses that date's row numbering, not today's
+> (its A14 is old A14, plan 160, and its A17 is old A17, plan 180, both
+> discharged; its A15 is plan 161, today's A11; its A27 is PR #2032, today's A20).
 
 ## Preconditions
 
