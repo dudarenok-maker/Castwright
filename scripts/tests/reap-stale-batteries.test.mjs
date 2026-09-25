@@ -1112,6 +1112,55 @@ test('C5: a taskkill that times out reports false, so the root is never recorded
 });
 
 // ---------------------------------------------------------------------------
+// E104 (discharged 2026-09-25, removed from the register) — taskkill's own
+// exit code lied about the outcome on real pushes (pids 38780 and 23792):
+// `/T` reports failure when a child had already exited mid-walk or couldn't
+// be found, even though the whole target tree was actually gone. killTree
+// must judge success by whether the root pid is actually gone afterward, not
+// by taskkill's exit code alone.
+// ---------------------------------------------------------------------------
+
+test('E104: taskkill exits nonzero but the root pid is actually gone -> reports success', () => {
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 1 }),
+      isAlive: () => false,
+    }),
+    true,
+    'a nonzero /T exit with the root pid confirmed gone is a successful kill, not a failed one',
+  );
+});
+
+test('E104: taskkill exits nonzero and the root pid is still alive -> reports failure', () => {
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 1 }),
+      isAlive: () => true,
+    }),
+    false,
+    'a nonzero /T exit with the root pid still alive is a genuinely failed kill',
+  );
+});
+
+test('E104: taskkill exits zero -> reports success without needing the liveness check', () => {
+  let checked = false;
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 0 }),
+      isAlive: () => {
+        checked = true;
+        return true;
+      },
+    }),
+    true,
+  );
+  assert.equal(checked, false, 'a zero exit is already conclusive; the liveness re-check is only needed on failure');
+});
+
+// ---------------------------------------------------------------------------
 // C6 — the tail window is sized against the trust window, not a round number
 // ---------------------------------------------------------------------------
 
@@ -1130,8 +1179,9 @@ test('C6: with realistically-sized entries, a 10-minute-old sample is still insi
   withTempLog((logPath) => {
     const rootPid = 77001;
     // 21 entries at one every 30s — the fastest cadence worth sizing for, and
-    // roughly what E104's own criterion (2) produces while an operator pokes
-    // at `npm run doctor`. The oldest sits exactly at the 10-minute bar.
+    // roughly what E104 (discharged 2026-09-25, removed from the register)'s
+    // own criterion (2) produces while an operator pokes at `npm run doctor`.
+    // The oldest sits exactly at the 10-minute bar.
     const lines = [];
     for (let i = 20; i >= 0; i -= 1) {
       const entry = { ts: NOW - i * 30_000, pad: '', roots: [{ rootPid, cpuSecondsNow: 100 + (20 - i), startedAt: 500 }] };

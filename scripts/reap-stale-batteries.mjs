@@ -739,10 +739,11 @@ export function ownAncestryPids(processes, selfPid = process.pid) {
 //
 // Measured live (PR #3063 review pass 2, C6): 214,013 bytes per entry on a
 // 415-root box. The previous flat 2 MB therefore held only NINE entries, and
-// E104's own acceptance criterion (2) — "run it again ~10+ minutes later",
-// with a handful of `npm run doctor` runs in between — evicted every
-// sufficiently-old sample from the window, so `stalled-rate` went dark for
-// every root exactly while an operator was using the tool to look for a stall.
+// E104 (discharged 2026-09-25, removed from the register)'s own acceptance
+// criterion (2) — "run it again ~10+ minutes later", with a handful of
+// `npm run doctor` runs in between — evicted every sufficiently-old sample
+// from the window, so `stalled-rate` went dark for every root exactly while
+// an operator was using the tool to look for a stall.
 const CENSUS_ENTRY_BYTES = 220 * 1024;
 // The shortest interval between two censuses worth sizing for: a human
 // running `npm run doctor` repeatedly while investigating, or a burst of
@@ -916,14 +917,35 @@ export const KILL_TIMEOUT_MS = 15000;
  *  startedAt checks in resolveRoot and the prior-sample match); the kill site
  *  has no equivalent, and closing it would need a second
  *  `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill. */
-export function killTree(pid, { spawn = spawnSync, windows = isWindows } = {}) {
+export function killTree(pid, { spawn = spawnSync, windows = isWindows, isAlive = pidIsStillRunning } = {}) {
   if (!windows) return false;
   const result = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
     stdio: 'ignore',
     windowsHide: true,
     timeout: KILL_TIMEOUT_MS,
   });
-  return !result.error && result.status === 0;
+  if (result.error) return false;
+  if (result.status === 0) return true;
+  // A nonzero exit does NOT mean the tree survived: register row E104,
+  // discharged 2026-09-25, removed from the register, observed `/T` exit
+  // nonzero on real pushes (pids 38780 and 23792) even though the whole
+  // target tree was actually gone — `/T` reports failure when a child had
+  // already exited mid-walk or couldn't be found. Judge the outcome by
+  // whether the ROOT pid itself is actually gone afterward, not by
+  // taskkill's own exit code.
+  return !isAlive(pid);
+}
+
+/** True while `pid` is still alive. `process.kill(pid, 0)` throws ESRCH once
+ *  it's gone (EPERM means alive-but-not-ours -> still alive) — same idiom as
+ *  scripts/restart-after-upgrade.mjs's `pidIsAlive`. */
+function pidIsStillRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
 }
 
 /**
