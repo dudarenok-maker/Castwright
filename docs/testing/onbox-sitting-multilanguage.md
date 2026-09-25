@@ -19,6 +19,10 @@
 > total for this pack ([`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1)
 > and the audit's own per-row estimates exactly — all four rows re-resolved
 > as still owed, so nothing changed the arithmetic.
+>
+> This dated 2026-08-20 line uses the row numbering in force just before the
+> 2026-08-26 (wave 7) renumbering, not today's (its A35 is #2179, today's
+> A27). (#3405)
 
 ## Preconditions
 
@@ -41,14 +45,14 @@ Stated once for the sitting; do not repeat per row.
       **absent** (confirmed still commented out in `server/.env.example` at
       `:659`, `:661`, `:663`) — copy `.env.example` verbatim rather than
       hand-editing an existing `.env` that may already carry explicit
-      overrides from earlier sittings. A35's whole premise is the auto path
+      overrides from earlier sittings. A27's whole premise is the auto path
       only activates when these three are unset.
 - [ ] **A way to force Qwen onto the CPU device** via the voice-engine
       device setting (Settings → Voice Engine, or the equivalent env
       override) for E4 — confirm the setting exists and is reachable before
       committing GPU time to D1/D2.
 - [ ] **A second shell** free throughout the sitting to poll `GET /health`
-      (for A35's `recycle_pending` flag) and tail the sidecar log (for the
+      (for A27's `recycle_pending` flag) and tail the sidecar log (for the
       `[sidecar]` restart/recycle lines and D1/D2's render progress).
 - [ ] SHA and a clean tree recorded below.
 
@@ -56,9 +60,9 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
 ## Procedure
 
-Ordered so the one env change (A35) happens before the sidecar is started for
+Ordered so the one env change (A27) happens before the sidecar is started for
 the sitting, D1 — the long pole at ~90 min, largely unattended once running —
-goes first and stays in the background as its own render doubles as A35's
+goes first and stays in the background as its own render doubles as A27's
 RAM/VRAM driver, and the short, genuinely interactive rows (D2's pipeline
 kick-off, E4's CPU-forced check) run in D1's shadow rather than after it.
 **Where D1/D2's GPU render is in flight, do not also drive E4's CPU-forced
@@ -126,7 +130,7 @@ two renders racing to write the same `render-integrity` state.
 5. **Kick off the batch.** Render one chapter of each fs-61 demo book — es,
    ru, then fr, de — through the shipped pipeline with the ASR content-QA
    gate enabled. Queue all four; this is the row's own "largely unattended"
-   batch and the sitting's long pole — start it, then move to A35 step 1 and
+   batch and the sitting's long pole — start it, then move to A27 step 1 and
    D2/E4 below while it runs.
    - Result (all four queued, start time):
 6. **Per-language WER inspection.** Once each language's chapter completes,
@@ -204,6 +208,10 @@ two renders racing to write the same `render-integrity` state.
 
 ## Excluded on re-resolution
 
+> This dated 2026-08-20 record uses the row numbering in force just before
+> the 2026-08-26 (wave 7) renumbering, not today's (its A35 is #2179,
+> today's A27).
+
 None excluded. All four rows were re-resolved against live repo/issue/PR
 state and the cited files themselves on 2026-08-20 and remain owed:
 
@@ -235,7 +243,7 @@ plan/issue/PR agrees with its own row text.
       operator's usual working config, note which is now active).
 - [ ] Confirm the sidecar is in a normal, non-recycling state — no
       `recycle_pending` still set on `GET /health` — before ending the
-      sitting; if A35's hard-restart path fired, confirm the respawned
+      sitting; if A27's hard-restart path fired, confirm the respawned
       sidecar is healthy.
 - [ ] Confirm the card returns to baseline (`nvidia-smi` ≈ idle) before
       ending the sitting.

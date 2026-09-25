@@ -14,7 +14,7 @@
 > [`174-audio-qa-gate.md`](../features/174-audio-qa-gate.md),
 > [`175-resource-telemetry.md`](../features/175-resource-telemetry.md),
 > [`archive/274-loudness-measurement-provenance.md`](../features/archive/274-loudness-measurement-provenance.md),
-> [`2055`](https://github.com/dudarenok-maker/Castwright/issues/2055) (A34 fix), [`2026`](https://github.com/dudarenok-maker/Castwright/issues/2026) (A34 repro source).
+> [`2055`](https://github.com/dudarenok-maker/Castwright/issues/2055) (A26 fix), [`2026`](https://github.com/dudarenok-maker/Castwright/issues/2026) (A26 repro source).
 >
 > **Running time total (recomputed 2026-08-21):** 20 (A9) + 20 (A10) + 15 (A11) + 15 (A12) +
 > 15 (A13) + 10 (A21) + 10 (A22) + 40 (A34) = **145 minutes** (was 155 —
@@ -73,16 +73,16 @@ verdicts exactly — no row is discharged or self-contradictory.
       residency the earlier sittings in this wave established (voice design →
       cloning/identity → this sitting, per plan §4 step 6).
 - [ ] A rendered real book with at least one chapter already through the full
-      generation + QA gate pipeline (for A21's badge-agreement check) and
-      spare chapters available to re-render (for A9, A12, A22).
-- [ ] `SEG_ASR_ENABLED=1` set for the whole sitting except the A34 leg, which
+      generation + QA gate pipeline (for A14's badge-agreement check) and
+      spare chapters available to re-render (for A8, old A12 (discharged 2026-08-26), A15).
+- [ ] `SEG_ASR_ENABLED=1` set for the whole sitting except the A26 leg, which
       additionally needs the Coqui/XTTS engine selected — see Step 9's own
       engine-swap note.
 - [ ] A second shell free for `gh`/log tailing and for triggering the
       sidecar-kill in Step 3.
-- [ ] Access to `#/admin` → "Resource trends" (A13) and to a chapter's
-      Generate + Listen rows (A9, A11, A12, A21).
-- [ ] A non-English (Russian ideal) book or chapter available for A34 —
+- [ ] Access to `#/admin` → "Resource trends" (old A13, discharged 2026-08-26) and to a chapter's
+      Generate + Listen rows (A8, A10, old A12, A14).
+- [ ] A non-English (Russian ideal) book or chapter available for A26 —
       required only for that step, sequence it last (Step 9).
 
 ---

@@ -36,7 +36,7 @@
 > the operator.
 >
 > **Box/card target:** the operator's GPU box, **single 8 GB card**, pinned
-> via `CUDA_VISIBLE_DEVICES=0` (A29/A30).
+> via `CUDA_VISIBLE_DEVICES=0` (A22/A23).
 >
 > **Running time total (recomputed 2026-08-21):** **170 minutes** for the
 > original eight rows (A23 ≈ 30, A25 ≈ 15, A28 ≈ 30, A29 ≈ 20, A39 ≈ 20,
@@ -45,6 +45,14 @@
 > ≈ 15 minutes for A30 §8.7 alone** (one re-render + listen; §8.8's
 > ≈ 15 minutes and A43's ≈ 20 minutes are discharged, dropped from this
 > pack's total) — new total **≈ 185 minutes**.
+>
+> These dated notes (2026-08-20, 2026-08-21) and the running-time list use
+> the row numbering in force just before the 2026-08-26 (wave 7) renumbering,
+> not today's: their A23 is plan 275 (#1951),
+> today's A16; A25 is #1967, today's A18; A28 is #1980, today's A21; A29 and
+> A30 are #2040 waves 1 and 3, today's A22 and A23; A39 is #2026, today's
+> A31; A40 is #2310, A32 (discharged 2026-09-25); A41 is #2106, old A34
+> (discharged 2026-08-27); A42 is #1969 (fully discharged 2026-09-06). (#3405)
 
 ## Preconditions
 
@@ -52,14 +60,14 @@ Stated once for the sitting; do not repeat per row.
 
 - [ ] **Single 8 GB card.** `CUDA_VISIBLE_DEVICES=0`.
 - [ ] **A real cloned voice, ingested WITHOUT a transcript**
-      (`master.transcript === ''`) — A28's gate needs it in this state at the
-      start of the sitting; A28 §4 fills the transcript in, and every later
-      row that wants "a cloneable voice" (A23, A42) reuses the now-transcribed
+      (`master.transcript === ''`) — A21's gate needs it in this state at the
+      start of the sitting; A21 §4 fills the transcript in, and every later
+      row that wants "a cloneable voice" (A16, old A42 (#1969, fully discharged 2026-09-06)) reuses the now-transcribed
       clone rather than a second ingest.
-- [ ] **A non-English book** (A23, A40) — cast the clone above onto a
+- [ ] **A non-English book** (A16, old A32 (discharged 2026-09-25)) — cast the clone above onto a
       character with dialogue in it. `ASR_DEVICE` and `ASR_COMPUTE_TYPE` must
       agree (a `cpu` device with a pinned `int8_float16` makes every
-      `/transcribe` 500 — A23 needs a working `/transcribe`).
+      `/transcribe` 500 — A16 needs a working `/transcribe`).
 - [ ] **The real, already-affected workspace book for A29 (old numbering — now A22)** —
       *Playing with Fire* (Derek Landy, Skulduggery Pleasant) at
       `C:\AudiobookWorkspace\books\Derek Landy\Skulduggery Pleasant\Playing with Fire`.
@@ -69,22 +77,22 @@ Stated once for the sitting; do not repeat per row.
       `19-chapter-fifteen-point-blank.segments.json`, and their `.mp3`s**
       before re-rendering, so a bad run can be reverted without re-importing.
 - [ ] **An EPUB carrying named HTML entities** in its first-chapter heading
-      and/or body (A40) — reuse the non-English book above if it qualifies,
+      and/or body (old A32, discharged 2026-09-25) — reuse the non-English book above if it qualifies,
       otherwise hand-substitute `&mdash;`/an accented named entity into a real
       chapter. Confirm one exists in the on-box corpus before the sitting.
 - [ ] **A Russian book or line on the stock catalogue Coqui voice
-      `Damien Black`** (A39) — no clone needed, every #2026 defect reproduces
+      `Damien Black`** (A31) — no clone needed, every #2026 defect reproduces
       on it.
-- [ ] **A genuinely static-FFmpeg box** for A25 — `ffmpeg` on PATH, no hot-
+- [ ] **A genuinely static-FFmpeg box** for A18 — `ffmpeg` on PATH, no hot-
       patched FFmpeg DLLs inside `site-packages/torchcodec/` (confirm
       `import torchcodec` still fails; if it succeeds, the box has drifted
-      back to hot-patched and A25 needs re-checking against register.md
-      §A25 item 1's three verified preconditions before trusting the result).
+      back to hot-patched and A18 needs re-checking against register.md
+      §A18 item 1's three verified preconditions before trusting the result).
 - [ ] **A live sidecar and a book mid-render, plus OS-level process-kill
-      access** (A41) — `taskkill`/Task Manager, ability to bind a foreign
+      access** (old A34, discharged 2026-08-27) — `taskkill`/Task Manager, ability to bind a foreign
       listener on `:9000`, ability to start a fresh sidecar manually, and
       ability to set `SIDECAR_NEVER_ADOPT` on the server process.
-- [ ] **A30 §8.7 (added 2026-08-20):** the same *Заказ Коалфолла* real
+- [ ] **A30 (old numbering — now A23) §8.7 (added 2026-08-20):** the same *Заказ Коалфолла* real
       workspace book already staged for A29-adjacent (old numbering — now A22) work (`.audiobook/cast-
       id-history.json` should already carry `mayrin→mairin`,
       `coalfall→coalfall-dragon` from the wave-3 `--apply` run of 2026-08-05
@@ -95,10 +103,10 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
 ## Procedure
 
-Ordered so the Qwen-resident rows run first (A28 fixes the clone's transcript
-that A23 and A42 then reuse), the same non-English book and cast id-drift work
+Ordered so the Qwen-resident rows run first (A21 fixes the clone's transcript
+that A16 and old A42 (#1969, fully discharged 2026-09-06) then reuse), the same non-English book and cast id-drift work
 ride the same Qwen residency, the engine swaps once into Coqui/XTTS for the
-two Russian/Coqui-derive rows, and the disruptive sidecar-kill row (A41) runs
+two Russian/Coqui-derive rows, and the disruptive sidecar-kill row (old A34, discharged 2026-08-27) runs
 last, alone, since it deliberately crashes the sidecar twice.
 
 ### A21 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/archive/276-cast-time-derivability-warning.md))
@@ -109,7 +117,7 @@ last, alone, since it deliberately crashes the sidecar twice.
 > Run sheet's every `Result:` line (§§3–6) is still an unfilled blank, SHA/
 > date/run-by line unfilled — no on-box run recorded. STILL OWED. Run **§4
 > first** — it is the load-bearing section per the run sheet's own §1 note —
-> and its "Add transcript" step is why this row runs before A23/A42: it
+> and its "Add transcript" step is why this row runs before A16 and old A42 (#1969, fully discharged 2026-09-06): it
 > converts the sitting's transcript-less clone into one with a real
 > transcript, which those rows then use.
 
@@ -143,7 +151,7 @@ last, alone, since it deliberately crashes the sidecar twice.
 > QA `voice-mismatch` sub-check since #1972 and #1969 landed. STILL OWED.
 
 5. **Chapter-level criterion.** Render one chapter of the non-English book
-   (Preconditions) on the now-transcribed clone from A28. Transcribe the
+   (Preconditions) on the now-transcribed clone from A21. Transcribe the
    output through the sidecar's `/transcribe` with Whisper **auto-detect**
    (no `x-language`). **Pass = detected language is the book's, and
    `avg_logprob` is better than ≈ −0.5.** Reference points from the row's own
@@ -189,7 +197,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     audition-reference path to one voice; render once so
     `render-integrity.centroids.json` persists an `audition` row.
     - Result:
-11. Reassign the character to a clearly different, cloned voice (the A28/A23
+11. Reassign the character to a clearly different, cloned voice (the A21/A16
     clone works); re-render.
     - Result:
 12. Confirm the new voice's lines are **not** flagged `voice-mismatch`/
@@ -204,7 +212,7 @@ last, alone, since it deliberately crashes the sidecar twice.
 > closed 2026-08-04T17:40:01Z, matches. The run sheet's §§3–6 `Result:` lines
 > are all still unfilled blanks. §9 of that same run sheet (dated
 > 2026-08-11) re-rendered a **different** book (*Заказ Коалфолла*, for the
-> since-discharged A37 audio-currency row) — it does not touch *Playing with
+> since-discharged old A37 audio-currency row) — it does not touch *Playing with
 > Fire* ch19/ch16, the fixture this row names. STILL OWED. No clone needed —
 > switch the cast target to the *Playing with Fire* workspace book
 > (Preconditions) while Qwen stays resident.
@@ -241,13 +249,13 @@ last, alone, since it deliberately crashes the sidecar twice.
 
 ### A32 (discharged 2026-09-25, removed from the register) · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), PR #2316)
 
-> **Criteria source:** `onbox-acceptance-register.md` A40. Re-resolved
+> **Criteria source:** old register A32 (discharged 2026-09-25, removed from the register). Re-resolved
 > 2026-08-20: `gh issue view 2310` → closed 2026-08-13T04:25:10Z; `gh pr view
 > 2316` → merged 2026-08-13T04:43:29Z, title matches ("widen named-entity
 > decode to the full HTML5 set"). Every layer proved only by unit/e2e tests
 > fixing the sentence text explicitly — no run sheet or dated result under
 > `docs/testing/` for a real EPUB. STILL OWED. Rides on the non-English book/
-> EPUB staged in Preconditions — still the same Qwen/book residency as A23.
+> EPUB staged in Preconditions — still the same Qwen/book residency as A16.
 
 16. **Chapter-title beat (design spec Finding 0 — the one criterion no model
     behaviour can mask).** On the EPUB whose first chapter heading carries
@@ -294,14 +302,14 @@ last, alone, since it deliberately crashes the sidecar twice.
 ### A18 · Cloned-voice derive on Coqui no longer needs torchcodec ([#1967](https://github.com/dudarenok-maker/Castwright/issues/1967))
 
 > **Criteria source:** `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md`
-> §12; `onbox-acceptance-register.md` A25 items 1–4. Re-resolved 2026-08-20:
+> §12; `onbox-acceptance-register.md` A18 items 1–4. Re-resolved 2026-08-20:
 > `gh issue view 1967` → closed 2026-07-31T06:06:03Z, matches. Items 1 and 3
 > are already DISCHARGED (register.md:1152-1184, pasted command output) —
 > **not re-run here.** Item 2's audible half and item 4 remain STILL OWED.
 > **Item 4 (Pinokio `import torchcodec` check) is explicitly batched with row
 > E1 in `onbox-sitting-device-browser.md`, which already owns the Pinokio
 > box — not run in this sitting.** Only item 2 runs here, on the same
-> static-FFmpeg box confirmed in Preconditions, same Coqui residency as A39.
+> static-FFmpeg box confirmed in Preconditions, same Coqui residency as A31.
 
 21. **Item 2 — latent equivalence, audible half.** Decode equivalence was
     already measured bit-identical (max difference 0.0) during PR #1978's
@@ -321,7 +329,7 @@ last, alone, since it deliberately crashes the sidecar twice.
 > documents the staleness for `check-register-citations.mjs`'s Check C so
 > this historical section is not misread as a live citation.
 
-> **Criteria source:** `onbox-acceptance-register.md` A41 — full scenario
+> **Criteria source:** old register A34 (discharged 2026-08-27, removed from the register) — full scenario
 > text already spelled out there (`:2473-2496`), cited not restated except
 > for the exact commands below. Re-resolved 2026-08-20: `gh issue view 2106`
 > → closed 2026-08-16T03:05:14Z; `gh pr view 2398` → merged
@@ -362,6 +370,10 @@ last, alone, since it deliberately crashes the sidecar twice.
     - Result:
 
 ## Excluded on re-resolution
+
+> This dated 2026-08-20 record uses the row numbering in force just before
+> the 2026-08-26 (wave 7) renumbering, not today's (e.g. its A23 is #1951, today's A16; its A41 is #2106, old A34). The note
+> under the running-time total at the top of this file gives the full mapping.
 
 None excluded. All ten rows were re-resolved against live repo/issue/PR
 state and the plan-of-record/run-sheet files themselves on 2026-08-20 and
@@ -412,17 +424,17 @@ A16's genuine frontmatter-vs-body contradiction handled in
 
 - [ ] Evict Qwen (Base + VoiceDesign) and Coqui/XTTS so the next sitting
       starts cold.
-- [ ] Confirm `SIDECAR_NEVER_ADOPT` is unset (A41 Scenario 2 cleanup) and the
+- [ ] Confirm `SIDECAR_NEVER_ADOPT` is unset (old A34 Scenario 2 cleanup) and the
       server has been restarted at least once since.
-- [ ] Confirm no foreign listener is still bound on `:9000` (A41 Scenario 1).
+- [ ] Confirm no foreign listener is still bound on `:9000` (old A34 Scenario 1).
 - [ ] Restore the *Playing with Fire* workspace book from the backups taken
       in Preconditions if either re-render (A29 §§13-14, old numbering — now
       A22) needs reverting, or
       confirm the new state is intentionally kept.
-- [ ] Confirm *Заказ Коалфолла* ch2's re-render (A30 §8.7) is intentionally
+- [ ] Confirm *Заказ Коалфолла* ch2's re-render (A23 §8.7) is intentionally
       kept or reverted — same backup-before-reverting discipline as A29 (old
       numbering — now A22).
-- [ ] Confirm any A25 static-FFmpeg-box changes (env vars, PATH) are left as
+- [ ] Confirm any A18 static-FFmpeg-box changes (env vars, PATH) are left as
       found.
 - [ ] Confirm the card returns to baseline (`nvidia-smi` ≈ idle) before
       ending the sitting.
