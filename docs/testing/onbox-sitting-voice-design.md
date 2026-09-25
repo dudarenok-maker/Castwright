@@ -1,4 +1,4 @@
-# On-box sitting pack — Qwen VoiceDesign, bulk cast design & audition (A4, A6, A7, A11, A20 (discharged 2026-09-25, removed from the register))
+# On-box sitting pack — Qwen VoiceDesign, bulk cast design & audition (A4, A6, A7, A11, A20)
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
 > register rows **A4, A6, A7, A11, A20** — the rows a human has to
@@ -268,7 +268,7 @@ runs last, after everything else is evicted.
     its Stop button is — not a generic "free VRAM" message.
     - Result:
 
-### A20 (discharged 2026-09-25, removed from the register) · Golden-audio bless guards + `_make_kokoro` against a real engine (PR #2032) — steps 15–18
+### A20 · Golden-audio bless guards + `_make_kokoro` against a real engine (PR #2032) — steps 15–18
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
 > `:1412-1518` (full procedure already spelled out there — cited, not

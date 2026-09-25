@@ -319,7 +319,7 @@ recurring shapes are recorded in that PR's review notes; the ones that bite here
 
 ## 9. Owed acceptance
 
-Row **A20** (#1894, discharged 2026-09-25, removed from the register) already asks the tester to record what the Stop control
+Row **A20** (#1894, since renumbered A13) already asks the tester to record what the Stop control
 reports during a render. That row's criteria are updated rather than duplicated:
 the expected observation changes from "records whatever it reports" to
 "Stop shows *Stopping…* and then completes, with no 2 s error". No new row.

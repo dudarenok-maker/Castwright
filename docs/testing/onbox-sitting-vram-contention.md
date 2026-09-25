@@ -228,8 +228,9 @@ up.
 > [`sidecar-evict-latency-onbox-acceptance.md`](sidecar-evict-latency-onbox-acceptance.md)
 > §§2–3 — cited, not restated, per the plan-of-record rule against copying a
 > criteria list that then drifts from the original. Re-resolved: #1919 closed
-> 2026-07-31T00:32:59Z. STILL OWED — the run sheet itself has empty `Result:`
-> lines.
+> 2026-07-31T00:32:59Z. **DISCHARGED 2026-09-25** — the run sheet's `Result:`
+> lines are now filled in (258.7 ms max inter-response gap, fit not
+> `noCapacity`, 2026-09-20).
 
 8. **(A24) Run the sidecar-evict-latency run sheet's procedure §3, steps 1–6**
    (its "optional second pass," step 7, is skippable — not required to clear

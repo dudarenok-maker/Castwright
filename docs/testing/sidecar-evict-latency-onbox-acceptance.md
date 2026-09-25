@@ -34,8 +34,9 @@ originating issue assumed.
       trigger — a Coqui `/load`, or an `/xtts/clone-voice` call.
 - [ ] A second shell free to poll `GET /health` throughout.
 
-Runnable in the same session as A19/A5/A20 (same card, same box) — no need for
-a dedicated sitting.
+Runnable in the same session as A19/A5/A13 (the last, A20 at the time this
+was written, since renumbered — the #1894 row) — same card, same box, no need
+for a dedicated sitting.
 
 ## 3. Procedure
 
@@ -71,10 +72,15 @@ under ~1 s), because the evict and its reclaim now run on a worker thread.
 
 ## 5. Result
 
-**Maximum `/health` inter-response gap:** _(fill in, ms)_
-**Second admission outcome (fit vs. `noCapacity`):** _(fill in)_
-**Run by:** _(fill in)_ **Date:** _(fill in)_
-**Optional ASR pass run?** _(yes/no; gap if yes)_
+**Maximum `/health` inter-response gap:** 258.7 ms (worst single-request latency 129.13 ms; p50 5.89 ms; 62 polls, 0 errors)
+**Second admission outcome (fit vs. `noCapacity`):** fit — `200 {"status":"ready"}`, not `noCapacity`
+**Run by:** agent lane ([Castwright#3301](https://github.com/dudarenok-maker/Castwright/issues/3301)) **Date:** 2026-09-20
+**Optional ASR pass run?** no
+
+Full detail: `docs/testing/onbox-mechanical-batch1-results/a17-clean-retry-2026-09-20.md`
+(the exact #1919 three-way race — VoiceDesign resident + a Base forward in
+flight, via `/qwen/clone-voice`, + a concurrent second admission — hit
+byte-for-byte; no CUDA OOM, no `vram-spill`/`evict-declined`/`poison`).
 
 _(Once run, mark the register row A17 discharged with a summary of this
 result and remove it from the "owed" count.)_

@@ -887,7 +887,8 @@ required `SEG_ASR_ENABLED=1` + `ASR_DEVICE=cuda`, which understated the bug.
 - **Prerequisites:** the dual-GPU dev box (`cuda:0` 4070 8 GB, `cuda:1` 5070 Ti
   16 GB per `r_dev_box_dual_gpu`); `SEG_CAPACITY_ADMISSION=1` (the default);
   Qwen as the generation engine (the default). Pin with `CUDA_VISIBLE_DEVICES`
-  per A20's convention; **runnable alongside A20/A19/A5** in one session.
+  per A20's convention (the #1894 row, since renumbered A13); **runnable
+  alongside A13/A19/A5** in one session.
 - **What to observe (concretely):**
   1. Run a cast-review **design** so Qwen VoiceDesign is warm-resident
      (`QWEN_DESIGN_IDLE_TTL` keeps it ~120 s).

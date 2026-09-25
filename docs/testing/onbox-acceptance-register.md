@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 30 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,61 +563,99 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**48 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**50 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-25, A17/A20/A32/A105/A107/E103/E104 DISCHARGED and
-> removed** (#3294, PR
-> [#3399](https://github.com/dudarenok-maker/Castwright/pull/3399), claude):
-> PR #3399 (parent issue #3294) ran these seven rows on-box and recorded the
-> outcomes inside each row's own body before this change removed them. **A17**
-> (`/health` through a contended eviction on the default Qwen path, #1919): the
-> exact three-way race (VoiceDesign resident + a Base forward in flight +
-> a concurrent second admission) was hit cleanly on 2026-09-20, with zero OOM
-> and `/health`'s worst inter-response gap at 258.7 ms, well inside the ~500 ms
-> target — all four row items met. Evidence:
+> **Last change: 2026-09-25, A17/A32/A107/E103/E104 DISCHARGED and removed;
+> A20/A105 restored, narrowed (owner decision)** (#3294, PR
+> [#3402](https://github.com/dudarenok-maker/Castwright/pull/3402); the
+> on-box runs themselves happened under PR
+> [#3399](https://github.com/dudarenok-maker/Castwright/pull/3399), which
+> recorded the outcomes inside each row's own body — all seven runs were
+> agent-lane dispatches on the repo owner's box (`cline-qwen-cloud` where the
+> row names a lane; A17's own note doesn't name one), commits authored as
+> `dudarenok-maker`). An earlier pass on this branch (PR #3399, now
+> superseded) removed all seven rows, including A20 and A105; a review of
+> PR #3402 found both still carry an unmet bullet in their own recorded text,
+> and the repo owner decided **A20 and A105 stay in the register, narrowed to
+> their one owed bullet each** — only the other five discharge.
+>
+> **A17** (`/health` through a contended eviction on the default Qwen path,
+> #1919, by whom not named in the row): the exact three-way race (VoiceDesign
+> resident + a Base forward in flight + a concurrent second admission) was
+> hit cleanly on 2026-09-20, with zero OOM and `/health`'s worst
+> inter-response gap at 258.7 ms, well inside the ~500 ms target — all four
+> row items met. **Caveat kept, not dropped:** the second admission's holder
+> was driven via `POST /qwen/clone-voice` (an ungated 1.7B-Base forward
+> holding the same `_synth_lock`), not the row's literal "start a Qwen
+> chapter render" step — chosen because the app-level chapter-render variant
+> had twice OOM'd (`vram-spill`) this 8 GB card in the 2026-09-06 attempt
+> before the race could be measured; the row's own evidence says outright
+> the app-level variant still doesn't fit this card mid-render, and that
+> observation is left standing for A10, not re-attempted here. Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/a17-clean-retry-2026-09-20.md`.
-> **A20** (golden-audio bless guards / `_make_kokoro` against a real engine,
-> #1995/#2003/#1987): the accept-path echo was observed on a genuine clean
-> bless on 2026-09-21, closing the row's last owed bullet; honest caveat kept
-> in the row's own text that the box was not fully quiet that session, so the
-> zero-flag uncontended-routine-bless case specifically stayed undemonstrated
-> even though every other bullet passed. Evidence:
-> `docs/testing/onbox-mechanical-batch1-results/a20-accept-echo-2026-09-21.md`.
-> **A32** (named-entity decode reaches the TTS engine on a real EPUB, #2310):
-> the owed audio-level confirmation of the secondary (body-line) bullet
-> completed 2026-09-23 — a decoded dash-opened line synthesized to a
-> character-exact ASR transcript with a measurable prosodic pause, not leading
-> silence — so both bullets now stand confirmed at text and audio level.
-> Evidence: `docs/testing/onbox-batch-results/a32.md`. **A105** (Qwen base17
-> eviction guard / `_DEVICE_LEDGER` serialization, #2752): the Stop-button
-> bullet's remaining unload-mechanism question was resolved 2026-09-22 by a
-> deliberately landed race (`/unload` before `_base17` is assigned is a no-op,
-> returns 200 in 14.4 ms, and never holds up or aborts the racing `/load`),
-> and the co-residency criterion is inherited discharged via #3086's own
-> closed-completed resolution — all five bullets now stand. **A107**
-> (`/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter, #3086/#3101): the
-> original repro — a raw cold Kokoro `/load` racing a real resident
-> VoiceDesign forward on a shared device — was re-driven 2026-09-22 through
-> the shipped guard and the bypass did not reproduce; the load was held for
-> 43.3 s until the design released and then ran within ~1 s, matching the
-> unit-level proof on real hardware. **E103** (`wt-gc.mjs --prune` real
-> junction-first teardown, #3051): driven in full on-box 2026-09-24 against a
-> real throwaway worktree with all four junctions — the one failure mode that
-> matters (junctions silently skipped, `git worktree remove` recursing into
-> the primary checkout's real trees) is ruled out with byte-for-byte
-> child-list SHA-256 hashes matching before/after. **E104** (ops-71
-> stale-battery reaper `Win32_Process` classification against real processes,
-> #3047): driven in full on-box 2026-09-24 against three live fixture process
-> trees plus one organic orphan the census found itself — all five observed
-> behaviours (report-only census, stalled-rate detection, orphan kill,
-> namer-only survival, push-cost + census-record accumulation) confirmed on
-> real `Win32_Process` output.
-> This branch diverged from the register at 55 owed (Group A 35, Group E 10);
-> discharging these seven rows is this branch's only register effect: 55 → 48
-> owed, Group A 35 → 30, Group E 10 → 8. `next-id` markers unaffected
-> (allocate-once — none of these seven IDs are reused).
+>
+> **A32** (named-entity decode reaches the TTS engine on a real EPUB, #2310,
+> `cline-qwen-cloud`): the owed audio-level confirmation of the secondary
+> (body-line) bullet completed 2026-09-23 — a decoded dash-opened line
+> synthesized to a character-exact ASR transcript with a measurable prosodic
+> pause, not leading silence — so both bullets now stand confirmed at text
+> and audio level. **Caveat kept:** the bullet's "manuscript view shows real
+> glyphs" clause was not observed in the UI; it was inferred from the
+> `candidate.sourceText` field carrying the correctly decoded characters.
+> Evidence: `docs/testing/onbox-batch-results/a32.md`.
+>
+> **A107** (`/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter,
+> #3086/#3101, `cline-qwen-cloud`, issue #3309): the original repro — a raw
+> cold Kokoro `/load` racing a real resident VoiceDesign forward on a shared
+> device — was re-driven 2026-09-22 through the shipped guard and the bypass
+> did not reproduce; the load was held for 43.3 s until the design released
+> and then ran within ~1 s, matching the unit-level proof on real hardware.
+> **Caveat kept:** this box has no DirectML profile (CUDA `onnxruntime-gpu`
+> only), so `_directml_selftest_or_fallback`'s one-shot forward — the row's
+> stated prerequisite — never ran; the row's own text judges the gate under
+> test EP-agnostic and the discharge stands on that basis. Evidence: this
+> row's own body (no separate evidence file).
+>
+> **E103** (`wt-gc.mjs --prune` real junction-first teardown, #3051,
+> `cline-qwen-cloud`, issue #3321): driven in full on-box 2026-09-24 against
+> a real throwaway worktree with all four junctions — the one failure mode
+> that matters (junctions silently skipped, `git worktree remove` recursing
+> into the primary checkout's real trees) is ruled out with byte-for-byte
+> child-list SHA-256 hashes matching before/after. Evidence: not durable —
+> `e103-test.log`, `e103-report-{default,nogh,locked}.txt`,
+> `e103-prune-{locked,final}.txt` under
+> `%TEMP%\open-engine-scratch\cline-qwen-cloud-3321-20260924-085933\` on the
+> box the run happened on; once this row is gone, git history (this note,
+> and #3321) is the only durable record.
+>
+> **E104** (ops-71 stale-battery reaper `Win32_Process` classification
+> against real processes, #3047, `cline-qwen-cloud`, issue #3322): driven in
+> full on-box 2026-09-24 against three live fixture process trees plus one
+> organic orphan the census found itself — all five observed behaviours
+> (report-only census, stalled-rate detection, orphan kill, namer-only
+> survival, push-cost + census-record accumulation) confirmed on real
+> `Win32_Process` output. Evidence: not durable — `census-t0.txt`,
+> `census-t1.txt`, `doctor-kill.txt`, `timeline.txt` under
+> `%TEMP%\open-engine-scratch\cline-qwen-cloud-3322-20260924-093037\` on the
+> box the run happened on; once this row is gone, git history (this note,
+> and #3322) is the only durable record. **Incidental finding kept, not
+> silently dropped:** the run's own text records that `taskkill /T` returned
+> a non-zero exit on both real pushes (pids 38780, 23792) even though the
+> whole process tree was actually gone seconds later in both cases — the
+> tool correctly prints `KILL FAILED` rather than a false `KILLED` on that
+> signal (`scripts/reap-stale-batteries.mjs`'s `killTree()`), so nothing
+> misreports success, but a genuinely-successful kill still reads as a
+> failure in the log. Not filed as a separate issue by this PR; flagged here
+> for whoever next touches `killTree()`'s exit-code handling.
+>
+> This branch diverged from the register at 55 owed (Group A 35, Group E 10).
+> Net effect of this change: 55 → 50 owed, Group A 35 → 32 (five Group-A rows
+> removed — A17, A32, A105, A107, and originally A20 — then A20 and A105
+> restored), Group E 10 → 8 (E103, E104 removed). `next-id` markers
+> unaffected (allocate-once — none of these five discharged IDs are reused;
+> A20/A105 were never freed).
 >
 > **Prior change: 2026-09-22, E107 ADDED** (#3263, PR
 > [#3358](https://github.com/dudarenok-maker/Castwright/pull/3358), claude):
@@ -3118,6 +3156,217 @@ which already stages a mixed-engine render on this same card.
 
 ---
 
+### A20 · Golden-audio bless guards don't rubber-stamp an honest bless, and `_make_kokoro` exercises a real engine (PR [#2032](https://github.com/dudarenok-maker/Castwright/pull/2032), closes [#1995](https://github.com/dudarenok-maker/Castwright/issues/1995), [#2003](https://github.com/dudarenok-maker/Castwright/issues/2003), [#1987](https://github.com/dudarenok-maker/Castwright/issues/1987)) · **Kokoro weights present; single 8 GB card is enough**
+
+> **2026-09-25 — narrowed, NOT discharged (owner decision, Castwright#3402).**
+> Every bullet below bullet 1 is CONFIRMED per the 2026-09-06 and 2026-09-21
+> notes further down this row: the forced-refusal drills (null `transcript`,
+> `identity.cosine.angry` +0.05), the `.onnx`-corruption FAIL-not-SKIP check,
+> and #2066's identity-epsilon measurement all landed. **Bullet 1 — a
+> routine, unflagged `--bless --sidecar-only` completing without any
+> `GOLDEN_REBLESS_*` flag — remains owed.** It refused on
+> `tolerances.rtf_max` twice: 2026-09-06, on a box the same note records as
+> confirmed-idle, and again 2026-09-21. Measured `rtf` ≈ 1.0–1.033 against
+> the committed `rtf_max: 1.0` baseline (roughly double the blessed
+> `rtf.batched` figure) is real run-to-run throughput noise forcing
+> `GOLDEN_REBLESS_THRESHOLDS`, not contention — the idle-box recurrence rules
+> contention out as the explanation. Whether the committed `rtf`/`rtf_max`
+> baseline is wrong for this box or this is a genuine throughput regression
+> is undecided and stays open.
+
+PR #2032 (hardened further by the independent pre-merge review that produced
+this row) closes three "a gate that silently stopped asserting" defects in
+`server/tts-sidecar/tests/golden/compare.py`'s bless guards and in
+`test_golden_regression.py`'s `_make_kokoro`. All three files' pure-function
+gating tests (`test_golden_compare.py`, `test_instruct_bless_gating.py`,
+`test_make_kokoro_gating.py`) are mutation-verified and run in the fast
+`test:sidecar` tier — but two behaviours only a real bless run against real
+weights can prove, and neither was exercised on real hardware for this PR:
+
+- **A guard that never blocks honest work.** Every guard added/hardened here
+  (`bless_guard`'s G1/G2, `bless_guard_thresholds`'s tolerances check and its
+  new `previously_blessed` disambiguation) is proven only against synthetic
+  fixtures. The thing that would make it a *rubber stamp in the other
+  direction* — refusing a bless that changed nothing real, or demanding
+  `GOLDEN_REBLESS_THRESHOLDS=1`/`GOLDEN_REBLESS_CONTENT=1` on a routine,
+  uncontended re-bless — has never been observed end to end.
+- **`_make_kokoro` against a real `KokoroEngine`.** `test_make_kokoro_gating.py`
+  pins the classifier wiring (`synthesise_or_skip` / `prereq.py`) with a
+  stubbed engine; #1987's actual claim — a genuine CUDA/model-corruption
+  failure during Kokoro warm-up now FAILS the test instead of reading as a
+  green SKIP — has not been forced against the real engine.
+
+- **Prerequisite:** Kokoro weights installed
+  (`server/tts-sidecar/voices/kokoro/kokoro-v1.0.onnx` +
+  `voices-v1.0.bin`), sidecar venv bootstrapped. A single 8 GB card is
+  sufficient (Kokoro is the ~1 GB fallback engine); CUDA is not required —
+  `ASR_DEVICE=cpu`/CPU Kokoro also exercises this.
+- Run `npm run test:golden-audio -- --bless --sidecar-only` on a clean,
+  **uncontended** box (check `nvidia-smi` first — this PR's `--bless`
+  contention warning should print nothing). Confirm it completes and writes
+  `kokoro-baseline.json` / `instruct-baseline.json` **without**
+  `GOLDEN_REBLESS_CONTENT=1`, `GOLDEN_REBLESS_THRESHOLDS=1`, or
+  `GOLDEN_REBLESS_MEASUREMENTS=1` set on a routine, uncontended re-bless.
+  **Amended by #2045 F1/F2, then again by #2060/#2061/#2062/#2069** (the
+  `identity`/`loudness_dbfs` guard, added by #2035 after this row was
+  written, was noise-tolerant-and-WRITTEN as of #2045; #2060/D4 later
+  changed the WRITE side, not the accept side): `kokoro-baseline.json`'s
+  `transcript`/`text_edits`, `instruct-baseline.json`'s `tolerances` block,
+  AND — since #2060/D4 — `instruct-baseline.json`'s `identity`/
+  `loudness_dbfs` figures too must ALL stay BYTE-IDENTICAL on a routine
+  re-bless (or the guard is broken). "Figures MAY move by run-to-run
+  noise" was true before D4 and is **no longer a meaningful thing to
+  check** — a within-epsilon noise-sized move is still ACCEPTED (not
+  refused, no flag needed), it just no longer REWRITES the committed
+  reference, so the file staying byte-identical is now the EXPECTED
+  outcome for `identity`/`loudness_dbfs` too, not evidence on its own that
+  anything happened. What real hardware is uniquely placed to confirm
+  instead is the ECHO: the console should still print a `[golden-bless]
+  identity moved within epsilon ... (noise -- reference unchanged) -- ...`
+  / `[golden-bless] loudness_dbfs moved ...` line whenever this run's raw
+  measurement differs AT ALL from the committed figure (real hardware
+  noise makes a nonzero diff near-certain, even though the file itself
+  won't change) — the echo is the part a `git diff` alone can't confirm,
+  and it's the accept-path half of the guard real hardware is uniquely
+  placed to exercise (both the ROUTINE-bless-doesn't-need-the-flag half
+  AND the noise-gets-echoed-but-not-written half need a REAL measurement
+  pair with real noise between them — a synthetic fixture can only assert
+  the arithmetic, never that actual noise clears epsilon on a real box). A
+  byte-identical block with an echo present is the guard working; a
+  byte-identical block with NO echo at all just means this run's raw
+  measurement happened to land exactly on the committed figure — don't
+  read bare byte-identical output alone as proof the guard fired; the
+  echo is the falsifiable signal. `blessed_at`-adjacent housekeeping
+  fields may still move as before.
+- **This run is also the only thing that retires the identity epsilon's
+  open question** (#2066). `IDENTITY_COSINE_EPSILON` moved 0.015 → 0.005
+  because 0.015 was derived from an unrelated ceiling (`identity_cosine_max`
+  = 0.15) rather than from measured noise. 0.005 is ≈3.6× the **single**
+  run-to-run delta recorded anywhere in the repo (`metadata.notes`' ~0.0014)
+  — one observed figure, on one leaf, while the guard refuses on the `max`
+  across five. Nothing in-repo measures the per-leaf distribution. So record
+  the **actual per-leaf deltas** you observe here, not just pass/fail: if any
+  single leaf routinely clears 0.005, the constant is too tight and this
+  gate refuses honest work. That measurement is the deliverable.
+- Then force one refusal for real: hand-edit a committed baseline to null out
+  its `transcript` (or delete its `tolerances` key) exactly as a bad
+  merge-resolution would, re-run the same `--bless` command, and confirm it
+  refuses with the expected `GOLDEN_REBLESS_*` message and leaves the file
+  byte-identical to before the attempt — then revert the hand-edit.
+  This is the "#2003/#1995 shape, on a real file, via the real CLI entry
+  point" check the unit tests can only approximate with `tmp_path` fixtures.
+- **Amended by #2045 F1/F2, then #2060/D1:** also force one WINDOW-sized
+  refusal on `instruct-baseline.json`'s `identity` block (hand-edit one
+  committed `identity.cosine.<emotion>` figure by clearly more than
+  `IDENTITY_COSINE_EPSILON`, e.g. +0.05), re-run the same `--bless`
+  command, and confirm it refuses (not just accepts-and-echoes) with the
+  expected `GOLDEN_REBLESS_MEASUREMENTS` message — **not**
+  `GOLDEN_REBLESS_THRESHOLDS`, which the #2060 flag split now reserves for
+  `tolerances` alone — and leaves the file byte-identical — then revert
+  the hand-edit. This is the boundary the noise-tolerant epsilon exists to
+  draw; the routine-bless bullet above only exercises the accept side.
+- Run `npm run test:golden-audio -- --sidecar-only --engine=kokoro -m golden`
+  (i.e. `test_golden_regression.py`'s real `_make_kokoro`-backed tests) once
+  normally (expect pass), then deliberately break the engine (e.g. rename
+  the `.onnx` weight file mid-run, or force a CUDA OOM by holding VRAM) and
+  confirm the run now **FAILS** rather than SKIPping — the #1987 defect this
+  PR closed. Restore the weights afterward.
+
+> **PARTIALLY run 2026-09-06 (batch 2 step 1, claude) — the forced-refusal and
+> engine-failure bullets are confirmed; the accept-path echo is still owed, and
+> #2066's own open question is answered.** Real hardware, two-GPU box.
+> `kokoro-baseline.json`'s routine, unflagged re-bless completed silently and
+> wrote through a genuine ASR noise diff (a comma Whisper inserted) with no
+> flag and no refusal — confirms the guard doesn't rubber-stamp real content
+> changes while correctly not demanding a flag for semantic-equivalent ASR
+> noise; also confirms this row's own already-amended "byte-identical" framing
+> doesn't hold literally for `kokoro-baseline.json` on real hardware ("written
+> through, semantically unchanged" is what actually happens, not silence with
+> no diff at all). `instruct-baseline.json`'s routine re-bless, by contrast,
+> refused twice in a row on `tolerances.rtf_max` (epsilon 0.0) even on a
+> confirmed-idle box, purely from real run-to-run `rtf` measurement noise
+> (`rtf_max` climbed 1.0 → 1.5 → 1.35 → 1.55 across this session's repeated
+> runs) — a real finding that an idle box's own timing noise, not contention,
+> can force `GOLDEN_REBLESS_THRESHOLDS` on an otherwise-routine re-bless; not
+> chased to a fix, flagged for whoever owns `rtf_max`'s epsilon next. The two
+> forced-refusal bullets (null `transcript`, `identity.cosine.angry` +0.05)
+> both confirmed exactly as specified, including the `GOLDEN_REBLESS_MEASUREMENTS`-not-`_THRESHOLDS`
+> flag-split boundary, with byte-identical reverts. The `.onnx` corruption
+> bullet confirmed real **FAIL, not SKIP** (all three tests), with the
+> weights restored and SHA-256/size-verified afterward. **#2066 answered from
+> this run's own per-leaf identity deltas** (the deliverable this row's text
+> asks for): the `angry` leaf's single-run delta (+0.0052) already exceeds
+> `IDENTITY_COSINE_EPSILON` (0.005) on genuine hardware noise with no
+> engine/model change — **0.005 is too tight**, at least for `angry` on this
+> box; recorded as the requested measurement, not chased into a constant
+> change here. **Still owed:** the accept-path echo (`[golden-bless] identity
+> moved ... (noise -- reference unchanged) ...` / `loudness_dbfs moved ...`)
+> was never actually observed printing on a genuine PASSING bless this run —
+> `run-golden-tests.ps1`'s pytest args (`-q -rs`, no `-s`) suppress stdout on
+> a pass, and a `-- -s` retry hit the `tolerances` refusal before reaching the
+> echo point instead. The echo is the row's own stated "falsifiable signal"
+> and remains unconfirmed; the next run needs either a forced-flags run with
+> `-s` that reaches a clean accept, or a direct read of the guard's own
+> `print(...)`/log output.
+>
+> **2026-09-21 — accept-path echo OBSERVED on a clean-accept bless — DISCHARGED**
+> (Castwright#3303, `cline-qwen-cloud`). Three real bless runs on this dev box
+> (two-GPU, Windows 11), each `node scripts/run-powershell.mjs
+> server/tts-sidecar/run-golden-tests.ps1 -s` with `GOLDEN_BLESS=1` — the
+> `npm run test:golden-audio -- --bless --sidecar-only` path plus the missing
+> `-s` (confirmed `Get-GoldenBlessPytestArgs` forwards caller args verbatim, so
+> `-s` survives and the bare-bless `-k 'not qwen_duration'` default still
+> applies). **Run 1 (routine, unflagged): the `rtf_max` noise-driven refusal
+> RECURRED** — `refusing to bless: tolerances would move beyond epsilon 0.0
+> (rtf_max: 0.5500) -- was {..., 'rtf_max': 1.0}, now {..., 'rtf_max': 1.55}`
+> (measured `rtf` ≈ 1.033 vs blessed 0.5089); a sibling agent had real GPU work
+> in flight this session, but the 2026-09-06 note reproduced the same refusal on
+> a confirmed-idle box, so this is recorded as a recurrence, still not chased to
+> a fix. The Kokoro bless again wrote through the same comma ASR-noise
+> transcript diff, flagless, plus three new whisper-lineage metadata fields
+> (`faster_whisper_version`/`ctranslate2_version`/`whisper_model_revision`).
+> **Run 2 (`GOLDEN_REBLESS_THRESHOLDS=1`):** tolerances gate cleared; refused
+> next on `loudness_dbfs` beyond ε 0.4 (angry ±2.68, whisper ±1.91, excited
+> ±1.15, neutral ±0.77, sad ±0.18 dB) — on this contended box the loudness
+> noise routinely exceeds the measurement epsilon, so reaching a clean accept
+> took both flags, not just the tolerances one. **Run 3 (both forced flags):
+> exit 0 — clean accept, echo printed**, verbatim through the real
+> `run-golden-tests.ps1` pytest (`-s`), which is the falsifiable signal the
+> prior note owed: `[golden-bless] tolerances moved BEYOND epsilon 0.0 (FORCED
+> by GOLDEN_REBLESS_THRESHOLDS) -- rtf_max: +/-1.4000` / `[golden-bless]
+> identity moved within epsilon 0.005 (noise -- reference unchanged) --
+> cosine.sad: +/-0.0014, cosine.excited: +/-0.0009, cosine.angry: +/-0.0004,
+> cosine.whisper: +/-0.0001, max: +/-0.0001` / `[golden-bless] loudness_dbfs
+> moved BEYOND epsilon 0.4 (FORCED by GOLDEN_REBLESS_MEASUREMENTS) -- angry:
+> +/-3.5000, excited: +/-1.6500, neutral: +/-1.6300, sad: +/-1.1700, whisper:
+> +/-0.9200`. The second line is the exact shape owed: a within-epsilon noise
+> echo fired while the `identity` block stayed byte-identical in the written
+> file (only the forced fields moved). #2066 follow-up from these runs: every
+> per-leaf identity delta this session was ≤ 0.0014 — the 2026-09-06
+> `angry` +0.0052 clearance did NOT recur, so this run adds no evidence that
+> `IDENTITY_COSINE_EPSILON` is too tight for identity (loudness noise, by
+> contrast, ±0.9–3.5 dB under sibling load, blows past its 0.4 ε
+> routinely). All baseline writes from the forced bless (`instruct-baseline`'s
+> `rtf_max`→2.4, `rtf.batched`→1.5841, new loudness figures) and the Kokoro
+> re-bless were reverted before committing — the commit here is docs-only.
+> Honest caveat kept: the box was NOT quiet this session (sibling heartbeat
+> agents held GPU compute throughout), so bullet 1's uncontended-routine-bless
+> completing with zero flags remains undemonstrated on this box — both of
+> today's unflagged-or-partially-forced attempts refused before the echo point,
+> exactly the known `rtf_max` noise behavior. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/a20-accept-echo-2026-09-21.md`
+> + raw run logs under `a20-accept-echo-2026-09-21/`.
+
+*Needs:* Kokoro weights on disk, a box quiet enough that `--bless` measures a
+stable, reproducible value (no concurrent GPU work), and permission to
+hand-edit a baseline JSON for the refusal drill (revert before committing).
+*Criteria:* this row; PR #2032's own mutation-verification table is the
+synthetic-fixture half of the evidence, this row is the real-file half.
+*Cost:* short — one clean bless, one deliberately-broken bless, one
+deliberately-broken Kokoro run; well under an hour total.
+
+---
+
 ### A21 · Cast-time clone-readiness gate — the fixes actually fix ([#1980](https://github.com/dudarenok-maker/Castwright/issues/1980), plan [276](../features/archive/276-cast-time-derivability-warning.md)) · **single 8 GB card + a real cloned voice**
 
 > **PARTIALLY discharged 2026-09-06 — NOT fully discharged (1 sub-check
@@ -4713,6 +4962,213 @@ load that splits, one genuinely-too-big load that doesn't, one
 > guidance: the three live bullets need a Linux/non-WDDM box where
 > `nvidia-smi --query-compute-apps` reports numeric `used_memory`.
 
+### A105 · Qwen base17 eviction guard and _DEVICE_LEDGER serialization ([#2752](https://github.com/dudarenok-maker/Castwright/issues/2752), PR [#2790](https://github.com/dudarenok-maker/Castwright/pull/2790)) · **single 8 GB GPU card, Qwen VoiceDesign 1.7B resident, real sidecar with base17 weights**
+
+> **2026-09-25 — narrowed, NOT discharged (owner decision, Castwright#3402).**
+> Bullets 1 and 5 are fully CONFIRMED on real hardware, 2026-09-06/08 note
+> below. Bullet 2's literal 200-not-500 claim is confirmed, but the
+> criterion's ~3.4 GB-freed observation was never actually seen: the only
+> race driven (2026-09-22 note below) hit the no-op case, where `/unload`
+> arrives before `_base17` is assigned — it returned 200 in 14.4 ms while the
+> racing `/load` completed uninhibited and the model stayed resident until
+> the ordinary idle watchdog freed it later, so nothing was freed by the
+> Stop call itself. Bullet 3's first direction (Kokoro pauses for a same-card
+> design forward) is CONFIRMED on real hardware; its second direction (Kokoro
+> must NOT pause for a base17-eviction-only wait) was closed only by
+> mocked-torch unit tests
+> (`docs/testing/onbox-mechanical-batch2-results/step-2-qwen-lifecycle.md:1622-1711`),
+> never by a live on-box repro — diagnosed as structurally impossible over
+> real HTTP, not just hard to time — so it stands as a from-source/unit-test
+> closure, not an on-box PASS. **Bullet 4 — a VoiceDesign forward and a
+> Kokoro synth never co-reside, repeated with TWO overlapping designs —
+> remains owed.** It FAILED on hardware 2026-09-08, filed as
+> [Castwright#3086](https://github.com/dudarenok-maker/Castwright/issues/3086):
+> a raw Kokoro `/synthesize` call completed in 44.11 s while both designs
+> were still in flight. The #3086 fix (commit `6e31b0c0`, PR #3142) ruled the
+> observed `/synthesize` path out by tracing and instead fixed `/load`; the
+> only on-box re-run since (A107) drove a single design against a raw
+> `/load`, not the observed co-residency path or the two-overlapping-designs
+> refcount shape this bullet asks for. No on-box PASS exists for bullet 4.
+
+PR #2790 (two rounds of independent review) improves base17 co-residency safety in `design_voice()`:
+the eviction guard now checks both `self._base17 is not None` and
+`self._base17_in_flight.busy` (closing the #1156-shape OOM where in-flight-but-unassigned
+base17 load was invisible); `unload_base17()` at `wait_seconds<=0` unconditionally nulls
+without waiting (restoring "Stop always succeeds"); base17 eviction wait moved outside
+the VoiceDesign block to avoid stalling concurrent Kokoro synths; and `design_voice()`
+now serializes via `_DEVICE_LEDGER.card_lock()` during the evict-through-VoiceDesign-load
+span to close a race where concurrent `mint_variant()` could reload base17 mid-eviction.
+Unit tests cannot prove VRAM co-residency, eviction ordering, or Stop-button success
+against the real model weights and sidecar lifecycle.
+
+**Extended by #2809 / PR [#2810](https://github.com/dudarenok-maker/Castwright/pull/2810).**
+PR #2790 left `_VD_KOKORO.design()` closing *before* the VoiceDesign GPU forwards, so
+Kokoro was not actually excluded during the forward the exclusion exists for; #2809
+widened the arbiter to span the forwards while keeping `card_lock` released across them
+and the base17 eviction outside the arbiter. That inverts this row's third criterion
+(Kokoro is now *expected* to pause for a design forward) and adds two more — the
+co-residency observation the widening restores, and a lock-leak check for the
+`Base17ContentionTimeoutError` path, where a `card_lock` acquired before the eviction was
+never released.
+
+- **Widened eviction guard prevents OOM in #1156 scenario.** On a single 8 GB GPU,
+  start a mint (`mint_variant()`) or a 1.7B synth so base17 begins loading — while
+  that load is in flight (`_base17_in_flight.busy`, `_base17` still `None`), trigger a
+  `design_voice()` call for a character on the same card. Confirm neither triggers an
+  OOM: the widened guard's check of `_base17_in_flight.busy` (not just
+  `self._base17 is not None`) makes `design_voice()` wait for the in-flight base17
+  load to clear before proceeding into the VoiceDesign load, instead of missing it
+  and letting both heavy models co-reside.
+- **Stop button works mid-base17-load.** While base17 is loading (mid-mint or
+  mid-1.7B-synth, `_base17_in_flight.busy` true), call `POST /unload` with body
+  `{"engine":"qwen","model":"1.7b"}` (or click Stop in the UI). Confirm the call
+  returns 200/success — not a 500 — and logs show the model unloaded immediately
+  (not waiting or raising), and `nvidia-smi` memory usage drops by ~3.4 GB (the
+  base17 1.7B model freed), proving the unconditional null at `wait_seconds<=0`
+  succeeded rather than the pass-1 regression (raising `Base17ContentionTimeoutError`
+  and freeing nothing).
+- **Bulk design run stalls Kokoro for the VoiceDesign forward — and ONLY for that.**
+  (Reworded by #2809 / PR #2810, which corrected the arbiter's scope. The two halves
+  below are deliberately opposite; a pass needs both.) With Kokoro resident, start a
+  design run (bulk "Design full cast" or repeated single-character designs), and
+  concurrently request a chapter render on a Kokoro voice in the same book.
+  - *Kokoro MUST pause while any design holds the arbiter.* `_VD_KOKORO.design()`
+    spans model load **through the GPU forwards** since #2809, so a Kokoro sentence
+    overlapping a design is expected to block until the arbiter clears. Before
+    #2809 the arbiter closed before the forwards, and this pause did not happen.
+    **A render that sails through a design forward unpaused is the FAILURE here —
+    the length of the wait is not.** During a bulk run whose design spans overlap
+    back-to-back, the arbiter can stay held for most of the run (measured at
+    #2809 pass 4: Kokoro waited 6.5 s against a 1 s design span, i.e. essentially
+    the whole run), because the refcount only reaches zero when the LAST design
+    leaves and the wait is unbounded. That is the price of the exclusion, not a
+    defect, and serialising designs would not shorten it. Record the wait you
+    observe; only escalate if a chapter render actually FAILS — the ceilings are
+    `SYNTH_CALL_TIMEOUT_MS` (600 s) and `CHAPTER_NO_PROGRESS_MS` (720 s), neither
+    of which has been reached in practice.
+  - *Kokoro MUST NOT pause for the base17 eviction wait.* That wait can run up to
+    `_BASE17_CONTENTION_WAIT_S_DEFAULT` (~150 s) and stays deliberately OUTSIDE the
+    arbiter (#2070 review R5). A Kokoro sentence blocking for tens of seconds while
+    the log shows only "Evicting resident/in-flight Qwen 1.7B-Base" — with no design
+    forward yet in flight — is a FAILURE.
+- **A VoiceDesign forward and a Kokoro synth never co-reside on the card.**
+  (Added by #2809 / PR #2810 — the property the reworded bullet above exists to
+  protect, observed directly rather than by wall-clock inference.) During the same
+  overlap, sample `nvidia-smi` (or the sidecar's own device log) across a design
+  forward that a Kokoro request arrives during. Confirm the card never shows the
+  Kokoro model and the VoiceDesign 1.7B resident simultaneously — the Kokoro synth
+  starts only after the design forward has completed and the arbiter has cleared.
+  **Repeat with TWO designs overlapping** (two characters designed back-to-back so
+  their spans interleave — the bulk "Design full cast" shape). The arbiter
+  refcounts its holders since #2809 pass 3, so Kokoro must stay blocked until the
+  **last** design leaves, not the first: a Kokoro synth admitted while a second
+  design is still forwarding is the exact regression that criterion guards.
+- **A failed base17 eviction does not wedge the card.** (Added by #2809 / PR #2810.)
+  Drive a `design_voice()` into the `Base17ContentionTimeoutError` path — start a
+  base17 load and trigger a design against it such that the bounded wait expires
+  (lower `_BASE17_CONTENTION_WAIT_S_DEFAULT` if needed to reach it). Confirm the
+  design fails with that error AND that the **next** design and the next
+  `mint_variant()` on the same card still run normally rather than failing/hanging on
+  the per-card lock. `card_lock` instances are cached for the process lifetime, so a
+  leak here is only observable as "every later design on this card fails until the
+  sidecar restarts" — which is exactly what a green next-design proves absent.
+
+*Needs:* single 8 GB GPU card, Qwen base17 weights (`server/tts-sidecar/voices/qwen/base17/`),
+Qwen VoiceDesign 1.7B model, real sidecar, Kokoro resident for the third and fourth criteria.
+*Criteria:* the five bullets above — no separate run sheet.
+*Cost:* moderate — concurrent-load/eviction scenarios + VRAM observation, plus one
+forced-contention run for the lock-leak criterion.
+
+> **Run 2026-09-06/08 (batch 2 step 2, claude) — bullets 1, 3, and 5 fully
+> CONFIRMED on real hardware; bullet 2 (Stop button) confirmed only for its
+> literal 200-not-500 claim, with the deeper unload-mechanism question still
+> open; the co-residency bullet FAILED and is narrowed to point at the new
+> bug it surfaced.** Across the same 18-run on-box session as A24 above
+> (`docs/testing/onbox-mechanical-batch2-results/step-2-qwen-lifecycle.md`):
+> the widened-eviction-guard/#1156 bullet is confirmed (a fresh design
+> correctly waited for/evicted an in-flight base17 load with no OOM); the
+> Stop-button-mid-base17-load bullet is confirmed **only for its literal
+> claim** — `/unload` returned 200 immediately, and separately the in-flight
+> load it raced was not aborted by the race, matching this bullet's own
+> 200-not-500 ask — but this run's timing did NOT prove the deeper claim
+> implied by "immediate unload in the logs": whether `unload_base17()`'s
+> bounded wait actually holds up completion of the racing `/load`, or
+> whether `/unload` arriving before `_base17` is assigned is simply a no-op
+> with nothing to null yet, since both produce the identical external HTTP
+> result; that unload-mechanism question stays owed
+> (`docs/testing/onbox-mechanical-batch2-results/step-2-qwen-lifecycle.md:191-206`);
+> the bulk-design
+> Kokoro-pause bullet is confirmed **for both required directions** — Kokoro
+> paused for a same-card VoiceDesign forward through the full forward (not
+> just the load), and (via the codebase's own existing white-box unit
+> coverage, `test_qwen_design_base17_exclusion.py` +
+> `test_mint_variant_kokoro_stall.py` + `test_base17_contention.py`, 10/10
+> passing — a live HTTP-level repro of this specific direction was diagnosed
+> as structurally impossible on this server's real request-handling model, not
+> just hard to time) did NOT pause for a base17-eviction-only wait; and the
+> failed-base17-eviction/lock-leak bullet is confirmed **both halves** — the
+> `Base17ContentionTimeoutError`/503/`base17_in_flight` contention claim
+> reproduced 4 times with the exact documented error text, and the
+> no-leak claim confirmed via a design-vs-design race (a fresh design
+> acquired the lock immediately and ran to completion with zero rejections
+> right after the contended pair resolved). **The co-residency
+> bullet FAILED:
+> a real, live repro (two raw `design-voice` calls confirmed genuinely
+> overlapping via `/health` polling, then a raw Kokoro `/synthesize` call
+> fired while both were still resident) showed the Kokoro call completing in
+> 44.11s while BOTH designs were still in flight (their own HTTP completions,
+> an authoritative lower bound on how long they held the arbiter, landed
+> 20-50s later) — directly contradicting `_VdKokoroArbiter`'s documented
+> contract and `KokoroEngine.synthesize()`'s own "never let this Kokoro
+> forward overlap a VoiceDesign forward" claim, with every no-op explanation
+> (device-sharing off, wrong build) ruled out from source.** Filed as
+> [Castwright#3086](https://github.com/dudarenok-maker/Castwright/issues/3086)
+> rather than silently fixed or dropped. **This row now stays open for
+> #3086's own co-residency criterion and for the Stop-button bullet's
+> unresolved unload-mechanism question** — the other three bullets (widened
+> eviction guard, bulk-design Kokoro-pause both directions,
+> failed-eviction/lock-leak) are fully discharged and don't need re-running;
+> the Stop-button bullet's literal 200-not-500 claim is discharged, but the
+> deeper unload-mechanism question is not and does not need re-running
+> either — it needs a sidecar log line (or a deliberately landed race) to
+> distinguish the two cases, per the source evidence above.
+>
+> **Note 2026-09-22 (#3308, cline-qwen-cloud, OE run 922, `chore/ops-onbox-batch-1`) —
+> A105 DISCHARGED: the Stop-button bullet's unload-mechanism question is RESOLVED
+> (case 2, no-op) by a deliberately landed race, and the co-residency criterion is
+> DISCHARGED by #3086's closed-completed resolution.** Co-residency half: #3086 was
+> closed 2026-09-11 as completed via the arbiter-fix chain (#3099–#3119, #3142, #3159,
+> #3166 — all closed, final corrective commits `6e31b0c`→`34f11b9`); per #3308's own
+> instruction ("anything already CONFIRMED/PASS/DISCHARGED elsewhere stays as-is — do
+> not retry") that closure is inherited here, not re-run. Unload-mechanism half, driven
+> fresh on this box against a dedicated log-captured sidecar instance (port 9417, this
+> worktree's venv, stdout/stderr to files):
+>
+> - **Source:** `POST /unload {"engine":"qwen","model":"1.7b"}` → `main.py:11746` calls
+>   `qwen.unload_base17()` with NO arguments → `wait_seconds=0.0` → only the
+>   unconditional-null branch (`main.py:6840-6850`) is reachable from the Stop route, and
+>   it early-`return`s a true no-op when `_base17` is still `None`. The bounded-wait
+>   branch (`wait_seconds>0`, which would hold up and then null a finished load) has
+>   exactly one caller — `design_voice()`'s contention guard (`main.py:7587`) — i.e. the
+>   hold-up case belongs to #3086's co-residency path, not to `/unload`.
+> - **Observation:** raced `/load` 1.7B in flight (`/health` at the instant:
+>   `qwen_loading: true`, `qwen_base17_loaded: false`, `committed≈3384MB` pre-load) →
+>   `POST /unload` returned **HTTP 200 `{"status":"idle"}` in 14.4 ms** (a hold-up case
+>   would have blocked for seconds); the racing `/load` completed uninhibited — HTTP 200
+>   `ready` in 15.95 s, log `Loading Qwen 1.7B-Base model=Qwen/Qwen3-TTS-12Hz-1.7B-Base
+>   on cuda:1 …` @ 20:03:04.621 → `Qwen 1.7B-Base loaded.` @ 20:03:20.451 — and the model
+>   was demonstrably resident afterwards, evicted only by the ordinary idle watchdog
+>   (`Qwen 1.7B-Base unloaded (idle watchdog).` @ 20:03:37.703, `committed` back to
+>   3927MB).
+> - **Verdict:** case 2 confirmed observationally on real weights — `/unload` arriving
+>   before `_base17` is assigned is a no-op that returns 200 immediately and neither
+>   aborts nor holds up the racing `/load`; no null-after-load happened (the only
+>   post-load eviction was the documented TTL watchdog). No code change needed; the
+>   "Stop always succeeds" guarantee holds. (Box was 2-card at run time; the
+>   lock-branch question is device-count-independent.) All five bullets now stand:
+>   1, 3, 5 CONFIRMED 2026-09-06/08; 2's literal 200-not-500 claim confirmed then and
+>   its mechanism question resolved above; co-residency bullet discharged by #3086.
+
 ### A106 · X-Device-Hint lazy Coqui derive request signaling ([#3058](https://github.com/dudarenok-maker/Castwright/issues/3058), PR [#3061](https://github.com/dudarenok-maker/Castwright/pull/3061)) · **2-card boot (8 GB + 16 GB), Coqui XTTS NOT yet resident (cold-load), no `COQUI_DEVICE` pin**
 
 A real chapter render from a server nobody has customized via Advanced Settings, on a
@@ -5418,7 +5874,7 @@ D1's five languages, which are done.
 
 <!-- next-id: E108 -->
 
-Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9/E103). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
+Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
 ### E1 · ops-16 Pinokio installer ([#822](https://github.com/dudarenok-maker/Castwright/issues/822)) · **macOS is the gap**
 
@@ -5833,9 +6289,11 @@ node(vitest) -> N forks`) to exhibit that specific race.
   and confirm that fork survives the subsequent `taskkill /PID <root> /T /F`
   — then confirm `runCensus({ kill: true, killReasons:
   ['orphaned-unreachable'] })`, invoked immediately after the kill, catches
-  and reaps that survivor (this is the sweep Part 3's reaper already proves
-  in isolation at **E104** above; this row is specifically about the
-  hand-off from Part 2's timeout kill into it, on a real tree).
+  and reaps that survivor (this is the sweep Part 3's reaper (ops-71,
+  `scripts/reap-stale-batteries.mjs`, formerly row E104, discharged 2026-09-25
+  and removed from the register) already proves in isolation; this row is
+  specifically about the hand-off from Part 2's timeout kill into it, on a
+  real tree).
 - Confirm the whole-pipeline `CASTWRIGHT_RUN_TIMEOUT_MIN` budget actually
   bounds a real multi-step `verify` run — start one with a tiny override and
   confirm it aborts with `[timeout]` well before the 4h34m incident figure
