@@ -103,7 +103,7 @@ server, letting it manage/adopt the one sidecar. Probe 2, run against the
 now-single-sidecar setup, completed cleanly end to end (6 attempts, zero
 transport errors).
 
-## Row A32 — Named-entity decode reaches the TTS engine on a real EPUB (#2310)
+## Row A32 (discharged 2026-09-25, removed from the register) — Named-entity decode reaches the TTS engine on a real EPUB (#2310)
 
 **Method:** hand-built a minimal, valid, throwaway EPUB (`mimetype` +
 `META-INF/container.xml` + OPF/NCX/two XHTML chapters, structurally identical

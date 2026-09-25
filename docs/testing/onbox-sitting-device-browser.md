@@ -6,9 +6,11 @@
 > Plan of record: [`docs/testing/onbox-sitting-plan.md`](onbox-sitting-plan.md)
 > §5 (pack format), §4.7 (this sitting's place in the order).
 > Register rows: [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
-> E1, E2, E3, E5, E6, E7, E8. (E6/E7/E8 here are the rows numbered that way
-> as of wave 4, 2026-08-21 — see the correction note below for the mapping
-> from the old numbers this file was originally written against.)
+> E1, E2, E3, E5. This pack also carried E6, E7 and E8 (the rows numbered
+> that way as of wave 4, 2026-08-21 — see the correction note below for the
+> mapping from the old numbers this file was originally written against):
+> E6 and E8 were discharged 2026-09-06 and E7 2026-09-08, all removed from
+> the register; their steps below are kept for the historical run record.
 > Feature plans: [`218-pinokio-installer.md`](../features/218-pinokio-installer.md) (E1),
 > [`250-lan-https-default.md`](../features/250-lan-https-default.md) (E2),
 > [`256-lan-pair-from-friendly-hostname.md`](../features/256-lan-pair-from-friendly-hostname.md) (E3),
