@@ -26,16 +26,16 @@
 > fails for entirely the wrong reason.
 >
 > **Running time total (recomputed):** **~155 minutes** — A5 ≈ 20, A19 ≈ 20,
-> A20 ≈ 25, A24 ≈ 20, A26 ≈ 15, A31 ≈ 10, A32 ≈ 15 (subtotal 125), plus **A16
+> A13 ≈ 25, A24 ≈ 20, A26 ≈ 15, A31 ≈ 10, A32 ≈ 15 (subtotal 125), plus **A16
 > ≈ 15** (runs in the same session — its book/cast precondition is already
-> met by A19/A5/A20's fixture) and **A33 ≈ 15** (also rides the same session's
+> met by A19/A5/A13's fixture) and **A33 ≈ 15** (also rides the same session's
 > ASR pass, folded into no separate block). 125 + 15 + 15 = **155**, matching
 > the plan of record's stated total for this pack exactly
 > ([`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1).
 >
-> **A19/A5/A20/A24 share one session by design** — same card, same
+> **A19/A5/A13/A24 share one session by design** — same card, same
 > mixed-cast non-English book, and A19 already stages the Qwen+Coqui
-> co-residency A20's first bullet needs (register `:969`, run sheet §2). Do not
+> co-residency A13's first bullet needs (register `:969`, run sheet §2). Do not
 > give them separate sittings.
 
 > **A5 was discharged on 2026-09-06 and removed from the register** — bullets 1–4 PASS (via a real product fix to `generation.ts`'s per-chapter fallback gate, which hard-failed every non-English book regardless of Coqui eligibility), bullet 5 N/A / superseded. The ID is kept here as a historical citation under the register's "annotate, don't renumber" rule.
@@ -59,7 +59,7 @@ Stated once for the sitting; do not repeat per row.
       are actually in effect.
 - [ ] **A mixed-cast non-English book loaded** — the Russian Coalfall chapter,
       with one designed-Qwen character and one undesigned character that falls
-      back to Coqui (the fixture A19/A20/A5/A24/A16 all name). This also
+      back to Coqui (the fixture A19/A13/A5/A24/A16 all name). This also
       satisfies A16's "open a real Russian book's cast view" precondition and
       A5's "Russian book with an undesigned character" precondition.
 - [ ] **`SEG_CAPACITY_ADMISSION=1`** (the default) and **Qwen as the generation
@@ -85,9 +85,9 @@ Stated once for the sitting; do not repeat per row.
 ## Procedure
 
 Ordered so shared setup happens once and engine swaps happen as few times as
-possible. A19 → A20 (with A33 riding) → A5 → A16 run as one mixed-cast session
+possible. A19 → A13 (with A33 riding) → A5 → A16 run as one mixed-cast session
 on the same card and book, because A19 stages the Qwen+Coqui co-residency
-A20's first bullet needs, A5 and A16 already share the Russian-book fixture,
+A13's first bullet needs, A5 and A16 already share the Russian-book fixture,
 and A16's banner/auto-load check is a near-zero-cost add to a session that
 already has the book open. A26 follows the same session's completed renders
 (its stranded pool is exactly what a finished chapter leaves behind). A24
@@ -136,13 +136,13 @@ up.
 > default. None of the four on-box bullets has been exercised — this row
 > carries no observation block at all.
 
-3. **(A20.1) Idle reclaim admits a blocked Qwen op.** Load Coqui from the UI so
+3. **(A13.1) Idle reclaim admits a blocked Qwen op.** Load Coqui from the UI so
    it is resident, then start a Qwen-only render that would not otherwise fit
    on the 8 GB card. Observe: the render **proceeds** and the sidecar log
    carries `Coqui model unloaded.`; record whether the reclaimed ~3 GB actually
    admitted the op, or was immediately taken by something else.
    - Result:
-4. **(A20.2) Chapter-boundary TTL observation.** Render the mixed Qwen+Coqui
+4. **(A13.2) Chapter-boundary TTL observation.** Render the mixed Qwen+Coqui
    book and watch the chapter boundaries. Observe which it is: an
    **evict→reload cycle repeating across chapters** means `COQUI_IDLE_TTL` is
    too short (each reload ~90 s); a render that still fails `NoCapacityError`
@@ -150,7 +150,7 @@ up.
    interval between the evict and the next Coqui use, so the default can be
    moved off 30 s with evidence rather than a guess.
    - Result:
-5. **(A20.3) Stop-button crash fix + control timing.** Press **Stop** on Coqui
+5. **(A13.3) Stop-button crash fix + control timing.** Press **Stop** on Coqui
    while a chapter is rendering through it. Observe: the chapter continues to
    **completion** (before #1894 this could kill it with
    `AttributeError: 'NoneType' object has no attribute 'tts'`). Record what the
@@ -249,7 +249,7 @@ up.
 > #1993 merged 2026-07-31T09:22:51Z. STILL OWED.
 
 9. **(A26) Stranded-pool reclaim + the two C1 guards.** Using the chapter
-   render just completed in A19/A20/A5 (or A16), let the engine report
+   render just completed in A19/A13/A5 (or A16), let the engine report
    unloaded and confirm via `nvidia-smi` and `GET /api/sidecar/health`'s
    `vramReservedMbByDevice` that a reserved-but-unallocated pool is left
    behind (~3.9 GB on this 8 GB card is #1976's own measured shape). With that
@@ -336,12 +336,12 @@ up.
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:2088-2127`;
 > the `asr.warm` seed comment in `SEED_FOOTPRINTS_MB` and `_device_free_mb`'s
 > docstring (`server/tts-sidecar/main.py`). Re-resolved: #2094 closed
-> 2026-08-05T05:54:36Z. STILL OWED. **Rides along with A20** — this step reuses
+> 2026-08-05T05:54:36Z. STILL OWED. **Rides along with A13** — this step reuses
 > the same rendered chapter and warm sidecar; no separate sitting block.
 
 12. **(A33) Resident ASR under repeated `/transcribe`.** With
     `ASR_DEVICE=cuda` and `SEG_ASR_ENABLED=1` set (per Preconditions), and
-    using the chapter already rendered in A19/A20, trigger several
+    using the chapter already rendered in A19/A13, trigger several
     `/transcribe` calls back-to-back (a re-record round is the natural
     trigger). Confirm none 503 `noCapacity` on a card that has genuine room.
     Watch `FootprintTable`'s learned `asr.warm` p95 after ≥5 real observations
@@ -364,7 +364,7 @@ state on 2026-08-19 and remain owed:
 - **A19** — `gh issue view 1893` → closed 2026-07-27T23:44:24Z; `gh pr view
   1898` → merged 2026-07-27T23:44:23Z. Forced-evict scenario confirmed never
   run. STILL OWED.
-- **A20** — `gh issue view 1894` → closed 2026-07-28T05:48:34Z; `gh issue view
+- **A13** — `gh issue view 1894` → closed 2026-07-28T05:48:34Z; `gh issue view
   1921` → closed 2026-07-28T11:27:04Z. `_COQUI_IDLE_TTL_DEFAULT = 30.0`
   confirmed still the shipped default in `tts-sidecar/main.py`. STILL OWED.
 - **A24** — `gh issue view 1919` → closed 2026-07-31T00:32:59Z. Run sheet

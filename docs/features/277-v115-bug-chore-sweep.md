@@ -970,7 +970,7 @@ against what actually still needs measuring before it is re-briefed, not
 copied forward as-is. **Correction (found while auditing live worktrees for
 this update):** a separate, parallel on-box acceptance campaign (tracked by
 #2435, not this sweep's Group 8 list) ran waves 6 through 9 in this same
-window — PRs #2679 (wave 6, rows A19/A20/A24/A26/A31–A33), #2693 (wave 8,
+window — PRs #2679 (wave 6, rows A19/A13/A24/A26/A31–A33), #2693 (wave 8,
 rows A34–A37, A34 since discharged and removed from the register), and
 #2658/#2664 (A46, for #2656) all merged 08-25 → 08-27.
 None of those waves' rows overlap this sweep's own tracked Group 8 items,

@@ -47,7 +47,7 @@ sitting; A1 is several sittings inside one pack.
 | Pack file | Rows (each pack file's own current heading labels) | Est. min |
 |---|---|---|
 | [`onbox-sitting-two-card-boot.md`](onbox-sitting-two-card-boot.md) | A2, A3, A8, A18 | 110 |
-| `onbox-sitting-vram-contention.md` | A5, A16, A19, A20, A24, A26, A31, A32, A33 | 155 |
+| `onbox-sitting-vram-contention.md` | A5, A16, A19, A13, A24, A26, A31, A32, A33 | 155 |
 | `onbox-sitting-voice-design.md` | A4, A6, A7, A14, A15, A17, A27 | 155 |
 | `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A34 | 145 |
 | `onbox-sitting-cloning-identity.md` | A23, A25, A28, A29, A30, A39, A40, A41, A42 | 185 |
@@ -334,7 +334,7 @@ the audit's own evidence contradicts it:
 Qwen is a GPU-resident model; "Qwen loads" means it loads into VRAM. "Analyzer
  evicted" is VRAM contention — the analyzer is reclaimed to make room for Qwen.
 That is unambiguous GPU work, identical in kind to the eviction rows in the
-VRAM-contention pack (A19 mixed Qwen+Coqui evict, A20 idle Coqui reclaimed under
+VRAM-contention pack (A19 mixed Qwen+Coqui evict, A13 idle Coqui reclaimed under
 VRAM pressure, A24 `/health` through a contended eviction, A26 stranded VRAM
 pool reclaimed). The audit's `no GPU` field appears to have followed the row's
 *frontend* framing ("open a cast view, see a banner") rather than what the

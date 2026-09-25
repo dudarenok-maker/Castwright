@@ -647,8 +647,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > tool correctly prints `KILL FAILED` rather than a false `KILLED` on that
 > signal (`scripts/reap-stale-batteries.mjs`'s `killTree()`), so nothing
 > misreports success, but a genuinely-successful kill still reads as a
-> failure in the log. Not filed as a separate issue by this PR; flagged here
-> for whoever next touches `killTree()`'s exit-code handling.
+> failure in the log. **Filed as issue [#3403](https://github.com/dudarenok-maker/Castwright/issues/3403) and fixed in PR [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404).**
 >
 > This branch diverged from the register at 55 owed (Group A 35, Group E 10).
 > Net effect of this change: 55 → 50 owed, Group A 35 → 32 (five Group-A rows

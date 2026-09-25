@@ -1201,8 +1201,8 @@ git commit -m "fix(frontend): show a Stopping state while the voice engine unloa
 
 **Files:**
 - Modify: `docs/release-notes-next.md`, `RELEASE_NOTES.md`
-- Modify: `docs/testing/onbox-acceptance-register.md` (row A20 criteria; the #1894 row, since renumbered A13)
-- Modify: `docs/superpowers/specs/2026-07-28-coqui-residency-eviction-design.md` (§6, the criteria home A20 (the #1894 row, since renumbered A13) points at)
+- Modify: `docs/testing/onbox-acceptance-register.md` (row A13 criteria; the #1894 row, since renumbered A13)
+- Modify: `docs/superpowers/specs/2026-07-28-coqui-residency-eviction-design.md` (§6, the criteria home A13 (the #1894 row, since renumbered A13) points at)
 - Modify: `docs/superpowers/specs/2026-07-28-sidecar-evict-hardening-design.md` (Ship notes)
 - Check: `docs/wiki/Advanced-Settings.md` — only if a task added a registry knob (none should have)
 
@@ -1215,9 +1215,9 @@ the Stop button: it now says "Stopping…" and waits, instead of reporting an
 error and stopping anyway a minute later. The other three are invisible
 correctness fixes — say so in the technical register, not in the user-facing one.
 
-- [ ] **Step 2: Update A20's criteria, in both places it lives**
+- [ ] **Step 2: Update A13's criteria, in both places it lives**
 
-A20 currently asks the tester to *record what the Stop control reports* during a
+A13 currently asks the tester to *record what the Stop control reports* during a
 render, because the behaviour was unresolved. It is resolved now. Update the row
 in `docs/testing/onbox-acceptance-register.md` AND the matching criteria in the
 predecessor spec's §6 so the two surfaces agree — that exact drift was a real
@@ -1244,7 +1244,7 @@ Fill the new spec's Ship notes with the date and the merge SHA once known
 
 ```bash
 git add docs/ RELEASE_NOTES.md
-git commit -m "docs(docs): record the evict-hardening fixes and refresh A20's criteria"
+git commit -m "docs(docs): record the evict-hardening fixes and refresh A13's criteria"
 ```
 
 ---
