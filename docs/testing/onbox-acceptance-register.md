@@ -553,21 +553,37 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**50 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**53 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-25, A17/A32/A107/E103/E104 DISCHARGED and removed;
+> **Last change: 2026-09-25, E108/E109/A111 ADDED** (#3403, #3406, PR
+> [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404)): three
+> rows this same PR owes. **E108** carries forward E104's own unproven
+> bullet 3 (the push-path `KILLED` print) against the fix for
+> [#3403](https://github.com/dudarenok-maker/Castwright/issues/3403) — a
+> `taskkill /T` nonzero exit no longer means the kill failed by itself, only
+> a re-checked whole-tree liveness probe does. **E109** is the POSIX
+> `stop:prod` async-shutdown grace period the same PR's review pass 2 found
+> and fixed (no issue of its own — found and fixed in the same round).
+> **A111** is the real-installed-release-zip row [#3406](https://github.com/dudarenok-maker/Castwright/issues/3406)
+> owes: the manifest omission that left Windows sleep prevention inert and
+> `stop:prod` crashing on a real zip install, closed by the same PR but
+> unprovable without a packaged release directory this box doesn't have.
+> 50 → 53 owed, Group A 32 → 33, Group E 8 → 10. `next-id` bumped E108 →
+> E110 and A111 → A112 in the same change.
+>
+> **Prior change: 2026-09-25, A17/A32/A107/E103/E104 DISCHARGED and removed;
 > A20/A105 restored, narrowed (owner decision)** (#3294, PR
 > [#3402](https://github.com/dudarenok-maker/Castwright/pull/3402); the
 > on-box runs themselves happened under PR
@@ -1564,7 +1580,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A111 -->
+<!-- next-id: A112 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -5428,6 +5444,52 @@ question — these criteria only measure `large-v3`. `docs/local-llm.md`'s
 tier table flags `medium`'s reservation as likely ~2x over-sized; that gap
 is not covered by this row and isn't tracked elsewhere.
 
+### A111 · A real installed release-zip exercises the restarter, `stop:prod`, and Windows sleep prevention ([Castwright#3406](https://github.com/dudarenok-maker/Castwright/issues/3406), PR [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404)) · **a real installed `castwright-vX.Y.Z.zip`, Windows for the sleep-prevention leg; no GPU strictly needed but a real render exercises it end-to-end**
+
+#3406 (filed in PR #3404's own review, pass 2) found `scripts/build-release-zip.mjs`'s
+MANIFEST omitted `scripts/lib/` files that shipped scripts import: the
+already-published v1.14.0 zip shipped `server/src/system/prevent-sleep.ts`
+spawning a `scripts/lib/prevent-sleep.ps1` that was never in the box, so
+Windows sleep prevention was silently inert during every render on that zip;
+`stop-app.mjs`'s `./lib/sidecar-sweep-port.mjs` import and `stop-app.ps1`'s
+two `.psm1` imports were in the same state, so `npm run stop:prod` crashed
+outright on a zip install rather than stopping anything. PR #3404 fixes all
+of this (all six now-identified stray relative imports ship, plus the new
+`scripts/lib/pid-alive.mjs` this same PR adds), and adds a static
+`scripts/tests/release-manifest.test.mjs` guard so a future hoisted helper
+can't repeat it silently — but that guard only proves every import
+*target* is present in the zip, never that the code importing it actually
+runs correctly once unpacked and installed for real. **No packaged release
+directory exists on this box** (confirmed exhaustively for A30, same
+conclusion applies here), so none of this has been driven end-to-end against
+a real install.
+
+**What to observe, concretely**, on a real installed `castwright-vX.Y.Z.zip`
+built from a commit at or after this PR:
+
+- **The in-app upgrade's restarter relaunches the app.** Trigger (or
+  simulate) the in-app upgrade path and confirm the detached restarter
+  (`server/src/upgrade/apply.ts`'s spawn of the release's own restart
+  script) actually brings the app back up — before this fix it crashed at
+  import with `ERR_MODULE_NOT_FOUND` and left the app down until relaunched
+  by hand.
+- **`npm run stop:prod` works.** From the installed release, run it and
+  confirm it prints `[STOP]`/succeeds rather than crashing on a missing
+  `scripts/lib/*` import, and that the server process is actually gone
+  afterward.
+- **Windows sleep prevention actually engages during a render.** Start a
+  real chapter render on this install and, while it is in flight, run
+  `powercfg /requests` and confirm it shows a live `SYSTEM` (or
+  display/execution, per `prevent-sleep.ps1`'s own request type) entry
+  attributable to the running process — not just that the script file is
+  present in the zip.
+
+*Needs:* a real installed release built from this change (its natural moment
+is the next release cut, per CLAUDE.md's release-notes-gate step), Windows
+for the sleep-prevention leg specifically; the other two legs are
+platform-general. *Criteria:* the three observations above; issue #3406 and
+PR #3404's manifest-guard section for the exact defect each leg closes.
+
 ## Group B — local Ollama analyzer only
 
 <!-- next-id: B102 -->
@@ -5924,7 +5986,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E108 -->
+<!-- next-id: E110 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -6443,6 +6505,87 @@ reaches production, and the feature would need the coordinator-set signal
 *Needs:* any dev box that can dispatch a subagent; no GPU. *Cost:* ~20 minutes.
 *Criteria:* the four observations above; `docs/ops/3263-transcript-signal-measurement.md`
 ("Which file this is about") for why each one matters.
+
+### E108 · ops-71 stale-battery reaper — the push-path `KILLED` print on a real orphaned Windows tree ([Castwright#3403](https://github.com/dudarenok-maker/Castwright/issues/3403), PR [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404)) · **any Windows dev box; no GPU needed**
+
+Row E104 (discharged 2026-09-25, removed from the register) drove the reaper's
+report-only census, stalled-rate detection, and `npm run doctor -- --kill`
+paths against real process trees, but its bullet 3 — that a `git push` whose
+**pre-push** census is what reaps an orphan prints
+`reap-stale-batteries: KILLED stale battery pid=… :: <command line>` — was
+**not** observed as specified: two real pushes (pids 38780, 23792) printed
+`KILL FAILED` instead, even though the whole tree was gone seconds later,
+because `killTree()` took its verdict from `taskkill /T`'s own exit code,
+which goes nonzero when a tree member exits mid-walk. On the owner's
+2026-09-25 decision, that unproven bullet moves here rather than discharging
+with the rest of E104 — this row is what's left, now against the fix
+(#3404) rather than the bug.
+
+`killTree` no longer trusts the exit code alone: on a nonzero exit it
+re-checks whether the WHOLE recorded tree (root + every OS descendant
+`runCensus` resolved beforehand) reads gone, via the shared `pid-alive.mjs`
+probe, and only reports `KILL FAILED` if something in that tree is still
+alive. A zero exit is still trusted outright. Unit-tested against a
+synthetic census and a stub `taskkill`; unproven against a real `git push`
+until this row runs.
+
+**What to observe, concretely**, on a Windows dev box:
+
+- Start a real battery that will not exit on its own (e.g. `npm run
+  test:server`), then kill its owning terminal so the whole subtree is
+  orphaned but stays busy or idle past the reaper's thresholds. Run a real
+  `git push` and confirm its pre-push census reaps the orphan, printing
+  `reap-stale-batteries: KILLED stale battery pid=… :: <command line>` on
+  stderr — not `KILL FAILED` — and confirm via `Get-Process` that every PID
+  the census recorded for that root is actually gone afterward.
+- If `taskkill`'s own exit code is visible (e.g. by adding a temporary log
+  line), record it — the fixed code path no longer depends on it being zero,
+  but the real-world value is still useful corroboration.
+- **Negative control:** construct a tree whose root's immediate parent is
+  already dead *before* the kill runs but whose child subtree survives (the
+  E104-recorded race `taskkill /T` cannot see), and confirm this case still
+  lands in `KILL FAILED` — the fix must not paper over a genuinely-incomplete
+  kill by declaring success whenever *any* prior exit happened.
+
+*Needs:* a Windows dev box, no GPU. *Cost:* ~10–15 minutes (mostly waiting out
+the reaper's staleness thresholds).
+*Criteria:* the observations above; issue #3403's repro; E104's own discharge
+note (above) for the exact bug this closes.
+
+### E109 · `npm run stop:prod` on a real POSIX box — the async-shutdown grace period ([PR #3404](https://github.com/dudarenok-maker/Castwright/pull/3404)) · **a Mac or Linux dev box; no GPU needed**
+
+Review pass 2 of PR #3404 found `npm run stop:prod` reported EVERY successful
+stop as a failure on POSIX: the liveness re-check ran the instant after
+`SIGTERM` was sent, but the server's own shutdown is asynchronous (drains,
+reaps the sidecar, then exits), so a stop that was actually succeeding always
+read as still-running and printed `[WARN] … could not be stopped`. `killTree`
+now polls liveness for a bounded grace period (reusing
+`restart-after-upgrade.mjs`'s `waitForExit`) before judging a kill failed, on
+both platforms — proven in the unit suite via a stub process that exits after
+a short delay, never against a real server process exiting for real reasons
+on a real POSIX kernel, which this repo's own dev box (Windows) cannot
+exercise.
+
+**What to observe, concretely**, on a Mac or Linux box, with the app running
+via `npm run start:prod` (or `start-app-prod.mjs` directly):
+
+- Run `npm run stop:prod` and confirm it prints `[STOP]` (not `[WARN] …
+  could not be stopped`) within the grace period, and that the server process
+  is actually gone (`ps`/`pgrep`) once the command returns.
+- Confirm the TTS sidecar the server owns is also gone afterward — `stop:prod`
+  stopping the server without the sidecar reaping in turn is a different,
+  narrower failure than the one this row targets, but worth ruling out in the
+  same run.
+- If practical, repeat once with the server intentionally slowed at shutdown
+  (e.g. a mid-drain chapter) to confirm the grace period is long enough to
+  cover a real, not just instantaneous, shutdown — and that a genuinely wedged
+  process (one that never exits) still eventually reports failure rather than
+  waiting forever.
+
+*Needs:* a Mac or Linux dev box, no GPU, the app running via `start:prod`.
+*Cost:* ~10 minutes.
+*Criteria:* the observations above; PR #3404's stop-app section for the exact
+defect and fix.
 
 ## Group G — GitHub Actions itself
 
