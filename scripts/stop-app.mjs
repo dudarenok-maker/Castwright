@@ -4,6 +4,10 @@
 // terminates the process tree, then sweeps any orphans on this checkout's
 // own configured server + TTS ports (#2632 N39) — never a hardcoded
 // :8080/:9000 that could belong to a different checkout.
+//
+// Importing this module must NOT stop or sweep anything — main() is guarded
+// behind an invoked-directly check (mirrors start-app-prod.mjs), so
+// importing killTree() alone for testing is side-effect-free.
 
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -15,6 +19,8 @@ import {
   getStopSummaryMessage,
   resolveConfiguredServerPort,
 } from './lib/sidecar-sweep-port.mjs';
+import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { pidIsAlive } from './lib/pid-alive.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -31,41 +37,52 @@ function info(msg) {
   process.stdout.write(`${msg}\n`);
 }
 
-function killTree(pid) {
+/** Kill one pid's process tree and classify the outcome by LIVENESS, never
+ *  by taskkill's own exit code (E104: `taskkill /T` reports failure — exit
+ *  128 on Windows — when a child had already exited mid-walk, even though
+ *  the whole tree is actually gone; the reverse also happens, PR #3404
+ *  review pass 1: a nonzero exit when the root itself was never found
+ *  leaves the tree entirely untouched). Probing liveness BEFORE the kill
+ *  attempt runs, not just after, is what lets this tell "already exited"
+ *  apart from "we killed it" apart from "still running" — three distinct
+ *  outcomes the old exit-code-trusting version collapsed into two.
+ *
+ *  Returns:
+ *    - `'gone'`   — `pid` was already dead before this call ran; no kill
+ *                   was attempted.
+ *    - `'killed'` — `pid` was alive beforehand and is confirmed dead now.
+ *    - `'failed'` — `pid` was alive beforehand and is STILL alive now.
+ *
+ *  `kill`/`isAlive` are injectable purely for testing; nothing in
+ *  production passes them. `isAlive` defaults to the shared fail-safe
+ *  scripts/lib/pid-alive.mjs probe (also used by
+ *  scripts/reap-stale-batteries.mjs and scripts/restart-after-upgrade.mjs). */
+export function killTree(pid, { kill = defaultKillAttempt, isAlive = pidIsAlive } = {}) {
+  if (!isAlive(pid)) return 'gone';
   try {
-    if (isWindows) {
-      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
-        stdio: 'ignore',
-        windowsHide: true,
-      });
-    } else {
-      // Negative pid = process group on POSIX. start-app-prod.mjs runs the
-      // child detached so it gets its own group.
-      try {
-        process.kill(-pid, 'SIGTERM');
-      } catch {
-        process.kill(pid, 'SIGTERM');
-      }
-    }
-    return true;
+    kill(pid);
   } catch {
-    return false;
+    // taskkill's own exit code is not trusted (E104) — the outcome is
+    // judged by the liveness re-check below regardless of whether the kill
+    // attempt itself threw.
   }
+  return isAlive(pid) ? 'failed' : 'killed';
 }
 
-let killedAny = false;
-for (const name of ['server', 'tts']) {
-  const pidPath = resolve(runDir, `${name}.pid`);
-  if (!existsSync(pidPath)) continue;
-  const raw = readFileSync(pidPath, 'utf8').trim();
-  rmSync(pidPath, { force: true });
-  const pid = Number.parseInt(raw, 10);
-  if (!Number.isInteger(pid) || pid <= 0) continue;
-  if (killTree(pid)) {
-    info(`[STOP] ${name} pid=${pid}`);
-    killedAny = true;
+function defaultKillAttempt(pid) {
+  if (isWindows) {
+    execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+      stdio: 'ignore',
+      windowsHide: true,
+    });
   } else {
-    info(`[GONE] ${name} pid=${pid} (already exited)`);
+    // Negative pid = process group on POSIX. start-app-prod.mjs runs the
+    // child detached so it gets its own group.
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {
+      process.kill(pid, 'SIGTERM');
+    }
   }
 }
 
@@ -91,7 +108,7 @@ for (const name of ['server', 'tts']) {
 // above already reaped by tree-kill, which needs no port sweep at all.
 // Sweep nothing here rather than warn about a port that might be someone
 // else's.
-async function probeAndSweep(port) {
+function probeAndSweep(port) {
   return new Promise((resolveProbe) => {
     const sock = net.connect({ port, host: '127.0.0.1' });
     sock.once('connect', () => {
@@ -109,40 +126,65 @@ async function probeAndSweep(port) {
   });
 }
 
-// The TTS port is per-checkout since #2632 (LOCAL_TTS_PORT); read the actual
-// owned port from .run/tts.owner.<port>.json, falling back to this checkout's own
-// server/.env, rather than assuming 9000 — a hardcoded 9000 here would warn
-// about (and stop-app.ps1's sibling would force-kill) a DIFFERENT checkout's
-// sidecar from a worktree (#2632 N27/N29). When neither source yields a
-// port, skip sweeping the TTS port entirely rather than guessing 9000.
-//
-// #2632 N39 — the SAME per-checkout discipline applies to the server port:
-// :8080 is only a safe base port for the checkout that's actually configured
-// for it. A worktree's server/.env always carries its own PORT (wt-new.mjs
-// writes one per slot), so resolveConfiguredServerPort resolves it there; a
-// hand-edited primary checkout with no PORT line yields null, and this warns
-// about nothing for that slot rather than warning about a different
-// checkout's :8080. (See the comment above probeAndSweep for why :8443 is
-// NOT resolved the same way and is dropped from the sweep entirely.)
-const serverPort = resolveConfiguredServerPort(serverEnvPath);
-const basePorts = serverPort ? [serverPort] : [];
-const stillListening = [];
-const portsToSweep = buildPortsToSweep(basePorts, runDir, serverEnvPath);
-for (const port of portsToSweep) {
-  if (await probeAndSweep(port)) stillListening.push(port);
+async function main() {
+  let killedAny = false;
+  for (const name of ['server', 'tts']) {
+    const pidPath = resolve(runDir, `${name}.pid`);
+    if (!existsSync(pidPath)) continue;
+    const raw = readFileSync(pidPath, 'utf8').trim();
+    rmSync(pidPath, { force: true });
+    const pid = Number.parseInt(raw, 10);
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    const outcome = killTree(pid);
+    if (outcome === 'killed') {
+      info(`[STOP] ${name} pid=${pid}`);
+      killedAny = true;
+    } else if (outcome === 'gone') {
+      info(`[GONE] ${name} pid=${pid} (already exited)`);
+    } else {
+      info(`[WARN] ${name} pid=${pid} could not be stopped (still running)`);
+    }
+  }
+
+  // The TTS port is per-checkout since #2632 (LOCAL_TTS_PORT); read the actual
+  // owned port from .run/tts.owner.<port>.json, falling back to this checkout's own
+  // server/.env, rather than assuming 9000 — a hardcoded 9000 here would warn
+  // about (and stop-app.ps1's sibling would force-kill) a DIFFERENT checkout's
+  // sidecar from a worktree (#2632 N27/N29). When neither source yields a
+  // port, skip sweeping the TTS port entirely rather than guessing 9000.
+  //
+  // #2632 N39 — the SAME per-checkout discipline applies to the server port:
+  // :8080 is only a safe base port for the checkout that's actually configured
+  // for it. A worktree's server/.env always carries its own PORT (wt-new.mjs
+  // writes one per slot), so resolveConfiguredServerPort resolves it there; a
+  // hand-edited primary checkout with no PORT line yields null, and this warns
+  // about nothing for that slot rather than warning about a different
+  // checkout's :8080. (See the comment above probeAndSweep for why :8443 is
+  // NOT resolved the same way and is dropped from the sweep entirely.)
+  const serverPort = resolveConfiguredServerPort(serverEnvPath);
+  const basePorts = serverPort ? [serverPort] : [];
+  const stillListening = [];
+  const portsToSweep = buildPortsToSweep(basePorts, runDir, serverEnvPath);
+  for (const port of portsToSweep) {
+    if (await probeAndSweep(port)) stillListening.push(port);
+  }
+
+  if (stillListening.length > 0) {
+    info(
+      `[WARN] still listening on :${stillListening.join(', :')} — no PID file recorded. ` +
+        `Use platform tools (Windows: "netstat -ano | findstr :${stillListening[0]}", ` +
+        `POSIX: "lsof -i:${stillListening[0]}") to identify + kill manually.`,
+    );
+  }
+
+  // #2632 N53 — a still-listening port, or zero ports resolved for this
+  // checkout, must not both read as the same "[OK] nothing to stop" claim.
+  // See getStopSummaryMessage's own comment.
+  const summary = getStopSummaryMessage(killedAny, stillListening.length > 0, portsToSweep);
+  if (summary) info(summary);
+  process.exit(0);
 }
 
-if (stillListening.length > 0) {
-  info(
-    `[WARN] still listening on :${stillListening.join(', :')} — no PID file recorded. ` +
-      `Use platform tools (Windows: "netstat -ano | findstr :${stillListening[0]}", ` +
-      `POSIX: "lsof -i:${stillListening[0]}") to identify + kill manually.`,
-  );
+if (isDirectlyInvoked(import.meta.url)) {
+  main();
 }
-
-// #2632 N53 — a still-listening port, or zero ports resolved for this
-// checkout, must not both read as the same "[OK] nothing to stop" claim.
-// See getStopSummaryMessage's own comment.
-const summary = getStopSummaryMessage(killedAny, stillListening.length > 0, portsToSweep);
-if (summary) info(summary);
-process.exit(0);
