@@ -155,3 +155,27 @@ export class AnalyzerTimeoutError extends Error {
     this.name = 'AnalyzerTimeoutError';
   }
 }
+
+/* #3084 wave 2 — the model stopped at its OUTPUT cap with no answer text while
+   there is evidence it was reasoning (reasoning tokens reported, thought parts
+   or reasoning deltas seen, or an unterminated <think> block). Unlike
+   AnalyzerTruncatedError this is NOT a size problem: splitting the chunk never
+   shrinks reasoning, so no chunker catches it — runner/finish.ts raises it and
+   the taxonomy maps it to analyzer-reasoning-overflow, naming the engine's
+   max-output and reasoning settings. Deliberately not a subclass of
+   AnalyzerTruncatedError. */
+export class AnalyzerReasoningOverflowError extends Error {
+  readonly code = 'ANALYZER_REASONING_OVERFLOW';
+  constructor(
+    public readonly transport: TransportKind,
+    public readonly model: string,
+    public readonly reasoningTokens: number | undefined,
+  ) {
+    super(
+      `${transport} ${model} used its whole output budget on reasoning` +
+        (reasoningTokens ? ` (${reasoningTokens} reasoning tokens)` : '') +
+        ' and returned no answer — splitting the chunk cannot shrink reasoning.',
+    );
+    this.name = 'AnalyzerReasoningOverflowError';
+  }
+}

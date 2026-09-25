@@ -99,6 +99,21 @@ export const FAILURE_REMEDIATIONS = {
       'Retry the chapter. If it recurs, lower STAGE2_CHUNK_CHAR_BUDGET in server/.env (or Advanced ' +
       'Settings) or switch to a stronger analyzer model.',
   },
+  'analyzer-reasoning-overflow': {
+    userMessage:
+      'The analyzer model spent its whole output budget reasoning and returned no answer, so the analysis ' +
+      'stopped: the same settings would overflow again on every chapter, and splitting never shrinks reasoning.',
+    /* #3084 F7 — a step list, ending in the sentence F7 requires verbatim.
+       No "lower the model's reasoning level" here in wave 2: that control
+       does not exist until 5a (Task 5.5b) adds it; mentioning it now would
+       promise a fix the UI cannot yet offer. "Switch to a different model"
+       stands in its place. */
+    remediation:
+      "Give the model more room: for Gemini, raise 'Gemini max output tokens' in Advanced Settings (0 = Auto, " +
+      "the model's own limit); for Ollama, raise 'Ollama num_ctx' (ANALYZER_NUM_CTX), the context window the " +
+      'prompt and the whole reply must fit in. Or switch to a different analyzer model. Then resume — ' +
+      'finished chapters are kept.',
+  },
   'analyzer-timeout': {
     userMessage:
       'The analyzer request was stopped because it ran past a time limit without finishing, instead of ' +

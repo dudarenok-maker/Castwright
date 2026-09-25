@@ -214,6 +214,9 @@ export class OllamaTransport implements ChatTransport {
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
       let buf = ''; // assembled assistant content
+      /* #3084 wave 2 — reasoning evidence for mapFinish: any non-empty
+         message.thinking chunk (a thinking model, or one ignoring think:false). */
+      let reasoningSeen = false;
       let lineBuf = ''; // partial NDJSON line carried across reads
       let firstByteSeen = false;
       /* Ollama reports WHY it stopped on the final `done:true` line:
@@ -263,7 +266,7 @@ export class OllamaTransport implements ChatTransport {
             if (!line) continue;
 
             let parsed: {
-              message?: { content?: string };
+              message?: { content?: string; thinking?: string };
               done?: boolean;
               done_reason?: string;
               error?: string;
@@ -296,6 +299,21 @@ export class OllamaTransport implements ChatTransport {
               };
             }
 
+            if (typeof parsed.message?.thinking === 'string' && parsed.message.thinking.length > 0) {
+              reasoningSeen = true;
+              /* P4 — a thinking chunk is activity. Feed the route heartbeat
+                 (analysis.ts:1184, :4417-4423) with the answer byte count
+                 unchanged, like Gemini thought-only chunks and OpenAI
+                 reasoning deltas. */
+              const now = Date.now();
+              onChunk?.({
+                receivedBytes: buf.length,
+                receivedText: buf,
+                sinceLastChunkMs: now - lastChunkAt,
+                elapsedMs: now - start,
+              });
+              lastChunkAt = now;
+            }
             const piece = parsed.message?.content;
             if (piece) {
               buf += piece;
@@ -319,7 +337,10 @@ export class OllamaTransport implements ChatTransport {
       }
 
       if (!buf) {
-        return { text: '', reasoningSeen: false, finish: doneReason === 'length' ? 'length' : 'stop', finishReason: doneReason, receivedBytes: 0 };
+        if (doneReason === 'length') {
+          console.warn(`[ollama] output truncated done_reason=length bytes=0 model=${this.model}`);
+        }
+        return { text: '', reasoningSeen, finish: doneReason === 'length' ? 'length' : 'stop', finishReason: doneReason, receivedBytes: 0 };
       }
       /* Truncation gate (#528): the stream completed but Ollama stopped
          because it hit the context/output budget (`done_reason: 'length'`),
@@ -331,7 +352,7 @@ export class OllamaTransport implements ChatTransport {
         console.warn(
           `[ollama] output truncated done_reason=length bytes=${buf.length} model=${this.model}`,
         );
-        return { text: buf, reasoningSeen: false, finish: 'length', finishReason: 'length', receivedBytes: buf.length };
+        return { text: buf, reasoningSeen, finish: 'length', finishReason: 'length', receivedBytes: buf.length };
       }
       // fs-45 v1: record this model's real GPU footprint while provably resident.
       // Env-gated (Global Constraints) so fetch-count tests can opt out; best-effort.
@@ -414,7 +435,7 @@ export class OllamaTransport implements ChatTransport {
           console.warn('[ollama] onEvalTiming sink threw (ignored, telemetry is best-effort):', evalSinkErr);
         }
       }
-      return { text: buf, reasoningSeen: false, finish: 'stop', finishReason: doneReason, receivedBytes: buf.length };
+      return { text: buf, reasoningSeen, finish: 'stop', finishReason: doneReason, receivedBytes: buf.length };
     } finally {
       releaseSlot();
     }

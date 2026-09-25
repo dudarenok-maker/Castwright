@@ -23,7 +23,11 @@
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
-import { AnalyzerTimeoutError, AnalyzerTruncatedError } from '../analyzer/errors.js';
+import {
+  AnalyzerReasoningOverflowError,
+  AnalyzerTimeoutError,
+  AnalyzerTruncatedError,
+} from '../analyzer/errors.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 export type FailureCode =
@@ -33,6 +37,7 @@ export type FailureCode =
   | 'analyzer-rate-limit'
   | 'analyzer-daily-quota'
   | 'analyzer-truncated'
+  | 'analyzer-reasoning-overflow'
   | 'analyzer-timeout'
   | 'analyzer-unreachable'
   | 'analyzer-content-blocked'
@@ -106,6 +111,13 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     fatal: false,
     source: 'analysis',
     matchName: 'AnalyzerTruncatedError',
+    match: () => false,
+  },
+  {
+    code: 'analyzer-reasoning-overflow',
+    fatal: true,
+    source: 'analysis',
+    matchName: 'AnalyzerReasoningOverflowError',
     match: () => false,
   },
   {
@@ -497,7 +509,11 @@ function withCopy(code: FailureCode, userMessage: string, detail?: string): Anal
     vocabulary changes to FailureCode and a remediation is attached. Plain
     unmatched errors additionally fall through to the analysis signature scan
     (so ECONNREFUSED etc. classify here too). */
-export function classifyAnalysisFailure(err: unknown, modelLabel: string): AnalysisFailure {
+export function classifyAnalysisFailure(
+  err: unknown,
+  modelLabel: string,
+  ctx?: { chapter?: { id: number; title?: string } },
+): AnalysisFailure {
   /* #2260 FINAL ROUND (B2) — FIRST, ahead of every other branch, because a
      lock-acquisition timeout is the one class here whose own message must never
      reach a client: it embeds the lock key, which for every key space this can
@@ -538,6 +554,20 @@ export function classifyAnalysisFailure(err: unknown, modelLabel: string): Analy
       `engine=${err.engine} reason=${err.reason} bytes=${err.receivedBytes}${
         err.outputTokens ? ` tokens=${err.outputTokens}` : ''
       }`,
+    );
+  }
+  if (err instanceof AnalyzerReasoningOverflowError) {
+    const chapter = ctx?.chapter;
+    const chapterLabel = chapter ? (chapter.title ? `chapter "${chapter.title}"` : `chapter ${chapter.id}`) : 'a chapter';
+    /* #3084 F7 — userMessage is the what-happened headline only: naming the
+       chapter, model and engine. It carries no "raise X" advice and no
+       "then retry" — that imperative lives in remediation instead (below),
+       which is per-code, not per-instance, so it cannot itself name the
+       chapter; naming happens here. */
+    return withCopy(
+      'analyzer-reasoning-overflow',
+      `${modelLabel} spent its whole output budget reasoning on ${chapterLabel} and returned no answer, so the analysis stopped.`,
+      `transport=${err.transport} model=${err.model}${chapter ? ` chapterId=${chapter.id}` : ''}${err.reasoningTokens ? ` reasoningTokens=${err.reasoningTokens}` : ''}`,
     );
   }
   if (err instanceof AnalyzerTimeoutError) {

@@ -16,7 +16,9 @@ import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js'
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
+import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
+import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import type { StageCall } from '../analyzer/index.js';
 import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
@@ -249,6 +251,23 @@ instructAnnotationRouter.post(
               message:
                 'Daily analyzer quota exhausted. Already-detected chapters are applied — re-run to finish.',
               resetAt: err.resetAt instanceof Date ? err.resetAt.toISOString() : undefined,
+            });
+            clearInterval(keepAlive);
+            if (!closed) res.end();
+            return;
+          }
+          /* #3084 P20 — a reasoning overflow stops the pass exactly as a daily
+             quota does: the same settings overflow again on every chapter, each
+             time spending a full output budget on thinking. Already-streamed
+             chapters stay applied client-side. One chapter runs at a time, so
+             nothing else is in flight. */
+          if (err instanceof AnalyzerReasoningOverflowError) {
+            send({
+              kind: 'error',
+              code: 'analyzer-reasoning-overflow',
+              message: err.message,
+              model: err.model,
+              remediation: FAILURE_REMEDIATIONS['analyzer-reasoning-overflow'].remediation,
             });
             clearInterval(keepAlive);
             if (!closed) res.end();

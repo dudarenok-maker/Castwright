@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
-import { AnalyzerTimeoutError, AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
+import { AnalyzerReasoningOverflowError, AnalyzerTimeoutError, AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
 import { UnresolvableClonedVoiceError } from '../tts/clone-voice-resolver.js';
 
 /* No copy should leak raw stack/jargon at the user — assert the message reads
@@ -403,6 +403,7 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
         'analyzer-content-blocked',
         'analyzer-daily-quota',
         'analyzer-rate-limit',
+        'analyzer-reasoning-overflow',
         'analyzer-timeout',
         'analyzer-truncated',
         'analyzer-unreachable',
@@ -622,6 +623,76 @@ describe('AnalyzerTimeoutError (#3084 wave 2b)', () => {
   it('is matched by name in the signature scan and never reads as unreachable', () => {
     expect(classifyAnalysisError(new AnalyzerTimeoutError('gemini', 'gemini-3.6-flash', 1, 'ceiling')).code).toBe(
       'analyzer-timeout',
+    );
+  });
+});
+
+describe('AnalyzerReasoningOverflowError (#3084 wave 2b)', () => {
+  it('→ analyzer-reasoning-overflow: userMessage is the what-happened headline only, remediation names the setting (#3084 F7)', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
+      'Gemini (gemini-3.6-flash)',
+    );
+    expect(r.code).toBe('analyzer-reasoning-overflow');
+    expect(r.userMessage).toContain('Gemini (gemini-3.6-flash)');
+    expect(r.detail).toContain('reasoningTokens=8100');
+    // #3084 F7 — no "raise X" advice or "then retry" in userMessage; that
+    // lives in remediation instead, which is static (per-code, not
+    // per-instance) so it names the setting but not this chapter.
+    expect(r.userMessage).not.toContain('Gemini max output tokens');
+    expect(r.userMessage).not.toContain('retry');
+    expect(r.remediation).toContain('Gemini max output tokens');
+    // #3084 F2/#13 — no wave-5-only "reasoning level" control promised yet.
+    expect(r.userMessage).not.toContain('reasoning level');
+    expect(r.remediation).not.toContain('reasoning level');
+    // #3084 F7 — the remediation step list ends with this sentence verbatim.
+    expect(r.remediation.endsWith('Then resume — finished chapters are kept.')).toBe(true);
+    // #3084 F7 — no chapter was passed, so the message never invents one.
+    expect(r.userMessage).toContain('a chapter');
+    expect(r.userMessage).not.toMatch(/chapter\s+"|chapter\s+\d/);
+  });
+
+  it('names the chapter by title when the caller passes one (#3084 F7)', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
+      'Gemini (gemini-3.6-flash)',
+      { chapter: { id: 4, title: 'The Long Night' } },
+    );
+    expect(r.userMessage).toContain('chapter "The Long Night"');
+    expect(r.detail).toContain('chapterId=4');
+  });
+
+  it('falls back to the bare chapter id when no title was passed (#3084 F7)', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
+      'Gemini (gemini-3.6-flash)',
+      { chapter: { id: 7 } },
+    );
+    expect(r.userMessage).toContain('chapter 7');
+    expect(r.detail).toContain('chapterId=7');
+  });
+
+  it('the static remediation names Ollama num_ctx (the binding limit), not num_predict, for an Ollama overflow (#3084 F7)', () => {
+    /* #3084 F7 — userMessage is the what-happened headline only (Task 2.9's
+       rewrite, this same round); it never names a setting. The setting comes
+       from the STATIC remediation (failure-remediations.ts), which is the
+       same for every AnalyzerReasoningOverflowError regardless of transport
+       or model, so this asserts on remediation, not userMessage. Task 2.9a's
+       own test (below, added when it lands `fixes`) additionally asserts the
+       Ollama branch's `reasoningOverflowFixes` names `analyzer.ollama.numCtx`
+       specifically — that is the per-instance, structured version of this
+       same fact; this test is the static, prose version. */
+    const r = classifyAnalysisFailure(new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', undefined), 'Ollama (qwen3.5:4b)');
+    expect(r.userMessage).not.toContain('num_ctx');
+    expect(r.userMessage).not.toContain('num_predict');
+    expect(r.remediation).toContain('Ollama num_ctx');
+    expect(r.remediation).not.toContain('num_predict');
+    expect(r.remediation).toContain('ANALYZER_NUM_CTX');
+  });
+
+  it('is matched by name in the signature scan', () => {
+    expect(classifyAnalysisError(new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', undefined)).code).toBe(
+      'analyzer-reasoning-overflow',
     );
   });
 });

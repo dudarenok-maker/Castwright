@@ -7121,6 +7121,7 @@ components:
         - analyzer-unreachable
         - analyzer-content-blocked
         - analyzer-timeout
+        - analyzer-reasoning-overflow
         - attribution-incomplete
         - attribution-collapse
         - gpu-acceleration-unavailable

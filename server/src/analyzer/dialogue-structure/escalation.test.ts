@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { conventionsFor } from './lang/index.js';
 import { buildNameIndex } from './name-matcher.js';
 import { parseChapterStructure } from './parser.js';
@@ -10,6 +10,14 @@ import type { Analyzer, StageCall } from '../index.js';
 import type { EscalationOutput } from '../../handoff/schemas.js';
 import type { SentenceOutput } from '../../handoff/schemas.js';
 import { MALE_BUCKET_ID, FEMALE_BUCKET_ID } from '../fold-minor-cast.js';
+import { rm } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { AnalyzerReasoningOverflowError } from '../errors.js';
+import { GEMINI_RETRY_POLICY } from '../runner/retry-policy.js';
+import { StageRunner, identitySchemaAdapter } from '../runner/stage-runner.js';
+import { TransportAnalyzer } from '../runner/transport-analyzer.js';
+import type { ChatTransport, TransportRequest, TransportResult } from '../runner/transport.js';
 
 /* srv-59 Task 9b. escalateFlaggedWindows groups the flagged dialogue lines
    crossExamine (Task 7) left unresolved into their conversation window,
@@ -234,6 +242,61 @@ function buildFlaggedGuessOffWindowFixture() {
     { index: 3, reason: 'unanchored-named:dmitri' },
     { index: 4, reason: 'unanchored-narrator' },
   ]);
+  return { body, paras, sentences: examined.sentences, flags: examined.flags };
+}
+
+/** #3084 P20 — buildFixture's conversation, then a narration paragraph long
+    enough to end a window (windows.ts NARRATION_BREAK_LENGTH = 200; this one is
+    227 chars), then a second conversation of the same shape. Two windows, each
+    with three anchored speakers (so alternation fill never engages) and two
+    unanchored lines. */
+function buildTwoWindowFixture() {
+  const enIdx = buildNameIndex(
+    [
+      { id: 'anton', name: 'Anton' },
+      { id: 'olga', name: 'Olga' },
+      { id: 'boris', name: 'Boris' },
+    ],
+    conventionsFor('en')!,
+  );
+  const digression = 'The corridor ran on past shuttered doors and cold lamps. '.repeat(4).trim();
+  const body = [
+    'He waited quietly.',
+    '"Ready?" said Anton.',
+    '"Ready," said Olga.',
+    '"Confirmed," said Boris.',
+    '"Then let\'s go."',
+    '"After you."',
+    digression,
+    '"Onward?" said Anton.',
+    '"Onward," said Olga.',
+    '"Agreed," said Boris.',
+    '"Then we part."',
+    '"Farewell."',
+    'She smiled and walked ahead.',
+  ].join('\n');
+  const paras = parseChapterStructure(body, enIdx);
+  resolveWindows(paras, { anton: 'male', olga: 'female', boris: 'male' }, null);
+  const sentences: SentenceOutput[] = [
+    { id: 1, chapterId: 1, characterId: 'anton', text: 'Ready?' },
+    { id: 2, chapterId: 1, characterId: 'olga', text: 'Ready,' },
+    { id: 3, chapterId: 1, characterId: 'boris', text: 'Confirmed,' },
+    { id: 4, chapterId: 1, characterId: 'narrator', text: "Then let's go." },
+    { id: 5, chapterId: 1, characterId: 'narrator', text: 'After you.' },
+    { id: 6, chapterId: 1, characterId: 'anton', text: 'Onward?' },
+    { id: 7, chapterId: 1, characterId: 'olga', text: 'Onward,' },
+    { id: 8, chapterId: 1, characterId: 'boris', text: 'Agreed,' },
+    { id: 9, chapterId: 1, characterId: 'narrator', text: 'Then we part.' },
+    { id: 10, chapterId: 1, characterId: 'narrator', text: 'Farewell.' },
+  ];
+  const alignment = alignSentences(sentences, paras, body);
+  const examined = crossExamine(alignment, {
+    rosterIds: new Set(ROSTER),
+    unknownBucketIds: new Set([MALE_BUCKET_ID, FEMALE_BUCKET_ID]),
+    alignmentFloorPct: 80,
+  });
+  // Sanity-check the fixture: the two unanchored lines of each conversation are flagged.
+  expect(examined.flags.map((f) => f.index)).toEqual([3, 4, 8, 9]);
   return { body, paras, sentences: examined.sentences, flags: examined.flags };
 }
 
@@ -671,5 +734,97 @@ describe('escalateFlaggedWindows — (#2537/#2540 gate) dash-dialogue language g
     const analyzer = fakeAnalyzer(() => ({ assignments: [] }));
     const outcome = await escalateFlaggedWindows({ ...baseOpts(), sentences, flags, paras, body, analyzer });
     expect(typeof outcome.attempted).toBe('number'); // baseline assertion: no crash
+  });
+});
+
+/* #3084 P20 — an escalation call that overflows still returns null, but the
+   runner first reports it through StageCall.onReasoningOverflow. Driven through
+   a real TransportAnalyzer + StageRunner over a transport that always
+   overflows, so this pins the runner and the window loop together. The hook
+   below does to the budget what the route's noteReasoningOverflow does; the
+   route wiring is pinned in routes/analysis.reasoning-overflow.test.ts. */
+describe('escalateFlaggedWindows — a reasoning overflow stops further windows (#3084 P20)', () => {
+  const HANDOFF_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'handoff');
+  const OVERFLOW_ID = 'm_esc_overflow';
+
+  afterAll(async () => {
+    for (const ch of [1, 2]) {
+      for (const w of [0, 1]) {
+        await rm(resolve(HANDOFF_ROOT, 'inbox', `${OVERFLOW_ID}-stageescalation-ch${ch}-w${w}.md`), { force: true });
+      }
+    }
+  });
+
+  it('positive control: with no overflow, the two-window fixture queries both windows', async () => {
+    const { body, paras, sentences, flags } = buildTwoWindowFixture();
+    const runFn = vi.fn((_m: string, _c: number, _windowIndex: number) =>
+      Promise.resolve<EscalationOutput | null>({ assignments: [] }),
+    );
+    const analyzer: Analyzer = { ...fakeAnalyzer(() => null), runAttributionEscalation: runFn };
+
+    const outcome = await escalateFlaggedWindows({ ...baseOpts(), sentences, flags, paras, body, analyzer });
+
+    expect(runFn).toHaveBeenCalledTimes(2);
+    expect(new Set(runFn.mock.calls.map((c) => c[2])).size).toBe(2);
+    expect(outcome.attempted).toBe(2);
+  });
+
+  it("one overflowing call stops that chapter's second window and every later chapter's", async () => {
+    const send = vi.fn(
+      async (_req: TransportRequest): Promise<TransportResult> => ({
+        text: '',
+        reasoningSeen: true,
+        finish: 'length',
+        finishReason: 'MAX_TOKENS',
+        receivedBytes: 0,
+        usage: { reasoningTokens: 8100 },
+      }),
+    );
+    const transport: ChatTransport = { kind: 'gemini', model: 'gemini-3.6-flash', send };
+    const analyzer = new TransportAnalyzer(
+      new StageRunner({
+        transport,
+        policy: GEMINI_RETRY_POLICY,
+        settings: () => ({ structuredOutput: 'json', maxOutputTokens: undefined }),
+        adaptSchema: identitySchemaAdapter,
+      }),
+    );
+    const budget = { remainingWindows: 600 };
+    const overflows: AnalyzerReasoningOverflowError[] = [];
+    const stageCall: StageCall = {
+      onReasoningOverflow: (err) => {
+        overflows.push(err);
+        budget.remainingWindows = 0;
+      },
+    };
+
+    const chapterOne = buildTwoWindowFixture();
+    const first = await escalateFlaggedWindows({
+      ...baseOpts(),
+      ...chapterOne,
+      analyzer,
+      manuscriptId: OVERFLOW_ID,
+      chapterId: 1,
+      stageCall,
+      budget,
+    });
+    const chapterTwo = buildTwoWindowFixture();
+    const second = await escalateFlaggedWindows({
+      ...baseOpts(),
+      ...chapterTwo,
+      analyzer,
+      manuscriptId: OVERFLOW_ID,
+      chapterId: 2,
+      stageCall,
+      budget,
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(overflows).toHaveLength(1);
+    expect(overflows[0]).toBeInstanceOf(AnalyzerReasoningOverflowError);
+    expect(first.attempted).toBe(1);
+    expect(second.attempted).toBe(0);
+    expect(chapterOne.flags).toHaveLength(4); // the skipped window leaves every flag intact
+    expect(chapterTwo.flags).toHaveLength(4);
   });
 });

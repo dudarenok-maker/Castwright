@@ -284,6 +284,25 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
     expect(events.some((e) => e.kind === 'result')).toBe(false);
   });
 
+  it('a reasoning overflow stops the pass like a daily quota: keeps streamed chapters, one analyzer-reasoning-overflow error, no chapter-failed (#3084 P20)', async () => {
+    writeBook(SENTENCES);
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    runStage3.mockImplementation((_m, chapterId): Promise<Stage3ChapterOutput> => {
+      if (chapterId === 1) return Promise.resolve({ annotations: [{ sentenceId: 2, instruct: 'urgent' }] });
+      return Promise.reject(new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100));
+    });
+
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
+    const events = parseSse(res.text);
+
+    expect(events.some((e) => e.kind === 'annotation' && e.chapterId === 1)).toBe(true);
+    const err = events.find((e) => e.kind === 'error');
+    expect(err).toMatchObject({ code: 'analyzer-reasoning-overflow', model: 'gemini-3.6-flash' });
+    expect(String(err?.remediation)).toContain('Gemini max output tokens');
+    expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
+    expect(events.some((e) => e.kind === 'result')).toBe(false);
+  });
+
   it('a single chapter failure does not abort the rest of the pass', async () => {
     writeBook(SENTENCES);
     runStage3.mockImplementation((_m, chapterId): Promise<Stage3ChapterOutput> => {

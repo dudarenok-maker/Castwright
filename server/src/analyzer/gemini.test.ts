@@ -802,6 +802,17 @@ describe('GeminiAnalyzer — transport retry policy (GeminiTransport + withTrans
 });
 
 describe('GeminiAnalyzer — output truncation (#528)', () => {
+  /* The earlier `stream watchdog + abort` describe calls vi.resetModules(),
+     detaching this file's static geminiRateLimiter (reset in the top-level
+     beforeEach) from the instance gemini.js uses. This describe sends seven
+     gemma-4-31b-it requests (TPM 16 000), so without resetting the live
+     limiter the #3084 wave 2b overflow cases wait on the TPM window past the
+     test timeout. Same workaround as the runAttributionEscalation describe. */
+  beforeEach(async () => {
+    const { geminiRateLimiter: limiter } = await import('./rate-limit.js');
+    limiter._reset();
+  });
+
   it('throws AnalyzerTruncatedError when the stream ends with finishReason MAX_TOKENS, without retrying', async () => {
     /* A truncated (mid-JSON) payload whose final chunk reports MAX_TOKENS.
        The truncation gate fires before parseAndValidate, so the corrupt
@@ -871,6 +882,50 @@ describe('GeminiAnalyzer — output truncation (#528)', () => {
       expect.objectContaining({ config: expect.objectContaining({ temperature: 0.2 }) }),
     );
   });
+
+  it('an empty MAX_TOKENS response WITH thoughtsTokenCount fails as reasoning overflow — no split, no retry (#3084)', async () => {
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([
+        { text: undefined, candidates: [{ finishReason: 'MAX_TOKENS' }], usageMetadata: { thoughtsTokenCount: 50 } },
+      ]),
+    );
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const { AnalyzerReasoningOverflowError } = await import('./errors.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-3.6-flash' });
+    await expect(analyzer.runStage1('m_overflow', '# stage 1 prompt', {})).rejects.toBeInstanceOf(
+      AnalyzerReasoningOverflowError,
+    );
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('an empty MAX_TOKENS response with NO reasoning evidence still raises AnalyzerTruncatedError (Gemma size problem, gemini.ts:784-804)', async () => {
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([{ text: undefined, candidates: [{ finishReason: 'MAX_TOKENS' }] }]),
+    );
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const { AnalyzerTruncatedError } = await import('./errors.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+    await expect(analyzer.runStage1('m_overflow_gemma', '# stage 1 prompt', {})).rejects.toBeInstanceOf(
+      AnalyzerTruncatedError,
+    );
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('a Gemma empty MAX_TOKENS response WITH thoughtsTokenCount but no thought parts still splits — Gemma asked for no thoughts, so the count is not evidence (#3084 P27)', async () => {
+    /* The same response the gemini-3.6-flash case above fails as an overflow. */
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([
+        { text: undefined, candidates: [{ finishReason: 'MAX_TOKENS' }], usageMetadata: { thoughtsTokenCount: 50 } },
+      ]),
+    );
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const { AnalyzerTruncatedError } = await import('./errors.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+    await expect(analyzer.runStage1('m_overflow_gemma_tokens', '# stage 1 prompt', {})).rejects.toBeInstanceOf(
+      AnalyzerTruncatedError,
+    );
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+  });
 });
 
 afterAll(async () => {
@@ -901,6 +956,9 @@ afterAll(async () => {
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_gemini_no_tone-stage1-ch1.json'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_maxtok_auto-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_maxtok_auto-stage1.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_overflow-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_overflow_gemma-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_overflow_gemma_tokens-stage1.md'), { force: true });
 });
 
 describe('GeminiAnalyzer.runStage1Chapter — two-schema runStage tolerates a tone-less response (srv-45)', () => {

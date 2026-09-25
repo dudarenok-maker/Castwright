@@ -7,7 +7,7 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { SentenceOutput } from '../handoff/schemas.js';
-import { AnalyzerTruncatedError } from './errors.js';
+import { AnalyzerTruncatedError, AnalyzerReasoningOverflowError } from './errors.js';
 import {
   splitBodyIntoChunks,
   splitParagraphIntoSentences,
@@ -241,6 +241,17 @@ describe('runStage2ChapterChunked', () => {
     expect(out.chunkCount).toBe(1);
     expect(out.sentences).toHaveLength(3);
     expect(out.coverage.ok).toBe(true);
+  });
+
+  it('does NOT split on AnalyzerReasoningOverflowError — splitting cannot shrink reasoning (#3084)', async () => {
+    const err = new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100);
+    const call = vi.fn(async (_subBody: string, _preceding: string | null): Promise<{ sentences: SentenceOutput[] }> => {
+      throw err;
+    });
+    await expect(
+      runStage2ChapterChunked({ body: makeBody(10), charBudget: 10_000, coverageRetries: 1, callForBody: call }),
+    ).rejects.toBe(err);
+    expect(call).toHaveBeenCalledTimes(1);
   });
 
   it('splits an over-budget chapter, renumbers ids 1..N, and passes preceding context', async () => {

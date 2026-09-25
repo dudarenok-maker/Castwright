@@ -11,6 +11,7 @@ import type {
 } from '../handoff/schemas.js';
 
 import type { RawEvalTiming } from './analyzer-eval-stats.js';
+import type { AnalyzerReasoningOverflowError } from './errors.js';
 
 export interface StageChunkInfo {
   /** Total bytes of model output received so far. */
@@ -63,6 +64,13 @@ export interface StageCall {
       AnalyzerUnreachableError to the fallback for this call. Route uses it to
       announce the switch. */
   onFallback?: (info: { reason: string }) => void;
+  /** #3084 P20 — called by StageRunner.runSingleAttempt (attribution
+      escalation) when its one call ends in a reasoning overflow, just before it
+      returns null. The runner swallows that error, so without this hook the
+      route never learns of it and the chapter keeps querying windows. The
+      analysis routes pass noteReasoningOverflow here. runStage never calls it:
+      its overflows propagate to the route. */
+  onReasoningOverflow?: (err: AnalyzerReasoningOverflowError) => void;
 }
 
 export interface Analyzer {

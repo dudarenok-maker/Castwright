@@ -33,7 +33,7 @@ import {
   type PriorExchange,
 } from '../../routes/script-review.js';
 import { planApply, type LiveSentence } from './review-apply-core.js';
-import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../errors.js';
+import { AnalyzerReasoningOverflowError, AnalyzerTruncatedError, GeminiContentBlockedError } from '../errors.js';
 import { AnalysisAbortedError } from '../ollama.js';
 import { DailyQuotaExhaustedError } from '../rate-limit.js';
 import type { EngineCapacity } from '../capacity.js';
@@ -119,7 +119,8 @@ export async function runReviewOverChapter(opts: {
      TERMINAL errors are re-thrown, not dropped: an abort, an exhausted daily
      quota, or a content block is fatal for EVERY remaining chunk (the route
      breaks the loop on these), so swallowing them would burn API calls on a
-     doomed run and report a scorecard of near-total drops. */
+     doomed run and report a scorecard of near-total drops.
+     A reasoning overflow is terminal too (#3084 P20): the same settings overflow on every chunk. */
   const ops: ScriptReviewOp[] = [];
   let droppedChunks = 0;
   for (let index = 0; index < chunks.length; index += 1) {
@@ -131,6 +132,7 @@ export async function runReviewOverChapter(opts: {
       if (
         err instanceof AnalysisAbortedError ||
         err instanceof DailyQuotaExhaustedError ||
+        err instanceof AnalyzerReasoningOverflowError ||
         err instanceof GeminiContentBlockedError
       ) {
         throw err;
