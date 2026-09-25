@@ -109,6 +109,22 @@ export interface FinalizeChapterAudioInput {
       full-render path from the history it actually built its resolver from;
       carried forward verbatim by the two partial writers. */
   castHistorySeq?: number;
+  /** #3362 pass-5 fix (🟠E, owner design (i)) — indices into `segments` this
+      write actually RE-SYNTHESISED (fresh TTS audio, produced by THIS call).
+      Absent means every segment was — the shape of a full render
+      (`generation.ts` never sets this, matching "initial full render = all
+      segments re-synthesized"). `chapter-splice.ts`'s `rerecord` mode and
+      `chapter-qa-repair.ts` pass the exact indices their own synth loop
+      touched; a `remix` (gain) pass passes an empty set — a gain changes
+      volume, not voice, so nothing was actually re-synthesised.
+
+      A segment OUTSIDE this set had its audio untouched by this write, so
+      its identity must not be re-derived from the CURRENT (mutable) cast +
+      cast-id-history either — the same freeze already applied to
+      `castHistorySeq` above, for the same reason: a re-finalize must not
+      re-arm identity drift for lines it never touched. See the stamping
+      block below for the mechanics (the class this closes: 🟠E / R1-R4). */
+  resynthesizedIndices?: Iterable<number>;
   /** Invoked once, immediately AFTER the encode (2-pass loudnorm) returns and
       BEFORE QA / snapshots / write. The generation route passes its
       `bumpProgress` here so the per-chapter no-progress watchdog sees the long
@@ -321,7 +337,20 @@ export async function finalizeChapterAudioWrite(
   const castResolver = buildCastResolver(cast, input.castIdHistory);
   const resolveSpeakingId = (rawId: string): string =>
     castResolver.resolve(rawId)?.character.id ?? rawId;
-  const speakingIds = new Set(segments.map((s) => resolveSpeakingId(s.characterId)));
+
+  /* #3362 pass-5 fix (🟠E, owner design (i)) — `resynthesizedIndices` (see
+     its own doc comment on `FinalizeChapterAudioInput`) splits `segments`
+     into the ones THIS write actually re-synthesised (default: all of
+     them — a full render) and the ones it merely carried through byte-
+     identical (a re-finalize's untouched lines). Only the former feed fresh
+     resolution below; the latter are frozen further down, at the
+     characterSnapshots merge and the stamping block. */
+  const resynthesizedIndexSet: Set<number> = input.resynthesizedIndices
+    ? new Set(input.resynthesizedIndices)
+    : new Set(segments.map((_, i) => i));
+  const untouchedIndices = segments.map((_, i) => i).filter((i) => !resynthesizedIndexSet.has(i));
+
+  const speakingIds = new Set<string>();
   const fallbackByChar = new Map<string, string>();
   /* #1972 — the voice ACTUALLY sent to the provider per character, read back
      from this render's own segments rather than re-derived from the cast
@@ -331,49 +360,56 @@ export async function finalizeChapterAudioWrite(
      run happens to be an emotion-tagged quote doesn't get the variant's
      `__<emotion>`-suffixed name stamped as its resolved voice. */
   const voiceNameByChar = new Map<string, string>();
-  for (const s of segments) {
-    if (s.renderedFallbackEngine) fallbackByChar.set(resolveSpeakingId(s.characterId), s.renderedFallbackEngine);
+  for (const i of resynthesizedIndexSet) {
+    const s = segments[i];
+    const resolved = resolveSpeakingId(s.characterId);
+    speakingIds.add(resolved);
+    if (s.renderedFallbackEngine) fallbackByChar.set(resolved, s.renderedFallbackEngine);
     const voiceName = s.baseVoiceName ?? s.voiceName;
-    if (voiceName) voiceNameByChar.set(resolveSpeakingId(s.characterId), voiceName);
+    if (voiceName) voiceNameByChar.set(resolved, voiceName);
   }
-  /* C1 (#1972 follow-up) — a character can be "speaking" this render (it has
-     segments in `segments`) without this run having synthesised a single new
-     sample for it: a gain-only remix reuses every existing segment's PCM
-     untouched, so none of THIS run's segments carry `voiceName` at all —
-     `voiceNameByChar` ends up SMALLER than `speakingIds`. Before this fix
-     that silently dropped `resolvedVoiceName` for every character on a
-     remix of a legacy (pre-#1972) chapter (and for any character a rerecord
-     didn't target), corrupting revisions.ts's drift detector, the Voices
-     "Designed vs Generated" split, and the srv-36 audition centroid — all of
-     which read `resolvedVoiceName` back off disk. Nothing was actually
-     re-synthesised for these characters, so the LAST render's own recorded
-     voice is still the truthful answer: carry it forward from the prior
-     segments file, read here BEFORE `preserveExistingAsPrevious` renames it
-     to `.previous.segments.json` below. */
-  if (voiceNameByChar.size < speakingIds.size) {
-    const prior = await readJson<ChapterSegmentsFile>(segPath).catch(() => null);
-    /* #3362 finding 5 — the prior file's `characterSnapshots` keys were
-       stamped by whatever render wrote that file, which can predate a
-       retirement recorded since (`retireCharacterId`): a snapshot the prior
-       render wrote under 'old' is invisible to a `speakingIds.has(id)` lookup
-       once cast-id-history has since folded 'old' into 'new', even though
-       'old'/'new' are the same character. Re-key the prior snapshots through
-       the same resolver used above so a snapshot stored under a retired (or
-       otherwise non-canonical) id is still found under its canonical id.
-       Two prior keys can resolve to the same canonical id (the canonical id
-       itself, still present verbatim, plus a retired alias for the same
-       character) — prefer the exact canonical-key entry over a resolved
-       alias, since it's the one the prior render itself wrote under the
-       character's own id rather than reached only by reading through
-       history. */
-    const priorSnapshotsByCanonicalId = new Map<string, CharacterSnapshot>();
-    for (const [rawKey, snapshot] of Object.entries(prior?.characterSnapshots ?? {})) {
-      const canonicalId = castResolver.resolve(rawKey)?.character.id ?? rawKey;
-      const isExactKey = canonicalId === rawKey;
-      if (isExactKey || !priorSnapshotsByCanonicalId.has(canonicalId)) {
-        priorSnapshotsByCanonicalId.set(canonicalId, snapshot);
-      }
+
+  /* Read the prior file once, when there's anything this write can't derive
+     fresh: an untouched segment (needs its own prior stamp/snapshot carried
+     forward, below) or C1's gap (needs the prior voiceName). Absent on a
+     genuine first render, where neither condition holds. */
+  const needsPriorFile = untouchedIndices.length > 0 || voiceNameByChar.size < speakingIds.size;
+  const priorFile = needsPriorFile ? await readJson<ChapterSegmentsFile>(segPath).catch(() => null) : null;
+
+  /* #3362 finding 5 — the prior file's `characterSnapshots` keys were
+     stamped by whatever render wrote that file, which can predate a
+     retirement recorded since (`retireCharacterId`): a snapshot the prior
+     render wrote under 'old' is invisible to a `speakingIds.has(id)` lookup
+     once cast-id-history has since folded 'old' into 'new', even though
+     'old'/'new' are the same character. Re-key the prior snapshots through
+     the same resolver used above so a snapshot stored under a retired (or
+     otherwise non-canonical) id is still found under its canonical id.
+     Two prior keys can resolve to the same canonical id (the canonical id
+     itself, still present verbatim, plus a retired alias for the same
+     character) — prefer the exact canonical-key entry over a resolved
+     alias, since it's the one the prior render itself wrote under the
+     character's own id rather than reached only by reading through
+     history. Reused below by both C1 (voiceName gap) and the pass-5
+     untouched-segment carry-forward. */
+  const priorSnapshotsByCanonicalId = new Map<string, CharacterSnapshot>();
+  for (const [rawKey, snapshot] of Object.entries(priorFile?.characterSnapshots ?? {})) {
+    const canonicalId = castResolver.resolve(rawKey)?.character.id ?? rawKey;
+    const isExactKey = canonicalId === rawKey;
+    if (isExactKey || !priorSnapshotsByCanonicalId.has(canonicalId)) {
+      priorSnapshotsByCanonicalId.set(canonicalId, snapshot);
     }
+  }
+
+  /* C1 (#1972 follow-up) — a character can be "speaking" in the resynthesized
+     set (it has a resynthesized segment) without that segment's own take
+     having carried a `voiceName` (a defensive gap-fill; every genuine
+     re-record sets it — see `SynthOutput.voiceName`'s doc). Nothing was
+     actually re-synthesised with a NEW voice for these characters, so the
+     LAST render's own recorded voice is still the truthful answer: carry it
+     forward from the prior segments file, read above BEFORE
+     `preserveExistingAsPrevious` renames it to `.previous.segments.json`
+     below. */
+  if (voiceNameByChar.size < speakingIds.size) {
     for (const id of speakingIds) {
       if (voiceNameByChar.has(id)) continue;
       const priorVoice = priorSnapshotsByCanonicalId.get(id)?.resolvedVoiceName;
@@ -389,20 +425,80 @@ export async function finalizeChapterAudioWrite(
     voiceNameByChar,
   );
 
-  /* #3362 pass-4 fix (🟠D / owner design a) — stamp each segment with the
-     canonical id THIS render resolved it to (the same `resolveSpeakingId`
-     already computed above to build `speakingIds`/`characterSnapshots`),
-     ONLY when that id is a real key in THIS chapter's own
-     `characterSnapshots` — otherwise the raw id stands (see
-     `ChapterSegment.resolvedCharacterId`'s own doc comment). Render-integrity
-     scoring, qa-report.ts and chapter-qa-repair.ts read this stamp back
-     instead of re-resolving `characterId` through the CURRENT, mutable
-     cast-id-history at scoring/repair time — a later retirement, reject, or
-     bridge added after this render must never change which identity this
-     render's own rows score under. */
-  const stampedSegments: ChapterSegment[] = segments.map((s) => {
-    const resolved = resolveSpeakingId(s.characterId);
-    return characterSnapshots[resolved] ? { ...s, resolvedCharacterId: resolved } : s;
+  /* #3362 pass-5 fix (🟠E, owner design (i)) — a character that speaks ONLY
+     in untouched segments this write (never in the resynthesized set) gets
+     no fresh snapshot above — `buildCharacterSnapshots` never saw its id in
+     `speakingIds`. Carry its EXISTING snapshot entry forward from the prior
+     file verbatim instead of leaving it un-snapshotted: nothing about that
+     character changed this write, so nothing about its snapshot (tone,
+     voiceEngine, resolvedVoiceName, …) should either. Never re-resolved
+     through the current cast/history, which is exactly the re-derivation
+     this fix closes (R4: a raw id that resolves differently today than at
+     its last render must not silently repaint an untouched line).
+
+     Identified by the segment's OWN existing stamp (`resolvedCharacterId`)
+     when it has one — but a LEGACY untouched segment predating the stamp
+     (R4's A22 shape: rendered before pass-4 shipped) has none, and its
+     identity has always lived at its raw `characterId`, exact-matched
+     against the chapter's own snapshot keys (the same fallback every
+     downstream reader already applies — see `ChapterSegment
+     .resolvedCharacterId`'s doc comment). So an untouched, unstamped
+     segment's effective key falls back to its raw id too, and the carry-
+     forward below looks it up the same way — otherwise a legacy chapter
+     that was never stamped in the first place would lose its ALREADY-
+     WORKING exact-match snapshot the moment it's re-finalized, which is a
+     regression this fix must not introduce. */
+  const untouchedStampedIds = new Set<string>();
+  for (const i of untouchedIndices) {
+    const id = segments[i].resolvedCharacterId ?? segments[i].characterId;
+    if (!speakingIds.has(id)) untouchedStampedIds.add(id);
+  }
+  for (const id of untouchedStampedIds) {
+    if (characterSnapshots[id]) continue; // the fresh set already covers it
+    const carried = priorFile?.characterSnapshots?.[id];
+    if (carried) characterSnapshots[id] = carried;
+    // No prior entry to carry forward — an untouched segment whose id (raw
+    // or stamped) never named a real snapshot key even at its last render.
+    // A stamped one is handled by the stamping block's R1 clearing below;
+    // an unstamped one was already invisible to a raw exact-match lookup
+    // before this fix, so leaving it out here changes nothing for it.
+  }
+
+  /* #3362 pass-4 fix (🟠D / owner design a), refined by pass-5 (🟠E, owner
+     design (i)) — stamp each segment with the canonical id THIS WRITE
+     resolved it to, ONLY when that id is a real key in THIS write's own
+     `characterSnapshots` (fresh + the carry-forward above) — otherwise no
+     stamp (see `ChapterSegment.resolvedCharacterId`'s own doc comment).
+     Render-integrity scoring, qa-report.ts and chapter-qa-repair.ts read
+     this stamp back instead of re-resolving `characterId` through the
+     CURRENT, mutable cast-id-history at scoring/repair time — a later
+     retirement, reject, or bridge added after this render must never change
+     which identity this render's own rows score under.
+
+     A resynthesized segment is resolved fresh, exactly as pass-4 did — that
+     audio genuinely changed (or was newly minted) this write, so its
+     identity is decided fresh, every time, unconditionally overwriting
+     whatever it carried before (never inherits a stale stamp from an
+     identity that no longer resolves).
+
+     An UNTOUCHED segment keeps its EXISTING stamp verbatim — it is never
+     re-resolved — UNLESS that stamp names a key still absent from this
+     write's characterSnapshots even after the carry-forward above (R1: e.g.
+     the character was rejected/retired out of the cast entirely since its
+     last render, so there is no snapshot to carry forward for it at all).
+     A stamp pointing at an absent key is worse than no stamp: a later
+     scoring/repair pass could join it, by raw string equality, against some
+     OTHER chapter's unrelated snapshot that happens to share the same key —
+     so it is cleared instead, same as a segment that never resolved at
+     render time. */
+  const stampedSegments: ChapterSegment[] = segments.map((s, i) => {
+    if (resynthesizedIndexSet.has(i)) {
+      const resolved = resolveSpeakingId(s.characterId);
+      return { ...s, resolvedCharacterId: characterSnapshots[resolved] ? resolved : undefined };
+    }
+    return s.resolvedCharacterId && !characterSnapshots[s.resolvedCharacterId]
+      ? { ...s, resolvedCharacterId: undefined }
+      : s;
   });
 
   /* Drift stamp from the ACTUAL render, not the request default (false-drift

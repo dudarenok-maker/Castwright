@@ -474,21 +474,28 @@ export interface ChapterSegment {
       silence) rather than shipped, after the ASR re-record budget failed to
       recover it. A hard `suspect` flag rides alongside. Undefined otherwise. */
   quarantined?: boolean;
-  /** #3362 pass-4 fix (🟠D / owner design a) — the canonical cast id THIS
-      RENDER resolved `characterId` to, stamped by `finalize-chapter-write.ts`
-      ONLY when that id is a real key in this chapter's own
-      `characterSnapshots` (never re-derived later). Render-integrity scoring
-      (`render-integrity/aggregate.ts`), `qa-report.ts` and
+  /** #3362 pass-4 fix (🟠D / owner design a), refined by pass-5 (🟠E, owner
+      design (i)) — the canonical cast id THIS SEGMENT was last resolved
+      under, stamped by `finalize-chapter-write.ts` ONLY when that id is a
+      real key in the WRITE's own `characterSnapshots`. Render-integrity
+      scoring (`render-integrity/aggregate.ts`), `qa-report.ts` and
       `chapter-qa-repair.ts` join an embedding/verdict row to its snapshot
       through THIS stamp instead of re-resolving `characterId` against the
       CURRENT (mutable, post-render) cast + cast-id-history — a later
       retirement, reject, or bridge added after this chapter rendered must
-      not change which identity this render's own rows score under. Absent
-      on a legacy segment written before this stamp, or when `characterId`
-      never resolved into this chapter's own snapshot at all; either way the
-      caller falls back to `characterId` verbatim with an EXACT match against
-      this chapter's own snapshot keys — no history consultation at scoring
-      time (main's pre-#3362 behaviour). See aggregate.ts's `scoreAndMergeCharacter`
+      not change which identity this render's own rows score under.
+
+      NOT "never re-derived later" outright: a re-finalize (a splice
+      remix/rerecord, a qa-repair) resolves this fresh again, but ONLY for a
+      segment it actually re-synthesised this write — see
+      `FinalizeChapterAudioInput.resynthesizedIndices`. A segment that write
+      did NOT touch keeps its existing stamp (or absence) verbatim; the write
+      never re-derives identity for audio it didn't itself produce. Absent on
+      a legacy segment written before this stamp, or when `characterId` never
+      resolved into that write's own snapshot at all; either way the caller
+      falls back to `characterId` verbatim with an EXACT match against this
+      chapter's own snapshot keys — no history consultation at scoring time
+      (main's pre-#3362 behaviour). See aggregate.ts's `scoreAndMergeCharacter`
       and its removed `buildSnapshotIdResolver` doc comment for the bug class
       this closes. */
   resolvedCharacterId?: string;

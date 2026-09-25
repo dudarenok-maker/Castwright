@@ -193,7 +193,12 @@ export async function buildAudioQaReport(
      eligibleChapterIds-eligible (its OWN characterSnapshots never named that
      character). The stamp is scoped to THIS chapter's own segment (see
      aggregate.ts's `resolveRowCharId`), so a row can no longer resolve onto
-     a DIFFERENT chapter's key at all — but a pre-#3362/pass-4 chapter with
+     a DIFFERENT chapter's key at all — that holds only because
+     finalize-chapter-write.ts's own write invariant guarantees a stamp
+     always names a key present in THAT SAME write's `characterSnapshots`
+     (pass-5, 🟠E: a re-finalize that can't carry a stamp's snapshot entry
+     forward clears the stamp rather than leaving it dangling — see
+     finalize-chapter-write.ts's stamping block) — but a pre-#3362/pass-4 chapter with
      no snapshot entry at all still passes its raw embeddings-row id through
      UNRESOLVED, and that raw id can still coincide, by plain string
      equality, with a canonical key a LATER chapter's own snapshot

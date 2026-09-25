@@ -38,6 +38,18 @@ import { loadAnalysisCache } from '../store/analysis-cache.js';
 
 // ── Module mocks (must come before any imports of the mocked modules) ────────
 
+/* #3362 review pass 5, 🟡 — pinned so the Q1–Q3 `embedSegment` call-count
+   assertions below (which assume 2 re-record attempts per segment) don't
+   pass vacuously if the shipped default ever moves. `chapter-qa-repair.ts`'s
+   `resolveMaxRerecords` reads `process.env.SEG_QA_MAX_RERECORDS` directly
+   (not `configValue`) — see `beforeAll` below, which sets that env var to
+   this SAME constant so the actual attempt count and the assertions' bound
+   stay a single source of truth. The `configValue('qa.seg.maxRerecords')`
+   mock entry is added for symmetry with the registry key this env var backs
+   (`server/src/config/registry.ts`), even though this route doesn't read it
+   through `configValue`. */
+const PINNED_MAX_RERECORDS = 2;
+
 vi.mock('../config/resolver.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../config/resolver.js')>();
   return {
@@ -45,6 +57,7 @@ vi.mock('../config/resolver.js', async (importOriginal) => {
     configValue: vi.fn((key: string) => {
       if (key === 'qa.speaker.autoRepair') return true;
       if (key === 'qa.speaker.enabled') return true;
+      if (key === 'qa.seg.maxRerecords') return PINNED_MAX_RERECORDS;
       return real.configValue(key);
     }),
   };
@@ -274,6 +287,9 @@ async function writeSegmentsFixture() {
 
 beforeAll(async () => {
   process.env.SEG_SPK_AUTO_REPAIR = '1';
+  // #3362 review pass 5, 🟡 — drives resolveMaxRerecords's actual attempt
+  // count; see PINNED_MAX_RERECORDS's own doc comment above.
+  process.env.SEG_QA_MAX_RERECORDS = String(PINNED_MAX_RERECORDS);
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-qa-snapshot-id-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
@@ -328,6 +344,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   delete process.env.SEG_SPK_AUTO_REPAIR;
+  delete process.env.SEG_QA_MAX_RERECORDS;
   rmSync(workspaceRoot, { recursive: true, force: true });
 });
 
@@ -580,7 +597,7 @@ describe('audio-qa-repair acoustic gate survives a cast-id-history write between
     // 'mairin'-keyed centroid — the acoustic gate found it.
     expect(stillSuspect).toContain(1);
     expect(repaired).not.toContain(1);
-    expect(vi.mocked(embedSegment).mock.calls.length).toBeGreaterThan(2);
+    expect(vi.mocked(embedSegment).mock.calls.length).toBeGreaterThan(PINNED_MAX_RERECORDS);
   });
 
   it('Q2 (mairin renamed AFTER scoring): wrong-voice take is STILL rejected — the gate keys off the verdict row, not the current cast-id-history', async () => {
@@ -624,7 +641,7 @@ describe('audio-qa-repair acoustic gate survives a cast-id-history write between
     // the wrong-voice take was silently ACCEPTED with no acoustic check.
     expect(stillSuspect).toContain(1);
     expect(repaired).not.toContain(1);
-    expect(vi.mocked(embedSegment).mock.calls.length).toBeGreaterThan(2);
+    expect(vi.mocked(embedSegment).mock.calls.length).toBeGreaterThan(PINNED_MAX_RERECORDS);
   });
 
   it('Q3 (mayrin/mairin pair rejected AFTER scoring): wrong-voice take is STILL rejected', async () => {
@@ -655,7 +672,7 @@ describe('audio-qa-repair acoustic gate survives a cast-id-history write between
 
     expect(stillSuspect).toContain(1);
     expect(repaired).not.toContain(1);
-    expect(vi.mocked(embedSegment).mock.calls.length).toBeGreaterThan(2);
+    expect(vi.mocked(embedSegment).mock.calls.length).toBeGreaterThan(PINNED_MAX_RERECORDS);
   });
 
   it('correct-voice take is accepted and the verdict row (still keyed "mairin") is updated, even after a post-scoring rename', async () => {

@@ -764,6 +764,14 @@ chapterQaRepairRouter.post(
         modelKey,
         audioFormat: bookStateAudioFormat(state as BookStateJson),
         expectedSec: segFile.durationSec,
+        /* #3362 pass-5 fix (🟠E) — the exact segment indices this repair
+           actually resynthesised (every entry `buildSynthReplacements`
+           attempted, accepted or not — see its own doc), so finalize freezes
+           identity for every other segment instead of re-deriving it from
+           the current cast/history. `spliced.segments` preserves
+           `segFile.segments`'s order/length 1:1, so these indices still
+           line up. */
+        resynthesizedIndices: safeTargetIndices,
         /* #2128 — carried forward verbatim, never refreshed. This path
            re-synthesises SOME sentences against the current resolver, correctly,
            but leaves every other segment byte-identical; refreshing the stamp

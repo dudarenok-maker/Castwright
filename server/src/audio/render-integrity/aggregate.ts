@@ -186,9 +186,23 @@ export function resolveConfiguredEngineByChar(
  * it names a real key in THIS chapter's own `characterSnapshots`. Joining a
  * row through that per-SEGMENT stamp makes every downstream consumer's join
  * invariant to anything written to `cast-id-history.json` after this
- * chapter rendered, and STABLE across repeat `scoreBook` runs — a re-score
- * can never resolve a chapter's own rows under a different key than the
- * last run did, so S7's staleness is structurally moot.
+ * chapter rendered, and STABLE across repeat `scoreBook` runs WHEN THE
+ * CHAPTER ITSELF IS NOT RE-FINALIZED BETWEEN THEM — a plain re-score (no
+ * splice, no qa-repair) can never resolve a chapter's own rows under a
+ * different key than the last run did, so S7's staleness is structurally
+ * moot for that case.
+ *
+ * A re-finalize in between is a different story (pass-5, 🟠E): it freezes
+ * identity for every segment it did not itself re-synthesise, but a segment
+ * it DID re-synthesise is resolved fresh against whatever the cast/history
+ * says NOW — by design, since that segment's audio genuinely changed. A
+ * rename recorded between two scores, followed by a re-finalize that only
+ * touches SOME of a character's segments, can therefore leave a chapter's
+ * rows split across the old and new key: the untouched segments' rows stay
+ * under the old key (frozen, still accurate for audio that never changed),
+ * the resynthesised ones land under the new one (also accurate — that audio
+ * really is the renamed character now). Two real, live rosters for one
+ * chapter, not a staleness bug.
  *
  * A segment with no stamp — a legacy pre-#3362/pass-4 render, or a raw id
  * that never resolved into this chapter's own snapshot AT RENDER TIME (an
