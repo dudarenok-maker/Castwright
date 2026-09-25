@@ -103,9 +103,13 @@ const baseInput = () => {
       { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
     ],
     cast: [{ id: 'amy', name: 'Amy', gender: 'female' as const, attributes: [] }],
+    /* #3362 finding 3 — the caller's own resolved history, not a disk read.
+       Tests that need a non-empty history pass their own override. */
+    castIdHistory: { schema: 1 as const, supersededBy: {} },
     defaultEngine: 'kokoro' as const,
     modelKey: 'kokoro-v1' as const,
     audioFormat: 'mp3' as const,
+    resynthesizedIndices: 'all' as const,
   };
 };
 
@@ -338,7 +342,7 @@ describe('finalizeChapterAudioWrite QA clip check — the centrepiece (plan 274 
 });
 
 describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 follow-up)', () => {
-  it('carries resolvedVoiceName forward from the PRIOR segments file when this run synthesised nothing for a speaking character (e.g. a gain-only remix)', async () => {
+  it('carries resolvedVoiceName forward from the PRIOR segments file when this run synthesised nothing for a speaking character (a defensive gap-fill, not a remix — #3362 pass-6 🟡4: a genuine remix passes resynthesizedIndices: [] and is pinned by R2/R4 in finalize-chapter-write-refinalize.test.ts instead)', async () => {
     // A LEGACY (pre-#1972) prior render: characterSnapshots carries
     // resolvedVoiceName but the segment itself carries no voiceName field at
     // all — the shape every chapter rendered before this PR has on disk.
@@ -357,9 +361,12 @@ describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 f
       }),
     );
 
-    // This "run" mirrors a remix: amy still speaks (has a segment in the
-    // input) but nothing was actually synthesised, so baseInput()'s segment
-    // carries no voiceName/baseVoiceName.
+    // #3362 pass-6 🟡4 — this is a FULL run (baseInput()'s default
+    // resynthesizedIndices: 'all'; not a remix, which would pass an empty
+    // set): amy speaks and was resynthesised, but this defensive fixture's
+    // segment carries no voiceName/baseVoiceName of its own, exercising the
+    // C1 gap-fill's prior-file lookup rather than the pass-5 untouched-
+    // segment carry-forward a real remix goes through.
     await finalizeChapterAudioWrite(baseInput());
 
     const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
@@ -418,7 +425,12 @@ describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 f
       }),
     );
 
-    // This run only re-recorded wren; amy's segment carries no voiceName.
+    // This run only re-recorded wren (index 1); amy (index 0) is untouched.
+    // #3362 pass-6 🟡4 — resynthesizedIndices is now explicit rather than
+    // relying on baseInput()'s 'all' default, so this actually exercises the
+    // partial-split freeze (pass-5 untouched carry-forward for amy, fresh
+    // resolution for wren) instead of coincidentally passing via the C1
+    // gap-fill, which a full-default run would also have hit.
     await finalizeChapterAudioWrite({
       ...baseInput(),
       segments: [
@@ -429,11 +441,85 @@ describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 f
         { id: 'amy', name: 'Amy', gender: 'female' as const, attributes: [] },
         { id: 'wren', name: 'Wren', gender: 'female' as const, attributes: [] },
       ],
+      resynthesizedIndices: [1],
     });
 
     const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
     expect(segFile.characterSnapshots.amy.resolvedVoiceName).toBe('kokoro-amy-legacy');
     expect(segFile.characterSnapshots.wren.resolvedVoiceName).toBe('kokoro-wren-FRESH');
+  });
+
+  it('#3362 finding 5 — carries forward a prior snapshot stored under a since-retired id, found via the canonical id it now resolves to', async () => {
+    // Prior render wrote the snapshot under 'retired_char' — the id it had
+    // BEFORE `retireCharacterId` folded it into 'live_char'.
+    writeFileSync(
+      join(audioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [{ groupIndex: 0, characterId: 'retired_char', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
+        characterSnapshots: { retired_char: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-retired-legacy' } },
+      }),
+    );
+
+    // This run's segment already carries the raw pre-#1972 shape: its
+    // characterId resolves to 'live_char' through the retirement, but
+    // carries no voiceName of its own. #3362 pass-6 🟡4 — a FULL run
+    // (baseInput()'s default resynthesizedIndices: 'all'), not a remix; it
+    // exercises C1's priorSnapshotsByCanonicalId lookup, which needs the
+    // segment resolved FRESH (a remix would freeze it at its raw untouched
+    // key instead — see the C1 describe block above for that distinction).
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      castIdHistory: { schema: 1, supersededBy: { retired_char: 'live_char' } },
+      segments: [{ groupIndex: 0, characterId: 'retired_char', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
+      cast: [{ id: 'live_char', name: 'Live Char', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots.live_char.resolvedVoiceName).toBe('kokoro-retired-legacy');
+  });
+
+  it('#3362 finding 5 — prefers the prior snapshot stored under the exact canonical id over one reached only via a retired alias', async () => {
+    // Prior file has BOTH a retired alias and the canonical key itself for
+    // the same character, with the ALIAS listed first — the canonical entry
+    // must still win, so this only passes if the exact-key preference is
+    // actually consulted rather than "first entry seen wins" (which the
+    // canonical-first ordering used to mask, since Object.entries visits
+    // insertion order and the guard's `!has(canonicalId)` alone would have
+    // let the first-seen alias stick).
+    writeFileSync(
+      join(audioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 1.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [{ groupIndex: 0, characterId: 'live_char', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
+        characterSnapshots: {
+          retired_char: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-retired-alias' },
+          live_char: { voiceEngine: 'kokoro', resolvedVoiceName: 'kokoro-live-canonical' },
+        },
+      }),
+    );
+
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      castIdHistory: { schema: 1, supersededBy: { retired_char: 'live_char' } },
+      segments: [{ groupIndex: 0, characterId: 'live_char', sentenceIds: [1], startSec: 0, endSec: 1.0 }],
+      cast: [{ id: 'live_char', name: 'Live Char', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots.live_char.resolvedVoiceName).toBe('kokoro-live-canonical');
   });
 });
 
@@ -459,6 +545,148 @@ describe('finalizeChapterAudioWrite resolvedVoiceName strips the emotion-variant
 
     const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
     expect(segFile.characterSnapshots.amy.resolvedVoiceName).toBe('qwen-amy');
+  });
+});
+
+/* #3362 — the snapshot map must be keyed by the canonical cast id even when a
+   segment's raw characterId only reaches the cast row through the resolver's
+   normalised-id tier, and a REJECTED pair must still produce no entry. */
+describe('finalizeChapterAudioWrite characterSnapshots canonical-id keying (#3362)', () => {
+  it('stamps the snapshot under the canonical cast id when the segment id only matches via the normalised-id tier', async () => {
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [
+        { groupIndex: 0, characterId: 'the-torment', sentenceIds: [1], startSec: 0, endSec: 1.0, voiceName: 'kokoro-the-torment' },
+      ],
+      cast: [{ id: 'the_torment', name: 'The Torment', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots['the_torment']).toBeDefined();
+    expect(segFile.characterSnapshots['the_torment'].resolvedVoiceName).toBe('kokoro-the-torment');
+    expect(segFile.characterSnapshots['the-torment']).toBeUndefined();
+  });
+
+  it('stamps the fallback engine under the canonical cast id when the segment id only matches via the normalised-id tier', async () => {
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [
+        {
+          groupIndex: 0,
+          characterId: 'the-torment',
+          sentenceIds: [1],
+          startSec: 0,
+          endSec: 1.0,
+          voiceName: 'kokoro-the-torment',
+          renderedFallbackEngine: 'kokoro',
+        },
+      ],
+      cast: [{ id: 'the_torment', name: 'The Torment', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots['the_torment']).toBeDefined();
+    expect(segFile.characterSnapshots['the_torment'].renderedFallbackEngine).toBe('kokoro');
+    expect(segFile.characterSnapshots['the-torment']).toBeUndefined();
+  });
+
+  it('produces NO snapshot entry under either key when the only path from the segment id to the cast row is a rejected pair', async () => {
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      // #3362 finding 3 — passed directly as the render's own resolved
+      // history, not written to disk for finalize to re-read.
+      castIdHistory: { schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'the-torment', to: 'the_torment' }] },
+      segments: [
+        { groupIndex: 0, characterId: 'the-torment', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+      ],
+      cast: [{ id: 'the_torment', name: 'The Torment', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots['the_torment']).toBeUndefined();
+    expect(segFile.characterSnapshots['the-torment']).toBeUndefined();
+  });
+});
+
+/* #3362 pass-4 fix (🟠D / owner design a) — finalize stamps each segment
+   with the SAME canonical id it resolved to build `characterSnapshots`, so
+   render-integrity scoring, qa-report.ts and chapter-qa-repair.ts can join a
+   row to its snapshot through the segment itself instead of re-resolving
+   the raw id through the CURRENT (mutable) cast + cast-id-history at
+   scoring/repair time. See aggregate.ts's `resolveRowCharId` doc comment. */
+describe('finalizeChapterAudioWrite stamps resolvedCharacterId on each segment (#3362 pass-4)', () => {
+  it('stamps the history-tier render-time resolution: segment "mayrin" stamped "mairin"', async () => {
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      castIdHistory: { schema: 1, supersededBy: { mayrin: 'mairin' } },
+      segments: [
+        { groupIndex: 0, characterId: 'mayrin', sentenceIds: [1], startSec: 0, endSec: 1.0, voiceName: 'kokoro-mairin' },
+      ],
+      cast: [{ id: 'mairin', name: 'Mairin', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.segments[0].characterId).toBe('mayrin');
+    expect(segFile.segments[0].resolvedCharacterId).toBe('mairin');
+    expect(segFile.characterSnapshots['mairin']).toBeDefined();
+  });
+
+  it('does NOT stamp a segment whose id never resolves into this chapter\'s own characterSnapshots', async () => {
+    // No cast row for 'amy' at all — resolveSpeakingId falls back to the raw
+    // id, which never appears as a characterSnapshots key.
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: [
+        { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+      ],
+      cast: [],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.segments[0].characterId).toBe('amy');
+    expect(segFile.segments[0].resolvedCharacterId).toBeUndefined();
+    expect(segFile.characterSnapshots['amy']).toBeUndefined();
+  });
+
+  it('stamps a segment whose raw id already matches its cast id exactly, with the same (identity) value', async () => {
+    await finalizeChapterAudioWrite(baseInput());
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.segments[0].characterId).toBe('amy');
+    expect(segFile.segments[0].resolvedCharacterId).toBe('amy');
+  });
+});
+
+/* #3362 finding 3 — finalize must resolve against the `castIdHistory` the
+   CALLER passes (the state the render actually resolved segments' ids
+   against), never a fresh `loadCastIdHistory(bookDir)` read of whatever is
+   on disk by the time the write tail runs. A mid-render edit (e.g. the user
+   rejecting a pair from the Cast banner while generation is still in
+   flight) can leave disk newer than the render's own resolver input; a
+   re-read would resolve against that newer, wrong state. */
+describe('finalizeChapterAudioWrite resolves against the caller-supplied history, not a fresh disk read (#3362 finding 3)', () => {
+  it('keeps the canonical-id snapshot from the history it was given, even when disk now says the pair is rejected', async () => {
+    // Disk holds a NEWER history (H1) than what this render resolved
+    // against: the pair has since been rejected.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast-id-history.json'),
+      JSON.stringify({ schema: 1, supersededBy: {}, rejectedPairs: [{ from: 'the-torment', to: 'the_torment' }] }),
+    );
+
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      // This render's OWN resolver input (H0): the pair is still linked,
+      // matching via the normalised-id tier.
+      castIdHistory: { schema: 1, supersededBy: {} },
+      segments: [
+        { groupIndex: 0, characterId: 'the-torment', sentenceIds: [1], startSec: 0, endSec: 1.0, voiceName: 'kokoro-the-torment' },
+      ],
+      cast: [{ id: 'the_torment', name: 'The Torment', gender: 'female' as const, attributes: [] }],
+    });
+
+    const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
+    expect(segFile.characterSnapshots['the_torment']).toBeDefined();
+    expect(segFile.characterSnapshots['the-torment']).toBeUndefined();
   });
 });
 

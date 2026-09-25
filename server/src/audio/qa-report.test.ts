@@ -3,7 +3,7 @@ import { mkdtemp, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeJsonAtomic } from '../workspace/state-io.js';
-import { audioDir } from '../workspace/paths.js';
+import { audioDir, dotAudiobook, castJsonPath } from '../workspace/paths.js';
 import { writeVerdicts, writeAttempted, attemptedPath } from './render-integrity/verdicts-io.js';
 import { scoreBook } from './render-integrity/aggregate.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './render-integrity/embeddings-io.js';
@@ -466,5 +466,192 @@ describe('qa-report — srv-36 hardening: embeddings-sourced roster + characters
 
     const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
     expect(report.voiceDrift.chaptersEmbedFailed).toBe(1);
+  });
+});
+
+describe('buildAudioQaReport — canonical cast-id roster join (#3362 review finding)', () => {
+  it('resolves a raw embedding-row characterId to the canonical cast id before joining against configuredEngineByChar, so a fully-scored chapter reads as scored (not embed-failed)', async () => {
+    // Repro (PR #3375 review pass 1): characterSnapshots is canonical-keyed
+    // since finalize-chapter-write #3370 ('the_torment', resolved from the
+    // raw 'the-torment' via the normalised-id tier), but embeddings.json rows
+    // are frozen at synth time and still carry the RAW 'the-torment' id.
+    // `configuredEngineByChar` (built from characterSnapshots) is therefore
+    // canonical-keyed too. Before this fix, `configuredEngineByChar.get(row.
+    // characterId)` looked up the raw id and found nothing, so
+    // `rosterByChapter` for this chapter was built from the WRONG (raw) id —
+    // it could never match `verdictCharactersByChapter` (sourced from the
+    // render-integrity.json rows, which aggregate.ts's own #3362 fix now
+    // persists under the canonical id), so the chapter never counted as
+    // "fully scored" despite a real, complete verdict row existing for it.
+    const dir = await makeBook();
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    await writeJsonAtomic(castJsonPath(dir), {
+      characters: [{ id: 'the_torment', name: 'The Torment', gender: 'female', attributes: [] }],
+    });
+
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      // segments.json's own segments[] carry the RAW id, PLUS the
+      // `resolvedCharacterId` stamp finalize-chapter-write.ts writes (#3362
+      // pass-4 fix) — the roster join now reads that stamp back instead of
+      // re-deriving it from a resolver at report time.
+      segments: [seg({ characterId: 'the-torment', resolvedCharacterId: 'the_torment' })],
+      // characterSnapshots IS canonical-keyed (#3370).
+      characterSnapshots: { the_torment: { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'the-torment', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    // The verdict row is stamped with the CANONICAL id — the persisted shape
+    // aggregate.ts's own #3362 fix now writes.
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'the_torment', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.chaptersEligible).toBe(1);
+    // The chapter's roster (from embeddings, resolved) matches its verdict
+    // rows (canonical) — fully scored, not stuck.
+    expect(report.voiceDrift.chaptersScored).toBe(1);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
+    expect(report.voiceDrift.charactersOnRoster).toBe(1);
+    expect(report.voiceDrift.charactersChecked).toBe(1);
+  });
+
+  it('keeps a chapter rendered under a character id retired AFTER rendering scored under its render-time identity, not embed-failed (#3362 review pass 2, 🟠A)', async () => {
+    // ch1 rendered as 'bob'; a later cast merge retires 'bob' in favour of
+    // 'robert' (cast.json now only has 'robert'). Resolving the embedding
+    // row through the book's CURRENT cast + cast-id-history (review pass 1's
+    // fix) would move it onto 'robert', which `configuredEngineByChar`
+    // (sourced from ch1's own, still-'bob'-keyed characterSnapshots) has no
+    // entry for — the roster join fails, and the chapter reads as
+    // embed-failed despite a real, complete verdict row existing for it.
+    const dir = await makeBook();
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    await writeJsonAtomic(castJsonPath(dir), {
+      characters: [{ id: 'robert', name: 'Robert', gender: 'male', attributes: [] }],
+    });
+    await writeJsonAtomic(join(dotAudiobook(dir), 'cast-id-history.json'), {
+      schema: 1, supersededBy: { bob: 'robert' },
+    });
+
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'bob' })],
+      characterSnapshots: { bob: { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'bob', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'bob', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    expect(report.voiceDrift.chaptersEligible).toBe(1);
+    expect(report.voiceDrift.chaptersScored).toBe(1);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
+    expect(report.voiceDrift.charactersOnRoster).toBe(1);
+    expect(report.voiceDrift.charactersChecked).toBe(1);
+  });
+
+  it('never reports chaptersScored > chaptersEligible when a chapter rendered before #3362 (no characterSnapshots entry at all) resolves its raw embeddings row onto a LATER chapter\'s canonical snapshot key (review pass 2 🟡 finding 1)', async () => {
+    // ch1 rendered BEFORE this PR: it never got a characterSnapshots entry
+    // for the drifted-spelling character at all (not even under the raw
+    // id) — so ch1 is not eligibleChapterIds-eligible by the snapshot-based
+    // test. ch2 rendered AFTER this PR and has the canonical entry. Both
+    // chapters' embeddings.json rows carry the same RAW spelling. ch1's
+    // segment carries no `resolvedCharacterId` stamp at all (no snapshot
+    // entry to resolve against at render time) — a book-wide resolver used
+    // to let it borrow ch2's canonical stamp instead, putting ch1 on
+    // rosterByChapter, and (once a real verdict exists for it) on
+    // chaptersScored, despite ch1 never counting as eligible. Before the fix
+    // this produced "2 of 1 eligible chapters scored". #3362 pass-4 fix: the
+    // join now reads each row's OWN segment's stamp (or the raw id,
+    // unresolved) — it can never reach across into a sibling chapter's.
+    const dir = await makeBook();
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    await writeJsonAtomic(castJsonPath(dir), {
+      characters: [{ id: 'the_torment', name: 'The Torment', gender: 'female', attributes: [] }],
+    });
+
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'the-torment' })],
+      characterSnapshots: {}, // pre-#3362 chapter: no snapshot entry at all
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'the-torment', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'the_torment', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+
+    await writeJsonAtomic(join(audioDir(dir), 'ch2.segments.json'), {
+      bookId: 'b1', chapterId: 2, chapterTitle: 'Two', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      // #3362 pass-4 fix — ch2's stamp, matching what finalize actually
+      // wrote for it.
+      segments: [seg({ characterId: 'the-torment', resolvedCharacterId: 'the_torment' })],
+      characterSnapshots: { the_torment: { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch2.embeddings.json'), [
+      { characterId: 'the-torment', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch2'));
+    await writeVerdicts(join(audioDir(dir), 'ch2.render-integrity.json'), [
+      { characterId: 'the_torment', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 2 },
+    ]);
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+    expect(report.voiceDrift.chaptersEligible).toBe(1); // only ch2 has a snapshot entry for it
+    expect(report.voiceDrift.chaptersScored).toBeLessThanOrEqual(report.voiceDrift.chaptersEligible);
+    expect(report.voiceDrift.chaptersScored).toBe(1); // ch1 must not count despite its resolved roster row
+  });
+
+  it('reads the roster join off each row\'s own segment stamp — a cast-id-history write AFTER render never moves the roster (#3362 pass-4, 🟠D)', async () => {
+    // Same history-bridged shape as aggregate.test.ts's S4: cast [mairin],
+    // segment raw 'mayrin' stamped 'mairin' at render time. AFTER that,
+    // 'mairin' is renamed to 'mairin-oakes' — cast.json and
+    // cast-id-history.json both move; the stamp does not.
+    const dir = await makeBook();
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: [seg({ characterId: 'mayrin', resolvedCharacterId: 'mairin' })],
+      characterSnapshots: { mairin: { voiceEngine: 'qwen' } },
+    });
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), [
+      { characterId: 'mayrin', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+    ], EMBEDDINGS_VERSION);
+    await writeAttempted(attemptedPath(audioDir(dir), 'ch1'));
+    await writeVerdicts(join(audioDir(dir), 'ch1.render-integrity.json'), [
+      { characterId: 'mairin', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: 1 },
+    ]);
+
+    // AFTER render: rename recorded on disk.
+    await writeJsonAtomic(castJsonPath(dir), {
+      characters: [{ id: 'mairin-oakes', name: 'Mairin Oakes', gender: 'female', attributes: [] }],
+    });
+    await writeJsonAtomic(join(dotAudiobook(dir), 'cast-id-history.json'), {
+      schema: 1, supersededBy: { mayrin: 'mairin-oakes', mairin: 'mairin-oakes' },
+    });
+
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }]);
+    // Still scored under 'mairin' — the roster join never re-derives
+    // through the renamed cast/history, so the chapter reads as fully
+    // scored (not embed-failed) regardless of the rename.
+    expect(report.voiceDrift.chaptersEligible).toBe(1);
+    expect(report.voiceDrift.chaptersScored).toBe(1);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
+    expect(report.voiceDrift.charactersOnRoster).toBe(1);
+    expect(report.voiceDrift.charactersChecked).toBe(1);
   });
 });

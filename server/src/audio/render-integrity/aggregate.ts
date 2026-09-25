@@ -64,6 +64,11 @@ interface SegmentsEntry {
   /** Per-SEGMENT fallback engine — the field we extend in segments-io.ts.
    *  Null / absent = rendered in the configured engine (anchor-eligible). */
   renderedFallbackEngine?: string | null;
+  /** #3362 pass-4 fix (🟠D) — the canonical id THIS render resolved
+   *  `characterId` to, stamped by finalize-chapter-write.ts. See
+   *  `resolveRowCharId`'s own doc comment just below for how this is used
+   *  to join a row to its chapter's `characterSnapshots`. */
+  resolvedCharacterId?: string;
 }
 
 interface SegmentsFileView {
@@ -145,6 +150,73 @@ export function resolveConfiguredEngineByChar(
     }
   }
   return configuredEngineByChar;
+}
+
+/**
+ * Resolve an embedding/segment row's raw `characterId` to the identity it
+ * should be scored/joined under: the render-time stamp
+ * `finalize-chapter-write.ts` wrote onto the MATCHING segment
+ * (`seg.resolvedCharacterId`), when one exists — else the raw id verbatim.
+ *
+ * #3362 pass-4 fix (🟠D) — this replaces `buildSnapshotIdResolver` (review
+ * pass 3), which paired a FROZEN render-time candidate set (this chapter's
+ * own snapshot keys) with the LIVE, mutable `cast-id-history.json`. A
+ * retirement, reject, or bridge recorded AFTER this chapter rendered
+ * changed what a row resolved to on every LATER `scoreBook`/qa-report run,
+ * even though the render itself never changed — pass-4's repros:
+ *   - S4/S5: a rename or reject recorded after render reopened review pass
+ *     3's 🟠C phantom-audition symptom (`retireCharacterId` path-compresses
+ *     the very history entry that bridged the render; `forgetSupersededId`
+ *     deletes it outright) — the row fell back to raw and missed, or
+ *     resolved onto a key it was never rendered under.
+ *   - S6/S8: a bridge that did not exist at render time let a resolver
+ *     rebuilt from CURRENT history pool an orphaned/narrator-substituted
+ *     row into a character's centroid it was never actually recorded as.
+ *   - S7: re-scoring an already-scored chapter after such a change left the
+ *     OLD key's verdict rows stale forever — `mergeVerdictRows` only
+ *     replaces rows under the id it's WRITING, so a row that resolves
+ *     differently on this run than the last leaves the previous run's rows
+ *     behind as orphaned data.
+ *
+ * Persisting the render-time resolution — instead of re-deriving it every
+ * call from whatever `cast-id-history.json` currently says — closes all of
+ * these at once: `finalize-chapter-write.ts` already computes
+ * `resolveSpeakingId(rawId)` per segment (the same `castResolver` this
+ * function used to rebuild here), and stamps it onto the segment only when
+ * it names a real key in THIS chapter's own `characterSnapshots`. Joining a
+ * row through that per-SEGMENT stamp makes every downstream consumer's join
+ * invariant to anything written to `cast-id-history.json` after this
+ * chapter rendered, and STABLE across repeat `scoreBook` runs WHEN THE
+ * CHAPTER ITSELF IS NOT RE-FINALIZED BETWEEN THEM — a plain re-score (no
+ * splice, no qa-repair) can never resolve a chapter's own rows under a
+ * different key than the last run did, so S7's staleness is structurally
+ * moot for that case.
+ *
+ * A re-finalize in between is a different story (pass-5, 🟠E): it freezes
+ * identity for every segment it did not itself re-synthesise, but a segment
+ * it DID re-synthesise is resolved fresh against whatever the cast/history
+ * says NOW — by design, since that segment's audio genuinely changed. A
+ * rename recorded between two scores, followed by a re-finalize that only
+ * touches SOME of a character's segments, can therefore leave a chapter's
+ * rows split across the old and new key: the untouched segments' rows stay
+ * under the old key (frozen, still accurate for audio that never changed),
+ * the resynthesised ones land under the new one (also accurate — that audio
+ * really is the renamed character now). Two real, live rosters for one
+ * chapter, not a staleness bug.
+ *
+ * A segment with no stamp — a legacy pre-#3362/pass-4 render, or a raw id
+ * that never resolved into this chapter's own snapshot AT RENDER TIME (an
+ * orphaned/narrator-substituted line, or a link added only after this
+ * chapter rendered — S8) — falls through with the raw id UNCHANGED. That is
+ * `main`'s own pre-#3362 behaviour: no resolver, no history consultation at
+ * scoring time at all, exact string match against this chapter's own
+ * snapshot keys via the `stochasticChars`/`charId` equality checks below.
+ */
+export function resolveRowCharId(
+  seg: { resolvedCharacterId?: string } | undefined,
+  rawId: string,
+): string {
+  return seg?.resolvedCharacterId ?? rawId;
 }
 
 // ── Reference resolution (Task 10 seam) ───────────────────────────────────
@@ -367,7 +439,10 @@ async function readBookLanguage(bookDir: string): Promise<string | undefined> {
 
 // ── Key for joining embedding rows to segment rows ─────────────────────────
 
-function segKey(characterId: string, sentenceIds: number[]): string {
+/** Exported so qa-report.ts's own roster join (the same embeddings-row →
+ *  segment lookup, for eligibility rather than scoring) can't drift from
+ *  this module's own key shape. */
+export function segKey(characterId: string, sentenceIds: number[]): string {
   return `${characterId}:${sentenceIds.join(',')}`;
 }
 
@@ -556,6 +631,25 @@ export async function scoreBook(
      `.supersededBy`) so `buildCastResolver` also honours `rejected`. */
   const castIdHistory = await loadCastIdHistory(bookDir);
   const castResolver = buildCastResolver(castChars ?? [], castIdHistory);
+  /* #3362 pass-4 fix (🟠D) — embedding rows carry the RAW segment
+     characterId their synth request was made under (frozen at render time,
+     see synthesise-chapter.ts); `stochasticChars`/`orderedChars`/
+     `voiceInfoByChar` are keyed by whatever snapshot key that chapter's own
+     `characterSnapshots` used (canonical AT THAT RENDER, since
+     finalize-chapter-write #3370 — but never rewritten by a LATER
+     retirement/merge). Earlier review passes resolved a row through a
+     resolver rebuilt from the book's cast + cast-id-history — first the
+     CURRENT state (pass 1: wrong once a character retires after rendering),
+     then a per-chapter resolver still keyed off the CURRENT (mutable, live)
+     history (pass 3: wrong again once that history changes after render —
+     see pass-4's S4/S5/S6/S7/S8). Neither survives a later retirement,
+     reject, or bridge, because neither is a record of what THIS render
+     actually resolved. `resolveRowCharId` (above) instead reads the render's
+     OWN resolution back off each row's matching segment — stamped once, at
+     render time, by finalize-chapter-write.ts — so no per-chapter resolver
+     is built here at all; the anchor-gathering loop and
+     `scoreAndMergeCharacter` below both call `resolveRowCharId(seg, rawId)`
+     directly against `cd.segsByKey`. */
   // #1951 — the language the chapters were rendered in. Read once per run and
   // stamped onto every Option-B audition below, for the same comparability
   // reason the render TIER is (see the renderKey comment further down).
@@ -622,16 +716,20 @@ export async function scoreBook(
 
   for (const cd of chapterData) {
     for (const row of cd.embRows) {
-      if (!stochasticChars.has(row.characterId)) continue;
-
+      // #3362 pass-4 fix — look up the row's matching segment FIRST, then
+      // resolve through its render-time stamp (falling back to the raw id —
+      // see `resolveRowCharId`'s doc comment) before the
+      // stochasticChars/anchorVecsByChar joins.
       const key = segKey(row.characterId, row.sentenceIds);
       const seg = cd.segsByKey.get(key);
+      const rowCharId = resolveRowCharId(seg, row.characterId);
+      if (!stochasticChars.has(rowCharId)) continue;
 
       // Anchor-eligible: no per-segment fallback (use the per-segment field,
       // NOT characterSnapshots.renderedFallbackEngine which over-excludes)
       const hasFallback = seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '';
       if (!hasFallback) {
-        anchorVecsByChar.get(row.characterId)!.push(row.vec);
+        anchorVecsByChar.get(rowCharId)!.push(row.vec);
       }
     }
   }
@@ -669,15 +767,24 @@ export async function scoreBook(
     for (const cd of chapterData) {
       const rowsForChar: VerdictRow[] = [];
       for (const row of cd.embRows) {
-        if (row.characterId !== charId) continue;
+        // #3362 pass-4 fix — same segment-stamp identity resolution as the
+        // anchor-gathering loop above; `charId` here is the snapshot key
+        // `orderedChars` was built from (a chapter's own characterSnapshots
+        // key at the time it rendered), not necessarily the character's
+        // CURRENT cast id. The persisted row's own `characterId` is stamped
+        // as this same `charId` — `deriveBookOutline`/qa-report.ts read this
+        // field back to build their own roster/eligibility sets using the
+        // identical per-segment stamp, so a differently-resolved id written
+        // here would silently fail that later join.
         const key = segKey(row.characterId, row.sentenceIds);
         const seg = cd.segsByKey.get(key);
+        if (resolveRowCharId(seg, row.characterId) !== charId) continue;
         const renderedFallback = seg?.renderedFallbackEngine ?? null;
         const renderedEngine = (renderedFallback != null && renderedFallback !== '') ? renderedFallback : configuredEngine;
 
         if (ref.referenceKind === 'too-short') {
           rowsForChar.push({
-            characterId: row.characterId, sentenceIds: row.sentenceIds, verdict: 'inconclusive',
+            characterId: charId, sentenceIds: row.sentenceIds, verdict: 'inconclusive',
             cosine: 0, severity: 'inconclusive', fixable: false,
             expectedEngine: configuredEngine, renderedEngine, referenceKind: 'too-short', windowed: false, chapterId: cd.id,
           });
@@ -688,7 +795,7 @@ export async function scoreBook(
         const fixable = verdict === 'voice-mismatch' && severity === 'severe' && STOCHASTIC_ENGINES.has(configuredEngine);
         if (verdict === 'voice-mismatch') mismatchCount++;
         rowsForChar.push({
-          characterId: row.characterId, sentenceIds: row.sentenceIds, verdict, cosine, severity, fixable,
+          characterId: charId, sentenceIds: row.sentenceIds, verdict, cosine, severity, fixable,
           expectedEngine: configuredEngine, renderedEngine, referenceKind: ref.referenceKind, windowed: false, chapterId: cd.id,
         });
       }

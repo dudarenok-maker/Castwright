@@ -192,6 +192,15 @@ chapterQaRepairRouter.post(
          *  acousticOnly is NOT set — the candidate remains signal-backed and must not
          *  be dropped by the centroid pre-filter. */
         acousticOnly?: boolean;
+        /** #3362 pass-4 fix (🟠D / owner design b) — the render-integrity
+         *  VERDICT ROW's own `characterId` (the key `scoreBook` wrote this
+         *  row under), set whenever this candidate is backed by a verdict
+         *  row (`acoustic === true`, both acoustic-only and unioned signal/
+         *  acoustic candidates). Every centroid lookup for an acoustic
+         *  candidate keys off THIS field, never a re-derived resolution of
+         *  `seg.characterId` — consistent with the pre-filter below, which
+         *  already looks centroids up by the verdict row's own key. */
+        verdictCharacterId?: string;
       }> = [];
       for (let i = 0; i < segFile.segments.length; i += 1) {
         const seg = segFile.segments[i];
@@ -248,11 +257,17 @@ chapterQaRepairRouter.post(
               // Union: the signal/ASR scan already covers this segment; mark it acoustic too.
               // acousticOnly is NOT set — the candidate is still signal-backed.
               existing.acoustic = true;
+              // #3362 pass-4 fix — stamp the verdict row's OWN key even on a
+              // union candidate, so every downstream centroid lookup for
+              // this segment keys off it too (design b), not just the
+              // acoustic-only branch below.
+              existing.verdictCharacterId = row.characterId;
             } else {
               flagged.push({
                 segmentIndex: segIdx,
                 characterId: row.characterId,
                 sentenceIds: row.sentenceIds.slice(),
+                verdictCharacterId: row.characterId,
                 reasons: [`voice-mismatch cosine ${row.cosine.toFixed(3)} < E (fixable)`],
                 acoustic: true,
                 acousticOnly: true,
@@ -424,6 +439,20 @@ chapterQaRepairRouter.post(
             );
           }),
         );
+      /* #3362 pass-4 fix (🟠D / owner design b) — centroids/verdict rows are
+         keyed by whatever id `scoreBook` resolved a chapter's rows under at
+         SCORING time (see aggregate.ts's `resolveRowCharId` doc comment),
+         which can differ from `seg.characterId` (the raw segment id) by
+         spelling, or by a retirement/reject/bridge recorded between scoring
+         and this repair pass. Re-deriving that resolution here via a
+         resolver rebuilt from the CURRENT cast + cast-id-history (as this
+         route used to) can disagree with what `scoreBook` actually wrote the
+         row under the moment history changes in between (pass-4 Q2/Q3) —
+         the acoustic gate then silently misses the centroid/verdict row
+         entirely. Every centroid lookup below instead keys off the
+         CANDIDATE's own `verdictCharacterId` — the verdict row's `characterId`
+         as `scoreBook` wrote it, threaded onto `flagged` above — consistent
+         with the pre-filter just above, which already does this. */
 
       /* Edit 6 (srv-36): capture accepted re-render embeddings by segment index.
          Populated inside the synth callback; flushed to disk after finalize. */
@@ -563,8 +592,9 @@ chapterQaRepairRouter.post(
             if (!signalAndAsrOk) return false;
             // Apply acoustic term only when the candidate originated from the verdict file
             // AND a centroid is available for this character.
-            if (cand?.acoustic && cos !== null && centroids?.[seg.characterId]) {
-              const charCentroid = centroids[seg.characterId];
+            const centroidCharId = cand?.verdictCharacterId;
+            if (cand?.acoustic && cos !== null && centroidCharId && centroids?.[centroidCharId]) {
+              const charCentroid = centroids[centroidCharId];
               return cos >= charCentroid.cleanMean;
             }
             return true;
@@ -601,9 +631,9 @@ chapterQaRepairRouter.post(
                centroid exists for this character — avoid the sidecar round-trip for
                pure signal/ASR repairs. */
             let cos: number | null = null;
-            if (candidate?.acoustic && centroids?.[seg.characterId]) {
+            if (candidate?.acoustic && candidate.verdictCharacterId && centroids?.[candidate.verdictCharacterId]) {
               const vec = Array.from(await embedSegment(r.pcm, r.sampleRate));
-              cos = cosineToCentroid(vec, centroids[seg.characterId].centroid);
+              cos = cosineToCentroid(vec, centroids[candidate.verdictCharacterId].centroid);
             }
             const better =
               !best ||
@@ -642,7 +672,7 @@ chapterQaRepairRouter.post(
           } else {
             repaired.push(segIndex);
             /* Edit 6a (srv-36): capture the accepted take's embedding for post-finalize write. */
-            if (bestCosine !== null && candidate?.acoustic && centroids?.[seg.characterId]) {
+            if (bestCosine !== null && candidate?.acoustic && candidate.verdictCharacterId && centroids?.[candidate.verdictCharacterId]) {
               // We already have the last-computed embedding via embedSegment — but to avoid
               // storing a reference to the Float32Array from the last loop iteration (which
               // may be the best or the last non-best), recompute from `best.pcm`.
@@ -726,10 +756,22 @@ chapterQaRepairRouter.post(
         durationSec: spliced.durationSec,
         segments: spliced.segments,
         cast: cast.characters,
+        /* #3362 finding 3 — the same `castIdHistory` loaded above (this
+           render's own resolver input), not a fresh re-read — see
+           FinalizeChapterAudioInput.castIdHistory's doc comment. */
+        castIdHistory,
         defaultEngine: engine,
         modelKey,
         audioFormat: bookStateAudioFormat(state as BookStateJson),
         expectedSec: segFile.durationSec,
+        /* #3362 pass-5 fix (🟠E) — the exact segment indices this repair
+           actually resynthesised (every entry `buildSynthReplacements`
+           attempted, accepted or not — see its own doc), so finalize freezes
+           identity for every other segment instead of re-deriving it from
+           the current cast/history. `spliced.segments` preserves
+           `segFile.segments`'s order/length 1:1, so these indices still
+           line up. */
+        resynthesizedIndices: safeTargetIndices,
         /* #2128 — carried forward verbatim, never refreshed. This path
            re-synthesises SOME sentences against the current resolver, correctly,
            but leaves every other segment byte-identical; refreshing the stamp
@@ -773,8 +815,13 @@ chapterQaRepairRouter.post(
           if (verdictRows) {
             for (const [segIdx, vec] of newEmbeddingsByIndex) {
               const seg = segFile.segments[segIdx];
-              if (!seg || !centroids?.[seg.characterId]) continue;
-              const centroid = centroids[seg.characterId];
+              // #3362 pass-4 fix (design b) — same verdict-row-keyed lookup
+              // as the synth callback above; find this segment's own flagged
+              // candidate to read its `verdictCharacterId` back.
+              const cand = flagged.find((f) => f.segmentIndex === segIdx);
+              const centroidCharId = cand?.verdictCharacterId;
+              if (!seg || !centroidCharId || !centroids?.[centroidCharId]) continue;
+              const centroid = centroids[centroidCharId];
               const newCosine = cosineToCentroid(Array.from(vec), centroid.centroid);
               // Update the verdict row that matches this segment's sentenceIds.
               const vRowIdx = verdictRows.findIndex(

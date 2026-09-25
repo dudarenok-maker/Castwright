@@ -115,6 +115,17 @@ vi.mock('../tts/model-keys.js', async (importOriginal) => {
   return { ...real, canonicalModelKeyForEngine: vi.fn(real.canonicalModelKeyForEngine) };
 });
 
+/* #3362 pass-6 (🟡1) — spy-wrap the real export (same pattern as the other
+   spies above) so a test can assert what THIS ROUTE actually threads through
+   as `resynthesizedIndices`, instead of only inferring it from finalize's
+   own downstream behaviour. Every prior test in this file calls the real
+   finalizeChapterAudioWrite through this spy unchanged — it wraps, it
+   doesn't replace. */
+vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../audio/finalize-chapter-write.js')>();
+  return { ...real, finalizeChapterAudioWrite: vi.fn(real.finalizeChapterAudioWrite) };
+});
+
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-splice-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
@@ -230,6 +241,29 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
 
     // Duration unchanged by a pure gain (within a frame of MP3 slack).
     expect(Math.abs(after.length - before.length) / (SR * 2)).toBeLessThan(0.1);
+  });
+
+  /* #3362 pass-6 (🟡1) — a remix never calls synthesiseChapter (it's a gain
+     change, not a re-synthesis), so it must thread an EMPTY
+     resynthesizedIndices to finalizeChapterAudioWrite, freezing identity for
+     every segment in the chapter. Nothing in this file previously asserted
+     what the route actually passes — mutation M2 (dropping the wiring
+     entirely, which finalize's now-required field would turn into a
+     silent 'all') stayed green. */
+  it('threads an EMPTY resynthesizedIndices to finalize — nothing was actually re-synthesised (🟡1)', async () => {
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    finalizeSpy.mockClear();
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
+      .send({ mode: 'remix', characterId: 'castor', gainDb: 8 });
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'splice_complete'), `expected splice_complete, got ${res.text}`).toBe(true);
+
+    expect(finalizeSpy).toHaveBeenCalledTimes(1);
+    const call = finalizeSpy.mock.calls[0][0];
+    expect(Array.from(call.resynthesizedIndices as Iterable<number>)).toEqual([]);
   });
 
   it('rejects a remix for a character with no segments', async () => {
@@ -365,6 +399,27 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
     // the mocked re-record's 0.3s length (was 1.0s), proving the request
     // targeted index 1, not the title at index 0.
     expect(segFile.segments[1].endSec - segFile.segments[1].startSec).toBeCloseTo(0.3, 5);
+  });
+
+  /* #3362 pass-6 (🟡1) — a rerecord's resynthesizedIndices must be EXACTLY
+     the on-disk indices this call re-synthesised (`targetIndices`, fs-10's
+     own index mapping) — never omitted, never every segment. Mutation M2
+     (dropping the wiring) turns this into finalize's 'all' default and
+     stayed green before this test existed. */
+  it('threads EXACTLY the resynthesized index (index 1, the mapped body line) to finalize (🟡1)', async () => {
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    finalizeSpy.mockClear();
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'splice_complete'), `expected splice_complete, got ${res.text}`).toBe(true);
+
+    expect(finalizeSpy).toHaveBeenCalledTimes(1);
+    const call = finalizeSpy.mock.calls[0][0];
+    expect(Array.from(call.resynthesizedIndices as Iterable<number>)).toEqual([1]);
   });
 
   /* #1888 — synthesiseChapter (the repair's own synth call) DOES compute

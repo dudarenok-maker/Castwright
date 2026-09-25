@@ -3483,8 +3483,10 @@ resolution, unchanged, since that needs Wave 2/3.
 
 - Re-render chapter 19 (`the-torment`, 37 of its 67 segments) and chapter 16
   (`lightning-dave` + `pool-player-2` together). Confirm the fresh
-  `segments.json` gains a `characterSnapshots` entry for `the-torment` /
-  `lightning-dave` naming their own voice (Torment's tuned
+  `segments.json` gains a `characterSnapshots` entry keyed by the canonical
+  cast id — `the_torment` / `lightning_dave`, not the raw `the-torment` /
+  `lightning-dave` segment ids (PR #3375/#3362 guarantees the raw-spelling
+  key is absent) — naming their own voice (Torment's tuned
   `qwen-YaC5ot82IqTLpeDbHd77F`, not `qwen-narrator`), and that
   `renderedFallbackEngine: "kokoro"` — present on every affected segment
   today — is gone from those two.
@@ -3554,6 +3556,20 @@ already-analysed book.
 > nothing. *Note on the brief:* issue #3305 cited lines 3040–3111 for this row;
 > the row has moved and lives at lines 3381–3452 (3040–3111 is now A19/A20
 > bullet text).
+>
+> **2026-09-24 — the 2026-09-06 open question above is answered by PR
+> [#3375](https://github.com/dudarenok-maker/Castwright/pull/3375) (closes
+> [#3362](https://github.com/dudarenok-maker/Castwright/issues/3362)):
+> `characterSnapshots` (and `speakingIds`/`fallbackByChar`/`voiceNameByChar`)
+> are now keyed by the canonical cast id resolved through
+> `buildCastResolver`, never the raw segment `characterId` — so bullet 1's
+> gap was not cosmetic, it was the bug, and the fix is to look the snapshot
+> up under `the_torment`/`lightning_dave` rather than to accept the miss.
+> This row's own criteria above have been reworded to the canonical keys
+> accordingly. **The 2026-08-02/09-06 re-renders that produced the evidence
+> above predate this fix — a fresh re-render is owed on A22 and A23 to
+> accept it against the corrected keying**, not merely re-read from the old
+> segments files.
 
 ---
 
@@ -3945,9 +3961,10 @@ workspace's analysis):**
   proving the write was durable, not merely printed once.
 - Re-render *Заказ Коалфолла* chapter 2 (the `mayrin`/`coalfall` orphaned
   chapter) and confirm the same shape A22 pins: the fresh `segments.json`
-  gains `characterSnapshots` entries for `mayrin`/`coalfall` naming Мэйрин's
-  and Коалфолл's own live voices, not the narrator — **listen** to confirm
-  audibly, not only from the JSON.
+  gains `characterSnapshots` entries keyed by the canonical cast ids
+  `mairin`/`coalfall-dragon` (what `mayrin`/`coalfall` retire to, per
+  `supersededBy` above) naming Мэйрин's and Коалфолл's own live voices, not
+  the narrator — **listen** to confirm audibly, not only from the JSON.
 - Cross-check the Cast screen for both affected books: the auto-reconciled
   section now names `mayrin`/`coalfall`/`lady-alina`; the needs-your-decision
   section still names the 93 remaining ids untouched by this run (spot-check

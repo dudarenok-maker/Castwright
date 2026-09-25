@@ -66,6 +66,15 @@ vi.mock('../tts/model-keys.js', async (importOriginal) => {
   return { ...real, canonicalModelKeyForEngine: vi.fn(real.canonicalModelKeyForEngine) };
 });
 
+/* #3362 pass-6 (🟡1) — spy-wrap the real export so a test can assert what
+   THIS ROUTE actually threads through as `resynthesizedIndices`, mirroring
+   chapter-splice.test.ts's own spy. Wraps, doesn't replace — every other
+   test in this file still exercises the real finalizeChapterAudioWrite. */
+vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../audio/finalize-chapter-write.js')>();
+  return { ...real, finalizeChapterAudioWrite: vi.fn(real.finalizeChapterAudioWrite) };
+});
+
 /* Only exercised by the "acoustic-only rejection" describe block below (which
    turns on qa.speaker.autoRepair via SEG_SPK_AUTO_REPAIR for its own tests) —
    returns a vector orthogonal to that block's centroid fixture, so its
@@ -366,6 +375,38 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(segFile.segments[1].suspect).toBeUndefined();
     expect(segFile.segments[1].qa?.status).toBe('ok');
     expect(segFile.segments[1].qaRetries).toBeGreaterThan(0);
+  });
+
+  /* #3362 pass-6 (🟡1) — the repair loop targets segment 1 only (castor's
+     silent line); segment 0 (amy) is never flagged. finalize must receive
+     EXACTLY [1] as resynthesizedIndices — not every segment, not none.
+     Mutation M3 (dropping the wiring) or M4 (passing every candidate index,
+     including the ones this repair left untouched) both stayed green
+     before this test existed. */
+  it('threads EXACTLY the repaired segment index to finalize, never the untouched ones (🟡1)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — accepted on attempt 1
+      sampleRate: SR,
+    }));
+
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    finalizeSpy.mockClear();
+
+    const { bookId: id } = await scaffoldVerdictBook('Wiring Story');
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+
+    expect(finalizeSpy).toHaveBeenCalledTimes(1);
+    const call = finalizeSpy.mock.calls[0][0];
+    expect(Array.from(call.resynthesizedIndices as Iterable<number>)).toEqual([1]);
   });
 
   it('a failed repair (never becomes acceptable) still marks the segment suspect:true, not undefined', async () => {

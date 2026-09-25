@@ -306,6 +306,16 @@ chapterSpliceRouter.post(
       // model/engine; rerecord adopts the requested one.
       let finalizeModelKey: TtsModelKey = segFile.modelKey as TtsModelKey;
       let defaultEngine: TtsEngine = engineForModelKey(finalizeModelKey);
+      /* #3362 pass-5 fix (🟠E, owner design (i)) — the exact segment indices
+         THIS splice re-synthesised, threaded to finalizeChapterAudioWrite as
+         `resynthesizedIndices` so it freezes identity for every OTHER
+         segment in the chapter instead of re-deriving it from the current
+         cast/history. `remix` (gain) never calls synthesiseChapter — it's a
+         volume change, not a re-synthesis — so its own targeted segments are
+         frozen too, same as every untouched line; only `rerecord`'s
+         `targetIndices` (exactly what feeds `buildSynthReplacements` below)
+         counts as resynthesized. */
+      let resynthesizedIndices: number[] = [];
 
       if (mode === 'remix') {
         replacements = [];
@@ -317,6 +327,7 @@ chapterSpliceRouter.post(
           replacements.push({ startSegmentIndex: run.start, endSegmentIndex: run.end, pcm: gained });
         }
       } else {
+        resynthesizedIndices = targetIndices;
         const modelKey = reqModelKey!;
         const engine = engineForModelKey(modelKey);
         const provider = selectTtsProvider(modelKey);
@@ -498,10 +509,20 @@ chapterSpliceRouter.post(
         durationSec: spliced.durationSec,
         segments: spliced.segments,
         cast: cast.characters,
+        /* #3362 finding 3 — the same `castIdHistory` loaded above (this
+           render's own resolver input), not a fresh re-read — see
+           FinalizeChapterAudioInput.castIdHistory's doc comment. */
+        castIdHistory,
         defaultEngine,
         modelKey: finalizeModelKey,
         audioFormat: bookStateAudioFormat(state as BookStateJson),
         expectedSec,
+        /* #3362 pass-5 fix (🟠E) — see the declaration above: empty for
+           `remix` (a gain change, never a re-synthesis), `targetIndices`
+           for `rerecord`. `spliced.segments` preserves `segFile.segments`'s
+           order/length 1:1 (spliceChapterSegments never drops or reorders a
+           segment), so these indices still line up. */
+        resynthesizedIndices,
         /* #2128 — carried forward verbatim, never refreshed. This path
            re-synthesises SOME sentences against the current resolver, correctly,
            but leaves every other segment byte-identical; refreshing the stamp

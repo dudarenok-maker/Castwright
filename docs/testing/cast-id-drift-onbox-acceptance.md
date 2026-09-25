@@ -101,14 +101,17 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
 Expected:
 
-- `characterSnapshots["the-torment"]` now exists, with `voiceEngine: "qwen"`
-  and `resolvedVoiceName` naming Torment's own tuned voice
-  (`qwen-YaC5ot82IqTLpeDbHd77F`) — **not** `qwen-narrator`.
+- `characterSnapshots["the_torment"]` now exists (keyed by the canonical
+  cast id, not the raw `the-torment` segment id — PR #3375/#3362), with
+  `voiceEngine: "qwen"` and `resolvedVoiceName` naming Torment's own tuned
+  voice (`qwen-YaC5ot82IqTLpeDbHd77F`) — **not** `qwen-narrator`. There is
+  no `characterSnapshots["the-torment"]` entry; that raw-spelling key is
+  guaranteed absent by design.
 - Those segments no longer carry `renderedFallbackEngine: "kokoro"` (the
   fallback that only fires when the line is being rendered as a
   *different* character/engine than its own).
 
-Result (`characterSnapshots["the-torment"].resolvedVoiceName`): ______________
+Result (`characterSnapshots["the_torment"].resolvedVoiceName`): ______________
 
 Result (`renderedFallbackEngine` still present? Y/N): ________________________
 
@@ -125,7 +128,8 @@ Result (by ear, distinct voice from narrator): _______________________________
 5. Read the fresh `16-chapter-twelve-barfight.segments.json`.
 
 Expected for **`lightning-dave`** (1 segment, `groupIndex: 39`) — same
-recovery shape as Torment: a `characterSnapshots["lightning-dave"]` entry
+recovery shape as Torment: a `characterSnapshots["lightning_dave"]` entry
+(keyed by the canonical cast id, not the raw `lightning-dave` segment id)
 now exists and `renderedFallbackEngine: "kokoro"` is gone from that segment.
 
 Result: _______________________________________________________________
@@ -656,8 +660,10 @@ explicitly, so this fix protects a future/test caller, not today's run.
     `mayrin`/`coalfall` orphaned segments — see §7.2's evidence).
 11. Read the fresh `segments.json`.
 
-Expected: `characterSnapshots["mayrin"]` and `characterSnapshots["coalfall"]`
-now exist, naming Мэйрин's and Коалфолл's own live voices — not the narrator.
+Expected: `characterSnapshots["mairin"]` and `characterSnapshots["coalfall-dragon"]`
+(the canonical cast ids `mayrin`/`coalfall` were retired to, per
+`cast-id-history.json`'s `supersededBy` — see §7.2) now exist, naming
+Мэйрин's and Коалфолл's own live voices — not the narrator.
 
 Result: **NOT RUN as of 2026-08-05** — needs the 8 GB card with Qwen resident. Still owed; register row A23 stays open for this and §8.8.
 

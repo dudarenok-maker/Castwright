@@ -19,7 +19,12 @@
 import { join } from 'node:path';
 import { loadSegmentsFiles } from './segments-io.js';
 import { deriveBookOutline } from './render-integrity/verdicts-io.js';
-import { STOCHASTIC_ENGINES, resolveConfiguredEngineByChar } from './render-integrity/aggregate.js';
+import {
+  STOCHASTIC_ENGINES,
+  resolveConfiguredEngineByChar,
+  resolveRowCharId,
+  segKey,
+} from './render-integrity/aggregate.js';
 import { readEmbeddings } from './render-integrity/embeddings-io.js';
 import { readCentroids } from './render-integrity/centroids-io.js';
 import { audioDir } from '../workspace/paths.js';
@@ -77,6 +82,33 @@ export async function buildAudioQaReport(
   // never disagree with which characters/chapters scoreBook actually scores.
   const configuredEngineByChar = resolveConfiguredEngineByChar(segFiles);
 
+  /* #3362 pass-4 fix (🟠D) — `configuredEngineByChar` is keyed by whatever
+     snapshot key each chapter's own `characterSnapshots` used (canonical AT
+     THAT RENDER, since finalize-chapter-write #3370 — but never rewritten by
+     a LATER retirement/merge), while `embeddings.json` rows below carry the
+     RAW segment characterId their synth request was made under. Resolve
+     each row's raw id through the SAME per-segment stamp aggregate.ts's
+     scoreBook now joins on (`resolveRowCharId`/`segKey`, reading
+     `resolvedCharacterId` off the matching `segments.json` entry) before
+     joining it against `configuredEngineByChar` — never through a resolver
+     rebuilt from the CURRENT cast + cast-id-history, which can disagree with
+     scoreBook's own join the moment that history changes after the chapter
+     rendered (see aggregate.ts's `resolveRowCharId` doc comment for the bug
+     class — pass-4 S4–S8 — this closes). A chapter's own `seg.segments`
+     supplies the segKey → stamp lookup directly; no cast-id-history read is
+     needed here at all any more. */
+  const stampByKeyByChapter = new Map<number, Map<string, string>>(
+    segFiles.map((seg) => {
+      const byKey = new Map<string, string>();
+      for (const s of seg.segments ?? []) {
+        if (s.characterId && Array.isArray(s.sentenceIds) && s.resolvedCharacterId) {
+          byKey.set(segKey(s.characterId, s.sentenceIds), s.resolvedCharacterId);
+        }
+      }
+      return [seg.chapterId, byKey];
+    }),
+  );
+
   // srv-36 hardening — per-chapter roster sourced from embeddings.json
   // (which character actually has embeddable rows in THIS chapter), not
   // from segments.json's characterSnapshots presence — a character can
@@ -90,10 +122,13 @@ export async function buildAudioQaReport(
     const embPath = join(audioDir(bookDir), `${ch.slug}.embeddings.json`);
     const embResult = await readEmbeddings(embPath);
     if (!embResult) continue;
+    const stampByKey = stampByKeyByChapter.get(ch.id);
     const chapterChars = new Set<string>();
     for (const row of embResult.rows) {
-      const engine = configuredEngineByChar.get(row.characterId);
-      if (engine && STOCHASTIC_ENGINES.has(engine)) chapterChars.add(row.characterId);
+      const stamp = stampByKey?.get(segKey(row.characterId, row.sentenceIds));
+      const rowCharId = resolveRowCharId({ resolvedCharacterId: stamp }, row.characterId);
+      const engine = configuredEngineByChar.get(rowCharId);
+      if (engine && STOCHASTIC_ENGINES.has(engine)) chapterChars.add(rowCharId);
     }
     if (chapterChars.size > 0) rosterByChapter.set(ch.id, chapterChars);
   }
@@ -152,8 +187,31 @@ export async function buildAudioQaReport(
      working) is excluded from chaptersEmbedFailed; only a chapter that was
      attempted and has an unscored roster character NOT in charactersPending
      (i.e. genuinely stuck) counts. */
+  /* review pass 2 🟡 finding 1 (still possible after the pass-4 fix's
+     per-segment stamp join) — a chapter can land on rosterByChapter (it has
+     embeddings rows that resolve onto a stochastic character) without being
+     eligibleChapterIds-eligible (its OWN characterSnapshots never named that
+     character). The stamp is scoped to THIS chapter's own segment (see
+     aggregate.ts's `resolveRowCharId`), so a row can no longer resolve onto
+     a DIFFERENT chapter's key at all — that holds only because
+     finalize-chapter-write.ts's own write invariant guarantees a stamp
+     always names a key present in THAT SAME write's `characterSnapshots`
+     (pass-5, 🟠E: a re-finalize that can't carry a stamp's snapshot entry
+     forward clears the stamp rather than leaving it dangling — see
+     finalize-chapter-write.ts's stamping block) — but a pre-#3362/pass-4 chapter with
+     no snapshot entry at all still passes its raw embeddings-row id through
+     UNRESOLVED, and that raw id can still coincide, by plain string
+     equality, with a canonical key a LATER chapter's own snapshot
+     introduced. Left unguarded, such a chapter could count as "scored"
+     while never counting as "eligible", producing the nonsensical "2 of 1
+     eligible chapters scored". chaptersEligible can't become the
+     roster-derived set instead — it must stay gate-independent (a chapter
+     with a stochastic character but the gate never run is still eligible,
+     just unscored) — so scored is clamped to eligibleChapterIds instead,
+     keeping chaptersScored <= chaptersEligible structurally true. */
   const chaptersScored = Array.from(rosterByChapter.entries())
     .filter(([chapterId, roster]) => {
+      if (!eligibleChapterIds.has(chapterId)) return false;
       const verdictChars = outline.verdictCharactersByChapter.get(chapterId);
       if (!verdictChars) return false;
       return Array.from(roster).every((id) => verdictChars.has(id));
