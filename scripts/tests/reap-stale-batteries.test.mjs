@@ -35,6 +35,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -1159,6 +1160,126 @@ test('E104: taskkill exits zero -> reports success without needing the liveness 
   );
   assert.equal(checked, false, 'a zero exit is already conclusive; the liveness re-check is only needed on failure');
 });
+
+// ---------------------------------------------------------------------------
+// PR #3404 review pass 1, main defect — "root gone" is NOT the same as
+// "tree gone". A nonzero taskkill exit also covers the shape where the ROOT
+// was already gone BEFORE taskkill even ran (nothing walked at all), leaving
+// every real descendant untouched — the old root-only check reported that as
+// a success. killTree must be told the whole recorded tree (via
+// `descendantPids`, exactly what runCensus passes from
+// `computeOsDescendants`) and judge success by the WHOLE set reading gone,
+// not the root alone.
+// ---------------------------------------------------------------------------
+
+test('review pass 1: exit 128, root gone but a recorded descendant still alive -> reports failure', () => {
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 128 }),
+      isAlive: (pid) => pid === 4243, // root (4242) gone; child 4243 survived
+      descendantPids: [4242, 4243],
+    }),
+    false,
+    'a surviving descendant must never be reported as a successful kill, even with the root gone',
+  );
+});
+
+test('review pass 1: exit 128, root AND every recorded descendant gone -> reports success', () => {
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 128 }),
+      isAlive: () => false,
+      descendantPids: [4242, 4243, 4244],
+    }),
+    true,
+    'the whole recorded tree reading gone is a genuine success, even on a nonzero exit',
+  );
+});
+
+test('review pass 1: exit 128, root still alive -> reports failure', () => {
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 128 }),
+      isAlive: (pid) => pid === 4242,
+      descendantPids: [4242],
+    }),
+    false,
+  );
+});
+
+test('review pass 1: runCensus passes the real OS descendant closure to killFn, not just the root pid', () => {
+  let seenDescendants = null;
+  runCensus({
+    collectSnapshot: () => processes,
+    readPrior: () => priorSamples,
+    appendLog: () => {},
+    kill: true,
+    killReasons: ['orphaned-unreachable'],
+    thresholds: THRESHOLDS,
+    now: NOW,
+    killFn: (pid, opts) => {
+      if (pid === 3001) seenDescendants = opts?.descendantPids;
+      return true;
+    },
+  });
+  assert.ok(seenDescendants, 'expected killFn to receive descendantPids for the 3001 subtree');
+  assert.ok([...seenDescendants].includes(3001), 'the descendant set must include the root itself');
+  assert.ok([...seenDescendants].includes(3002), "B3's real OS descendant closure includes pid 3002");
+});
+
+test(
+  'review pass 1 (Windows-only, real processes): killTree returns false when a real descendant outlives a real dead root',
+  { skip: process.platform !== 'win32' ? 'Windows-only: real taskkill /T against real processes' : false },
+  () => {
+    // Parent: spawns a long-lived, detached grandchild (stands in for a
+    // stray worker) and prints its pid, then exits — so by the time
+    // spawnSync returns, the ROOT (parent) pid is already gone and nothing
+    // was ever walked by taskkill, the exact "never found, nothing touched"
+    // shape the fix targets. The grandchild is a REAL, independent process
+    // still running afterward.
+    const parentScript = `
+      const { spawn } = require('node:child_process');
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+      process.stdout.write(String(child.pid));
+      process.exit(0);
+    `;
+    const result = spawnSync(process.execPath, ['-e', parentScript], { encoding: 'utf8', windowsHide: true });
+    assert.equal(result.status, 0, `expected the parent helper to exit cleanly, got ${JSON.stringify(result)}`);
+    const parentPid = result.pid;
+    const childPid = Number.parseInt(result.stdout.trim(), 10);
+    assert.ok(Number.isInteger(childPid) && childPid > 0, `expected a real child pid, got ${JSON.stringify(result)}`);
+
+    try {
+      // spawnSync already waited for the parent to exit, so parentPid is
+      // confirmed dead before killTree ever runs. Real spawn/windows/isAlive
+      // defaults — nothing injected except the descendant set under test.
+      const outcome = killTree(parentPid, { descendantPids: [parentPid, childPid] });
+      assert.equal(
+        outcome,
+        false,
+        'a real surviving descendant must never be reported as a successful kill, even with the root already gone',
+      );
+    } finally {
+      // Always clean up the real child process, regardless of the assertion
+      // outcome above, so this test never leaks a process.
+      try {
+        execFileSync('taskkill', ['/PID', String(childPid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      } catch {
+        // Best-effort cleanup — if it's already gone (e.g. killTree's own
+        // taskkill call above reached it despite the assertion), there is
+        // nothing left to clean up.
+      }
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // C6 — the tail window is sized against the trust window, not a round number
