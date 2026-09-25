@@ -76,14 +76,14 @@ verdicts exactly — no row is discharged or self-contradictory.
       generation + QA gate pipeline (for A14's badge-agreement check) and
       spare chapters available to re-render (for A8, old A12 (discharged 2026-08-26), A15).
 - [ ] `SEG_ASR_ENABLED=1` set for the whole sitting except the A26 leg, which
-      additionally needs the Coqui/XTTS engine selected — see Step 9's own
+      additionally needs the Coqui/XTTS engine selected — see Step 8's own
       engine-swap note.
 - [ ] A second shell free for `gh`/log tailing and for triggering the
       sidecar-kill in Step 3.
 - [ ] Access to `#/admin` → "Resource trends" (old A13, discharged 2026-08-26) and to a chapter's
       Generate + Listen rows (A8, A10, old A12, A14).
 - [ ] A non-English (Russian ideal) book or chapter available for A26 —
-      required only for that step, sequence it last (Step 9).
+      required only for that step, sequence it last (Step 8).
 
 ---
 
@@ -222,7 +222,7 @@ Result: _(fill in — healthy-content pass false-positive count, vs. pre-#2055 b
 
 ## Teardown
 
-- Evict the Coqui/XTTS engine loaded for Step 9 if nothing later needs it
+- Evict the Coqui/XTTS engine loaded for Step 8 if nothing later needs it
   resident.
 - Unset `SEG_ASR_ENABLED` if the next sitting does not want it on by default.
 - Clear any deliberately-degraded fixtures created for Steps 4/7 so they do

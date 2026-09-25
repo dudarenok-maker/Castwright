@@ -305,7 +305,7 @@ last, alone, since it deliberately crashes the sidecar twice.
 > §12; `onbox-acceptance-register.md` A18 items 1–4. Re-resolved 2026-08-20:
 > `gh issue view 1967` → closed 2026-07-31T06:06:03Z, matches. Items 1 and 3
 > are already DISCHARGED (register.md:1152-1184, pasted command output) —
-> **not re-run here.** Item 2's audible half and item 4 remain STILL OWED.
+> **not re-run here.** Item 2's audible half and item 4 remain STILL OWED. (Since then: item 4 was discharged 2026-09-08, per register A18; only item 2 remains.)
 > **Item 4 (Pinokio `import torchcodec` check) is explicitly batched with row
 > E1 in `onbox-sitting-device-browser.md`, which already owns the Pinokio
 > box — not run in this sitting.** Only item 2 runs here, on the same
