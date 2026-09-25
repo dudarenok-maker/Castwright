@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="39" data-publish-id="71f815356306"></div>
+  <div hidden data-published-as="40" data-publish-id="d91646cad111"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">50</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">53</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,11 +209,11 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->32<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->33<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->2<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->8<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->10<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">32 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">33 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -724,6 +724,18 @@
         <p class="src">single GPU card, <code>ASR_DEVICE=cuda</code>, <code>ASR_MODEL=large-v3</code> (or another non-<code>tiny</code>/<code>base</code>/<code>small</code> tag), a squeezable card (able to be driven down to ~500–900 MB free) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3347">#3347</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/3357">#3357</a> &#183; no separate run sheet &#183; medium — needs <code>faster-whisper</code>&#39;s <code>large-v3</code> weights installed, a GPU card that can be driven down to the ~500–900 MB free range (e.g. holding a Qwen or Coqui model resident alongside), and one cold <code>/transcribe</code> call in each state. No golden-audio comparison.</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">A111</span><span class="iname">A real installed release-zip exercises the restarter, <code>stop:prod</code>, and Windows sleep prevention</span><span class="risk">a real installed castwright-vX.Y.Z.zip, Windows for the sleep-prevention leg; no GPU strictly needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>#3406 (filed in PR #3404&#39;s own review, pass 2) found <code>scripts/build-release-zip.mjs</code>&#39;s MANIFEST omitted <code>scripts/lib/</code> files that shipped scripts import: the already-published v1.14.0 zip shipped <code>server/src/system/prevent-sleep.ts</code> spawning a <code>scripts/lib/prevent-sleep.ps1</code> that was never in the box, so Windows sleep prevention was silently inert during every render on that zip; <code>stop-app.mjs</code>&#39;s <code>./lib/sidecar-sweep-port.mjs</code> import and <code>stop-app.ps1</code>&#39;s two <code>.psm1</code> imports were in the same state, so <code>npm run stop:prod</code> crashed outright on a zip install. PR #3404 fixes all six now-identified stray relative imports and adds a static <code>scripts/tests/release-manifest.test.mjs</code> guard, but that guard only proves every import target is present in the zip, never that the code importing it actually runs correctly once unpacked and installed for real. No packaged release directory exists on this box (same conclusion as A30), so none of this has been driven end-to-end against a real install.</p>
+        <ul>
+          <li>The in-app upgrade&#39;s restarter relaunches the app: trigger (or simulate) the in-app upgrade path and confirm the detached restarter actually brings the app back up &#8212; before this fix it crashed at import with <code>ERR_MODULE_NOT_FOUND</code> and left the app down until relaunched by hand.</li>
+          <li><code>npm run stop:prod</code> works from the installed release &#8212; prints <code>[STOP]</code>/succeeds rather than crashing on a missing <code>scripts/lib/*</code> import, and the server process is actually gone afterward.</li>
+          <li>Windows sleep prevention actually engages during a render: start a real chapter render on this install and, while it is in flight, run <code>powercfg /requests</code> and confirm it shows a live request entry attributable to the running process.</li>
+        </ul>
+        <p class="src">A real installed release built from this change (its natural moment is the next release cut), Windows for the sleep-prevention leg &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3406">Castwright#3406</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3404">#3404</a> &#183; no separate run sheet &#183; the three observations above; issue #3406 and PR #3404&#39;s manifest-guard section for the exact defect each leg closes</p>
+      </div>
+    </details>
 
 
 </section>
@@ -1034,7 +1046,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">8 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">10 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1124,6 +1136,30 @@
         </ul>
         <p>A negative result on the first two is not a regression &#8212; the guard fails open to <code>cwd</code>, i.e. the pre-#3263 behaviour &#8212; but it would mean the 99.1% never reaches production, and the feature would need the coordinator-set signal #3263 originally called direction (a) instead.</p>
         <p class="src">Any dev box that can dispatch a subagent, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3263">Castwright#3263</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3358">#3358</a> &#183; the four observations above; <code>docs/ops/3263-transcript-signal-measurement.md</code> (&#8220;Which file this is about&#8221;) for why each one matters &#183; ~20 minutes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E108</span><span class="iname">ops-71 stale-battery reaper &#8212; the push-path <code>KILLED</code> print on a real orphaned Windows tree</span><span class="risk">any Windows dev box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Row E104 (discharged 2026-09-25, removed from the register) drove the reaper&#39;s report-only census, stalled-rate detection, and <code>npm run doctor -- --kill</code> paths against real process trees, but its bullet 3 &#8212; that a <code>git push</code> whose pre-push census reaps an orphan prints <code>reap-stale-batteries: KILLED stale battery pid=&#8230; :: &lt;command line&gt;</code> &#8212; was <strong>not</strong> observed as specified: two real pushes (pids 38780, 23792) printed <code>KILL FAILED</code> instead, even though the whole tree was gone seconds later, because <code>killTree()</code> took its verdict from <code>taskkill /T</code>&#39;s own exit code, which goes nonzero when a tree member exits mid-walk. On the owner&#39;s 2026-09-25 decision, that unproven bullet moves here rather than discharging with the rest of E104. <code>killTree</code> now re-checks whether the WHOLE recorded tree (root + every OS descendant <code>runCensus</code> resolved beforehand) reads gone on a nonzero exit, via the shared <code>pid-alive.mjs</code> probe, and only reports <code>KILL FAILED</code> if something in that tree is still alive.</p>
+        <ul>
+          <li>Start a real battery that will not exit on its own (e.g. <code>npm run test:server</code>), then kill its owning terminal so the whole subtree is orphaned. Run a real <code>git push</code> and confirm its pre-push census reaps the orphan, printing <code>reap-stale-batteries: KILLED stale battery pid=&#8230; :: &lt;command line&gt;</code> on stderr &#8212; not <code>KILL FAILED</code> &#8212; and confirm via <code>Get-Process</code> that every PID the census recorded for that root is actually gone afterward.</li>
+          <li>If <code>taskkill</code>&#39;s own exit code is visible, record it for corroboration.</li>
+          <li><strong>Negative control:</strong> construct a tree whose root&#39;s immediate parent is already dead <em>before</em> the kill runs but whose child subtree survives, and confirm this case still lands in <code>KILL FAILED</code> &#8212; the fix must not paper over a genuinely-incomplete kill.</li>
+        </ul>
+        <p class="src">A Windows dev box, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3403">Castwright#3403</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3404">#3404</a> &#183; the observations above; issue #3403&#39;s repro; E104&#39;s own discharge note for the exact bug this closes &#183; ~10&#8211;15 minutes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E109</span><span class="iname"><code>npm run stop:prod</code> on a real POSIX box &#8212; the async-shutdown grace period</span><span class="risk">a Mac or Linux dev box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Review pass 2 of PR #3404 found <code>npm run stop:prod</code> reported EVERY successful stop as a failure on POSIX: the liveness re-check ran the instant after <code>SIGTERM</code> was sent, but the server&#39;s own shutdown is asynchronous (drains, reaps the sidecar, then exits), so a stop that was actually succeeding always read as still-running and printed <code>[WARN] &#8230; could not be stopped</code>. <code>killTree</code> now polls liveness for a bounded grace period (reusing <code>restart-after-upgrade.mjs</code>&#39;s <code>waitForExit</code>) before judging a kill failed, on both platforms &#8212; proven in the unit suite via a stub process, never against a real server process on a real POSIX kernel, which this repo&#39;s own dev box (Windows) cannot exercise.</p>
+        <ul>
+          <li>With the app running via <code>npm run start:prod</code>, run <code>npm run stop:prod</code> and confirm it prints <code>[STOP]</code> (not <code>[WARN] &#8230; could not be stopped</code>) within the grace period, and that the server process is actually gone once the command returns.</li>
+          <li>Confirm the TTS sidecar the server owns is also gone afterward.</li>
+          <li>If practical, repeat with the server intentionally slowed at shutdown to confirm the grace period covers a real, not just instantaneous, shutdown, and that a genuinely wedged process still eventually reports failure.</li>
+        </ul>
+        <p class="src">A Mac or Linux dev box, no GPU, the app running via <code>start:prod</code> &#183; PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3404">#3404</a> &#183; the observations above; PR #3404&#39;s stop-app section for the exact defect and fix &#183; ~10 minutes</p>
       </div>
     </details>
 

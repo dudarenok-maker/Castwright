@@ -8,6 +8,9 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   MANIFEST,
   matchesManifest,
@@ -16,6 +19,8 @@ import {
   companionApkSrc,
   companionApkZipEntry,
 } from '../build-release-zip.mjs';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 const INCLUDED = [
   'package.json',
@@ -192,4 +197,100 @@ test('ships the analyzer skill prompts (read at runtime from <root>/skills)', ()
 test('ships the fs-22 bundled demo book (manuscript + cast + voice files)', () => {
   assert.equal(matchesManifest('samples/the-coalfall-commission/.audiobook/cast.json'), true);
   assert.equal(matchesManifest('samples/the-coalfall-commission/voices/qwen/qwen-coalfall.pt'), true);
+});
+
+// PR #3404 review pass 2, orange finding 2 — the same class as the
+// is-main-module.mjs guard in entry-point-guard-convention.test.mjs, made
+// general: a shipped scripts/*.{mjs,cjs,ps1,psm1} file that gains a new
+// relative import (JS `./…`/`../…`, or a `Join-Path $PSScriptRoot …`
+// Import-Module) must have that import target ALSO in MANIFEST.include, or
+// the entry point crashes/no-ops at import/dot-source time on a real zip
+// install. Scoped to literal (non-glob) entries directly under `scripts/`
+// — `server/tts-sidecar/**` and `server/src/**` ship wholesale via a glob,
+// so a relative import that stays inside either tree is already covered by
+// that glob; the one case that reaches OUT of a glob (scripts/lib/is-main-
+// module.mjs, imported by nine server/tts-sidecar/scripts/*.mjs installers)
+// is pinned separately by entry-point-guard-convention.test.mjs's own
+// "shared helper ships in the release zip" test.
+function shippedScriptEntries() {
+  return MANIFEST.include.filter(
+    (p) => p.startsWith('scripts/') && !p.includes('*') && /\.(mjs|cjs|ps1|psm1)$/.test(p),
+  );
+}
+
+const JS_IMPORT_PATTERNS = [
+  /\bfrom\s+['"](\.\.?\/[^'"]+)['"]/g,
+  /\bimport\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
+  /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
+];
+const PS_IMPORT_MODULE_PATTERN =
+  /Import-Module\s*\(\s*Join-Path\s+\$PSScriptRoot\s+['"]([^'"]+)['"]\s*\)/g;
+
+// Strip comments before matching — this repo's scripts are prose-heavy, and
+// a doc comment can itself contain example import text (e.g. is-main-
+// module.mjs's own header shows `import { isDirectlyInvoked } from
+// './lib/is-main-module.mjs';` as guidance for ITS callers, not a real
+// self-import) that a naive scan over raw source mis-reads as a real target.
+function stripLineComments(source, commentToken) {
+  return source
+    .split('\n')
+    .map((line) => {
+      const idx = line.indexOf(commentToken);
+      return idx === -1 ? line : line.slice(0, idx);
+    })
+    .join('\n');
+}
+
+function relativeImportTargets(absPath) {
+  const raw = readFileSync(absPath, 'utf8');
+  const dir = dirname(absPath);
+  const rawTargets = new Set();
+  if (/\.(mjs|cjs)$/.test(absPath)) {
+    const source = stripLineComments(raw.replace(/\/\*[\s\S]*?\*\//g, ''), '//');
+    for (const pattern of JS_IMPORT_PATTERNS) {
+      for (const m of source.matchAll(pattern)) rawTargets.add(m[1]);
+    }
+  } else {
+    const source = stripLineComments(raw, '#');
+    for (const m of source.matchAll(PS_IMPORT_MODULE_PATTERN)) {
+      rawTargets.add(m[1].replace(/\\/g, '/'));
+    }
+  }
+  return [...rawTargets].map((t) => resolve(dir, t));
+}
+
+test('every relative import target of a MANIFEST-shipped scripts/ file is itself shipped', () => {
+  const failures = [];
+  for (const rel of shippedScriptEntries()) {
+    const absPath = resolve(repoRoot, rel);
+    for (const targetAbs of relativeImportTargets(absPath)) {
+      const targetRel = relative(repoRoot, targetAbs).split('\\').join('/');
+      if (!matchesManifest(targetRel)) {
+        failures.push(`${rel} imports ${targetRel}, which MANIFEST.include does not ship`);
+      }
+    }
+  }
+  assert.deepEqual(
+    failures,
+    [],
+    `The following shipped scripts/ files import a target MANIFEST.include does not ship — ` +
+      `add the target to MANIFEST.include:\n${failures.join('\n')}`,
+  );
+});
+
+// The general scan above only follows imports FROM a shipped scripts/ file.
+// server/src/system/prevent-sleep.ts reaches scripts/lib/prevent-sleep.ps1
+// the other direction — by spawning a resolve()-built path at runtime, not a
+// static relative import — so no source-level regex over server/src/** can
+// find it without either false-positiving on unrelated string literals or
+// hand-parsing arbitrary spawn() call expressions. A targeted assertion is
+// the honest fix for that one known site rather than a scan that looks
+// general but only works by accident.
+test('prevent-sleep.ps1 (spawned by server/src/system/prevent-sleep.ts) ships in the release zip', () => {
+  assert.equal(
+    matchesManifest('scripts/lib/prevent-sleep.ps1'),
+    true,
+    'server/src/system/prevent-sleep.ts spawns scripts/lib/prevent-sleep.ps1 at runtime; a ' +
+      'missing manifest entry makes Windows sleep prevention silently inert on a zip install.',
+  );
 });

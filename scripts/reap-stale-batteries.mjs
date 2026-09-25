@@ -34,6 +34,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, r
 import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { pidIsAlive } from './lib/pid-alive.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(__dirname, '..');
@@ -739,10 +740,11 @@ export function ownAncestryPids(processes, selfPid = process.pid) {
 //
 // Measured live (PR #3063 review pass 2, C6): 214,013 bytes per entry on a
 // 415-root box. The previous flat 2 MB therefore held only NINE entries, and
-// E104's own acceptance criterion (2) — "run it again ~10+ minutes later",
-// with a handful of `npm run doctor` runs in between — evicted every
-// sufficiently-old sample from the window, so `stalled-rate` went dark for
-// every root exactly while an operator was using the tool to look for a stall.
+// E104 (discharged 2026-09-25, removed from the register)'s own acceptance
+// criterion (2) — "run it again ~10+ minutes later", with a handful of
+// `npm run doctor` runs in between — evicted every sufficiently-old sample
+// from the window, so `stalled-rate` went dark for every root exactly while
+// an operator was using the tool to look for a stall.
 const CENSUS_ENTRY_BYTES = 220 * 1024;
 // The shortest interval between two censuses worth sizing for: a human
 // running `npm run doctor` repeatedly while investigating, or a burst of
@@ -906,7 +908,15 @@ export const KILL_TIMEOUT_MS = 15000;
  *
  *  `spawn`/`windows` are injectable purely so the spawn BUDGET and the
  *  timed-out-spawn path are testable on any platform — nothing in production
- *  passes them.
+ *  passes them. `isAlive` (default: the shared fail-safe
+ *  scripts/lib/pid-alive.mjs probe) and `descendantPids` (default: just
+ *  `[pid]`, for a caller — including this file's own direct unit tests —
+ *  that never computed a descendant set) ARE meaningfully exercised in
+ *  production: on a nonzero taskkill exit, `runCensus` passes the root's
+ *  real OS descendant closure (`computeOsDescendants`) as `descendantPids`,
+ *  so the outcome is judged by the WHOLE recorded tree reading gone
+ *  afterward, not the root pid alone (PR #3404 review pass 1 — see the
+ *  comment on the nonzero-exit branch below).
  *
  *  Residual, accepted and named rather than fixed (PR #3063 review pass 2,
  *  N4): this call re-validates nothing about `pid` itself. The census
@@ -915,15 +925,46 @@ export const KILL_TIMEOUT_MS = 15000;
  *  unrelated new tree. classify() guards PID reuse for CLASSIFICATION (the
  *  startedAt checks in resolveRoot and the prior-sample match); the kill site
  *  has no equivalent, and closing it would need a second
- *  `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill. */
-export function killTree(pid, { spawn = spawnSync, windows = isWindows } = {}) {
+ *  `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill.
+ *
+ *  Same class, also residual (PR #3404 review pass 2): `descendantPids` is a
+ *  point-in-time snapshot too — the census's, not a re-walk at kill time. A
+ *  descendant that spawns its OWN child AFTER the census runs, then exits
+ *  itself, leaves that grandchild running while every pid this function
+ *  actually checks reads gone — the whole-tree check above reports `true`
+ *  for a tree that is not, in fact, whole gone. The zero-exit path
+ *  (`result.status === 0`, below) trusts taskkill's own success claim
+ *  outright and has the exact same blindness: taskkill's `/T` walk is a
+ *  point-in-time snapshot of its own, taken independently of the census's.
+ *  Closing either needs a second `Win32_Process` query per kill — the same
+ *  cost N4 already declined. */
+export function killTree(pid, { spawn = spawnSync, windows = isWindows, isAlive = pidIsAlive, descendantPids } = {}) {
   if (!windows) return false;
   const result = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
     stdio: 'ignore',
     windowsHide: true,
     timeout: KILL_TIMEOUT_MS,
   });
-  return !result.error && result.status === 0;
+  if (result.error) return false;
+  if (result.status === 0) return true;
+  // A nonzero exit does NOT mean the tree survived: register row E104,
+  // discharged 2026-09-25, removed from the register, observed `/T` exit
+  // nonzero on real pushes (pids 38780 and 23792) even though the whole
+  // target tree was actually gone — `/T` reports failure when a child had
+  // already exited mid-walk or couldn't be found.
+  //
+  // But a nonzero exit ALSO covers the opposite shape (PR #3404 review pass
+  // 1): the ROOT itself was already gone BEFORE taskkill even ran ("ERROR:
+  // The process ... not found"), so nothing was walked at all and every
+  // descendant survives untouched. The exit code alone cannot distinguish
+  // these two cases. Judge the outcome by whether the WHOLE recorded tree —
+  // the root AND every real OS descendant the caller resolved beforehand —
+  // reads gone afterward, never by the root pid alone: a reaped tree whose
+  // descendants are still running must never be reported as killed.
+  for (const p of descendantPids ?? [pid]) {
+    if (isAlive(p)) return false;
+  }
+  return true;
 }
 
 /**
@@ -1005,11 +1046,15 @@ function findKillRefusalReason(rootPid, processes, protectedPids, pidToRoot, roo
  * `--kill` manual path passes both. Before each kill, `findKillRefusalReason`
  * re-checks the root's real OS descendant closure (not classify()'s subtree)
  * and refuses rather than kills when that closure reaches anything protected
- * or alive — see its own doc comment. Refused roots land in `refused`
- * (`{rootPid, reason}`), never in `killed`. A kill that was ATTEMPTED but
- * whose `taskkill` failed or timed out (`killFn` returns falsy) lands in
- * `failed`, never silently in neither bucket — a failed kill must stay
- * distinguishable from one never attempted at all.
+ * or alive — see its own doc comment. That same descendant closure is also
+ * handed to `killFn` as `descendantPids`, so a nonzero taskkill exit is
+ * judged against the WHOLE recorded tree being gone, not the root pid alone
+ * (PR #3404 review pass 1 — see killTree's own doc comment). Refused roots
+ * land in `refused` (`{rootPid, reason}`), never in `killed`. A kill that was
+ * ATTEMPTED but whose outcome is not actually successful (`killFn` returns
+ * falsy — the tree, or some part of it, is still confirmed alive after the
+ * attempt) lands in `failed`, never silently in neither bucket — a failed
+ * kill must stay distinguishable from one never attempted at all.
  *
  * Every argument the OS/filesystem touches is injectable so tests never
  * need a real Windows box or a real stale process.
@@ -1051,7 +1096,12 @@ export function runCensus({
         refused.push({ rootPid: v.rootPid, reason: refusalReason });
         continue;
       }
-      if (killFn(v.rootPid)) {
+      // Same descendant closure findKillRefusalReason just checked, reused
+      // here rather than recomputed with different semantics: killFn judges
+      // a nonzero taskkill exit by whether the WHOLE tree is gone, not the
+      // root pid alone (PR #3404 review pass 1).
+      const descendantPids = computeOsDescendants(v.rootPid, processes);
+      if (killFn(v.rootPid, { descendantPids })) {
         killed.push(v.rootPid);
       } else {
         failed.push(v.rootPid);
