@@ -1,18 +1,20 @@
-# On-box sitting pack — VRAM contention + eviction (A5, A13, A17 (discharged 2026-09-25, removed from the register), A19, A24, A25)
+# On-box sitting pack — VRAM contention + eviction (A13, A19, A24)
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
-> register rows **A5, A13, A17, A19, A24, A25** — the rows that
+> register rows **A13, A19, A24** — the rows that
 > only mean something when the single 8 GB card is genuinely full — and nothing
-> else. (Four rows this sitting pack originally covered — A19/A16/A31 in
-> their pre-2026-08-26 numbering, plus A25 (2026-09-20, #3036) — are discharged
-> and removed from the register; their sections below are kept for the
-> historical run record.)
+> else. (Six rows this sitting pack originally covered — old A16, old A19 and
+> old A31 in their pre-2026-08-26 numbering (discharged 2026-08-26), A5
+> (2026-09-06), A25 (2026-09-20, #3036) and A17 (2026-09-25, #3294) — are
+> discharged and removed from the register; their sections below are kept for
+> the historical run record. Today's register A16 and A31 are unrelated rows,
+> and today's A19 is the stranded-VRAM row, #1976, still owed below.)
 > Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule of
 > §6 was applied to every row (see
 > [`## Excluded on re-resolution`](#excluded-on-re-resolution)).
 >
-> **A16 is included per the plan of record's own re-derivation** (§3): the
+> **Old A16 (fe-16, discharged 2026-08-26) was included per the plan of record's own re-derivation** (§3): the
 > issue #2462 brief's row list omits it, but the plan explicitly moves A16 into
 > this pack and is the document that "fixes… the binning you must not
 > re-litigate." Its AMBIGUOUS status (frontmatter `active` vs. body `stable`)
@@ -95,9 +97,9 @@ re-uses the same warm card for its contended-eviction `/health` measurement.
 A31 and A32 are independent but cheap to run while the sidecar and book are
 up.
 
-### A19 · Mixed Qwen+Coqui evict fails soft (#1893) — steps 1–2
+### old A19 (discharged 2026-08-26, removed from the register) · Mixed Qwen+Coqui evict fails soft (#1893) — steps 1–2
 
-> **Register row: A19 — discharged 2026-08-26, row removed from the register**
+> **Register row: old A19 — discharged 2026-08-26, row removed from the register**
 > (real on-box measurement: a pause during a permanently-stalled evict landed
 > within ~300ms, nowhere near the 10-minute ceiling).
 
@@ -159,7 +161,7 @@ up.
    eventual unload actually took.
    - Result:
 
-### A5 · fs-60 XTTS per-language engine eligibility (plan 249) — step 6
+### A5 (discharged 2026-09-06, removed from the register) · fs-60 XTTS per-language engine eligibility (plan 249) — step 6
 
 > **A5 was discharged on 2026-09-06 and removed from the register** — bullets 1–4 PASS (via a real product fix to `generation.ts`'s per-chapter fallback gate, which hard-failed every non-English book regardless of Coqui eligibility), bullet 5 N/A / superseded. The ID is kept here as a historical citation under the register's "annotate, don't renumber" rule.
 
@@ -193,9 +195,9 @@ up.
      `generation.ts:851` before this gate is reached. Full evidence:
      [`onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`](onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md).
 
-### A16 · fe-16 Qwen auto-load on a Russian book (plan 165) — step 7
+### old A16 (discharged 2026-08-26, removed from the register) · fe-16 Qwen auto-load on a Russian book (plan 165) — step 7
 
-> **Register row: A16 — discharged 2026-08-26, row removed from the register**
+> **Register row: old A16 — discharged 2026-08-26, row removed from the register**
 > (owner-confirmed live observation: the Qwen banner and auto-load-with-
 > analyzer-evicted behaviour on a real Russian book).
 
@@ -263,9 +265,9 @@ up.
    line appears **only once**.
    - Result:
 
-### A31 · Supervisor respawn survives a refused spawn attempt (#2037) — step 10
+### old A31 (discharged 2026-08-26, removed from the register) · Supervisor respawn survives a refused spawn attempt (#2037) — step 10
 
-> **Register row: A31 — discharged 2026-08-26, row removed from the register**
+> **Register row: old A31 — discharged 2026-08-26, row removed from the register**
 > (real on-box measurement: the in-flight chapter's own completion was
 > confirmed clean after riding out the respawn, in an isolated worktree).
 
@@ -324,7 +326,7 @@ up.
     neighbourhood, not immediately and not never.
     - Result:
 
-### A25 · ASR warm-reservation figure vs. a real resident `/transcribe` peak (#2094) — step 12
+### A25 (discharged 2026-09-20, removed from the register) · ASR warm-reservation figure vs. a real resident `/transcribe` peak (#2094) — step 12
 
 > **Row A25 is DISCHARGED and removed from the register** (2026-09-20, #3036,
 > PR #3282) — the run below was superseded by two later real-hardware attempts

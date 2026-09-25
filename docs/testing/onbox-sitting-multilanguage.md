@@ -1,8 +1,9 @@
-# On-box sitting pack — multi-language render + ASR content-QA (D1, D2, A27, E4)
+# On-box sitting pack — multi-language render + ASR content-QA (D2, A27)
 
 > **Sitting pack** for wave 2 of `#2435`, step 7 of the `#2453` chain. Covers
-> register rows **D1, D2, A27, E4** (E4 discharged 2026-09-06, human-checkpoint
-> batch, retired, not reused) — non-English ASR content-QA calibration,
+> register rows **D2, A27** (D1 discharged 2026-09-07 and E4 discharged
+> 2026-09-06, both removed from the register, retired, not reused; their
+> sections below are kept for the historical run record) — non-English ASR content-QA calibration,
 > zh/ja placeholder voice design, sidecar auto-scaled RAM/VRAM recycle
 > thresholds, and the engine-recommendation CPU caveat. Follows the shared
 > format fixed by [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the

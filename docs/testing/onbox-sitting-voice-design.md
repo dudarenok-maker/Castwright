@@ -5,8 +5,9 @@
 > **listen to**: Qwen VoiceDesign persona/A/B audition, bulk cast design, the
 > emotion-chip manuscript preview, cross-engine audition fidelity, and the
 > golden-audio bless guards. (Two rows this sitting pack originally covered —
-> the persona-prompt rewrite and the emotion-chip preview — are discharged
-> 2026-08-26 and removed from the register; their sections below are kept for
+> old A14, the persona-prompt rewrite, and old A17, the emotion-chip preview —
+> are discharged 2026-08-26 and removed from the register; today's A14 and
+> A17 IDs name unrelated rows; their sections below are kept for
 > the historical run record.) Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule
 > of §6 was applied to every row (see
@@ -127,9 +128,9 @@ runs last, after everything else is evicted.
    completes with a correct terminal summary once the sidecar comes back.
    - Result:
 
-### A14 · Qwen VoiceDesign persona-prompt rewrite (plan 160) — steps 4–6
+### old A14 (discharged 2026-08-26, removed from the register) · Qwen VoiceDesign persona-prompt rewrite (plan 160) — steps 4–6
 
-> **Register row: A14 — discharged 2026-08-26, row removed from the register**
+> **Register row: old A14 — discharged 2026-08-26, row removed from the register**
 > (owner-confirmed live observation: the rewritten pitch/purpose-clause wording
 > changes the rendered voice on a real audition).
 
@@ -203,9 +204,9 @@ runs last, after everything else is evicted.
    against the Side B audition played in step 7.
    - Result:
 
-### A17 · Emotion-chip preview from the manuscript (plan 180, fe-31) — step 10
+### old A17 (discharged 2026-08-26, removed from the register) · Emotion-chip preview from the manuscript (plan 180, fe-31) — step 10
 
-> **Register row: A17 — discharged 2026-08-26, row removed from the register**
+> **Register row: old A17 — discharged 2026-08-26, row removed from the register**
 > (owner-confirmed live observation: the audible delta between a designed
 > variant and the base voice, on a real sidecar).
 

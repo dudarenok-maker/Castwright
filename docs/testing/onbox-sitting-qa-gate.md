@@ -6,8 +6,8 @@
 > Plan of record: [`onbox-sitting-plan.md`](onbox-sitting-plan.md) (§2.1, §5 pack
 > format), step 5 of the [#2453](https://github.com/dudarenok-maker/Castwright/issues/2453) chain.
 > Register rows: [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
-> A9, A10, A11, A12, A13, A21, A22, A34. (A22 in this pack is the row now
-> numbered A22 as of wave 4, 2026-08-21 — see the correction note below.)
+> A8, A9, A10, A14, A15, A26 (current IDs — see the renumbering note below;
+> old A12 and old A13 are discharged and removed from the register).
 > Row plans: [`228-batch-qa-rerecords.md`](../features/228-batch-qa-rerecords.md),
 > [`176-character-splice.md`](../features/176-character-splice.md),
 > [`173-failure-taxonomy.md`](../features/173-failure-taxonomy.md),
@@ -21,9 +21,10 @@
 > the former A22, real-corpus true-peak distribution, was retired 2026-08-21;
 > see the correction note below).
 >
-> **Renumbering note, 2026-08-27.** The row numbers above (and used throughout
-> this pack's headings) are as of 2026-08-21 and have drifted across several
-> later register waves. Current mapping, re-resolved against
+> **Renumbering note, 2026-08-27.** The row numbers in the running-time total
+> above and in the correction/re-resolution notes below are as of 2026-08-21
+> and have drifted across several later register waves; the Procedure
+> headings and the register-rows line carry the current IDs (#3405). Current mapping, re-resolved against
 > `onbox-acceptance-register.md`: **A9→A8** (Batch QA RTF, plan 228),
 > **A10→A9** (per-character splice, plan 176), **A11→A10** (structured failure
 > taxonomy, plan 173), **A21→A14** (suspect/Listen dBTP agreement, plan 274 §6
@@ -88,7 +89,7 @@ verdicts exactly — no row is discharged or self-contradictory.
 
 ## Procedure
 
-### 1. Batch QA re-record RTF (A9 — plan 228)
+### 1. Batch QA re-record RTF (A8 — plan 228)
 
 **Do:** Regenerate a QA-flagging Qwen chapter (e.g. KotLC "Chapter Three") with
 the full gate stack on (`SEG_ASR_ENABLED=1`, signal-QA + ASR re-records at 2).
@@ -100,7 +101,7 @@ same suspect/asrSuspect flagging behaviour appears as on any other chapter.
 Result: _(fill in — measured RTF)_
 Result: _(fill in — suspect/asrSuspect flags present as expected: yes/no)_
 
-### 2. Per-character re-record / splice, +3 dB gain (A10 — plan 176)
+### 2. Per-character re-record / splice, +3 dB gain (A9 — plan 176)
 
 **Do:** On the rendered book from Step 1 (or another already-rendered book),
 open a character's profile → Fix audio → apply the **+3 dB gain** across all
@@ -119,7 +120,7 @@ Result: _(fill in — louder, duration unchanged, backups written, A/B works: ye
 Result: _(fill in — post-gain LUFS reading)_
 Result: _(fill in — re-record seam/doubled-title check: pass/fail, detail)_
 
-### 3. Structured failure taxonomy, ≥2 real failure modes (A11 — plan 173, fs-19)
+### 3. Structured failure taxonomy, ≥2 real failure modes (A10 — plan 173, fs-19)
 
 **Do:** Force two distinct real failure modes against a live render:
 1. **`sidecar-unreachable`** — stop the TTS sidecar process mid-render.
@@ -133,7 +134,7 @@ message plus its remediation line (not a raw stack trace or generic error).
 Result: _(fill in — sidecar-unreachable: message + remediation shown, verbatim)_
 Result: _(fill in — vram-spill: message + remediation shown, verbatim)_
 
-### 4. Post-synthesis audio QA gate, deliberately degraded render (A12 — plan 174, srv-27)
+### 4. Post-synthesis audio QA gate, deliberately degraded render (old A12 (discharged 2026-08-26, removed from the register) — plan 174, srv-27)
 
 **Do:** Craft a chapter render that deliberately fails one of `DEFAULT_QA_THRESHOLDS`
 (plan 174 `:22`) — e.g. force a near-silent result (well under −40 LUFS) or a
@@ -149,7 +150,7 @@ Result: _(fill in — degraded condition used)_
 Result: _(fill in — Suspect badge shown on Generate row: yes/no, reason text)_
 Result: _(fill in — Suspect badge shown on Listen row: yes/no, reason text)_
 
-### 5. Resource trends admin panel, multi-chapter run (A13 — plan 175, fs-20)
+### 5. Resource trends admin panel, multi-chapter run (old A13 (discharged 2026-08-26, removed from the register) — plan 175, fs-20)
 
 **Do:** Run a real multi-chapter render on the GPU box (the Step 1 and Step 2
 renders together should already qualify if run back-to-back; otherwise render
@@ -162,7 +163,7 @@ rendered (not flat / not the mock's placeholder value).
 Result: _(fill in — RTF/QA/VRAM/wall-time rows present: yes/no)_
 Result: _(fill in — sparkline tracks real per-chapter RTF: yes/no, describe)_
 
-### 6. Suspect-badge / Listen-badge dBTP agreement (A21 — plan 274 §6 row 1)
+### 6. Suspect-badge / Listen-badge dBTP agreement (A14 — plan 274 §6 row 1)
 
 **Do:** Using the full multi-chapter render already produced in Steps 1–2/5,
 check every chapter that carries a true-peak-related Suspect reason.
@@ -173,7 +174,7 @@ any chapter where they disagree.
 
 Result: _(fill in — chapters checked, and per-chapter dBTP agreement: match/mismatch, figures)_
 
-### 7. Measurement-failure path renders as untrusted (A22 — plan 274 §6 row 3) — opportunistic
+### 7. Measurement-failure path renders as untrusted (A15 — plan 274 §6 row 3) — opportunistic
 
 **Do:** Opportunistically, across the renders already produced in this
 sitting, watch for (or attempt to force, e.g. via a corrupted/short audio
@@ -189,7 +190,7 @@ outcome, but record the attempt.
 
 Result: _(fill in — failure forced or caught: yes/no; if yes, badge + report-card behaviour observed)_
 
-### 8. Catastrophic-WER override on a real Coqui language-collapse (A34 — #2055) — **engine swap, run last**
+### 8. Catastrophic-WER override on a real Coqui language-collapse (A26 — #2055) — **engine swap, run last**
 
 **Engine swap:** switch the sidecar to the Coqui/XTTS engine with ASR
 content-QA on (`SEG_ASR_ENABLED=1`, Coqui selected) — this is why this step is

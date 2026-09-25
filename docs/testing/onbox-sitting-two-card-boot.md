@@ -1,10 +1,13 @@
-# On-box sitting pack — two-card boot (A2, A3, A12)
+# On-box sitting pack — two-card boot (A3, A12)
 
 > **Sitting pack** for wave 2 of `#2435`, step 2 of the `#2453` chain. Covers
-> register rows **A2, A3, A12** — everything that needs the **2-card boot**.
+> register rows **A3, A12** — everything that needs the **2-card boot**.
 > This pack also carried old A8 (GPU residency safety + coexistence, plan
 > 222), **discharged 2026-08-27 (on-box wave 9)** and removed from the
-> register — its walkthrough below stays for historical context only.
+> register, and A2 (capacity-aware GPU placement, plan 264), **discharged
+> 2026-09-08** (#2950) and removed from the register — both walkthroughs
+> below stay for historical context only. (Today's register A8 is an
+> unrelated row — batch QA re-record, plan 228.)
 > Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule of
 > §6 was applied to every row (see [`## Excluded on re-resolution`](#excluded-on-re-resolution)).
@@ -50,7 +53,7 @@ the multi-GPU Wave 2 checklist; A12 is the device-pin respawn set, done last
 because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 2-card config.
 
-### A8 · GPU residency safety + coexistence (plan 222) — steps 1–5
+### old A8 (discharged 2026-08-27, removed from the register) · GPU residency safety + coexistence (plan 222) — steps 1–5
 
 > **Criteria source:** [`../features/archive/222-gpu-residency-and-analysing-honesty.md`](../features/archive/222-gpu-residency-and-analysing-honesty.md) §"Manual acceptance walkthrough" at `:54-59` — discharged 2026-08-27, kept for the concrete observation. Distinct from B1/plan 216 (that one is the device probe).
 >
