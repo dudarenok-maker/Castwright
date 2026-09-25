@@ -6,7 +6,8 @@
 >
 > Plan of record: [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.3, §5
 > Register rows: [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
-> H1 and H2 (Group H), D3 (Group D)
+> H1 and H2 (Group H). D3 (Group D) was discharged 2026-09-06 and removed from
+> the register; its §4.3 below is kept for the historical run record.
 > Audit input: [`onbox-acceptance-staleness-audit.md`](onbox-acceptance-staleness-audit.md)
 
 ---
@@ -147,7 +148,7 @@ Stated once for the sitting; H1/H2/D3 share a single session.
    ~1,900; this is the number that answers the row.
    **Result:** _(fill in: distinct-Han-character count V)_
 
-### 4.3 D3 — the recovered turn actually sounds right when voiced
+### 4.3 D3 (discharged 2026-09-06, removed from the register) — the recovered turn actually sounds right when voiced
 
 *Blocked pending corpus* (see §2's re-resolution finding — the design doc's
 cited corpus books are not present on this box; D3 needs the same kind of
