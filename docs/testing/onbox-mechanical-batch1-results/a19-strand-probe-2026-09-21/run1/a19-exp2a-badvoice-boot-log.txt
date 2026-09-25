@@ -1,0 +1,337 @@
+INFO:     Started server process [8492]
+INFO:     Waiting for application startup.
+2026-09-21 02:38:43.483 [sidecar] [ort-preload] added 6 nvidia/<pkg>/bin dir(s) to PATH: ['C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\cublas\\bin', 'C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\cuda_nvrtc\\bin', 'C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\cuda_runtime\\bin', 'C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\cudnn\\bin', 'C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\cufft\\bin', 'C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\nvjitlink\\bin']
+2026-09-21 02:38:43.573 [sidecar] [ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft DLLs; all 11 expected files were found under nvidia/<pkg>/bin.
+2026-09-21 02:38:45.666 [sidecar] Qwen idle watchdog started (design ttl=120s, 1.7B-Base ttl=120s).
+2026-09-21 02:38:45.666 [sidecar] Whisper ASR idle watchdog started (ttl=120s).
+2026-09-21 02:38:45.666 [sidecar] ECAPA speaker idle watchdog started (ttl=120s).
+2026-09-21 02:38:45.667 [sidecar] sidecar memory watchdog started (warn/reclaim at 8192MB rss; host soft-recycle at DISABLED, process-recycle at 47583MB committed; VRAM soft-recycle at 7727MB reserved, process-recycle at 8414MB reserved).
+2026-09-21 02:38:45.672 [sidecar] Device probe complete: {'kokoro': 'cuda', 'coqui': 'cuda', 'qwen': 'cuda'} (state=ready).
+2026-09-21 02:39:00.495 [sidecar] Pinned TTS.api import order at startup (COQUI_PIN_IMPORT_ORDER=1).
+2026-09-21 02:39:00.495 [sidecar] PRELOAD_COQUI is not set — skipping eager Coqui load; use POST /load to warm the model.
+2026-09-21 02:39:00.495 [sidecar] PRELOAD_KOKORO not enabled — Kokoro warms on demand on first synth.
+2026-09-21 02:39:00.495 [sidecar] PRELOAD_QWEN is not set — Qwen warms on demand via POST /load.
+2026-09-21 02:39:00.496 [sidecar] CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER is set in the environment — it overrides every per-engine device pin set via the Advanced Configuration picker. If you've moved to per-engine pins, remove these two lines from server/.env (see docs/local-llm.md's cutover section).
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:9101 (Press CTRL+C to quit)
+INFO:     127.0.0.1:61252 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:02.386 [sidecar] Loading Qwen VoiceDesign model=Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign on cuda:0 (transient) …
+INFO:     127.0.0.1:50275 - "GET /health HTTP/1.1" 200 OK
+'sox' is not recognized as an internal or external command,
+operable program or batch file.
+2026-09-21 02:39:02.461 [sidecar] SoX could not be found!
+
+    If you do not have SoX, proceed here:
+     - - - http://sox.sourceforge.net/ - - -
+
+    If you do (or think that you should) have SoX, double-check your
+    path variables.
+    
+
+********
+Warning: flash-attn is not installed. Will only run the manual PyTorch version. Please install flash-attn for faster inference.
+********
+ 
+INFO:     127.0.0.1:50277 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50279 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:03.124 [sidecar] speaker_encoder_config is None. Initializing talker model with default values
+2026-09-21 02:39:03.124 [sidecar] talker_config is None. Initializing talker model with default values
+2026-09-21 02:39:03.124 [sidecar] speaker_encoder_config is None. Initializing talker model with default values
+INFO:     127.0.0.1:50280 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50282 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50283 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50285 - "GET /health HTTP/1.1" 200 OK
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]Fetching 4 files: 100%|##########| 4/4 [00:00<?, ?it/s]
+INFO:     127.0.0.1:50286 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:04.309 [sidecar] encoder_config is None. Initializing encoder with default values
+2026-09-21 02:39:04.309 [sidecar] decoder_config is None. Initializing decoder with default values
+INFO:     127.0.0.1:50288 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49895 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53746 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53747 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56554 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56555 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56556 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56660 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56661 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56662 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56663 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56664 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56665 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56666 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56667 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62840 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62841 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62842 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62843 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62844 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62845 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62846 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62847 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62848 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62849 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62850 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62851 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62852 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62853 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62854 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62855 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62856 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62857 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:62858 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65104 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59986 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:15.242 [sidecar] Qwen model=Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign attn_implementation=sdpa device=cuda:0
+2026-09-21 02:39:15.242 [sidecar] Qwen VoiceDesign loaded.
+2026-09-21 02:39:15.242 [sidecar] Loading Qwen Base model=Qwen/Qwen3-TTS-12Hz-0.6B-Base on cuda:0 …
+INFO:     127.0.0.1:59987 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:15.492 [sidecar] talker_config is None. Initializing talker model with default values
+2026-09-21 02:39:15.492 [sidecar] speaker_encoder_config is None. Initializing talker model with default values
+INFO:     127.0.0.1:59988 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59989 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59990 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59991 - "GET /health HTTP/1.1" 200 OK
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]Fetching 4 files: 100%|##########| 4/4 [00:00<?, ?it/s]
+INFO:     127.0.0.1:59992 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:16.628 [sidecar] encoder_config is None. Initializing encoder with default values
+2026-09-21 02:39:16.628 [sidecar] decoder_config is None. Initializing decoder with default values
+INFO:     127.0.0.1:59993 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59994 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59995 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59996 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59997 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59998 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59999 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60000 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60001 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60002 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60003 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60004 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60005 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60006 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60007 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60008 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60009 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60010 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60011 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60012 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60013 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60014 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60015 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60016 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60017 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60018 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60019 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60020 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60021 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60022 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:25.343 [sidecar] Qwen model=Qwen/Qwen3-TTS-12Hz-0.6B-Base attn_implementation=sdpa device=cuda:0
+2026-09-21 02:39:25.344 [sidecar] Qwen Base loaded.
+INFO:     127.0.0.1:60023 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60024 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:25.606 [sidecar] code_predictor_config is None. Initializing code_predictor model with default values
+Setting `pad_token_id` to `eos_token_id`:2150 for open-end generation.
+INFO:     127.0.0.1:60025 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60026 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60027 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60028 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60029 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60030 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60031 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60032 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60033 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60034 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60035 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60036 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60037 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60038 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60039 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60040 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60042 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60043 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60044 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60045 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60046 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60047 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60048 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60050 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60051 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60052 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60053 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60054 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60055 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60056 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60057 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60058 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60059 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60060 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60061 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60063 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60064 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59783 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59784 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59785 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59787 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59788 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59789 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59791 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59792 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59794 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59795 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59797 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59798 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59800 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59801 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:39.312 [sidecar] Designed + cached Qwen voice 'a19-exp2a-narrator' (instruct='A warm, measured storyteller with a low calm register.').
+2026-09-21 02:39:39.320 [sidecar] code_predictor_config is None. Initializing code_predictor model with default values
+Setting `pad_token_id` to `eos_token_id`:2150 for open-end generation.
+INFO:     127.0.0.1:59803 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49543 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49544 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49546 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49547 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49548 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49550 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49551 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49553 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49554 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49556 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49557 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49559 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49560 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49562 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:49563 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59234 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59235 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59237 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59238 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59240 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59241 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59243 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:45.745 [sidecar] sidecar memory: rss=4796MB committed=13398MB (peak 13398MB) vram_reserved=5746/8585MB (peak 5746MB)
+INFO:     127.0.0.1:59244 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59246 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59247 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59249 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59250 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59252 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59253 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59255 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59257 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59259 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59260 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59261 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59263 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59264 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59266 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59267 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59269 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59270 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59272 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59273 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59275 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59276 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59278 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59279 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59281 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59282 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59284 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59285 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59286 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59287 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59288 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59289 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59290 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:54.379 [sidecar] qwen voice design: voice=a19-exp2a-narrator lang=English load_ms=22948 design_fwd_ms=13535 distil_ms=317 audition_ms=15065 total_ms=51983
+INFO:     127.0.0.1:50274 - "POST /qwen/design-voice HTTP/1.1" 200 OK
+2026-09-21 02:39:54.808 [sidecar] Qwen VoiceDesign unloaded (Base stays resident).
+INFO:     127.0.0.1:60551 - "GET /health HTTP/1.1" 200 OK
+2026-09-21 02:39:54.836 [sidecar] batch synth failed (engine=qwen model=0.6b items=16): batch item 8 (voice='a19-ghost-voice-does-not-exist'): Qwen voice 'a19-ghost-voice-does-not-exist' has not been designed yet (no cached embedding). Design it first via POST /qwen/design-voice.
+Traceback (most recent call last):
+  File "C:\Claude\Projects\wt-onbox-batch-1\server\tts-sidecar\main.py", line 8644, in synthesize_batch
+    prompt, lang, _cache_hit = self._load_voice_prompt(voice)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Claude\Projects\wt-onbox-batch-1\server\tts-sidecar\main.py", line 8172, in _load_voice_prompt
+    raise VoiceNotDesignedError(
+main.VoiceNotDesignedError: Qwen voice 'a19-ghost-voice-does-not-exist' has not been designed yet (no cached embedding). Design it first via POST /qwen/design-voice.
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Claude\Projects\wt-onbox-batch-1\server\tts-sidecar\main.py", line 12941, in synthesize_batch
+    result = await asyncio.to_thread(
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dudar\AppData\Local\Programs\Python\Python312\Lib\asyncio\threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dudar\AppData\Local\Programs\Python\Python312\Lib\concurrent\futures\thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Claude\Projects\wt-onbox-batch-1\server\tts-sidecar\main.py", line 8646, in synthesize_batch
+    raise RuntimeError(f"batch item {i} (voice={voice!r}): {e}") from e
+RuntimeError: batch item 8 (voice='a19-ghost-voice-does-not-exist'): Qwen voice 'a19-ghost-voice-does-not-exist' has not been designed yet (no cached embedding). Design it first via POST /qwen/design-voice.
+INFO:     127.0.0.1:61912 - "POST /synthesize-batch HTTP/1.1" 500 Internal Server Error
+2026-09-21 02:39:55.284 [sidecar] Qwen models unloaded — reserved VRAM 1890\u219223MB (freed 1866MB).
+INFO:     127.0.0.1:60552 - "POST /unload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60554 - "POST /unload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60555 - "POST /unload HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60553 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60556 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60557 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60558 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60561 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60562 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60564 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60565 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60567 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60568 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60569 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60570 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60571 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60572 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60573 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60574 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60575 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60576 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60577 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60578 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60579 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60580 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60581 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60582 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60583 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60584 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58165 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58166 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58168 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58169 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58170 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58171 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58172 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58173 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58174 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58175 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58176 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58177 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58178 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58179 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58180 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58181 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:58182 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65002 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65003 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65004 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65005 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65006 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65007 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65009 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65010 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65012 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65013 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65014 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65015 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65016 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65017 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65018 - "GET /debug/memory HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65019 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65020 - "GET /health HTTP/1.1" 200 OK

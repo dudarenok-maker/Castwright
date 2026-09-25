@@ -1,0 +1,88 @@
+node.exe : [1;31m2026-09-21 18:06:21.5821274 
+[E:onnxruntime:Default, provider_bridge_ort.cc:2369 
+onnxruntime::TryGetProviderInfo_CUDA] E:\_work\1\s\onnxrunt
+ime\core\session\provider_bridge_ort.cc:1962 
+onnxruntime::ProviderLibrary::Get [ONNXRuntimeError] : 1 : 
+FAIL : Error loading "C:\Claude\Projects\wt-onbox-batch-1\s
+erver\tts-sidecar\.venv\Lib\site-packages\onnxruntime\capi\o
+nnxruntime_providers_cuda.dll" which depends on 
+"cudnn64_9.dll" which is missing. (Error 126: "The 
+specified module could not be found.")
+At C:\Users\dudar\AppData\Local\Temp\open-engine-ringer\oe-heartbeat-cline-qwen-cloud-3303-20260921-075313\oe-heartbeat
+-cline-qwen-cloud\oe-a20-run1-helper.ps1:3 char:1
++ & node scripts/run-powershell.mjs server/tts-sidecar/run-golden-tests ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([1;31m2...ound."):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[m
+[0;93m2026-09-21 18:06:21.5830891 [W:onnxruntime:Default, 
+onnxruntime_pybind_state.cc:1094 onnxruntime::python::Creat
+eExecutionProviderFactoryInstance] Failed to create 
+CUDAExecutionProvider. Require cuDNN 9.* and CUDA 12.*, 
+and the latest MSVC runtime. Please install all 
+dependencies as mentioned in the GPU requirements page (htt
+ps://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionP
+rovider.html#requirements), make sure they're in the PATH, 
+and that your GPU is supported.[m
+[0;93m2026-09-21 18:06:59.6969926 [W:onnxruntime:, 
+transformer_memcpy.cc:111 
+onnxruntime::MemcpyTransformer::ApplyImpl] 17 Memcpy nodes 
+are added to the graph main_graph for 
+CUDAExecutionProvider. It might have negative impact on 
+performance (including unable to run CUDA graph). Set 
+session_options.log_severity_level=1 to see the detail 
+logs before this message.[m
+[0;93m2026-09-21 18:07:01.4528275 [W:onnxruntime:Default, 
+scatter_nd.h:50 onnxruntime::cuda::ScatterNDWithAtomicReduc
+tion::ScatterNDWithAtomicReduction] ScatterND with 
+reduction=='none' only guarantees to be correct if indices 
+are not duplicated.[m
+'sox' is not recognized as an internal or external command,
+operable program or batch file.
+ssssss.s
+********
+Warning: flash-attn is not installed. Will only run the manual PyTorch version. Please install flash-attn for faster inference.
+********
+ 
+
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]
+Fetching 4 files: 100%|##########| 4/4 [00:00<00:00, 643.57it/s]
+Setting `pad_token_id` to `eos_token_id`:2150 for open-end generation.
+
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]
+Fetching 4 files: 100%|##########| 4/4 [00:00<00:00, 7064.09it/s]
+Setting `pad_token_id` to `eos_token_id`:2150 for open-end generation.
+F
+================================== FAILURES ===================================
+__________________________ test_live_instruct_golden __________________________
+tests\golden\test_instruct_golden.py:554: in test_live_instruct_golden
+    _bless(measured)
+tests\golden\test_instruct_golden.py:418: in _bless
+    raise AssertionError(guard_reason)
+E   AssertionError: refusing to bless: tolerances would move beyond epsilon 0.0 (rtf_max: 0.5500) -- was {'identity_cosine_max': 0.15, 'loudness_dbfs_abs': 4.0, 'rtf_max': 1.0}, now {'identity_cosine_max': 0.15, 'loudness_dbfs_abs': 4.0, 'rtf_max': 1.55} -- set GOLDEN_REBLESS_THRESHOLDS=1 to confirm this is intentional
+------------------------------ Captured log call ------------------------------
+WARNING  sox:__init__.py:10 SoX could not be found!
+
+    If you do not have SoX, proceed here:
+     - - - http://sox.sourceforge.net/ - - -
+
+    If you do (or think that you should) have SoX, double-check your
+    path variables.
+    
+WARNING  transformers.generation.utils:utils.py:2102 Setting `pad_token_id` to `eos_token_id`:2150 for open-end generation.
+WARNING  transformers.generation.utils:utils.py:2102 Setting `pad_token_id` to `eos_token_id`:2150 for open-end generation.
+============================== warnings summary ===============================
+tests/golden/test_instruct_golden.py::test_live_instruct_golden
+  C:\Claude\Projects\wt-onbox-batch-1\server\tts-sidecar\.venv\Lib\site-packages\torch\nn\modules\module.py:1370: UserWarning: expandable_segments not supported on this platform (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\c10/cuda/CUDAAllocatorConfig.h:39.)
+    return t.to(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+SKIPPED [1] tests\golden\test_cross_engine_sanity.py:102: Set GOLDEN_COQUI=1 to run the Coqui XTTS sanity check (lazy-loads weights).
+SKIPPED [1] tests\golden\test_cross_engine_sanity.py:116: Set GOLDEN_COQUI=1 to run the Coqui XTTS sanity check (lazy-loads weights).
+SKIPPED [1] tests\golden\test_cross_engine_sanity.py:130: Set GOLDEN_QWEN_VOICE=<voiceId> (an already-designed voice under voices/qwen/) to run the Qwen sanity check.
+SKIPPED [1] tests\golden\test_cross_engine_sanity.py:162: Set GOLDEN_XTTS_CLONE=<voiceUuid> (an already-cloned voice under voices/xtts/) to run the XTTS clone sanity check.
+SKIPPED [1] tests\golden\test_cross_engine_sanity.py:196: Set GOLDEN_XTTS_DESIGNED=<voiceUuid> (a voice cloned from a designed voice's synthetic calibration clip, under voices/xtts/) to run the XTTS designed-voice sanity check.
+SKIPPED [1] tests\golden\test_golden_regression.py:282: GOLDEN_BLESS set ù recorded kokoro-baseline.json (not asserting this run).
+SKIPPED [1] tests\golden\test_golden_regression.py:365: GOLDEN_BLESS set ù content is (re)recorded by the lengths test's bless step.

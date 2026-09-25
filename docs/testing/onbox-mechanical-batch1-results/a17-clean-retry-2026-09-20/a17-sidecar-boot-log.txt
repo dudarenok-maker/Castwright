@@ -1,0 +1,64 @@
+INFO:     Started server process [8956]
+INFO:     Waiting for application startup.
+2026-09-20 23:56:18.351 [sidecar] [ort-preload] added 6 nvidia/<pkg>/bin dir(s) to PATH: ['C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\cublas\\bin', 'C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\cuda_nvrtc\\bin', 'C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\cuda_runtime\\bin', 'C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\cudnn\\bin', 'C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\cufft\\bin', 'C:\\Claude\\Projects\\wt-onbox-batch-1\\server\\tts-sidecar\\.venv\\Lib\\site-packages\\nvidia\\nvjitlink\\bin']
+2026-09-20 23:56:18.442 [sidecar] [ort-preload] onnxruntime.preload_dlls() loaded the CUDA/cudnn/cublas/cufft DLLs; all 11 expected files were found under nvidia/<pkg>/bin.
+2026-09-20 23:56:20.334 [sidecar] Qwen idle watchdog started (design ttl=120s, 1.7B-Base ttl=120s).
+2026-09-20 23:56:20.334 [sidecar] Whisper ASR idle watchdog started (ttl=120s).
+2026-09-20 23:56:20.334 [sidecar] ECAPA speaker idle watchdog started (ttl=120s).
+2026-09-20 23:56:20.337 [sidecar] sidecar memory watchdog started (warn/reclaim at 8192MB rss; host soft-recycle at DISABLED, process-recycle at 47583MB committed; VRAM soft-recycle at 7727MB reserved, process-recycle at 8414MB reserved).
+2026-09-20 23:56:20.339 [sidecar] Device probe complete: {'kokoro': 'cuda', 'coqui': 'cuda', 'qwen': 'cuda'} (state=ready).
+2026-09-20 23:56:32.619 [sidecar] Pinned TTS.api import order at startup (COQUI_PIN_IMPORT_ORDER=1).
+2026-09-20 23:56:32.619 [sidecar] PRELOAD_COQUI is not set — skipping eager Coqui load; use POST /load to warm the model.
+2026-09-20 23:56:32.619 [sidecar] PRELOAD_KOKORO not enabled — Kokoro warms on demand on first synth.
+2026-09-20 23:56:32.619 [sidecar] PRELOAD_QWEN is not set — Qwen warms on demand via POST /load.
+2026-09-20 23:56:32.619 [sidecar] CUDA_VISIBLE_DEVICES/CUDA_DEVICE_ORDER is set in the environment — it overrides every per-engine device pin set via the Advanced Configuration picker. If you've moved to per-engine pins, remove these two lines from server/.env (see docs/local-llm.md's cutover section).
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:9101 (Press CTRL+C to quit)
+2026-09-20 23:56:56.670 [sidecar] Loading Qwen VoiceDesign model=Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign on cuda:0 (transient) …
+'sox' is not recognized as an internal or external command,
+operable program or batch file.
+2026-09-20 23:56:56.722 [sidecar] SoX could not be found!
+
+    If you do not have SoX, proceed here:
+     - - - http://sox.sourceforge.net/ - - -
+
+    If you do (or think that you should) have SoX, double-check your
+    path variables.
+    
+2026-09-20 23:56:57.271 [sidecar] speaker_encoder_config is None. Initializing talker model with default values
+2026-09-20 23:56:57.271 [sidecar] talker_config is None. Initializing talker model with default values
+2026-09-20 23:56:57.271 [sidecar] speaker_encoder_config is None. Initializing talker model with default values
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]Fetching 4 files: 100%|##########| 4/4 [00:00<?, ?it/s]
+2026-09-20 23:56:58.313 [sidecar] encoder_config is None. Initializing encoder with default values
+2026-09-20 23:56:58.313 [sidecar] decoder_config is None. Initializing decoder with default values
+2026-09-20 23:57:04.939 [sidecar] Qwen model=Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign attn_implementation=sdpa device=cuda:0
+2026-09-20 23:57:04.939 [sidecar] Qwen VoiceDesign loaded.
+2026-09-20 23:57:04.939 [sidecar] Loading Qwen Base model=Qwen/Qwen3-TTS-12Hz-0.6B-Base on cuda:0 …
+2026-09-20 23:57:05.193 [sidecar] talker_config is None. Initializing talker model with default values
+2026-09-20 23:57:05.193 [sidecar] speaker_encoder_config is None. Initializing talker model with default values
+Fetching 4 files:   0%|          | 0/4 [00:00<?, ?it/s]Fetching 4 files: 100%|##########| 4/4 [00:00<?, ?it/s]
+2026-09-20 23:57:06.218 [sidecar] encoder_config is None. Initializing encoder with default values
+2026-09-20 23:57:06.218 [sidecar] decoder_config is None. Initializing decoder with default values
+2026-09-20 23:57:11.417 [sidecar] Qwen model=Qwen/Qwen3-TTS-12Hz-0.6B-Base attn_implementation=sdpa device=cuda:0
+2026-09-20 23:57:11.417 [sidecar] Qwen Base loaded.
+2026-09-20 23:57:11.598 [sidecar] code_predictor_config is None. Initializing code_predictor model with default values
+Setting `pad_token_id` to `eos_token_id`:2150 for open-end generation.
+2026-09-20 23:57:20.425 [sidecar] sidecar memory: rss=4486MB committed=12591MB (peak 12591MB) vram_reserved=5723/8585MB (peak 5723MB)
+2026-09-20 23:57:21.540 [sidecar] Designed + cached Qwen voice 'qwen-a17race-sep20-a' (instruct='A warm, measured storyteller with a low calm register.').
+2026-09-20 23:57:21.546 [sidecar] code_predictor_config is None. Initializing code_predictor model with default values
+Setting `pad_token_id` to `eos_token_id`:2150 for open-end generation.
+2026-09-20 23:57:32.729 [sidecar] qwen voice design: voice=qwen-a17race-sep20-a lang=English load_ms=14747 design_fwd_ms=9868 distil_ms=246 audition_ms=11187 total_ms=36057
+2026-09-20 23:57:34.131 [sidecar] Qwen VoiceDesign unloaded (Base stays resident).
+2026-09-20 23:57:34.131 [sidecar] Loading Coqui model=tts_models/multilingual/multi-dataset/xtts_v2 on device=cuda:0 half=True deepspeed=True …
+2026-09-20 23:57:34.195 [sidecar] tts_models/multilingual/multi-dataset/xtts_v2 is already downloaded.
+2026-09-20 23:57:34.394 [sidecar] code_predictor_config is None. Initializing code_predictor model with default values
+Setting `pad_token_id` to `eos_token_id`:2150 for open-end generation.
+2026-09-20 23:57:35.109 [sidecar] Using model: xtts
+2026-09-20 23:57:44.914 [sidecar] Cloned + cached Qwen voice 'qwen-a17race-sep20-b' from caller clip.
+2026-09-20 23:57:46.377 [sidecar] DeepSpeed enable failed (No module named 'deepspeed') — continuing without it. If you want this speedup, install deepspeed in the sidecar venv.
+2026-09-20 23:57:47.349 [sidecar] fp16 autocast enabled for /synthesize.
+2026-09-20 23:57:47.349 [sidecar] Coqui ready — 58 speakers in manifest.
+2026-09-20 23:57:48.932 [sidecar] Coqui model unloaded.
+2026-09-20 23:57:49.330 [sidecar] Qwen models unloaded — reserved VRAM 1890\u219223MB (freed 1866MB).
+2026-09-20 23:58:20.467 [sidecar] sidecar memory: rss=3460MB committed=5564MB (peak 12591MB) vram_reserved=23/8585MB (peak 5723MB)
+2026-09-20 23:59:20.555 [sidecar] sidecar memory: rss=3374MB committed=5564MB (peak 5564MB) vram_reserved=23/8585MB (peak 23MB)

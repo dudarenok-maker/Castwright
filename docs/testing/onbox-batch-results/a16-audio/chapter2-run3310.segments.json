@@ -1,0 +1,1909 @@
+{
+  "bookId": "castwright__standalones__заказ-коалфолла",
+  "chapterId": 2,
+  "chapterTitle": "Глава первая — Стук",
+  "durationSec": 295.8467083333333,
+  "sampleRate": 24000,
+  "modelKey": "qwen3-tts-0.6b",
+  "synthesizedAt": "2026-09-22T11:26:41.633Z",
+  "castHistorySeq": 33,
+  "segments": [
+    {
+      "groupIndex": -1,
+      "characterId": "narrator",
+      "sentenceIds": [],
+      "startSec": 1.5,
+      "endSec": 4.466,
+      "kind": "title",
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara"
+    },
+    {
+      "groupIndex": 0,
+      "characterId": "narrator",
+      "sentenceIds": [
+        1
+      ],
+      "textHash": "ard8a5",
+      "startSec": 5.966,
+      "endSec": 13.625333333333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.144479518475961,
+        "longestSilenceSec": 0.5648333333333333,
+        "durationSec": 7.6593333333333335,
+        "expectedSec": 7.357142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.21428571428571427,
+        "sub": 3,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Гор настыл до цвета подёрнутого пеплом заката, и Рён выскребала последнюю колину, когда раздался стук.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 1,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        2
+      ],
+      "textHash": "jdjs9m",
+      "startSec": 13.625333333333334,
+      "endSec": 17.545333333333332,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.03811937087699836,
+        "longestSilenceSec": 0.582875,
+        "durationSec": 3.92,
+        "expectedSec": 3.5714285714285716
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0.7142857142857143,
+        "sub": 4,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Астайс козал мастер одуван, не пенимай от loss.",
+        "reasons": [
+          "Transcript untrustworthy — avg logprob -1.06 below -1; not scoring."
+        ]
+      }
+    },
+    {
+      "groupIndex": 2,
+      "characterId": "narrator",
+      "sentenceIds": [
+        3
+      ],
+      "textHash": "ha3o1w",
+      "startSec": 17.545333333333332,
+      "endSec": 22.324666666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1284560964993125,
+        "longestSilenceSec": 0.5719583333333333,
+        "durationSec": 4.779333333333334,
+        "expectedSec": 3.7142857142857144
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Семьдесят зимстерли его голос до гравия и терпения.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 3,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        4
+      ],
+      "textHash": "aml29h",
+      "startSec": 22.324666666666666,
+      "endSec": 24.804666666666666,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.046661170850512565,
+        "longestSilenceSec": 0.5184166666666666,
+        "durationSec": 2.88,
+        "expectedSec": 2.5
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.5,
+        "sub": 3,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Ктобы это не было, пусть учит.",
+        "reasons": [
+          "Content drift — word-error-rate 0.50 exceeds 0.45 (3 sub, 0 del, 0 ins vs 6 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 4,
+      "characterId": "narrator",
+      "sentenceIds": [
+        5
+      ],
+      "textHash": "qums5p",
+      "startSec": 24.804666666666666,
+      "endSec": 27.632,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.09718160379396076,
+        "longestSilenceSec": 0.583375,
+        "durationSec": 3.2006666666666668,
+        "expectedSec": 1.2857142857142858
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 2,
+        "sub": 2,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Я кем-то заказала.",
+        "reasons": [
+          "Transcript untrustworthy — avg logprob -1.07 below -1; not scoring."
+        ]
+      },
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 5,
+      "characterId": "narrator",
+      "sentenceIds": [
+        6
+      ],
+      "textHash": "jf1dhi",
+      "startSec": 27.632,
+      "endSec": 36.87,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13175750893659802,
+        "longestSilenceSec": 0.5912083333333333,
+        "durationSec": 9.238,
+        "expectedSec": 7.857142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.05263157894736842,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Яка в такой час это либо пьяный, либо долг, ни тот ни другой не заплатит больше от того, что его впустят быстрее.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 6,
+      "characterId": "narrator",
+      "sentenceIds": [
+        7
+      ],
+      "textHash": "z0jkp1",
+      "startSec": 36.87,
+      "endSec": 39.14266666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12831140625917106,
+        "longestSilenceSec": 0.5884166666666667,
+        "durationSec": 2.0806666666666667,
+        "expectedSec": 1.9285714285714286
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Дверь всё равно отварилась.",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 7,
+      "characterId": "narrator",
+      "sentenceIds": [
+        8
+      ],
+      "textHash": "am3kds",
+      "startSec": 39.14266666666666,
+      "endSec": 45.12733333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11905566814442417,
+        "longestSilenceSec": 0.5710833333333334,
+        "durationSec": 5.984666666666667,
+        "expectedSec": 5
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.1111111111111111,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Мейрин староста просунула голову внутри и вместе с ней вошел холод.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 8,
+      "characterId": "mairin",
+      "sentenceIds": [
+        9
+      ],
+      "textHash": "7myu70",
+      "startSec": 45.12733333333333,
+      "endSec": 49.629333333333335,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12887381828002148,
+        "longestSilenceSec": 0.5722916666666666,
+        "durationSec": 4.502,
+        "expectedSec": 2.5714285714285716
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Екаадуван, запреставни и залей угли его.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 9,
+      "characterId": "narrator",
+      "sentenceIds": [
+        10
+      ],
+      "textHash": "nk53ub",
+      "startSec": 49.629333333333335,
+      "endSec": 54.13133333333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12629798674128398,
+        "longestSilenceSec": 0.5410416666666666,
+        "durationSec": 4.502,
+        "expectedSec": 3.857142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.1111111111111111,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Слава её были отрывисты, как всегда, когда она бежала.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 10,
+      "characterId": "mairin",
+      "sentenceIds": [
+        11
+      ],
+      "textHash": "hhzu1a",
+      "startSec": 54.13133333333333,
+      "endSec": 59.7,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1430611567802159,
+        "longestSilenceSec": 0.5551666666666667,
+        "durationSec": 6.262,
+        "expectedSec": 5.357142857142857
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.5,
+        "sub": 3,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Яка на Калфолской дороге дракон. Огромный сомбар. Идет прямо по переулку Вола.",
+        "reasons": [
+          "Content drift — word-error-rate 0.50 exceeds 0.45 (3 sub, 0 del, 2 ins vs 10 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 11,
+      "characterId": "narrator",
+      "sentenceIds": [
+        12
+      ],
+      "textHash": "masyhi",
+      "startSec": 59.7,
+      "endSec": 62.623333333333335,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.09306633945790886,
+        "longestSilenceSec": 0.844375,
+        "durationSec": 2.9233333333333333,
+        "expectedSec": 1.2857142857142858
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Скребокрён замер.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 12,
+      "characterId": "ren",
+      "sentenceIds": [
+        13
+      ],
+      "textHash": "79d3j3",
+      "startSec": 62.623333333333335,
+      "endSec": 65.25866666666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Claribel Dervla",
+      "baseVoiceName": "Claribel Dervla",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11244602393515113,
+        "longestSilenceSec": 0.605875,
+        "durationSec": 2.6353333333333335,
+        "expectedSec": 0.8571428571428571
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 2,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Нека настоящий яй.",
+        "reasons": [
+          "Content drift — word-error-rate 2.00 exceeds 0.45 (0 sub, 0 del, 2 ins vs 1 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 13,
+      "characterId": "narrator",
+      "sentenceIds": [
+        14
+      ],
+      "textHash": "6vxket",
+      "startSec": 65.25866666666667,
+      "endSec": 69.66466666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10230949147640152,
+        "longestSilenceSec": 0.5955416666666666,
+        "durationSec": 4.406,
+        "expectedSec": 1.7857142857142858
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.6666666666666666,
+        "sub": 1,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Её конец — дитя, нарисованный.",
+        "reasons": [
+          "Content drift — word-error-rate 0.67 exceeds 0.45 (1 sub, 0 del, 1 ins vs 3 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 14,
+      "characterId": "mairin",
+      "sentenceIds": [
+        15
+      ],
+      "textHash": "jx24se",
+      "startSec": 69.66466666666666,
+      "endSec": 71.79866666666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12199730657853623,
+        "longestSilenceSec": 0.600125,
+        "durationSec": 2.134,
+        "expectedSec": 1.6428571428571428
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Мейрин не улыбнулась.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 15,
+      "characterId": "mairin",
+      "sentenceIds": [
+        16
+      ],
+      "textHash": "qpkz5o",
+      "startSec": 71.79866666666666,
+      "endSec": 81.07,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Sofia Hellen",
+      "baseVoiceName": "Sofia Hellen",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1327299676066571,
+        "longestSilenceSec": 0.60575,
+        "durationSec": 9.271333333333333,
+        "expectedSec": 7.642857142857143
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 1,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "настоящий и направляется прямо к единственному освещенному окну в долине, то есть к вашему почве. Гасите огонь его.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 16,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        17
+      ],
+      "textHash": "8wrjz4",
+      "startSec": 81.07,
+      "endSec": 89.31004166666666,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.046049712732059024,
+        "longestSilenceSec": 0.5752916666666666,
+        "durationSec": 8.240041666666666,
+        "expectedSec": 5.928571428571429
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2727272727272727,
+        "sub": 3,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Если я заю огонь, сказал одуван, то потеряю сварку, тоторю нячу спалудня.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 17,
+      "characterId": "narrator",
+      "sentenceIds": [
+        18
+      ],
+      "textHash": "ihq1ml",
+      "startSec": 89.31004166666666,
+      "endSec": 97.56670833333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1322261009613446,
+        "longestSilenceSec": 1.0325416666666667,
+        "durationSec": 8.256666666666666,
+        "expectedSec": 7.285714285714286
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.21428571428571427,
+        "sub": 3,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "дракон либо подождет, пока я доварю, либо нет, и в любом случае я предпочел бы встретить его в теплее.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 18,
+      "characterId": "narrator",
+      "sentenceIds": [
+        19
+      ],
+      "textHash": "557nej",
+      "startSec": 97.56670833333334,
+      "endSec": 100.575375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12352487436269136,
+        "longestSilenceSec": 0.581875,
+        "durationSec": 3.0086666666666666,
+        "expectedSec": 1.2142857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Он отложил клещи.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 19,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        20
+      ],
+      "textHash": "pd1wzd",
+      "startSec": 100.575375,
+      "endSec": 103.615375,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04340239024949476,
+        "longestSilenceSec": 0.643375,
+        "durationSec": 3.04,
+        "expectedSec": 2.4285714285714284
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 1.5,
+        "sub": 4,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "В Роберсек, в Куйбор-Шуиде 8.",
+        "reasons": [
+          "Transcript untrustworthy — avg logprob -1.15 below -1; not scoring."
+        ]
+      },
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 20,
+      "characterId": "narrator",
+      "sentenceIds": [
+        21
+      ],
+      "textHash": "14ckum",
+      "startSec": 103.615375,
+      "endSec": 111.64804166666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13955452030092977,
+        "longestSilenceSec": 0.571,
+        "durationSec": 8.032666666666668,
+        "expectedSec": 8.642857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.11764705882352941,
+        "sub": 2,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Реан Воробушком он звал ее только тогда, когда забывал быть строгим, подошла к огромной двери и распахнула ее на стеж.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 21,
+      "characterId": "narrator",
+      "sentenceIds": [
+        22
+      ],
+      "textHash": "l2rkxe",
+      "startSec": 111.64804166666667,
+      "endSec": 116.843375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13193229198671588,
+        "longestSilenceSec": 0.5822083333333333,
+        "durationSec": 5.195333333333333,
+        "expectedSec": 4.071428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.1,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Драк он заполнил тьму за ней так, как вода заполняет чешу.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 22,
+      "characterId": "narrator",
+      "sentenceIds": [
+        23
+      ],
+      "textHash": "tbdmc8",
+      "startSec": 116.843375,
+      "endSec": 125.51604166666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12717278384737432,
+        "longestSilenceSec": 0.638,
+        "durationSec": 8.672666666666666,
+        "expectedSec": 7.428571428571429
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.08333333333333333,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Один глаз, золото и медленный, поравнялся с проемом и остановился, разглядывая малое тепло этого места.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 23,
+      "characterId": "narrator",
+      "sentenceIds": [
+        24
+      ],
+      "textHash": "722mpq",
+      "startSec": 125.51604166666667,
+      "endSec": 132.567375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11713916652080529,
+        "longestSilenceSec": 0.5837083333333334,
+        "durationSec": 8.075333333333333,
+        "expectedSec": 6.142857142857143
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2857142857142857,
+        "sub": 3,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Откуда ты из переулка во тьме сорвался голос? Не обегите, глупцы он сожрет вас всех.",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 24,
+      "characterId": "narrator",
+      "sentenceIds": [
+        25
+      ],
+      "textHash": "d0tu5k",
+      "startSec": 132.567375,
+      "endSec": 134.509375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11044644666293174,
+        "longestSilenceSec": 0.5937083333333333,
+        "durationSec": 1.942,
+        "expectedSec": 1.2142857142857142
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Никто не побежал.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 25,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        26
+      ],
+      "textHash": "u9uf9",
+      "startSec": 134.509375,
+      "endSec": 140.81404166666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13536468874508953,
+        "longestSilenceSec": 0.575375,
+        "durationSec": 4.5873333333333335,
+        "expectedSec": 2.7857142857142856
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 2,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Йотая прошел долгий путь, сказал дракон.",
+        "reasons": []
+      },
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 26,
+      "characterId": "narrator",
+      "sentenceIds": [
+        27
+      ],
+      "textHash": "y0l8hi",
+      "startSec": 140.81404166666667,
+      "endSec": 151.57804166666668,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.13211033313119436,
+        "longestSilenceSec": 0.5876666666666667,
+        "durationSec": 10.764,
+        "expectedSec": 8.857142857142858
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.23809523809523808,
+        "sub": 4,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Голос его не был громок, Катя. Так звучал обо гора, будь гора усталый, и каждое слово приходил мгновением позже, чем ты его ждал.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 27,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        28
+      ],
+      "textHash": "mu32qm",
+      "startSec": 151.57804166666668,
+      "endSec": 155.653375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.11817753437196321,
+        "longestSilenceSec": 0.5813333333333334,
+        "durationSec": 4.128666666666667,
+        "expectedSec": 2.357142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Деревнях меня зовут Калфол Талтелта.",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 28,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        29
+      ],
+      "textHash": "jz92uy",
+      "startSec": 155.653375,
+      "endSec": 158.523375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10612543683872491,
+        "longestSilenceSec": 0.565125,
+        "durationSec": 2.87,
+        "expectedSec": 1.8571428571428572
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 2,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Это не мое имя, но сойдет.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 29,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        30
+      ],
+      "textHash": "ne25tr",
+      "startSec": 158.523375,
+      "endSec": 163.857375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12435575001391998,
+        "longestSilenceSec": 0.564125,
+        "durationSec": 5.334,
+        "expectedSec": 4
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 2,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Мне сказали, что лучший кузнец Дуалины держит этот горнио панте.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 30,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        31
+      ],
+      "textHash": "vgeewd",
+      "startSec": 163.857375,
+      "endSec": 166.817375,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04655388306689903,
+        "longestSilenceSec": 0.44575,
+        "durationSec": 2.96,
+        "expectedSec": 2.642857142857143
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.25,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Сказали неверно, а дизвался от уван.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 31,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        32
+      ],
+      "textHash": "6emiis",
+      "startSec": 166.817375,
+      "endSec": 174.017375,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.051812873638960866,
+        "longestSilenceSec": 0.97925,
+        "durationSec": 7.2,
+        "expectedSec": 5.571428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2,
+        "sub": 2,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Лучший кузнец долины умер девять лет назад. Придется доводствоваться вторым.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 32,
+      "characterId": "narrator",
+      "sentenceIds": [
+        33
+      ],
+      "textHash": "o3sgby",
+      "startSec": 174.017375,
+      "endSec": 178.007375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12171870698626751,
+        "longestSilenceSec": 0.538,
+        "durationSec": 3.99,
+        "expectedSec": 2.357142857142857
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.5,
+        "sub": 1,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Якоскромность или торговая уловка? Ело.",
+        "reasons": [
+          "Content drift — word-error-rate 0.50 exceeds 0.45 (1 sub, 0 del, 1 ins vs 4 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 33,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        34
+      ],
+      "textHash": "wmsazi",
+      "startSec": 178.007375,
+      "endSec": 180.487375,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.054284097015710034,
+        "longestSilenceSec": 0.23183333333333334,
+        "durationSec": 2.48,
+        "expectedSec": 2.5
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0.7142857142857143,
+        "sub": 4,
+        "del": 1,
+        "ins": 0,
+        "longestDeletionRun": 1,
+        "transcript": "В моем бозерстве я додною торже.",
+        "reasons": [
+          "Transcript untrustworthy — avg logprob -1.15 below -1; not scoring."
+        ]
+      }
+    },
+    {
+      "groupIndex": 34,
+      "characterId": "narrator",
+      "sentenceIds": [
+        35
+      ],
+      "textHash": "mj6x26",
+      "startSec": 180.487375,
+      "endSec": 186.37604166666668,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12070455876333508,
+        "longestSilenceSec": 0.5440416666666666,
+        "durationSec": 5.8886666666666665,
+        "expectedSec": 5.714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.07692307692307693,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Золотой глаз перешел на рён, и она ощутила его, как ощущаешь солнце сквозь окно.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 35,
+      "characterId": "ren",
+      "sentenceIds": [
+        36
+      ],
+      "textHash": "lqspq8",
+      "startSec": 186.37604166666668,
+      "endSec": 188.083375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Claribel Dervla",
+      "baseVoiceName": "Claribel Dervla",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10059337805868929,
+        "longestSilenceSec": 0.5902083333333333,
+        "durationSec": 1.7073333333333334,
+        "expectedSec": 0.7142857142857143
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Яка, а малая?",
+        "reasons": [
+          "Not scored — sentence under the 12-char ASR floor."
+        ]
+      }
+    },
+    {
+      "groupIndex": 36,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        37
+      ],
+      "textHash": "v144rz",
+      "startSec": 188.083375,
+      "endSec": 189.523375,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04253503824107777,
+        "longestSilenceSec": 0.47920833333333335,
+        "durationSec": 1.44,
+        "expectedSec": 0.9285714285714286
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Моя ученица",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 37,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        38
+      ],
+      "textHash": "7xavs2",
+      "startSec": 189.523375,
+      "endSec": 195.283375,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.047155404436437266,
+        "longestSilenceSec": 0.47070833333333334,
+        "durationSec": 5.76,
+        "expectedSec": 4.428571428571429
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.1,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Тейл 13 и она думает, что я не слышу, как она вздыхает.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 38,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        39
+      ],
+      "textHash": "mhb25f",
+      "startSec": 195.283375,
+      "endSec": 203.043375,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.039504198922078064,
+        "longestSilenceSec": 0.39520833333333333,
+        "durationSec": 7.76,
+        "expectedSec": 7.5
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.4375,
+        "sub": 6,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "а он останет лучше меня, прежде чем ей исполнится 20 единственных причин, по которые я ее держу.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 39,
+      "characterId": "ren",
+      "sentenceIds": [
+        40
+      ],
+      "textHash": "bxzyai",
+      "startSec": 203.043375,
+      "endSec": 207.90804166666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Claribel Dervla",
+      "baseVoiceName": "Claribel Dervla",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12060118233525306,
+        "longestSilenceSec": 0.5517083333333334,
+        "durationSec": 4.8646666666666665,
+        "expectedSec": 4.071428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.42857142857142855,
+        "sub": 2,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Нёкая никогда не вздыхаюла, сказал Эрен, которая вздохнула.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 40,
+      "characterId": "narrator",
+      "sentenceIds": [
+        41
+      ],
+      "textHash": "6fhgmv",
+      "startSec": 207.90804166666666,
+      "endSec": 215.055375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12670808820121346,
+        "longestSilenceSec": 0.5832916666666667,
+        "durationSec": 7.147333333333333,
+        "expectedSec": 7.214285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Дракон опустился так низко, что его дыхание шевельнуло угли, и они разгорелись, хоть их и не просили.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 41,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        42
+      ],
+      "textHash": "w8auiu",
+      "startSec": 215.055375,
+      "endSec": 218.99204166666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.128872428499666,
+        "longestSilenceSec": 0.5727916666666667,
+        "durationSec": 3.9366666666666665,
+        "expectedSec": 2.2142857142857144
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Я то мне не нужен меч, сказал он.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 42,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        43
+      ],
+      "textHash": "bsstfl",
+      "startSec": 218.99204166666667,
+      "endSec": 223.53670833333334,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.1171415982200049,
+        "longestSilenceSec": 0.6034166666666667,
+        "durationSec": 4.544666666666667,
+        "expectedSec": 3.5714285714285716
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.14285714285714285,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Все хотят моей смерти, а Мечик только подстегнет.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 43,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        44
+      ],
+      "textHash": "wsfyb1",
+      "startSec": 223.53670833333334,
+      "endSec": 226.321375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10469174457147948,
+        "longestSilenceSec": 0.573,
+        "durationSec": 2.784666666666667,
+        "expectedSec": 1.2857142857142858
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 0,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Мне нужен колокол койтоди.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 44,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        45
+      ],
+      "textHash": "o3a9dn",
+      "startSec": 226.321375,
+      "endSec": 231.655375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10571207940430871,
+        "longestSilenceSec": 1.465375,
+        "durationSec": 5.334,
+        "expectedSec": 2.857142857142857
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Достаточно малый, чтобы снесать скогтя.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 45,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        46
+      ],
+      "textHash": "rujpe",
+      "startSec": 231.655375,
+      "endSec": 237.501375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12240374412260381,
+        "longestSilenceSec": 0.6046666666666667,
+        "durationSec": 5.846,
+        "expectedSec": 4.571428571428571
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Я последний из своих, и когда я уйду, некому будет это отметить.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 46,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        47
+      ],
+      "textHash": "juybhq",
+      "startSec": 237.501375,
+      "endSec": 244.595375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.121290786079796,
+        "longestSilenceSec": 0.5842916666666667,
+        "durationSec": 7.094,
+        "expectedSec": 6.357142857142857
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.06666666666666667,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Я хотел бы отметить это сам, заранее пока еще есть тот, кто умеет отлить верную ноту О.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 47,
+      "characterId": "narrator",
+      "sentenceIds": [
+        48
+      ],
+      "textHash": "qdrwzl",
+      "startSec": 244.595375,
+      "endSec": 248.62804166666666,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12099966934632903,
+        "longestSilenceSec": 0.592875,
+        "durationSec": 4.032666666666667,
+        "expectedSec": 3.2142857142857144
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0,
+        "sub": 0,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "какое-то время единственным звуком был огонь.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 48,
+      "characterId": "narrator",
+      "sentenceIds": [
+        49
+      ],
+      "textHash": "uuvq7w",
+      "startSec": 248.62804166666666,
+      "endSec": 252.10604166666667,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.12663630040325533,
+        "longestSilenceSec": 0.5622916666666666,
+        "durationSec": 3.478,
+        "expectedSec": 2.142857142857143
+      },
+      "qaRetries": 1,
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.2,
+        "sub": 1,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Потом Адуван снова взял клеще.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 49,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        50
+      ],
+      "textHash": "7kxmzx",
+      "startSec": 252.10604166666667,
+      "endSec": 257.1460416666667,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.0469791903212876,
+        "longestSilenceSec": 0.5877916666666667,
+        "durationSec": 5.44,
+        "expectedSec": 4.714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.4,
+        "sub": 4,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Колокол сказал он, так будет ракон и просядек каждый вторник.",
+        "reasons": []
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 50,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        51
+      ],
+      "textHash": "23gumj",
+      "startSec": 257.1460416666667,
+      "endSec": 259.38604166666664,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.05720407667264911,
+        "longestSilenceSec": 0.440125,
+        "durationSec": 2.24,
+        "expectedSec": 1.7142857142857142
+      },
+      "asr": {
+        "verdict": "drift",
+        "wer": 0.5,
+        "sub": 1,
+        "del": 1,
+        "ins": 0,
+        "longestDeletionRun": 1,
+        "transcript": "Тогда бронза нежелиза.",
+        "reasons": [
+          "Content drift — word-error-rate 0.50 exceeds 0.45 (1 sub, 1 del, 0 ins vs 4 words)."
+        ]
+      },
+      "asrSuspect": true,
+      "asrRetries": 2
+    },
+    {
+      "groupIndex": 51,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        52
+      ],
+      "textHash": "dxeiff",
+      "startSec": 259.38604166666664,
+      "endSec": 266.50604166666665,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04602234793214129,
+        "longestSilenceSec": 0.5144583333333334,
+        "durationSec": 7.12,
+        "expectedSec": 6.857142857142857
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 0.45454545454545453,
+        "sub": 5,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Воробушек, хорошая олова, тигель и перестанет плакать на фромовочный песок и спортишь отливку.",
+        "reasons": [
+          "Transcript untrustworthy — no-speech prob 0.60 above 0.6; not scoring."
+        ]
+      }
+    },
+    {
+      "groupIndex": 52,
+      "characterId": "ren",
+      "sentenceIds": [
+        53
+      ],
+      "textHash": "orsnma",
+      "startSec": 266.50604166666665,
+      "endSec": 268.917375,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Claribel Dervla",
+      "baseVoiceName": "Claribel Dervla",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10880109257274449,
+        "longestSilenceSec": 0.591375,
+        "durationSec": 1.846,
+        "expectedSec": 0.9285714285714286
+      },
+      "asr": {
+        "verdict": "inconclusive",
+        "wer": 1,
+        "sub": 1,
+        "del": 0,
+        "ins": 1,
+        "longestDeletionRun": 0,
+        "transcript": "Ето не плачула.",
+        "reasons": [
+          "Transcript untrustworthy — no-speech prob 0.68 above 0.6; not scoring."
+        ]
+      },
+      "asrRetries": 1
+    },
+    {
+      "groupIndex": 53,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        54
+      ],
+      "textHash": "usdcb4",
+      "startSec": 268.917375,
+      "endSec": 275.157375,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04082593139799144,
+        "longestSilenceSec": 0.51525,
+        "durationSec": 6.24,
+        "expectedSec": 5.428571428571429
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.18181818181818182,
+        "sub": 2,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Разумеется, нет. Он поширился на дракона, оценивая его, как оценивал все.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 54,
+      "characterId": "oduvan",
+      "sentenceIds": [
+        55
+      ],
+      "textHash": "hiuxfd",
+      "startSec": 275.157375,
+      "endSec": 280.677375,
+      "voiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "baseVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.04642943052007073,
+        "longestSilenceSec": 0.49695833333333334,
+        "durationSec": 5.52,
+        "expectedSec": 5.142857142857143
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.18181818181818182,
+        "sub": 1,
+        "del": 1,
+        "ins": 0,
+        "longestDeletionRun": 1,
+        "transcript": "до утра. Придется тебе составить огню компанию, пока мы работаем.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 55,
+      "characterId": "narrator",
+      "sentenceIds": [
+        56
+      ],
+      "textHash": "gukc07",
+      "startSec": 280.677375,
+      "endSec": 291.9527083333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Asya Anara",
+      "baseVoiceName": "Asya Anara",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.14329542621007413,
+        "longestSilenceSec": 0.554875,
+        "durationSec": 11.275333333333334,
+        "expectedSec": 11.714285714285714
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.125,
+        "sub": 3,
+        "del": 0,
+        "ins": 0,
+        "longestDeletionRun": 0,
+        "transcript": "Дракон устроился в дверном проеме, прикрыв один глаз от тепла, и сказал голосам усталой Гары, которую очень-очень давно не просили подождать где-нибудь по-доброму.",
+        "reasons": []
+      }
+    },
+    {
+      "groupIndex": 56,
+      "characterId": "coalfall-dragon",
+      "sentenceIds": [
+        57
+      ],
+      "textHash": "6id2zc",
+      "startSec": 291.9527083333333,
+      "endSec": 295.8467083333333,
+      "renderedFallbackEngine": "coqui",
+      "voiceName": "Gracie Wise",
+      "baseVoiceName": "Gracie Wise",
+      "qa": {
+        "status": "ok",
+        "reasons": [],
+        "rms": 0.10378566658937585,
+        "longestSilenceSec": 0.5800416666666667,
+        "durationSec": 3.894,
+        "expectedSec": 3.2857142857142856
+      },
+      "asr": {
+        "verdict": "ok",
+        "wer": 0.3333333333333333,
+        "sub": 0,
+        "del": 0,
+        "ins": 2,
+        "longestDeletionRun": 0,
+        "transcript": "Яка у меня нет ничего, кроме времени. Начинайте его.",
+        "reasons": []
+      }
+    }
+  ],
+  "characterSnapshots": {
+    "ren": {
+      "tone": {
+        "warmth": 50,
+        "pace": 55,
+        "authority": 40,
+        "emotion": 45
+      },
+      "gender": "female",
+      "ageRange": "teen",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Claribel Dervla",
+      "renderedFallbackEngine": "coqui"
+    },
+    "oduvan": {
+      "tone": {
+        "warmth": 60,
+        "pace": 50,
+        "authority": 70,
+        "emotion": 35
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "qwen-c8c583c7-3449-4602-850c-8701f1dfec23"
+    },
+    "mairin": {
+      "tone": {
+        "warmth": 55,
+        "pace": 45,
+        "authority": 40,
+        "emotion": 60
+      },
+      "gender": "female",
+      "ageRange": "adult",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Sofia Hellen",
+      "renderedFallbackEngine": "coqui"
+    },
+    "coalfall-dragon": {
+      "tone": {
+        "warmth": 50,
+        "pace": 45,
+        "authority": 60,
+        "emotion": 35
+      },
+      "gender": "neutral",
+      "ageRange": "adult",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Gracie Wise",
+      "renderedFallbackEngine": "coqui"
+    },
+    "narrator": {
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 60,
+        "emotion": 40
+      },
+      "gender": "neutral",
+      "ageRange": "adult",
+      "voiceEngine": "qwen",
+      "modelKey": "qwen3-tts-0.6b",
+      "resolvedVoiceName": "Asya Anara",
+      "renderedFallbackEngine": "coqui",
+      "attributes": [
+        "formal",
+        "measured",
+        "observational",
+        "rhythmic"
+      ]
+    }
+  },
+  "qa": {
+    "status": "ok",
+    "reasons": [],
+    "measuredLufs": -16.2,
+    "truePeakDb": -1.2,
+    "durationSec": 295.8467083333333,
+    "expectedSec": 232.07142857142858,
+    "checkedAt": "2026-09-22T11:26:41.632Z"
+  }
+}

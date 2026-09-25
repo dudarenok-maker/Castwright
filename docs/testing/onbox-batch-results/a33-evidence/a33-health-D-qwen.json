@@ -1,0 +1,108 @@
+﻿{
+    "ok":  true,
+    "protocol_version":  1,
+    "__version__":  "1.14.0",
+    "engines":  [
+                    "coqui",
+                    "kokoro",
+                    "qwen"
+                ],
+    "model_loaded":  false,
+    "loading":  false,
+    "kokoro_loaded":  false,
+    "kokoro_loading":  false,
+    "qwen_loaded":  true,
+    "qwen_base17_loaded":  false,
+    "qwen_design_ever_loaded":  false,
+    "qwen_design_resident":  false,
+    "qwen_device_key":  "cuda:0",
+    "qwen_loading":  false,
+    "qwen_package_installed":  true,
+    "qwen_weights_present":  true,
+    "qwen_base17_weights_present":  true,
+    "qwen_install_state":  "loaded",
+    "coqui_package_installed":  true,
+    "coqui_import_ok":  true,
+    "coqui_weights_present":  true,
+    "coqui_version":  "0.27.5",
+    "kokoro_package_installed":  true,
+    "whisper_package_installed":  true,
+    "kokoro_import_ok":  true,
+    "qwen_import_ok":  true,
+    "whisper_import_ok":  null,
+    "asr_loaded":  false,
+    "asr_device":  "cpu",
+    "spk_loaded":  false,
+    "spk_device":  "cpu",
+    "devices":  {
+                    "kokoro":  "cuda",
+                    "coqui":  "cuda",
+                    "qwen":  "cuda"
+                },
+    "gpus":  [
+                 {
+                     "uuid":  "1831b67f-ccc0-c3fc-9167-cff059c3224c",
+                     "idx":  0,
+                     "name":  "NVIDIA GeForce RTX 4070 Laptop GPU",
+                     "total_mb":  8585,
+                     "free_mb":  5564,
+                     "torch_reserved_mb":  1845,
+                     "free_floor_mb":  1024.0,
+                     "reserved_ceiling_mb":  8413.3,
+                     "resident":  [
+
+                                  ]
+                 },
+                 {
+                     "uuid":  "73e7270e-ff5b-d1a2-de93-bc83af87699d",
+                     "idx":  1,
+                     "name":  "NVIDIA GeForce RTX 5070 Ti",
+                     "total_mb":  17066,
+                     "free_mb":  15767,
+                     "torch_reserved_mb":  0,
+                     "free_floor_mb":  1024.0,
+                     "reserved_ceiling_mb":  16724.68,
+                     "resident":  [
+
+                                  ]
+                 },
+                 {
+                     "uuid":  null,
+                     "idx":  -1,
+                     "name":  "unindexed (cpu / ORT / CT2)",
+                     "total_mb":  0,
+                     "free_mb":  0,
+                     "torch_reserved_mb":  0,
+                     "resident":  [
+                                      {
+                                          "engine":  "qwen",
+                                          "actual_card":  null
+                                      }
+                                  ],
+                     "free_floor_mb":  1024.0,
+                     "reserved_ceiling_mb":  0.0
+                 }
+             ],
+    "devices_state":  "ready",
+    "device":  null,
+    "poisoned":  false,
+    "cuda_verified":  null,
+    "cuda_verification_detail":  null,
+    "recycle_pending":  false,
+    "inflight_synth":  0,
+    "committed_mb":  6551.6544,
+    "vram_reserved_mb":  1845.49376,
+    "vram_total_mb":  8585.216,
+    "vram_reserved_mb_by_device":  {
+                                       "cuda:0":  {
+                                                      "reserved_mb":  1845.49376,
+                                                      "total_mb":  8585.216
+                                                  },
+                                       "cuda:1":  {
+                                                      "reserved_mb":  0.0,
+                                                      "total_mb":  17066.033152
+                                                  }
+                                   },
+    "mem_restart_mb":  47582.758092799995,
+    "vram_restart_mb":  8413.51168
+}

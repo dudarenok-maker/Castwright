@@ -1,0 +1,43 @@
+{
+  "saturation": {
+    "cuda0_used_mb": 5631,
+    "cuda1_free_mb": 573,
+    "fill_child_alive": true,
+    "t_after_design_s": 2.5
+  },
+  "node_retry": {
+    "started_ms_after_design": 2770,
+    "elapsed_ms": 2246,
+    "total_posts": 1,
+    "denials_503": 0,
+    "first_posts": [
+      {
+        "n": 1,
+        "at_ms": 5015,
+        "status": 200
+      }
+    ],
+    "last_posts": [
+      {
+        "n": 1,
+        "at_ms": 5015,
+        "status": 200
+      }
+    ],
+    "outcome": {
+      "kind": "response",
+      "status": 200,
+      "body_head": "{\"text\":\"\",\"language\":\"en\",\"avg_logprob\":null,\"no_speech_prob\":null,\"compression_ratio\":null,\"words\":null}"
+    },
+    "health_at_end": {
+      "qwenLoaded": true,
+      "qwenBase17Loaded": false,
+      "qwenDesignEverLoaded": true,
+      "qwenDesignResident": true,
+      "qwenDeviceKey": "cuda:0",
+      "vramReservedMb": 5746.19648
+    },
+    "verdict": "UNEXPECTED \u00e2\u20ac\u201d inspect fields (check sidecar_stderr6 tail + x2_saturation.json)"
+  },
+  "node_rc": 0
+}
