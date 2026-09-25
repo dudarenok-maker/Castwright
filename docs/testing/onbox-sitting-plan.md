@@ -46,12 +46,12 @@ sitting; A1 is several sittings inside one pack.
 
 | Pack file | Rows (each pack file's own current heading labels) | Est. min |
 |---|---|---|
-| [`onbox-sitting-two-card-boot.md`](onbox-sitting-two-card-boot.md) | A3, A12 (A2, A8 discharged) | 85 |
-| `onbox-sitting-vram-contention.md` | A5, A13, A19, A24 (A17, A25 discharged) | 155 |
-| `onbox-sitting-voice-design.md` | A4, A6, A7, A11, A20 (A14, A17 discharged) | 155 |
-| `onbox-sitting-qa-gate.md` | A9, A10, A12, A13, A21, A22 (A34 discharged, A11 moved) | 145 |
-| `onbox-sitting-cloning-identity.md` | A16, A18, A21, A22, A23, A31 (A32, A34 discharged) | 185 |
-| `onbox-sitting-multilanguage.md` | D2, A27 (D1, E4 discharged, A35 nonexistent) | 165 |
+| [`onbox-sitting-two-card-boot.md`](onbox-sitting-two-card-boot.md) | A2, A3, A8, A18 | 110 |
+| `onbox-sitting-vram-contention.md` | A5, A16, A19, A13, A24, A26, A31, A32, A33 | 155 |
+| `onbox-sitting-voice-design.md` | A4, A6, A7, A14, A15, A17, A27 | 155 |
+| `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A34 | 145 |
+| `onbox-sitting-cloning-identity.md` | A23, A25, A28, A29, A30, A39, A40, A41, A42 | 185 |
+| `onbox-sitting-multilanguage.md` | D1, D2, A35, E4 | 165 |
 | `onbox-sitting-device-browser.md` | E1, E2, E3, E5, E6, E7, E8 | 135 |
 | `onbox-sitting-fs38-wave3.md` | A1 | multi-hour, several sittings |
 
@@ -485,5 +485,3 @@ incident** is the reason this rule exists and is named here.
 
 **Grand reconciliation:** 48 operator + 16 wave-3 + 3 blocked = **67 rows**, the
 register's full owed count, each exactly once.
-
-### A1 · Synthetic finding-N/W pin (#1849)
