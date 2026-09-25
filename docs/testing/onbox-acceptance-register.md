@@ -575,11 +575,16 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > recorded the outcomes inside each row's own body — all seven runs were
 > agent-lane dispatches on the repo owner's box (`cline-qwen-cloud` where the
 > row names a lane; A17's own note doesn't name one), commits authored as
-> `dudarenok-maker`). An earlier pass on this branch (PR #3399, now
-> superseded) removed all seven rows, including A20 and A105; a review of
+> `dudarenok-maker`). An earlier pass of this PR (#3402, commit `6e655b77`
+> onward) removed all seven rows, including A20 and A105; a review of
 > PR #3402 found both still carry an unmet bullet in their own recorded text,
 > and the repo owner decided **A20 and A105 stay in the register, narrowed to
 > their one owed bullet each** — only the other five discharge.
+> **Owner confirmation, 2026-09-25 (repo owner, `dudarenok-maker`):** the
+> owner confirmed the A17 and A32 discharges, kept A20 and A105 owed
+> (narrowed), and moved E104's bullet 3 (the push-path `KILLED` print) to a
+> new row that PR [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404)
+> adds — see E104 below.
 >
 > **A17** (`/health` through a contended eviction on the default Qwen path,
 > #1919, by whom not named in the row): the exact three-way race (VoiceDesign
@@ -615,8 +620,10 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > **Caveat kept:** this box has no DirectML profile (CUDA `onnxruntime-gpu`
 > only), so `_directml_selftest_or_fallback`'s one-shot forward — the row's
 > stated prerequisite — never ran; the row's own text judges the gate under
-> test EP-agnostic and the discharge stands on that basis. Evidence: this
-> row's own body (no separate evidence file).
+> test EP-agnostic and the discharge stands on that basis. Evidence: no
+> separate evidence file; the row's last text is the register's A107
+> section at `origin/main` `a8b0fcc6`, plus
+> [#3309](https://github.com/dudarenok-maker/Castwright/issues/3309).
 >
 > **E103** (`wt-gc.mjs --prune` real junction-first teardown, #3051,
 > `cline-qwen-cloud`, issue #3321): driven in full on-box 2026-09-24 against
@@ -634,20 +641,29 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > against real processes, #3047, `cline-qwen-cloud`, issue #3322): driven in
 > full on-box 2026-09-24 against three live fixture process trees plus one
 > organic orphan the census found itself — all five observed behaviours
-> (report-only census, stalled-rate detection, orphan kill, namer-only
-> survival, push-cost + census-record accumulation) confirmed on real
-> `Win32_Process` output. Evidence: not durable — `census-t0.txt`,
+> (report-only census, stalled-rate detection, orphan kill via
+> `npm run doctor -- --kill`, namer-only survival, push-cost + census-record
+> accumulation) confirmed on real `Win32_Process` output, except bullet 3's
+> push-path print (below). Evidence: not durable — `census-t0.txt`,
 > `census-t1.txt`, `doctor-kill.txt`, `timeline.txt` under
 > `%TEMP%\open-engine-scratch\cline-qwen-cloud-3322-20260924-093037\` on the
 > box the run happened on; once this row is gone, git history (this note,
-> and #3322) is the only durable record. **Incidental finding kept, not
-> silently dropped:** the run's own text records that `taskkill /T` returned
-> a non-zero exit on both real pushes (pids 38780, 23792) even though the
-> whole process tree was actually gone seconds later in both cases — the
-> tool correctly prints `KILL FAILED` rather than a false `KILLED` on that
-> signal (`scripts/reap-stale-batteries.mjs`'s `killTree()`), so nothing
-> misreports success, but a genuinely-successful kill still reads as a
-> failure in the log. **Filed as issue [#3403](https://github.com/dudarenok-maker/Castwright/issues/3403) and fixed in PR [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404).**
+> and #3322) is the only durable record. **Bullet 3's push-path half was
+> NOT observed as specified.** The criterion asks that, when the pre-push
+> census is what reaps an orphan, `git push` prints
+> `reap-stale-batteries: KILLED stale battery pid=… :: <command line>`.
+> Both real pushes (pids 38780, 23792) printed `KILL FAILED` instead, even
+> though the whole process tree was gone seconds later in both cases:
+> `killTree()` in `scripts/reap-stale-batteries.mjs` takes its verdict from
+> `taskkill /T`'s exit code, which is non-zero when a tree member exits
+> during the sweep. That misreport of a kill that landed is the bug filed as
+> [#3403](https://github.com/dudarenok-maker/Castwright/issues/3403), fix in
+> PR [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404). The
+> `[KILLED]` output on record came from `npm run doctor -- --kill`, a
+> different print site, so the push-path `KILLED` line has never been seen
+> on hardware. **On the owner's decision of 2026-09-25, that push-path check
+> moves to a new register row that PR #3404 adds**; E104's other bullets
+> discharge here.
 >
 > This branch diverged from the register at 55 owed (Group A 35, Group E 10).
 > Net effect of this change: 55 → 50 owed, Group A 35 → 32 (five Group-A rows
@@ -3165,13 +3181,24 @@ which already stages a mixed-engine render on this same card.
 > routine, unflagged `--bless --sidecar-only` completing without any
 > `GOLDEN_REBLESS_*` flag — remains owed.** It refused on
 > `tolerances.rtf_max` twice: 2026-09-06, on a box the same note records as
-> confirmed-idle, and again 2026-09-21. Measured `rtf` ≈ 1.0–1.033 against
-> the committed `rtf_max: 1.0` baseline (roughly double the blessed
-> `rtf.batched` figure) is real run-to-run throughput noise forcing
-> `GOLDEN_REBLESS_THRESHOLDS`, not contention — the idle-box recurrence rules
-> contention out as the explanation. Whether the committed `rtf`/`rtf_max`
-> baseline is wrong for this box or this is a genuine throughput regression
-> is undecided and stays open.
+> confirmed-idle, and again 2026-09-21. **The cause is a real throughput
+> level shift, not noise, and it is not yet diagnosed.** Measured `rtf` ≈
+> 1.0–1.033 is about 2× the blessed `rtf.batched` 0.5089 and above
+> `compare.py`'s ~0.667 pin point (`rtf_max = max(1.0, rtf × 1.5)`): below
+> it `rtf_max` stays pinned at 1.0 and "no amount of `rtf` noise moves it";
+> above it, `compare.py` says "a `rtf` regression or a slower box … the
+> guard refuses exactly as designed". `tolerances` is compared at
+> `epsilon=0.0` (exact equality, by design), so there is no epsilon to
+> blame. At that `rtf` the non-bless assert run also fails
+> (`test_instruct_golden.py`: "throughput regressed", since 1.033 >
+> `rtf_max` 1.0). **A second blocker:** the 2026-09-21 run 2 below, with
+> `GOLDEN_REBLESS_THRESHOLDS=1` forced, then refused on `loudness_dbfs`
+> beyond ε 0.4 — so a routine bless is currently blocked on two fields, not
+> one. **The owed step is to diagnose the level shift before any re-bless:**
+> a genuine throughput regression, or a slower box/config than the one the
+> baseline was blessed on. Forcing `GOLDEN_REBLESS_THRESHOLDS` (which would
+> write `rtf_max` ≈ 1.55 — the #1995 loosening this row exists to catch)
+> or widening the `tolerances` epsilon is **not** the fix.
 
 PR #2032 (hardened further by the independent pre-merge review that produced
 this row) closes three "a gate that silently stopped asserting" defects in
@@ -4988,6 +5015,20 @@ load that splits, one genuinely-too-big load that doesn't, one
 > only on-box re-run since (A107) drove a single design against a raw
 > `/load`, not the observed co-residency path or the two-overlapping-designs
 > refcount shape this bullet asks for. No on-box PASS exists for bullet 4.
+> **The 2026-09-08 FAIL itself is unconfirmed at the arbiter level.** It
+> rests on the premise (2026-09-06/08 note below) that each design's HTTP
+> completion bounds how long it held the arbiter. A107's measured timeline
+> contradicts that premise: the design released the arbiter at `20:26:06.5`
+> (`Designed + cached Qwen voice`) but its HTTP 200 landed at `20:26:29.7`,
+> about 23 s later (`audition_ms=23159` — the audition synth runs after the
+> arbiter span releases, by design). A107's row is gone from this register;
+> its last text is at `origin/main` `a8b0fcc6` (the register's A107 section)
+> and in [#3309](https://github.com/dudarenok-maker/Castwright/issues/3309).
+> So a design whose HTTP completion landed ~20 s after the Kokoro call may
+> already have released the arbiter before Kokoro finished. **Bullet 4 stays
+> owed, and its re-run must be timed from the sidecar's own arbiter
+> enter/release log lines (or from `nvidia-smi` / the device log), never from
+> HTTP completion.**
 
 PR #2790 (two rounds of independent review) improves base17 co-residency safety in `design_voice()`:
 the eviction guard now checks both `self._base17 is not None` and
