@@ -334,7 +334,7 @@ the audit's own evidence contradicts it:
 Qwen is a GPU-resident model; "Qwen loads" means it loads into VRAM. "Analyzer
  evicted" is VRAM contention — the analyzer is reclaimed to make room for Qwen.
 That is unambiguous GPU work, identical in kind to the eviction rows in the
-VRAM-contention pack (A19 mixed Qwen+Coqui evict, A13 idle Coqui reclaimed under
+VRAM-contention pack (A19 mixed Qwen+Coqui evict, A20 idle Coqui reclaimed under
 VRAM pressure, A24 `/health` through a contended eviction, A26 stranded VRAM
 pool reclaimed). The audit's `no GPU` field appears to have followed the row's
 *frontend* framing ("open a cast view, see a banner") rather than what the
