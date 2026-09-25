@@ -1,0 +1,77 @@
+{
+    "dashLine":  "—Ne partez pas après le dîner, dit-elle.",
+    "sourceTextHead":  "L’Été | —Ne partez pas après le dîner, dit-elle. |  | Elle regarda la mer à travers les fenêtres ouvertes. |  | Ne partez pas après le dîner. |  | Le Départ | —Restez, répondit-il. |  | Ils attendirent jusqu’à l’aube.",
+    "ctrlLine":  "Ne partez pas après le dîner.",
+    "durations":  {
+                      "sr":  24000,
+                      "title_ms":  1110,
+                      "ctrl_ms":  1899,
+                      "dash_ms":  3009
+                  },
+    "silence_starts_ms":  [
+                              1497,
+                              2454
+                          ],
+    "fails":  [
+                  "dash pause not evident (dash=0 ctrl=0)"
+              ],
+    "leadGapMs":  {
+                      "dash":  0,
+                      "ctrl":  0
+                  },
+    "titleSpoken":  "L\u0027Ete",
+    "silence_durations_ms":  [
+                                 471,
+                                 554
+                             ],
+    "dashWords":  [
+                      {
+                          "word":  " Ne",
+                          "start":  0.0,
+                          "end":  0.18
+                      },
+                      {
+                          "word":  " partez",
+                          "start":  0.18,
+                          "end":  0.54
+                      },
+                      {
+                          "word":  " pas",
+                          "start":  0.54,
+                          "end":  0.74
+                      },
+                      {
+                          "word":  " après",
+                          "start":  0.74,
+                          "end":  0.98
+                      },
+                      {
+                          "word":  " le",
+                          "start":  0.98,
+                          "end":  1.1
+                      },
+                      {
+                          "word":  " dîner,",
+                          "start":  1.1,
+                          "end":  1.5
+                      },
+                      {
+                          "word":  " dit",
+                          "start":  1.84,
+                          "end":  2.1
+                      },
+                      {
+                          "word":  "-elle.",
+                          "start":  2.1,
+                          "end":  2.36
+                      }
+                  ],
+    "transcripts":  {
+                        "dash_nospeech":  0.00817108154296875,
+                        "title":  "L\u0027été.",
+                        "ctrl":  "Ne partez pas après le dîner.",
+                        "dash_logprob":  -0.2653821496402516,
+                        "dash":  "Ne partez pas après le dîner, dit-elle."
+                    },
+    "dashTranscriptWordHits":  "2/4"
+}

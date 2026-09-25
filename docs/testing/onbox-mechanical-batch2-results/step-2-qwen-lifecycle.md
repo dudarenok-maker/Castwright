@@ -205,6 +205,22 @@ to) — the next run should check whether `_ensure_base17_loaded` writes an
 identifiable log line, or add a temporary one, rather than relying on
 timing to separate the two cases.
 
+**RESOLVED 2026-09-22 (#3308, cline-qwen-cloud, OE run 922):** the race was landed
+deliberately against a log-captured sidecar instance (port 9417, this worktree's venv,
+stdout/stderr redirected to files). `_ensure_base17_loaded` does write identifiable
+lines — `Loading Qwen 1.7B-Base model=… on cuda:1 …` at entry and
+`Qwen 1.7B-Base loaded.` at assignment — and the route's branch is fixed by source:
+`/unload` calls `unload_base17()` with no arguments (`main.py:11746` →
+`wait_seconds=0.0` → the unconditional-null branch, which early-`return`s when
+`_base17` is `None`); the bounded wait has exactly one caller, `design_voice()`
+(`main.py:7587`). Observed: with `/load` in flight (`qwen_loading: true`,
+`qwen_base17_loaded: false`), `POST /unload` returned 200 `idle` in **14.4 ms**; the
+racing `/load` completed uninhibited (200 `ready`, 15.95 s, `Qwen 1.7B-Base loaded.` in
+the captured log) and the model was later evicted only by the ordinary 120 s idle
+watchdog — not by the race. **Case 2 confirmed: mid-load `/unload` is a no-op that
+neither aborts nor holds up the racing `/load`.** Register row A105 flipped to
+DISCHARGED.
+
 ## A105 bullet 1 — base17-in-flight vs. concurrent design_voice() (4th run, 2026-09-07)
 
 **Real result: CONFIRMED — no OOM; the design co-resided with (and, on the

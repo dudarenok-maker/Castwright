@@ -1,0 +1,5 @@
+{
+  "http_status": 400,
+  "body": "{\"detail\":\"X-Sample-Rate header (>0) is required.\"}",
+  "elapsed_s": 0.1
+}

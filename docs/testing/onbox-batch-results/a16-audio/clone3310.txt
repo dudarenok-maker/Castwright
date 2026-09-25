@@ -1,0 +1,11 @@
+﻿20:54:08 CHAIN START bookId=castwright__standalones__заказ-коалфолла
+20:54:08 STEP A: clone-sample ingest (Whisper on cuda)
+20:54:41 STEP A resp: {"candidateId":"c8fb9653-b88e-49b2-904d-d67bfe34ad3d","transcript":"ocean, and then the rover boys in the jungle, and then year after year they're followed the rover boys out west, on the Great Lakes, in the mountains, on land and sea, in camp, on the river, and on the plains where we last met them. In the present tale","durationSeconds":20,"sampleRate":24000,"qualityWarnings":[],"detectedLanguage":"en"}
+20:54:41 STEP B: clone (Qwen distill, may take minutes)
+20:57:00 STEP B resp: {"voiceUuid":"c8c583c7-3449-4602-850c-8701f1dfec23","name":"A16-3310 Fixture Speaker (EN clone)","provenance":"cloned","tags":[],"pinned":false,"languageCode":"en","consent":{"personName":"LibriVox Fixture Speaker A","relationship":"self","permittedUse":"personal","attestedAt":"2026-09-22T10:57:00.966Z","attestedBy":"LibriVox Fixture Speaker A"},"master":{"sampleRate":24000,"durationSeconds":20,"transcript":"ocean, and then the rover boys in the jungle, and then year after year they're followed the rover boys out west, on the Great Lakes, in the mountains, on land and sea, in camp, on the river, and on the plains where we last met them. In the present tale","transcriptSource":"whisper","captureMethod":"upload","languageCode":"en","clipFile":"master.wav"},"sampleTranscript":"ocean, and then the rover boys in the jungle, and then year after year they're followed the rover boys out west, on...
+20:57:00 voiceUuid=c8c583c7-3449-4602-850c-8701f1dfec23
+20:57:00 STEP C: assign to oduvan
+20:57:01 STEP C resp: {"updated":1,"written":["qwen","coqui"],"warning":"\"╨₧╨┤╤â╨▓╨░╨╜\"'s voice was cloned in English, but this book is Russian ΓÇö the clone will sound less like the person it was cloned from. Re-clone the voice in Russian to fix it."}
+20:57:01 STEP D: flip ttsEngine to qwen via PUT state slice=cast
+20:57:01 STEP D resp: 
+20:57:01 CHAIN OK
