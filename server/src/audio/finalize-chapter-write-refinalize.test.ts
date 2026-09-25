@@ -56,6 +56,7 @@ let scoreBook: typeof import('./render-integrity/aggregate.js').scoreBook;
 let readVerdicts: typeof import('./render-integrity/verdicts-io.js').readVerdicts;
 let readCentroids: typeof import('./render-integrity/centroids-io.js').readCentroids;
 let writeEmbeddings: typeof import('./render-integrity/embeddings-io.js').writeEmbeddings;
+let readEmbeddings: typeof import('./render-integrity/embeddings-io.js').readEmbeddings;
 let EMBEDDINGS_VERSION: typeof import('./render-integrity/embeddings-io.js').EMBEDDINGS_VERSION;
 let castJsonPath: typeof import('../workspace/paths.js').castJsonPath;
 let castIdHistoryPath: typeof import('../store/cast-id-history.js').castIdHistoryPath;
@@ -69,7 +70,7 @@ beforeEach(async () => {
     { scoreBook: scoreBookFn },
     { readVerdicts: readVerdictsFn },
     { readCentroids: readCentroidsFn },
-    { writeEmbeddings: writeEmbeddingsFn, EMBEDDINGS_VERSION: embVersion },
+    { writeEmbeddings: writeEmbeddingsFn, readEmbeddings: readEmbeddingsFn, EMBEDDINGS_VERSION: embVersion },
     { makeBookId, castJsonPath: castJsonPathFn },
     { castIdHistoryPath: castIdHistoryPathFn },
   ] = await Promise.all([
@@ -86,6 +87,7 @@ beforeEach(async () => {
   readVerdicts = readVerdictsFn;
   readCentroids = readCentroidsFn;
   writeEmbeddings = writeEmbeddingsFn;
+  readEmbeddings = readEmbeddingsFn;
   EMBEDDINGS_VERSION = embVersion;
   castJsonPath = castJsonPathFn;
   castIdHistoryPath = castIdHistoryPathFn;
@@ -171,6 +173,7 @@ describe('finalizeChapterAudioWrite re-finalize freezes untouched-segment identi
       defaultEngine: 'kokoro',
       modelKey: 'kokoro-v1',
       audioFormat: 'mp3',
+      resynthesizedIndices: 'all',
     });
     const rendered = readSegFile();
     expect(rendered.segments[0].resolvedCharacterId).toBeUndefined();
@@ -221,6 +224,7 @@ describe('finalizeChapterAudioWrite re-finalize freezes untouched-segment identi
       defaultEngine: 'kokoro',
       modelKey: 'kokoro-v1',
       audioFormat: 'mp3',
+      resynthesizedIndices: 'all',
     });
     const rendered = readSegFile();
     expect(rendered.segments[0].resolvedCharacterId).toBe('mairin');
@@ -296,6 +300,7 @@ describe('finalizeChapterAudioWrite re-finalize freezes untouched-segment identi
       modelKey: 'qwen3-tts-0.6b',
       audioFormat: 'mp3',
       embeddings,
+      resynthesizedIndices: 'all',
     });
     const rendered = readSegFile();
     expect(rendered.characterSnapshots?.mairin?.resolvedVoiceName).toBe('v-mairin');
@@ -371,6 +376,7 @@ describe('finalizeChapterAudioWrite re-finalize freezes untouched-segment identi
       modelKey: 'qwen3-tts-0.6b',
       audioFormat: 'mp3',
       embeddings,
+      resynthesizedIndices: 'all',
     });
     const rendered = readSegFile();
 
@@ -501,5 +507,287 @@ describe('finalizeChapterAudioWrite re-finalize freezes untouched-segment identi
 
     const centroids = await readCentroids(bookDir);
     expect(centroids!['the_torment'].referenceKind).toBe('in-book');
+  });
+});
+
+/* #3362 review pass 6 — two correctness regressions in pass 5's fix, plus
+   the three 🟡 gaps the same pass found. Fixed inside the same owner design
+   (i); no new design decision. See finalize-chapter-write.ts's own doc
+   comments at the fold loop (🟠F), the embeddings-drop block (🟠G), the
+   untouchedStampedIds loop (🟡3) and the stamping block (🟡2) for the
+   mechanics each test below pins. */
+describe('finalizeChapterAudioWrite re-finalize regressions (#3362 pass-6 review)', () => {
+  it('🟠F: a partial re-record does not let the re-recorded line alone decide resolvedVoiceName when 11 other lines are still in the OLD voice', async () => {
+    const mairinSegs = Array.from({ length: 12 }, (_, i) => ({
+      groupIndex: i,
+      characterId: 'mairin',
+      sentenceIds: [i],
+      startSec: i,
+      endSec: i + 1,
+      voiceName: 'v-old',
+    }));
+
+    writeCast([{ id: 'mairin', name: 'Mairin' }]);
+    writeHistory({ schema: 1, supersededBy: {} });
+    await finalizeChapterAudioWrite({
+      bookId,
+      bookDir,
+      chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      pcm: tone(12.0, 12000),
+      sampleRate: SR,
+      durationSec: 12.0,
+      segments: mairinSegs,
+      cast: [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }],
+      castIdHistory: { schema: 1, supersededBy: {} },
+      defaultEngine: 'kokoro',
+      modelKey: 'kokoro-v1',
+      audioFormat: 'mp3',
+      resynthesizedIndices: 'all',
+    });
+    const rendered = readSegFile();
+    expect(rendered.characterSnapshots?.mairin?.resolvedVoiceName).toBe('v-old');
+
+    // Mairin's voice is changed; ONE line (index 3) is re-recorded in the
+    // new voice — a Fix-line marker (splice rerecord) or a qa-repair of one
+    // flagged line both look like this. The other 11 stay in v-old.
+    const reRecorded = rendered.segments.map((s, i) => (i === 3 ? { ...s, voiceName: 'v-new' } : s));
+
+    await finalizeChapterAudioWrite({
+      bookId,
+      bookDir,
+      chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      pcm: tone(12.0, 12000),
+      sampleRate: SR,
+      durationSec: 12.0,
+      segments: reRecorded,
+      cast: [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }],
+      castIdHistory: { schema: 1, supersededBy: {} },
+      defaultEngine: 'kokoro',
+      modelKey: 'kokoro-v1',
+      audioFormat: 'mp3',
+      resynthesizedIndices: [3],
+    });
+
+    const reFinalized = readSegFile();
+    // 11 of 12 lines are STILL v-old on disk — the snapshot must still say
+    // v-old (main's per-key last-wins: index 11, the chapter's LAST mairin
+    // line, is untouched and carries v-old, so it wins over index 3's
+    // v-new), never the single re-recorded line's voice alone. Getting this
+    // wrong means revisions.ts stops flagging a chapter a voice change
+    // actually stranded (see routes/revisions.ts:191-197).
+    expect(reFinalized.characterSnapshots?.mairin?.resolvedVoiceName).toBe('v-old');
+    expect(reFinalized.segments.filter((s) => s.voiceName === 'v-old').length).toBe(11);
+    expect(reFinalized.segments[3].voiceName).toBe('v-new');
+  });
+
+  it('🟠G (A22 legacy shape): re-recording one orphan line drops its OLD embedding row instead of scoring a vector that no longer matches the new take', async () => {
+    writeCast([{ id: 'the_torment', name: 'The Torment' }]);
+    writeHistory({ schema: 1, supersededBy: {} });
+
+    const realSegs = Array.from({ length: 12 }, (_, i) => ({
+      groupIndex: i,
+      characterId: 'the_torment',
+      sentenceIds: [i],
+      startSec: i,
+      endSec: i + 1,
+    }));
+    const narratorSegs = Array.from({ length: 6 }, (_, i) => ({
+      groupIndex: 12 + i,
+      characterId: 'the-torment',
+      sentenceIds: [100 + i],
+      startSec: 12 + i,
+      endSec: 13 + i,
+    }));
+    const embeddings: EmbeddingRow[] = [
+      ...realSegs.map((s, i) => ({ characterId: 'the_torment', sentenceIds: s.sentenceIds, vec: vec(0.02 * i) })),
+      ...narratorSegs.map((s, i) => ({ characterId: 'the-torment', sentenceIds: s.sentenceIds, vec: vec(Math.PI / 2 + 0.02 * i) })),
+    ];
+    const embPath = join(audioRoot, `${SLUG}.embeddings.json`);
+    await writeEmbeddings(embPath, embeddings, EMBEDDINGS_VERSION);
+    writeFileSync(
+      segPath,
+      JSON.stringify({
+        bookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 18,
+        sampleRate: SR,
+        modelKey: 'qwen3-tts-0.6b',
+        synthesizedAt: new Date().toISOString(),
+        segments: [...realSegs, ...narratorSegs],
+        characterSnapshots: {
+          the_torment: { voiceEngine: 'qwen', resolvedVoiceName: 'v-torment', modelKey: 'qwen3-tts-0.6b' },
+        },
+      } satisfies ChapterSegmentsFile),
+    );
+    const legacy = readSegFile();
+
+    // "Fix" the first orphan line (index 12) by re-recording it in Torment's
+    // voice — the Listen view's Fix-line marker scopes a splice rerecord to
+    // the segment's own RAW characterId, so it stays 'the-torment'; finalize
+    // resolves it fresh to 'the_torment' through the normalised-id tier. No
+    // fresh embeddings are passed to THIS call — chapter-splice.ts and
+    // chapter-qa-repair.ts never pass them for a partial re-record.
+    const fixedIndex = 12;
+    const reRecorded = legacy.segments.map((s, i) => (i === fixedIndex ? { ...s, voiceName: 'v-torment' } : s));
+
+    await finalizeChapterAudioWrite({
+      bookId,
+      bookDir,
+      chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      pcm: tone(18.0, 12000),
+      sampleRate: SR,
+      durationSec: 18.0,
+      segments: reRecorded,
+      cast: [{ id: 'the_torment', name: 'The Torment', gender: 'female', attributes: [] }],
+      castIdHistory: { schema: 1, supersededBy: {} },
+      defaultEngine: 'qwen',
+      modelKey: 'qwen3-tts-0.6b',
+      audioFormat: 'mp3',
+      resynthesizedIndices: [fixedIndex],
+    });
+
+    const reFinalized = readSegFile();
+    // The fixed line resolves fresh — it now carries the real identity.
+    expect(reFinalized.segments[fixedIndex].resolvedCharacterId).toBe('the_torment');
+
+    // The OLD (narrator-voiced) vector for the fixed segment is gone —
+    // never left to be joined to the fresh stamp above.
+    const afterEmb = await readEmbeddings(embPath);
+    expect(afterEmb).not.toBeNull();
+    expect(afterEmb!.rows.length).toBe(17); // 18 - 1 dropped
+    expect(
+      afterEmb!.rows.some((r) => r.characterId === 'the-torment' && r.sentenceIds.join(',') === '100'),
+    ).toBe(false);
+
+    await scoreBook(bookDir, [{ id: 1, slug: SLUG }], undefined, makeAuditionStub());
+    const verdicts = await readVerdicts(join(audioRoot, `${SLUG}.render-integrity.json`));
+    expect(verdicts).not.toBeNull();
+    // 12 rows, exactly the original the_torment rows — the fixed line has
+    // no row (dropped above), so it goes unscored this pass rather than
+    // being flagged as a false voice-mismatch under its own fresh identity.
+    expect(verdicts!.length).toBe(12);
+    expect(verdicts!.every((v) => v.characterId === 'the_torment')).toBe(true);
+
+    const centroids = await readCentroids(bookDir);
+    expect(centroids!['the_torment'].referenceKind).toBe('in-book');
+  });
+
+  it('🟡2: an untouched segment whose stamp has no snapshot anywhere (the prior file itself is missing) has its stamp cleared, not carried', async () => {
+    writeCast([{ id: 'mairin', name: 'Mairin' }]);
+    writeHistory({ schema: 1, supersededBy: {} });
+    await finalizeChapterAudioWrite({
+      bookId,
+      bookDir,
+      chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      pcm: tone(1.0, 12000),
+      sampleRate: SR,
+      durationSec: 1.0,
+      segments: [{ groupIndex: 0, characterId: 'mairin', sentenceIds: [1], startSec: 0, endSec: 1.0, voiceName: 'v-mairin' }],
+      cast: [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }],
+      castIdHistory: { schema: 1, supersededBy: {} },
+      defaultEngine: 'kokoro',
+      modelKey: 'kokoro-v1',
+      audioFormat: 'mp3',
+      resynthesizedIndices: 'all',
+    });
+    const rendered = readSegFile();
+    expect(rendered.segments[0].resolvedCharacterId).toBe('mairin');
+    expect(rendered.characterSnapshots?.mairin).toBeDefined();
+
+    // The prior segments file itself is missing/unreadable at this write —
+    // the ONE shape review pass 6 found that still reaches the clearing
+    // branch (the earlier "R1: character rejected" framing in this branch's
+    // own comment was wrong — R1's carry-forward reads the prior FILE, not
+    // the cast, so a rejected character's own prior snapshot is still found
+    // there; see the corrected comment in finalize-chapter-write.ts).
+    rmSync(segPath);
+
+    await finalizeChapterAudioWrite({
+      bookId,
+      bookDir,
+      chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      pcm: tone(1.0, 12000),
+      sampleRate: SR,
+      durationSec: 1.0,
+      segments: rendered.segments,
+      cast: [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }],
+      castIdHistory: { schema: 1, supersededBy: {} },
+      defaultEngine: 'kokoro',
+      modelKey: 'kokoro-v1',
+      audioFormat: 'mp3',
+      resynthesizedIndices: [],
+    });
+
+    const reFinalized = readSegFile();
+    // No prior file to carry a snapshot forward from — the dangling stamp
+    // is cleared instead of surviving with no matching characterSnapshots key.
+    expect(reFinalized.segments[0].resolvedCharacterId).toBeUndefined();
+    expect(reFinalized.characterSnapshots?.mairin).toBeUndefined();
+  });
+
+  it('🟡3: removing a character from the cast, then re-recording one of its OTHER lines, does not clear the other 11 untouched stamps or drop the snapshot', async () => {
+    const mairinSegs = Array.from({ length: 12 }, (_, i) => ({
+      groupIndex: i,
+      characterId: 'mairin',
+      sentenceIds: [i],
+      startSec: i,
+      endSec: i + 1,
+      voiceName: 'v-mairin',
+    }));
+
+    writeCast([{ id: 'mairin', name: 'Mairin' }]);
+    writeHistory({ schema: 1, supersededBy: {} });
+    await finalizeChapterAudioWrite({
+      bookId,
+      bookDir,
+      chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      pcm: tone(12.0, 12000),
+      sampleRate: SR,
+      durationSec: 12.0,
+      segments: mairinSegs,
+      cast: [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }],
+      castIdHistory: { schema: 1, supersededBy: {} },
+      defaultEngine: 'kokoro',
+      modelKey: 'kokoro-v1',
+      audioFormat: 'mp3',
+      resynthesizedIndices: 'all',
+    });
+    const rendered = readSegFile();
+    expect(rendered.characterSnapshots?.mairin).toBeDefined();
+
+    // 'mairin' is removed from the cast entirely, with NO history entry
+    // linking it to anything else.
+    writeCast([]);
+    writeHistory({ schema: 1, supersededBy: {} });
+
+    // Line 0 is re-recorded. `resolveSpeakingId` falls back to the raw id
+    // (no cast row to resolve it TO), which lands 'mairin' in `speakingIds`
+    // even though the character no longer exists — the exact collision the
+    // removed `:454` pre-filter used to mishandle.
+    await finalizeChapterAudioWrite({
+      bookId,
+      bookDir,
+      chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      pcm: tone(12.0, 12000),
+      sampleRate: SR,
+      durationSec: 12.0,
+      segments: rendered.segments,
+      cast: [],
+      castIdHistory: { schema: 1, supersededBy: {} },
+      defaultEngine: 'kokoro',
+      modelKey: 'kokoro-v1',
+      audioFormat: 'mp3',
+      resynthesizedIndices: [0],
+    });
+
+    const reFinalized = readSegFile();
+    // The 11 UNTOUCHED lines' stamps survive — they are never re-derived,
+    // and are no longer wrongly treated as "already covered by the fresh
+    // set" just because the resynthesized line's fallback resolution
+    // happens to land on the same raw id.
+    expect(reFinalized.segments.slice(1).every((s) => s.resolvedCharacterId === 'mairin')).toBe(true);
+    // The snapshot is carried forward, not dropped.
+    expect(reFinalized.characterSnapshots?.mairin).toBeDefined();
   });
 });

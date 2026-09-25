@@ -244,3 +244,51 @@ describe('guard 6 — the full-render castHistorySeq stamp reads the loaded hist
     expect(body.match(/loadCastIdHistory\(/g)?.length ?? 0).toBe(1);
   });
 });
+
+/* #3362 pass-6 (🟡1) — the full-render handler is the ONLY caller for which
+   `resynthesizedIndices: 'all'` is correct (every segment this render wrote
+   was, by construction, actually re-synthesised — see
+   `FinalizeChapterAudioInput.resynthesizedIndices`'s own doc comment).
+   Nothing in generation.test.ts's heavy fixture pins WHAT this route
+   actually threads through, only that a full render behaves like one — a
+   dropped or mangled `resynthesizedIndices` property here is invisible to
+   that suite. Reuses this file's own text-scan helpers rather than pulling
+   in the whole generation dependency graph, mirroring guard 6's own
+   rationale above (see this file's header). */
+describe('guard 7 — the full-render resynthesizedIndices stamp is the literal \'all\' (#3362 pass-6, 🟡1)', () => {
+  const renderBody = blankOutOpaque(extractRouteHandlerBody(SRC, ROUTE));
+
+  it("stamps resynthesizedIndices as the literal 'all'", () => {
+    const args = callArgsText(renderBody, 'finalizeChapterAudioWrite');
+    expect(args, 'finalizeChapterAudioWrite call not found in the render body').not.toBeNull();
+    const value = propertyValueText(args!, 'resynthesizedIndices');
+    expect(value, 'resynthesizedIndices property not found on the finalizeChapterAudioWrite call').not.toBeNull();
+    expect(value).toBe("'all'");
+  });
+
+  it('actually detects a dropped/mangled resynthesizedIndices property', () => {
+    const violating = `
+      generationRouter.post('/:bookId/generation', async (req, res) => {
+        const { audioQa } = await finalizeChapterAudioWrite({
+          bookId,
+        });
+      });
+    `;
+    const body = blankOutOpaque(extractRouteHandlerBody(violating, ROUTE));
+    const args = callArgsText(body, 'finalizeChapterAudioWrite');
+    const value = propertyValueText(args!, 'resynthesizedIndices');
+    expect(value).toBeNull();
+
+    const mangled = `
+      generationRouter.post('/:bookId/generation', async (req, res) => {
+        const { audioQa } = await finalizeChapterAudioWrite({
+          resynthesizedIndices: targetIndices,
+        });
+      });
+    `;
+    const mangledBody = blankOutOpaque(extractRouteHandlerBody(mangled, ROUTE));
+    const mangledArgs = callArgsText(mangledBody, 'finalizeChapterAudioWrite');
+    const mangledValue = propertyValueText(mangledArgs!, 'resynthesizedIndices');
+    expect(mangledValue).not.toBe("'all'");
+  });
+});

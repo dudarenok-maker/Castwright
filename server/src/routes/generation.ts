@@ -1878,6 +1878,12 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         expectedSec: expectedSec ?? undefined,
         onEncoded: bumpProgress,
         embeddings: result.embeddings,
+        /* #3362 pass-6 (🟡1) — this write's `segments` IS the full render:
+           every segment here was actually re-synthesised by this call, so
+           the field is the literal 'all', never omitted (see
+           `FinalizeChapterAudioInput.resynthesizedIndices`'s own doc
+           comment for why the field is required rather than defaulting). */
+        resynthesizedIndices: 'all',
         /* #2128 — the seq this chapter actually RESOLVED against: the same
            `castIdHistory` object loaded at the top of this render and threaded
            into `synthesiseChapter`, whose `buildCastResolver` call is the only

@@ -109,6 +109,7 @@ const baseInput = () => {
     defaultEngine: 'kokoro' as const,
     modelKey: 'kokoro-v1' as const,
     audioFormat: 'mp3' as const,
+    resynthesizedIndices: 'all' as const,
   };
 };
 
@@ -341,7 +342,7 @@ describe('finalizeChapterAudioWrite QA clip check — the centrepiece (plan 274 
 });
 
 describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 follow-up)', () => {
-  it('carries resolvedVoiceName forward from the PRIOR segments file when this run synthesised nothing for a speaking character (e.g. a gain-only remix)', async () => {
+  it('carries resolvedVoiceName forward from the PRIOR segments file when this run synthesised nothing for a speaking character (a defensive gap-fill, not a remix — #3362 pass-6 🟡4: a genuine remix passes resynthesizedIndices: [] and is pinned by R2/R4 in finalize-chapter-write-refinalize.test.ts instead)', async () => {
     // A LEGACY (pre-#1972) prior render: characterSnapshots carries
     // resolvedVoiceName but the segment itself carries no voiceName field at
     // all — the shape every chapter rendered before this PR has on disk.
@@ -360,9 +361,12 @@ describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 f
       }),
     );
 
-    // This "run" mirrors a remix: amy still speaks (has a segment in the
-    // input) but nothing was actually synthesised, so baseInput()'s segment
-    // carries no voiceName/baseVoiceName.
+    // #3362 pass-6 🟡4 — this is a FULL run (baseInput()'s default
+    // resynthesizedIndices: 'all'; not a remix, which would pass an empty
+    // set): amy speaks and was resynthesised, but this defensive fixture's
+    // segment carries no voiceName/baseVoiceName of its own, exercising the
+    // C1 gap-fill's prior-file lookup rather than the pass-5 untouched-
+    // segment carry-forward a real remix goes through.
     await finalizeChapterAudioWrite(baseInput());
 
     const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
@@ -421,7 +425,12 @@ describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 f
       }),
     );
 
-    // This run only re-recorded wren; amy's segment carries no voiceName.
+    // This run only re-recorded wren (index 1); amy (index 0) is untouched.
+    // #3362 pass-6 🟡4 — resynthesizedIndices is now explicit rather than
+    // relying on baseInput()'s 'all' default, so this actually exercises the
+    // partial-split freeze (pass-5 untouched carry-forward for amy, fresh
+    // resolution for wren) instead of coincidentally passing via the C1
+    // gap-fill, which a full-default run would also have hit.
     await finalizeChapterAudioWrite({
       ...baseInput(),
       segments: [
@@ -432,6 +441,7 @@ describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 f
         { id: 'amy', name: 'Amy', gender: 'female' as const, attributes: [] },
         { id: 'wren', name: 'Wren', gender: 'female' as const, attributes: [] },
       ],
+      resynthesizedIndices: [1],
     });
 
     const segFile = JSON.parse(readFileSync(join(audioRoot, `${SLUG}.segments.json`), 'utf8'));
@@ -457,9 +467,13 @@ describe('finalizeChapterAudioWrite resolvedVoiceName carry-forward (C1, #1972 f
       }),
     );
 
-    // This run's segment already carries the raw pre-#1972 shape (a remix of
-    // a legacy chapter): its characterId resolves to 'live_char' through the
-    // retirement, but carries no voiceName of its own.
+    // This run's segment already carries the raw pre-#1972 shape: its
+    // characterId resolves to 'live_char' through the retirement, but
+    // carries no voiceName of its own. #3362 pass-6 🟡4 — a FULL run
+    // (baseInput()'s default resynthesizedIndices: 'all'), not a remix; it
+    // exercises C1's priorSnapshotsByCanonicalId lookup, which needs the
+    // segment resolved FRESH (a remix would freeze it at its raw untouched
+    // key instead — see the C1 describe block above for that distinction).
     await finalizeChapterAudioWrite({
       ...baseInput(),
       castIdHistory: { schema: 1, supersededBy: { retired_char: 'live_char' } },

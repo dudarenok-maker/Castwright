@@ -314,6 +314,7 @@ async function runPipeline(target: number): Promise<Artifacts> {
       defaultEngine: 'kokoro',
       modelKey: 'kokoro-v1',
       audioFormat: 'mp3',
+      resynthesizedIndices: 'all',
     });
 
     const mp3Path = join(audioRoot, `${SLUG}.mp3`);

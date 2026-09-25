@@ -5,8 +5,14 @@
 
    Extracted from generation.ts so the fs-26 splice path produces byte-identical
    snapshots (same resolved voice name, same sorted attributes, same per-
-   character engine) — a re-recorded or re-mixed chapter must update the
-   detector exactly as a full regen does. Pure: no fs, no synthesis. */
+   character engine) for whatever it actually re-synthesised. #3362 pass-5
+   (🟠E) narrowed that: a re-record only updates the detector for the
+   character(s)/segments it actually touched this write, not the whole
+   chapter — an untouched character's existing snapshot is carried forward
+   verbatim by finalize-chapter-write.ts instead of being rebuilt here, and a
+   gain-only remix (no re-synthesis at all) calls this with an empty
+   `speakingIds` and carries EVERY snapshot forward, never landing here.
+   Pure: no fs, no synthesis. */
 
 import { resolveCharacterEngine, resolveCharacterQwenTier } from '../tts/per-character-engine.js';
 import { canonicalModelKeyForEngine, type TtsEngine, type TtsModelKey } from '../tts/index.js';
