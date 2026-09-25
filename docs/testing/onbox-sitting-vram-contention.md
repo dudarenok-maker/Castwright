@@ -1,12 +1,10 @@
-# On-box sitting pack — VRAM contention + eviction (A5, A13, A17 (discharged 2026-09-25, removed from the register), A19, A24, A25)
+# On-box sitting pack — VRAM contention + eviction (A5/A17/A25 discharged; A13, A19, A24 active)
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
-> register rows **A5, A13, A17, A19, A24, A25** — the rows that
-> only mean something when the single 8 GB card is genuinely full — and nothing
-> else. (Four rows this sitting pack originally covered — A19/A16/A31 in
-> their pre-2026-08-26 numbering, plus A25 (2026-09-20, #3036) — are discharged
-> and removed from the register; their sections below are kept for the
-> historical run record.)
+> register rows **A13, A19, A24** — the rows that only mean something when the 
+> single 8 GB card is genuinely full. Sections for A5 (discharged 2026-09-06), 
+> A17 (discharged 2026-09-25), and A25 (discharged 2026-09-20) are retained below 
+> for historical context.
 > Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule of
 > §6 was applied to every row (see

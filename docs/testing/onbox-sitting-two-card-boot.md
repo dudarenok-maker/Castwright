@@ -1,7 +1,7 @@
-# On-box sitting pack — two-card boot (A2, A3, A12)
+# On-box sitting pack — two-card boot (A3, A12)
 
 > **Sitting pack** for wave 2 of `#2435`, step 2 of the `#2453` chain. Covers
-> register rows **A2, A3, A12** — everything that needs the **2-card boot**.
+> register rows **A3, A12** — everything that needs the **2-card boot**.
 > This pack also carried old A8 (GPU residency safety + coexistence, plan
 > 222), **discharged 2026-08-27 (on-box wave 9)** and removed from the
 > register — its walkthrough below stays for historical context only.

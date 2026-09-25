@@ -1,11 +1,10 @@
 # On-box sitting pack — cloning + character-identity (A16, A18, A21, A22, A23, A31, A32 (discharged 2026-09-25, removed from the register))
 
 > **Sitting pack** for wave 2 of `#2435`, step 6 of the `#2453` chain. Covers
-> register rows **A16, A18, A21, A22, A23, A31, A32** —
-> clone-derive, clone-readiness, `characterId` drift and resolution, Russian
-> XTTS quality, and entity decode. The audition-centroid fix section this pack
-> also carried (old A34/A35, #1969/PR #2402) is **discharged as of on-box wave
-> 9** and removed from the register — kept below for historical context only.
+> register rows **A16, A18, A21, A22, A23, A31** — clone-derive, clone-readiness, 
+> `characterId` drift and resolution, Russian XTTS quality. Sections for A32 
+> (discharged 2026-09-25) and A34 (discharged 2026-09-09) are retained below for 
+> historical context.
 > Follows the
 > shared format fixed by [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5;
 > the re-resolution rule of §6 was applied to every row (see
@@ -308,7 +307,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     and confirm the rendered output is equivalent by ear.
     - Result:
 
-### A34 · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398)
+### A34 (discharged 2026-09-09, removed from the register) · Respawn budget deadline and exhaustion under sustained refusal ([#2106](https://github.com/dudarenok-maker/Castwright/issues/2106), PR #2398)
 
 > **Register row: A34 — discharged, pre-2026-08-26 numbering; that ID was
 > then re-minted for unrelated work (`characterId` drift, #2584/#2040), and

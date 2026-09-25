@@ -2,12 +2,9 @@
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
 > register rows **A4, A6, A7, A11, A20** — the rows a human has to
-> **listen to**: Qwen VoiceDesign persona/A/B audition, bulk cast design, the
-> emotion-chip manuscript preview, cross-engine audition fidelity, and the
-> golden-audio bless guards. (Two rows this sitting pack originally covered —
-> the persona-prompt rewrite and the emotion-chip preview — are discharged
-> 2026-08-26 and removed from the register; their sections below are kept for
-> the historical run record.) Follows the shared format fixed by
+> **listen to**: Qwen VoiceDesign A/B audition, bulk cast design, cross-engine 
+> audition fidelity, and golden-audio bless guards. Sections for A14 (discharged 2026-08-26) 
+> and A17 (discharged 2026-09-25) are retained below for historical context. Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule
 > of §6 was applied to every row (see
 > [`## Excluded on re-resolution`](#excluded-on-re-resolution) — nothing was
@@ -127,11 +124,11 @@ runs last, after everything else is evicted.
    completes with a correct terminal summary once the sidecar comes back.
    - Result:
 
-### A14 · Qwen VoiceDesign persona-prompt rewrite (plan 160) — steps 4–6
+### A14 · Qwen VoiceDesign persona-prompt rewrite (discharged 2026-08-26, removed from the register) — steps 4–6
 
 > **Register row: A14 — discharged 2026-08-26, row removed from the register**
 > (owner-confirmed live observation: the rewritten pitch/purpose-clause wording
-> changes the rendered voice on a real audition).
+> changes the rendered voice on a real audition). Historical section only.
 
 > **Criteria source:** `docs/features/160-voicedesign-persona-format.md`
 > `:88-98` (manual acceptance walkthrough), `:9` (Status line), `:132-136`
@@ -203,7 +200,7 @@ runs last, after everything else is evicted.
    against the Side B audition played in step 7.
    - Result:
 
-### A17 · Emotion-chip preview from the manuscript (plan 180, fe-31) — step 10
+### A17 (discharged 2026-09-25, removed from the register) · Emotion-chip preview from the manuscript (plan 180, fe-31) — step 10
 
 > **Register row: A17 — discharged 2026-08-26, row removed from the register**
 > (owner-confirmed live observation: the audible delta between a designed
