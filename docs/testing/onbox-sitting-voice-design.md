@@ -21,7 +21,7 @@
 > depend on that residency surviving, but reuses it if present.
 >
 > **Running time total (recomputed 2026-08-20):** **155 minutes** — A4 ≈ 15,
-> A6 ≈ 20, A7 ≈ 30, old A14 ≈ 15, A11 ≈ 15, old A17 ≈ 15, A20 ≈ 45. Sum = 155,
+> A6 ≈ 20, A7 ≈ 30, A14 ≈ 15, A15 ≈ 15, A17 ≈ 15, A27 ≈ 45. Sum = 155,
 > matching the plan of record's stated total for this pack
 > ([`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1) exactly — all seven
 > rows re-resolved as still owed, so nothing changed the arithmetic.
