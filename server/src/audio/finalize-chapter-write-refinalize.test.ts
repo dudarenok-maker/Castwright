@@ -345,7 +345,7 @@ describe('finalizeChapterAudioWrite re-finalize freezes untouched-segment identi
     expect(centroids!['mairin'].referenceKind).toBe('in-book'); // no audition
   });
 
-  it('R3: a rename recorded AFTER scoring, followed by a re-finalize that resynthesizes nothing, never splits the chapter into a stale/fresh duplicate pair', async () => {
+  it('R3: a rename recorded AFTER scoring, followed by a re-finalize that resynthesizes only ONE of 12 lines, never repaints the other 11 into a stale/fresh duplicate pair', async () => {
     const segs = Array.from({ length: 12 }, (_, i) => ({
       groupIndex: i,
       characterId: 'mairin',
@@ -388,7 +388,25 @@ describe('finalizeChapterAudioWrite re-finalize freezes untouched-segment identi
     writeCast([{ id: 'mairin-oakes', name: 'Mairin Oakes' }]);
     writeHistory({ schema: 1, supersededBy: { mairin: 'mairin-oakes' } });
 
-    // A splice re-finalizes the chapter, resynthesizing nothing.
+    // A splice re-finalizes the chapter, resynthesizing ONLY segment 0 (a
+    // one-line re-record bundled with the rename). This is what actually
+    // exercises the freeze: it's what gives 'mairin-oakes' a REAL
+    // characterSnapshots entry this write, via the legitimate resynthesized-
+    // segment path — without it, the renamed id never has a matching
+    // snapshot key for an untouched segment's re-resolution to collide
+    // with, so a broken freeze (one that re-stamps untouched segments
+    // fresh) would be indistinguishable from a working one: with no
+    // 'mairin-oakes' key to match, EITHER stamping rule leaves the 11
+    // untouched segments' 'mairin' stamp untouched, and R3 would pass on
+    // that null observation regardless of which rule actually ran
+    // (#3362 pass-6 review, 🟡5). With the collision key present, a broken
+    // freeze wrongly repaints all 11 untouched segments to 'mairin-oakes'
+    // too (their raw 'mairin' id resolves fresh through the rename, and
+    // now finds a real match) — collapsing scoring's per-segment lookup for
+    // 'mairin' to zero rows THIS pass, which leaves the FIRST pass's 12
+    // stale 'mairin' rows sitting unwritten-over on disk, stacked under a
+    // fresh mismatched 12-row 'mairin-oakes' write: 24 rows, the exact
+    // stale/fresh duplicate pair this test exists to catch.
     await finalizeChapterAudioWrite({
       bookId,
       bookDir,
@@ -402,20 +420,38 @@ describe('finalizeChapterAudioWrite re-finalize freezes untouched-segment identi
       defaultEngine: 'qwen',
       modelKey: 'qwen3-tts-0.6b',
       audioFormat: 'mp3',
-      resynthesizedIndices: [],
+      resynthesizedIndices: [0],
     });
+    // No fresh `embeddings` passed above → the 🟠G fix (finalize-chapter-
+    // write.ts's post-write drop block) removes segment 0's STALE embedding
+    // row (it no longer matches the just-re-synthesised audio), leaving it
+    // unembedded — same as chapter-qa-repair.ts's real shape, whose own
+    // fresh vector for an accepted candidate is appended by the CALLER after
+    // finalize returns, not passed as `input.embeddings` (which would
+    // replace the whole sibling and lose the other 11 untouched rows). Do
+    // the same here: append segment 0's fresh vector directly.
+    const embPath = join(audioRoot, `${SLUG}.embeddings.json`);
+    const priorEmbeddings = (await readEmbeddings(embPath))!;
+    await writeEmbeddings(
+      embPath,
+      [...priorEmbeddings.rows, { characterId: 'mairin', sentenceIds: [0], vec: vec(0) }],
+      EMBEDDINGS_VERSION,
+    );
 
     await scoreBook(bookDir, [{ id: 1, slug: SLUG }], undefined, makeAuditionStub());
     const secondPass = await readVerdicts(join(audioRoot, `${SLUG}.render-integrity.json`));
     expect(secondPass).not.toBeNull();
-    // 12 rows, still under the FROZEN 'mairin' key — never 24 (12 stale +
-    // 12 under the renamed key), and never moved to 'mairin-oakes'.
+    // 12 rows total, split exactly 11 (still under the FROZEN 'mairin' key)
+    // / 1 (the genuinely resynthesized line, now under 'mairin-oakes') —
+    // never 24 (12 stale 'mairin' + 12 wrongly-repainted 'mairin-oakes'),
+    // and never all 12 moved to 'mairin-oakes'.
     expect(secondPass!.length).toBe(12);
-    expect(secondPass!.every((v) => v.characterId === 'mairin')).toBe(true);
+    expect(secondPass!.filter((v) => v.characterId === 'mairin').length).toBe(11);
+    expect(secondPass!.filter((v) => v.characterId === 'mairin-oakes').length).toBe(1);
 
     const centroids = await readCentroids(bookDir);
     expect(centroids!['mairin']).toBeDefined();
-    expect(centroids!['mairin-oakes']).toBeUndefined();
+    expect(centroids!['mairin-oakes']).toBeDefined();
   });
 
   it('R4 (A22 legacy shape): a re-finalize of a legacy chapter with drift-spelled narrator-rendered lines never repaints them in place — no history change needed at all', async () => {
