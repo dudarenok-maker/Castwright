@@ -195,7 +195,8 @@ def test_kokoro_stays_excluded_until_the_last_concurrent_design_exits():
     cost — with a plain bool, whichever design exits FIRST clears the flag for
     the other, admitting a Kokoro synth onto the card for the whole remainder of
     the surviving design's forward. That is precisely the co-residency the
-    arbiter exists to prevent, and register row A105 bullet 4 asserts against.
+    arbiter exists to prevent, and register row A105 bullet 4 asserted against
+    (row A105 discharged 2026-09-25, removed from the register).
 
     Mutation that must fail this (verified) — revert `_design_active_count` to a
     bool set True on entry and False in the exit `finally`: the Kokoro thread is
