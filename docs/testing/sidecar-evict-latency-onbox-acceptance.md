@@ -4,7 +4,7 @@
 > the box, with the real GPU + real TTS sidecar. Do not pre-fill them.
 >
 > Plan of record: [`docs/features/archive/273-sidecar-lock-event-loop.md`](../features/archive/273-sidecar-lock-event-loop.md) §7
-> Register row: [`onbox-acceptance-register.md` A17](onbox-acceptance-register.md)
+> Register row: [`onbox-acceptance-register.md` A17](onbox-acceptance-register.md) (discharged 2026-09-25, removed from the register)
 > Issues: [#1919](https://github.com/dudarenok-maker/Castwright/issues/1919) (fixed here), [#1925](https://github.com/dudarenok-maker/Castwright/issues/1925) (closed as superseded — see the plan §1.2)
 
 ---

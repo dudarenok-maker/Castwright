@@ -1,4 +1,4 @@
-# On-box sitting pack — cloning + character-identity (A16, A18, A21, A22, A23, A31, A32)
+# On-box sitting pack — cloning + character-identity (A16, A18, A21, A22, A23, A31, A32 (discharged 2026-09-25, removed from the register))
 
 > **Sitting pack** for wave 2 of `#2435`, step 6 of the `#2453` chain. Covers
 > register rows **A16, A18, A21, A22, A23, A31, A32** —
@@ -237,7 +237,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     the criterion, not just the JSON.
     - Result:
 
-### A32 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), PR #2316)
+### A32 (discharged 2026-09-25, removed from the register) · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), PR #2316)
 
 > **Criteria source:** `onbox-acceptance-register.md` A40. Re-resolved
 > 2026-08-20: `gh issue view 2310` → closed 2026-08-13T04:25:10Z; `gh pr view

@@ -1201,7 +1201,7 @@ git commit -m "fix(frontend): show a Stopping state while the voice engine unloa
 
 **Files:**
 - Modify: `docs/release-notes-next.md`, `RELEASE_NOTES.md`
-- Modify: `docs/testing/onbox-acceptance-register.md` (row A20 criteria)
+- Modify: `docs/testing/onbox-acceptance-register.md` (row A20 criteria, discharged 2026-09-25, removed from the register)
 - Modify: `docs/superpowers/specs/2026-07-28-coqui-residency-eviction-design.md` (§6, the criteria home A20 points at)
 - Modify: `docs/superpowers/specs/2026-07-28-sidecar-evict-hardening-design.md` (Ship notes)
 - Check: `docs/wiki/Advanced-Settings.md` — only if a task added a registry knob (none should have)

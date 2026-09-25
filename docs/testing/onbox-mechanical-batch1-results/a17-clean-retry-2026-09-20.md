@@ -1,6 +1,6 @@
 # A17 clean re-run — second admission fires while `qwenDesignResident` is still `true` (2026-09-20)
 
-Issue: [Castwright#3301](https://github.com/dudarenok-maker/Castwright/issues/3301) · Register row: A17 (`docs/testing/onbox-acceptance-register.md`, "### A17 · /health stays live through a contended eviction on the default Qwen path") · Discharges the "still owed" item from the 2026-09-06 step-4 note: *"a run where the second admission fires while `qwenDesignResident` is still `true`, on a box … with enough headroom that the race doesn't also OOM the card."*
+Issue: [Castwright#3301](https://github.com/dudarenok-maker/Castwright/issues/3301) · Register row: A17 (discharged 2026-09-25, removed from the register; `docs/testing/onbox-acceptance-register.md`, "### A17 · /health stays live through a contended eviction on the default Qwen path") · Discharges the "still owed" item from the 2026-09-06 step-4 note: *"a run where the second admission fires while `qwenDesignResident` is still `true`, on a box … with enough headroom that the race doesn't also OOM the card."*
 
 ## Result
 

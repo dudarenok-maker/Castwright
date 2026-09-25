@@ -1052,5 +1052,6 @@ raises a loud `RuntimeError` instead of being silently absorbed, on both
 `QwenEngine` (the `synthesize` path only — see point 1) and `WhisperEngine`.
 
 On-box acceptance row A17 recorded in
-`docs/testing/onbox-acceptance-register.md` (Group A) — does not block this
+`docs/testing/onbox-acceptance-register.md` (Group A, discharged 2026-09-25,
+removed from the register) — does not block this
 merge; run sheet at `docs/testing/sidecar-evict-latency-onbox-acceptance.md`.

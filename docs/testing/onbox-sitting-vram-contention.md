@@ -1,4 +1,4 @@
-# On-box sitting pack — VRAM contention + eviction (A5, A13, A17, A19, A24, A25)
+# On-box sitting pack — VRAM contention + eviction (A5, A13, A17 (discharged 2026-09-25, removed from the register), A19, A24, A25)
 
 > **Sitting pack** for wave 2 of `#2435`, step 3 of the `#2453` chain. Covers
 > register rows **A5, A13, A17, A19, A24, A25** — the rows that
@@ -222,7 +222,7 @@ up.
    - **Separately, flag for the operator:** plan 165 frontmatter says `active`,
      body says `stable` — needs reconciliation, not resolved by this pack.
 
-### A17 · `/health` stays live through a contended eviction (#1919) — step 8
+### A17 (discharged 2026-09-25, removed from the register) · `/health` stays live through a contended eviction (#1919) — step 8
 
 > **Criteria source:** run sheet
 > [`sidecar-evict-latency-onbox-acceptance.md`](sidecar-evict-latency-onbox-acceptance.md)
