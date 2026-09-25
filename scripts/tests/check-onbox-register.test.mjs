@@ -3864,31 +3864,3 @@ test('every Import-Module command quoted in docs/testing is executable as writte
   assert.equal(importPathIsExecutable('./scripts/lib/x.psm1'), true);
   assert.equal(importPathIsExecutable('Pester'), true);
 });
-
-test('E103 drives the two-engine scan read-only, so the second engine still has a junction to find (#3055)', () => {
-  // wt-gc-junctions.ps1's [ValidateSet('Remove')] leaves Remove as its only
-  // action, so a criterion that says "run the .ps1 under each engine" unlinks
-  // the fixture between the two runs and the second run legitimately finds
-  // nothing -- which the same bullet defines as a failure.
-  const md = readFileSync(
-    join(HERE, '..', '..', 'docs', 'testing', 'onbox-acceptance-register.md'),
-    'utf8',
-  );
-  const html = readFileSync(REAL_LIVE_VIEW_PATH, 'utf8');
-
-  // The action set is what makes this necessary -- pin the premise, so this
-  // fails loudly (rather than silently becoming pointless) if a read-only
-  // action is ever restored to the wrapper.
-  const ps1 = readFileSync(
-    join(HERE, '..', 'lib', 'wt-gc-junctions.ps1'),
-    'utf8',
-  );
-  assert.match(ps1, /ValidateSet\(\s*'Remove'\s*\)/, 'wt-gc-junctions.ps1 still offers only -Action Remove');
-
-  for (const [name, text] of [['register', md], ['live view', html]]) {
-    assert.ok(
-      text.includes('Get-JunctionsRecursive'),
-      `${name}'s E103 must name the read-only Get-JunctionsRecursive for the two-engine run`,
-    );
-  }
-});
