@@ -275,7 +275,8 @@ describe('ModelManagerView — inventory', () => {
        use-tts-lifecycle, and used to collapse load and stop into a single
        busyId — so pressing Stop rendered the pill as though it were loading.
        This PR takes the Stop window from ≤2s to ≤90s (F1921's own fix), which
-       makes that mislabel far more visible to a tester exercising A20. */
+       makes that mislabel far more visible to a tester exercising A20 (the
+       #1894 row, since renumbered A13). */
     let resolveUnload!: (v: ModelControlResult) => void;
     mockUnload.mockImplementation(
       () =>
