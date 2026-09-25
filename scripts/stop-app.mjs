@@ -21,6 +21,17 @@ import {
 } from './lib/sidecar-sweep-port.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { pidIsAlive } from './lib/pid-alive.mjs';
+import { waitForExit } from './restart-after-upgrade.mjs';
+
+// PR #3404 review pass 2 — a kill request only asks the target to exit; it
+// doesn't confirm it. On POSIX, SIGTERM to the server triggers an ASYNC
+// shutdown (server/src/index.ts's runShutdownSequence awaits the sidecar
+// reap before process.exit), so a liveness probe taken the instant after
+// kill() returns reads a stop that IS succeeding as 'failed'. Give it a
+// bounded grace period to actually exit before judging it — short enough
+// that a genuinely stuck process still reports 'failed' promptly.
+const STOP_GRACE_MS = 5000;
+const STOP_POLL_INTERVAL_MS = 100;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
@@ -51,13 +62,33 @@ function info(msg) {
  *    - `'gone'`   — `pid` was already dead before this call ran; no kill
  *                   was attempted.
  *    - `'killed'` — `pid` was alive beforehand and is confirmed dead now.
- *    - `'failed'` — `pid` was alive beforehand and is STILL alive now.
+ *    - `'failed'` — `pid` was alive beforehand and is STILL alive after the
+ *                   grace period.
  *
- *  `kill`/`isAlive` are injectable purely for testing; nothing in
- *  production passes them. `isAlive` defaults to the shared fail-safe
- *  scripts/lib/pid-alive.mjs probe (also used by
+ *  The post-kill liveness check is not an instant re-probe: a POSIX SIGTERM
+ *  only asks the target to exit, and the server's own shutdown is
+ *  asynchronous, so this polls (via the shared restart-after-upgrade.mjs
+ *  waitForExit) for up to `graceMs` before judging the kill failed. Windows
+ *  goes through the same wait — a `taskkill /F` that already succeeded
+ *  resolves on its first liveness check with no extra delay, so a genuinely
+ *  dead tree still reports 'killed' immediately.
+ *
+ *  `kill`/`isAlive`/`wait`/`sleep`/`now` are injectable purely for testing;
+ *  nothing in production passes them. `isAlive` defaults to the shared
+ *  fail-safe scripts/lib/pid-alive.mjs probe (also used by
  *  scripts/reap-stale-batteries.mjs and scripts/restart-after-upgrade.mjs). */
-export function killTree(pid, { kill = defaultKillAttempt, isAlive = pidIsAlive } = {}) {
+export async function killTree(
+  pid,
+  {
+    kill = defaultKillAttempt,
+    isAlive = pidIsAlive,
+    wait = waitForExit,
+    graceMs = STOP_GRACE_MS,
+    pollIntervalMs = STOP_POLL_INTERVAL_MS,
+    sleep,
+    now,
+  } = {},
+) {
   if (!isAlive(pid)) return 'gone';
   try {
     kill(pid);
@@ -66,7 +97,17 @@ export function killTree(pid, { kill = defaultKillAttempt, isAlive = pidIsAlive 
     // judged by the liveness re-check below regardless of whether the kill
     // attempt itself threw.
   }
-  return isAlive(pid) ? 'failed' : 'killed';
+  const exited = await wait({ pid, timeoutMs: graceMs, intervalMs: pollIntervalMs, isAlive, sleep, now });
+  return exited ? 'killed' : 'failed';
+}
+
+/** Whether the '[OK] nothing to stop' summary line must be suppressed —
+ *  true when any pid's kill outcome was 'failed', or when a port is still
+ *  listening with no PID file recorded. Pure so it's directly unit-testable
+ *  without spawning main()'s real process/exit path (#2632 N53's contract:
+ *  a stop that is NOT clean must never co-print OK). */
+export function isStopSummarySuppressed(failedAny, stillListeningCount) {
+  return failedAny || stillListeningCount > 0;
 }
 
 function defaultKillAttempt(pid) {
@@ -128,6 +169,7 @@ function probeAndSweep(port) {
 
 async function main() {
   let killedAny = false;
+  let failedAny = false;
   for (const name of ['server', 'tts']) {
     const pidPath = resolve(runDir, `${name}.pid`);
     if (!existsSync(pidPath)) continue;
@@ -135,7 +177,7 @@ async function main() {
     rmSync(pidPath, { force: true });
     const pid = Number.parseInt(raw, 10);
     if (!Number.isInteger(pid) || pid <= 0) continue;
-    const outcome = killTree(pid);
+    const outcome = await killTree(pid);
     if (outcome === 'killed') {
       info(`[STOP] ${name} pid=${pid}`);
       killedAny = true;
@@ -143,6 +185,7 @@ async function main() {
       info(`[GONE] ${name} pid=${pid} (already exited)`);
     } else {
       info(`[WARN] ${name} pid=${pid} could not be stopped (still running)`);
+      failedAny = true;
     }
   }
 
@@ -179,8 +222,14 @@ async function main() {
 
   // #2632 N53 — a still-listening port, or zero ports resolved for this
   // checkout, must not both read as the same "[OK] nothing to stop" claim.
-  // See getStopSummaryMessage's own comment.
-  const summary = getStopSummaryMessage(killedAny, stillListening.length > 0, portsToSweep);
+  // See getStopSummaryMessage's own comment. PR #3404 review pass 2 widens
+  // this: a 'failed' kill (see isStopSummarySuppressed) must suppress OK too
+  // — a stop that did NOT succeed is not "nothing to stop".
+  const summary = getStopSummaryMessage(
+    killedAny,
+    isStopSummarySuppressed(failedAny, stillListening.length),
+    portsToSweep,
+  );
   if (summary) info(summary);
   process.exit(0);
 }
