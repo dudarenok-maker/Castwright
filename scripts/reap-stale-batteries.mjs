@@ -925,7 +925,19 @@ export const KILL_TIMEOUT_MS = 15000;
  *  unrelated new tree. classify() guards PID reuse for CLASSIFICATION (the
  *  startedAt checks in resolveRoot and the prior-sample match); the kill site
  *  has no equivalent, and closing it would need a second
- *  `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill. */
+ *  `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill.
+ *
+ *  Same class, also residual (PR #3404 review pass 2): `descendantPids` is a
+ *  point-in-time snapshot too — the census's, not a re-walk at kill time. A
+ *  descendant that spawns its OWN child AFTER the census runs, then exits
+ *  itself, leaves that grandchild running while every pid this function
+ *  actually checks reads gone — the whole-tree check above reports `true`
+ *  for a tree that is not, in fact, whole gone. The zero-exit path
+ *  (`result.status === 0`, below) trusts taskkill's own success claim
+ *  outright and has the exact same blindness: taskkill's `/T` walk is a
+ *  point-in-time snapshot of its own, taken independently of the census's.
+ *  Closing either needs a second `Win32_Process` query per kill — the same
+ *  cost N4 already declined. */
 export function killTree(pid, { spawn = spawnSync, windows = isWindows, isAlive = pidIsAlive, descendantPids } = {}) {
   if (!windows) return false;
   const result = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
