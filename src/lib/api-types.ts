@@ -3992,6 +3992,74 @@ export interface components {
             /** @description Human-readable advisory text. */
             message: string;
         };
+        /**
+         * @description #3084 F7 — one structured "how to fix" entry attached to a failed
+         *     analysis. A fix is exactly one of: a settings link (`settingKey`,
+         *     rendered as a deep link into that Advanced Settings row), a wiki link
+         *     (`wikiPage`, always its OWN entry — it names a whole page, so it can
+         *     never be a field tacked onto a setting-changing fix), or plain text
+         *     (neither, e.g. "switch model"). `endpointField` / `reasoningSetting`
+         *     are declared for the later waves that fill them (3b endpoints, 5a
+         *     reasoning level); nothing sends them yet.
+         */
+        AnalysisFailureFix: {
+            /** @description Human-readable action text, rendered verbatim (and as the link's text when the fix is a link). */
+            label: string;
+            /** @description Advanced Settings knob key this fix should focus (e.g. `analyzer.ollama.numCtx`). Absent on a wiki-link or label-only fix. */
+            settingKey?: string;
+            /** @description Wave 3 (#3084) — the OpenAI-compatible endpoint field this fix should focus. Not emitted yet. */
+            endpointField?: {
+                endpointId: string;
+                field: string;
+            };
+            /**
+             * @description Docs wiki page NAME to read — never an `#anchor` (e.g.
+             *     `Analysis-and-the-Analyzer`). Resolved against `docs/wiki/`; a
+             *     client that does not recognise the name renders the `label` as
+             *     plain text instead of linking.
+             */
+            wikiPage?: string;
+            /** @description Wave 5 (#3084) — the reasoning-level control this fix should focus. Not emitted yet. */
+            reasoningSetting?: {
+                /** @enum {string} */
+                engine: "gemini" | "ollama";
+                model: string;
+            };
+        };
+        /**
+         * @description Terminal `error` frame on the analysis SSE stream (`POST /api/
+         *     manuscripts/{manuscriptId}/analysis` and its `/analysis/chapters`
+         *     sibling). The analysis stops here — no `result` follows. A classified
+         *     analyzer failure carries `remediation` + `detail` (+ `fixes` when the
+         *     classifier can name something actionable); the route's own terminal
+         *     codes (`language_unset`, `cast_incomplete`, `stage1_shrink_refused`,
+         *     `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
+         *     `design_in_progress`, `bad_request`, `chapter_excluded`) carry `code`
+         *     and `message` only.
+         */
+        AnalyseErrorEvent: {
+            /** @enum {string} */
+            kind: "error";
+            /**
+             * @description Stable machine-readable reason. A `FailureCode` for a classified
+             *     analyzer failure; the route's own terminal codes are the extras
+             *     listed in this schema's description.
+             */
+            code: string;
+            /** @description Human-readable what-happened sentence (it names the chapter/model when the classifier knows them). */
+            message: string;
+            /** @description What to do about it — the per-code copy from the server's failure-remediations table. Absent on an unclassified terminal error. */
+            remediation?: string;
+            /** @description Collapsible diagnostic blob (engine, model, chapter id, reasoning tokens, upstream status/details). Absent when there is nothing to add. */
+            detail?: string;
+            /**
+             * @description #3084 F7 — structured "how to fix" entries, every actionable fix
+             *     first and every `Read: …` wiki entry last. Present only for
+             *     `analyzer-reasoning-overflow` today; a client renders the list only
+             *     when it carries at least one entry.
+             */
+            fixes?: components["schemas"]["AnalysisFailureFix"][];
+        };
         AnalyseResponse: {
             /** @example ns */
             bookId: string;
@@ -6888,7 +6956,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AnalyseResponse"];
-                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseResponse"];
+                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseErrorEvent"] | components["schemas"]["AnalyseResponse"];
                 };
             };
             /**
@@ -6937,7 +7005,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseResponse"];
+                    "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseErrorEvent"] | components["schemas"]["AnalyseResponse"];
                 };
             };
         };

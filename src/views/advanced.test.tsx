@@ -2,7 +2,7 @@
    banner tests. Mirrors the pattern of model-manager.test.tsx: a lightweight
    configureStore with only the slices the view reads, plus vi.mock for api. */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
@@ -1050,3 +1050,83 @@ describe('AdvancedView — Revert seam, advanced.tsx → OverrideRow (#2209 revi
     ).toHaveTextContent('reset blocked: bad combo');
   });
 });
+
+/* #3084 wave 2b, Task 2.9a (F7) — a run-error's "How to fix" entry deep-links
+   to `#/advanced?focus=<knob key>`; AdvancedRoute hydrates that key into
+   `ui.stage.focusKey`, and AdvancedView scrolls the matching row into view and
+   marks it `data-highlighted="true"` for ~2 s.
+
+   The shared top-level FIXTURE_CONFIG and renderView()/makeStore() carry no
+   `analyzer.gemini.maxInputTokensPerRequest` descriptor and no way to pre-seed
+   `ui.stage`, so this block builds its own fixture and its own store, the way
+   the file's other scoped describes do.
+
+   Mutation row (plan Step 5 row 5/6 covers the router+slice halves of this
+   contract): making `stage.focusKey` a no-op in `stageToHash`'s 'advanced'
+   case leaves this row un-highlighted and scrollIntoView uncalled — the
+   assertions below are what observe it. */
+describe('Advanced Settings — scroll-and-highlight (#3084 wave 2b, F7)', () => {
+  const FOCUS_FIXTURE: ConfigResponse = {
+    groups: [{ id: 'analyzer-sampling', label: 'LLM sampling parameters', help: '', risk: 'medium', collapsedByDefault: false }],
+    descriptors: [
+      {
+        key: 'analyzer.gemini.maxInputTokensPerRequest',
+        group: 'analyzer-sampling',
+        label: 'Gemini max input tokens per request',
+        help: 'Per-request INPUT-token cap for cloud analyzer passes.',
+        type: 'integer',
+        min: 1000,
+        max: 1_000_000,
+        apply: 'live',
+        risk: 'medium',
+        isPrompt: false,
+        default: 12000,
+      },
+    ],
+    values: {
+      'analyzer.gemini.maxInputTokensPerRequest': {
+        key: 'analyzer.gemini.maxInputTokensPerRequest',
+        effective: 12000,
+        source: 'default',
+        locked: false,
+        overridden: false,
+      },
+    },
+    restartPending: false,
+    cudaEnvShadow: false,
+    envCleanupCandidates: [],
+  };
+
+  const originalScrollIntoView = Element.prototype.scrollIntoView;
+  afterEach(() => {
+    // jsdom has no scrollIntoView; other tests in this file, and other
+    // files, must not inherit whatever this suite stubbed it to.
+    Element.prototype.scrollIntoView = originalScrollIntoView;
+  });
+
+  it('scrolls the focused row into view and sets data-highlighted once', async () => {
+    const scrollIntoView = vi.fn();
+    Element.prototype.scrollIntoView = scrollIntoView;
+    mockGetConfig.mockResolvedValueOnce(FOCUS_FIXTURE);
+    const store = configureStore({
+      reducer: {
+        config: configSlice.reducer,
+        ui: uiSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        account: accountSlice.reducer,
+      },
+      preloadedState: {
+        ui: { stage: { kind: 'advanced', focusKey: 'analyzer.gemini.maxInputTokensPerRequest' } } as never,
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AdvancedView />
+      </Provider>,
+    );
+    await screen.findByText('Gemini max input tokens per request');
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(/Gemini max input tokens per request/i).closest('[data-highlighted="true"]')).toBeTruthy();
+  });
+});
+

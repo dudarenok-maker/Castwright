@@ -235,3 +235,73 @@ describe('ToastStack — nudge routing', () => {
     vi.useRealTimers();
   });
 });
+
+/* #3084 F7 — a toast carrying `fixes` is the persistent reasoning-overflow
+   notification. It is routed through ReasoningOverflowToast rather than
+   ToastItem, and the point of that routing is what this test pins: ToastItem
+   owns the 6 s auto-dismiss timer, so a fixes toast rendered through it would
+   vanish while the user is still reading the fix list (and it is pushed
+   exactly when the user has navigated AWAY from the run that failed).
+
+   The three rows are the three shapes server-side `reasoningOverflowFixes`
+   emits (server/src/routes/failure-taxonomy.ts): a `settingKey` (in-app
+   Advanced Settings deep link), a label-only entry, and a `wikiPage`
+   (outbound wiki link). */
+describe('ToastStack — reasoning-overflow fixes routing (#3084 F7)', () => {
+  it('renders a fixes toast, links both link shapes, and does not auto-dismiss it', () => {
+    vi.useFakeTimers();
+    try {
+      const store = makeStoreWithToast({
+        id: 'f1',
+        kind: 'error',
+        message: 'Gemini stopped after 65536 output tokens without finishing.',
+        createdAt: Date.now(),
+        fixes: [
+          {
+            label: 'Lower Gemini max input tokens per request',
+            settingKey: 'analyzer.gemini.maxInputTokensPerRequest',
+          },
+          { label: 'Switch to a different analyzer model' },
+          {
+            label: 'Read: When a model thinks past its output limit',
+            wikiPage: 'Analysis-and-the-Analyzer',
+          },
+        ],
+      });
+      /* Override sharedStore so the mock's useAppSelector/useAppDispatch see
+         the new store — same reason as the nudge test above. */
+      sharedStore = store as ReturnType<typeof makeStore>;
+      render(
+        <Provider store={store}>
+          <ToastStack />
+        </Provider>,
+      );
+
+      expect(screen.getByText('How to fix:')).toBeTruthy();
+      const rows = screen.getAllByRole('listitem');
+      expect(rows).toHaveLength(3);
+      /* settingKey → in-app deep link. The URL is built by stageToHash, so its
+         `#/` prefix and query name are the router's business, asserted here
+         as the contract the Advanced view reads. */
+      expect(rows[0].querySelector('a')?.getAttribute('href')).toBe(
+        '#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest',
+      );
+      /* label-only → plain text, NOT a dead link. */
+      expect(rows[1].querySelector('a')).toBeNull();
+      /* wikiPage → outbound wiki link, and never an in-app `#/` one. */
+      expect(rows[2].querySelector('a')?.getAttribute('href')).toBe(
+        'https://github.com/dudarenok-maker/Castwright/wiki/Analysis-and-the-Analyzer',
+      );
+
+      /* Well past ToastItem's 6 s window the list is still on screen. */
+      act(() => {
+        vi.advanceTimersByTime(7000);
+      });
+      expect(screen.getByText('How to fix:')).toBeTruthy();
+      expect(rows[0]).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+

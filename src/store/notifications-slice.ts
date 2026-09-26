@@ -15,6 +15,9 @@
  * timer on `[id, createdAt]`, so a bump resets the dismiss window. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+/* #3084 F7 — structured "how to fix" entry shape, re-exported from api.ts
+   (which derives it from the generated OpenAPI schema). Type-only. */
+import type { AnalysisFailureFix } from '../lib/api';
 
 export type ToastKind = 'error' | 'warn' | 'info';
 
@@ -52,6 +55,11 @@ export interface Toast {
   /** fs-58 Task 9 — present only on a model_load_failed script-review
       error; routes ToastStack to render a "Retry" action. */
   retryReview?: RetryReview;
+  /** #3084 F7 — present only on the reasoning-overflow toast the
+      analysis-stream middleware pushes. Routes ToastStack to
+      <ReasoningOverflowToast> (which has NO auto-dismiss timer) and
+      carries the structured "how to fix" list it renders. */
+  fixes?: AnalysisFailureFix[];
 }
 
 export interface NotificationsState {
@@ -66,6 +74,9 @@ interface PushToastPayload {
   dedupeKey?: string;
   nudge?: VoiceNudge;
   retryReview?: RetryReview;
+  /** #3084 F7 — set only by the analysis-stream middleware's
+      reasoning-overflow push; see `Toast.fixes`. */
+  fixes?: AnalysisFailureFix[];
 }
 
 export const notificationsSlice = createSlice({
@@ -74,13 +85,18 @@ export const notificationsSlice = createSlice({
   reducers: {
     pushToast: {
       reducer: (s, a: PayloadAction<{ id: string; createdAt: number } & PushToastPayload>) => {
-        const { id, kind, message, dedupeKey, createdAt, nudge, retryReview } = a.payload;
+        const { id, kind, message, dedupeKey, createdAt, nudge, retryReview, fixes } = a.payload;
         if (dedupeKey) {
           const existing = s.toasts.find((t) => t.dedupeKey === dedupeKey);
           if (existing) {
             existing.createdAt = createdAt;
             existing.kind = kind;
             existing.message = message;
+            /* #3084 F7 — a later push under the same key REPLACES the
+               carried fixes (the reasoning-overflow toast and the plain
+               analysis-stream toast share 'analysis-stream', so the
+               newest push wins — same as kind/message above). */
+            existing.fixes = fixes;
             // fs-63 — union nudge work-lists so a burst of off-roster creates
             // yields ONE nudge covering every still-unvoiced character.
             if (nudge && existing.nudge) {
@@ -97,7 +113,7 @@ export const notificationsSlice = createSlice({
             return;
           }
         }
-        s.toasts.push({ id, kind, message, dedupeKey, createdAt, nudge, retryReview });
+        s.toasts.push({ id, kind, message, dedupeKey, createdAt, nudge, retryReview, fixes });
       },
       prepare: (payload: PushToastPayload) => ({
         payload: {

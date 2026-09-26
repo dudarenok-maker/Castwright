@@ -6564,8 +6564,12 @@ export async function runMainAnalyzerJob(
       userMessage: message,
       remediation,
       detail,
+      fixes,
     } = classifyAnalysisFailure(e, analyzerLabel, { chapter: job.reasoningOverflowChapter });
-    endJob(job, { kind: 'error', code, message, remediation, detail });
+    /* #3084 F7 — `fixes` travels on the SSE `error` event ONLY. `endJob`'s
+       #3004 last-outcome record deliberately stays code+message (nothing on the
+       frontend reads `priorOutcome`'s extras — see endJob's own comment). */
+    endJob(job, { kind: 'error', code, message, remediation, detail, fixes });
   }
 }
 
@@ -8209,6 +8213,7 @@ export async function runSubsetAnalyzerJob(
       userMessage: message,
       remediation,
       detail,
+      fixes,
     } = classifyAnalysisFailure(e, analyzerLabel, { chapter: job.reasoningOverflowChapter });
     console.error('[analysis-subset] failed', {
       manuscriptId,
@@ -8217,7 +8222,9 @@ export async function runSubsetAnalyzerJob(
       lastStep,
       stack: (e as Error)?.stack,
     });
-    endJob(job, { kind: 'error', code, message, remediation, detail });
+    /* #3084 F7 — same contract as the main route above: fixes ride the SSE
+       `error` event only; the #3004 last-outcome record is untouched. */
+    endJob(job, { kind: 'error', code, message, remediation, detail, fixes });
   }
 }
 

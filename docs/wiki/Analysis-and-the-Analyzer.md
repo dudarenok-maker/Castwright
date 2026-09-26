@@ -41,4 +41,48 @@ path (pulling an Ollama model vs. [adding a Gemini API key](Getting-a-Gemini-API
 
 A cloud analyzer also unlocks a **pipelined two-model split** on the Analysing screen itself — one model races ahead detecting characters (Phase 0) while a second, more careful model trails behind verifying attribution (Phase 1), gated by a warm-up lag so the second model always has a roster to work against before it starts. Configure each phase independently, or leave both on "(use server default)" for the ordinary single-model path.
 
+## When a model thinks past its output limit
+
+Some analyzer models reason before they answer: they work through the problem
+in hidden thinking tokens and only then write the answer. If that thinking eats
+the model's whole output budget, the call comes back with no answer text at all
+— a **reasoning overflow** — and Castwright stops the run rather than burning
+the rest of your quota on a setting that can't succeed.
+
+Re-running the chapter will not help, and neither will splitting it. The
+overflow is about how much *output* the model had room for, not how much text
+you fed it, so the same settings overflow again on a smaller chunk. Change one
+of the settings the failure names, then resume: chapters that already finished
+are kept, and a reasoning overflow never sends you back to the start of the
+book.
+
+The failure tells you which settings to change. The Analysing view's
+**What to do:** block grows a **How to fix:** list, the same list rides a
+notification that stays on screen while you go and change something, and each
+entry opens the exact row in [Advanced Settings](Advanced-Settings) (that row
+is highlighted for you):
+
+- **Ollama (on-device):** raise **Ollama num_ctx** — the binding limit, since
+  the context window is what Ollama sizes the answer from; lower the **stage-1
+  local input fraction** or the **stage-2 local input fraction** if your model
+  is the verbose sort that overflows the window; or switch model.
+- **Gemini / Gemma (cloud):** lower **Gemini max input tokens per request**
+  (the analyzer sizes its request bodies from it, so a smaller body leaves more
+  of the window for the answer); lower the **Gemini output-heavy chunk size**
+  (the per-chunk input budget for the output-heavy passes such as script review
+  and emotion annotation); and — only when you've pinned **Gemini max output
+  tokens** below what the model can actually do instead of leaving it on
+  **Auto** — raise it, or set it back to Auto.
+- **Any engine:** **switch to a different analyzer model**. Some models simply
+  think too long to finish a chunked pass, and no budget tweak fixes that. This
+  entry is advice rather than a link — there's nothing to open.
+
+> **The thinking window is a different knob.** **Gemini thinking idle timeout
+> (ms)** decides how long one Gemini call may stay *silent* before Castwright
+> gives up on it — the wait for the first chunk, and the gap allowed between
+> thought summaries. It bounds *time*, not output room, so it can't rescue a
+> reasoning overflow; raising it only makes a stalled call wait longer before
+> failing. Raising **Gemini max output tokens**, or leaving it on Auto, is the
+> output-room knob on that engine.
+
 Next: [Reviewing Low-Confidence Speaker Tags](Reviewing-Low-Confidence-Speaker-Tags).

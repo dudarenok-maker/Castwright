@@ -8,6 +8,7 @@ import { MANIFESTO } from '../lib/brand';
 import {
   api,
   AnalysisError,
+  type AnalysisFailureFix,
   type AnalysisLiveInfo,
   type AnalysisHeartbeat,
   type OllamaHealth,
@@ -26,6 +27,7 @@ import {
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
+import { FailureFixList } from '../components/failure-fix-list';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
@@ -149,6 +151,11 @@ export function AnalysingView({
     code: string;
     detail?: string;
     remediation?: string;
+    /* #3084 F7 — structured "How to fix" list carried on the terminal error
+       frame (see `AnalysisError.fixes`). Present only when the classifier can
+       name something actionable; the run-level block renders it when non-empty
+       and renders nothing at all otherwise. */
+    fixes?: AnalysisFailureFix[];
   } | null>(null);
   const [retry, setRetry] = useState<{
     nonce: number;
@@ -283,6 +290,31 @@ export function AnalysingView({
       (s as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis
         ?.activeStream ?? null,
   );
+  /* #3084 F7 — the run-level "How to fix" list must survive the user leaving
+     the view and coming back in the same session. This view's own `error`
+     state does not (it is per-mount), but the halted-run snapshot the
+     analysis-stream middleware wrote does — so the block near the bottom of
+     this file falls back to `haltFixes` when `error` is null.
+
+     Three guards, all load-bearing:
+     - manuscriptId: a DIFFERENT book's halt must not leak this book's chrome;
+     - state === 'halted': a running/paused snapshot has no fixes to show;
+     - !isNotAFailureHaltCode: `cast_incomplete` and `stage1_shrink_refused`
+       also leave `error` null while halted (their catch branches dispatch
+       setHalted and deliberately never setError, see below), and #3244 renders
+       those as a neutral "Needs action" state. Without this exclusion a future
+       task attaching fixes to either code would print a "How to fix" list
+       inside failure chrome for a state that is explicitly not a failure.
+       Neither code carries fixes today, so this is a guard, not a carve-out. */
+  const haltFixes = useAppSelector((s) => {
+    const snap = (s as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis
+      ?.activeStream;
+    if (!snap) return undefined;
+    if (snap.manuscriptId !== manuscriptId) return undefined;
+    if (snap.state !== 'halted') return undefined;
+    if (isNotAFailureHaltCode(snap.haltCode)) return undefined;
+    return snap.haltFixes;
+  });
   const coldBootRehydratedRef = useRef(false);
   useEffect(() => {
     if (coldBootRehydratedRef.current) return;
@@ -688,11 +720,18 @@ export function AnalysingView({
         const code = e instanceof AnalysisError ? e.code : 'unknown';
         const detail = e instanceof AnalysisError ? e.detail : undefined;
         const remediation = e instanceof AnalysisError ? e.remediation : undefined;
+        /* #3084 F7 — carried to BOTH sinks below so the view agrees with the
+           analysis-stream middleware's own setHalted/pushToast for the same
+           failure (the middleware is what keeps the toast alive after
+           navigation; this view's copy is what renders the run-level list
+           inline without waiting for a re-mount). */
+        const fixes = e instanceof AnalysisError ? e.fixes : undefined;
         dispatch(
           analysisActions.setHalted({
             manuscriptId,
             code,
             message: (e as Error)?.message ?? 'Analysis failed.',
+            fixes,
           }),
         );
         setError({
@@ -700,6 +739,7 @@ export function AnalysingView({
           code,
           detail,
           remediation,
+          fixes,
         });
       }
     })();
@@ -1446,6 +1486,12 @@ export function AnalysingView({
                   )}
                 </p>
               )}
+              {error.fixes && error.fixes.length > 0 && (
+                <div className="mt-3">
+                  <p className="mb-1 text-xs font-semibold text-red-900">How to fix:</p>
+                  <FailureFixList fixes={error.fixes} className="flex flex-col gap-1" />
+                </div>
+              )}
               {error.detail && (
                 <details className="mt-2 text-xs text-red-800/90">
                   <summary className="cursor-pointer font-medium hover:text-red-900">
@@ -1506,6 +1552,23 @@ export function AnalysingView({
                 Try again resumes from the first uncached chapter. Start fresh discards all cached
                 progress and re-runs stage 1.
               </p>
+            </div>
+          )}
+          {!error && haltFixes && haltFixes.length > 0 && (
+            /* #3084 F7 — run-level survival path: this run failed (or was
+               rejoined after a reload) while the user was elsewhere, so the
+               inline block above never mounted. The halted-run snapshot still
+               carries the fixes, so they render here instead — same list
+               renderer, same call to action.
+               Gated on `!error` so the two blocks can never both render the
+               same list: when `error` is set, its inline copy is authoritative.
+               `haltFixes` (not the raw `activeStream` read) is what keeps this
+               render honest — see its definition for the three guards, the
+               `cast_incomplete`/`stage1_shrink_refused` exclusion in
+               particular. */
+            <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-left">
+              <p className="text-sm font-semibold text-rose-900">How to fix:</p>
+              <FailureFixList fixes={haltFixes} className="mt-1 flex flex-col gap-1" />
             </div>
           )}
         </div>

@@ -468,9 +468,15 @@ function AboutRoute() {
   return <AboutView />;
 }
 
-/* Advanced configuration — reached from Admin and Account views. */
-function AdvancedRoute() {
-  useHydrateStage({ kind: 'advanced' }, []);
+/* Advanced configuration — reached from Admin and Account views.
+   #3084 F7 — `?focus=<knob key>` deep-links one row (the run-error panel's
+   and the reasoning-overflow toast's "How to fix" list both point here),
+   mirroring HelpRoute's `?code=` handling below. Exported so
+   src/routes/index.test.tsx can mount it directly. */
+export function AdvancedRoute() {
+  const [searchParams] = useSearchParams();
+  const focusKey = searchParams.get('focus') ?? undefined;
+  useHydrateStage({ kind: 'advanced', focusKey }, [focusKey]);
   return <AdvancedView />;
 }
 

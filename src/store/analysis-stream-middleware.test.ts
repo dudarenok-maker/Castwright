@@ -37,13 +37,15 @@ vi.mock('../lib/api', () => {
      to the top of the file, so the class must be defined here (referencing
      a top-level class would hit a TDZ error). Shape mirrors the
      `AnalysisError` class in src/lib/api.ts — same positional constructor
-     (message, code, detail?, prevCharCount?, nextCharCount?, remediation?). */
+     (message, code, detail?, prevCharCount?, nextCharCount?, remediation?,
+     fixes? — the 7th, #3084 F7). */
   class AnalysisError extends Error {
     code: string;
     detail?: string;
     prevCharCount?: number;
     nextCharCount?: number;
     remediation?: string;
+    fixes?: { label: string; settingKey?: string; wikiPage?: string }[];
     constructor(
       message: string,
       code: string,
@@ -51,6 +53,7 @@ vi.mock('../lib/api', () => {
       prev?: number,
       next?: number,
       remediation?: string,
+      fixes?: { label: string; settingKey?: string; wikiPage?: string }[],
     ) {
       super(message);
       this.name = 'AnalysisError';
@@ -59,6 +62,7 @@ vi.mock('../lib/api', () => {
       this.prevCharCount = prev;
       this.nextCharCount = next;
       this.remediation = remediation;
+      this.fixes = fixes;
     }
   }
   return {
@@ -445,6 +449,57 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     expect(snap?.haltCode).toBe('attribution_drift');
     /* The setHalted dispatch closes the handle via the HALTED_TYPE hook. */
     expect(captured[0]?.signal.aborted).toBe(true);
+  });
+
+  /* #3084 F7 — the reasoning-overflow toast is pushed from HERE, not from
+     analysing.tsx (this stream survives navigation; the view's aborts on
+     unmount). Mutation: delete `fixes: e.fixes` from the
+     `analyzer-reasoning-overflow` arm of the ternary below → the first test
+     reddens (toasts[0].fixes is undefined). The second test stays green
+     under that mutation — deliberately: it proves the wiring did not leak
+     into a code that must never carry fixes, which is why both exist. */
+  it('a reasoning-overflow AnalysisError pushes ONE toast carrying fixes under dedupeKey analysis-stream (#3084 F7)', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+    );
+    const fixes = [
+      { label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' },
+    ];
+    lastCall().reject(
+      new AnalysisError(
+        'boom',
+        'analyzer-reasoning-overflow',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        fixes,
+      ),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ kind: 'error', dedupeKey: 'analysis-stream', fixes });
+    /* The halted-run snapshot carries the same list, so the analysing view
+       still renders "How to fix" after navigating back in this session. */
+    expect(store.getState().analysis.activeStream?.haltFixes).toEqual(fixes);
+  });
+
+  it('a non-reasoning-overflow AnalysisError still pushes the plain toast, with no fixes field (unchanged behaviour)', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+    );
+    lastCall().reject(new AnalysisError('drift', 'attribution_drift'));
+    await Promise.resolve();
+    await Promise.resolve();
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]?.fixes).toBeUndefined();
   });
 
   it('does NOT poison the snapshot when an AbortError surfaces from the SSE (clean cancel)', async () => {

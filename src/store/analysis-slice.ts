@@ -14,6 +14,10 @@
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
+/* #3084 F7 — the structured "how to fix" entry shape (derived from the
+   generated OpenAPI schema by src/lib/api.ts, which is the frontend's single
+   alias for it). Type-only: the slice stays free of api.ts at runtime. */
+import type { AnalysisFailureFix } from '../lib/api';
 
 /* Snapshot of the in-flight analyzer run. Set by the analysing view (or
    the analysis-stream middleware) on start; updated on every Phase/ETA/
@@ -67,6 +71,14 @@ export interface AnalysisStreamSnapshot {
   /** Carried error code from the server's last terminal event so the
       pill / view can route to the right banner. */
   haltCode?: string;
+  /** #3084 F7 — structured "how to fix" list carried from the terminal
+      `error` event (both the view's own stream and the middleware's
+      copy it here). This is the SAME halted-run state a user who
+      navigates away and back in the session sees: the analysing view
+      renders these as the run-level "How to fix:" list when it has no
+      live `error` object of its own. Undefined for every halt code the
+      classifier has nothing actionable for. */
+  haltFixes?: AnalysisFailureFix[];
   /** Series carry-over surface (plan 04 + plan 09). Populated by the
       server's one-shot `series-prior` SSE event at Phase 0 entry when
       the analyzer pre-seeded its per-chapter prompt with characters
@@ -187,10 +199,18 @@ export const analysisSlice = createSlice({
 
     /* Flip to halted state with an error code + message. Used for
        attribution_drift / stage1_shrink_refused / cast_incomplete /
-       aborted / unknown error events. */
+       aborted / unknown error events. #3084 F7 — `fixes` is optional and
+       rides the SAME halted-run record (never a separate one): the
+       analysing view reads `activeStream.haltFixes` when it has no live
+       error object of its own. */
     setHalted(
       state,
-      action: PayloadAction<{ manuscriptId: string; code: string; message: string }>,
+      action: PayloadAction<{
+        manuscriptId: string;
+        code: string;
+        message: string;
+        fixes?: AnalysisFailureFix[];
+      }>,
     ) {
       const snap = state.activeStream;
       if (!snap) return;
@@ -198,6 +218,7 @@ export const analysisSlice = createSlice({
       snap.state = 'halted';
       snap.haltCode = action.payload.code;
       snap.haltReason = action.payload.message;
+      snap.haltFixes = action.payload.fixes;
     },
 
     /* Flip to paused state. Dispatched by the analysing view's Pause

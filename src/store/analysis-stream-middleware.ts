@@ -264,14 +264,39 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           closeHandle();
           return;
         }
+        /* #3084 F7 — the persistent "reasoning overflow" notification lives
+           HERE, not in the analysing view: this stream survives navigation,
+           while the view's own SSE aborts on unmount (so a toast pushed from
+           the view would vanish the moment the user navigated away). Both
+           arms share `dedupeKey: 'analysis-stream'` — the same key the
+           `language_unset` branch above and the transport-failure branch
+           below use — so the slice's own dedupe-by-key merge REPLACES this
+           run's plain toast rather than stacking a second one. Only the
+           reasoning-overflow arm carries `fixes`; ToastStack routes a
+           `t.fixes` toast to <ReasoningOverflowToast>. Every other code
+           still pushes exactly one plain toast. */
         if (e instanceof AnalysisError) {
-          dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
           dispatch(
-            notificationsActions.pushToast({
-              kind: 'error',
+            analysisActions.setHalted({
+              manuscriptId,
+              code: e.code,
               message: e.message,
-              dedupeKey: 'analysis-stream',
+              fixes: e.fixes,
             }),
+          );
+          dispatch(
+            e.code === 'analyzer-reasoning-overflow'
+              ? notificationsActions.pushToast({
+                  kind: 'error',
+                  message: e.message,
+                  fixes: e.fixes,
+                  dedupeKey: 'analysis-stream',
+                })
+              : notificationsActions.pushToast({
+                  kind: 'error',
+                  message: e.message,
+                  dedupeKey: 'analysis-stream',
+                }),
           );
           return;
         }

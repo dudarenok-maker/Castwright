@@ -695,4 +695,49 @@ describe('AnalyzerReasoningOverflowError (#3084 wave 2b)', () => {
       'analyzer-reasoning-overflow',
     );
   });
+
+  /* #3084 F7 (Task 2.9a) — `fixes` on top of the copy asserted above: the
+     per-instance, structured half of the same advice. The static remediation
+     stays transport-agnostic; `fixes` is the part that can name THIS engine's
+     settings, so these assert the Gemini/Ollama split and the wiki entry's
+     position (every actionable fix first, the single wiki link last). */
+  it('attaches the Gemini fixes: actionable first, the single wiki link last (#3084 F7)', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
+      'Gemini (gemini-3.6-flash)',
+    );
+    const keys = (r.fixes ?? []).map((f) => f.settingKey);
+    expect(keys).toContain('analyzer.gemini.maxInputTokensPerRequest');
+    expect(keys).toContain('analyzer.gemini.outputHeavyChunkChars');
+    /* Label-only "switch model" (no settingKey, no wikiPage → plain text). */
+    const switchModel = (r.fixes ?? []).find((f) => f.label === 'Switch to a different analyzer model');
+    expect(switchModel?.settingKey).toBeUndefined();
+    expect(switchModel?.wikiPage).toBeUndefined();
+    const fixes = r.fixes ?? [];
+    const last = fixes[fixes.length - 1];
+    expect(last?.label).toBe('Read: When a model thinks past its output limit');
+    expect(last?.wikiPage).toBe('Analysis-and-the-Analyzer');
+    expect(last?.settingKey).toBeUndefined();
+  });
+
+  it('attaches the Ollama fixes naming num_ctx, not num_predict (#3084 F7)', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', undefined),
+      'Ollama (qwen3.5:4b)',
+    );
+    const keys = (r.fixes ?? []).map((f) => f.settingKey);
+    expect(keys).toContain('analyzer.ollama.numCtx');
+    expect(keys).not.toContain('analyzer.ollama.numPredict');
+    expect(keys).toContain('analyzer.stage1.localInputFraction');
+    expect(keys).toContain('analyzer.stage2.localInputFraction');
+    expect((r.fixes ?? []).map((f) => f.label)).toContain('Switch to a different analyzer model');
+  });
+
+  it('carries no fixes for an OpenAI-compatible endpoint yet (3b adds them) (#3084 F7)', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerReasoningOverflowError('openai', 'm', undefined),
+      'OpenAI-compatible (m)',
+    );
+    expect(r.fixes).toEqual([]);
+  });
 });

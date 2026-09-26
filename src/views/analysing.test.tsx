@@ -11,6 +11,7 @@ import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { AnalysingView } from './analysing';
+import { WIKI_BASE } from '../lib/wiki-links';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
 import type {
   AnalyseResponse,
@@ -2848,3 +2849,132 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
     expect(screen.getByText(/Check that Ollama is running…/)).toBeInTheDocument();
   });
 });
+
+/* #3084 F7 — the run-level "How to fix" block. Two things this pins:
+   (1) the three-way rule FailureFixList owns — a `settingKey` entry deep-links
+       into Advanced Settings, a published `wikiPage` entry is a wiki link, an
+       unrecognised `wikiPage` and a label-only entry are plain text; and
+   (2) the survival path — a halted run whose fixes live on the slice snapshot
+       (`haltFixes`) rather than on a live `error` object still renders them.
+   The per-chapter "What to do:" block is deliberately NOT covered here: the
+   plan excludes it, and a chapter failure never carries `fixes`.
+   Mutations these cases pin (plan Step 5): flipping the inline block's guard in
+   `analysing.tsx` to `false` reddens the first case (`findByText('How to fix:')`
+   never resolves); deleting `snap.haltFixes = action.payload.fixes` from
+   `setHalted` reddens the second. */
+const RUN_FIXES = [
+  {
+    label: 'Lower Gemini max input tokens per request',
+    settingKey: 'analyzer.gemini.maxInputTokensPerRequest',
+  },
+  { label: 'Switch to a different analyzer model' },
+  {
+    label: 'Read: When a model thinks past its output limit',
+    wikiPage: 'Analysis-and-the-Analyzer',
+  },
+  { label: 'Read: a page this build does not publish', wikiPage: 'Not-A-Real-Page' },
+];
+
+describe('AnalysingView — run-level "How to fix" block (#3084 F7)', () => {
+  it('renders the list from the terminal error, linking the settings that fix it', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError(
+      'Gemini stopped after 65536 output tokens without finishing.',
+      'analyzer-reasoning-overflow',
+      undefined,
+      undefined,
+      undefined,
+      'Then resume — finished chapters are kept.',
+      RUN_FIXES,
+    );
+    await renderViewWaitingForAnalysis();
+
+    expect(await screen.findByText('How to fix:')).toBeInTheDocument();
+
+    /* A `settingKey` entry is the F7 deep link — the same URL the persistent
+       toast offers, built by fixHref through the router's `?focus=` param. */
+    const knobHref = screen
+      .getByRole('link', { name: /Lower Gemini max input tokens per request/ })
+      .getAttribute('href');
+    expect(knobHref).toBe('#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest');
+
+    /* A published `wikiPage` entry is an outbound wiki link — the exact URL
+       wikiUrl builds, from the same WIKI_BASE this build publishes under. */
+    const wikiHref = screen
+      .getByRole('link', { name: /Read: When a model thinks past its output limit/ })
+      .getAttribute('href');
+    expect(wikiHref).toBe(`${WIKI_BASE}/Analysis-and-the-Analyzer`);
+
+    /* An unrecognised `wikiPage` must be plain text, never a broken link. */
+    expect(screen.queryByRole('link', { name: /a page this build does not publish/ })).toBeNull();
+    expect(screen.getByText('Read: a page this build does not publish')).toBeInTheDocument();
+
+    /* A label-only fix ("switch model") is plain text — no href to invent. */
+    expect(screen.queryByRole('link', { name: /Switch to a different analyzer model/ })).toBeNull();
+  });
+
+  it('renders haltFixes for a halted run with no live error', async () => {
+    /* The rejoin/navigate-away case: the view remounted after the failure, so
+       its own `error` state is empty and only the slice snapshot carries the
+       list — which is exactly what the middleware's setHalted wrote. */
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      preloadedState: {
+        analysis: {
+          activeStream: {
+            bookId: 'book-1',
+            manuscriptId: 'm1',
+            bookTitle: 'the Coalfall Commission',
+            engine: 'gemini' as const,
+            phaseId: 1,
+            phaseLabel: 'Parsing & attribution',
+            phaseProgress: 0.32,
+            remainingMs: 45_000,
+            lastTickAt: Date.now() - 2_000,
+            state: 'halted' as const,
+            haltCode: 'analyzer-reasoning-overflow',
+            haltReason: 'Gemini stopped after 65536 output tokens without finishing.',
+            haltFixes: RUN_FIXES,
+          },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    expect(await screen.findByText('How to fix:')).toBeInTheDocument();
+    expect(
+      screen
+        .getByRole('link', { name: /Lower Gemini max input tokens per request/ })
+        .getAttribute('href'),
+    ).toBe('#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest');
+  });
+
+  /* The behaviour this list must not disturb: a terminal error that names
+     nothing actionable renders the banner it always did — no empty "How to
+     fix:" heading, no placeholder list. */
+  it('renders no "How to fix" list when the error carries no fixes (unchanged behaviour)', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError('boom', 'attribution_drift');
+    await renderViewWaitingForAnalysis();
+
+    expect(await screen.findByText('Analysis failed')).toBeInTheDocument();
+    expect(screen.queryByText('How to fix:')).toBeNull();
+  });
+});
+
