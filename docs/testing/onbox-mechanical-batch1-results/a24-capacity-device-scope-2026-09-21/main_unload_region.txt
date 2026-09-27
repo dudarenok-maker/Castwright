@@ -1,0 +1,68 @@
+999: 
+1000:     Ordering is a verbatim copy of the old registration order in BOTH
+1001:     directions. FastAPI's `APIRouter._startup()` ran `on_startup` handlers in
+1002:     registration order and `_shutdown()` ran `on_shutdown` handlers in
+1003:     registration order too — neither ever reversed them — so reversing the
+1004:     teardown here would be a behaviour change smuggled into a migration whose
+1005:     whole premise is that nothing changes. (The four stop handlers are
+1006:     mutually independent anyway; each just cancels its own task.)
+1007: 
+1008:     Failure semantics match the decorator form as well. The startup awaits are
+1009:     sequential and unguarded, so a raising handler aborts boot and skips the
+1010:     handlers after it — as FastAPI's `APIRouter._startup()` did. The teardown
+1011:     sits in a `finally` because FastAPI's `_DefaultLifespan.__aexit__`
+1012:     ignores its `exc_info` and runs `APIRouter._shutdown()` unconditionally
+1013:     (`fastapi/routing.py:265-266`) — not Starlette's: the shipped Starlette
+1014:     `_DefaultLifespan.__aenter__`/`__aexit__` are two bare `pass`es, and
+1015:     `Router.startup()`/`Router.shutdown()`/`Router.on_startup` don't exist on
+1016:     Starlette's `Router` at all. Without the `finally`, an exception thrown
+1017:     at the `yield` (a cancelled lifespan task) would skip teardown entirely,
+1018:     which the `on_event` form did not do.
+1019: 
+1020:     `tests/test_lifespan_order.py` drives this very context manager and pins
+1021:     both sequences by name, so a later edit cannot quietly drop or reshuffle a
+1022:     handler."""
+1023:     await _startup_ort_cuda_preload()
+1024:     await _configure_vd_kokoro_coupling()
+1025:     await _start_design_idle_watchdog()
+1026:     await _start_asr_idle_watchdog()
+1027:     await _start_spk_idle_watchdog()
+1028:     await _start_device_probe()
+1029:     await _start_memory_watchdog()
+1030:     await _pin_coqui_import_order()
+1031:     await _preload_default_engines()
+1032:     await _startup_cuda_env_shadow_check()
+1033:     try:
+1034:         yield
+1035:     finally:
+1036:         await _stop_design_idle_watchdog()
+1037:         await _stop_asr_idle_watchdog()
+1038:         await _stop_spk_idle_watchdog()
+1039:         await _stop_memory_watchdog()
+1040: 
+1041: 
+1042: app = FastAPI(title="audiobook-generator local TTS sidecar", lifespan=_lifespan)
+1043: 
+1044: 
+1045: async def _read_json_body(req: Request):
+ROUTE 11164: @app.get("/health")
+ROUTE 11354: @app.get("/devices")
+ROUTE 11359: @app.get("/capacity")
+ROUTE 11367: @app.get("/debug/memory")
+ROUTE 11470: @app.get("/debug/codec-timing")
+ROUTE 11475: @app.post("/debug/codec-timing/reset")
+ROUTE 11481: @app.post("/debug/reclaim")
+ROUTE 11528: @app.post("/load")
+ROUTE 11709: @app.post("/unload")
+ROUTE 11757: @app.post("/recycle")
+ROUTE 11774: @app.get("/speakers")
+ROUTE 11802: @app.post("/qwen/design-voice")
+ROUTE 11943: @app.post("/qwen/clone-voice")
+ROUTE 12042: @app.post("/qwen/mint-variant")
+ROUTE 12184: @app.post("/qwen/evict-voice")
+ROUTE 12212: @app.post("/xtts/clone-voice")
+ROUTE 12412: @app.post("/xtts/evict-voice")
+ROUTE 12468: @app.post("/synthesize")
+ROUTE 12674: @app.post("/transcribe")
+ROUTE 12758: @app.post("/embed")
+ROUTE 12830: @app.post("/synthesize-batch")

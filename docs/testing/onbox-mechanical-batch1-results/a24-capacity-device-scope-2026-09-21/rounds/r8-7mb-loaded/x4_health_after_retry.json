@@ -1,0 +1,7 @@
+{
+  "qwen_design_resident": true,
+  "qwen_device_key": "cuda:0",
+  "asr_loaded": true,
+  "t_after_design_s": 5.1,
+  "cuda1_used_mb": 15531
+}

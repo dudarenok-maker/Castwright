@@ -5,8 +5,9 @@
 > **listen to**: Qwen VoiceDesign persona/A/B audition, bulk cast design, the
 > emotion-chip manuscript preview, cross-engine audition fidelity, and the
 > golden-audio bless guards. (Two rows this sitting pack originally covered —
-> the persona-prompt rewrite and the emotion-chip preview — are discharged
-> 2026-08-26 and removed from the register; their sections below are kept for
+> old A14, the persona-prompt rewrite, and old A17, the emotion-chip preview —
+> are discharged 2026-08-26 and removed from the register; today's A14 and
+> A17 IDs name unrelated rows; their sections below are kept for
 > the historical run record.) Follows the shared format fixed by
 > [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §5; the re-resolution rule
 > of §6 was applied to every row (see
@@ -24,6 +25,10 @@
 > matching the plan of record's stated total for this pack
 > ([`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.1) exactly — all seven
 > rows re-resolved as still owed, so nothing changed the arithmetic.
+>
+> This dated 2026-08-20 line uses that date's row numbering, not today's
+> (its A14 is old A14, plan 160, and its A17 is old A17, plan 180, both
+> discharged; its A15 is plan 161, today's A11; its A27 is PR #2032, today's A20).
 
 ## Preconditions
 
@@ -39,18 +44,18 @@ Stated once for the sitting; do not repeat per row.
       this launch path applies.
 - [ ] **A Qwen project/book with a multi-voice cast** (≥3 characters, at least
       one with no persona yet and one already carrying an old-format persona
-      pre-dating plan 160's rewrite) — needed for A6, A7 and A14's "compare
+      pre-dating plan 160's rewrite) — needed for A6, A7 and old A14's "compare
       against a character still on an old-format persona" step. A sibling book
       in the same series, for A7's series-propagation check.
 - [ ] **Engines available and loadable from the UI:** Qwen VoiceDesign (0.6B
       and 1.7B tiers), Coqui XTTS, Kokoro (`server/tts-sidecar/voices/kokoro/kokoro-v1.0.onnx`
       + `voices-v1.0.bin` on disk, sidecar venv bootstrapped) — A4 needs all
-      three plus both Qwen tiers in the same session; A27 needs Kokoro
+      three plus both Qwen tiers in the same session; A20 needs Kokoro
       specifically.
 - [ ] **A book set to the 1.7B tier** and a book/character overridden to
       Kokoro inside a Coqui book (A4's tier/engine-override checks).
 - [ ] **A manuscript with a Qwen-voiced character carrying a designed `angry`
-      emotion variant**, and the ability to remove/re-add that variant (A17).
+      emotion variant**, and the ability to remove/re-add that variant (old A17).
 - [ ] **A second browser tab/session** (A7's 2nd-tab serialization check).
 - [ ] **A way to genuinely oversubscribe VRAM with Coqui resident** — e.g.
       hold the card near capacity with a concurrent Qwen load — to force a
@@ -62,10 +67,10 @@ Stated once for the sitting; do not repeat per row.
       (e.g. hold the sidecar near its committed-memory ceiling, or the
       supervisor's own forced-restart path if the box exposes one).
 - [ ] **`npm run test:golden-audio`** runnable from the worktree/repo root,
-      and the box **quiet** for A27 — `nvidia-smi` shows no concurrent GPU
+      and the box **quiet** for A20 — `nvidia-smi` shows no concurrent GPU
       work when that step runs (its own `--bless` contention warning should
       print nothing).
-- [ ] **Permission to hand-edit a committed baseline JSON** for A27's forced-
+- [ ] **Permission to hand-edit a committed baseline JSON** for A20's forced-
       refusal drills, with a plan to revert the hand-edit before committing
       anything.
 - [ ] **One shell** for server/CLI control; a second free for `nvidia-smi` /
@@ -77,7 +82,7 @@ Ordered so the bulk-design (Qwen-heavy) rows run first while the cast/session
 setup is fresh, the single-voice persona/A/B/emotion rows follow on the same
 Qwen residency, the multi-engine audition row (A4) comes next since it is the
 one point this sitting swaps into Kokoro/Coqui/tier variations, and the
-golden-audio bless row (A27) — which needs Kokoro alone on a **quiet** card —
+golden-audio bless row (A20) — which needs Kokoro alone on a **quiet** card —
 runs last, after everything else is evicted.
 
 ### A6 + A7 · Bulk voice-design recycle resilience (plan 200) + Design full cast (plan 195) — steps 1–3
@@ -127,9 +132,9 @@ runs last, after everything else is evicted.
    completes with a correct terminal summary once the sidecar comes back.
    - Result:
 
-### A14 · Qwen VoiceDesign persona-prompt rewrite (plan 160) — steps 4–6
+### old A14 (discharged 2026-08-26, removed from the register) · Qwen VoiceDesign persona-prompt rewrite (plan 160) — steps 4–6
 
-> **Register row: A14 — discharged 2026-08-26, row removed from the register**
+> **Register row: old A14 — discharged 2026-08-26, row removed from the register**
 > (owner-confirmed live observation: the rewritten pitch/purpose-clause wording
 > changes the rendered voice on a real audition).
 
@@ -145,13 +150,13 @@ runs last, after everything else is evicted.
 > for the three-step walkthrough below — the plan's own text still lists it
 > as owed. STILL OWED.
 
-4. **(A14.1) Regenerate a persona.** On a Qwen character, hit "Regenerate
+4. **(old A14.1) Regenerate a persona.** On a Qwen character, hit "Regenerate
    voice style" (Profile drawer, or
    `POST /api/books/:bookId/cast/:characterId/voice-style/generate`).
    Observe the persona text: a full sentence, ~15–40 words, containing a
    pitch word and ending in a purpose clause (not a bare adjective list).
    - Result:
-5. **(A14.2) Design → audition → A/B against the old format.** Design the
+5. **(old A14.2) Design → audition → A/B against the old format.** Design the
    voice from that regenerated persona and audition it. **Listening target:**
    compare it directly against a character still on an old-format (pre-plan-
    160) persona in the same session — you are listening for the new
@@ -160,7 +165,7 @@ runs last, after everything else is evicted.
    "a voice." Confirm the cached `instruct` field at
    `voices/qwen/<voiceId>.json` matches the new persona text.
    - Result:
-6. **(A14.3) Un-regenerated character unaffected.** Play a character whose
+6. **(old A14.3) Un-regenerated character unaffected.** Play a character whose
    persona was **not** regenerated this session. **Listening target:**
    confirm it plays its pre-existing designed voice unchanged — no silent
    drift in an existing book's cast just from this rewrite being live.
@@ -171,21 +176,21 @@ runs last, after everything else is evicted.
 > **Criteria source:** `docs/features/161-voice-design-compare.md` `:100-109`
 > (manual acceptance walkthrough), `:9` (Status line), `:117-121` (Ship
 > notes, unfilled placeholder). Re-resolved 2026-08-20 by direct read: same
-> pattern as A14 — frontmatter `status: active`, body `> Status: active —
+> pattern as old A14 — frontmatter `status: active`, body `> Status: active —
 > code shipped, GPU audition validation owed` (`:9`), Ship notes still the
 > literal placeholder. `git log` on the plan file shows one commit only
-> (`6fb41b7a`), nothing since. STILL OWED. Register row A15 states this
+> (`6fb41b7a`), nothing since. STILL OWED. Register row A11 states this
 > explicitly: **"A non-destructive re-design — Cancel must leave the live
 > `.pt` untouched — plus an audible delta on approve."** Directly downstream
-> of A14; run in the same session.
+> of old A14; run in the same session.
 
-7. **(A15.1) Open the A/B modal, play both sides.** Profile drawer → "Design
+7. **(A11.1) Open the A/B modal, play both sides.** Profile drawer → "Design
    & compare." Confirm Side A plays the **current** voice, Side B the
    **proposed**. Edit the persona on Side B → Re-design → audition again.
    **Listening target:** an audible delta between Side A and the freshly
    re-designed Side B — not identical audio with a different waveform file.
    - Result:
-8. **(A15.2) Cancel is genuinely non-destructive — test it, don't assume it.**
+8. **(A11.2) Cancel is genuinely non-destructive — test it, don't assume it.**
    Before cancelling, note the live `qwen-<id>.pt`'s mtime/checksum and play
    it once as a baseline. Re-design Side B again, then **Cancel** instead of
    approving. Observe and record, explicitly:
@@ -196,16 +201,16 @@ runs last, after everything else is evicted.
      baseline recording — this is the audible half of "non-destructive," not
      just a file-timestamp check.
    - Result:
-9. **(A15.3) Approve, save, render — the new voice is actually used.** Redo
+9. **(A11.3) Approve, save, render — the new voice is actually used.** Redo
    the re-design, this time click "Use proposed voice" → Save → generate a
    chapter using that character. **Listening target:** the rendered chapter
    audibly uses the **proposed** (Side B) voice, not the original — confirm
    against the Side B audition played in step 7.
    - Result:
 
-### A17 · Emotion-chip preview from the manuscript (plan 180, fe-31) — step 10
+### old A17 (discharged 2026-08-26, removed from the register) · Emotion-chip preview from the manuscript (plan 180, fe-31) — step 10
 
-> **Register row: A17 — discharged 2026-08-26, row removed from the register**
+> **Register row: old A17 — discharged 2026-08-26, row removed from the register**
 > (owner-confirmed live observation: the audible delta between a designed
 > variant and the base voice, on a real sidecar).
 
@@ -218,7 +223,7 @@ runs last, after everything else is evicted.
 > owed:** the audible difference between a designed variant and the base
 > voice can only be confirmed on a real sidecar." STILL OWED.
 
-10. **(A17) Designed variant vs. base voice, by ear.** In the manuscript view,
+10. **(old A17) Designed variant vs. base voice, by ear.** In the manuscript view,
     flip the speaking character to Qwen with its designed `angry` variant
     present, tag a dialogue line `angry`, and press the ▶ preview next to
     the chip. **Listening target:** the designed `angry` variant's
@@ -280,15 +285,15 @@ runs last, after everything else is evicted.
 > the row's own text. No later issue/PR/run-sheet references `--bless`,
 > `IDENTITY_COSINE_EPSILON`, or `_make_kokoro` since. STILL OWED. Run this
 > **last**, on a **quiet** card — evict every engine from the rows above
-> first (see Teardown-before-A27 note below), because this row's own
+> first (see Teardown-before-A20 note below), because this row's own
 > contention warning must print nothing for the run to mean anything.
 
-> **Evict everything from A4–A17 before starting this row.** Stop Qwen,
-> Coqui, and any resident analyzer; confirm `nvidia-smi` ≈ idle. A27 does not
+> **Evict everything from the rows above (steps 1–14) before starting this row.** Stop Qwen,
+> Coqui, and any resident analyzer; confirm `nvidia-smi` ≈ idle. A20 does not
 > need CUDA (`ASR_DEVICE=cpu`/CPU Kokoro also exercises it) but does need the
 > card **uncontended** for a stable, reproducible measurement.
 
-15. **(A27.1) Clean bless run, byte-identical + noise-echo.** Run
+15. **(A20.1) Clean bless run, byte-identical + noise-echo.** Run
     `npm run test:golden-audio -- --bless --sidecar-only` on the now-quiet
     box (confirm `nvidia-smi` first — the `--bless` contention warning
     should print **nothing**). Confirm it completes and writes
@@ -307,14 +312,14 @@ runs last, after everything else is evicted.
     Record the actual **per-leaf identity-cosine deltas** observed (the
     open #2066 question this run is meant to retire) — not just pass/fail.
     - Result:
-16. **(A27.2) Force a real refusal — corrupted field.** Hand-edit a committed
+16. **(A20.2) Force a real refusal — corrupted field.** Hand-edit a committed
     baseline to null out its `transcript` (or delete its `tolerances` key),
     re-run the same `--bless` command, and confirm it **refuses** with the
     expected `GOLDEN_REBLESS_*` message and leaves the file byte-identical
     to before the attempt. Revert the hand-edit immediately after recording
     the result.
     - Result:
-17. **(A27.3) Force a real refusal — WINDOW-sized identity drift.** Hand-edit
+17. **(A20.3) Force a real refusal — WINDOW-sized identity drift.** Hand-edit
     one committed `instruct-baseline.json` `identity.cosine.<emotion>`
     figure by clearly more than `IDENTITY_COSINE_EPSILON` (e.g. +0.05),
     re-run the same `--bless` command, and confirm it refuses with
@@ -322,7 +327,7 @@ runs last, after everything else is evicted.
     which is reserved for `tolerances`), and leaves the file byte-identical.
     Revert the hand-edit immediately after recording the result.
     - Result:
-18. **(A27.4) `_make_kokoro` fails, not skips, on a real broken engine.** Run
+18. **(A20.4) `_make_kokoro` fails, not skips, on a real broken engine.** Run
     `npm run test:golden-audio -- --sidecar-only --engine=kokoro -m golden`
     once normally (expect pass). Then deliberately break the engine — rename
     the `.onnx` weight file mid-run, or force a CUDA OOM by holding VRAM —
@@ -332,6 +337,9 @@ runs last, after everything else is evicted.
     - Result:
 
 ## Excluded on re-resolution
+
+> This dated 2026-08-20 record uses that date's row numbering, not today's
+> (e.g. its A15 is plan 161, today's A11; its A27 is PR #2032, today's A20).
 
 None excluded. All seven rows were re-resolved against live repo/issue/PR
 state and the plan-of-record files themselves on 2026-08-20 and remain owed:
@@ -379,11 +387,11 @@ frontmatter-vs-body contradiction handled in `onbox-sitting-vram-contention.md`.
 - [ ] Restore `server/.env`'s `QWEN_DEVICE` / `COQUI_DEVICE` pins back to
       `cuda:1` (the owner's box policy) if they were changed for this
       sitting.
-- [ ] Confirm any hand-edited baseline JSON from A27.2/A27.3 was reverted —
+- [ ] Confirm any hand-edited baseline JSON from A20.2/A20.3 was reverted —
       `git status`/`git diff` on `server/tts-sidecar/tests/golden/` shows
       clean before this sitting ends.
 - [ ] Confirm the Kokoro `.onnx` weight file (or whatever was broken for
-      A27.4) is restored and a clean `test:golden-audio` run passes.
+      A20.4) is restored and a clean `test:golden-audio` run passes.
 - [ ] Close the second browser tab/session (A7's 2nd-tab check).
 - [ ] Remove/undo whatever forced the sidecar `/recycle` (A6) and whatever
       held VRAM to force the capacity refusal (A4.4), if either is still

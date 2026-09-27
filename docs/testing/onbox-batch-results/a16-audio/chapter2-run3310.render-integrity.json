@@ -1,0 +1,152 @@
+[
+  {
+    "characterId": "oduvan",
+    "sentenceIds": [
+      2
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8377650877985156,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "in-book",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "oduvan",
+    "sentenceIds": [
+      17
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8927828107108351,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "in-book",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "oduvan",
+    "sentenceIds": [
+      20
+    ],
+    "verdict": "voice-mismatch",
+    "cosine": 0.6931858826355062,
+    "severity": "severe",
+    "fixable": true,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "in-book",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "oduvan",
+    "sentenceIds": [
+      32
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8638798339640968,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "in-book",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "oduvan",
+    "sentenceIds": [
+      38
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8834508458971517,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "in-book",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "oduvan",
+    "sentenceIds": [
+      39
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.9034469450711979,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "in-book",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "oduvan",
+    "sentenceIds": [
+      50
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8662767161639326,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "in-book",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "oduvan",
+    "sentenceIds": [
+      52
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8127453041512475,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "in-book",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "oduvan",
+    "sentenceIds": [
+      54
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8604694941743414,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "in-book",
+    "windowed": false,
+    "chapterId": 2
+  },
+  {
+    "characterId": "oduvan",
+    "sentenceIds": [
+      55
+    ],
+    "verdict": "voice-match",
+    "cosine": 0.8679569270740412,
+    "severity": null,
+    "fixable": false,
+    "expectedEngine": "qwen",
+    "renderedEngine": "qwen",
+    "referenceKind": "in-book",
+    "windowed": false,
+    "chapterId": 2
+  }
+]

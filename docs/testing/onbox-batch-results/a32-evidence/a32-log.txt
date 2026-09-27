@@ -1,0 +1,16 @@
+12:10:44 DRIVER START
+12:10:46 server 8100 up
+12:10:48 sidecar 9020 healthy
+12:10:49 fixture.epub built
+12:10:49 import ok: title=Test Entites chapters=2 words=31
+12:10:49 PASS no residual entities in sourceText
+12:10:49 PASS accented glyphs real in dash line
+12:11:25 synth title sr=24000 bytes=53280 durMs=1110
+12:11:28 synth dash sr=24000 bytes=144416 durMs=3009
+12:11:29 synth ctrl sr=24000 bytes=91168 durMs=1899
+12:11:38 transcribe title -> {"text":"L'été.","language":"fr","avg_logprob":-0.6272724866867065,"no_speech_prob":0.1715087890625,"compression_ratio":0.5,"words":[{"word":" L","start":0.0,"end":0.12},{"word":"'été.","start":0.12,"end":0.36}]}
+12:11:39 transcribe dash -> {"text":"Ne partez pas après le dîner, dit-elle.","language":"fr","avg_logprob":-0.2653821496402516,"no_speech_prob":0.00817108154296875,"compression_ratio":0.8541666666666666,"words":[{"word":" Ne","start":0.0,"end":0.1
+12:11:39 transcribe ctrl -> {"text":"Ne partez pas après le dîner.","language":"fr","avg_logprob":-0.2870283860426683,"no_speech_prob":0.00911712646484375,"compression_ratio":0.8157894736842105,"words":[{"word":" Ne","start":0.0,"end":0.14},{"word"
+12:11:39 lead gap ms: dash=0 ctrl=0
+12:11:40 silencedetect dash: starts=1497,2454 durs=471,554
+12:11:40 DONE with 1 failure(s): dash pause not evident (dash=0 ctrl=0)

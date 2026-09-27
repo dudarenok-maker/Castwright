@@ -1,0 +1,34 @@
+{
+  "started_ms_after_design": 4679,
+  "elapsed_ms": 98065,
+  "total_posts": 1,
+  "denials_503": 0,
+  "first_posts": [
+    {
+      "n": 1,
+      "at_ms": 102742,
+      "status": 500
+    }
+  ],
+  "last_posts": [
+    {
+      "n": 1,
+      "at_ms": 102742,
+      "status": 500
+    }
+  ],
+  "outcome": {
+    "kind": "response",
+    "status": 500,
+    "body_head": "{\"detail\":\"Internal error.\"}"
+  },
+  "health_at_end": {
+    "qwenLoaded": true,
+    "qwenBase17Loaded": false,
+    "qwenDesignEverLoaded": true,
+    "qwenDesignResident": true,
+    "qwenDeviceKey": "cuda:0",
+    "vramReservedMb": 5725.22496
+  },
+  "verdict": "UNEXPECTED — inspect fields (check sidecar_stderr6 tail + x2_saturation.json)"
+}

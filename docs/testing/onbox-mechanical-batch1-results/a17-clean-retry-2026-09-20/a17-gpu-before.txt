@@ -1,0 +1,2 @@
+index, memory.free [MiB], memory.used [MiB], utilization.gpu [%]
+0, 7948 MiB, 0 MiB, 0 %

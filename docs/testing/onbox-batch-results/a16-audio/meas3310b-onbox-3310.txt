@@ -1,0 +1,19 @@
+21:47:28 MEAS3310B START
+21:47:28 segments: 02-глава-первая-стук.segments.json modelKey=qwen3-tts-0.6b synth=2026-09-22T11:26:41.633Z segs=58
+21:47:28 mp3: C:\Claude\Projects\wt-onbox-batch-1\castwright-workspace\books\Castwright\Standalones\Заказ Коалфолла\audio\02-глава-первая-стук.mp3
+21:47:28 --- s2 char=oduvan voice=qwen-c8c583c7-3449-4602-850c-8701f1dfec23 win=13.63-17.55
+21:47:31 s2AUTO   : {"text":"Asthaiskazal maastro davan, nipani maya glas.","language":"en","avg_logprob":-0.9537612199783325,"no_speech_prob":0.032196044921875,"compression_ratio":0.8653846153846154,"words":null}
+21:47:32 s2FORCED : {"text":"Астайс козал мастер одуван, не пенимай от лас.","language":"ru","avg_logprob":-1.0081810446885915,"no_speech_prob":0.032196044921875,"compression_ratio":1.1066666666666667,"words":null}
+21:47:32 --- s17 char=oduvan voice=qwen-c8c583c7-3449-4602-850c-8701f1dfec23 win=81.07-89.31
+21:47:33 s17AUTO   : {"text":"If I was a fire, he said to me, I will burn the spark, and burn the fire.","language":"en","avg_logprob":-1.0422036565583328,"no_speech_prob":0.1151123046875,"compression_ratio":1.106060606060606,"words":null}
+21:47:34 s17FORCED : {"text":"Если я заю огонь, сказал одуван, то потеряю сварку, то торю нячу спалудня.","language":"ru","avg_logprob":-0.5342027793327967,"no_speech_prob":0.1151123046875,"compression_ratio":1.306930693069307,"words":null}
+21:47:34 --- s19 char=narrator voice=Asya Anara win=97.57-100.58
+21:47:34 s19AUTO   : {"text":"Он отложил клещи.","language":"ru","avg_logprob":-0.30723725507656735,"no_speech_prob":0.031341552734375,"compression_ratio":0.775,"words":null}
+21:47:35 s19FORCED : {"text":"Он отложил клещи.","language":"ru","avg_logprob":-0.30723725507656735,"no_speech_prob":0.031341552734375,"compression_ratio":0.775,"words":null}
+21:47:35 --- s20 char=oduvan voice=qwen-c8c583c7-3449-4602-850c-8701f1dfec23 win=100.58-103.62
+21:47:35 s20AUTO   : {"text":"For Roboshek, a Koi-bo shui-dvi.","language":"en","avg_logprob":-0.9681625068187714,"no_speech_prob":0.1478271484375,"compression_ratio":0.8,"words":null}
+21:47:36 s20FORCED : {"text":"В Роберсек, в Куйбор-Шуиде в 8.","language":"ru","avg_logprob":-1.1868737469548765,"no_speech_prob":0.1478271484375,"compression_ratio":0.8833333333333333,"words":null}
+21:47:37 cos(src-master, s2) = 0.723
+21:47:38 cos(src-master, s17) = 0.820
+21:47:38 cos(src-master, s20) = 0.593
+21:47:38 MEAS3310B DONE
