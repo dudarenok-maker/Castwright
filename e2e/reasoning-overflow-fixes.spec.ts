@@ -143,11 +143,24 @@ test.describe('#3084 F7 — reasoning overflow names its fixes', () => {
 
     /* (1) The run-level block renders the structured "How to fix" list, with a
      * link per `settingKey`/`wikiPage` entry and plain text for the label-only
-     * one. Four fixes: two setting links, one wiki link, one plain label. */
-    await expect(page.getByText('How to fix:')).toBeVisible({ timeout: 5_000 });
-    const fixList = page
-      .locator('ul')
+     * one. Four fixes: two setting links, one wiki link, one plain label.
+     *
+     * Every locator below is scoped to the RUN-LEVEL panel, not the page: the
+     * toast injected above renders the same four entries through the same
+     * `failure-fix-list.tsx`, so `getByText('How to fix:')` and a bare `ul`
+     * filter each resolve to two elements and trip Playwright's strict mode.
+     *
+     * The panel is the SURVIVAL-path block (`analysing.tsx`, the
+     * `!error && haltFixes` branch): `deliverTerminalError` dispatches
+     * `setHalted` into the store, which fills `haltFixes`, while the view's own
+     * `error` stays null — so the `error.fixes` copy inside the inline failure
+     * card never mounts. That block is the rose `div.mt-6.rounded-2xl` wrapper;
+     * the toast's wrapper is a different element with none of those classes. */
+    const runLevelPanel = page
+      .locator('div.mt-6.rounded-2xl.border-rose-200')
       .filter({ hasText: 'Lower Gemini max input tokens per request' });
+    await expect(runLevelPanel.getByText('How to fix:')).toBeVisible({ timeout: 5_000 });
+    const fixList = runLevelPanel.locator('ul');
     await expect(fixList.getByRole('listitem')).toHaveCount(4);
     await expect(fixList.getByRole('link')).toHaveCount(3);
     await expect(
