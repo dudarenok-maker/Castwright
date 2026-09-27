@@ -554,18 +554,27 @@ setup rather than repeatedly loading and evicting models.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 12 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**55 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**58 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
+
+> **Last change: 2026-09-27 (#3084 wave 2b), 55 → 58.** Rows **B102** (capacity
+> recalibration — the measurement owed before any capacity default changes),
+> **E108** (Gemini thinking-window timing on real chapters — a measurement
+> that gates nothing) and **E109** (a thinking Gemini model on a 20,000-
+> character chapter at Auto output, and Gemma's empty-`MAX_TOKENS` split)
+> added from #3084 wave 2's run sheet
+> (`3084-openai-analyzer-onbox-acceptance.md` §1–§3). Group B `next-id`
+> marker bumped by one, Group E by two.
 
 > **Last change: 2026-09-22, E107 ADDED** (#3263, PR
 > [#3358](https://github.com/dudarenok-maker/Castwright/pull/3358), claude):
@@ -4917,7 +4926,7 @@ is not covered by this row and isn't tracked elsewhere.
 
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B102 -->
+<!-- next-id: B103 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -5005,6 +5014,19 @@ Analyse chapter 1 of *The Coalfall Commission* (`server/src/__fixtures__/the-coa
 - local: the analysing view's per-pass eval stats (tokens/s) populate — proves `onEvalTiming` still fires off a real `done` line — and `server/handoff/outbox/<id>-stage1-ch1.json` is written;
 - Gemini: no `[gemini] generate failed` line in `logs/server.log`; a throttle chip appears only when the limiter actually waits;
 - if a local thinking tag that emits a leading `<think>` block is installed, its chapter validates on the first attempt (no `attempt1.raw.txt` for that key).
+
+### B102 · Capacity recalibration measured before any capacity default changes ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 2) · **the 16 GB card, Ollama only**
+
+Wave 2 moved every chunk-budget resolver onto an `EngineCapacity` descriptor, with budgets pinned byte-identical to `main` (`server/src/analyzer/capacity-pinning.test.ts`). This row is therefore not a regression check. It is the measurement the design requires **before** any capacity default changes — `analyzer.ollama.numCtx`, the two `localInputFraction` knobs, or an `/api/show` context clamp.
+
+On three large chapters, record stage-1/stage-2 section counts, truncation count and attribution quality twice:
+
+- at today's defaults;
+- with a large-context model at its served context.
+
+For at least two short-context tags, also record `num_ctx` sent (32768) against `/api/show`'s native context, plus one chapter's truncation count.
+
+Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §3](3084-openai-analyzer-onbox-acceptance.md). Clears when §3's three `Result:` lines are filled.
 
 ---
 
@@ -5379,7 +5401,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E108 -->
+<!-- next-id: E110 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9/E103). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -5983,6 +6005,31 @@ reaches production, and the feature would need the coordinator-set signal
 *Needs:* any dev box that can dispatch a subagent; no GPU. *Cost:* ~20 minutes.
 *Criteria:* the four observations above; `docs/ops/3263-transcript-signal-measurement.md`
 ("Which file this is about") for why each one matters.
+
+### E108 · Gemini thinking-window timing measured on real chapters ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 2) · **any machine with a Gemini key; no GPU**
+
+Wave 2 bounds the silence before a Gemini request's answer text instead of probing each model: a thinking model gets a 120 s thinking window (`GEMINI_THINKING_IDLE_TIMEOUT_MS`, at most 290 s) for the wait for the first chunk and each gap between thought parts, any other model today's 45 s, and each attempt logs `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…`. No real chapter has measured those waits. **This row is a measurement: it gates nothing, and it clears once recorded.**
+
+On a 19,000–21,000-character chapter, for stage 1 and stage 2 separately, on `gemini-3.5-flash-lite`, `gemini-3.6-flash` and `gemma-4-31b-it`, record the request count, the largest and median `firstChunkMs` and `firstAnswerMs`, the largest `thoughtPartsBeforeAnswer`, and every `firstAnswerMs=none`, `stream idle` or thinking-window `analyzer-timeout` line. Then record whether the 120 s default should change; a raise goes no higher than 290 s.
+
+Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §1](3084-openai-analyzer-onbox-acceptance.md). Clears when §1's three `Result:` lines and its recommendation are filled.
+
+### E109 · A thinking Gemini model completes a 20,000-character chapter with Auto output, and Gemma still splits an empty MAX_TOKENS ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 2) · **any machine with a Gemini key; no GPU**
+
+Wave 2 made four changes to Gemini analysis:
+
+- the output cap is Auto (the model's own limit, not 8192);
+- thinking models are asked for thought summaries and may stay silent for up to 120 s at a time before their answer text;
+- an empty `MAX_TOKENS` response with reasoning evidence fails as `analyzer-reasoning-overflow` and stops the run instead of splitting;
+- on Gemma, which asks for no thoughts, only a thought part counts as reasoning evidence, so its empty `MAX_TOKENS` still splits.
+
+Unit tests drive all four against a mocked stream. Only a real `gemini-3.6-flash` run proves the #3084 reporter's stall is gone, and only a real `gemma-4-31b-it` run proves Gemma's split recovery survives whatever usage Gemma reports.
+
+On a 19,000–21,000-character chapter, record on `gemini-3.6-flash`, once at Auto and once at `8192`: time to first chunk and to first answer text, whether the heartbeat moves during thinking, idle retries, `analyzer-timeout` failures, truncations, reasoning-overflow failures and request count. Then, on `gemma-4-31b-it` with "Gemini max output tokens" at `64`, record each `output truncated reason=MAX_TOKENS bytes=0` line, whether a re-split follows it, and any `analyzer-reasoning-overflow` failure.
+
+**Pass:** Auto completes with no `analyzer-timeout` and no overflow, using no more requests than the 8192 run; and on Gemma at `64` at least one `bytes=0` truncation appears, each is followed by a re-split, and no `analyzer-reasoning-overflow` failure occurs. **The row fails if no `bytes=0` truncation can be reproduced at `64`.**
+
+Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §2](3084-openai-analyzer-onbox-acceptance.md).
 
 ## Group G — GitHub Actions itself
 

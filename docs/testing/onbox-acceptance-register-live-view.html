@@ -803,6 +803,18 @@
         <p class="src"><code>#3084 wave 1 · PR #3349</code></p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">B102</span><span class="iname">Capacity recalibration measured before any capacity default changes (#3084 wave 2)</span><span class="risk low">Measurement, 3 parts</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Wave 2 moved every chunk-budget resolver onto an <code>EngineCapacity</code> descriptor, with budgets pinned byte-identical to <code>main</code> (<code>capacity-pinning.test.ts</code>). Nothing here is a regression check: it is the measurement the design requires <b>before</b> any capacity default changes.</p>
+        <ul>
+          <li><b>Baseline:</b> three large chapters at today's defaults (<code>num_ctx</code> 32768, fractions 0.7 / 0.3) — stage-1/stage-2 section counts, truncation count, attribution quality.</li>
+          <li><b>Large context:</b> the same chapters with a large-context model at its served context on the 16 GB card — the same figures, plus <code>ollama ps</code> VRAM.</li>
+          <li><b>Short-context tags:</b> for at least two tags, <code>num_ctx</code> sent (32768) against <code>/api/show</code> native context, and one chapter's truncation count.</li>
+        </ul>
+        <p class="src">The 16 GB card, Ollama only, no TTS engine · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
   </section>
 
   <!-- C -->
@@ -1194,6 +1206,30 @@
         </ul>
         <p>A negative result on the first two is not a regression &#8212; the guard fails open to <code>cwd</code>, i.e. the pre-#3263 behaviour &#8212; but it would mean the 99.1% never reaches production, and the feature would need the coordinator-set signal #3263 originally called direction (a) instead.</p>
         <p class="src">Any dev box that can dispatch a subagent, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3263">Castwright#3263</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3358">#3358</a> &#183; the four observations above; <code>docs/ops/3263-transcript-signal-measurement.md</code> (&#8220;Which file this is about&#8221;) for why each one matters &#183; ~20 minutes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E108</span><span class="iname">Gemini thinking-window timing measured on real chapters (#3084 wave 2)</span><span class="risk low">Measurement, gates nothing</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Wave 2 gives a thinking Gemini model a 120 s thinking window (every silent gap before its answer text, at most 290 s) and any other model today's 45 s, and logs <code>firstChunkMs</code>, <code>firstAnswerMs</code> and <code>thoughtPartsBeforeAnswer</code> for every attempt. No real chapter has measured those waits; this row records them so the default can be tuned.</p>
+        <ul>
+          <li>On a 19,000–21,000-character chapter, for stage 1 and stage 2, on <code>gemini-3.5-flash-lite</code>, <code>gemini-3.6-flash</code> and <code>gemma-4-31b-it</code>: request count, largest and median <code>firstChunkMs</code> and <code>firstAnswerMs</code>, largest <code>thoughtPartsBeforeAnswer</code>, any <code>firstAnswerMs=none</code>, <code>stream idle</code> or thinking-window <code>analyzer-timeout</code> line.</li>
+          <li><b>Record:</b> keep, lower, or raise (to at most 290 s) the 120 s default.</li>
+        </ul>
+        <p class="src">Any machine with a Gemini key; no GPU · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E109</span><span class="iname">A thinking Gemini model completes a 20,000-character chapter with Auto output, and Gemma still splits (#3084 wave 2)</span><span class="risk hot">The reporter's stall</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Wave 2 made Gemini's output cap Auto (the model's own limit, not 8192), asks thinking models for thought summaries and lets them stay silent for up to 120 s at a time before their answer text, and fails an empty <code>MAX_TOKENS</code> response with reasoning evidence as <code>analyzer-reasoning-overflow</code> instead of splitting. On Gemma only a thought part counts as evidence, so its empty <code>MAX_TOKENS</code> must still split. Unit tests drive all of this against a mocked stream; only real runs prove it.</p>
+        <ul>
+          <li>On a 19,000–21,000-character chapter at <b>Auto</b> on <code>gemini-3.6-flash</code>: time to first chunk and to first answer text, whether the heartbeat moves during thinking, idle retries, <code>analyzer-timeout</code> failures, truncations, reasoning-overflow failures, request count.</li>
+          <li>The same chapter at <b>8192</b> (Advanced Settings → Gemini max output tokens) as the baseline.</li>
+          <li><b>Gemma:</b> <code>gemma-4-31b-it</code> at a 64-token cap — at least one <code>bytes=0</code> truncation appears (the row fails if none can be reproduced), every one is followed by a re-split, and no <code>analyzer-reasoning-overflow</code> failure occurs.</li>
+          <li><b>Pass:</b> Auto completes with no <code>analyzer-timeout</code> and no overflow, using no more requests than the 8192 run, and the Gemma check holds.</li>
+        </ul>
+        <p class="src">Any machine with a Gemini key; no GPU; two chapter runs within <code>gemini-3.6-flash</code>'s 20 requests a day · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §2 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
       </div>
     </details>
 
