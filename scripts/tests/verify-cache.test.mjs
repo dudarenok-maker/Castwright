@@ -1588,10 +1588,71 @@ test('runPipeline computes its step and pipeline budgets via computeStepBudgetMs
     /contentionBudgetMultiplier/,
     'runPipeline must no longer compute a pipeline-level contention budget multiplier at all (Castwright#3361)',
   );
-  assert.doesNotMatch(
+
+  // Pin the runBudgetMs and runDeadline statements: must contain EXACTLY the expected forms with no multipliers.
+  // These exact-statement pins catch post-call widening mutations like:
+  //   const runBudgetMs = computeRunBudgetMs(...) * pipelineThrottle;
+  //   const runDeadline = Date.now() + runBudgetMs * (lowConcurrency(env) ? 2 : 1);
+  assert.match(
     pipelineBody,
-    /floorMs \* multiplier/,
-    'runPipeline must not multiply a pipeline floor by a throttle multiplier inline (Castwright#3361)',
+    /const\s+runBudgetMs\s*=\s*computeRunBudgetMs\(\s*qualifiedRunDurationMs,\s*runTimeoutFloorMs\s*\)\s*;/,
+    'the runBudgetMs statement must be exactly: const runBudgetMs = computeRunBudgetMs(...);',
+  );
+  assert.match(
+    pipelineBody,
+    /const\s+runDeadline\s*=\s*Date\.now\(\)\s*\+\s*runBudgetMs\s*;/,
+    'the runDeadline statement must be exactly: const runDeadline = Date.now() + runBudgetMs;',
+  );
+});
+
+test('runPipeline: the pipeline budget is not widened under LOW_CONCURRENCY, though the step budget is (Castwright#3361, behavioural)', async () => {
+  // Pipeline deadline is the binding constraint in both runs: the step's own
+  // budget (10 min, x2 under throttle) dwarfs the 3s run floor, so the step is
+  // clamped to the deadline and its reported elapsed time is the pipeline
+  // budget itself. The hang fixture never exits on its own.
+  const FLOOR_MS = 3000;
+  const runHang = async (extraEnv) => {
+    const dir = makeGitFixture();
+    writeHangingFixture(dir, 'test'); // vitest-backed name => affectedByContention
+    gitAt(dir, ['add', '.']);
+    gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+    const logs = [];
+    const originalLog = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try {
+      await runPipeline({
+        argv: ['--steps', 'test'],
+        cwd: dir,
+        env: {
+          ...scrubGitEnvForThrowawayRepo(process.env),
+          SKIP_CONTENTION_CHECK: '1',
+          CASTWRIGHT_RUN_TIMEOUT_MIN: String(FLOOR_MS / 60000),
+          CASTWRIGHT_STEP_TIMEOUT_MIN: '10',
+          ...extraEnv,
+        },
+      });
+    } finally {
+      console.log = originalLog;
+    }
+    const m = logs.join('\n').match(/\[timeout\] test \(exceeded budget after ([\d.]+)s/);
+    assert.ok(m, `expected a clamped-step [timeout] line, got:\n${logs.join('\n')}`);
+    return Number(m[1]) * 1000;
+  };
+
+  const throttledMs = await runHang({ LOW_CONCURRENCY: '1' });
+  const controlMs = await runHang({});
+
+  // Kill latency is common to both runs and cancels in the difference: correct
+  // code gives ~0, a 2x widening of the pipeline budget gives ~+FLOOR_MS. The
+  // control ceiling stops a never-clamped control from passing the relative
+  // check vacuously.
+  assert.ok(
+    controlMs < 2 * FLOOR_MS,
+    `control run must be clamped near the flat ${FLOOR_MS}ms floor, was cut at ${controlMs}ms`,
+  );
+  assert.ok(
+    Math.abs(throttledMs - controlMs) <= FLOOR_MS / 2,
+    `pipeline budget must not widen under throttle: throttled cut at ${throttledMs}ms vs control ${controlMs}ms`,
   );
 });
 
