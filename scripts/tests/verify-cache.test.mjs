@@ -1607,54 +1607,94 @@ test('runPipeline computes its step and pipeline budgets via computeStepBudgetMs
   );
 });
 
-test('runPipeline: the pipeline budget is not widened under LOW_CONCURRENCY, though the step budget is (Castwright#3361, behavioural)', async () => {
-  // Pipeline deadline is the binding constraint in both runs: the step's own
-  // budget (10 min, x2 under throttle) dwarfs the 3s run floor, so the step is
-  // clamped to the deadline and its reported elapsed time is the pipeline
-  // budget itself. The hang fixture never exits on its own.
-  const FLOOR_MS = 3000;
-  const runHang = async (extraEnv) => {
-    const dir = makeGitFixture();
-    writeHangingFixture(dir, 'test'); // vitest-backed name => affectedByContention
-    gitAt(dir, ['add', '.']);
-    gitAt(dir, ['commit', '-q', '-m', 'fixture']);
-    const logs = [];
-    const originalLog = console.log;
-    console.log = (...args) => logs.push(args.join(' '));
-    try {
-      await runPipeline({
-        argv: ['--steps', 'test'],
-        cwd: dir,
-        env: {
-          ...scrubGitEnvForThrowawayRepo(process.env),
-          SKIP_CONTENTION_CHECK: '1',
-          CASTWRIGHT_RUN_TIMEOUT_MIN: String(FLOOR_MS / 60000),
-          CASTWRIGHT_STEP_TIMEOUT_MIN: '10',
-          ...extraEnv,
-        },
-      });
-    } finally {
-      console.log = originalLog;
-    }
-    const m = logs.join('\n').match(/\[timeout\] test \(exceeded budget after ([\d.]+)s/);
-    assert.ok(m, `expected a clamped-step [timeout] line, got:\n${logs.join('\n')}`);
-    return Number(m[1]) * 1000;
+// Castwright#3361 behavioural pair. Both measure the span the hanging step was
+// ALIVE for (first heartbeat -> last heartbeat, written by the fixture itself),
+// not the `[timeout] ... after Ns` figure: that one also contains taskkill plus
+// a synchronous runCensus (a PowerShell CIM spawn, 0.8-3.5s measured here),
+// which is variance unrelated to the budget under test. The fixture dies at the
+// kill, so the span ends when the budget fires and excludes kill/census time.
+async function runHangingStepSpanMs(extraEnv) {
+  const dir = makeGitFixture();
+  writeHangingFixture(dir, 'test'); // vitest-backed name => affectedByContention
+  writeFileSync(
+    join(dir, 'hang.mjs'),
+    "import { writeFileSync } from 'node:fs';\n" +
+      'const t0 = Date.now();\n' +
+      "const beat = () => writeFileSync('beat.txt', t0 + ' ' + Date.now());\n" +
+      'beat();\n' +
+      'setInterval(beat, 100);\n' +
+      'setTimeout(() => process.exit(0), 60_000);\n',
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+  const originalLog = console.log;
+  let runLoggedAt = null;
+  console.log = (...args) => {
+    // `[run] test` is logged immediately before the step is spawned, so it
+    // stands in for the budget timer's own start (npm/node startup, which
+    // varies by seconds under load, is not part of the budget under test).
+    if (runLoggedAt === null && String(args[0]).startsWith('[run] test')) runLoggedAt = Date.now();
   };
+  let code;
+  try {
+    code = await runPipeline({
+      argv: ['--steps', 'test'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1', ...extraEnv },
+    });
+  } finally {
+    console.log = originalLog;
+  }
+  assert.notEqual(code, 0, 'the hanging step must time out, not pass');
+  assert.notEqual(runLoggedAt, null, 'expected a `[run] test` log line');
+  const last = Number(readFileSync(join(dir, 'beat.txt'), 'utf8').split(' ')[1]);
+  const t0 = runLoggedAt;
+  return last - t0;
+}
 
-  const throttledMs = await runHang({ LOW_CONCURRENCY: '1' });
-  const controlMs = await runHang({});
-
-  // Kill latency is common to both runs and cancels in the difference: correct
-  // code gives ~0, a 2x widening of the pipeline budget gives ~+FLOOR_MS. The
-  // control ceiling stops a never-clamped control from passing the relative
-  // check vacuously.
+test('runPipeline: the pipeline budget is not widened under LOW_CONCURRENCY (Castwright#3361, behavioural)', async () => {
+  // Pipeline deadline is the binding constraint in both runs: the step's own
+  // budget (10 min, x2 under throttle) dwarfs the run floor, so the step is
+  // clamped to the deadline and its live span is the pipeline budget itself.
+  // Correct code: throttled - control ~ 0 (startup jitter only). A 2x widening
+  // of the pipeline budget: ~ +FLOOR_MS.
+  const FLOOR_MS = 4000;
+  const env = {
+    CASTWRIGHT_RUN_TIMEOUT_MIN: String(FLOOR_MS / 60000),
+    CASTWRIGHT_STEP_TIMEOUT_MIN: '10',
+  };
+  const throttledMs = await runHangingStepSpanMs({ ...env, LOW_CONCURRENCY: '1' });
+  const controlMs = await runHangingStepSpanMs(env);
+  // The control ceiling stops a never-clamped control from passing vacuously.
   assert.ok(
     controlMs < 2 * FLOOR_MS,
-    `control run must be clamped near the flat ${FLOOR_MS}ms floor, was cut at ${controlMs}ms`,
+    `control run must be clamped near the flat ${FLOOR_MS}ms floor, was alive ${controlMs}ms`,
   );
   assert.ok(
     Math.abs(throttledMs - controlMs) <= FLOOR_MS / 2,
-    `pipeline budget must not widen under throttle: throttled cut at ${throttledMs}ms vs control ${controlMs}ms`,
+    `pipeline budget must not widen under throttle: throttled alive ${throttledMs}ms vs control ${controlMs}ms`,
+  );
+});
+
+test('runPipeline: the per-step budget IS widened under LOW_CONCURRENCY for a vitest-backed step (Castwright#3361, behavioural)', async () => {
+  // Mirror image: the run budget is huge, the step floor small, so the step's
+  // own budget binds. Correct code: throttled ~ 2x control (diff ~ +FLOOR_MS).
+  // stepContentionMultiplier forced to 1: diff ~ 0.
+  const FLOOR_MS = 4000;
+  const env = {
+    CASTWRIGHT_RUN_TIMEOUT_MIN: '10',
+    CASTWRIGHT_STEP_TIMEOUT_MIN: String(FLOOR_MS / 60000),
+  };
+  const throttledMs = await runHangingStepSpanMs({ ...env, LOW_CONCURRENCY: '1' });
+  const controlMs = await runHangingStepSpanMs(env);
+  assert.ok(
+    controlMs < 2 * FLOOR_MS,
+    `control run must be bounded by the ${FLOOR_MS}ms step floor, was alive ${controlMs}ms`,
+  );
+  assert.ok(
+    throttledMs - controlMs >= FLOOR_MS / 2,
+    `step budget must widen under throttle: throttled alive ${throttledMs}ms vs control ${controlMs}ms`,
   );
 });
 
