@@ -380,9 +380,11 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
   /* #3362 pass-6 (🟡1) — the repair loop targets segment 1 only (castor's
      silent line); segment 0 (amy) is never flagged. finalize must receive
      EXACTLY [1] as resynthesizedIndices — not every segment, not none.
-     Mutation M3 (dropping the wiring) or M4 (passing every candidate index,
-     including the ones this repair left untouched) both stayed green
-     before this test existed. */
+     Mutation M3 (dropping the wiring) stayed green before this test
+     existed. This fixture has no divergent candidate, so it does NOT
+     discriminate M4 (passing every candidate index, including the diverged
+     ones this repair left untouched) — the divergent-attribution test in
+     the C2 describe block below pins that one. */
   it('threads EXACTLY the repaired segment index to finalize, never the untouched ones (🟡1)', async () => {
     synthesiseChapterMock.mockReset();
     synthesiseChapterMock.mockImplementation(async () => ({
@@ -1383,6 +1385,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (C2, #1972 attributi
     audioDirFn = paths.audioDir;
     encodePcmToAudio = mp3.encodePcmToAudio;
     synthesiseChapterMock = vi.mocked(synth.synthesiseChapter);
+    vi.mocked((await import('../audio/finalize-chapter-write.js')).finalizeChapterAudioWrite).mockClear();
   });
 
   /** amy (healthy) + castor (dead-silent — flagged by the signal scan).
@@ -1472,6 +1475,16 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (C2, #1972 attributi
     const events = parseSse(res.text);
     const done = events.find((e) => e.type === 'qa_repair_complete');
     expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    /* #3362 pass-7 🟡1 (M4) — the diverged segment (index 1) is a flagged
+       candidate but is deliberately NOT re-synthesised, so finalize must be
+       told nothing was: `safeTargetIndices` ([]), never `targetIndices` ([1]).
+       Passing the latter would re-stamp the untouched diverged line fresh and
+       drop its embedding row. The scaffold above has no divergent-free
+       candidate, so this is the one fixture where the two arrays differ. */
+    const finalizeSpy = vi.mocked((await import('../audio/finalize-chapter-write.js')).finalizeChapterAudioWrite);
+    expect(finalizeSpy).toHaveBeenCalledTimes(1);
+    expect(Array.from(finalizeSpy.mock.calls[0][0].resynthesizedIndices as Iterable<number>)).toEqual([]);
 
     // The regression this closes: pre-fix, the diverged segment would have
     // been re-recorded — rendering 'amy's line — into castor's voice slot.
