@@ -1877,6 +1877,137 @@ for (const [label, sharedFile] of [
   });
 }
 
+test('runPipeline with scope filtering: a step not touched by the diff prints [skip] and does not execute (#3393)', async () => {
+  // Verifies the scope filter correctly identifies and skips steps outside the diff.
+  // Edited file (src/index.ts) matches lint glob but not config:check glob.
+  const dir = makeGitFixture();
+  const srcFile = join(dir, 'src', 'index.ts');
+  const markerFile = join(dir, '.marker');
+  mkdirSync(dirname(srcFile), { recursive: true });
+  writeFileSync(srcFile, 'export default 1;', 'utf8');
+  writeFileSync(join(dir, 'mark.cjs'), `require('fs').appendFileSync('.marker', '1');`, 'utf8');
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'scope-fixture',
+      private: true,
+      scripts: { lint: 'node mark.cjs && exit 0' },
+    }),
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'base']);
+  gitAt(dir, ['switch', '-q', '-c', 'feature']);
+
+  writeFileSync(srcFile, 'export default 2;', 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'edit src']);
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    const result = await runPipeline({
+      argv: ['--steps', 'lint,config:check', '--scope-branch'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+    });
+    const lintLog = logs.find((l) => l.match(/^\[run\] lint\b/));
+    const checkLog = logs.find((l) => l.match(/^\[skip\] config:check\b/));
+
+    assert.ok(lintLog, `expected [run] lint, got:\n${logs.join('\n')}`);
+    assert.ok(checkLog, `expected [skip] config:check, got:\n${logs.join('\n')}`);
+    assert.ok(
+      existsSync(markerFile),
+      'lint ran (marker file created)',
+    );
+    assert.equal(result, 0);
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+test('runPipeline with unchanged inputs: step prints [cached], does not execute, then [run] again after input change (#3393)', async () => {
+  // Verifies: (1) unchanged inputs trigger cache hit and skip execution,
+  // (2) changed inputs clear cache and force re-execution.
+  const dir = makeGitFixture();
+  const envFile = join(dir, 'server', '.env.example');
+  mkdirSync(dirname(envFile), { recursive: true });
+  writeFileSync(envFile, 'FOO=1', 'utf8');
+  writeFileSync(join(dir, 'increment.cjs'), `
+const fs = require('fs');
+const count = parseInt(fs.readFileSync('.exec-count', 'utf8')) + 1;
+fs.writeFileSync('.exec-count', String(count));
+`, 'utf8');
+  writeFileSync(join(dir, '.exec-count'), '0', 'utf8');
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'cache-fixture',
+      private: true,
+      scripts: { 'config:check': 'node increment.cjs && exit 0' },
+    }),
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'base']);
+
+  const run = async () => {
+    const logs = [];
+    const originalLog = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try {
+      const result = await runPipeline({
+        argv: ['--steps', 'config:check'],
+        cwd: dir,
+        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+      });
+      return { result, logs };
+    } finally {
+      console.log = originalLog;
+    }
+  };
+
+  // Run 1: no cache, step executes
+  const first = await run();
+  assert.equal(first.result, 0);
+  const firstLog = first.logs.find((l) => l.match(/^\[run\] config:check\b/));
+  assert.ok(firstLog, `run 1 expected [run], got:\n${first.logs.join('\n')}`);
+  assert.equal(readFileSync(join(dir, '.exec-count'), 'utf8'), '1', 'marker shows step executed once');
+
+  // Run 2: unchanged inputs, cache hits, step does NOT execute
+  const second = await run();
+  assert.equal(second.result, 0);
+  const secondLog = second.logs.find((l) => l.match(/^\[cached\] config:check\b/));
+  assert.ok(
+    secondLog,
+    `run 2 expected [cached], got:\n${second.logs.join('\n')}`,
+  );
+  assert.equal(
+    readFileSync(join(dir, '.exec-count'), 'utf8'),
+    '1',
+    'marker unchanged: step did NOT execute on cache hit',
+  );
+
+  // Run 3: change an input (server/.env.example is in config:check inputs), cache invalidates, step re-executes
+  writeFileSync(envFile, 'FOO=2', 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'change env']);
+
+  const third = await run();
+  assert.equal(third.result, 0);
+  const thirdLog = third.logs.find((l) => l.match(/^\[run\] config:check\b/));
+  assert.ok(
+    thirdLog,
+    `run 3 expected [run] after input change, got:\n${third.logs.join('\n')}`,
+  );
+  assert.equal(
+    readFileSync(join(dir, '.exec-count'), 'utf8'),
+    '2',
+    'marker shows step executed a second time after input change',
+  );
+});
+
 test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {
   const dir = makeGitFixture();
   writeHangingFixture(dir, 'test:server');
