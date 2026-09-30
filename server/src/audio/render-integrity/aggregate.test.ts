@@ -1223,6 +1223,56 @@ describe('scoreBook — canonical cast-id joins survive history changes AFTER re
     // dragged/bimodal from the orphan's θ≈π/2 rows.
     expect(centroids!['mairin'].centroid[0]).toBeGreaterThan(0.9);
   });
+
+  // #3362 review 🟠A — an UNSTAMPED row may join a key only if that key is in
+  // its OWN chapter's snapshot; a book-wide exact-string match lets an orphan
+  // id that a LATER analysis re-mints as a real cast id pool into it.
+  for (const [label, orphanId, expectRows] of [
+    ['mairin (re-minted as a real cast id in ch2)', 'mairin', 0],
+    ['mayrin (control: never a cast id anywhere)', 'mayrin', 0],
+  ] as const) {
+    it(`🟠A: ch1's unstamped narrator-voiced rows under ${label} are never scored against another chapter's key`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'spk-3362-orphan-remint-'));
+      mkdirSync(join(dir, 'audio'), { recursive: true });
+      mkdirSync(dotAudiobook(dir), { recursive: true });
+
+      const halfPi = Math.PI / 2;
+      // ch1: 6 narrator-voiced rows under the orphan id, no stamp, and a
+      // snapshot that names only the narrator (kokoro — never stochastic).
+      const ch1Rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+      for (let i = 0; i < 6; i++) ch1Rows.push({ characterId: orphanId, sentenceIds: [100 + i], vec: vec(halfPi + 0.02 * i) });
+      await writeEmbeddings(join(dir, 'audio', 'ch1.embeddings.json'), ch1Rows, EMBEDDINGS_VERSION);
+      writeFileSync(join(dir, 'audio', 'ch1.segments.json'), JSON.stringify({
+        chapterId: 1,
+        modelKey: 'qwen3-tts-0.6b',
+        segments: ch1Rows.map((r) => ({ characterId: orphanId, sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+        characterSnapshots: { narrator: { voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' } },
+      }));
+
+      // ch2: 12 real 'mairin' lines, snapshot names her (qwen).
+      const ch2Rows: { characterId: string; sentenceIds: number[]; vec: Float32Array }[] = [];
+      for (let i = 0; i < 12; i++) ch2Rows.push({ characterId: 'mairin', sentenceIds: [i], vec: vec(0.02 * i) });
+      await writeEmbeddings(join(dir, 'audio', 'ch2.embeddings.json'), ch2Rows, EMBEDDINGS_VERSION);
+      writeFileSync(join(dir, 'audio', 'ch2.segments.json'), JSON.stringify({
+        chapterId: 2,
+        modelKey: 'qwen3-tts-0.6b',
+        segments: ch2Rows.map((r) => ({ characterId: 'mairin', sentenceIds: r.sentenceIds, renderedFallbackEngine: null })),
+        characterSnapshots: { mairin: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-mairin', modelKey: 'qwen3-tts-0.6b' } },
+      }));
+
+      await scoreBook(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+
+      const ch1Verdicts = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+      expect(ch1Verdicts?.length ?? 0).toBe(expectRows);
+
+      const ch2Verdicts = await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'));
+      expect(ch2Verdicts!.length).toBe(12);
+      expect(ch2Verdicts!.every((v) => v.referenceKind === 'in-book')).toBe(true);
+      const centroids = await readCentroids(dir);
+      expect(centroids!['mairin'].referenceKind).toBe('in-book');
+      expect(centroids!['mairin'].centroid[0]).toBeGreaterThan(0.9);
+    });
+  }
 });
 
 describe('centroids-io round-trip', () => {

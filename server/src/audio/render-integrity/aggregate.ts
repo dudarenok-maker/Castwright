@@ -207,16 +207,23 @@ export function resolveConfiguredEngineByChar(
  * A segment with no stamp — a legacy pre-#3362/pass-4 render, or a raw id
  * that never resolved into this chapter's own snapshot AT RENDER TIME (an
  * orphaned/narrator-substituted line, or a link added only after this
- * chapter rendered — S8) — falls through with the raw id UNCHANGED. That is
- * `main`'s own pre-#3362 behaviour: no resolver, no history consultation at
- * scoring time at all, exact string match against this chapter's own
- * snapshot keys via the `stochasticChars`/`charId` equality checks below.
+ * chapter rendered — S8) — falls through with the raw id UNCHANGED, but ONLY
+ * if that raw id is a key of THIS chapter's own snapshot (`ownSnapshots`);
+ * otherwise it returns `undefined` and joins nothing. That is `main`'s own
+ * pre-#3362 behaviour: no resolver, no history consultation at scoring time
+ * at all, exact string match against this chapter's own snapshot keys. The
+ * scope matters (#3362 review 🟠A): the callers' rosters
+ * (`stochasticChars`/`configuredEngineByChar`) are BOOK-wide, so an orphaned
+ * id that a LATER analysis re-mints as a real cast id would otherwise pool
+ * this chapter's narrator-voiced rows into that character's centroid.
  */
 export function resolveRowCharId(
   seg: { resolvedCharacterId?: string } | undefined,
   rawId: string,
-): string {
-  return seg?.resolvedCharacterId ?? rawId;
+  ownSnapshots: Record<string, unknown>,
+): string | undefined {
+  if (seg?.resolvedCharacterId) return seg.resolvedCharacterId;
+  return Object.prototype.hasOwnProperty.call(ownSnapshots, rawId) ? rawId : undefined;
 }
 
 // ── Reference resolution (Task 10 seam) ───────────────────────────────────
@@ -722,8 +729,8 @@ export async function scoreBook(
       // stochasticChars/anchorVecsByChar joins.
       const key = segKey(row.characterId, row.sentenceIds);
       const seg = cd.segsByKey.get(key);
-      const rowCharId = resolveRowCharId(seg, row.characterId);
-      if (!stochasticChars.has(rowCharId)) continue;
+      const rowCharId = resolveRowCharId(seg, row.characterId, cd.snapshots);
+      if (rowCharId === undefined || !stochasticChars.has(rowCharId)) continue;
 
       // Anchor-eligible: no per-segment fallback (use the per-segment field,
       // NOT characterSnapshots.renderedFallbackEngine which over-excludes)
@@ -778,7 +785,7 @@ export async function scoreBook(
         // here would silently fail that later join.
         const key = segKey(row.characterId, row.sentenceIds);
         const seg = cd.segsByKey.get(key);
-        if (resolveRowCharId(seg, row.characterId) !== charId) continue;
+        if (resolveRowCharId(seg, row.characterId, cd.snapshots) !== charId) continue;
         const renderedFallback = seg?.renderedFallbackEngine ?? null;
         const renderedEngine = (renderedFallback != null && renderedFallback !== '') ? renderedFallback : configuredEngine;
 

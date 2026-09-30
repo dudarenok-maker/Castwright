@@ -123,12 +123,13 @@ export async function buildAudioQaReport(
     const embResult = await readEmbeddings(embPath);
     if (!embResult) continue;
     const stampByKey = stampByKeyByChapter.get(ch.id);
+    const ownSnapshots = segFiles.find((s) => s.chapterId === ch.id)?.characterSnapshots ?? {};
     const chapterChars = new Set<string>();
     for (const row of embResult.rows) {
       const stamp = stampByKey?.get(segKey(row.characterId, row.sentenceIds));
-      const rowCharId = resolveRowCharId({ resolvedCharacterId: stamp }, row.characterId);
-      const engine = configuredEngineByChar.get(rowCharId);
-      if (engine && STOCHASTIC_ENGINES.has(engine)) chapterChars.add(rowCharId);
+      const rowCharId = resolveRowCharId({ resolvedCharacterId: stamp }, row.characterId, ownSnapshots);
+      const engine = rowCharId === undefined ? undefined : configuredEngineByChar.get(rowCharId);
+      if (rowCharId !== undefined && engine && STOCHASTIC_ENGINES.has(engine)) chapterChars.add(rowCharId);
     }
     if (chapterChars.size > 0) rosterByChapter.set(ch.id, chapterChars);
   }

@@ -615,6 +615,34 @@ describe('buildAudioQaReport — canonical cast-id roster join (#3362 review fin
     expect(report.voiceDrift.chaptersScored).toBe(1); // ch1 must not count despite its resolved roster row
   });
 
+  it('clamps chaptersScored to chaptersEligible when a stamp dangles (names a key absent from its own chapter\'s snapshot) — #3362 review 🟡C', async () => {
+    // ch1's segment carries a stamp naming 'the_torment' but ch1's own
+    // snapshot lacks that key (a hand-edited / corrupt file that violates
+    // finalize's write invariant). The roster join follows the stamp, so ch1
+    // lands on rosterByChapter and — with a verdict row present — would count
+    // as scored while never eligible. Without the clamp: scored 2 > eligible 1.
+    const dir = await makeBook();
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    for (const [id, snaps] of [[1, {}], [2, { the_torment: { voiceEngine: 'qwen' } }]] as const) {
+      await writeJsonAtomic(join(audioDir(dir), `ch${id}.segments.json`), {
+        bookId: 'b1', chapterId: id, chapterTitle: `C${id}`, durationSec: 10, sampleRate: 24000,
+        modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+        segments: [seg({ characterId: 'the-torment', resolvedCharacterId: 'the_torment' })],
+        characterSnapshots: snaps,
+      });
+      await writeEmbeddings(join(audioDir(dir), `ch${id}.embeddings.json`), [
+        { characterId: 'the-torment', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) },
+      ], EMBEDDINGS_VERSION);
+      await writeAttempted(attemptedPath(audioDir(dir), `ch${id}`));
+      await writeVerdicts(join(audioDir(dir), `ch${id}.render-integrity.json`), [
+        { characterId: 'the_torment', sentenceIds: [1], verdict: 'voice-match', cosine: 0.9, severity: null, fixable: false, expectedEngine: 'qwen', renderedEngine: 'qwen', referenceKind: 'in-book', windowed: false, chapterId: id },
+      ]);
+    }
+    const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
+    expect(report.voiceDrift.chaptersEligible).toBe(1);
+    expect(report.voiceDrift.chaptersScored).toBe(1);
+  });
+
   it('reads the roster join off each row\'s own segment stamp — a cast-id-history write AFTER render never moves the roster (#3362 pass-4, 🟠D)', async () => {
     // Same history-bridged shape as aggregate.test.ts's S4: cast [mairin],
     // segment raw 'mayrin' stamped 'mairin' at render time. AFTER that,
