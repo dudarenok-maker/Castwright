@@ -391,9 +391,15 @@ export async function finalizeChapterAudioWrite(
      a fresh segment and an untouched one (a partial re-record of one of its
      lines) then got its `resolvedVoiceName` decided by the re-recorded line
      by itself — 11 untouched `mairin` lines still in the OLD voice, 1 fresh
-     line in the NEW voice, and the snapshot reported only the new voice, so
-     `revisions.ts` stopped flagging a chapter a voice change had actually
-     stranded (🟠F).
+     line in the NEW voice, and the snapshot reported only the new voice (🟠F).
+
+     The snapshot is still ONE voice per character (last-wins), so it CANNOT
+     represent a mixed-voice character and this fold does not make it: with
+     11 old lines and the last line re-recorded, it still says the new voice.
+     Drift is therefore NOT derived from it any more — `revisions.ts` compares
+     each line's own `voiceName`/`baseVoiceName` (persisted on the segment)
+     against the character's current voice, and reads this snapshot only for
+     a legacy chapter whose segments carry no voice stamp (#3362).
 
      A resynthesized segment's key is resolved FRESH (its audio genuinely
      changed this write) and always folds, unconditionally overwriting

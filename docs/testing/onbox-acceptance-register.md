@@ -3485,8 +3485,10 @@ resolution, unchanged, since that needs Wave 2/3.
   (`lightning-dave` + `pool-player-2` together). Confirm the fresh
   `segments.json` gains a `characterSnapshots` entry keyed by the canonical
   cast id — `the_torment` / `lightning_dave`, not the raw `the-torment` /
-  `lightning-dave` segment ids (PR #3375/#3362 guarantees the raw-spelling
-  key is absent) — naming their own voice (Torment's tuned
+  `lightning-dave` segment ids (on this FULL re-render — every line is
+  re-synthesised — PR #3375/#3362 guarantees the raw-spelling key is absent;
+  a partial re-record or splice carries untouched legacy lines' raw/retired
+  keys forward) — naming their own voice (Torment's tuned
   `qwen-YaC5ot82IqTLpeDbHd77F`, not `qwen-narrator`), and that
   `renderedFallbackEngine: "kokoro"` — present on every affected segment
   today — is gone from those two.
@@ -3562,14 +3564,20 @@ already-analysed book.
 > [#3362](https://github.com/dudarenok-maker/Castwright/issues/3362)):
 > `characterSnapshots` (and `speakingIds`/`fallbackByChar`/`voiceNameByChar`)
 > are now keyed by the canonical cast id resolved through
-> `buildCastResolver`, never the raw segment `characterId` — so bullet 1's
+> `buildCastResolver` on a **full re-render** (a partial re-record or splice
+> carries untouched legacy lines' raw/retired keys forward, so it is NOT
+> "never the raw segment `characterId`" in general) — so bullet 1's
 > gap was not cosmetic, it was the bug, and the fix is to look the snapshot
 > up under `the_torment`/`lightning_dave` rather than to accept the miss.
 > This row's own criteria above have been reworded to the canonical keys
 > accordingly. **The 2026-08-02/09-06 re-renders that produced the evidence
 > above predate this fix — a fresh re-render is owed on A22 and A23 to
 > accept it against the corrected keying**, not merely re-read from the old
-> segments files.
+> segments files. Also owed on the same sitting: Revisions **voice drift is
+> now per line** (each segment's own `voiceName`/`baseVoiceName` vs the
+> character's current voice, not the snapshot's single last-wins voice) — after
+> changing a voice and re-recording only some lines, Revisions must keep
+> flagging the chapter until every line is re-recorded.
 
 ---
 

@@ -105,8 +105,10 @@ Expected:
   cast id, not the raw `the-torment` segment id — PR #3375/#3362), with
   `voiceEngine: "qwen"` and `resolvedVoiceName` naming Torment's own tuned
   voice (`qwen-YaC5ot82IqTLpeDbHd77F`) — **not** `qwen-narrator`. There is
-  no `characterSnapshots["the-torment"]` entry; that raw-spelling key is
-  guaranteed absent by design.
+  no `characterSnapshots["the-torment"]` entry on this FULL re-render (every
+  line re-synthesised); a partial re-record or splice carries untouched legacy
+  lines' raw/retired keys forward, so the raw key is only guaranteed absent
+  after a full re-render.
 - Those segments no longer carry `renderedFallbackEngine: "kokoro"` (the
   fallback that only fires when the line is being rendered as a
   *different* character/engine than its own).

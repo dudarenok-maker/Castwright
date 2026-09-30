@@ -209,7 +209,11 @@ last, alone, since it deliberately crashes the sidecar twice.
 
 13. Run [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md)
     §3 (re-render chapter 19 — `the-torment` recovery, `characterSnapshots`
-    check, by-ear distinct-voice listen).
+    check, by-ear distinct-voice listen). The canonical-key expectation holds
+    for this FULL re-render; a partial re-record or splice carries untouched
+    legacy lines' raw/retired keys forward. Also confirm Revisions voice drift
+    is per line (#3362): after a voice change, re-record only some lines and
+    Revisions must keep flagging the chapter until every line is re-recorded.
     - Result:
 14. Run §4 (re-render chapter 16 — `lightning-dave` recovery **and**
     `pool-player-2` negative control in the same chapter).

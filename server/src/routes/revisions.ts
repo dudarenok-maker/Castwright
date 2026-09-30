@@ -22,7 +22,7 @@ import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { pickVoiceForEngine } from '../tts/voice-mapping.js';
 import { toVoiceLike, buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine } from '../tts/index.js';
-import { loadSegmentsFiles, type CharacterSnapshot } from '../audio/segments-io.js';
+import { loadSegmentsFiles, type CharacterSnapshot, type SegmentsFile } from '../audio/segments-io.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 
@@ -188,13 +188,30 @@ export async function computeRevisionsForBook(
          change that keeps voiceId constant — the rebaseline / per-character
          picker case), falling back to voiceId for pre-108 snapshots that have
          no resolvedVoiceName. */
-      if (snapshot.resolvedVoiceName) {
+      /* #3362 — derive voice drift PER LINE from the segments' own voice
+         stamps when they carry any: the snapshot holds ONE voice per
+         character (last-wins), so after a voice change plus a re-record of
+         only some lines it names the NEW voice while the rest of the chapter
+         is still in the old one, and would read as up to date. A line stamped
+         with a different voice than the character's current one makes the
+         chapter drifted; the card then shows that stale voice. Legacy
+         chapters with no stamped lines fall through to the snapshot. */
+      const renderedVoices = renderedSegmentVoices(seg.segments, characterId);
+      if (renderedVoices.length > 0 || snapshot.resolvedVoiceName) {
         const currentName = pickVoiceForEngine(
           currentEngine,
           toVoiceLike(current),
           buildHintFromCast(current),
         );
-        pushHardDrift(drift, ctx, 'voice', 'Voice', snapshot.resolvedVoiceName, currentName);
+        const staleVoice = renderedVoices.find((v) => v !== currentName);
+        pushHardDrift(
+          drift,
+          staleVoice ? { ...ctx, snapshot: { ...snapshot, resolvedVoiceName: staleVoice } } : ctx,
+          'voice',
+          'Voice',
+          renderedVoices.length > 0 ? (staleVoice ?? currentName) : snapshot.resolvedVoiceName,
+          currentName,
+        );
       } else {
         pushHardDrift(drift, ctx, 'voice', 'Voice', snapshot.voiceId, current.voiceId);
       }
@@ -253,6 +270,27 @@ revisionsBulkRouter.get('/revisions', async (req: Request, res: Response) => {
     res.status(500).json({ error: (e as Error).message || 'Failed to compute bulk revisions.' });
   }
 });
+
+/* The distinct voices (pre-emotion-variant `baseVoiceName`, else `voiceName`)
+   the segments stamped under one snapshot key were actually rendered in.
+   A segment joins a key by its stamped `resolvedCharacterId`, else its raw
+   `characterId` — exact match only, never through the resolver, matching every
+   other reader of that stamp. Kokoro-fallback lines are skipped: their voice
+   is the fallback engine's, not a voice choice, and the snapshot path already
+   owns that case. Empty when no line carries a stamp (legacy chapter). */
+function renderedSegmentVoices(
+  segments: NonNullable<SegmentsFile['segments']> | undefined,
+  snapshotKey: string,
+): string[] {
+  const voices = new Set<string>();
+  for (const s of segments ?? []) {
+    if ((s.resolvedCharacterId ?? s.characterId) !== snapshotKey) continue;
+    if (s.renderedFallbackEngine) continue;
+    const v = s.baseVoiceName ?? s.voiceName;
+    if (v) voices.add(v);
+  }
+  return [...voices];
+}
 
 interface DriftContext {
   bookId: string;

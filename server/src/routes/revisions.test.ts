@@ -127,9 +127,11 @@ interface SeedOpts {
     overrideTtsVoices?: Record<string, { name: string }>;
   }>;
   dismissed?: string[];
+  /** Override the default single-segment fixture (per-line voice stamps). */
+  segments?: Array<Record<string, unknown>>;
 }
 
-function seed({ snapshots, cast, dismissed }: SeedOpts): void {
+function seed({ snapshots, cast, dismissed, segments }: SeedOpts): void {
   writeFileSync(
     join(audioRoot, '01-chapter-one.segments.json'),
     JSON.stringify({
@@ -140,7 +142,7 @@ function seed({ snapshots, cast, dismissed }: SeedOpts): void {
       sampleRate: 24000,
       modelKey: 'coqui-xtts-v2',
       synthesizedAt: '2026-01-01T12:00:00.000Z',
-      segments: [
+      segments: segments ?? [
         {
           groupIndex: 0,
           characterId: Object.keys(snapshots)[0] ?? 'narrator',
@@ -584,6 +586,97 @@ describe('GET .../revisions — engine + resolved-voice drift (plan 108 R5)', ()
     });
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.body.drift).toEqual([]);
+  });
+});
+
+/* #3362 (owner design C) — voice drift is derived PER LINE from the segments'
+   own `voiceName`/`baseVoiceName` stamps, not from the per-character snapshot's
+   single last-wins `resolvedVoiceName`. A voice change followed by a re-record
+   of only SOME lines leaves the snapshot on the new voice while the rest of the
+   chapter is still in the old one; the snapshot alone reads that as "up to
+   date". */
+describe('GET .../revisions — per-line voice drift from segments (#3362)', () => {
+  const kokoroCast = [
+    { id: 'mairin', voiceId: 'lib-mairin', overrideTtsVoices: { kokoro: { name: 'af_nicole' } } },
+  ];
+  const line = (i: number, voice: string | undefined, extra: Record<string, unknown> = {}) => ({
+    groupIndex: i,
+    characterId: 'mairin',
+    sentenceIds: [i],
+    ...(voice ? { voiceName: voice, baseVoiceName: voice } : {}),
+    ...extra,
+  });
+
+  it('flags a character whose voice changed when only line 11 of 12 was re-recorded (snapshot says new voice)', async () => {
+    seed({
+      // Last-wins snapshot: line 11 (the last) was re-recorded in the NEW voice.
+      snapshots: { mairin: { voiceId: 'lib-mairin', voiceEngine: 'kokoro', resolvedVoiceName: 'af_nicole' } },
+      cast: kokoroCast,
+      segments: Array.from({ length: 12 }, (_, i) => line(i, i === 11 ? 'af_nicole' : 'af_bella')),
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const voiceEvent = (res.body.drift as DriftEventOut[]).find((d) => d.factor === 'voice');
+    expect(voiceEvent, 'mixed-voice chapter must still read as drifted').toBeTruthy();
+    // The card shows the stale voice, not the snapshot's new one.
+    expect(voiceEvent!.snapshot?.resolvedVoiceName).toBe('af_bella');
+  });
+
+  it('reports no drift once every line has been re-recorded in the current voice', async () => {
+    seed({
+      snapshots: { mairin: { voiceId: 'lib-mairin', voiceEngine: 'kokoro', resolvedVoiceName: 'af_nicole' } },
+      cast: kokoroCast,
+      segments: Array.from({ length: 12 }, (_, i) => line(i, 'af_nicole')),
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.body.drift).toEqual([]);
+  });
+
+  it('falls back to the snapshot for a legacy chapter whose segments carry no voice stamp', async () => {
+    seed({
+      snapshots: { mairin: { voiceId: 'lib-mairin', voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' } },
+      cast: kokoroCast,
+      segments: [line(0, undefined), line(1, undefined)],
+    });
+    const stale = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect((stale.body.drift as DriftEventOut[]).some((d) => d.factor === 'voice')).toBe(true);
+
+    seed({
+      snapshots: { mairin: { voiceId: 'lib-mairin', voiceEngine: 'kokoro', resolvedVoiceName: 'af_nicole' } },
+      cast: kokoroCast,
+      segments: [line(0, undefined), line(1, undefined)],
+    });
+    const current = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(current.body.drift).toEqual([]);
+  });
+
+  it('does not count a Kokoro-fallback line as a voice change', async () => {
+    seed({
+      snapshots: { mairin: { voiceId: 'lib-mairin', voiceEngine: 'kokoro', resolvedVoiceName: 'af_nicole' } },
+      cast: kokoroCast,
+      segments: [line(0, 'af_nicole'), line(1, 'am_adam', { renderedFallbackEngine: 'kokoro' })],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.body.drift).toEqual([]);
+  });
+
+  it("joins a line to its snapshot key by the stamped id, ignoring other characters' lines", async () => {
+    seed({
+      snapshots: {
+        mairin: { voiceId: 'lib-mairin', voiceEngine: 'kokoro', resolvedVoiceName: 'af_nicole' },
+      },
+      cast: kokoroCast,
+      segments: [
+        line(0, 'af_nicole'),
+        // Drift-spelled raw id, stamped canonical: belongs to `mairin`, stale voice.
+        { ...line(1, 'af_bella'), characterId: 'ma-irin', resolvedCharacterId: 'mairin' },
+        // Someone else's line in a different voice must not count against `mairin`.
+        { ...line(2, 'am_adam'), characterId: 'narrator' },
+      ],
+    });
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    const events = (res.body.drift as DriftEventOut[]).filter((d) => d.factor === 'voice');
+    expect(events).toHaveLength(1);
+    expect(events[0].snapshot?.resolvedVoiceName).toBe('af_bella');
   });
 });
 
