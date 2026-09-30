@@ -3620,7 +3620,8 @@ already-analysed book.
 > (`voiceName`/`baseVoiceName`, shipped #1992, 2026-07-31). In a chapter rendered
 > before that, a mixed chapter (voiceless legacy lines plus re-recorded stamped
 > lines) can clear drift while the legacy lines are still in the old voice —
-> they fall back to the snapshot, which a partial re-record updates. Not a
+> the snapshot's voice is read only when no line under that key carries a
+> stamp, so once any does, the voiceless legacy lines are skipped. Not a
 > regression. Run this check on a chapter rendered after 2026-07-31.
 
 ---

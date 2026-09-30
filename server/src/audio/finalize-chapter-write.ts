@@ -404,9 +404,10 @@ export async function finalizeChapterAudioWrite(
      against the character's current voice, and reads this snapshot only for
      a legacy chapter whose segments carry no voice stamp (#3362). The
      per-line guarantee needs every line stamped (#1992, 2026-07-31): in a
-     MIXED pre-#1992 chapter, voiceless untouched lines fall back to this
-     snapshot, which a partial re-record updates, so drift can clear while
-     they are still in the old voice (not a regression).
+     MIXED pre-#1992 chapter, this snapshot is read only when NO line under
+     its key carries a stamp; once any does, the voiceless legacy lines are
+     skipped, so drift can clear while they are still in the old voice (not
+     a regression).
 
      A resynthesized segment's key is resolved FRESH (its audio genuinely
      changed this write) and always folds, unconditionally overwriting
