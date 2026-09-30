@@ -3615,7 +3615,13 @@ already-analysed book.
 > now per line** (each segment's own `voiceName`/`baseVoiceName` vs the
 > character's current voice, not the snapshot's single last-wins voice) — after
 > changing a voice and re-recording only some lines, Revisions must keep
-> flagging the chapter until every line is re-recorded.
+> flagging the chapter until every line is re-recorded. **Condition:** this
+> holds for chapters whose lines all carry a per-segment voice stamp
+> (`voiceName`/`baseVoiceName`, shipped #1992, 2026-07-31). In a chapter rendered
+> before that, a mixed chapter (voiceless legacy lines plus re-recorded stamped
+> lines) can clear drift while the legacy lines are still in the old voice —
+> they fall back to the snapshot, which a partial re-record updates. Not a
+> regression. Run this check on a chapter rendered after 2026-07-31.
 
 ---
 

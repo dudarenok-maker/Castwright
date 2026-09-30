@@ -195,7 +195,9 @@ export async function computeRevisionsForBook(
          is still in the old one, and would read as up to date. A line stamped
          with a different voice than the character's current one makes the
          chapter drifted; the card then shows that stale voice. Legacy
-         chapters with no stamped lines fall through to the snapshot. */
+         chapters with no stamped lines fall through to the snapshot — and a
+         MIXED pre-#1992 chapter (voiceless lines plus re-recorded stamped
+         ones) sees only the stamped voice, so drift can clear early. */
       const renderedVoices = renderedSegmentVoices(seg.segments, characterId);
       if (renderedVoices.length > 0 || snapshot.resolvedVoiceName) {
         const currentName = pickVoiceForEngine(

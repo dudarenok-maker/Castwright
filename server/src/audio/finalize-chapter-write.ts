@@ -399,7 +399,11 @@ export async function finalizeChapterAudioWrite(
      Drift is therefore NOT derived from it any more — `revisions.ts` compares
      each line's own `voiceName`/`baseVoiceName` (persisted on the segment)
      against the character's current voice, and reads this snapshot only for
-     a legacy chapter whose segments carry no voice stamp (#3362).
+     a legacy chapter whose segments carry no voice stamp (#3362). The
+     per-line guarantee needs every line stamped (#1992, 2026-07-31): in a
+     MIXED pre-#1992 chapter, voiceless untouched lines fall back to this
+     snapshot, which a partial re-record updates, so drift can clear while
+     they are still in the old voice (not a regression).
 
      A resynthesized segment's key is resolved FRESH (its audio genuinely
      changed this write) and always folds, unconditionally overwriting

@@ -224,6 +224,11 @@ last, alone, since it deliberately crashes the sidecar twice.
     legacy lines' raw/retired keys forward. Also confirm Revisions voice drift
     is per line (#3362): after a voice change, re-record only some lines and
     Revisions must keep flagging the chapter until every line is re-recorded.
+    This holds for chapters whose lines all carry a per-segment voice stamp
+    (`voiceName`/`baseVoiceName`, #1992, 2026-07-31); in an older mixed chapter
+    (voiceless legacy lines plus re-recorded stamped lines) drift can clear
+    while legacy lines are still in the old voice — not a regression. Use a
+    chapter rendered after 2026-07-31.
     - Result:
 14. Run §4 (re-render chapter 16 — `lightning-dave` recovery **and**
     `pool-player-2` negative control in the same chapter).
