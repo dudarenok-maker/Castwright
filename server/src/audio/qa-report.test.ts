@@ -682,4 +682,51 @@ describe('buildAudioQaReport — canonical cast-id roster join (#3362 review fin
     expect(report.voiceDrift.charactersOnRoster).toBe(1);
     expect(report.voiceDrift.charactersChecked).toBe(1);
   });
+
+  it('scopes each row\'s roster join to its OWN chapter\'s snapshot — unstamped rows under an id that is a real cast id only in another chapter never join the roster (#3362 pass-9 minor 1)', async () => {
+    // ch1 is eligible through `wren` (12 stamped rows) and ALSO carries 6
+    // unstamped, narrator-voiced rows under 'mairin' — an id that is a real
+    // snapshot key only in ch2. scoreBook joins those rows against ch1's own
+    // snapshot (no `mairin` there) and never scores them for ch1. The report
+    // must agree: were the roster join scoped to the union of every chapter's
+    // snapshots, ch1's roster would gain `mairin`, which scoreBook never
+    // scored for ch1, and ch1 would flip to embed-failed.
+    const dir = await makeBook();
+    await mkdir(dotAudiobook(dir), { recursive: true });
+    const vec = (t: number) => Float32Array.from([Math.cos(t), Math.sin(t), 0, 0, 0, 0, 0, 0]);
+    const ch1Rows = [
+      ...Array.from({ length: 12 }, (_, i) => ({ characterId: 'wren', sentenceIds: [i], vec: vec(1.0 + 0.01 * i) })),
+      ...Array.from({ length: 6 }, (_, i) => ({ characterId: 'mairin', sentenceIds: [100 + i], vec: vec(Math.PI / 2 + 0.02 * i) })),
+    ];
+    await writeEmbeddings(join(audioDir(dir), 'ch1.embeddings.json'), ch1Rows, EMBEDDINGS_VERSION);
+    await writeJsonAtomic(join(audioDir(dir), 'ch1.segments.json'), {
+      bookId: 'b1', chapterId: 1, chapterTitle: 'One', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: ch1Rows.map((r) => seg({
+        characterId: r.characterId, sentenceIds: r.sentenceIds, renderedFallbackEngine: null,
+        ...(r.characterId === 'wren' ? { resolvedCharacterId: 'wren' } : {}),
+      })),
+      characterSnapshots: {
+        wren: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-wren', modelKey: 'qwen3-tts-0.6b' },
+        narrator: { voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' },
+      },
+    });
+    const ch2Rows = Array.from({ length: 12 }, (_, i) => ({ characterId: 'mairin', sentenceIds: [i], vec: vec(0.02 * i) }));
+    await writeEmbeddings(join(audioDir(dir), 'ch2.embeddings.json'), ch2Rows, EMBEDDINGS_VERSION);
+    await writeJsonAtomic(join(audioDir(dir), 'ch2.segments.json'), {
+      bookId: 'b1', chapterId: 2, chapterTitle: 'Two', durationSec: 10, sampleRate: 24000,
+      modelKey: 'qwen3-tts-0.6b', synthesizedAt: new Date(0).toISOString(),
+      segments: ch2Rows.map((r) => seg({
+        characterId: 'mairin', sentenceIds: r.sentenceIds, renderedFallbackEngine: null, resolvedCharacterId: 'mairin',
+      })),
+      characterSnapshots: { mairin: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-mairin', modelKey: 'qwen3-tts-0.6b' } },
+    });
+    const chapters = [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }];
+    await scoreBook(dir, chapters);
+
+    const report = await buildAudioQaReport(dir, chapters);
+    expect(report.voiceDrift.chaptersEligible).toBe(2);
+    expect(report.voiceDrift.chaptersScored).toBe(2);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
+  });
 });
