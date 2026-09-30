@@ -663,9 +663,27 @@ export async function finalizeChapterAudioWrite(
       /* #3362 pass-7 🟠H — put back the fresh rows for the re-recorded takes
          (keyed by the same tuple the drop used), so the character keeps a
          centroid. Untouched segments' rows were never dropped above. */
-      const freshRows = (input.reembeddedRows ?? []).filter((r) =>
-        droppedKeys.has(segKey(r.characterId, r.sentenceIds)),
-      );
+      /* #3362 pass-9 🟠I — the fresh rows come from the CURRENT analysis cache,
+         so after a cast merge their characterId is the merge target while the
+         segment (and the dropped row) still carry the render-time raw id. Attach
+         each fresh row to the resynthesized segment it replaces by sentenceIds
+         (one sentence per segment, unique in a chapter) and write it under that
+         segment's OWN raw id, so the row key equals the key the drop removed.
+         A row matching no resynthesized segment is ignored; a second row for a
+         segment already filled is ignored too (first wins — no duplicate). */
+      const segBySentenceIds = new Map<string, (typeof segments)[number]>();
+      for (const i of resynthesizedIndexSet) {
+        segBySentenceIds.set(segments[i].sentenceIds.join(','), segments[i]);
+      }
+      const seen = new Set<string>();
+      const freshRows: EmbeddingRow[] = [];
+      for (const r of input.reembeddedRows ?? []) {
+        const k = r.sentenceIds.join(',');
+        const seg = segBySentenceIds.get(k);
+        if (!seg || seen.has(k)) continue;
+        seen.add(k);
+        freshRows.push({ ...r, characterId: seg.characterId });
+      }
       if (filteredRows.length !== existing.rows.length || freshRows.length > 0) {
         await writeEmbeddings(embPath, [...filteredRows, ...freshRows], existing.version);
       }

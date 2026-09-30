@@ -472,6 +472,56 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
     expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([]);
   });
 
+  /* #3362 pass-9 🟠I — every fixture above gives the segment the SAME id the
+     analysis cache carries, which is why the bug hid. After a cast merge the
+     cache (and so the synth's fresh embedding row) carries the merge TARGET
+     ('amy') while the segment keeps its render-time raw id ('amyold'): the row
+     must still replace the dropped one, under the segment's own id. */
+  it('a re-record after a cast merge keeps the take\'s fresh embedding row (keyed by the analysis id, stored under the segment\'s raw id) (🟠I)', async () => {
+    const { readEmbeddings, writeEmbeddings, EMBEDDINGS_VERSION } = await import('../audio/render-integrity/embeddings-io.js');
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    const bookDir = join(titleLedAudioRoot, '..');
+    const segPath = join(titleLedAudioRoot, `${SLUG}.segments.json`);
+    const embPath = join(titleLedAudioRoot, `${SLUG}.embeddings.json`);
+    const histPath = join(bookDir, '.audiobook', 'cast-id-history.json');
+    const originalSegs = readFileSync(segPath, 'utf8');
+    try {
+      const file = JSON.parse(originalSegs) as { segments: Array<{ characterId: string; sentenceIds: number[] }> };
+      file.segments[1].characterId = 'amyold';
+      writeFileSync(segPath, JSON.stringify(file));
+      writeFileSync(histPath, JSON.stringify({ schema: 1, supersededBy: { amyold: 'amy' } }));
+      await writeEmbeddings(
+        embPath,
+        [{ characterId: 'amyold', sentenceIds: [1], vec: Float32Array.from([0, 1, 0, 0, 0, 0, 0, 0]) }],
+        EMBEDDINGS_VERSION,
+      );
+      const fresh = Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]);
+      synthMock.mockImplementationOnce(async () => ({
+        pcm: tone(0.3, 9000),
+        sampleRate: SR,
+        segments: [],
+        durationSec: 0.3,
+        rerecordMs: 0,
+        transcribeMs: 0,
+        embedMs: 0,
+        embeddings: [{ characterId: 'amy', sentenceIds: [1], vec: fresh }],
+      }));
+      const res = await request(app)
+        .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+        .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+      expect(parseSse(res.text).some((e) => e.type === 'splice_complete'), `got ${res.text}`).toBe(true);
+      const after = await readEmbeddings(embPath);
+      expect(after!.rows.length).toBe(1);
+      expect(after!.rows[0].characterId).toBe('amyold');
+      expect(Array.from(after!.rows[0].vec)).toEqual(Array.from(fresh));
+    } finally {
+      writeFileSync(segPath, originalSegs);
+      rmSync(histPath, { force: true });
+      rmSync(embPath, { force: true });
+    }
+  });
+
   /* #1888 — synthesiseChapter (the repair's own synth call) DOES compute
      voiceSubstitutedFrom correctly per segment; this pins that the value
      actually survives onto the persisted segment through the splice route's

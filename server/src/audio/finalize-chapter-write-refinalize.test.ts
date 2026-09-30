@@ -1025,3 +1025,94 @@ describe('finalizeChapterAudioWrite re-embeds re-recorded lines (#3362 pass-7 �
     expect(after!.rows.length).toBe(15);
   });
 });
+
+/* #3362 pass-9 🟠I — a cast MERGE (mayrin -> mairin) rewrites the sentences to
+   the target id but leaves segments.json on the render-time raw id. A re-record
+   synthesises from the CURRENT cache, so synthesiseChapter's embed pass keys its
+   fresh rows `mairin` while the segment (and the drop filter) key `mayrin`.
+   Finalize must attach each fresh row to its resynthesized segment by
+   sentenceIds and write it under the segment's OWN raw id. */
+describe('finalizeChapterAudioWrite re-embeds by the segment a row replaces (#3362 pass-9 🟠I)', () => {
+  const PRE = [
+    { id: 'mayrin', name: 'Mayrin', gender: 'female' as const, attributes: [], ttsEngine: 'qwen' as const },
+    { id: 'mairin', name: 'Mairin', gender: 'female' as const, attributes: [], ttsEngine: 'qwen' as const },
+  ];
+  const POST = [PRE[1]];
+  const HIST = { schema: 1, supersededBy: { mayrin: 'mairin' } } as const;
+  const SEGS = Array.from({ length: 12 }, (_, i) => ({
+    groupIndex: i, characterId: 'mayrin', sentenceIds: [i], startSec: i, endSec: i + 1, voiceName: 'v-old',
+  }));
+  const baseInput = (cast: typeof PRE, history: unknown) => ({
+    bookId,
+    bookDir,
+    chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+    pcm: tone(12.0, 12000),
+    sampleRate: SR,
+    durationSec: 12.0,
+    cast,
+    castIdHistory: history as { schema: 1; supersededBy: Record<string, string> },
+    defaultEngine: 'qwen' as const,
+    modelKey: 'qwen3-tts-0.6b' as const,
+    audioFormat: 'mp3' as const,
+  });
+  const idx = Array.from({ length: 12 }, (_, i) => i);
+
+  async function renderThenMerge(): Promise<ChapterSegmentsFile> {
+    writeCast(PRE);
+    writeHistory({ schema: 1, supersededBy: {} });
+    await finalizeChapterAudioWrite({
+      ...baseInput(PRE, { schema: 1, supersededBy: {} }),
+      segments: SEGS,
+      resynthesizedIndices: 'all',
+      embeddings: SEGS.map((s, i) => ({ characterId: s.characterId, sentenceIds: s.sentenceIds, vec: vec(0.02 * i) })),
+    });
+    await scoreBook(bookDir, [{ id: 1, slug: SLUG }], undefined, makeAuditionStub());
+    writeCast(POST);
+    writeHistory(HIST);
+    return readSegFile();
+  }
+
+  it('fresh rows keyed by the merge TARGET (mairin) land under the segments\' raw id (mayrin): 12 rows, scored 1 / embed-failed 0', async () => {
+    const { buildAudioQaReport } = await import('./qa-report.js');
+    const rendered = await renderThenMerge();
+    const fresh: EmbeddingRow[] = idx.map((i) => ({ characterId: 'mairin', sentenceIds: [i], vec: vec(0.5 + 0.01 * i) }));
+    await finalizeChapterAudioWrite({
+      ...baseInput(POST as unknown as typeof PRE, HIST),
+      segments: rendered.segments.map((s) => ({ ...s, voiceName: 'v-new' })),
+      resynthesizedIndices: idx,
+      reembeddedRows: fresh,
+    });
+    const after = await readEmbeddings(join(audioRoot, `${SLUG}.embeddings.json`));
+    expect(after!.rows.length).toBe(12);
+    for (const i of idx) {
+      const row = after!.rows.find((r) => r.sentenceIds[0] === i)!;
+      expect(row.characterId).toBe('mayrin');
+      expect(Array.from(row.vec)).toEqual(Array.from(fresh[i].vec));
+    }
+    await scoreBook(bookDir, [{ id: 1, slug: SLUG }], undefined, makeAuditionStub());
+    const report = await buildAudioQaReport(bookDir, [{ id: 1, slug: SLUG }]);
+    expect(report.voiceDrift.chaptersScored).toBe(1);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
+  });
+
+  it('a fresh row whose sentenceIds match no resynthesized segment is ignored, and a duplicate row for one segment does not duplicate it', async () => {
+    const rendered = await renderThenMerge();
+    await finalizeChapterAudioWrite({
+      ...baseInput(POST as unknown as typeof PRE, HIST),
+      segments: rendered.segments,
+      resynthesizedIndices: [0],
+      reembeddedRows: [
+        { characterId: 'mairin', sentenceIds: [0], vec: vec(0.9) },
+        { characterId: 'mairin', sentenceIds: [0], vec: vec(0.8) },
+        { characterId: 'mairin', sentenceIds: [5], vec: vec(0.9) }, // not resynthesized
+        { characterId: 'ghost', sentenceIds: [999], vec: vec(0.9) }, // matches nothing
+      ],
+    });
+    const after = await readEmbeddings(join(audioRoot, `${SLUG}.embeddings.json`));
+    expect(after!.rows.length).toBe(12);
+    expect(after!.rows.filter((r) => r.sentenceIds[0] === 0).length).toBe(1);
+    const five = after!.rows.find((r) => r.sentenceIds[0] === 5)!;
+    expect(five.characterId).toBe('mayrin');
+    expect(Array.from(five.vec)).toEqual(Array.from(vec(0.02 * 5)));
+  });
+});
