@@ -156,7 +156,8 @@ export function resolveConfiguredEngineByChar(
  * Resolve an embedding/segment row's raw `characterId` to the identity it
  * should be scored/joined under: the render-time stamp
  * `finalize-chapter-write.ts` wrote onto the MATCHING segment
- * (`seg.resolvedCharacterId`), when one exists — else the raw id verbatim.
+ * (`seg.resolvedCharacterId`), when one exists — else the raw id, but only
+ * when it is a key of this chapter's own snapshot (else `undefined`).
  *
  * #3362 pass-4 fix (🟠D) — this replaces `buildSnapshotIdResolver` (review
  * pass 3), which paired a FROZEN render-time candidate set (this chapter's
@@ -209,10 +210,10 @@ export function resolveConfiguredEngineByChar(
  * orphaned/narrator-substituted line, or a link added only after this
  * chapter rendered — S8) — falls through with the raw id UNCHANGED, but ONLY
  * if that raw id is a key of THIS chapter's own snapshot (`ownSnapshots`);
- * otherwise it returns `undefined` and joins nothing. That is `main`'s own
- * pre-#3362 behaviour: no resolver, no history consultation at scoring time
- * at all, exact string match against this chapter's own snapshot keys. The
- * scope matters (#3362 review 🟠A): the callers' rosters
+ * otherwise it returns `undefined` and joins nothing. Like `main`, there is
+ * no resolver and no history consultation at scoring time at all — an exact
+ * string match — but `main` matched against the BOOK-wide roster, which is
+ * the bug this scoping fixes (#3362 review 🟠A): the callers' rosters
  * (`stochasticChars`/`configuredEngineByChar`) are BOOK-wide, so an orphaned
  * id that a LATER analysis re-mints as a real cast id would otherwise pool
  * this chapter's narrator-voiced rows into that character's centroid.
@@ -655,8 +656,8 @@ export async function scoreBook(
      OWN resolution back off each row's matching segment — stamped once, at
      render time, by finalize-chapter-write.ts — so no per-chapter resolver
      is built here at all; the anchor-gathering loop and
-     `scoreAndMergeCharacter` below both call `resolveRowCharId(seg, rawId)`
-     directly against `cd.segsByKey`. */
+     `scoreAndMergeCharacter` below both call `resolveRowCharId(seg, rawId,
+     ownSnapshots)` directly against `cd.segsByKey`. */
   // #1951 — the language the chapters were rendered in. Read once per run and
   // stamped onto every Option-B audition below, for the same comparability
   // reason the render TIER is (see the renderKey comment further down).

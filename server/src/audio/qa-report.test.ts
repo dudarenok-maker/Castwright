@@ -612,7 +612,7 @@ describe('buildAudioQaReport — canonical cast-id roster join (#3362 review fin
     const report = await buildAudioQaReport(dir, [{ id: 1, slug: 'ch1' }, { id: 2, slug: 'ch2' }]);
     expect(report.voiceDrift.chaptersEligible).toBe(1); // only ch2 has a snapshot entry for it
     expect(report.voiceDrift.chaptersScored).toBeLessThanOrEqual(report.voiceDrift.chaptersEligible);
-    expect(report.voiceDrift.chaptersScored).toBe(1); // ch1 must not count despite its resolved roster row
+    expect(report.voiceDrift.chaptersScored).toBe(1); // ch1 must not count: it has no roster row for this character
   });
 
   it('clamps chaptersScored to chaptersEligible when a stamp dangles (names a key absent from its own chapter\'s snapshot) — #3362 review 🟡C', async () => {

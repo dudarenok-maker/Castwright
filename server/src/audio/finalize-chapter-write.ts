@@ -622,10 +622,11 @@ export async function finalizeChapterAudioWrite(
     /* #3362 pass-6 fix (🟠G, owner design (i)) — chapter-splice.ts's
        `rerecord` mode and chapter-qa-repair.ts both give a resynthesized
        segment fresh audio and (above) a fresh identity stamp, but neither
-       passes fresh `input.embeddings` for a partial re-record — only
-       qa-repair's own ACCEPTED acoustic candidates get a fresh vector, and
-       it writes those itself AFTER this call returns, reading the sibling
-       fresh (chapter-qa-repair.ts's Edit 6b, ~787-808). Left alone, the OLD
+       passes fresh `input.embeddings` for a partial re-record — both pass
+       `reembeddedRows` instead (below), the fresh vectors for every
+       re-recorded segment; qa-repair's own ACCEPTED acoustic candidates are
+       also re-added by it AFTER this call returns (chapter-qa-repair.ts's
+       Edit 6b, ~787-808). Left alone, the OLD
        take's row in `<slug>.embeddings.json` — keyed by (characterId,
        sentenceIds), the same tuple a segment itself carries — still sits
        there under audio that no longer exists, and the next scoreBook run
