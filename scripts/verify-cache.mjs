@@ -763,6 +763,33 @@ export function hashFile(absPath) {
   }
 }
 
+// Run-wide, stat-validated file-hash memo (Castwright#3393 review pass 3). A
+// file's hash is reused only while its stat identity (size, mtime, ctime, ino)
+// is unchanged; any difference — or a file that vanished — re-reads it, so a
+// step that rewrites an input mid-run is still seen by every later lookup,
+// at the price of one statSync per lookup instead of a read + sha256. Known
+// limit, same trade git's index makes: a rewrite that keeps size AND mtime
+// identical within the filesystem's timestamp resolution would be missed.
+export function makeStatHashMemo(cwd, { hash = hashFile, stat = statSync } = {}) {
+  const memo = new Map(); // rel -> { id, hash }
+  return (rel) => {
+    const abs = join(cwd, rel);
+    let id = null;
+    try {
+      const s = stat(abs);
+      id = `${s.size}:${s.mtimeMs}:${s.ctimeMs}:${s.ino}`;
+    } catch {
+      // missing/unreadable: fall through to hash(), which owns the sentinel
+    }
+    const hit = memo.get(rel);
+    if (id !== null && hit && hit.id === id) return hit.hash;
+    const h = hash(abs);
+    if (id === null) memo.delete(rel);
+    else memo.set(rel, { id, hash: h });
+    return h;
+  };
+}
+
 function toPosix(p) {
   return p.replace(/\\/g, '/');
 }
@@ -1801,7 +1828,7 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   if (cache.schemaVersion !== schemaVer) {
     cache = { schemaVersion: schemaVer, steps: {} };
   }
-  const fileHashes = new Map(); // memoize across the planning pre-pass ONLY
+  const hashOf = makeStatHashMemo(cwd); // run-wide; stat-validated, so never stale
 
   if (!fileList) {
     console.log('[verify-cache] git ls-files failed; running uncached');
@@ -1813,24 +1840,19 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   // per-step hash + decision, in ONE helper — the sole call site of
   // composeInputHash — and out-of-scope steps are never hashed. The pre-pass
   // result feeds the BUDGET ESTIMATE only. The step loop calls planStep again
-  // as each step is about to start, with a FRESH memo, because an earlier step
-  // can rewrite a later step's inputs while it runs (Castwright#3393 review
-  // pass 2): the run/skip decision and the hash written to the cache on a pass
-  // must describe the inputs at that moment, so neither may come from the
-  // pre-pass or from a memo populated before an earlier step ran. The file SET
+  // as each step is about to start, because an earlier step can rewrite a
+  // later step's inputs while it runs (Castwright#3393 review pass 2): the
+  // run/skip decision and the hash written to the cache on a pass must
+  // describe the inputs at that moment, so neither may come from the pre-pass
+  // result. Both passes share ONE run-wide memo (`hashOf`) that re-validates
+  // each file by stat on every lookup, so a rewritten file is re-hashed while
+  // an unchanged one is read once per run, not once per step. The file SET
   // obeys the same rule (pass 3): an earlier step can also CREATE a file inside
   // this step's globs, so the loop re-takes `fileList` before each planStep —
   // the pre-pass list (taken once, up front) is only good for the estimate.
-  function planStep(step, memo) {
+  function planStep(step) {
     const files = fileList ? selectStepFiles({ fileList, step }) : [];
-    const entries = files.map((rel) => {
-      let h = memo.get(rel);
-      if (!h) {
-        h = hashFile(join(cwd, rel));
-        memo.set(rel, h);
-      }
-      return [rel, h];
-    });
+    const entries = files.map((rel) => [rel, hashOf(rel)]);
     const lockHashes = pickLockHashes(cwd, step.inputs.includeLockfiles ?? []);
     const fp = step.toolFingerprint ? step.toolFingerprint() : null;
     const currentHash = composeInputHash({
@@ -1857,7 +1879,7 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   const stepPlan = new Map();
   for (const step of activeSteps) {
     if (outOfScope(step)) continue;
-    stepPlan.set(step.name, planStep(step, fileHashes));
+    stepPlan.set(step.name, planStep(step));
   }
 
   // Part 2 (ops-72) budgets — see the constants' own doc comments above for
@@ -1896,15 +1918,15 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
       continue;
     }
     // The stepPlan pre-pass above only sized the budget (Castwright#3361 task
-    // 3). Hash + decide again NOW, with a fresh memo, so an earlier step's
-    // mid-run edit to this step's inputs is seen; if it disagrees with the
+    // 3). Hash + decide again NOW (stat-validated lookups), so an earlier
+    // step's mid-run edit to this step's inputs is seen; if it disagrees with the
     // plan, this decision wins and the budget is not recomputed. The file list
     // is re-taken too (only when the up-front listing succeeded — a failed
     // one keeps the whole run uncached, as announced above). A listing that
     // fails here nulls `fileList`, so this step and the rest of the run go
     // uncached, exactly as if the up-front listing had failed.
     if (fileList !== null) fileList = gitFileList(cwd);
-    const { currentHash, action } = planStep(step, new Map());
+    const { currentHash, action } = planStep(step);
 
     if (action === 'skip') {
       console.log(`[cached] ${step.name} (input hash unchanged)`);

@@ -15,6 +15,7 @@ import {
   readFileSync,
   copyFileSync,
   rmSync,
+  utimesSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -26,6 +27,7 @@ import {
   composeInputHash,
   decide,
   hashFile,
+  makeStatHashMemo,
   hashEntries,
   loadCache,
   saveCache,
@@ -1833,12 +1835,22 @@ test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum
   const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
   assert.match(
     pipelineBody,
-    /function planStep\(step, memo\) \{/,
-    'the per-step hash + decide() must live in ONE planStep helper taking its memo explicitly — never an inline duplicate in the loop',
+    /function planStep\(step\) \{/,
+    'the per-step hash + decide() must live in ONE planStep helper — never an inline duplicate in the loop',
   );
   assert.match(
     pipelineBody,
-    /if \(outOfScope\(step\)\) continue;\s*\n\s*stepPlan\.set\(step\.name, planStep\(step, fileHashes\)\);/,
+    /const hashOf = makeStatHashMemo\(cwd\);/,
+    'the run-wide memo must be the stat-validated one; a bare Map would serve a stale hash after an earlier step rewrites a file',
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /memo\.get\(|new Map\(\)\);/,
+    'no unvalidated memo may sit between planStep and the files: every lookup goes through the stat-validated hashOf',
+  );
+  assert.match(
+    pipelineBody,
+    /if \(outOfScope\(step\)\) continue;\s*\n\s*stepPlan\.set\(step\.name, planStep\(step\)\);/,
     'the pre-pass must plan every active step exactly once and never hash an out-of-scope step',
   );
   assert.match(
@@ -1848,12 +1860,12 @@ test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum
   );
   assert.match(
     pipelineBody,
-    /const \{ currentHash, action \} = planStep\(step, new Map\(\)\);/,
-    'the step loop must re-plan at execution time with a FRESH memo (the pre-pass hash/memo may predate an earlier step\'s edit) — the cache write uses this currentHash',
+    /const \{ currentHash, action \} = planStep\(step\);/,
+    "the step loop must re-plan at execution time (stat-validated lookups; the pre-pass result may predate an earlier step's edit) — the cache write uses this currentHash",
   );
   assert.match(
     pipelineBody,
-    /if \(fileList !== null\) fileList = gitFileList\(cwd\);\s*\n\s*const \{ currentHash, action \} = planStep\(step, new Map\(\)\);/,
+    /if \(fileList !== null\) fileList = gitFileList\(cwd\);\s*\n\s*const \{ currentHash, action \} = planStep\(step\);/,
     "the step loop must re-take the file list immediately before its planStep (an earlier step may have created a file in this step's globs); a failed up-front listing stays uncached",
   );
   assert.doesNotMatch(
@@ -1866,6 +1878,63 @@ test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum
     1,
     'exactly one composeInputHash(...) call site may remain in runPipeline — one helper, never an inline duplicate',
   );
+});
+
+// Castwright#3393 review pass 3 (efficiency): the run-wide memo re-reads a file
+// only when its stat identity changed, so an unchanged file is hashed once per
+// run rather than once per step.
+test('makeStatHashMemo: an unchanged file is hashed once across repeated lookups (#3393)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stat-memo-'));
+  try {
+    writeFileSync(join(dir, 'f.txt'), 'hello', 'utf8');
+    let hashes = 0;
+    const hashOf = makeStatHashMemo(dir, {
+      hash: (abs) => {
+        hashes++;
+        return hashFile(abs);
+      },
+    });
+    const first = hashOf('f.txt');
+    for (let i = 0; i < 17; i++) assert.equal(hashOf('f.txt'), first);
+    assert.equal(hashes, 1, '18 lookups of an unchanged file must read it once');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('makeStatHashMemo: size, mtime, or existence changes force a re-hash; missing matches hashFile (#3393)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stat-memo-'));
+  try {
+    const p = join(dir, 'f.txt');
+    let hashes = 0;
+    const hashOf = makeStatHashMemo(dir, {
+      hash: (abs) => {
+        hashes++;
+        return hashFile(abs);
+      },
+    });
+    assert.equal(hashOf('f.txt'), hashFile(p), 'a missing file hashes as hashFile does');
+    assert.equal(hashOf('f.txt'), '__missing__');
+    assert.equal(hashes, 2, 'a missing file is never memoized');
+
+    writeFileSync(p, 'orig', 'utf8');
+    const created = hashOf('f.txt');
+    assert.notEqual(created, '__missing__', 'a file created after a miss is seen');
+
+    writeFileSync(p, 'mutated', 'utf8'); // size changes
+    const grown = hashOf('f.txt');
+    assert.notEqual(grown, created);
+    assert.equal(grown, hashFile(p));
+
+    writeFileSync(p, 'MUTATED', 'utf8'); // same size, new mtime
+    utimesSync(p, new Date(), new Date(Date.now() + 5000));
+    assert.equal(hashOf('f.txt'), hashFile(p), 'a same-size rewrite with a new mtime is seen');
+
+    rmSync(p);
+    assert.equal(hashOf('f.txt'), '__missing__', 'a deleted file is seen');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // Castwright#3393 review pass 2: the cache entry must record the step's inputs
