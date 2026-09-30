@@ -611,11 +611,10 @@ export async function finalizeChapterAudioWrite(
     qa: audioQa,
   };
 
-  /* Rollback preservation: rename the live `<slug>.<ext>` + `.segments.json`
-     to `.previous.*` BEFORE the new render lands. The revision-diff player
-     auditions the preserved pair (A) vs this render (B). */
-  await preserveExistingAsPrevious(audioRoot, chapter.slug);
-  await writeJsonAtomic(segPath, segmentsFile);
+  /* #3362 pass-7 🟡2 — the embeddings rewrite runs BEFORE the live audio is
+     moved aside below: a row dropped or replaced ahead of its audio only
+     under-scores, whereas a failure between the move and the audio rename
+     left no `<slug>.<ext>` on disk (an unplayable chapter). */
   if (input.embeddings) {
     const embPath = join(audioRoot, `${chapter.slug}.embeddings.json`);
     await writeEmbeddings(embPath, input.embeddings, EMBEDDINGS_VERSION);
@@ -665,6 +664,11 @@ export async function finalizeChapterAudioWrite(
       }
     }
   }
+  /* Rollback preservation: rename the live `<slug>.<ext>` + `.segments.json`
+     to `.previous.*` BEFORE the new render lands. The revision-diff player
+     auditions the preserved pair (A) vs this render (B). */
+  await preserveExistingAsPrevious(audioRoot, chapter.slug);
+  await writeJsonAtomic(segPath, segmentsFile);
   await rename(tmpAudio, audioPath);
   try {
     await writeChapterPeaksFile(pcm, sampleRate, peaksPath);
