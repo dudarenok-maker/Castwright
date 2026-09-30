@@ -1994,6 +1994,28 @@ test('makeStatHashMemo: size, mtime, or existence changes force a re-hash; missi
   }
 });
 
+// Castwright#3393 review pass 4: pin each stat-identity component on its own,
+// deterministically (stubbed stat, no filesystem, no timestamps) — the real-fs
+// test above cannot, since utimesSync may leave ctime alone on some platforms.
+test('makeStatHashMemo: each of size, mtimeMs, ctimeMs, ino alone invalidates the memo (#3393)', () => {
+  const base = { size: 5, mtimeMs: 1000, ctimeMs: 2000, ino: 42 };
+  for (const field of ['size', 'mtimeMs', 'ctimeMs', 'ino']) {
+    let current = base;
+    let hashes = 0;
+    const hashOf = makeStatHashMemo('/nowhere', {
+      hash: () => `h${++hashes}`,
+      stat: () => current,
+    });
+    assert.equal(hashOf('f.txt'), 'h1');
+    current = { ...base };
+    assert.equal(hashOf('f.txt'), 'h1', 'an identical stat is served from the memo');
+    assert.equal(hashes, 1);
+    current = { ...base, [field]: base[field] + 1 };
+    assert.equal(hashOf('f.txt'), 'h2', `a changed ${field} alone must re-hash`);
+    assert.equal(hashes, 2, `a changed ${field} alone must re-hash`);
+  }
+});
+
 // Castwright#3393 review pass 2: the cache entry must record the step's inputs
 // as they were when THAT step started, not as they were when the pre-pass
 // planned the run. Step A (`lint`) rewrites a file that only step B
