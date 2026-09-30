@@ -1800,7 +1800,7 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   if (cache.schemaVersion !== schemaVer) {
     cache = { schemaVersion: schemaVer, steps: {} };
   }
-  const fileHashes = new Map(); // memoize across steps
+  const fileHashes = new Map(); // memoize across the planning pre-pass ONLY
 
   if (!fileList) {
     console.log('[verify-cache] git ls-files failed; running uncached');
@@ -1809,17 +1809,21 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   // Castwright#3361 (task 3): plan every step this run could execute BEFORE the
   // pipeline budget is fixed, so the calibration sum can exclude steps that
   // will be skipped as `[cached]`, not only out-of-scope ones. This is the
-  // per-step hash + decision the step loop used to do inline, MOVED here
-  // verbatim — the sole call site of composeInputHash remains right here —
-  // and out-of-scope steps are never hashed. The loop below reads
-  // { currentHash, action } back out of `stepPlan` instead of recomputing.
-  function planStep(step) {
+  // per-step hash + decision, in ONE helper — the sole call site of
+  // composeInputHash — and out-of-scope steps are never hashed. The pre-pass
+  // result feeds the BUDGET ESTIMATE only. The step loop calls planStep again
+  // as each step is about to start, with a FRESH memo, because an earlier step
+  // can rewrite a later step's inputs while it runs (Castwright#3393 review
+  // pass 2): the run/skip decision and the hash written to the cache on a pass
+  // must describe the inputs at that moment, so neither may come from the
+  // pre-pass or from a memo populated before an earlier step ran.
+  function planStep(step, memo) {
     const files = fileList ? selectStepFiles({ fileList, step }) : [];
     const entries = files.map((rel) => {
-      let h = fileHashes.get(rel);
+      let h = memo.get(rel);
       if (!h) {
         h = hashFile(join(cwd, rel));
-        fileHashes.set(rel, h);
+        memo.set(rel, h);
       }
       return [rel, h];
     });
@@ -1861,7 +1865,7 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   const stepPlan = new Map();
   for (const step of activeSteps) {
     if (outOfScope(step)) continue;
-    stepPlan.set(step.name, planStep(step));
+    stepPlan.set(step.name, planStep(step, fileHashes));
   }
 
   // Part 2 (ops-72) budgets — see the constants' own doc comments above for
@@ -1899,10 +1903,11 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
       console.log(`[skip] ${step.name} (out of scope)`);
       continue;
     }
-    // Hash + cache decision were computed once by the stepPlan pre-pass above
-    // (Castwright#3361 task 3) so the budget sum could already see them; the
-    // loop consumes the plan rather than recomputing it.
-    const { currentHash, action } = stepPlan.get(step.name);
+    // The stepPlan pre-pass above only sized the budget (Castwright#3361 task
+    // 3). Hash + decide again NOW, with a fresh memo, so an earlier step's
+    // mid-run edit to this step's inputs is seen; if it disagrees with the
+    // plan, this decision wins and the budget is not recomputed.
+    const { currentHash, action } = planStep(step, new Map());
 
     if (action === 'skip') {
       console.log(`[cached] ${step.name} (input hash unchanged)`);

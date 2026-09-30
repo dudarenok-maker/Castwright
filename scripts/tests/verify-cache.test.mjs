@@ -1737,8 +1737,9 @@ test('runPipeline budgets only in-scope steps, via one shared outOfScope predica
 // `include` can see the planned action. Same evidence shape as task 2: a
 // direct value assertion on the pure helper (include rejects a cached step →
 // its baseline drops out) PLUS source pins that runPipeline really consults
-// the planned action and reads the loop's { currentHash, action } back out of
-// the pre-pass instead of keeping a second copy of the computation.
+// the planned action for the BUDGET, while the loop re-plans each step at
+// execution time through the same single planStep helper (never reading the
+// pre-pass's hash back — see the #3393 tests below).
 
 test('sumQualifiedRunDurationMs: an include that rejects a cached step drops its baseline (#3361)', () => {
   const cache = {
@@ -1771,12 +1772,12 @@ test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum
   const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
   assert.match(
     pipelineBody,
-    /function planStep\(step\) \{/,
-    'the per-step hash + decide() must live in ONE planStep helper — the loop\'s old code moved, not duplicated',
+    /function planStep\(step, memo\) \{/,
+    'the per-step hash + decide() must live in ONE planStep helper taking its memo explicitly — never an inline duplicate in the loop',
   );
   assert.match(
     pipelineBody,
-    /if \(outOfScope\(step\)\) continue;\s*\n\s*stepPlan\.set\(step\.name, planStep\(step\)\);/,
+    /if \(outOfScope\(step\)\) continue;\s*\n\s*stepPlan\.set\(step\.name, planStep\(step, fileHashes\)\);/,
     'the pre-pass must plan every active step exactly once and never hash an out-of-scope step',
   );
   assert.match(
@@ -1786,15 +1787,95 @@ test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum
   );
   assert.match(
     pipelineBody,
-    /const \{ currentHash, action \} = stepPlan\.get\(step\.name\);/,
-    'the step loop must read currentHash/action from the pre-pass, not recompute them',
+    /const \{ currentHash, action \} = planStep\(step, new Map\(\)\);/,
+    'the step loop must re-plan at execution time with a FRESH memo (the pre-pass hash/memo may predate an earlier step\'s edit) — the cache write uses this currentHash',
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /stepPlan\.get\(step\.name\)\.(currentHash|action)|=\s*stepPlan\.get\(step\.name\)/,
+    'the step loop must never read currentHash/action back out of the pre-pass',
   );
   assert.equal(
     (pipelineBody.match(/composeInputHash\(/g) || []).length,
     1,
-    'exactly one composeInputHash(...) call site may remain in runPipeline — the computation was moved, not copied',
+    'exactly one composeInputHash(...) call site may remain in runPipeline — one helper, never an inline duplicate',
   );
 });
+
+// Castwright#3393 review pass 2: the cache entry must record the step's inputs
+// as they were when THAT step started, not as they were when the pre-pass
+// planned the run. Step A (`lint`) rewrites a file that only step B
+// (`check:onbox-register`) reads; B passes only on the rewritten content. The
+// test then restores the file and re-runs: B's inputs are now different from
+// what B actually ran against, so it must run again (and fail), never
+// print `[cached]`.
+async function runTwoStepFixture({ sharedFile }) {
+  const dir = makeGitFixture();
+  // `sharedFile` true: the mutated file is ALSO an input of step A (a `.mjs`
+  // matched by both `lint` and `check:onbox-register`), so a per-run memo
+  // populated while planning/running A would serve B a stale hash.
+  const target = sharedFile ? 'scripts/shared.mjs' : 'docs/testing/onbox-acceptance-register.md';
+  mkdirSync(dirname(join(dir, target)), { recursive: true });
+  writeFileSync(join(dir, target), 'orig', 'utf8');
+  writeFileSync(
+    join(dir, 'a.mjs'),
+    `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(join(dir, target))}, 'mutated');\n`,
+    'utf8',
+  );
+  writeFileSync(
+    join(dir, 'b.mjs'),
+    `import { readFileSync } from 'node:fs';\nprocess.exit(readFileSync(${JSON.stringify(join(dir, target))}, 'utf8') === 'mutated' ? 0 : 1);\n`,
+    'utf8',
+  );
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'stale-hash-fixture',
+      private: true,
+      scripts: { lint: 'node a.mjs', 'check:onbox-register': 'node b.mjs' },
+    }),
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  const run = async () => {
+    const logs = [];
+    const originalLog = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try {
+      const result = await runPipeline({
+        argv: ['--steps', 'lint,check:onbox-register'],
+        cwd: dir,
+        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+      });
+      return { result, logs };
+    } finally {
+      console.log = originalLog;
+    }
+  };
+
+  const first = await run();
+  assert.equal(first.result, 0, `run 1 must pass (B sees the mutated file):\n${first.logs.join('\n')}`);
+  writeFileSync(join(dir, target), 'orig', 'utf8'); // put the input back
+  const second = await run();
+  return { second };
+}
+
+for (const [label, sharedFile] of [
+  ['an input only the later step reads', false],
+  ['an input BOTH steps read (per-run memo route)', true],
+]) {
+  test(`runPipeline: a step's cache entry reflects its inputs at START, not at plan time — ${label} (#3393)`, async () => {
+    const { second } = await runTwoStepFixture({ sharedFile });
+    assert.ok(
+      !second.logs.some((l) => l.includes('[cached] check:onbox-register')),
+      `check:onbox-register ran against content that no longer exists on disk; it must not be [cached]:\n${second.logs.join('\n')}`,
+    );
+    assert.ok(second.logs.some((l) => l.includes('[run] check:onbox-register')));
+    assert.equal(second.result, 1, 'B fails on the restored content');
+  });
+}
 
 test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {
   const dir = makeGitFixture();
