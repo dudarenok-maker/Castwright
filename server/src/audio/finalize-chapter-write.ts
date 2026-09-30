@@ -148,10 +148,13 @@ export interface FinalizeChapterAudioInput {
       The stale-row drop below removes the OLD take's rows for
       `resynthesizedIndices`; these replace them, so a whole-character
       re-record leaves the character with a centroid instead of reading as
-      "embed failed" in the QA report. Only rows keyed to a resynthesized
-      segment are used; a line whose re-embed failed simply has no row here
-      and stays unembedded. Ignored when `embeddings` (a full render) is
-      passed. */
+      "embed failed" in the QA report. Each row is matched to a resynthesized
+      segment by its `sentenceIds` (NOT by `characterId`, which after a cast
+      merge is the analysis id, not the segment's) and stored re-keyed to
+      that segment's raw `characterId`. A row matching no resynthesized
+      segment is ignored, and the first row per segment wins; a line whose
+      re-embed failed simply has no row here and stays unembedded. Ignored
+      when `embeddings` (a full render) is passed. */
   reembeddedRows?: EmbeddingRow[];
 }
 
