@@ -2870,10 +2870,18 @@ test('#3271: runPipeline calls the unconditional checks unguarded, outside the c
     /stepTouchedByDiff\([^)]*register-citations/,
     'the register-citation check must not be scope-filtered — it scans the whole tracked tree',
   );
+  // Scope-gating pin, aimed at the current spelling (the scope test is the
+  // shared `outOfScope` predicate over scopeDiff/scopeShared, defined AFTER the
+  // call). Everything before the call must be free of all three names: the call
+  // sits ahead of the scope machinery, so any of them appearing earlier means it
+  // was moved under (or after) a scope guard. Asserts the call was located first,
+  // so a failed extraction cannot pass vacuously.
+  const callIdx = body.indexOf('runUnconditionalLocalChecks({');
+  assert.ok(callIdx > 0, 'could not locate the runUnconditionalLocalChecks call in runPipeline');
   assert.doesNotMatch(
-    body,
-    /if \(scopeDiff !== null && !scopeShared[\s\S]{0,400}?runUnconditionalLocalChecks/,
-    'the unconditional checks must not be moved under a scopeDiff/scopeShared guard — ' +
+    body.slice(0, callIdx),
+    /outOfScope|scopeDiff|scopeShared/,
+    'the unconditional checks must not be moved under a scope guard — ' +
       'that is exactly the `--scope-branch`/`--scope-staged` skip this issue removes',
   );
 });
@@ -2970,6 +2978,29 @@ test('#3271: a full run executes the citation check every time, and never report
       `run ${run}: the checker must have been spawned exactly once per full run`,
     );
   }
+});
+
+test('#3271: a --scope-branch run with EVERY step out of scope still runs the citation check', async () => {
+  // makeGitFixture is on `main` with no diff vs main, so scopeDiff is [] and
+  // every STEPS[] entry is out of scope. The check must still run: it scans the
+  // whole tracked tree, so it can never be scope-gated.
+  const dir = makeGitFixture();
+  const marker = writeRegisterCitationFixture(dir);
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+  const env = { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' };
+
+  const { logs } = await captureLogs(() => runPipeline({ argv: ['--scope-branch'], cwd: dir, env }));
+
+  assert.ok(
+    logs.some((l) => l.includes('nothing in scope')),
+    `expected the all-out-of-scope path — got:\n${logs.join('\n')}`,
+  );
+  assert.ok(
+    logs.some((l) => l.startsWith(`[pass] ${CHECK_SCRIPT}`)),
+    `the citation check must run and pass under an all-out-of-scope --scope-branch run — got:\n${logs.join('\n')}`,
+  );
+  assert.equal(readFileSync(marker, 'utf8').length, 1, 'the checker must have been spawned once');
 });
 
 test('#3271: a broken citation fails the whole run with the checker error visible', async () => {
