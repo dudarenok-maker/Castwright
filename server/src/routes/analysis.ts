@@ -4854,6 +4854,11 @@ export async function runMainAnalyzerJob(
         await Promise.all(castWorkers);
         log(0, analyzerConcurrencyPeakLine('Cast detection', castTaskIndices.length));
 
+        /* #3084 P20 — In pipelined mode, Phase 1 escalation can overflow while Phase 0a
+           is still running. If the overflow occurred after the last Phase 0a dispatch,
+           it must be caught here before Phase 0b runs. */
+        throwIfReasoningOverflowed(job);
+
         /* Phase 1+ MUST NOT advance while any chapter is missing its cast —
            otherwise attribution / voice matching run against a partial
            roster and the user gets a degraded book without ever being
@@ -5839,6 +5844,12 @@ export async function runMainAnalyzerJob(
     const armsToJoin: Promise<void>[] = [runPhase1Pool()];
     if (phase0PoolPromise) armsToJoin.push(phase0PoolPromise);
     await Promise.all(armsToJoin);
+
+    /* #3084 P20 — An escalation overflow that occurred after the last chapter
+       dispatch (e.g., while the last chapter's escalation was in flight after
+       the pool joined) was not caught here, leaving the job in SUCCESS state
+       despite reasoningOverflowed=true. Rethrow it now. */
+    throwIfReasoningOverflowed(job);
 
     /* Plan 88 follow-up — Phase 0 ended with failed cast chapters; emit
        the `cast_incomplete` SSE error and bail. Phase 1 workers exited
@@ -7694,6 +7705,12 @@ export async function runSubsetAnalyzerJob(
         model: phase1ModelId,
       });
     }
+
+    /* #3084 P20 — An escalation overflow that occurred after the last chapter
+       dispatch (e.g., while the last chapter's escalation was in flight after
+       the loop exited) was not caught, leaving the job in SUCCESS state despite
+       reasoningOverflowed=true. Rethrow it now. */
+    throwIfReasoningOverflowed(job);
 
     /* Stitch the full sentence list across all cached chapters (old + new),
        in narrative order. Excluded chapters contribute nothing. */

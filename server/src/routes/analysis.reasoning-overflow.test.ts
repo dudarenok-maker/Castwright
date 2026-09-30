@@ -593,4 +593,70 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
     expect(run.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
     expect(run.job.controller.signal.aborted).toBe(false);
   }, 90_000);
+
+  /* #3084 P20 — Tail-call gap detection: escalation overflows that occur after
+     the last chapter dispatch (or after all in-flight dispatches join) were not
+     checked, so the job ended as SUCCESS even though reasoningOverflowed was true.
+     These three cases exercise the three tail gaps:
+     1. Main route: overflow in chapter 2 (last) at pool width 1 (after Phase 1 pool joins)
+     2. Main route: overflow in chapter 1 while chapter 2 in flight (width 2) (after pool joins)
+     3. Subset route: overflow in chapter 2 (last) at width 1 (after subset loop)
+  */
+  async function runTailCase(
+    route: 'main' | 'subset',
+    overflowOnChapter: number,
+    poolWidth: string,
+  ): Promise<{ escalate: ReturnType<typeof vi.fn>; stage2: ReturnType<typeof vi.fn>; job: AnalysisJob; events: CapturedEvent[]; bookDir: string }> {
+    const seed = await seedBook(`tail-${route}-${overflowOnChapter}-${poolWidth}`, [1, 2], { fullCache: route === 'subset' });
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    const escalate = vi.fn(async (_m: string, chapterId: number, _w: number, _p: string, call: StageCall) => {
+      if (chapterId === overflowOnChapter) call.onReasoningOverflow?.(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100));
+      return null;
+    });
+    const stage2 = vi.fn(async (_m: string, chapterId: number): Promise<Stage2ChapterOutput> => stage2For(chapterId));
+    const phase1Selection = buildSelection(stubAnalyzer({ runAttributionEscalation: escalate, runStage2Chapter: stage2 }), MODEL);
+    const { runMainAnalyzerJob, runSubsetAnalyzerJob } = await import('./analysis.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = poolWidth;
+    try {
+      const record = getManuscript(seed.manuscriptId)!;
+      if (route === 'main') {
+        (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection = phase1Selection;
+        const events = captureEvents(seed.job);
+        await runMainAnalyzerJob(seed.job, record as never, seed.phase0Selection, {
+          requestedFresh: true,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+        return { escalate, stage2, job: seed.job, events, bookDir: seed.bookDir };
+      }
+      const job = { ...seed.job, kind: 'subset', subsetChapterIds: [1, 2] } as unknown as AnalysisJob;
+      const events = captureEvents(job);
+      await runSubsetAnalyzerJob(job, record as never, seed.phase0Selection, phase1Selection, record.chapterHints, false);
+      return { escalate, stage2, job, events, bookDir: seed.bookDir };
+    } finally {
+      process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  describe('tail-call overflow gap (no dispatch check after the final chapter)', () => {
+    for (const route of ['main', 'subset'] as const) {
+      it(`${route}: overflow in the LAST chapter's escalation (pool width 1) — #3084 P20`, async () => {
+        const r = await runTailCase(route, 2, '1');
+        expect(r.job.reasoningOverflowed).toBe(true);
+        expect(r.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
+        expect(r.events.some((e) => e.kind === 'result')).toBe(false);
+      }, 60_000);
+    }
+
+    it('main: overflow in chapter 1 escalation while chapter 2 in flight (pool width 2) — #3084 P20', async () => {
+      const r = await runTailCase('main', 1, '2');
+      expect(r.job.reasoningOverflowed).toBe(true);
+      expect(r.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
+      expect(r.events.some((e) => e.kind === 'result')).toBe(false);
+    }, 60_000);
+  });
 });
