@@ -487,8 +487,11 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
     const histPath = join(bookDir, '.audiobook', 'cast-id-history.json');
     const originalSegs = readFileSync(segPath, 'utf8');
     try {
-      const file = JSON.parse(originalSegs) as { segments: Array<{ characterId: string; sentenceIds: number[] }> };
+      const file = JSON.parse(originalSegs) as { segments: Array<{ characterId: string; resolvedCharacterId?: string; sentenceIds: number[] }> };
       file.segments[1].characterId = 'amyold';
+      // The route's ownership check matches on the stamped canonical id; set it
+      // here rather than inheriting it from an earlier test's splice write.
+      file.segments[1].resolvedCharacterId = 'amy';
       writeFileSync(segPath, JSON.stringify(file));
       writeFileSync(histPath, JSON.stringify({ schema: 1, supersededBy: { amyold: 'amy' } }));
       await writeEmbeddings(
