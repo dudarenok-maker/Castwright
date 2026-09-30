@@ -141,6 +141,18 @@ export interface FinalizeChapterAudioInput {
       `<slug>.embeddings.json` sibling after the segments write. Optional — absent
       when `qa.speaker.enabled` is off or no stochastic-engine groups qualified. */
   embeddings?: EmbeddingRow[];
+  /** #3362 pass-7 🟠H — fresh embedding rows for the segments a PARTIAL
+      re-record (chapter-splice.ts `rerecord`, chapter-qa-repair.ts) just
+      re-synthesised, taken from `synthesiseChapter`'s own `embeddings` for
+      each take (same embed pass a full render uses; nothing else embeds).
+      The stale-row drop below removes the OLD take's rows for
+      `resynthesizedIndices`; these replace them, so a whole-character
+      re-record leaves the character with a centroid instead of reading as
+      "embed failed" in the QA report. Only rows keyed to a resynthesized
+      segment are used; a line whose re-embed failed simply has no row here
+      and stays unembedded. Ignored when `embeddings` (a full render) is
+      passed. */
+  reembeddedRows?: EmbeddingRow[];
 }
 
 export interface FinalizeChapterAudioResult {
@@ -613,12 +625,13 @@ export async function finalizeChapterAudioWrite(
        rows here instead: this write is the one place that knows exactly
        which segments were re-synthesised.
 
-       A dropped row leaves its segment unembedded until qa-repair's own
-       re-append (for an accepted candidate) or the next full render — the
+       The routes pass `reembeddedRows` (the fresh takes' vectors, from the
+       same embed pass a full render uses), which replace the dropped rows
+       below. Only a line whose re-embed FAILED (or was off / under the
+       duration floor / on a non-stochastic engine) stays unembedded — the
        same "no row for this segment yet" shape aggregate.ts's Phase-1 join
-       already tolerates for a segment its embeddings sibling never covered
-       (no audition fallback follows from a missing row on its own; a
-       segment with no row is simply not scored this pass).
+       already tolerates. Dropping WITHOUT re-embedding is what made a
+       whole-character re-record read as embed-failed (pass-7 🟠H).
 
        Skipped when this call DID pass fresh `input.embeddings` (a full
        render, which just replaced the whole file above — nothing stale can
@@ -631,8 +644,14 @@ export async function finalizeChapterAudioWrite(
         [...resynthesizedIndexSet].map((i) => segKey(segments[i].characterId, segments[i].sentenceIds)),
       );
       const filteredRows = existing.rows.filter((r) => !droppedKeys.has(segKey(r.characterId, r.sentenceIds)));
-      if (filteredRows.length !== existing.rows.length) {
-        await writeEmbeddings(embPath, filteredRows, existing.version);
+      /* #3362 pass-7 🟠H — put back the fresh rows for the re-recorded takes
+         (keyed by the same tuple the drop used), so the character keeps a
+         centroid. Untouched segments' rows were never dropped above. */
+      const freshRows = (input.reembeddedRows ?? []).filter((r) =>
+        droppedKeys.has(segKey(r.characterId, r.sentenceIds)),
+      );
+      if (filteredRows.length !== existing.rows.length || freshRows.length > 0) {
+        await writeEmbeddings(embPath, [...filteredRows, ...freshRows], existing.version);
       }
     }
   }

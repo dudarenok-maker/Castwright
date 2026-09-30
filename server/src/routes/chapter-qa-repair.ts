@@ -539,6 +539,12 @@ chapterQaRepairRouter.post(
       // here so every synthesiseChapter call inside the synth loop below
       // resolves orphaned ids through the same history map.
 
+      /* #3362 pass-7 🟠H — embedding rows for each re-synthesised take that
+         ends up SPLICED (accepted or not), taken from synthesiseChapter's
+         own embed pass (`qa.speaker.enabled`), handed to finalize so it can
+         replace the stale rows it drops for `resynthesizedIndices`. Empty
+         when the gate is off or an embed failed (that line is unembedded). */
+      const reembeddedRows: EmbeddingRow[] = [];
       const replacements: SegmentReplacement[] = await buildSynthReplacements({
         segments: segFile.segments,
         targetIndices: safeTargetIndices,
@@ -556,6 +562,7 @@ chapterQaRepairRouter.post(
             voiceName?: string;
             baseVoiceName?: string;
             voiceSubstitutedFrom?: string;
+            embeddings?: EmbeddingRow[];
           } | null = null;
           let bestVerdict: SegmentQaVerdict | null = null;
           let bestAsr: AsrClassification | null = null;
@@ -649,6 +656,7 @@ chapterQaRepairRouter.post(
                 voiceName: bestSeg?.voiceName,
                 baseVoiceName: bestSeg?.baseVoiceName,
                 voiceSubstitutedFrom: bestSeg?.voiceSubstitutedFrom,
+                embeddings: r.embeddings,
               };
               bestVerdict = v;
               bestAsr = a;
@@ -657,6 +665,7 @@ chapterQaRepairRouter.post(
             if (isAcceptable(bestVerdict, bestAsr, bestCosine, candidate)) break;
           }
           if (!best) throw new Error('Re-record produced no audio.');
+          if (best.embeddings) reembeddedRows.push(...best.embeddings);
           const accepted = isAcceptable(bestVerdict, bestAsr, bestCosine, candidate);
           /* Same signal/ASR-only predicate isAcceptable gates on before it ever
              applies the conditional acoustic term (see isAcceptable above) —
@@ -772,6 +781,7 @@ chapterQaRepairRouter.post(
            `segFile.segments`'s order/length 1:1, so these indices still
            line up. */
         resynthesizedIndices: safeTargetIndices,
+        reembeddedRows,
         /* #2128 — carried forward verbatim, never refreshed. This path
            re-synthesises SOME sentences against the current resolver, correctly,
            but leaves every other segment byte-identical; refreshing the stamp

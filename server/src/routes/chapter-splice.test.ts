@@ -434,6 +434,43 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
     expect(Array.from(call.resynthesizedIndices as Iterable<number>)).toEqual([1]);
   });
 
+  /* #3362 pass-7 🟠H — the take's embedding row (synthesiseChapter's own
+     `embeddings`, the same pass a full render uses) must reach finalize as
+     `reembeddedRows`, or the stale-row drop leaves the re-recorded character
+     with no centroid. A take with no embedding (gate off / embed failed) just
+     contributes nothing — the splice still completes. */
+  it('threads the re-recorded take\'s embedding rows to finalize as reembeddedRows (🟠H); none when the embed pass produced none', async () => {
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    const row = { characterId: 'amy', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) };
+
+    finalizeSpy.mockClear();
+    synthMock.mockImplementationOnce(async () => ({
+      pcm: tone(0.3, 9000),
+      sampleRate: SR,
+      segments: [],
+      durationSec: 0.3,
+      rerecordMs: 0,
+      transcribeMs: 0,
+      embedMs: 0,
+      embeddings: [row],
+    }));
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+    expect(parseSse(res.text).some((e) => e.type === 'splice_complete'), `got ${res.text}`).toBe(true);
+    expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([row]);
+
+    finalizeSpy.mockClear();
+    const res2 = await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+    expect(parseSse(res2.text).some((e) => e.type === 'splice_complete'), `got ${res2.text}`).toBe(true);
+    expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([]);
+  });
+
   /* #1888 — synthesiseChapter (the repair's own synth call) DOES compute
      voiceSubstitutedFrom correctly per segment; this pins that the value
      actually survives onto the persisted segment through the splice route's

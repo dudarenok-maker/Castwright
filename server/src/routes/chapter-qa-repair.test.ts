@@ -409,6 +409,32 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(Array.from(call.resynthesizedIndices as Iterable<number>)).toEqual([1]);
   });
 
+  /* #3362 pass-7 🟠H — the spliced take's embedding rows (synthesiseChapter's
+     own embed pass) reach finalize as `reembeddedRows`, so the stale-row drop
+     doesn't strand the character without a centroid. */
+  it('threads the spliced take\'s embedding rows to finalize as reembeddedRows (🟠H)', async () => {
+    const row = { characterId: 'castor', sentenceIds: [2], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) };
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+      embeddings: [row],
+    }));
+
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    finalizeSpy.mockClear();
+
+    const { bookId: id } = await scaffoldVerdictBook('Reembed Story');
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+    expect(parseSse(res.text).find((e) => e.type === 'qa_repair_complete'), res.text).toBeTruthy();
+
+    expect(finalizeSpy).toHaveBeenCalledTimes(1);
+    expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([row]);
+  });
+
   it('a failed repair (never becomes acceptable) still marks the segment suspect:true, not undefined', async () => {
     synthesiseChapterMock.mockReset();
     synthesiseChapterMock.mockImplementation(async () => ({

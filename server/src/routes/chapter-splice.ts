@@ -61,6 +61,7 @@ import {
   finalizeChapterAudioWrite,
   type ChapterSegmentsFile,
 } from '../audio/finalize-chapter-write.js';
+import type { EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
 import { abortInFlightChapterJob } from './generation.js';
 import { registerSplice } from './chapter-job-coordination.js';
 import { configValue } from '../config/resolver.js';
@@ -326,6 +327,13 @@ chapterSpliceRouter.post(
          `targetIndices` (exactly what feeds `buildSynthReplacements` below)
          counts as resynthesized. */
       let resynthesizedIndices: number[] = [];
+      /* #3362 pass-7 🟠H — the embedding rows synthesiseChapter's own embed
+         pass (`qa.speaker.enabled`) produced for each re-recorded take,
+         handed to finalize so it can replace the stale rows it drops for
+         `resynthesizedIndices` instead of leaving the character with no
+         centroid. Empty when the gate is off or an embed failed (that line
+         is then just unembedded). */
+      const reembeddedRows: EmbeddingRow[] = [];
 
       if (mode === 'remix') {
         replacements = [];
@@ -447,6 +455,7 @@ chapterSpliceRouter.post(
                   }
                 : {}),
             });
+            if (r.embeddings) reembeddedRows.push(...r.embeddings);
             const s = r.segments[0];
             return {
               pcm: r.pcm,
@@ -533,6 +542,7 @@ chapterSpliceRouter.post(
            order/length 1:1 (spliceChapterSegments never drops or reorders a
            segment), so these indices still line up. */
         resynthesizedIndices,
+        reembeddedRows,
         /* #2128 — carried forward verbatim, never refreshed. This path
            re-synthesises SOME sentences against the current resolver, correctly,
            but leaves every other segment byte-identical; refreshing the stamp

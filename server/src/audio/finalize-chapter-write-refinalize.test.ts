@@ -827,3 +827,137 @@ describe('finalizeChapterAudioWrite re-finalize regressions (#3362 pass-6 review
     expect(reFinalized.characterSnapshots?.mairin).toBeDefined();
   });
 });
+
+/* #3362 pass-7/8 🟠H — the embeddings drop (🟠G) alone turned a whole-
+   character re-record into "scored 0 / embed-failed 1" in the QA report
+   (the chapter's last stochastic rows were gone and nothing re-added them).
+   The routes now hand finalize the fresh rows synthesiseChapter's own embed
+   pass produced for the re-recorded takes (`reembeddedRows`); finalize
+   replaces the dropped rows with them. Untouched segments keep theirs. */
+describe('finalizeChapterAudioWrite re-embeds re-recorded lines (#3362 pass-7 🟠H)', () => {
+  const CAST = [
+    { id: 'mairin', name: 'Mairin', gender: 'female' as const, attributes: [], ttsEngine: 'qwen' as const },
+    { id: 'wren', name: 'Wren', gender: 'female' as const, attributes: [], ttsEngine: 'qwen' as const },
+  ];
+  // 12 mairin lines (indices 0-11) + 3 untouched wren lines (12-14).
+  const SEGS = [
+    ...Array.from({ length: 12 }, (_, i) => ({
+      groupIndex: i, characterId: 'mairin', sentenceIds: [i], startSec: i, endSec: i + 1, voiceName: 'v-old',
+    })),
+    ...Array.from({ length: 3 }, (_, i) => ({
+      groupIndex: 12 + i, characterId: 'wren', sentenceIds: [100 + i], startSec: 12 + i, endSec: 13 + i, voiceName: 'v-wren',
+    })),
+  ];
+  const baseInput = () => ({
+    bookId,
+    bookDir,
+    chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+    pcm: tone(15.0, 12000),
+    sampleRate: SR,
+    durationSec: 15.0,
+    cast: CAST,
+    castIdHistory: { schema: 1, supersededBy: {} } as const,
+    defaultEngine: 'qwen' as const,
+    modelKey: 'qwen3-tts-0.6b' as const,
+    audioFormat: 'mp3' as const,
+  });
+
+  async function renderAndScore(): Promise<EmbeddingRow[]> {
+    writeCast(CAST);
+    writeHistory({ schema: 1, supersededBy: {} });
+    const rows: EmbeddingRow[] = SEGS.map((s, i) => ({
+      characterId: s.characterId,
+      sentenceIds: s.sentenceIds,
+      vec: vec(s.characterId === 'wren' ? Math.PI / 2 + 0.01 * i : 0.02 * i),
+    }));
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: SEGS,
+      resynthesizedIndices: 'all',
+      embeddings: rows,
+    });
+    await scoreBook(bookDir, [{ id: 1, slug: SLUG }], undefined, makeAuditionStub());
+    return rows;
+  }
+
+  it('a whole-character re-record keeps the chapter scored (scored 1 / embed-failed 0), with fresh rows for the re-recorded lines and the untouched lines\' rows preserved', async () => {
+    const { buildAudioQaReport } = await import('./qa-report.js');
+    const original = await renderAndScore();
+    const before = await buildAudioQaReport(bookDir, [{ id: 1, slug: SLUG }]);
+    expect(before.voiceDrift.chaptersScored).toBe(1);
+    expect(before.voiceDrift.chaptersEmbedFailed).toBe(0);
+
+    const rendered = readSegFile();
+    const mairinIdx = Array.from({ length: 12 }, (_, i) => i);
+    const reRecorded = rendered.segments.map((s, i) => (i < 12 ? { ...s, voiceName: 'v-new' } : s));
+    // The fresh takes' vectors — deliberately different from the originals.
+    const fresh: EmbeddingRow[] = mairinIdx.map((i) => ({
+      characterId: 'mairin',
+      sentenceIds: [i],
+      vec: vec(0.5 + 0.01 * i),
+    }));
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: reRecorded,
+      resynthesizedIndices: mairinIdx,
+      reembeddedRows: fresh,
+    });
+
+    const embPath = join(audioRoot, `${SLUG}.embeddings.json`);
+    const after = await readEmbeddings(embPath);
+    expect(after).not.toBeNull();
+    expect(after!.rows.length).toBe(15);
+    for (let i = 0; i < 12; i += 1) {
+      const row = after!.rows.find((r) => r.characterId === 'mairin' && r.sentenceIds[0] === i)!;
+      expect(Array.from(row.vec)).toEqual(Array.from(fresh[i].vec));
+    }
+    for (const orig of original.filter((r) => r.characterId === 'wren')) {
+      const row = after!.rows.find((r) => r.characterId === 'wren' && r.sentenceIds[0] === orig.sentenceIds[0])!;
+      expect(Array.from(row.vec)).toEqual(Array.from(orig.vec));
+    }
+
+    await scoreBook(bookDir, [{ id: 1, slug: SLUG }], undefined, makeAuditionStub());
+    const report = await buildAudioQaReport(bookDir, [{ id: 1, slug: SLUG }]);
+    expect(report.voiceDrift.chaptersScored).toBe(1);
+    expect(report.voiceDrift.chaptersEmbedFailed).toBe(0);
+  });
+
+  it('a line whose re-embed failed (no fresh row) is simply unembedded — the splice still completes, the other re-recorded lines keep fresh rows, and the stale row is not resurrected', async () => {
+    await renderAndScore();
+    const rendered = readSegFile();
+    const mairinIdx = Array.from({ length: 12 }, (_, i) => i);
+    // Line 5's embed failed: its row is absent from the fresh set.
+    const fresh: EmbeddingRow[] = mairinIdx
+      .filter((i) => i !== 5)
+      .map((i) => ({ characterId: 'mairin', sentenceIds: [i], vec: vec(0.5 + 0.01 * i) }));
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: rendered.segments,
+      resynthesizedIndices: mairinIdx,
+      reembeddedRows: fresh,
+    });
+    const after = await readEmbeddings(join(audioRoot, `${SLUG}.embeddings.json`));
+    expect(after!.rows.length).toBe(14); // 15 - the one failed line
+    expect(after!.rows.some((r) => r.characterId === 'mairin' && r.sentenceIds[0] === 5)).toBe(false);
+    expect(after!.rows.filter((r) => r.characterId === 'mairin').length).toBe(11);
+  });
+
+  it('ignores a fresh row for a segment that was NOT resynthesized (an untouched segment keeps its render-time row)', async () => {
+    const original = await renderAndScore();
+    const rendered = readSegFile();
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: rendered.segments,
+      resynthesizedIndices: [0],
+      reembeddedRows: [
+        { characterId: 'mairin', sentenceIds: [0], vec: vec(0.9) },
+        { characterId: 'wren', sentenceIds: [100], vec: vec(0.9) }, // not a resynthesized key
+      ],
+    });
+    const after = await readEmbeddings(join(audioRoot, `${SLUG}.embeddings.json`));
+    const wren100 = after!.rows.find((r) => r.characterId === 'wren' && r.sentenceIds[0] === 100)!;
+    const orig = original.find((r) => r.characterId === 'wren' && r.sentenceIds[0] === 100)!;
+    expect(Array.from(wren100.vec)).toEqual(Array.from(orig.vec));
+    expect(after!.rows.length).toBe(15);
+  });
+});
