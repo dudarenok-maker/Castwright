@@ -63,6 +63,8 @@ const TITLE_LED_MANUSCRIPT_ID = 'm_title_led';
    to a DIFFERENT character than segments.json (the on-disk fixture below)
    records for it, reproducing the attribution-source disagreement. */
 const DIVERGENT_MANUSCRIPT_ID = 'm_divergent';
+/* #3362 🟠B — one cast character spelled two ways across a chapter's segments. */
+const MIXED_SPELLING_MANUSCRIPT_ID = 'm_mixed_spelling';
 vi.mock('../store/analysis-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
   return {
@@ -70,6 +72,16 @@ vi.mock('../store/analysis-cache.js', async (importOriginal) => {
     loadAnalysisCache: vi.fn(async (manuscriptId: string) => {
       if (manuscriptId === TITLE_LED_MANUSCRIPT_ID) {
         return { chapters: { 1: [{ id: 1, characterId: 'amy', text: 'The first body line.' }] } };
+      }
+      if (manuscriptId === MIXED_SPELLING_MANUSCRIPT_ID) {
+        return {
+          chapters: {
+            1: [1, 2, 3, 4].map((id) => ({ id, characterId: 'the_torment', text: `Torment line ${id}.` }))
+              .concat([{ id: 5, characterId: 'the-torment', text: 'Torment line 5.' }])
+              .concat([{ id: 6, characterId: 'amy', text: 'Amy line.' }])
+              .concat([{ id: 7, characterId: 'the-torment', text: 'Legacy line.' }]),
+          },
+        };
       }
       if (manuscriptId === DIVERGENT_MANUSCRIPT_ID) {
         // segments.json (below) says sentence 5 belongs to 'castor'; the
@@ -684,6 +696,119 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-38 Wave 3c 
    the WHOLE splice the moment any targeted segment's segFile characterId
    disagrees with the current analysis's characterId for the same
    sentenceIds, instead of rendering anything. */
+describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — #3362 🟠B target selection by resolved cast id', () => {
+  let mixedBookId: string;
+
+  beforeAll(async () => {
+    const [{ makeBookId: makeId }, mp3] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../tts/mp3.js'),
+    ]);
+    const author = 'Mixed Spelling Author';
+    const series = 'Standalones';
+    const title = 'Mixed Spelling Story';
+    mixedBookId = makeId(author, series, title);
+    const bookDir = join(workspaceRoot, 'books', author, series, title);
+    const mixedAudioRoot = join(bookDir, 'audio');
+    mkdirSync(mixedAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: mixedBookId,
+        manuscriptId: MIXED_SPELLING_MANUSCRIPT_ID,
+        title,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'en',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:04' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'the_torment', name: 'The Torment', gender: 'female', attributes: [] },
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+        ],
+      }),
+    );
+    const mp3Bytes = await mp3.encodePcmToAudio(
+      Buffer.concat(Array.from({ length: 7 }, () => tone(0.5, 9000))),
+      SR,
+      { format: 'mp3', quality: 2 },
+    );
+    writeFileSync(join(mixedAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    const seg = (i: number, characterId: string, resolvedCharacterId?: string) => ({
+      groupIndex: i,
+      characterId,
+      ...(resolvedCharacterId ? { resolvedCharacterId } : {}),
+      sentenceIds: [i + 1],
+      startSec: i * 0.5,
+      endSec: (i + 1) * 0.5,
+    });
+    writeFileSync(
+      join(mixedAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: mixedBookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 3.5,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          seg(0, 'the_torment', 'the_torment'),
+          seg(1, 'the_torment', 'the_torment'),
+          seg(2, 'the_torment', 'the_torment'),
+          seg(3, 'the_torment', 'the_torment'),
+          // Same cast character, other spelling, stamped to the cast id; LAST of its lines.
+          seg(4, 'the-torment', 'the_torment'),
+          seg(5, 'amy', 'amy'),
+          // Legacy line: other spelling, NO stamp — deliberately not resolved.
+          seg(6, 'the-torment'),
+        ],
+      }),
+    );
+  });
+
+  async function rerecord(body: Record<string, unknown>): Promise<number[] | null> {
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    finalizeSpy.mockClear();
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(mixedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', modelKey: 'kokoro-v1', ...body });
+    const events = parseSse(res.text);
+    if (!events.some((e) => e.type === 'splice_complete')) return null;
+    return Array.from(finalizeSpy.mock.calls[0][0].resynthesizedIndices as Iterable<number>);
+  }
+
+  it('a cast-id request selects every line stamped to that cast character, whatever its raw spelling; never another character or an unstamped legacy spelling', async () => {
+    expect(await rerecord({ characterId: 'the_torment' })).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('a raw-id request (Listen per-line marker) still selects its own line', async () => {
+    expect(await rerecord({ characterId: 'the-torment', segmentIndices: [4] })).toEqual([4]);
+  });
+
+  it('a raw-id request selects lines with that raw id (stamped or not), not lines merely stamped to a different raw spelling', async () => {
+    expect(await rerecord({ characterId: 'the-torment' })).toEqual([4, 6]);
+  });
+
+  it("refuses segmentIndices naming a different character's line", async () => {
+    expect(await rerecord({ characterId: 'the_torment', segmentIndices: [5] })).toBeNull();
+  });
+});
+
 describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — #1972 attribution-source divergence', () => {
   let divergentBookId: string;
   let divergentAudioRoot: string;

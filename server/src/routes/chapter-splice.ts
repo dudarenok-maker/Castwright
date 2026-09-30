@@ -166,8 +166,18 @@ chapterSpliceRouter.post(
       return fail('Chapter segments metadata is missing or unreadable — re-render the chapter.');
     }
 
+    /* #3362 🟠B — which segments belong to the requested character. The
+       "Fix audio" button sends the CAST id, while the Listen per-line marker
+       sends a line's RAW `characterId`; one cast character can be spelled two
+       ways in one chapter (`the_torment` / `the-torment`). A segment is the
+       character's when EITHER its render-time stamp (`resolvedCharacterId`,
+       falling back to the raw id when unstamped) OR its raw `characterId`
+       equals the request. STAMPED ONLY (owner decision): an unstamped legacy
+       spelling is never resolved here, so no resolver join. */
     let targetIndices = segFile.segments
-      .map((s, i) => (s.characterId === characterId ? i : -1))
+      .map((s, i) =>
+        (s.resolvedCharacterId ?? s.characterId) === characterId || s.characterId === characterId ? i : -1,
+      )
       .filter((i) => i >= 0);
     if (!targetIndices.length) {
       return fail(`Character "${characterId}" has no segments in this chapter.`);
