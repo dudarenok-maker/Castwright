@@ -225,7 +225,7 @@ last, alone, since it deliberately crashes the sidecar twice.
     is per line (#3362): after a voice change, re-record only some lines and
     Revisions must keep flagging the chapter until every line is re-recorded.
     This holds for chapters whose lines all carry a per-segment voice stamp
-    (`voiceName`/`baseVoiceName`, #1992, 2026-07-31); in an older mixed chapter
+    (`voiceName`/`baseVoiceName`, #1992, merged 2026-07-31, not yet in a release); in an older mixed chapter
     (voiceless legacy lines plus re-recorded stamped lines) drift can clear
     while legacy lines are still in the old voice — not a regression. Use a
     chapter rendered after 2026-07-31.

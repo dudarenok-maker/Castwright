@@ -3617,7 +3617,7 @@ already-analysed book.
 > changing a voice and re-recording only some lines, Revisions must keep
 > flagging the chapter until every line is re-recorded. **Condition:** this
 > holds for chapters whose lines all carry a per-segment voice stamp
-> (`voiceName`/`baseVoiceName`, shipped #1992, 2026-07-31). In a chapter rendered
+> (`voiceName`/`baseVoiceName`, merged #1992, 2026-07-31 — on `main`, not yet in a release). In a chapter rendered
 > before that, a mixed chapter (voiceless legacy lines plus re-recorded stamped
 > lines) can clear drift while the legacy lines are still in the old voice —
 > the snapshot's voice is read only when no line under that key carries a
