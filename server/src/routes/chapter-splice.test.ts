@@ -260,8 +260,8 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
      resynthesizedIndices to finalizeChapterAudioWrite, freezing identity for
      every segment in the chapter. Nothing in this file previously asserted
      what the route actually passes — mutation M2 (dropping the wiring
-     entirely, which finalize's now-required field would turn into a
-     silent 'all') stayed green. */
+     entirely: tsc now rejects the omission, but at runtime an absent field
+     reads as "nothing re-synthesised", the opposite of 'all') stayed green. */
   it('threads an EMPTY resynthesizedIndices to finalize — nothing was actually re-synthesised (🟡1)', async () => {
     const finalizeMod = await import('../audio/finalize-chapter-write.js');
     const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
@@ -416,8 +416,9 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
   /* #3362 pass-6 (🟡1) — a rerecord's resynthesizedIndices must be EXACTLY
      the on-disk indices this call re-synthesised (`targetIndices`, fs-10's
      own index mapping) — never omitted, never every segment. Mutation M2
-     (dropping the wiring) turns this into finalize's 'all' default and
-     stayed green before this test existed. */
+     (dropping the wiring) is a compile error now, and at runtime an absent
+     field reads as "nothing re-synthesised"; it stayed green before this
+     test existed. */
   it('threads EXACTLY the resynthesized index (index 1, the mapped body line) to finalize (🟡1)', async () => {
     const finalizeMod = await import('../audio/finalize-chapter-write.js');
     const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);

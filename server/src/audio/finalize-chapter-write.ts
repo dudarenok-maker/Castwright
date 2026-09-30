@@ -358,8 +358,8 @@ export async function finalizeChapterAudioWrite(
 
   /* #3362 pass-5 fix (🟠E, owner design (i)) — `resynthesizedIndices` (see
      its own doc comment on `FinalizeChapterAudioInput`) splits `segments`
-     into the ones THIS write actually re-synthesised (default: all of
-     them — a full render) and the ones it merely carried through byte-
+     into the ones THIS write actually re-synthesised (`'all'` for a full
+     render) and the ones it merely carried through byte-
      identical (a re-finalize's untouched lines). Only the former feed fresh
      resolution below; the latter are frozen further down, at the
      characterSnapshots merge and the stamping block. */
@@ -643,9 +643,16 @@ export async function finalizeChapterAudioWrite(
        whole-character re-record read as embed-failed (pass-7 🟠H).
 
        Skipped when this call DID pass fresh `input.embeddings` (a full
-       render, which just replaced the whole file above — nothing stale can
-       survive that) and when nothing was resynthesised at all (a pure
-       remix has no stale vector to invalidate). */
+       render with speaker QA on, which just replaced the whole file above —
+       nothing stale can survive that) and when nothing was resynthesised at
+       all (a pure remix has no stale vector to invalidate).
+
+       NOT skipped for a full render that passes no `input.embeddings`
+       (`'all'` with speaker QA off, or a failed embed pass —
+       synthesise-chapter.ts:3303-3319): every row matching the new segments
+       is dropped. That is right — the audio was just re-rendered, so those
+       rows are stale — and leaves the chapter unembedded until a render
+       embeds it. */
     const embPath = join(audioRoot, `${chapter.slug}.embeddings.json`);
     const existing = await readEmbeddings(embPath).catch(() => null);
     if (existing) {

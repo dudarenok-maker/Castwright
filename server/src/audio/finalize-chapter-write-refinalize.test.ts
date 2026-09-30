@@ -6,8 +6,9 @@
    touched — silently repainting an untouched line's `resolvedCharacterId`
    and folding its voice into a DIFFERENT character's `resolvedVoiceName`
    ("last wins"). owner design (i): identity is FROZEN for a segment this
-   write did not itself re-synthesize; only `resynthesizedIndices` (or its
-   default — every index, the shape of a full render) get resolved fresh.
+   write did not itself re-synthesize; only `resynthesizedIndices` (`'all'` —
+   every index, the shape of a full render — or the exact indices) get
+   resolved fresh.
 
    Each test below follows the reviewer's own repro shape: call the REAL
    `finalizeChapterAudioWrite` twice (an initial render, then a re-finalize
@@ -990,6 +991,19 @@ describe('finalizeChapterAudioWrite re-embeds re-recorded lines (#3362 pass-7 �
     expect(after!.rows.length).toBe(14); // 15 - the one failed line
     expect(after!.rows.some((r) => r.characterId === 'mairin' && r.sentenceIds[0] === 5)).toBe(false);
     expect(after!.rows.filter((r) => r.characterId === 'mairin').length).toBe(11);
+  });
+
+  it('a full render that passes no embeddings (speaker QA off / embed pass failed) drops every stale row matching the new segments', async () => {
+    await renderAndScore();
+    const rendered = readSegFile();
+    await finalizeChapterAudioWrite({
+      ...baseInput(),
+      segments: rendered.segments,
+      resynthesizedIndices: 'all',
+    });
+    const after = await readEmbeddings(join(audioRoot, `${SLUG}.embeddings.json`));
+    expect(after).not.toBeNull();
+    expect(after!.rows.length).toBe(0);
   });
 
   it('ignores a fresh row for a segment that was NOT resynthesized (an untouched segment keeps its render-time row)', async () => {
