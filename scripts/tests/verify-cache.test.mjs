@@ -2069,6 +2069,55 @@ fs.writeFileSync('.exec-count', String(count));
   );
 });
 
+test('runPipeline: a lockfile edit alone re-runs a step whose only input is its lockfile (planStep lock hashing)', async () => {
+  const dir = makeGitFixture();
+  writeFileSync(join(dir, 'package-lock.json'), '{"v":1}', 'utf8');
+  writeFileSync(join(dir, 'increment.cjs'), `
+const fs = require('fs');
+fs.writeFileSync('.exec-count', String(parseInt(fs.readFileSync('.exec-count', 'utf8')) + 1));
+`, 'utf8');
+  writeFileSync(join(dir, '.exec-count'), '0', 'utf8');
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'cache-fixture', private: true, scripts: { audit: 'node increment.cjs' } }),
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'base']);
+
+  const run = async () => {
+    const logs = [];
+    const originalLog = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try {
+      const result = await runPipeline({
+        argv: ['--steps', 'audit'],
+        cwd: dir,
+        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+      });
+      return { result, logs };
+    } finally {
+      console.log = originalLog;
+    }
+  };
+
+  assert.equal((await run()).result, 0);
+  const second = await run();
+  assert.ok(
+    second.logs.some((l) => /^\[cached\] audit\b/.test(l)),
+    `run 2 expected [cached], got:\n${second.logs.join('\n')}`,
+  );
+  writeFileSync(join(dir, 'package-lock.json'), '{"v":2}', 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'bump lock']);
+  const third = await run();
+  assert.ok(
+    third.logs.some((l) => /^\[run\] audit\b/.test(l)),
+    `run 3 expected [run] after lockfile edit, got:\n${third.logs.join('\n')}`,
+  );
+  assert.equal(readFileSync(join(dir, '.exec-count'), 'utf8'), '2');
+});
+
 test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {
   const dir = makeGitFixture();
   writeHangingFixture(dir, 'test:server');

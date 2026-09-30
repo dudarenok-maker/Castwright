@@ -1445,15 +1445,20 @@ export function qualifiedDurationFor(cache, stepName) {
  *  own sleep duration; a formula bug like B5's should never depend on
  *  outracing real subprocess overhead to be provable). The PER-STEP budget is
  *  the one that still widens under throttle — the whole-pipeline budget never
- *  does (Castwright#3361; see the comment at its call site in runPipeline). */
+ *  does (Castwright#3361; see the comment at its call site in runPipeline).
+ *  It widens the FLOOR, not computeBudgetMs' result: a calibrated baseline
+ *  recorded under throttle already absorbed it, so multiplying the result
+ *  double-counts it (PR #3260 review pass 2, B5). */
 export function computeStepBudgetMs(cache, stepName, floorMs, multiplier) {
   return computeBudgetMs(qualifiedDurationFor(cache, stepName), floorMs * multiplier);
 }
 
 /** The real whole-pipeline budget computation runPipeline uses — same
  *  extraction rationale as computeStepBudgetMs. `qualifiedRunDurationMs` is
- *  the SUM of the active steps' own qualified baselines (0 when nothing is
- *  calibratable, treated as null/uncalibrated per computeBudgetMs). The
+ *  the SUM of the qualified baselines of only the steps this run will
+ *  actually execute — out-of-scope and planned-`[cached]` steps excluded
+ *  (see sumQualifiedRunDurationMs); 0 when nothing is
+ *  calibratable, treated as null/uncalibrated per computeBudgetMs. The
  *  pipeline budget is never widened by throttle, calibrated or not: at this
  *  repo's real run size the floor term dominates, and a widened floor lands
  *  at 2x DEFAULT_RUN_TIMEOUT_MIN (360 min) — past the 273.8-min incident this
@@ -1792,10 +1797,6 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   const fileList = gitFileList(cwd);
   const nodeVer = process.version;
   const schemaVer = SCHEMA_VERSION;
-  const lockHashesAll = {
-    root: hashFile(join(cwd, 'package-lock.json')),
-    server: hashFile(join(cwd, 'server', 'package-lock.json')),
-  };
   let cache = loadCache(cachePath);
   if (cache.schemaVersion !== schemaVer) {
     cache = { schemaVersion: schemaVer, steps: {} };
@@ -1828,18 +1829,6 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
       return [rel, h];
     });
     const lockHashes = pickLockHashes(cwd, step.inputs.includeLockfiles ?? []);
-    // Always reuse the universal lockHashesAll-derived values to avoid
-    // re-reading the same file twice; pickLockHashes already memoizes via
-    // hashFile, but cache the call site cheaply too.
-    if (lockHashes.root === undefined && (step.inputs.includeLockfiles ?? []).includes('root')) {
-      lockHashes.root = lockHashesAll.root;
-    }
-    if (
-      lockHashes.server === undefined &&
-      (step.inputs.includeLockfiles ?? []).includes('server')
-    ) {
-      lockHashes.server = lockHashesAll.server;
-    }
     const fp = step.toolFingerprint ? step.toolFingerprint() : null;
     const currentHash = composeInputHash({
       stepName: step.name,
