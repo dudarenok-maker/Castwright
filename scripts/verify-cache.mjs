@@ -1794,7 +1794,7 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     scopeDiff !== null && !scopeShared && !stepTouchedByDiff(step, scopeDiff);
 
   const cachePath = join(cwd, CACHE_FILENAME);
-  const fileList = gitFileList(cwd);
+  let fileList = gitFileList(cwd);
   const nodeVer = process.version;
   const schemaVer = SCHEMA_VERSION;
   let cache = loadCache(cachePath);
@@ -1817,7 +1817,10 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   // can rewrite a later step's inputs while it runs (Castwright#3393 review
   // pass 2): the run/skip decision and the hash written to the cache on a pass
   // must describe the inputs at that moment, so neither may come from the
-  // pre-pass or from a memo populated before an earlier step ran.
+  // pre-pass or from a memo populated before an earlier step ran. The file SET
+  // obeys the same rule (pass 3): an earlier step can also CREATE a file inside
+  // this step's globs, so the loop re-takes `fileList` before each planStep —
+  // the pre-pass list (taken once, up front) is only good for the estimate.
   function planStep(step, memo) {
     const files = fileList ? selectStepFiles({ fileList, step }) : [];
     const entries = files.map((rel) => {
@@ -1895,7 +1898,12 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     // The stepPlan pre-pass above only sized the budget (Castwright#3361 task
     // 3). Hash + decide again NOW, with a fresh memo, so an earlier step's
     // mid-run edit to this step's inputs is seen; if it disagrees with the
-    // plan, this decision wins and the budget is not recomputed.
+    // plan, this decision wins and the budget is not recomputed. The file list
+    // is re-taken too (only when the up-front listing succeeded — a failed
+    // one keeps the whole run uncached, as announced above). A listing that
+    // fails here nulls `fileList`, so this step and the rest of the run go
+    // uncached, exactly as if the up-front listing had failed.
+    if (fileList !== null) fileList = gitFileList(cwd);
     const { currentHash, action } = planStep(step, new Map());
 
     if (action === 'skip') {

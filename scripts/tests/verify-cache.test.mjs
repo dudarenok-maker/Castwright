@@ -1851,6 +1851,11 @@ test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum
     /const \{ currentHash, action \} = planStep\(step, new Map\(\)\);/,
     'the step loop must re-plan at execution time with a FRESH memo (the pre-pass hash/memo may predate an earlier step\'s edit) — the cache write uses this currentHash',
   );
+  assert.match(
+    pipelineBody,
+    /if \(fileList !== null\) fileList = gitFileList\(cwd\);\s*\n\s*const \{ currentHash, action \} = planStep\(step, new Map\(\)\);/,
+    "the step loop must re-take the file list immediately before its planStep (an earlier step may have created a file in this step's globs); a failed up-front listing stays uncached",
+  );
   assert.doesNotMatch(
     pipelineBody,
     /stepPlan\.get\(step\.name\)\.(currentHash|action)|=\s*stepPlan\.get\(step\.name\)/,
@@ -1870,14 +1875,21 @@ test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum
 // test then restores the file and re-runs: B's inputs are now different from
 // what B actually ran against, so it must run again (and fail), never
 // print `[cached]`.
-async function runTwoStepFixture({ sharedFile }) {
+async function runTwoStepFixture({ sharedFile, createsFile = false }) {
   const dir = makeGitFixture();
   // `sharedFile` true: the mutated file is ALSO an input of step A (a `.mjs`
   // matched by both `lint` and `check:onbox-register`), so a per-run memo
   // populated while planning/running A would serve B a stale hash.
-  const target = sharedFile ? 'scripts/shared.mjs' : 'docs/testing/onbox-acceptance-register.md';
+  // `createsFile` true: the target does not exist (never `git add`ed) until A
+  // creates it, so it is absent from any file LIST taken before A ran — the
+  // file SET, not just the hashes, must be taken at B's start.
+  const target = createsFile
+    ? 'scripts/new.mjs'
+    : sharedFile
+      ? 'scripts/shared.mjs'
+      : 'docs/testing/onbox-acceptance-register.md';
   mkdirSync(dirname(join(dir, target)), { recursive: true });
-  writeFileSync(join(dir, target), 'orig', 'utf8');
+  if (!createsFile) writeFileSync(join(dir, target), 'orig', 'utf8');
   writeFileSync(
     join(dir, 'a.mjs'),
     `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(join(dir, target))}, 'mutated');\n`,
@@ -1918,7 +1930,9 @@ async function runTwoStepFixture({ sharedFile }) {
 
   const first = await run();
   assert.equal(first.result, 0, `run 1 must pass (B sees the mutated file):\n${first.logs.join('\n')}`);
-  writeFileSync(join(dir, target), 'orig', 'utf8'); // put the input back
+  // put the input back (or, for a file A created, take it away again)
+  if (createsFile) rmSync(join(dir, target));
+  else writeFileSync(join(dir, target), 'orig', 'utf8');
   const second = await run();
   return { second };
 }
@@ -1937,6 +1951,16 @@ for (const [label, sharedFile] of [
     assert.equal(second.result, 1, 'B fails on the restored content');
   });
 }
+
+test("runPipeline: a file an earlier step CREATES inside a later step's globs is in that step's hash (#3393 pass 3)", async () => {
+  const { second } = await runTwoStepFixture({ sharedFile: true, createsFile: true });
+  assert.ok(
+    !second.logs.some((l) => l.includes('[cached] check:onbox-register')),
+    `check:onbox-register passed only because step A created scripts/new.mjs, which is gone now; it must not be [cached]:\n${second.logs.join('\n')}`,
+  );
+  assert.ok(second.logs.some((l) => l.includes('[run] check:onbox-register')));
+  assert.equal(second.result, 1, 'B fails once the created file is deleted');
+});
 
 test('runPipeline with scope filtering: a step not touched by the diff prints [skip] and does not execute (#3393)', async () => {
   // Verifies the scope filter correctly identifies and skips steps outside the diff.
