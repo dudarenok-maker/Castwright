@@ -1922,7 +1922,7 @@ test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum
   );
   assert.match(
     pipelineBody,
-    /if \(fileList !== null\) fileList = gitFileList\(cwd\);\s*\n\s*const \{ currentHash, action \} = planStep\(step\);/,
+    /if \(fileList !== null\) \{\s*fileList = gitFileList\(cwd\);[^]*?\}\s*\n\s*const \{ currentHash, action \} = planStep\(step\);/,
     "the step loop must re-take the file list immediately before its planStep (an earlier step may have created a file in this step's globs); a failed up-front listing stays uncached",
   );
   assert.doesNotMatch(
@@ -2108,6 +2108,51 @@ test("runPipeline: a file an earlier step CREATES inside a later step's globs is
   );
   assert.ok(second.logs.some((l) => l.includes('[run] check:onbox-register')));
   assert.equal(second.result, 1, 'B fails once the created file is deleted');
+});
+
+test('runPipeline: a per-step file listing that fails mid-run logs the uncached notice once and writes no entry (#3393 pass 4)', async () => {
+  const dir = makeGitFixture();
+  // Step A corrupts the git index, so step B's re-taken `git ls-files` fails.
+  writeFileSync(
+    join(dir, 'a.mjs'),
+    `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(join(dir, '.git', 'index'))}, 'garbage');\n`,
+    'utf8',
+  );
+  writeFileSync(join(dir, 'b.mjs'), 'process.exit(0);\n', 'utf8');
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'listing-fails-fixture',
+      private: true,
+      scripts: { lint: 'node a.mjs', 'check:onbox-register': 'node b.mjs' },
+    }),
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  let result;
+  try {
+    result = await runPipeline({
+      argv: ['--steps', 'lint,check:onbox-register'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+    });
+  } finally {
+    console.log = originalLog;
+  }
+  assert.equal(result, 0, `both steps must still run and pass:\n${logs.join('\n')}`);
+  assert.ok(logs.some((l) => l.includes('[run] check:onbox-register')), logs.join('\n'));
+  assert.equal(
+    logs.filter((l) => l.includes('[verify-cache] git ls-files failed; running uncached')).length,
+    1,
+    `the mid-run listing failure must be announced exactly once:\n${logs.join('\n')}`,
+  );
+  const cache = JSON.parse(readFileSync(join(dir, '.verify-cache.json'), 'utf8'));
+  assert.equal(cache.steps['check:onbox-register'], undefined, 'no cache entry for the uncached step');
 });
 
 test('runPipeline with scope filtering: a step not touched by the diff prints [skip] and does not execute (#3393)', async () => {

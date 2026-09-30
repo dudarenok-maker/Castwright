@@ -768,8 +768,12 @@ export function hashFile(absPath) {
 // is unchanged; any difference — or a file that vanished — re-reads it, so a
 // step that rewrites an input mid-run is still seen by every later lookup,
 // at the price of one statSync per lookup instead of a read + sha256. Known
-// limit, same trade git's index makes: a rewrite that keeps size AND mtime
-// identical within the filesystem's timestamp resolution would be missed.
+// limit: a rewrite that keeps size, mtime, ctime AND ino identical is missed.
+// On NTFS ctime moves on any content write, so that needs two same-size writes
+// inside one filesystem timestamp tick (~15.6 ms) straddling a lookup. A step's
+// own writes can't reach that window (npm/node start-up and a `git ls-files`
+// spawn sit between steps); only an external writer saving twice within a tick
+// could. Unlike git's index, this memo does no racy-entry re-check.
 export function makeStatHashMemo(cwd, { hash = hashFile, stat = statSync } = {}) {
   const memo = new Map(); // rel -> { id, hash }
   return (rel) => {
@@ -1924,8 +1928,14 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     // is re-taken too (only when the up-front listing succeeded — a failed
     // one keeps the whole run uncached, as announced above). A listing that
     // fails here nulls `fileList`, so this step and the rest of the run go
-    // uncached, exactly as if the up-front listing had failed.
-    if (fileList !== null) fileList = gitFileList(cwd);
+    // uncached, and the same notice is logged (once, since `fileList` stays
+    // null from then on), exactly as if the up-front listing had failed.
+    if (fileList !== null) {
+      fileList = gitFileList(cwd);
+      if (fileList === null) {
+        console.log('[verify-cache] git ls-files failed; running uncached');
+      }
+    }
     const { currentHash, action } = planStep(step);
 
     if (action === 'skip') {
