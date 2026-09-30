@@ -828,6 +828,56 @@ describe('finalizeChapterAudioWrite re-finalize regressions (#3362 pass-6 review
   });
 });
 
+describe('finalizeChapterAudioWrite fold gate keeps C1 exact (#3362 pass-1 🟡D)', () => {
+  it('an untouched character\'s voice never masks a fresh character\'s missing voiceName — the C1 gap-fill still carries the fresh one\'s prior voice', async () => {
+    const CAST2 = [
+      { id: 'xx', name: 'Xx', gender: 'female' as const, attributes: [] },
+      { id: 'yy', name: 'Yy', gender: 'female' as const, attributes: [] },
+    ];
+    writeCast(CAST2);
+    writeHistory({ schema: 1, supersededBy: {} });
+    const base = {
+      bookId,
+      bookDir,
+      chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      pcm: tone(2.0, 12000),
+      sampleRate: SR,
+      durationSec: 2.0,
+      cast: CAST2,
+      castIdHistory: { schema: 1, supersededBy: {} } as const,
+      defaultEngine: 'kokoro' as const,
+      modelKey: 'kokoro-v1' as const,
+      audioFormat: 'mp3' as const,
+    };
+    await finalizeChapterAudioWrite({
+      ...base,
+      segments: [
+        { groupIndex: 0, characterId: 'xx', sentenceIds: [1], startSec: 0, endSec: 1, voiceName: 'v-x-old' },
+        { groupIndex: 1, characterId: 'yy', sentenceIds: [2], startSec: 1, endSec: 2, voiceName: 'v-y' },
+      ],
+      resynthesizedIndices: 'all',
+    });
+    const rendered = readSegFile();
+    expect(rendered.characterSnapshots?.xx?.resolvedVoiceName).toBe('v-x-old');
+
+    // Re-record xx's line WITHOUT a voiceName on the take (C1's defensive
+    // gap); yy stays untouched and still carries its own voice.
+    const reRecorded = rendered.segments.map((s, i) => {
+      if (i !== 0) return s;
+      const { voiceName: _dropped, baseVoiceName: _b, ...rest } = s;
+      return rest;
+    });
+    await finalizeChapterAudioWrite({ ...base, segments: reRecorded, resynthesizedIndices: [0] });
+
+    const after = readSegFile();
+    // Without the gate, yy's untouched voice lands in voiceNameByChar, its
+    // size equals speakingIds' ({xx}), and the gap-fill is skipped: xx would
+    // lose its voice.
+    expect(after.characterSnapshots?.xx?.resolvedVoiceName).toBe('v-x-old');
+    expect(after.characterSnapshots?.yy?.resolvedVoiceName).toBe('v-y');
+  });
+});
+
 /* #3362 pass-7/8 🟠H — the embeddings drop (🟠G) alone turned a whole-
    character re-record into "scored 0 / embed-failed 1" in the QA report
    (the chapter's last stochastic rows were gone and nothing re-added them).

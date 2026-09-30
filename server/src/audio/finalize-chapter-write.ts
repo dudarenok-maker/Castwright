@@ -410,11 +410,15 @@ export async function finalizeChapterAudioWrite(
      the stamping block further down both use) and folds ONLY when that
      frozen key is ALSO a fresh key this write (already in `speakingIds`,
      built from resynthesized segments in the loop just above, so it's
-     complete before this one runs). That gate is what keeps R2/R4's orphans
-     out: an untouched-ONLY character's frozen key never enters
-     `speakingIds`, so its segments are skipped here — untouched-only
-     characters get their WHOLE prior snapshot carried forward verbatim by
-     the untouchedStampedIds block below instead, unchanged by this fix. */
+     complete before this one runs). That gate keeps `voiceNameByChar ⊆
+     speakingIds`, so C1's size test (`voiceNameByChar.size <
+     speakingIds.size`, below) stays exact: without it an untouched,
+     non-fresh character's voice would count toward that size and mask a
+     fresh character's missing voice, skipping C1's gap-fill. (It does NOT
+     keep R2/R4's orphans out of the snapshots — `buildCharacterSnapshots`
+     only emits ids in `speakingIds` regardless. Untouched-ONLY characters
+     get their WHOLE prior snapshot carried forward verbatim by the
+     untouchedStampedIds block below.) */
   const fallbackByChar = new Map<string, string>();
   const voiceNameByChar = new Map<string, string>();
   for (let i = 0; i < segments.length; i++) {
