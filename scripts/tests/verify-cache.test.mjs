@@ -1692,7 +1692,16 @@ async function runHangingStepSpanMs(extraEnv) {
   // CI (Castwright#3419) can only come from an empty or truncated beat.txt.
   // Appending removes that window. The specific trigger on Linux CI was not
   // reproduced. Only a newline-terminated line is complete; a torn tail is dropped.
-  const { last, maxGap } = parseLastHeartbeat(readFileSync(join(dir, 'beat.txt'), 'utf8'));
+  const beatText = readFileSync(join(dir, 'beat.txt'), 'utf8');
+  const { last, maxGap } = parseLastHeartbeat(beatText);
+  // The span above assumes the fixture died at the kill. With append, a
+  // surviving hang.mjs would keep adding lines unnoticed, so prove it stopped.
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(
+    readFileSync(join(dir, 'beat.txt'), 'utf8').length,
+    beatText.length,
+    'the hanging fixture outlived the step kill: beat.txt kept growing after the step ended',
+  );
   return { spanMs: last - runLoggedAt, maxGapMs: maxGap };
 }
 
