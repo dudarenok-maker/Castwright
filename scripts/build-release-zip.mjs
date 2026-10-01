@@ -84,6 +84,21 @@ export const MANIFEST = {
     // removing that assertion first.
     'scripts/lib/is-main-module.mjs',
 
+    // PR #3404 review pass 2 — every scripts/lib/ file a SHIPPED scripts/*
+    // entry point imports must itself ship, or that entry point crashes at
+    // import time on a zip install (the same class as is-main-module.mjs
+    // above, caught here for stop-app.mjs/.ps1, restart-after-upgrade.mjs,
+    // and server/src/system/prevent-sleep.ts's runtime spawn). Pinned by
+    // scripts/tests/release-manifest.test.mjs's "every relative import
+    // target ... is itself shipped" scan plus its targeted prevent-sleep.ps1
+    // assertion — don't remove an entry here without checking that test.
+    'scripts/lib/pid-alive.mjs',
+    'scripts/lib/sidecar-sweep-port.mjs',
+    'scripts/lib/log-utils.psm1',
+    'scripts/lib/sidecar-sweep-port.psm1',
+    'scripts/lib/prevent-sleep.ps1',
+    'scripts/lib/prevent-sleep.psm1',
+
     // Frontend source + pre-built bundle
     'src/**',
     'dist/**',
@@ -111,6 +126,23 @@ export const MANIFEST = {
     'scripts/stop-app.mjs',
     'scripts/stop-app.ps1',
     'scripts/preflight-ffmpeg.cjs',
+    // start-app-prod.mjs dynamically imports this for best-effort mkcert LAN
+    // HTTPS cert provisioning (PR #3404 review pass 2 — caught by the
+    // release-manifest.test.mjs guard, not one of the review's named cases:
+    // the try/catch around the import means a missing entry degrades LAN
+    // HTTPS to loopback HTTP silently rather than crashing, but it's the
+    // same "shipped file depends on an unshipped scripts/ file" class).
+    'scripts/setup-lan-certs.mjs',
+    // `npm run install:cert-mobile` target. Shipped text tells a zip user to run
+    // it (start-app-prod.mjs's no-mkcert hint, server/src/index.ts's cert-less
+    // boot warning, the pair-device modal, INSTALL.md); unshipped it dies with
+    // ERR_MODULE_NOT_FOUND. Imports only qrcode (a dependency) + setup-lan-certs.mjs.
+    'scripts/print-cert-install-instructions.mjs',
+    // `npm run tts:sidecar` target. server/src/tts/sidecar.ts's "not reachable"
+    // error and the standalone (autoStartSidecar off) path tell the user to run
+    // it, and a zip install ships server/tts-sidecar/** (start.ps1/start.sh) for
+    // it to launch. Imports only scripts/lib/is-main-module.mjs, already shipped.
+    'scripts/launch-sidecar.mjs',
     // fs-1 upgrade machinery the deployer/runtime needs.
     'scripts/restart-after-upgrade.mjs',
     'scripts/setup-versioned-install.mjs',

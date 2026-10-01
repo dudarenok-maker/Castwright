@@ -190,3 +190,58 @@ Describe 'start-app.ps1 / stop-app.ps1 agree on $runDir (#2632 N35)' {
         $startSource | Should -Not -Match '\$runDir\s*=\s*Join-Path \$repoRoot "\.run"'
     }
 }
+
+# PR #3404 review pass 3, yellow D — stop-app.ps1 judged `taskkill`'s exit code
+# (the E104 defect: `/T` exits 128 on a churning tree that IS gone, so a
+# successful stop printed "[GONE] ... (already exited)"). Stop-ProcessTreeByLiveness
+# is the .mjs shape: pre-probe, kill, then a bounded wait on LIVENESS.
+Describe 'Stop-ProcessTreeByLiveness (PR #3404 pass 3)' {
+    BeforeAll {
+        # -WindowStyle is a Windows-only Start-Process parameter: pwsh on Linux
+        # throws NotSupportedException for it. $IsWindows is $null on Windows
+        # PowerShell 5.1, so Desktop edition is tested explicitly (a plain
+        # `-not $IsWindows` skip would also skip on 5.1).
+        $script:hideWindow = @{}
+        if ($PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows) { $script:hideWindow = @{ WindowStyle = 'Hidden' } }
+        function Start-Sleeper {
+            $hide = $script:hideWindow
+            Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 120' -PassThru @hide
+        }
+    }
+
+    It "returns 'gone' and never attempts a kill for a pid that is already dead" {
+        $hide = $script:hideWindow
+        $p = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList '-NoProfile', '-Command', 'exit 0' -PassThru @hide
+        $p.WaitForExit()
+        $script:attempted = $false
+        $r = Stop-ProcessTreeByLiveness -ProcessId $p.Id -KillAction { param($x) $script:attempted = $true }
+        $r | Should -Be 'gone'
+        $script:attempted | Should -BeFalse
+    }
+
+    It "returns 'killed' for a live pid even when the kill action reports failure (E104 shape: nonzero exit, tree gone)" {
+        $p = Start-Sleeper
+        try {
+            $r = Stop-ProcessTreeByLiveness -ProcessId $p.Id -KillAction {
+                param($x)
+                Stop-Process -Id $x -Force
+                $global:LASTEXITCODE = 128
+            }
+            $r | Should -Be 'killed'
+        } finally { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
+
+    It "returns 'failed' when the pid is still alive after the grace period" {
+        $p = Start-Sleeper
+        try {
+            $r = Stop-ProcessTreeByLiveness -ProcessId $p.Id -KillAction { param($x) } -GraceMs 400
+            $r | Should -Be 'failed'
+        } finally { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'stop-app.ps1 judges the kill by Stop-ProcessTreeByLiveness, never by $LASTEXITCODE' {
+        $stopSource = Get-Content (Join-Path $PSScriptRoot "..\stop-app.ps1") -Raw
+        $stopSource | Should -Match 'Stop-ProcessTreeByLiveness'
+        $stopSource | Should -Not -Match '\$LASTEXITCODE'
+    }
+}

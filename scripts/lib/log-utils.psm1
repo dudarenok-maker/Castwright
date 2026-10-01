@@ -74,4 +74,36 @@ function Resolve-RunDir {
     return Join-Path $RepoRoot ".run"
 }
 
-Export-ModuleMember -Function New-FreshLog, Remove-OldRotatedLogs, Resolve-RunDir
+function Test-ProcessAlive {
+    param([Parameter(Mandatory)][int]$ProcessId)
+    return $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
+}
+
+# Kill one pid's process tree and classify the outcome by LIVENESS, never by
+# taskkill's exit code (E104: `taskkill /T` exits nonzero — 128 on Windows —
+# when a child had already exited mid-walk even though the whole tree IS gone;
+# PR #3404 review pass 3). Mirrors scripts/stop-app.mjs's killTree: probe
+# BEFORE the kill (so "already exited" is told apart from "we killed it"), then
+# wait up to -GraceMs for the pid to actually exit.
+#
+# Returns 'gone' (dead before the call; no kill attempted), 'killed' (alive
+# beforehand, confirmed dead now) or 'failed' (still alive after the grace).
+# -KillAction is injectable purely for testing.
+function Stop-ProcessTreeByLiveness {
+    param(
+        [Parameter(Mandatory)][int]$ProcessId,
+        [scriptblock]$KillAction = { param($p) & taskkill /PID $p /T /F *> $null },
+        [int]$GraceMs = 5000,
+        [int]$PollMs = 100
+    )
+    if (-not (Test-ProcessAlive -ProcessId $ProcessId)) { return 'gone' }
+    try { & $KillAction $ProcessId } catch { }
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($GraceMs)
+    while ($true) {
+        if (-not (Test-ProcessAlive -ProcessId $ProcessId)) { return 'killed' }
+        if ([DateTime]::UtcNow -ge $deadline) { return 'failed' }
+        Start-Sleep -Milliseconds $PollMs
+    }
+}
+
+Export-ModuleMember -Function New-FreshLog, Remove-OldRotatedLogs, Resolve-RunDir, Stop-ProcessTreeByLiveness

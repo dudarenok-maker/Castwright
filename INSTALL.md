@@ -252,11 +252,14 @@ steps above). All knobs have safe defaults — set only what you need.
 
 **LAN / companion access**
 
-- `LAN_HTTPS` — `1` serves over mkcert-backed HTTPS on `:8443`, bound on all
-  interfaces (phone/tablet web + the Android companion). Off by default;
-  `npm run start:lan` sets it. Requires the LAN cert
-  (`npm run install:cert-mobile`); with `LAN_HTTPS=1` the server refuses to start
-  if the cert is missing.
+- `LAN_HTTPS` — serves over mkcert-backed HTTPS on `:8443`, bound on all
+  interfaces (phone/tablet web + the Android companion). **On by default in a
+  production run** (`npm run start:prod`); set `LAN_HTTPS=0` to turn it off.
+  `npm run start:lan` sets it explicitly. It needs the LAN cert: with `mkcert`
+  on your PATH, `start:prod` provisions it on first start
+  (`npm run install:cert-mobile` prints the manual steps). Without a cert the
+  server still starts — it falls back to plain HTTP on loopback `:8080` with a
+  warning, and phones/tablets can't reach it until a cert exists.
 - `LAN_AUTH_TOKEN` — the shared pairing secret for the companion (and the LAN
   access guard on `/api` + `/workspace`). Required for the companion app.
 
