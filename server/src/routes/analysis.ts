@@ -109,7 +109,8 @@ import {
   slug,
   stateJsonPath,
 } from '../workspace/paths.js';
-import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
+import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import {
@@ -3929,7 +3930,10 @@ export async function runMainAnalyzerJob(
              reports a guaranteed false conflict on every fresh run. */
           castBase?.markDeleted();
         });
-        await rm(manuscriptEditsJsonPath(recordRef.bookDir), { force: true });
+        {
+          const editsPath = manuscriptEditsJsonPath(recordRef.bookDir);
+          await enqueuePathOp(editsPath, () => rm(editsPath, { force: true }));
+        }
         /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
            meaningless; drop the merge journal + dedup suggestions too. */
         await clearCastMerges(recordRef.bookDir);
@@ -5593,9 +5597,10 @@ export async function runMainAnalyzerJob(
       const chDurationForCache = Date.now() - startedAt;
       stage2Durations[ch.id] = chDurationForCache;
       cache.stage2Durations = stage2Durations;
-      /* Cache writes are atomic-rename, but atomic-rename alone does NOT order
-         overlapping writes to one path. `saveAnalysisCache` serialises them
-         per manuscript (#3427), so they land in call order and the last call
+      /* Atomic-rename alone does NOT order overlapping writes to one path, and
+         the pool runs chapters concurrently. `saveAnalysisCache` and the
+         manuscript-edits roll below both go through the per-path op chain
+         (#3427), so each file's writes land in call order and the last call
          wins. */
       await saveAnalysisCache(manuscriptId, cache);
       if (recordRef.bookDir) {
@@ -5614,7 +5619,7 @@ export async function runMainAnalyzerJob(
           await withVerifiedBookDir(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             async (bookDir) => {
-              await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: running });
+              await writeJsonAtomicOrdered(manuscriptEditsJsonPath(bookDir), { sentences: running });
             },
           );
         } catch (persistErr) {
@@ -6049,7 +6054,7 @@ export async function runMainAnalyzerJob(
          re-keyed onto `writeDir` (R3 — no ordering bet). */
       const writeDir = await resolveVerifiedBookDirForRun(job);
       try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(writeDir), {
+        await writeJsonAtomicOrdered(manuscriptEditsJsonPath(writeDir), {
           sentences: reconciled.sentences,
         });
         /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
@@ -7537,7 +7542,7 @@ export async function runSubsetAnalyzerJob(
           await withVerifiedBookDir(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             async (bookDir) => {
-              await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: running });
+              await writeJsonAtomicOrdered(manuscriptEditsJsonPath(bookDir), { sentences: running });
             },
           );
         } catch (persistErr) {
@@ -7809,7 +7814,7 @@ export async function runSubsetAnalyzerJob(
          this run's top-level catch -> endJob halted (C1/C3). */
       const writeDir = await resolveVerifiedBookDirForRun(job);
       try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(writeDir), {
+        await writeJsonAtomicOrdered(manuscriptEditsJsonPath(writeDir), {
           sentences: subsetReconciled.sentences,
         });
         /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
