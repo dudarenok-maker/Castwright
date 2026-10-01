@@ -2,8 +2,9 @@
 
    Watches a curated set of action types that represent user edits and
    debounces a PUT /api/books/:bookId/state for the touched slice. Each
-   slice has its own debounce window so an edit to cast doesn't delay a
-   write to revisions.
+   (book, slice) pair has its own debounce window so an edit to cast doesn't
+   delay a write to revisions, and one book's write never cancels another's.
+   Leaving a book sends its queued writes at once (#3395 pass 4, S3).
 
    Skipped when no bookId is in scope (library browsing, fresh upload
    before confirm). Under VITE_USE_MOCKS, PUTs still flow — the mock api
@@ -332,6 +333,16 @@ function flushKey(bookId: string, slice: StateSlice): FlushKey {
   return `${bookId}:${slice}`;
 }
 
+/* #3395 pass 4, S3 — dispatched by Layout's per-book hydrate before it
+   re-reads a book's disk state. The middleware sends that book's queued
+   writes now and the dispatch returns a promise that settles once every
+   write for the book still in flight has settled (success or failure), or
+   `null` when nothing is queued or in flight — so the re-read never sees
+   disk from before a write the user already made. Not a reducer action:
+   no slice handles it. */
+const FLUSH_BOOK = 'persistence/flushBook';
+export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, payload: bookId });
+
 export const persistenceMiddleware: Middleware = (store) => {
   const timers = new Map<FlushKey, ReturnType<typeof setTimeout>>();
   const pending = new Map<FlushKey, unknown>();
@@ -351,6 +362,22 @@ export const persistenceMiddleware: Middleware = (store) => {
      that a NEWER in-flight PUT (started while the first was still pending) still
      needs — closing the overlapping-in-flight-PUT data-loss race. */
   const generation = new Map<FlushKey, number>();
+  /* #3395 pass 4, S3 — each key's PUTs still in flight, as settle-never-
+     reject promises, so `flushBookPersistence` can await them. */
+  const inFlight = new Map<FlushKey, Set<Promise<void>>>();
+  /* The book the stage named after the previous action — when it changes,
+     that book's queued writes are sent at once (S3). */
+  let lastBookId: string | null = bookIdFromState(store.getState() as PersistableRootState);
+
+  /* Send every queued write for `bookId` now instead of at the end of its
+     debounce. */
+  const flushBookNow = (bookId: string) => {
+    for (const [key, timer] of Array.from(timers)) {
+      if (!key.startsWith(`${bookId}:`)) continue;
+      clearTimeout(timer);
+      flush(bookId, key.slice(bookId.length + 1) as StateSlice);
+    }
+  };
 
   const flush = (bookId: string, slice: StateSlice) => {
     const key = flushKey(bookId, slice);
@@ -361,8 +388,19 @@ export const persistenceMiddleware: Middleware = (store) => {
     toastPending.delete(key);
     const gen = generation.get(key) ?? 0;
     if (patch === undefined) return;
-    api
-      .putBookState(bookId, { slice, patch })
+    const put = api.putBookState(bookId, { slice, patch });
+    const settled = put.then(
+      () => {},
+      () => {},
+    );
+    const set = inFlight.get(key) ?? new Set<Promise<void>>();
+    set.add(settled);
+    inFlight.set(key, set);
+    void settled.then(() => {
+      set.delete(settled);
+      if (set.size === 0 && inFlight.get(key) === set) inFlight.delete(key);
+    });
+    put
       .then(() => {
         /* #2230 — only the LATEST flush prunes the rollback snapshot. If a
            newer write has since been scheduled (gen advanced), a fresh snapshot
@@ -396,14 +434,32 @@ export const persistenceMiddleware: Middleware = (store) => {
 
   return (next) => (action) => {
     const result = next(action);
-    const a = action as { type?: string };
+    const a = action as { type?: string; payload?: unknown };
     const type = a?.type;
     if (!type) return result;
-    const rule = PERSIST_RULES[type];
-    if (!rule) return result;
 
     const after = store.getState() as PersistableRootState;
     const bookId = bookIdFromState(after);
+    /* S3 — scope moved off a book: send its queued writes now, so a quick
+       return re-reads disk that already has them (and the re-read awaits
+       any still in flight via FLUSH_BOOK below). */
+    if (lastBookId !== bookId) {
+      if (lastBookId) flushBookNow(lastBookId);
+      lastBookId = bookId;
+    }
+
+    if (type === FLUSH_BOOK && typeof a.payload === 'string') {
+      const target = a.payload;
+      flushBookNow(target);
+      const waits: Promise<void>[] = [];
+      for (const [key, set] of inFlight) {
+        if (key.startsWith(`${target}:`)) waits.push(...set);
+      }
+      return waits.length > 0 ? Promise.all(waits).then(() => undefined) : null;
+    }
+
+    const rule = PERSIST_RULES[type];
+    if (!rule) return result;
     if (!bookId) return result;
     /* Belt-and-braces (#3395 pass 2, N1): refuse to persist a revisions
        patch when `revisions.bookId` (kept in lockstep with the active book

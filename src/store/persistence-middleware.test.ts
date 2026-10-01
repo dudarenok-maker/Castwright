@@ -8,7 +8,7 @@ const { putBookState } = vi.hoisted(() => ({
 }));
 vi.mock('../lib/api', () => ({ api: { putBookState } }));
 
-import { persistenceMiddleware } from './persistence-middleware';
+import { persistenceMiddleware, flushBookPersistence } from './persistence-middleware';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
@@ -739,6 +739,75 @@ describe('persistenceMiddleware — per-book debounce isolation (#3395 pass 4, S
       'book-2',
       expect.objectContaining({ patch: expect.objectContaining({ characters: [{ id: 'bob', name: 'Bob (renamed)' }] }) }),
     );
+  });
+});
+
+describe('persistenceMiddleware — leaving a book flushes, and a re-read can await, its writes (#3395 pass 4, S3)', () => {
+  it('flushes the left book\'s queued write the moment scope moves away, not at the end of the debounce', async () => {
+    const state: Record<string, unknown> = baseState({
+      revisions: { pending: [], drift: [], bookId: 'book-1', hydratedFor: 'book-1' },
+    });
+    const next = vi.fn((x) => x);
+    const mw = persistenceMiddleware(makeStore(state))(next);
+
+    mw({ type: 'revisions/acceptAllPending' });
+    await advance(50);
+    expect(putBookState).not.toHaveBeenCalled();
+
+    /* goHome: the stage no longer names a book. */
+    state.ui = { stage: {} };
+    mw({ type: 'ui/goHome' });
+    await advance(0);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    expect(putBookState).toHaveBeenCalledWith('book-1', expect.objectContaining({ slice: 'revisions' }));
+
+    /* The timer it replaced must not fire a second PUT later. */
+    await advance(1000);
+    expect(putBookState).toHaveBeenCalledTimes(1);
+  });
+
+  it('flushBookPersistence resolves only after that book\'s in-flight PUT settles, and returns null when nothing is pending', async () => {
+    let resolvePut: () => void = () => {};
+    putBookState.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolvePut = resolve;
+        }),
+    );
+    const state: Record<string, unknown> = baseState();
+    const next = vi.fn((x) => x);
+    const mw = persistenceMiddleware(makeStore(state))(next);
+
+    expect(mw(flushBookPersistence('book-1'))).toBeNull();
+
+    mw({ type: 'revisions/acceptAllPending' });
+    /* A queued (not yet sent) write is sent now, and awaited. */
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<void>;
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    let settled = false;
+    void waited.then(() => {
+      settled = true;
+    });
+    await advance(10);
+    expect(settled).toBe(false);
+
+    resolvePut();
+    await advance(0);
+    expect(settled).toBe(true);
+    expect(mw(flushBookPersistence('book-1'))).toBeNull();
+  });
+
+  it('flushBookPersistence still resolves when the in-flight PUT fails', async () => {
+    putBookState.mockRejectedValueOnce(new Error('boom'));
+    const state: Record<string, unknown> = baseState();
+    const next = vi.fn((x) => x);
+    const mw = persistenceMiddleware(makeStore(state))(next);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    mw({ type: 'revisions/acceptAllPending' });
+    const waited = mw(flushBookPersistence('book-1')) as unknown as Promise<void>;
+    await expect(waited).resolves.toBeUndefined();
+    err.mockRestore();
   });
 });
 

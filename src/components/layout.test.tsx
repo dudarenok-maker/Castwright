@@ -682,8 +682,9 @@ describe('Layout — revisions persist only after the book is hydrated (#3395 pa
       serves, so a test can assert on what actually ends up on disk rather
       than only on which PUTs went out. `hold(bookId)` makes that book's next
       GET wait for `release(bookId)`, which serves the disk as it stands at
-      release time; `fail(bookId, n)` rejects that book's next `n` GETs. */
-  function makeDisk(initial: Record<string, Record<string, unknown>>) {
+      release time; `fail(bookId, n)` rejects that book's next `n` GETs.
+      `putDelayMs` keeps each PUT in flight that long before it reaches disk. */
+  function makeDisk(initial: Record<string, Record<string, unknown>>, putDelayMs = 0) {
     const disk = new Map<string, Record<string, unknown>>(Object.entries(initial));
     const held = new Map<string, Array<() => void>>();
     const holding = new Set<string>();
@@ -702,6 +703,7 @@ describe('Layout — revisions persist only after the book is hydrated (#3395 pa
       return minimalState(bookId, { revisions: disk.get(bookId) ?? null });
     });
     putBookStateMock.mockImplementation(async (bookId: string, req: { slice: string; patch: unknown }) => {
+      if (putDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, putDelayMs));
       if (req.slice === 'revisions') disk.set(bookId, req.patch as Record<string, unknown>);
     });
     return {
@@ -1112,6 +1114,50 @@ describe('Layout — revisions persist only after the book is hydrated (#3395 pa
       expect.objectContaining({ id: 'splice-book-A-4-nora', playable: true }),
     ]);
   }, 15000);
+
+  /* #3395 pass 4, S3 — leaving and returning inside the autosave debounce
+     used to re-read disk before the debounced PUT landed, so an accepted
+     take came back and the accept was erased on the next write. */
+  it('S3: an accept made just before a Library round trip is neither re-read stale nor erased', async () => {
+    const d = makeDisk(
+      { 'book-A': { pending: [{ id: 'rA', chapterId: 7, characterId: 'nora', segments: [] }], drift: [] } },
+      80,
+    );
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    renderAt(store, '/books/book-A');
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-A'));
+    expect(store.getState().revisions.pending.map((r) => r.id)).toEqual(['rA']);
+
+    store.dispatch(revisionsActions.acceptRevision({ revisionId: 'rA', selection: { 0: 'B' } }));
+    act(() => {
+      store.dispatch(uiActions.goHome());
+    });
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    });
+
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-A'));
+    expect(store.getState().revisions.pending).toEqual([]);
+    expect(store.getState().revisions.timeline[7]?.map((e) => e.eventKind)).toEqual(['accepted']);
+
+    /* The next revisions write writes memory back to disk. */
+    store.dispatch(revisionsActions.markRevisionPlayable({ chapterId: 99 }));
+    await new Promise((resolve) => setTimeout(resolve, 800));
+
+    const puts = revisionsPuts('book-A');
+    expect(puts.length).toBeGreaterThan(0);
+    for (const patch of puts) {
+      expect(patch.pending).toEqual([]);
+      expect(patch.acceptedSelections).toEqual({ rA: { 0: 'B' } });
+    }
+    const final = d.disk.get('book-A');
+    expect(final?.pending).toEqual([]);
+    expect(final?.acceptedSelections).toEqual({ rA: { 0: 'B' } });
+    expect((final?.timeline as Record<number, Array<{ eventKind: string }>>)[7]?.map((e) => e.eventKind)).toEqual([
+      'accepted',
+    ]);
+  });
 });
 
 /* Task 6 (fix round 1, finding 2) — the first-load library-hydrate dispatcher

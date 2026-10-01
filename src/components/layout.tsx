@@ -23,6 +23,7 @@ import {
   selectDriftGroupsByBook,
   scopeDriftGroupsByBook,
 } from '../store/revisions-slice';
+import { flushBookPersistence } from '../store/persistence-middleware';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions, findSeriesBookIds } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
@@ -1009,7 +1010,20 @@ export function Layout() {
           console.warn('[book-state] hydrate skipped:', err.message);
         });
     };
-    load(0);
+    /* #3395 pass 4, S3 — don't read disk while a write for this book is
+       still queued or in flight: a quick Library round trip would read the
+       snapshot from before it, then write that stale memory back over it.
+       Sends anything queued now and waits for in-flight PUTs; `null` (or the
+       bare action, in a store without the persistence middleware) means
+       there is nothing to wait for. */
+    const writes = dispatch(flushBookPersistence(bookId)) as unknown;
+    if (writes instanceof Promise) {
+      void writes.then(() => {
+        if (!cancelled) load(0);
+      });
+    } else {
+      load(0);
+    }
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
