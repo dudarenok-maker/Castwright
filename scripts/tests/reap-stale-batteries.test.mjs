@@ -1979,3 +1979,34 @@ test('#3331: collectProcessSnapshot logs a warning when the first attempt times 
     console.warn = origWarn;
   }
 });
+
+// PR #3404 pass 4, yellow B — snapshotError was pinned only on the parse path.
+// A failed census must read as "failed", not "nothing running", on EVERY path
+// that returns [] (R3: permanent failure, R4: empty after retry).
+test('pass 4: a permanent failure returns [] carrying snapshotError (a failed census must not read as nothing running)', () => {
+  const origWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const result = collectProcessSnapshot({
+      spawn: () => ({ status: 1, stdout: '', stderr: 'some error' }),
+      windows: true,
+    });
+    assert.deepEqual(result, []);
+    assert.match(String(result.snapshotError), /permanent failure/);
+    assert.equal(Object.keys(result).includes('snapshotError'), false, 'must stay non-enumerable');
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('pass 4: an empty result after the retry returns [] carrying snapshotError', () => {
+  const origWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const result = collectProcessSnapshot({ spawn: () => emptyArraySpawn(), windows: true });
+    assert.deepEqual(result, []);
+    assert.match(String(result.snapshotError), /empty Win32_Process result after retry/);
+  } finally {
+    console.warn = origWarn;
+  }
+});
