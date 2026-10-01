@@ -3,6 +3,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFileSync } from 'child_process';
+// @ts-expect-error — shared helper ships no .d.ts; see its own header (#2216).
+import { scrubGitEnv, scrubGitEnvForThrowawayRepo } from '../../../scripts/git-env.mjs';
 
 /* Settings moved from Account → (section) to Admin → Model Manager → (section)
    on 2026-07-15 (fs-23 phase A7). This guard reads what the UI actually
@@ -55,13 +57,9 @@ const dirsToExclude = [
    repo-relative, forward-slash paths. git failing throws — it must never
    degrade to scanning nothing. */
 function listScanCandidates(root: string): string[] {
-  /* A git hook exports GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE, which would
-     redirect this git at the wrong repo or index. */
-  const env = { ...process.env };
-  for (const k of ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE']) delete env[k];
   const out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
     cwd: root,
-    env,
+    env: scrubGitEnv(),
     encoding: 'utf8',
     windowsHide: true,
     maxBuffer: 256 * 1024 * 1024,
@@ -326,6 +324,62 @@ export function findStaleAccountRefLines(
   });
 }
 
+/* The live scan: every candidate git lists under `root`, read and checked.
+   Returns the hits (and the candidates, for the caller's non-vacuity check). */
+function scanTree(
+  root: string,
+  names: GuardNames,
+): {
+  candidates: string[];
+  failing: { file: string; line: number; pattern: string; text: string }[];
+} {
+  const currentVersion: string = JSON.parse(
+    fs.readFileSync(path.join(root, 'package.json'), 'utf-8'),
+  ).version;
+  const versionKey = (v: string) => v.split('.').map(Number);
+  const isReleased = (v: string) => {
+    const [a, b] = [versionKey(v), versionKey(currentVersion)];
+    for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
+    return true;
+  };
+
+  const failing: { file: string; line: number; pattern: string; text: string }[] = [];
+  const candidates = listScanCandidates(root);
+
+  for (const rel of candidates) {
+    const fullPath = path.join(root, rel);
+    const name = path.basename(rel);
+    if (fullPath === __filename) continue; // this guard names the stale forms on purpose
+
+    /* Generated per-version wiki pages for RELEASED versions describe the
+       UI of their day (scripts/generate-release-notes-wiki.mjs). A page for
+       a not-yet-released version is still live text. */
+    const releasePage = name.match(/^Release-Notes-v(\d+\.\d+\.\d+)\.md$/);
+    if (releasePage && isReleased(releasePage[1])) continue;
+
+    let content: string;
+    try {
+      content = readText(fullPath);
+    } catch {
+      continue; // unreadable file, or listed but deleted from disk
+    }
+
+    if (fullPath === path.join(root, 'RELEASE_NOTES.md')) {
+      content = unreleasedReleaseNotes(content, currentVersion);
+    }
+
+    for (const hit of findStaleAccountRefLines(content, names)) {
+      failing.push({
+        file: rel,
+        line: hit.line,
+        pattern: `Account + "${hit.name}"`,
+        text: hit.text,
+      });
+    }
+  }
+  return { candidates, failing };
+}
+
 describe('Gemini API key path guard', () => {
   const sectionLabels = readModelSettingsSectionLabels();
   const fieldLabels = readModelSettingsFieldLabels();
@@ -476,53 +530,9 @@ describe('Gemini API key path guard', () => {
   });
 
   it('scans the live tree for stale Account paths to settings moved to Model Manager', () => {
-    const currentVersion: string = JSON.parse(
-      fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf-8'),
-    ).version;
-    const versionKey = (v: string) => v.split('.').map(Number);
-    const isReleased = (v: string) => {
-      const [a, b] = [versionKey(v), versionKey(currentVersion)];
-      for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
-      return true;
-    };
-
-    const failing: { file: string; line: number; pattern: string; text: string }[] = [];
-
-    const candidates = listScanCandidates(repoRoot);
+    const { candidates, failing } = scanTree(repoRoot, names);
     /* A broken listing must not pass vacuously. */
     expect(candidates).toContain('server/src/analyzer/index.ts');
-
-    for (const rel of candidates) {
-      const fullPath = path.join(repoRoot, rel);
-      const name = path.basename(rel);
-      if (fullPath === __filename) continue; // this guard names the stale forms on purpose
-
-      /* Generated per-version wiki pages for RELEASED versions describe the
-         UI of their day (scripts/generate-release-notes-wiki.mjs). A page for
-         a not-yet-released version is still live text. */
-      const releasePage = name.match(/^Release-Notes-v(\d+\.\d+\.\d+)\.md$/);
-      if (releasePage && isReleased(releasePage[1])) continue;
-
-      let content: string;
-      try {
-        content = readText(fullPath);
-      } catch {
-        continue; // unreadable file, or listed but deleted from disk
-      }
-
-      if (fullPath === path.join(repoRoot, 'RELEASE_NOTES.md')) {
-        content = unreleasedReleaseNotes(content, currentVersion);
-      }
-
-      for (const hit of findStaleAccountRefLines(content, names)) {
-        failing.push({
-          file: rel,
-          line: hit.line,
-          pattern: `Account + "${hit.name}"`,
-          text: hit.text,
-        });
-      }
-    }
 
     /* Positive assertion: the corrected path is present in at least one live
        error message, so an over-eager rewrite cannot pass by removing both. */
@@ -556,9 +566,11 @@ describe('Gemini API key path guard', () => {
   it('lists scan candidates from git: ignored dirs and dot-dirs are out (#3428)', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-3428-'));
     try {
-      const env = { ...process.env };
-      for (const k of ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE']) delete env[k];
-      execFileSync('git', ['init', '-q'], { cwd: tmp, env, windowsHide: true });
+      execFileSync('git', ['init', '-q'], {
+        cwd: tmp,
+        env: scrubGitEnvForThrowawayRepo(),
+        windowsHide: true,
+      });
       const put = (rel: string, body: string) => {
         fs.mkdirSync(path.dirname(path.join(tmp, rel)), { recursive: true });
         fs.writeFileSync(path.join(tmp, rel), body);
@@ -572,6 +584,36 @@ describe('Gemini API key path guard', () => {
       expect(got).toContain('docs/live.md');
       expect(got).not.toContain('brand/x.md');
       expect(got).not.toContain('.github/y.md');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('the live scan reads only what git lists: a stale line in an ignored or dot-dir file is not a hit (#3428)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-3428-scan-'));
+    try {
+      execFileSync('git', ['init', '-q'], {
+        cwd: tmp,
+        env: scrubGitEnvForThrowawayRepo(),
+        windowsHide: true,
+      });
+      const stale = 'Set your Analysis model in the Account tab before uploading.\n';
+      const put = (rel: string, body: string) => {
+        fs.mkdirSync(path.dirname(path.join(tmp, rel)), { recursive: true });
+        fs.writeFileSync(path.join(tmp, rel), body);
+      };
+      put('package.json', '{ "version": "1.0.0" }\n');
+      put('.gitignore', 'brand/\n');
+      put('brand/x.md', stale);
+      put('.github/y.md', stale);
+      put('server/.env.example', stale);
+      put('docs/live.md', stale);
+
+      const { failing } = scanTree(tmp, names);
+      expect([...new Set(failing.map((f) => f.file))].sort()).toEqual([
+        'docs/live.md',
+        'server/.env.example',
+      ]);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
