@@ -1,6 +1,6 @@
 ---
 status: draft
-revision: 2 (folds the 2026-10-01 assumption-checker pass)
+revision: 3 (narrowed by the operator after two assumption-checker passes, 2026-10-02)
 issues: "#3400, #3397"
 supersedes-client-guards-from: "#3376 / PR #3395 (merged 9f379fb6)"
 ---
@@ -9,363 +9,386 @@ supersedes-client-guards-from: "#3376 / PR #3395 (merged 9f379fb6)"
 
 ## Problem
 
-`<bookDir>/.audiobook/revisions.json` holds the pending A/B takes, dismissed drift, accepted segment selections, and the Revision History timeline. Today the client writes it as a **whole-file replace**:
+`<bookDir>/.audiobook/revisions.json` holds four things: pending A/B takes, dismissed drift, accepted segment selections, and the Revision History timeline. Today the client writes it as a **whole-file replace**. The persistence middleware PUTs the entire slice through nine `revisions/*` rules built by `revisionsPatch` (`src/store/persistence-middleware.ts:231-251`). The server then writes it with no lock and no validation (`server/src/routes/book-state.ts:789-790`).
 
-- the persistence middleware PUTs the entire slice (`src/store/persistence-middleware.ts:231-251`, nine `revisions/*` rules built by `revisionsPatch`);
-- the server writes that body over the file with no lock and no validation (`server/src/routes/book-state.ts:789-790`).
+Any stale client state therefore erases disk. PR #3395 (#3376) added client guards over six review passes, and each one closed one ordering and opened another (#3400).
 
-Any stale client state erases disk. PR #3395 (#3376) spent six review passes adding client guards (scope middleware, `bookId`/`hydratedFor`/`windowActions`, a hydrate gate, pre-hydrate write replay, `persistPendingAfterHydrateMerge`, flush-on-leave). Each closed one ordering and opened another (#3400).
+Pending entries are also **client-created and active-book-only** (#3397):
+- **Stuck:** a Fix-audio entry is enqueued as `playable:false`, and it never flips if the user leaves the book first.
+- **Lost:** a splice that runs entirely while its book is not active never gets an entry at all.
 
-Pending entries are **client-created and active-book-only**, which leaves #3397's two gaps:
-
-- **Stuck.** A Fix-audio entry enqueued as `playable:false` never flips if the user leaves the book first. It then survives reloads.
-- **Lost.** A splice that runs entirely while its book is not active never gets an entry.
-
-Defects found while designing this, all owed in this change (CLAUDE.md "Incidental findings"):
+### Defects fixed in this deliverable
 
 | | Defect | Evidence |
 |---|---|---|
-| D1 | Accept and reject are not atomic. The slice action persists *before* the audio call, so a 409 on restore leaves the timeline saying "rejected" with nothing restored. | `layout.tsx` ~2485-2568 |
-| D2 | Reject deletes the live take *before* renaming `.previous` back into place, and swallows a failed segments rename. A failed restore followed by Approve (which deletes `.previous`) leaves the chapter with **no audio**. | `chapter-audio.ts:420-438` |
-| D3 | Reject restores only the audio and segments. `state.json`'s `duration`/`audioModelKey`/`audioEngines`/`audioRenderedAt`/`audioQa`, and the live `peaks.json`/`lufs.json`/embeddings, keep describing the take that was thrown away. | `finalize-chapter-write.ts:207-211,361-402` |
-| D4 | `.previous` is always named `.previous.mp3`, and restore always writes `<slug>.mp3`, whatever the book's format. The boot fsck tests the literal `<slug>.mp3`, so **on every boot of an m4a or ogg book** it promotes a valid `.previous.mp3` over the live take. That silently reverts the chapter and hides the new file. | `preserve-previous-audio.ts:37,45`; `chapter-audio.ts:232-235,428`; `fsck-orphan-audio.ts:80-91`; `chapter-audio-file.ts:37-41` |
-| D5 | Reject checks only the book-wide `isGenerationActive`; accept checks nothing. Neither sees a QA repair or splice on that chapter. | `chapter-audio.ts:377-441` |
-| D6 | The A/B player opens `pending[0]`, not the entry the user came for. A leftover entry can become the auto-opened player during a profile-regen preview, and approving it skips the preview fan-out. | `layout.tsx:2474-2479,2509` |
-| D7 | `mockPollRevisions` returns the canned `PENDING_REVISIONS` for every book and ignores `MOCK_BOOK_STATES`. | `src/lib/api.ts:1931-1973` |
+| D1 | Accept/reject are not atomic: the slice action persists *before* the audio call, so a 409 on restore leaves the timeline saying "rejected". | `layout.tsx` ~2485-2568 |
+| D2 | Reject deletes the live take before renaming `.previous` into place. A failed restore followed by Approve leaves the chapter with **no audio**. | `chapter-audio.ts:420-438` |
+| D5 | Reject checks only the book-wide `isGenerationActive`; accept checks nothing. Neither guards against a job starting mid-op. | `chapter-audio.ts:374-441` |
+| D6 | The A/B player opens `pending[0]`, not the entry the user came for. A leftover entry can become the preview player, and approving it skips the preview fan-out. | `layout.tsx:2474-2479,2509` |
+| D7 | `mockPollRevisions` returns the canned fixture for every book, ignoring `MOCK_BOOK_STATES`. | `src/lib/api.ts:1931-1973` |
+| D8 | `computeRevisionsForBook` returns `pending: []` whenever the cast is empty. | `server/src/routes/revisions.ts:132-135` |
+
+### Filed separately, each naming its owed decision (not in this deliverable)
+
+- **Full take restore on reject.** Reject currently restores audio + segments only. `state.json` take fields, loudness, peaks and embeddings still describe the rejected take. The owed decisions:
+  - which fields belong to a take;
+  - where finalize captures them (the live lufs is written *before* preserve runs, `finalize-chapter-write.ts:210` vs `:359`);
+  - how `state.json` gets locked. Today it has unlocked whole-file writers in finalize, `book-state.ts` and generation's failure stamp.
+- **A stalled or displaced generation body keeps finalizing after it deregisters.** `Promise.race` at `generation.ts` ~2077-2084; finalize takes no abort signal. The owed decision: an abort signal threaded into finalize, versus a drain-before-deregister.
+- **Reparse/replace racing in-flight jobs.** `abortInFlightSplice(bookId, null)` is a no-op (`chapter-job-coordination.ts:40`), and abort is not drain. The owed decision: refuse a reparse while jobs run, or abort-and-await.
+- **`.previous` is always named `.previous.mp3`.** The A-side routes are mp3-only. The owed decision: extension-aware naming, including the migration of legacy m4a/ogg pairs.
+
+### Dispatched now as an independent fix agent (no design needed)
+
+- **Boot fsck destroys valid m4a/ogg A/B pairs.** Its "orphan `.previous`" rule tests the literal `<slug>.mp3` (`fsck-orphan-audio.ts:80-91`), so it promotes `.previous.mp3` over a live `.m4a`/`.ogg` on every boot. The fix: promote only when **no live audio of any extension** exists. It ships as its own branch, PR and issue, ahead of this deliverable.
 
 ## Decisions
 
-From the operator, 2026-10-01, recorded on #3400 and #3397:
+Recorded by the operator on #3400/#3397 and in session, 2026-10-01/02:
 
-1. **Server-side per-operation writes.** The client never writes revisions.json.
-2. **Server-derived pending**, for every source.
-3. **Accept and reject are single atomic operations** covering the audio-file step and the JSON write.
-4. **One route per operation.**
-5. **#3395's client guard machinery is deleted from `main`.**
-
-Made in this spec after review (the operator may overrule any of them at spec review):
-
-- **R1. Reject restores the chapter exactly as it was before the new take.** That covers the audio, segments, peaks, loudness, embeddings, and the per-chapter `state.json` take fields. "Atomic" covers all of it, not only the JSON (closes D2 and D3).
-- **R2. Recording a review entry is best-effort with respect to the render.** If `recordPending` fails after a good finalize, the chapter still succeeds and its SSE result carries `reviewRecorded: false`. The client shows "The new take is live, but its A/B review couldn't be saved". A render is never failed after its audio is written.
-- **R3. Accept and reject are journalled.** An intent marker is written before any file moves, so a retry, or the next read, finishes an interrupted operation instead of guessing. This removes v1's "known residual".
-- **R4. The busy check is per chapter**, not book-wide. Accepting or rejecting chapter 3 is allowed while chapter 9 renders.
+1. Server-side per-operation writes; the client never writes revisions.json.
+2. Server-derived pending, for every source (Fix-audio splice and profile-regen preview).
+3. Accept/reject are single atomic server operations covering the audio step and the JSON write.
+4. One route per operation.
+5. #3395's client guard machinery is deleted from `main`.
+6. **Narrow scope:** reject keeps today's restore fidelity (audio + segments). Everything else is filed as listed above.
+7. **Two PRs.** PR 1 is server, shipped dark; PR 2 is the client cutover (see Delivery).
 
 ## Design
 
-### 1. Ownership and the store
+### 1. The store
 
-`revisions.json` is **server-owned**. Every read and write goes through `server/src/workspace/revisions-store.ts`, modelled on `server/src/workspace/script-review-ledger.ts`.
+All reads and writes of revisions.json go through `server/src/workspace/revisions-store.ts`, modelled on `script-review-ledger.ts`.
 
-- **Lock:** `withKeyLock(\`revisions:${bookDir}\`)` (`file-lock.ts:218`). Reads and every decision derived from them happen inside the lock.
-- **Leaf lock.** Verified: no generation, splice, QA-repair, finalize or chapter-audio code holds a cast, design or library-voice lock, and the reparse wipe's revisions branch is a sibling of its `withCastLock` branch, not nested in it (`book-state.ts:1132-1204`). Add the leaf rule to `cast-lock.ts:11-24`'s lock-order comment **and** to CLAUDE.md's matching rule 4. The header says to keep the two in sync.
-- **Imports.** `revisions-store.ts` imports `file-lock`, the workspace path helpers, `preserve-previous-audio`, and `chapter-job-coordination` **only**. It must never import `routes/generation.ts` (see §2, busy check), or a madge cycle closes through `generation.ts → finalize-chapter-write.ts → revisions-store.ts`. `npm run check:cycles` must stay green with no allowlist entry.
+**Writes** run under `withKeyLock(\`revisions:${bookDir}\`)` (`file-lock.ts:218`). The read, and every decision derived from it, sits inside the lock.
 
-**File shape, `schema: 1`:**
+This is a **leaf lock**. That was verified: no generation, splice, QA-repair, finalize or chapter-audio code holds a cast/design/library-voice lock, and the reparse wipe's revisions branch is a sibling of its `withCastLock` branch rather than nested inside it (`book-state.ts:1132-1204`). Add the rule to `cast-lock.ts:11-24` **and** to CLAUDE.md's matching rule 4.
+
+**Reads** (`readRevisions`) take no lock. A `writeJsonAtomic` rename is atomic, so a reader sees either the old file or the new one. That keeps the GET handlers free of lock-timeout errors, so they need no new `requestFailureMessage` sites.
+
+**File shape**, `schema: 1`:
 ```ts
 { schema: 1,
-  rev: number,                                  // monotonic, +1 on every write (§4 stale-response guard)
-  pending: Revision[],                          // ≤1 entry per chapterId
+  fileId: string,        // random id minted when the file is created; a reparse/replace delete + recreate yields a new one
+  rev: number,           // +1 on every write within one fileId
+  pending: Revision[],   // ≤1 entry per chapterId
   dismissed: string[],
   acceptedSelections: Record<revisionId, Record<segmentIndex, 'A'|'B'>>,
   timeline: Record<chapterId, TimelineEntry[]> }
 ```
-Each `Revision` may carry `resolving?: { op: 'accept'|'reject', selection?, at }`, the R3 journal marker. The legacy `drift` copy is dropped; drift stays computed live by `computeRevisionsForBook` (`server/src/routes/revisions.ts:125`).
 
-**`readRevisions(bookDir)`** normalises in memory and never writes. Every reader uses it, **including `GET /state`** (`book-state.ts:276-285`, which today reads the file raw):
+**Server-recorded `Revision` entries** carry two extra fields:
+- `origin: 'server'`;
+- `newTake: { size: number; mtimeMs: number }`: the `fs.stat` of the live chapter audio, taken right after finalize wrote it.
 
-- Drop `drift`, and default any missing field (`rev: 0`).
-- **Legacy entries** have no epoch in their id (`splice-…`, `revision:<ch>:<char>`):
-  - drop them if `playable:false`. Their `.previous` cannot be trusted to belong to them: a later regen may have replaced it;
-  - keep them if `playable:true` **and** the chapter's `.previous` exists;
-  - if several remain for one chapter, keep the last in array order.
-- **An entry with `resolving` set** is finished by the next mutating op, or by `completeInterrupted(bookDir)`, run once per book at boot after fsck (§3). A pure read reports it as-is, and the client shows it disabled as "finishing…".
+Legacy entries (client-written) have neither field. Identification is by these fields, never by parsing the id.
 
-**Reparse and replace-manuscript** delete the file through the store, under the lock (`book-state.ts:1201-1203`). They first call `abortInFlightSplice(bookId, null)` (`chapter-job-coordination.ts:39`), so a splice cannot finish afterwards and record an entry against a renumbered chapter.
+**Normalisation on read** (never writes):
+- drop the legacy `drift` copy;
+- default any missing field (a legacy file without `fileId` gets a deterministic `fileId = 'legacy'`);
+- legacy entries:
+  - drop those with `playable:false`;
+  - keep those with `playable:true` only if the chapter's `.previous.mp3` exists;
+  - if several are left for one chapter, keep the last.
 
-### 2. HTTP contract
+### 2. Per-chapter reservation (`server/src/routes/chapter-job-coordination.ts`)
 
-All three ops answer `200 RevisionsState`:
-```ts
-{ bookId, rev, pending, dismissed, acceptedSelections, timeline }
-```
+This file stays import-free. It gains:
 
-**Per-chapter busy check: `isChapterBusy(bookId, chapterId)` in `server/src/routes/chapter-job-coordination.ts`.** It returns true if any of these holds:
+- `reserveChapter(bookId, chapterId): Reservation | null`. It returns `null` if the chapter is busy or already reserved. **Busy** means any of:
+  - `inFlightSplices` has the chapter (this covers Fix-audio and QA repair, which calls `registerSplice`, `chapter-qa-repair.ts:299-300`);
+  - generation has `${bookId}::${chapterId}` or `${bookId}::*`.
 
-- `inFlightSplices` has `(bookId, chapterId)` (this covers Fix-audio and QA repair; QA repair calls `registerSplice`, `chapter-qa-repair.ts:299-300`);
-- **generation** has `${bookId}::${chapterId}` or `${bookId}::*` in flight (`inFlightByChapter`, `generation.ts` ~438-454).
+  Generation is read through a registered accessor, `registerGenerationChapterProbe(fn)`, set by `generation.ts` at module init. It fails **closed** (busy) while unset. This follows CLAUDE.md's leaf-gate pattern, so no madge cycle appears and `npm run check:cycles` stays clean with no allowlist entry.
+- `release()`, on the returned reservation.
+- `awaitChapterFree(bookId, chapterId, timeoutMs = 10_000)`.
+  - `registerSplice` callers and generation's `registerJob` (`generation.ts:526`) **await this before registering**, so a job that starts during an op waits a few seconds instead of reading files mid-rename.
+  - A book-wide `::*` generation job awaits every reservation held on that book (`awaitChapterFree(bookId, null)`).
+  - On timeout the job fails with a curated "chapter is busy" error (no path).
+  - Ops hold a reservation for well under a second in the normal case.
 
-Generation's map is reached through a **registered accessor** (`registerGenerationChapterProbe(fn)`, set by `generation.ts` at module init, failing **closed**, i.e. busy, when unset), following the `gpu/*-gate.ts` leaf-gate pattern in CLAUDE.md. That way `chapter-job-coordination.ts` keeps zero imports. `_hasInFlightSplice` (`:45`) stays as the test seam.
+The reservation only makes ops and **newly starting** jobs mutually exclusive. A stalled or displaced generation body that is still finalizing is not covered; that's the filed issue above.
 
-> Unverified: generation's stall watchdog (`Promise.race`, `generation.ts` ~2069) may deregister a job whose body is still running. The implementation plan must check whether the body can still reach finalize after deregistration. If it can, the busy check must also cover it.
+### 3. HTTP contract
 
-**`POST /api/books/{bookId}/revisions/{revisionId}/accept`**, body `{ selection?: Record<segmentIndex,'A'|'B'> }`. Under the lock:
+**Every op returns `200 RevisionsState`**: `{ bookId, fileId, rev, pending, dismissed, acceptedSelections, timeline }`.
 
-1. Look up the entry.
-   - If it's absent and the timeline has `accepted` for this `revisionId`, return 200 with the current state (idempotent).
-   - If it's absent otherwise, return 404 `revision_not_found`.
-2. If `isChapterBusy`, return 409 `chapter_busy`.
-3. **Refuse to lose the last copy.** If the live take is missing, return 409 `live_audio_missing` and change nothing.
-4. Write the journal marker `resolving: {op:'accept', selection}` (one atomic write, `rev+1`).
-5. Delete the `.previous` set (§3). A missing file counts as success.
-6. Remove the entry, set `acceptedSelections`, and append the timeline `accepted` entry, keeping the reversible-chain rule from `appendTimelineEntryHelper`. One atomic write, `rev+1`.
+**`POST /api/books/{bookId}/revisions/{revisionId}/accept`**, body `{ selection?: Record<segmentIndex,'A'|'B'> }`
 
-**`POST …/{revisionId}/reject`** follows the same steps, except:
+1. **Under the lock:** read the entry.
+   - If it's absent and the timeline has `accepted` for this id → 200 with the current state (idempotent).
+   - If it's absent otherwise → 404 `revision_not_found`.
+2. **Under the lock:** `reserveChapter` → `null` → 409 `chapter_busy`.
+3. **Outside the lock, holding the reservation:** classify the disk state of the live audio `L` (found via `findChapterAudio`) and `.previous.mp3` `P`:
+   - `L` is missing → 409 `live_audio_missing`. Nothing changes; this stops the last-copy loss (D2).
+   - The entry has `newTake` and `stat(L)` ≠ `newTake` → 409 `revision_stale`, and the entry is dropped in step 4. A newer render replaced this take; its `.previous` is no longer this entry's A side.
+   - Otherwise delete `P` and `.previous.segments.json`. If they're missing, the accept already happened.
+4. **Under the lock:** re-read. Remove the entry, set `acceptedSelections` (when `selection` is given), and append the timeline entry `accepted`, keeping the reversible-chain rule from `appendTimelineEntryHelper`. Write once, `rev + 1`. Release the reservation in `finally`.
 
-- step 1 checks for `rejected`;
-- step 3 returns 409 `no_previous_audio` if the `.previous` set is missing;
-- step 5 runs the **full restore** (§3);
-- step 6 appends `rejected`.
+**`POST …/{revisionId}/reject`**
 
-**Finishing an interrupted op (R3).** When step 1 finds an entry with `resolving` set, it finishes **the journalled op, whatever the request asked for**, and resumes from step 5. If the request asked for the other op, the response is 409 `revision_resolving` with the finished state, so the client can show what actually happened.
+Steps 1, 2 and 4 are the same as accept (step 4 appends `rejected`). Step 3:
+- `L` is missing → 409 `live_audio_missing`.
+- `P` is present:
+  - The entry has `newTake` and `stat(L)` ≠ `newTake` → 409 `revision_stale` and drop the entry.
+  - Otherwise restore, **with no moment without live audio**:
+    1. Rename `.previous.segments.json` → `segments.json`.
+    2. Rename `P` → `<slug>.mp3`. This is a rename *over* the existing file: `renameWithRetry`, `atomic-rename.ts:45`, replaces a closed target, as `writeJsonAtomic` does every day.
+    3. Only then, if the live file was `<slug>.<other ext>`, delete it. `findChapterAudio` probes mp3 first (`chapter-audio-file.ts:37-41`), so the restored file is served as soon as step 2 completes.
 
-- accept: deleting an already-deleted set is a no-op;
-- reject: if the `.previous` audio is gone and the live take is present, the restore already happened, so skip to step 6.
+    A failure in step 1 or 2 returns 500, and the live take is still present. A failed segments rename is **not** swallowed, unlike today.
+- `P` is absent:
+  - The entry has `newTake` and `stat(L)` ≠ `newTake` → **the restore already happened** (a retry after a failed step 4). Go to step 4.
+  - The entry has `newTake` and `stat(L)` = `newTake` → 409 `no_previous_audio`.
+  - A legacy entry → 409 `no_previous_audio`.
 
-Either way the result matches what the user asked for, and `completeInterrupted` applies the same rule at boot. No path records a timeline outcome that disagrees with the audio on disk.
+  The UI offers **Keep new take** (accept) on `no_previous_audio`.
 
-**`POST /api/books/{bookId}/drift/{driftId}/dismiss`** adds the id to `dismissed` (idempotent). It answers `{ bookId, rev, dismissed }`. No busy check; no audio step.
+The fingerprint is valid across a restore because `rename` on one volume preserves `mtime`, so a restored old take never matches the new take's fingerprint. A unit test pins this on the CI OS and on Windows.
 
-**`GET /api/books/{bookId}/revisions`** (the active-book poll) answers `RevisionsState` plus live `drift`. `GET /api/revisions` (bulk) is unchanged.
+**`POST /api/books/{bookId}/drift/{driftId}/dismiss`** adds the id to `dismissed` (idempotent) and returns `{ bookId, fileId, rev, dismissed }`.
 
-`computeRevisionsForBook`'s return shape is changed in step with its third caller, `server/src/routes/qa-report.ts:13,30`.
+**Polls**
+- `GET /api/books/{bookId}/revisions` (active-book poll) returns `RevisionsState` plus live `drift`.
+- `GET /api/revisions` (bulk) returns `{byBookId:{[id]:{pending, drift}}}` with pending now read through the store.
+- `computeRevisionsForBook` (`revisions.ts:125`) changes shape for all three callers, including `server/src/routes/qa-report.ts:13,30`. It returns pending even when the cast is empty (D8).
 
 **Errors**
+- 404: unknown book, `revision_not_found`.
+- 400: malformed `selection` (non-integer keys, values outside A/B, dangerous keys as in `script-review-ledger.ts:46-52`).
+- 409: `chapter_busy`, `live_audio_missing`, `revision_stale`, `no_previous_audio`.
+- 500: through `requestFailureMessage` (`file-lock.ts:214`).
 
-- 404: unknown book.
-- 400: malformed `selection` (non-integer keys, values outside `A`/`B`, dangerous keys as in `script-review-ledger.ts:46-52`).
-- 409: the three codes above.
-- 500: through `requestFailureMessage` (`file-lock.ts:214`), so no lock key or path reaches a body.
-- CLAUDE.md's sentence "`git grep requestFailureMessage` enumerates all thirteen sites" is updated for the three new sites.
-
-**Whole-file writes are closed.** `PUT /api/books/{bookId}/state` with `slice:'revisions'` returns **400 `revisions_server_owned`**.
-
-**The two old routes** (`DELETE …/audio/previous`, `POST …/audio/previous/restore`, `chapter-audio.ts:374-441`) return **410 `moved`**, with their logic moved into the store. They are not deleted: an old tab's `acceptChapterRevision` treats **404** as success (`api.ts:10221`), so a 404 would fake success, and 410 surfaces as an error.
+CLAUDE.md's "`git grep requestFailureMessage` enumerates all thirteen sites" sentence is updated for the three new sites.
 
 **OpenAPI** (then `npm run openapi:types`):
-
-- the three routes, `RevisionsState`, `DriftDismissResponse`, and the 409 codes;
-- `BookStateResponse.revisions` gains `timeline` and `rev`, and loses `drift`;
+- the three routes;
+- `RevisionsState` and `DriftDismissResponse`;
+- the 409 codes;
+- `Revision` gains optional `origin` and `newTake`;
+- `BookStateResponse.revisions` gains `timeline`, `fileId` and `rev`;
 - `RevisionsResponse` takes the poll's new shape;
-- the PUT and 410 descriptions.
-
-### 3. Takes on disk: the `.previous` set
-
-**What gets preserved.** `preserveExistingAsPrevious` (`preserve-previous-audio.ts`) preserves a complete **set** under `<slug>.previous.*`:
-
-- the audio, **keeping its real extension** (`<slug>.previous.<ext>`, not always `.mp3`; fixes D4);
-- `segments.json`, peaks, lufs, and embeddings where they exist;
-- a new `<slug>.previous.take.json`, holding the chapter's `state.json` take fields (`duration`, `audioModelKey`, `audioEngines`, `audioRenderedAt`, `audioQa`, and any field `finalize-chapter-write.ts:373-402` writes per take).
-
-It returns the existing `PreserveResult { preserved }`, which `finalize-chapter-write.ts:359` currently discards. **`preserved` is true only when the audio *and* segments were both preserved.** Today it reports true even when the segments rename failed.
-
-**Accept** deletes the whole set.
-
-**Reject's full restore (R1), with no moment where no live audio exists:**
-
-1. Rename each `.previous.*` sidecar over its live counterpart, then the audio last (`rename` over an existing file replaces it; verify on Windows).
-2. If the extensions differ, the stale live file of the other extension is removed **after** the rename.
-3. Then apply `previous.take.json` back into `state.json` (the same read-modify-write `finalize` uses).
-4. A failure at any step returns 500. The journal marker stays, so the retry or boot completion finishes it.
-
-**Boot fsck** (`fsck-orphan-audio.ts`, `index.ts:208-230`):
-
-- It recognises `.previous.<any audio ext>` and only promotes `.previous` when **no live audio of any extension** exists.
-- It runs before `completeInterrupted`, per book, under the revisions lock.
+- the bulk response's description.
 
 ### 4. Server-derived pending
 
-`FinalizeChapterAudioInput` (`finalize-chapter-write.ts`) gains `review?: { characterId: string; triggeredBy: string }`. After the audio, segments and state are written:
+`FinalizeChapterAudioInput` (`server/src/audio/finalize-chapter-write.ts`) gains:
+```ts
+review?: { characterId: string; triggeredBy: string } | null
+```
 
-- **`review` given and `preserved`:** `recordPending` upserts the chapter's single entry, **playable**, with:
-  - `hasPreviousAudio: true`;
-  - id `revision:<chapterId>:<finalize epoch ms>`. The id is unique per recording, so a late or duplicated accept of an earlier take returns 404 instead of approving a take the user never heard;
-  - `triggeredBy` and the old/new durations.
+It has three states:
 
-  It replaces any older entry for that chapter.
-- **No `review`, but the chapter has an entry:** `dropPendingForChapter`. Its side A was just overwritten.
+| Value | Meaning |
+|---|---|
+| `undefined` | Finalize does not touch revisions.json. This is the **PR 1 dark state**, and what every caller passes until PR 2. |
+| `null` | A plain render. If the chapter has a pending entry, drop it: its A side was just overwritten. |
+| an object | A review render. If `preserveExistingAsPrevious` actually preserved (`PreserveResult.preserved`, currently discarded at `:359`), upsert the chapter's single entry. Otherwise (a first render) drop any entry. |
 
-  The flows that do this are all user-initiated: QA repair from the Listen row, drift "Regenerate", and "Regenerate now". An open player for that entry then gets 404, and shows "This take was replaced by a newer render" and closes.
-- **`review` given but nothing preserved** (first render): no entry.
-- **Failure (R2).**
-  - `recordPending`/`dropPendingForChapter` errors are caught **inside finalize**, logged in full, and surfaced as `reviewRecorded: false` on `FinalizeChapterAudioResult`.
-  - The three SSE completion events (`splice_complete`, generation's `chapter_complete`, QA repair's completion) carry it.
-  - No message from it ever reaches an SSE body, so a lock-key path can never leak through `chapter-splice.ts:524-525`'s `fail(…message)` or its generation/QA siblings.
+`preserved` becomes true only if **both** the audio and the segments renamed. Today it reports true even when the segments rename failed.
 
-**Callers**
+The upserted entry contains:
+- `playable: true`, `hasPreviousAudio: true`;
+- `origin: 'server'`;
+- `newTake` (a stat of the live audio taken after it is written);
+- id `revision:<chapterId>:<epoch ms>`;
+- `triggeredBy`, and the old/new durations.
 
-- **`chapter-splice.ts:492`** always passes `review`. Its "Loudness fix…" / "Re-record…" text moves server-side from `splice-runner-middleware.ts:55-67`.
-- **`chapter-qa-repair.ts:720`** never passes it.
-- **`generation.ts:1861`** passes it only when the job carries one:
-  - `review` travels on the **persisted generation queue entry**, the thing `queue-dispatcher-middleware.ts:225-276` claims, not on transient `ui.previewRegen` (`ui-slice.ts:22-33`, which has no `bookId` and is never persisted).
-  - It goes queue entry → `runner.open` spec (`generation-stream-runner.ts`) → `StreamArgs` (`api.ts:603`) → `GenerationRequestBody` → `RunningJob` → finalize.
-  - The server **rejects with 400** a `review` on a request whose `chapterIds` is not exactly one chapter, so a back-compat `*` job can never tag every chapter.
-  - The preview click handler (`layout.tsx:2064-2084`) sets `review` on the entry it enqueues.
+**Failure is best-effort with respect to the render.** The store call is wrapped inside finalize. Any error is logged in full and surfaces only as `reviewRecorded: false` on `FinalizeChapterAudioResult`, and from there on the three SSE completion events (`splice_complete`, generation's `chapter_complete`, QA repair's completion).
+- No store error message ever reaches an SSE body. That closes the lock-key-path leak through `chapter-splice.ts:524-525`'s `fail(…message)` and its siblings.
+- A failed upsert can leave an older entry in place against an overwritten `.previous`. That entry's `newTake` no longer matches the live audio, so accept/reject answer `revision_stale` instead of comparing the wrong pair.
 
-### 5. Client
+**Callers in PR 2** (PR 1 leaves them all at `undefined`):
+- `chapter-splice.ts:492` always passes `review`. Its "Loudness fix…" / "Re-record…" text moves server-side from `splice-runner-middleware.ts:55-67`.
+- `chapter-qa-repair.ts:720` passes `null`.
+- `generation.ts:1861` passes the job's `review`, or `null` if the job has none.
 
-**API (`src/lib/api.ts`).**
+**Plumbing `review` through generation** (the code lands in PR 1, the behaviour switches on in PR 2):
+- It travels on the **persisted queue entry**:
+  - `src/store/queue-thunks.ts` `enqueueQueueEntries`;
+  - `POST /api/queue/enqueue`, whose field whitelist must add it (`server/src/routes/queue.ts:107-118`);
+  - `enqueue()`'s whitelist (`server/src/workspace/queue-io.ts:122-139`), plus `QueueEntry`/`EnqueueInput` and OpenAPI `QueueEntry`;
+  - the claim in `queue-dispatcher-middleware.ts:225-276`;
+  - the `runner.open` spec (`generation-stream-runner.ts`) and `StreamArgs` (`api.ts:603`);
+  - `GenerationRequestBody` and `RunningJob`;
+  - finalize.
+- The server returns **400** for a `review` whose request does not name exactly one chapter.
+- A server test round-trips `review` through enqueue → claim → generation request, so a whitelist drop fails CI.
 
-- Add `acceptRevision`, `rejectRevision` and `dismissDrift`, each with a real and a mock implementation. The mocks apply the store's rules to `MOCK_BOOK_STATES` (`api.ts:917`), including the 409s and `rev`.
-- **`mockPollRevisions` reads `MOCK_BOOK_STATES`** (fixes D7). The `PENDING_REVISIONS` fixture moves into the seeded mock state.
-- `mockStreamSplice` records pending like finalize does, takes `bookId`, and accepts a test-controllable delay, so an e2e can switch books mid-splice.
+### 5. Client (PR 2)
+
+**API (`src/lib/api.ts`)**
+- Add `acceptRevision`, `rejectRevision` and `dismissDrift`, each with a real and a mock implementation. The mocks apply the store's rules to `MOCK_BOOK_STATES` (`api.ts:917`), including the 409s, `fileId`/`rev` and `newTake`.
+- The mock fixture's seeded entry (`src/data/revisions.ts`) becomes a server-shaped entry (`origin:'server'`, `newTake`).
+- `mockPollRevisions` reads `MOCK_BOOK_STATES` (D7).
+- `mockStreamSplice` records pending as finalize does, takes `bookId`, and accepts a test-controllable delay.
 - Remove `acceptChapterRevision` / `rejectChapterRevision`.
 
-**Revisions slice (`src/store/revisions-slice.ts`): a cache.**
+**Revisions slice (`src/store/revisions-slice.ts`) becomes a cache.**
 
-- **State:** `pending`, `drift`, `dismissed`, `acceptedSelections`, `timeline`, `loaded`, `bookId`, `rev`.
-- **Writers:**
-  - `hydrate({bookId, state})` adopts the book.
-  - `applyServerState({bookId, state})` and `applyPoll(...)` are **ignored when `bookId` differs from the cache's, or when `state.rev < cache.rev`**. A poll that started before an op and lands after it can't resurrect the entry.
-  - `applyDismiss({bookId, rev, dismissed})` is **multi-book**: it removes that book's dismissed events from `s.drift` whatever book the cache holds, and updates `dismissed`/`rev` only when the book matches.
-  - `applyBackgroundPoll` is unchanged.
-- **Delete:**
-  - `hydratedFor`, `windowActions`, `recordIfUnhydrated`, `replayRecorded`;
-  - `bookScopeChanged`, `bookWiped`, `persistPendingAfterHydrateMerge`;
-  - `enqueuePending`, `markRevisionPlayable`;
-  - the reducer halves of `acceptRevision`/`rejectRevision`/`dismissDrift`;
-  - `acceptAllPending`, `rejectAllPending`, `rolledBack`.
-- **Keep:** drift selectors and helpers, `mergeDriftForBook`, `normaliseTimelineKeys`.
-- **Delete `src/store/revisions-scope-middleware.ts`** and its wiring in `src/store/index.ts`.
+State: `pending`, `drift`, `dismissed`, `acceptedSelections`, `timeline`, `loaded`, `bookId`, `fileId`, `rev`.
 
-**Every dispatch site of a deleted action is updated in the same task as the deletion:**
+Writers:
+- `hydrate({bookId, state})` adopts the book unconditionally.
+- `applyServerState(...)` and `applyPoll(...)` are ignored when the `bookId` differs. When the `fileId` differs they adopt (the file was recreated). Within the same `fileId` they are ignored when `state.rev < cache.rev`. So a poll that started before an op can't bring back the accepted entry, and a reparse that resets `rev` doesn't lock the cache out.
+- `applyDismiss({bookId, rev, dismissed})` works across books. It removes that book's dismissed events from `s.drift` whatever book the cache holds, and updates `dismissed`/`rev` only when the book matches.
+- `applyBackgroundPoll` is unchanged.
+
+**Delete:**
+- `hydratedFor`, `windowActions`, `recordIfUnhydrated`, `replayRecorded`;
+- `bookScopeChanged`, `bookWiped`, `persistPendingAfterHydrateMerge`;
+- `enqueuePending`, `markRevisionPlayable`;
+- the reducer halves of `acceptRevision`/`rejectRevision`/`dismissDrift`;
+- `acceptAllPending`, `rejectAllPending`, `rolledBack`;
+- `src/store/revisions-scope-middleware.ts` and its wiring in `src/store/index.ts`;
+- `buildPendingRevisionStub` (`src/lib/build-pending-revision.ts`), once the generation-stream middleware stops using it (below).
+
+**Dispatch sites of deleted actions, updated in the same task as the deletion:**
 
 | Site | Change |
 |---|---|
-| `src/routes/index.tsx:155,196,252` | `revisionsActions.bookWiped` → removed; the server-side reparse/replace wipe plus the next hydrate cover it. |
-| `e2e/profile-regen-preview.spec.ts:96-101` | The `rejectAllPending` phantom-clearing workaround is removed. It's unnecessary once D6 and D7 are fixed. |
-| `e2e/marketing/scenes.ts:1060,1087` | `rejectAllPending` / `markRevisionPlayable` → seed the mock state directly. |
-| `src/lib/build-pending-revision.ts` | Deleted, if nothing else uses it. |
+| `src/routes/index.tsx:155,196,252` (`bookWiped`) | removed |
+| `e2e/profile-regen-preview.spec.ts:96-101` (`rejectAllPending` phantom workaround) | removed (unnecessary after D6/D7) |
+| `e2e/marketing/scenes.ts:1060,1087` (`rejectAllPending`, `markRevisionPlayable`) | seed the mock state instead |
 
-**Persistence middleware.** Remove the nine `revisions/*` rules, `revisionsPatch` (`:313`), and the revisions hydrate gate (`:486-490`). The `${bookId}:${slice}` flush key and flush-on-book-change stay, because every persisted slice shares them.
+**Persistence middleware**
+- Remove the nine `revisions/*` rules, `revisionsPatch` (`:313`), and the revisions hydrate gate (`:486-490`).
+- The `${bookId}:${slice}` flush key and flush-on-book-change stay. They are shared by every persisted slice.
 
-**Thunks (`src/store/revisions-thunks.ts`): confirm, then apply, with no optimistic update.**
-
-- `acceptRevisionOp` / `rejectRevisionOp` → `applyServerState`.
+**Thunks (`src/store/revisions-thunks.ts`): confirm, then apply.**
+- `acceptRevisionOp`/`rejectRevisionOp` → `applyServerState`.
 - `dismissDriftOp` posts to **the event's own book** → `applyDismiss`.
 - Errors:
   - `chapter_busy` → toast "This chapter is busy — try again when it finishes".
-  - `no_previous_audio` → the player's "Original audio not preserved" state, with **Keep new take** (= accept).
-  - `live_audio_missing` → error toast; the entry stays.
-  - `revision_not_found` → "This take was replaced by a newer render"; refetch.
+  - `no_previous_audio` → the player's "Original audio not preserved" state with **Keep new take**.
+  - `live_audio_missing` → error toast.
+  - `revision_stale` / `revision_not_found` → "This take was replaced by a newer render", then refetch.
   - Anything else → toast. The cache is unchanged.
 
-**Layout (`src/components/layout.tsx`).**
+**Layout (`src/components/layout.tsx`)**
+- **Book-open hydrate** (`:825-925`) dispatches `hydrate`. The `persistPendingAfterHydrateMerge` follow-up and the revisions retry loop go. A failed read leaves the cache unloaded until the next poll.
+- **Accept** (`:2485-2527`) and **reject** (`:2549-2568`) dispatch the thunks.
+  - The player first **releases both `<audio>` elements** (`src=''`). As today, it closes before the call. That avoids replacing a file `res.sendFile` still holds open on Windows.
+  - Preview side effects (drop the preview, the change-log entry, the fan-out of the remaining chapters) run **only after success**.
+- **Dismiss** (`:2199`) → `dismissDriftOp`.
+- The **active poll** (`:1108-1125`) → `applyPoll`.
+- **The A/B player opens a specific `revisionId`**, not `pending[0]` (D6). The preview opens `previewChapterId`'s entry, and the Listen row opens its own chapter's entry.
 
-- Book-open hydrate (`:825-925`) dispatches `hydrate`. The `persistPendingAfterHydrateMerge` follow-up and the revisions retry loop go. A failed read leaves the cache unloaded, and the next poll fills it.
-- Accept (`:2485-2527`) and reject (`:2549-2568`) dispatch the thunks. The **preview side effects run only after success**:
-  - accept: drop the preview, append the change-log entry, enqueue the remaining chapters;
-  - reject: drop the preview.
-- **The A/B player opens a specific entry**, not `pending[0]` (fixes D6):
-  - the preview opens the entry for `previewChapterId`;
-  - the Listen row opens its own chapter's entry;
-  - `RevisionDiffPlayer` receives `revisionId`.
-- Dismiss (`:2199`) → `dismissDriftOp`.
-- The active poll (`:1108-1125`) → `applyPoll` with the full state.
+**`PreviewRegenCtx`** (`src/store/ui-slice.ts:22-33`) gains `bookId`. Accept's fan-out uses `previewRegen.bookId`, not the active book. The context stays transient: after a reload, Approve no longer fans out, which is today's behaviour too and is stated in the regression plan.
 
 **`src/views/revision-diff.tsx`** (reads `revision.playable` at `:72,187,256,260,281,324`):
+- "Rendering new take…" is driven by a `rendering` prop.
+- It adds a **Keep new take** action and a `busy` prop.
 
-- Its "Rendering new take…" state is driven by a new prop `rendering`, derived from splice-slice in-flight state.
-- It gains the **Keep new take** action and a `busy` prop that disables the buttons while an op is in flight.
-- An entry carrying `resolving` renders disabled as "Finishing…".
+**Splice slice (`src/store/splice-slice.ts:31-45`)** gains `inFlightChapterIds`, maintained by the runner. It is the source of "Rendering new take…".
 
-**Splice slice (`src/store/splice-slice.ts:31-45`)** gains `inFlightChapterIds: number[]` per batch, maintained by the splice runner. It is the source for the Listen row's and the player's "Rendering new take…" state, because pending entries now appear only when a take is complete.
-
-**Runners.**
-
-- `splice-runner-middleware.ts`:
-  - remove the `enqueuePending`/`markRevisionPlayable` dispatches (`:68-70`, `:123-124`);
+**Runners**
+- **`splice-runner-middleware.ts`**:
+  - drop the `enqueuePending`/`markRevisionPlayable` dispatches (`:68-70`, `:123-124`);
   - maintain `inFlightChapterIds`;
   - on `splice_complete` for the cached book, refetch revisions;
-  - on `reviewRecorded:false`, show the R2 warning.
-- **The preview hook.** Today the preview gate fires *on* the `revisions/markRevisionPlayable` action (`generation-stream-middleware.ts:169`), which is being deleted. The runner gets a new action, `chapters/previewChapterComplete({bookId, chapterId, reviewRecorded})`. `generation-stream-runner.ts` dispatches it whenever a `chapter_complete` tick's job carried `review`, **for any book, not only the viewed one** (`:345-354` only forwards ticks for the viewed book). The middleware then refetches revisions and opens the player on that chapter's entry.
+  - on `reviewRecorded:false`, toast "The new take is live, but its A/B review couldn't be saved".
+- **Preview completion.** The preview gate currently fires *on* the deleted `revisions/markRevisionPlayable` action (`generation-stream-middleware.ts:169`). Instead, `generation-stream-runner.ts` dispatches a new action, `chapters/previewChapterComplete({bookId, chapterId, reviewRecorded})`, for any `chapter_complete` whose job carried `review`, **for any book**. (Today only the viewed book's ticks are forwarded, `:345-354`.)
+  - If `bookId` is the cached book, the middleware refetches and opens the player on that chapter's entry.
+  - Otherwise it shows a toast "Preview ready in ‹book›". The entry is on disk and appears when that book is opened.
 - Remove `generation-stream-runner.ts`'s `markRevisionPlayable` dispatch.
 
-### 6. Compatibility and rollout
+## Compatibility and the two PRs
 
-- Files on disk are normalised on read (§1). Historical lost entries are not recreated; the fix is forward-only.
-- An old tab: its revisions PUT gets 400, and its accept/reject gets 410. Both are logged and surfaced. Nothing on disk changes.
-- Existing m4a/ogg books with a `.previous.mp3` from before this change: fsck's "no live audio of any extension" rule stops treating it as an orphan, and accept/reject find it by glob.
+**PR 1, server, dark.** Everything in §1-§4 lands, but:
+- every finalize caller passes `review: undefined`, so no server path writes pending;
+- the old `DELETE …/audio/previous` and `POST …/audio/previous/restore` routes stay live and the client keeps using them. Their logic is rewired to the store's safe accept/reject **disk steps** (§3 step 3, no JSON write), so D2's last-copy loss is fixed even for the old client;
+- `PUT /state` with `slice:'revisions'` is still accepted;
+- `GET /state` still returns revisions.json **raw**, including the legacy `drift` key that the old client's `hydrateFromBookState` reads (`revisions-slice.ts:396-402`).
+
+**Invariant on `main` between PR 1 and PR 2: the client is the only writer of `pending`.** If server recording went live while the old client still PUT whole files, those PUTs would erase server-written entries. That is #3400 again.
+
+**PR 2, client cutover.** It carries all of §5 plus the server switches:
+- callers pass `review`/`null`;
+- `GET /state` returns the normalised state;
+- `PUT slice:'revisions'` returns **400 `revisions_server_owned`**;
+- the two old routes return **410 `moved`**. Not 404, because the old client's `acceptChapterRevision` treats 404 as success (`api.ts:10218-10221`).
+
+On rollout, an old tab hits the 400/410, which are logged and surfaced; disk is unchanged. Files already on disk are normalised on read. Historical lost entries are not recreated.
 
 ## Testing
 
-Every behavioural item ships with its paired test, each mutation-checked: revert the fix and observe red.
+Every behavioural item has a paired test and is mutation-checked: revert the fix and observe red.
 
-**Server, `revisions-store`**
+**PR 1 (server)**
 
-- Each op, including the idempotent retries and `live_audio_missing`.
-- **The journal:** inject a failure after the marker, at each step of the restore, and after the audio step, then show that the retry and `completeInterrupted` reach the requested outcome, with the timeline matching the audio on disk.
-- **Reject's full restore** brings back the audio, segments, peaks, lufs, embeddings and the state.json take fields, for **mp3 and m4a**. Live audio exists at every intermediate step (assert after each injected failure).
-- Lock serialisation: accept racing `recordPending`, in both orders.
-- Legacy normalisation: each rule in §1.
-- `rev` increases on every write.
+Store:
+- each op, including idempotent retries;
+- all four 409s;
+- **the fingerprint rule:**
+  - a reject retried after an injected step-4 failure completes;
+  - a stale entry (live audio re-rendered after recording) answers `revision_stale`;
+  - `rename` preserves `mtime`, pinned on the CI OS;
+- **no moment without live audio:** inject failures at restore steps 1 and 2, and assert the live file exists after each; test an m4a live take;
+- lock serialisation: accept racing `recordPending` on the same book, in both orders;
+- legacy normalisation;
+- the `fileId`/`rev` rules;
 - `selection` validation.
 
-**Server, other**
-
-- `isChapterBusy`: per chapter, the `::*` case, and the unset accessor failing closed.
+Reservation:
+- `reserveChapter` refuses during a splice, a QA repair, and generation on `::id` and `::*`;
+- the unset probe fails closed;
+- a splice/generation registering during an op waits, then proceeds;
+- a wait that times out gives a curated error;
 - `check:cycles` stays clean.
-- Finalize records, drops or skips per §4, and sets `reviewRecorded:false` on an injected store failure, with no message in any SSE body.
-- 400 on a `review` with more than one chapter.
-- Route status codes. `PUT slice:'revisions'` returns 400. The old routes return 410.
-- A lock timeout returns the curated body.
-- `GET /state` returns normalised revisions.
-- `qa-report` still works with the new `computeRevisionsForBook` shape.
-- fsck with m4a pairs, and a live file under a different extension.
-- Reparse aborts in-flight splices.
 
-**Client**
+Finalize:
+- the `review` tri-state;
+- `preserved` requires the segments too;
+- a store failure → `reviewRecorded:false` and no message in any SSE body;
+- **dark:** every caller passes `undefined`, asserted by a test over the three call sites.
 
-- Foreign-book and stale-`rev` payloads are ignored.
-- `applyDismiss` across books.
-- Each thunk outcome. Preview side effects run only on success.
-- **No revisions PUT is ever sent**, asserted over every `putBookState` call.
-- The player opens the requested entry, not `pending[0]`.
-- `previewChapterComplete` fires for a non-viewed book.
-- Mock and real implementations pass one shared contract test.
-- The mock poll reads per-book state.
+Routes:
+- status codes;
+- curated 500 on a lock timeout;
+- `computeRevisionsForBook` returns pending with an empty cast;
+- `qa-report` is unaffected;
+- `review` round-trips through queue enqueue and claim into the generation request, and a multi-chapter request gets 400;
+- the old routes use the safe disk steps.
 
-**e2e (mock mode)**
+**PR 2 (client and switches)**
 
-- Fix-audio on A with a controlled delay → switch to B → completion → back to A: the prompt is present and playable.
-- `profile-regen-preview.spec.ts` passes **without** its phantom workaround.
+Client:
+- foreign-book payloads ignored; `fileId`/`rev` handling; `applyDismiss` across books;
+- every thunk outcome;
+- preview side effects only on success, fan-out under `previewRegen.bookId`;
+- **no revisions PUT is ever sent**, asserted over every `putBookState` call;
+- the player opens the requested entry;
+- `previewChapterComplete` for a non-viewed book;
+- mock/real contract test;
+- the mock poll reads per-book state.
 
-The e2e exercises the mock's imitation of finalize, so the server half is covered by the server tests above and by on-box acceptance.
+Server switches:
+- each caller's `review` value;
+- the 400 and the 410;
+- `GET /state` is normalised.
 
-**On-box acceptance** (register row; real sidecar, real book, **one mp3 and one m4a book**):
+e2e (mock):
+- Fix-audio on book A with a controlled delay → switch to B → completion → back to A: the prompt is present and playable (#3397);
+- `profile-regen-preview.spec.ts` passes without its workaround.
 
-- splice → book switch → the prompt appears;
-- accept → the `.previous` set is gone;
-- re-splice → reject → the original take, duration, waveform and loudness all return;
-- restart the server between the two → the pair survives fsck;
-- reject a chapter that is rendering → 409, and pending is unchanged.
+The e2e drives the mock's imitation of finalize. The server half is covered by the PR 1 tests and by on-box acceptance.
 
-## Not in scope
-
-- Timeline rollback (`rolledBack` has no UI and is removed).
-- Cross-tab sync of the cache. It is no longer needed for correctness.
-- Recovering pre-existing lost entries.
-- Drift computation.
-- Reparse/replace refusing to run during active **generation**. That is pre-existing, and it's a policy decision, so file it as its own issue naming that decision. This spec only aborts splices so that pending can't be recorded against renumbered chapters.
+**On-box acceptance** (register row, owed by PR 2; real sidecar, real mp3 book):
+- splice → switch books → the prompt appears;
+- accept → `.previous` is gone;
+- re-splice → reject → the original audio and segments return;
+- a reject while that chapter renders → 409;
+- render a chapter while its accept/reject is mid-flight → the render waits and then proceeds.
 
 ## Delivery
 
-- One branch, `fix/server-3400-revisions-server-ops` (worktree `C:\Claude\Projects\wt-3400-revisions-server-ops`).
-- One PR with `Closes #3400` and `Closes #3397`.
-- A regression plan `docs/features/285-revisions-server-ops.md` plus an INDEX entry, release notes in both files, an on-box register row on all three surfaces, and the two CLAUDE.md sentence updates (lock order, `requestFailureMessage` count).
-
-**Order** (the implementation plan cuts the children):
-
-1. Server: store + journal.
-2. `.previous` set + fsck.
-3. Busy probe.
-4. Ops + routes + OpenAPI.
-5. Finalize recording + `review` plumbing.
-6. Client: API + mocks.
-7. The cache + its dispatch sites.
-8. Thunks + layout + player.
-9. Runners + the splice slice.
-10. e2e.
-11. **Then** the server's 400 on the revisions PUT and the 410 on the old routes, once no client code sends either.
-12. Docs and the register.
-
-**Expect about 15 children.** If the plan's task count goes much past that, the plan should propose splitting delivery into two PRs (server, then client) rather than producing children that can't finish.
+- **One worktree and branch per PR.**
+  - PR 1: `fix/server-3400-revisions-server-ops` (this worktree), `Refs #3400`, `Refs #3397`.
+  - PR 2: a new branch cut from `main` after PR 1 merges, `Closes #3400`, `Closes #3397`.
+- **Docs:**
+  - PR 1 adds the regression plan `docs/features/285-revisions-server-ops.md`, its INDEX entry, and the two CLAUDE.md sentence updates (lock order, `requestFailureMessage` count);
+  - both PRs add release notes (PR 1's are operator-facing: the reject last-copy fix);
+  - PR 2 adds the on-box register row on all three surfaces.
+- **Filed before PR 1 starts:** the four issues above, each naming its owed decision, and the fsck fix agent's issue.
+- **Child counts:** PR 1 about 8 children plus verify; PR 2 about 7 plus verify. If writing-plans counts more than about 10 for either PR, it re-cuts rather than overloading children.
