@@ -613,6 +613,19 @@ export function reasoningOverflowFixes(ctx: {
   return [...fixes, ...reads];
 }
 
+/** #3084 pass-3 — the actionable half of `reasoningOverflowFixes` as one
+    sentence of advice, for copy that cannot render structured fixes (the
+    non-story warning is a plain string). Built FROM the fixes list — never a
+    second hand-written copy — so it cannot name an entry the list omits (the
+    Gemini output cap at Auto, num_predict at its default). "Read:" wiki-link
+    entries are dropped; returns '' when there is nothing actionable. */
+export function reasoningOverflowAdvice(ctx: Parameters<typeof reasoningOverflowFixes>[0]): string {
+  return reasoningOverflowFixes(ctx)
+    .filter((f) => !f.wikiPage)
+    .map((f) => f.label)
+    .join('; ');
+}
+
 /** Run-level analysis classifier — the unified replacement for analysis.ts's
     describeError(). Typed-error checks and the Google-envelope/status parsing
     are PORTED VERBATIM (same precedence, same message construction: model

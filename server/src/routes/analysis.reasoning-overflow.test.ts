@@ -831,7 +831,10 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
         expect(warnings[0].code).toBe('analyzer-reasoning-overflow-nonstory');
         expect(warnings[0].message).toMatch(/front-matter/i);
         expect(warnings[0].message).toMatch(/chapter titles only/i);
-        expect(warnings[0].message).toMatch(/num_predict|max output tokens/i);
+        /* Gemini at Auto: the fixes list omits the output-cap entry (nothing to
+           raise), so the warning must not advise it either (#3084 pass-3). */
+        expect(warnings[0].message).not.toMatch(/num_predict|max output tokens/i);
+        expect(warnings[0].message).toMatch(/different analyzer model/i);
       }, 60_000);
 
       it(`${route}: a run an earlier overflow already halted emits no non-story warning`, async () => {
@@ -840,6 +843,42 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
         expect(r.events.some((e) => e.kind === 'result')).toBe(false);
         expect(r.events.filter((e) => e.kind === 'warning')).toEqual([]);
       }, 60_000);
+    }
+  });
+});
+
+/* #3084 pass-3 — the non-story warning's advice is built from the SAME source as
+   the fixes list, so it cannot drift from it. */
+describe('nonStoryOverflowWarningMessage — advice follows the fixes list (#3084 pass-3)', () => {
+  afterEach(() => {
+    delete process.env.ANALYZER_NUM_PREDICT;
+    delete process.env.ANALYZER_MAX_OUTPUT_TOKENS;
+  });
+
+  it('Ollama at the default num_predict names num_ctx and not num_predict; a positive cap names num_predict', async () => {
+    const { nonStoryOverflowWarningMessage } = await import('./analysis.js');
+    const ctx = { transport: 'ollama' as const, model: 'qwen3.5:9b' };
+    const dflt = nonStoryOverflowWarningMessage(ctx);
+    expect(dflt).toMatch(/num_ctx/);
+    expect(dflt).not.toMatch(/num_predict/);
+    process.env.ANALYZER_NUM_PREDICT = '2048';
+    expect(nonStoryOverflowWarningMessage(ctx)).toMatch(/num_predict/);
+  });
+
+  it('Gemini names the output cap only when the fixes list does (pinned below the known limit)', async () => {
+    const { nonStoryOverflowWarningMessage } = await import('./analysis.js');
+    const { _seedGeminiCatalogForTest, _resetGeminiCatalogForTest } = await import(
+      '../analyzer/catalog/gemini-catalog.js'
+    );
+    const ctx = { transport: 'gemini' as const, model: 'gemini-3.6-flash' };
+    _seedGeminiCatalogForTest('test-key', [{ id: 'gemini-3.6-flash', outputTokenLimit: 65_536 }]);
+    try {
+      process.env.ANALYZER_MAX_OUTPUT_TOKENS = '0';
+      expect(nonStoryOverflowWarningMessage(ctx)).not.toMatch(/max output tokens/i);
+      process.env.ANALYZER_MAX_OUTPUT_TOKENS = '4096';
+      expect(nonStoryOverflowWarningMessage(ctx)).toMatch(/max output tokens/i);
+    } finally {
+      _resetGeminiCatalogForTest();
     }
   });
 });

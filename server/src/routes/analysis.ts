@@ -170,6 +170,7 @@ import {
   classifyAnalysisFailure,
   tryParseApiError,
   FAILURE_REMEDIATIONS,
+  reasoningOverflowAdvice,
   type FailureCode,
 } from './failure-taxonomy.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
@@ -3701,12 +3702,16 @@ const CAST_MERGE_BASE_STALE_MESSAGE =
    main and subset routes; the caller sends it at most once, and only when no
    earlier overflow halted the run (that rethrew before the guard ran). */
 const NONSTORY_OVERFLOW_WARNING_CODE = 'analyzer-reasoning-overflow-nonstory';
-const NONSTORY_OVERFLOW_WARNING_MESSAGE =
-  'The analyzer model ran out of output while reasoning during the front-matter (non-story) check, so ' +
-  'front-matter detection used chapter titles only for this run. The analysis itself completed. To give ' +
-  "the model more room: for Gemini, raise 'Gemini max output tokens' in Advanced Settings (or set it back to " +
-  "0, Auto); for Ollama, raise 'Ollama num_predict' (ANALYZER_NUM_PREDICT) or set it to -1, otherwise raise " +
-  "'Ollama num_ctx' (ANALYZER_NUM_CTX); or switch to a different analyzer model.";
+/* The advice half comes from `reasoningOverflowAdvice` — the same source as the
+   failure's structured fixes list — so the two cannot drift (#3084 pass-3). */
+export function nonStoryOverflowWarningMessage(ctx: Parameters<typeof reasoningOverflowAdvice>[0]): string {
+  const advice = reasoningOverflowAdvice(ctx);
+  return (
+    'The analyzer model ran out of output while reasoning during the front-matter (non-story) check, so ' +
+    'front-matter detection used chapter titles only for this run. The analysis itself completed.' +
+    (advice ? ` To fix it: ${advice}.` : '')
+  );
+}
 
 export async function runMainAnalyzerJob(
   job: AnalysisJob,
@@ -5988,7 +5993,11 @@ export async function runMainAnalyzerJob(
       { minLines: userSettings.minorCastMinLines, classifyNonStory },
     );
     if (job.reasoningOverflowed) {
-      send({ kind: 'warning', code: NONSTORY_OVERFLOW_WARNING_CODE, message: NONSTORY_OVERFLOW_WARNING_MESSAGE });
+      send({
+        kind: 'warning',
+        code: NONSTORY_OVERFLOW_WARNING_CODE,
+        message: nonStoryOverflowWarningMessage(job.reasoningOverflowError ?? { transport: 'openai', model: '' }),
+      });
     }
     if (guarded.stripped.length > 0) {
       log(
@@ -7783,7 +7792,11 @@ export async function runSubsetAnalyzerJob(
       { classifyNonStory },
     );
     if (job.reasoningOverflowed) {
-      send({ kind: 'warning', code: NONSTORY_OVERFLOW_WARNING_CODE, message: NONSTORY_OVERFLOW_WARNING_MESSAGE });
+      send({
+        kind: 'warning',
+        code: NONSTORY_OVERFLOW_WARNING_CODE,
+        message: nonStoryOverflowWarningMessage(job.reasoningOverflowError ?? { transport: 'openai', model: '' }),
+      });
     }
     if (guarded.stripped.length > 0) {
       log(
