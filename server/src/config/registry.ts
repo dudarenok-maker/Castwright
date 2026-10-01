@@ -72,7 +72,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST',
     group: 'analyzer-sampling',
     label: 'Gemini max input tokens per request',
-    help: 'Per-request INPUT-token cap for cloud analyzer passes (stage-1, stage-2, script-review/emotion/instruct). Body chunks are sized to the smaller of this and the model TPM (Gemma free tier = 16000/min), so the system prompt + roster fit even when this is set higher than a given model allows. Raise it for a model with more headroom (Gemini 3.x accepts up to 1,000,000 input tokens). Feeds the request-cap family\'s body sizing in stage 1, stage 2 and the output-heavy passes (cloudBodyCharBudget), each bounded further by that pass\'s own char ceiling. Default 12000.',
+    help: 'Per-request INPUT-token cap for cloud analyzer passes (stage-1, stage-2, script-review/emotion/instruct). Body chunks are sized to the smaller of this and the model TPM (Gemma free tier = 16000/min), so the system prompt + roster fit even when this is set higher than a given model allows. Raise it for a model with more headroom (Gemini 3.x accepts up to 1,000,000 input tokens). Feeds the request-cap family\'s body sizing (cloudBodyCharBudget): stage 1 sizes its body from this alone (no further ceiling); stage 2 and the output-heavy passes additionally cap the result at their own char ceiling (analyzer.stage2.chunkCharBudget / analyzer.gemini.outputHeavyChunkChars). Default 12000.',
     type: 'integer', min: 1000, max: 1_000_000,
     default: 12000,
     apply: 'live', risk: 'medium',
