@@ -89,6 +89,25 @@ recite:
     would resolve). Checkable: does the fix's condition name the invariant,
     or the repro's state? Does the paired test vary the conditions the repro
     held fixed?
+14. **A computation moved earlier "verbatim" now records a stale observation**
+    — code that was correct because it ran immediately before the thing it
+    describes is hoisted into an up-front pass (to let an earlier decision
+    see its result), and the later consumer reads the early value back
+    instead of recomputing. Each line is unchanged, so the diff reads as
+    a pure move — what changed is WHEN it runs relative to the side effects
+    in between. A pre-pass hashes every step's inputs before the first step
+    runs so the pipeline budget can exclude steps that would be `[cached]`;
+    a passing step then writes that plan-time hash to the cache. An input
+    rewritten while an earlier step ran is tested in its new state and
+    recorded under the hash of its old one, so restoring the file produces
+    `[cached]`, exit 0, for content the step never ran against. The suite
+    was green and a source pin actively REQUIRED the bug: "the loop must
+    read the hash from the pre-pass, not recompute" (PR #3393 —
+    `scripts/verify-cache.mjs`). Checkable: for anything hoisted out of
+    a loop or moved ahead of side-effecting work, what can change between
+    where it now runs and where its result is used — and is the value an
+    estimate (safe to take early) or a record of what actually happened
+    (must be taken at the time)?
 
 ### Keeping the catalogue current
 
