@@ -40,7 +40,7 @@
    Pairs with docs/features/archive/32-sticky-analysis.md. */
 
 import type { Dispatch, Middleware } from '@reduxjs/toolkit';
-import { api, AnalysisError } from '../lib/api';
+import { api, AnalysisError, type AnalysisFailureFix } from '../lib/api';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { notificationsActions } from './notifications-slice';
@@ -76,6 +76,15 @@ const APPLY_TICK_TYPE = analysisActions.applyAnalysisSnapshotTick.type;
    on every single tick. Track whether we've already tried a reopen after a heal,
    and if so, dampen subsequent retries. */
 const REOPEN_FAILURE_DAMPEN_TICKS = 2;
+
+/* The one place the persistent reasoning-overflow toast is built. */
+const overflowToast = (message: string, fixes: AnalysisFailureFix[] | undefined) =>
+  notificationsActions.pushToast({
+    kind: 'error',
+    message,
+    fixes,
+    dedupeKey: 'analysis-stream',
+  });
 
 export const analysisStreamMiddleware: Middleware = (store) => {
   let handle: OpenHandle | null = null;
@@ -264,11 +273,15 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           closeHandle();
           return;
         }
-        /* #3084 F7 — the persistent "reasoning overflow" notification lives
-           HERE, not in the analysing view: this stream survives navigation,
-           while the view's own SSE aborts on unmount (so a toast pushed from
-           the view would vanish the moment the user navigated away). Both
-           arms share `dedupeKey: 'analysis-stream'` — the same key the
+        /* #3084 F7 — the persistent "reasoning overflow" notification is
+           pushed from the store, not from the analysing view, so it does not
+           depend on the view being mounted when the terminal frame arrives
+           (this stream survives navigation; the view's own SSE aborts on
+           unmount). It is pushed from TWO places via the same `overflowToast`
+           builder: here, and in the HALTED_TYPE hook below — the view's catch
+           can dispatch setHalted first, which closes this handle and turns
+           this stream's own copy of the error into a swallowed AbortError.
+           Both arms share `dedupeKey: 'analysis-stream'` — the same key the
            `language_unset` branch above and the transport-failure branch
            below use — so the slice's own dedupe-by-key merge REPLACES this
            run's plain toast rather than stacking a second one. Only the
@@ -286,12 +299,7 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           );
           dispatch(
             e.code === 'analyzer-reasoning-overflow'
-              ? notificationsActions.pushToast({
-                  kind: 'error',
-                  message: e.message,
-                  fixes: e.fixes,
-                  dedupeKey: 'analysis-stream',
-                })
+              ? overflowToast(e.message, e.fixes)
               : notificationsActions.pushToast({
                   kind: 'error',
                   message: e.message,
@@ -357,16 +365,9 @@ export const analysisStreamMiddleware: Middleware = (store) => {
          hook before the middleware's own copy of the error arrives (which would
          then surface as AbortError and be swallowed without pushing). The slice's
          dedupe-by-key will collapse a double push. */
-      const haltedAction = a.payload as { code?: string; message?: string; fixes?: Array<{label: string; settingKey?: string; wikiPage?: string}> } | undefined;
-      if (haltedAction?.code === 'analyzer-reasoning-overflow' && haltedAction?.fixes?.length) {
-        dispatch(
-          notificationsActions.pushToast({
-            kind: 'error',
-            message: haltedAction.message || 'Reasoning overflow',
-            fixes: haltedAction.fixes,
-            dedupeKey: 'analysis-stream',
-          }),
-        );
+      const halted = a.payload as ReturnType<typeof analysisActions.setHalted>['payload'] | undefined;
+      if (a.type === HALTED_TYPE && halted?.code === 'analyzer-reasoning-overflow' && halted.fixes?.length) {
+        dispatch(overflowToast(halted.message, halted.fixes));
       }
 
       closeHandle();

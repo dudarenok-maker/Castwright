@@ -502,71 +502,66 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     expect(toasts[0]?.fixes).toBeUndefined();
   });
 
-  it('reasoning-overflow toast is pushed even when the view handles setHalted first (#3084 F7)', async () => {
-    /* Race condition: both the view and middleware receive the same
-       analyzer-reasoning-overflow frame. The view's SSE is subscribed first
-       (Set insertion order), so in the headline case its catch dispatches
-       setHalted synchronously, triggering the middleware's HALTED_TYPE hook.
-
-       Without the fix, the HALTED_TYPE hook only closes the handle, and when
-       the middleware's own copy of the error arrives, the handle is already
-       closed so the error surfaces as an AbortError, which is swallowed at
-       line 202 without pushing a toast.
-
-       Desired: the HALTED_TYPE hook should push the overflow toast when
-       the halted payload carries fixes, ensuring the persistent notification
-       survives regardless of which subscriber handled first. */
-    const store = buildStore();
-    const fixes = [
-      { label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' },
-    ];
-
-    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
-    store.dispatch(
-      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
-    );
-
-    // Simulate the view's catch running first, dispatching setHalted
-    // This triggers the middleware's HALTED_TYPE hook which closes the handle
-    store.dispatch(
-      analysisActions.setHalted({
-        manuscriptId: 'm1',
-        code: 'analyzer-reasoning-overflow',
+  /* #3084 F7 — the same terminal frame reaches BOTH the analysing view's SSE
+     and this middleware's. When the view's catch dispatches setHalted first,
+     the HALTED_TYPE hook closes this handle and the middleware's own copy of
+     the error becomes a swallowed AbortError — so the toast must be pushed by
+     the hook. Mutation: delete the `overflowToast(...)` dispatch in the
+     HALTED_TYPE hook and the "view first" case reddens (0 toasts). The
+     "middleware first" case is the control and stays green. Both orders must
+     yield exactly ONE toast with the SAME message. */
+  describe.each([
+    ['middleware first', false],
+    ['view first', true],
+  ])('reasoning-overflow toast, %s (#3084 F7)', (_label, viewFirst) => {
+    it('pushes exactly one toast carrying fixes and the error message', async () => {
+      const store = buildStore();
+      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+      store.dispatch(
+        analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+      );
+      const fixes = [
+        { label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' },
+      ];
+      const halt = () =>
+        store.dispatch(
+          analysisActions.setHalted({
+            manuscriptId: 'm1',
+            code: 'analyzer-reasoning-overflow',
+            message: 'boom',
+            fixes,
+          }),
+        );
+      const failStream = async () => {
+        lastCall().reject(
+          new AnalysisError(
+            'boom',
+            'analyzer-reasoning-overflow',
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fixes,
+          ),
+        );
+        await new Promise((r) => setTimeout(r, 0));
+      };
+      if (viewFirst) {
+        halt();
+        await failStream();
+      } else {
+        await failStream();
+        halt();
+      }
+      const toasts = store.getState().notifications.toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0]).toMatchObject({
+        kind: 'error',
         message: 'boom',
+        dedupeKey: 'analysis-stream',
         fixes,
-      }),
-    );
-
-    // At this point, without the fix, there should be 0 toasts with fixes because
-    // the HALTED_TYPE hook only closed the handle without pushing a toast
-    let toasts = store.getState().notifications.toasts;
-    const toastsBeforeMiddlewareError = toasts.filter((t) => t.fixes?.length).length;
-    console.log(`toasts before middleware error: ${toastsBeforeMiddlewareError}, total toasts: ${toasts.length}`);
-
-    // Then the middleware's own copy of the error arrives, but the handle
-    // is already closed, so it surfaces as an AbortError which is swallowed
-    lastCall().reject(
-      new AnalysisError(
-        'boom',
-        'analyzer-reasoning-overflow',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        fixes,
-      ),
-    );
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // After the fix, the HALTED_TYPE hook should have pushed the toast, so
-    // we should have exactly 1 overflow toast with fixes
-    toasts = store.getState().notifications.toasts;
-    const overflowToasts = toasts.filter((t) => t.fixes?.length);
-
-    // This should be 1 after the fix, but 0 before
-    expect(overflowToasts.length).toBe(1);
-    expect(overflowToasts[0]).toMatchObject({ kind: 'error', dedupeKey: 'analysis-stream', fixes });
+      });
+    });
   });
 
   it('does NOT poison the snapshot when an AbortError surfaces from the SSE (clean cancel)', async () => {
