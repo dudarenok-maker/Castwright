@@ -448,3 +448,60 @@ test('prevent-sleep.ps1 (spawned by server/src/system/prevent-sleep.ts) ships in
       'missing manifest entry makes Windows sleep prevention silently inert on a zip install.',
   );
 });
+
+test('the npm-script targets that shipped text tells a zip user to run ship too (install:cert-mobile, tts:sidecar)', () => {
+  for (const target of ['scripts/print-cert-install-instructions.mjs', 'scripts/launch-sidecar.mjs']) {
+    assert.equal(
+      matchesManifest(target),
+      true,
+      `${target} is the target of an npm script shipped text points users at; unshipped it crashes ` +
+        'with ERR_MODULE_NOT_FOUND on a zip install.',
+    );
+  }
+});
+
+// The import scan above follows static imports; shipped TEXT reaches an
+// unshipped script through package.json's `scripts` instead ("Run `npm run X`").
+// For every root npm script whose command is `node <tracked file>`, if that file
+// is not shipped, no shipped file may tell the user to `npm run` it.
+// Comment-only mentions are listed (keyed `<file> -> <script>`) with a reason.
+const UNSHIPPED_NPM_RUN_ALLOWLIST = {
+  // The opt-in maintainer golden-audio runners: their tests/golden/ tree is not
+  // shipped (`server/tts-sidecar/tests/**`), so they cannot run on an install
+  // regardless (same reason as UNSHIPPED_IMPORT_ALLOWLIST's run-golden-tests entry).
+  'server/tts-sidecar/run-golden-tests.ps1 -> test:golden-audio:sidecar':
+    'maintainer golden-audio runner; its tests/ tree is not shipped either',
+  'server/tts-sidecar/run-tests.ps1 -> test:golden-audio':
+    'maintainer golden-audio runner; its tests/ tree is not shipped either',
+};
+const SHIPPED_TEXT_EXT = /\.(mjs|cjs|js|jsx|ts|tsx|mts|cts|md|ps1|psm1)$/;
+
+test('no MANIFEST-shipped file tells the user to `npm run` a script whose target file is not shipped', () => {
+  const tracked = trackedFiles();
+  const trackedSet = new Set(tracked);
+  const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
+  const unshipped = [];
+  for (const [name, cmd] of Object.entries(pkg.scripts)) {
+    const m = /^node\s+(\S+)/.exec(cmd);
+    if (!m) continue;
+    const target = m[1].replace(/^\.\//, '');
+    if (trackedSet.has(target) && !matchesManifest(target)) unshipped.push({ name, target });
+  }
+  assert.ok(unshipped.length > 0, 'sanity: the repo has unshipped maintainer scripts for this guard to judge');
+  const failures = [];
+  for (const rel of tracked) {
+    if (!matchesManifest(rel) || TEST_FILE.test(rel) || !SHIPPED_TEXT_EXT.test(rel)) continue;
+    const source = readFileSync(resolve(repoRoot, rel), 'utf8');
+    for (const { name, target } of unshipped) {
+      const re = new RegExp(`npm run ${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w:-])`);
+      if (re.test(source) && !(`${rel} -> ${name}` in UNSHIPPED_NPM_RUN_ALLOWLIST)) {
+        failures.push(`${rel} says \`npm run ${name}\`, but its target ${target} is not shipped`);
+      }
+    }
+  }
+  assert.deepEqual(
+    failures,
+    [],
+    `Add the target to MANIFEST.include, reword the text, or (comment-only mention) allowlist it:\n${failures.join('\n')}`,
+  );
+});

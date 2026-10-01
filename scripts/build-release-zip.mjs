@@ -133,6 +133,16 @@ export const MANIFEST = {
     // HTTPS to loopback HTTP silently rather than crashing, but it's the
     // same "shipped file depends on an unshipped scripts/ file" class).
     'scripts/setup-lan-certs.mjs',
+    // `npm run install:cert-mobile` target. Shipped text tells a zip user to run
+    // it (start-app-prod.mjs's no-mkcert hint, server/src/index.ts's cert-less
+    // boot warning, the pair-device modal, INSTALL.md); unshipped it dies with
+    // ERR_MODULE_NOT_FOUND. Imports only qrcode (a dependency) + setup-lan-certs.mjs.
+    'scripts/print-cert-install-instructions.mjs',
+    // `npm run tts:sidecar` target. server/src/tts/sidecar.ts's "not reachable"
+    // error and the standalone (autoStartSidecar off) path tell the user to run
+    // it, and a zip install ships server/tts-sidecar/** (start.ps1/start.sh) for
+    // it to launch. Imports only scripts/lib/is-main-module.mjs, already shipped.
+    'scripts/launch-sidecar.mjs',
     // fs-1 upgrade machinery the deployer/runtime needs.
     'scripts/restart-after-upgrade.mjs',
     'scripts/setup-versioned-install.mjs',
