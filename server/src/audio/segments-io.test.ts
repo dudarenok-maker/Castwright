@@ -140,14 +140,36 @@ describe('collectRenderedQwenVoiceNames per-line voices (#3362)', () => {
   });
 
   it('ignores Kokoro-fallback lines and lines of other characters', async () => {
-    writeChapter({ wren: qwenSnap, marlow: { voiceEngine: 'kokoro', resolvedVoiceName: 'af_x' } }, [
+    /* Marlow's snapshot is Qwen too but carries no stamped line of its own
+       under wren's key; wren's result must not absorb marlow's voice. */
+    writeChapter({ wren: qwenSnap, marlow: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-marlow' } }, [
       { characterId: 'wren', voiceName: 'af_fallback', renderedFallbackEngine: 'kokoro' },
       { characterId: 'wren', voiceName: 'qwen-new' },
-      { characterId: 'marlow', voiceName: 'qwen-marlow' },
     ]);
     await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
-      new Set(['qwen-new']),
+      new Set(['qwen-new', 'qwen-marlow']),
     );
+  });
+
+  it('keeps a Qwen voice still on stamped lines after the character switched to Kokoro (#3362 pass 11)', async () => {
+    /* Qwen -> Kokoro switch, then ONE of three lines re-recorded: the snapshot
+       is last-wins ({kokoro, af_bella}) but two lines are still in qwen-wrenA.
+       The old snapshot-engine gate dropped them, so the Qwen card read
+       "Designed" with two thirds of the chapter audible in that voice. */
+    writeChapter({ wren: { voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' } }, [
+      { characterId: 'wren', resolvedCharacterId: 'wren', voiceName: 'qwen-wrenA' },
+      { characterId: 'wren', resolvedCharacterId: 'wren', voiceName: 'qwen-wrenA' },
+      { characterId: 'wren', resolvedCharacterId: 'wren', voiceName: 'af_bella' },
+    ]);
+    const names = await collectRenderedQwenVoiceNames(bookDir, chapters);
+    expect(names.has('qwen-wrenA')).toBe(true);
+  });
+
+  it('does not use a non-Qwen snapshot voice on the legacy fallback', async () => {
+    writeChapter({ wren: { voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' } }, [
+      { characterId: 'wren', sentenceIds: [1] },
+    ]);
+    await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(new Set());
   });
 });
 

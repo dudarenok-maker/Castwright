@@ -229,15 +229,17 @@ export function renderedSegmentVoices(
   return [...voices];
 }
 
-/* Collect the set of bespoke-Qwen voice NAMES (designed voiceIds) that have
-   actually rendered audio in a book — every voice a rendered `voiceEngine ===
-   'qwen'` snapshot's lines were stamped with, or that snapshot's own
-   `resolvedVoiceName` when no line under its key carries a stamp (legacy
-   chapter). The snapshot holds ONE voice per character (last-wins), so after a
-   voice change plus a partial re-record it names only the new voice and the
-   old one — still rendered in the untouched lines — would be missed (#3362).
-   Used by the voices aggregator to split "Designed" from "Generated" for Qwen
-   voices. */
+/* Collect the set of voice NAMES that have actually rendered audio in a book —
+   every voice the lines under a snapshot key were stamped with, whatever the
+   snapshot's engine, or (legacy chapter: no line under the key carries a
+   stamp) the snapshot's own `resolvedVoiceName` when its `voiceEngine` is
+   'qwen'. The snapshot holds ONE voice and ONE engine per character
+   (last-wins), so after a voice or engine change plus a partial re-record it
+   names only the new one and the old Qwen voice — still rendered in the
+   untouched lines — would be missed (#3362). No engine filter on stamped lines:
+   the consumer only ever asks `.has('qwen-<uuid>')`, which a non-Qwen name can
+   never equal. Used by the voices aggregator to split "Designed" from
+   "Generated" for Qwen voices. */
 export async function collectRenderedQwenVoiceNames(
   bookDir: string,
   chapters: Array<{ id: number; slug: string }>,
@@ -246,11 +248,10 @@ export async function collectRenderedQwenVoiceNames(
   const segs = await loadSegmentsFiles(bookDir, chapters);
   for (const seg of segs) {
     for (const [key, snap] of Object.entries(seg.characterSnapshots ?? {})) {
-      if (snap.voiceEngine !== 'qwen') continue;
       const lineVoices = renderedSegmentVoices(seg.segments, key);
       if (lineVoices.length > 0) {
         for (const v of lineVoices) names.add(v);
-      } else if (snap.resolvedVoiceName) {
+      } else if (snap.voiceEngine === 'qwen' && snap.resolvedVoiceName) {
         names.add(snap.resolvedVoiceName);
       }
     }
