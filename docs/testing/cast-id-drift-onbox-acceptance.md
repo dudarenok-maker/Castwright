@@ -1022,8 +1022,12 @@ Defects NOT filed: none. The fix is narrowly scoped (one function's gating condi
 
 Register row: [A22 "#3362 checks 1–5"](onbox-acceptance-register.md) (extends A22; no new row).
 **Needs:** the 8 GB card, real sidecar with Qwen resident, the *Playing with Fire*
-workspace book, speaker QA (render-integrity) **on** for checks 4–5, a backup of
-each chapter's `.segments.json` + `.mp3` before every re-record.
+workspace book, a backup of each chapter's `.segments.json` + `.mp3` before every
+re-record. Checks 4–5: turn on **"Render-integrity QA (voice match)"**
+(`qa.speaker.enabled`, env `SEG_SPK_ENABLED`, default off, live) **before** the
+renders/re-records. Files live in the book's `audio/` folder:
+`<slug>.segments.json`, `<slug>.embeddings.json`, `<slug>.render-integrity.json`
+(verdict rows), `render-integrity.centroids.json`.
 
 SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
@@ -1035,36 +1039,61 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
    Result: _______________________________________________________________
 
-2. **Per-line voice drift.** Chapter rendered **after 2026-07-31**, ≥ 4 lines of
-   one Qwen character, no drift showing. Change the character's voice →
-   Revisions flags the chapter (voice row). Re-record 2 of 4 lines → Revisions
-   **still** flags it; `segments.json` shows new `voiceName` on those 2 and the
-   old on the other 2; Voices still lists the **old** designed voice as
-   Generated. Re-record the rest → flag clears.
+2. **Per-line voice drift.** Chapter fully rendered by this build, ≥ 4 lines of
+   one Qwen character, no drift showing.
+   (a) *Assign* a **different Qwen library voice** (Cast → voice library) — not
+   a redesign, which keeps `qwen-<voiceUuid>` and changes nothing.
+   (b) Revisions flags the chapter (Voice row). (c) Per-line re-record ONE
+   **non-last** line → still flagged (sanity only). (d) Also re-record the
+   character's **LAST** line, leave ≥ 1 earlier line untouched → Revisions
+   **still** flags it; `segments.json` shows new `voiceName` on the last line,
+   old on the untouched one; Voices still lists the **old** designed voice as
+   Generated. This step discriminates: the snapshot is last-wins, so
+   snapshot-only logic would clear here. (e) Re-record the rest → flag clears.
+   (f) Engine-switch variant: switch the character to Kokoro, re-record only its
+   last line → its Qwen voice still reads Generated on Voices.
    *Stated limit:* pre-stamp (#1992) legacy, or voiceless-legacy + stamped
    mixed, chapters can clear drift early (not a regression) — do not use one.
 
    Result: _______________________________________________________________
 
-3. **Fix audio reaches every stamped spelling.** Chapter with lines under both
+3. **Fix audio reaches every stamped spelling.** Chapter **fully rendered by
+   this build** whose fresh `segments.json` has lines under both
    `characterId: "the-torment"` and `"the_torment"`, all
-   `resolvedCharacterId: "the_torment"`. Press Fix audio for Torment. Expect all
-   those lines re-synthesised (segments/take mtimes), none left on the old take.
+   `resolvedCharacterId: "the_torment"` (a re-record cannot create this — if no
+   chapter renders that way, record SKIP, not PASS). *Assign* Torment a
+   different library voice, then profile drawer → Fix audio → re-record. Expect
+   **every** segment with `resolvedCharacterId: "the_torment"` to carry the new
+   `voiceName`, under both raw spellings. Also: lines that had
+   `renderedFallbackEngine: "kokoro"` lose it after a clean re-take and the Cast
+   "Fallback (Kokoro)" pill clears when none remain (use chapter 19 before check
+   1's re-render; skip if none).
    *Stated limit:* an unstamped legacy spelling is not reached.
 
    Result: _______________________________________________________________
 
-4. **Re-record after cast merge stays scored.** Speaker QA on, chapter scored.
-   Merge two entries of one character, re-record that character's lines.
-   Expect the chapter in `chaptersScored`, **not** `chaptersEmbedFailed`, with
-   a centroid and verdicts on the re-recorded lines.
+4. **Re-record after cast merge keeps embeddings, scores under the survivor.**
+   Speaker QA on during the original render. Chapter lines stamped `X`
+   (merged away) and survivor `Y`; note N = `characterId: "X"` rows in
+   `<slug>.embeddings.json`. Merge `X` into `Y`, then Listen per-line re-record
+   each `X` line (Fix audio on `Y` cannot reach them — stamped-only). Expect:
+   (i) rows under `"X"` still present (N; before the fix: 0; lines under the
+   duration floor have none); (ii) QA report before any rescan shows `Y`
+   unchecked with **Resume scoring** and `chaptersScored` possibly lower —
+   expected, not a failure; (iii) after Resume scoring,
+   `<slug>.render-integrity.json` has verdict rows with `characterId: "Y"` for
+   those sentence ids (before the fix: only `X` + narrator).
 
    Result: _______________________________________________________________
 
-5. **Unstamped orphan rows do not pool.** *Заказ Коалфолла* (orphan `mayrin`,
-   re-minted `mairin`): run the QA scan. Expect the re-minted character's
-   centroid built only from its own chapter's stamped rows (row count equals
-   the stamped-segment count), no pooled orphan rows, `chaptersScored <=
-   chaptersEligible`.
+5. **Unstamped orphan rows do not pool.** Chapter rendered **before** this fix
+   and not re-rendered (orphan `mayrin` lines have no `resolvedCharacterId`;
+   `mairin` later re-minted), e.g. *Заказ Коалфолла*. Trigger one `scoreBook`
+   pass by finishing a render of another chapter (a re-record does not rescore).
+   Expect that chapter's `<slug>.render-integrity.json` has **no** rows under
+   `"mairin"` for the orphan's sentence ids, and `render-integrity.centroids.json`
+   `mairin.referenceKind` is `in-book` only if its own stamped lines supply
+   enough anchors, else `audition` (centroids store a vector, no row count). Pooling arithmetic is pinned by `aggregate.test.ts`
+   (S8; 🟠A) — corroboration only; SKIP acceptable if the old chapter is gone.
 
    Result: _______________________________________________________________

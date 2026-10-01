@@ -226,12 +226,17 @@ last, alone, since it deliberately crashes the sidecar twice.
 13a. Run the five **#3362 checks** (run sheet
     [§11](cast-id-drift-onbox-acceptance.md), register A22 "#3362 checks
     1–5"): (1) canonical snapshot keys on a full re-render, (2) per-line voice
-    drift — change a voice, re-record only some lines, Revisions must still
-    flag until every line is redone (chapter rendered after 2026-07-31 only;
-    pre-stamp legacy/mixed chapters can clear early — not a regression),
-    (3) Fix audio reaches every stamped spelling, (4) re-record after a cast
-    merge keeps the chapter in `chaptersScored`, (5) unstamped orphan rows do
-    not pool into a re-minted character's centroid. Speaker QA on for 4–5.
+    drift — *assign* a different library voice (a redesign changes nothing),
+    re-record a non-last line, then the LAST line plus some others: Revisions
+    must still flag until every line is redone (chapter rendered by this build
+    only; pre-stamp legacy/mixed chapters can clear early — not a regression),
+    (3) Fix audio on a chapter rendered with both raw spellings: every stamped
+    line gets the new `voiceName` in `segments.json`; Kokoro-fallback stamps
+    clear on a clean re-take, (4) per-line re-record after a cast merge keeps
+    its rows in `<slug>.embeddings.json` and, after Resume scoring, gets
+    verdict rows under the survivor, (5) unstamped orphan rows do not pool into
+    a re-minted character (corroboration; pinned by `aggregate.test.ts`). Turn
+    on "Render-integrity QA (voice match)" (`qa.speaker.enabled`) for 4–5.
     - Result (1–5, one line each):
 14. Run §4 (re-render chapter 16 — `lightning-dave` recovery **and**
     `pool-player-2` negative control in the same chapter).
