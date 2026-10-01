@@ -983,3 +983,130 @@ describe('a Retry whose Phase 1 fails keeps its failure on record and reports it
     expect(r.failedChapterErrors['1'].code).toBe('analyzer-reasoning-overflow');
   }, 30_000);
 });
+
+/* #3435 review pass 1 — the failure record is read back by the NEXT subset run's
+   Phase-1 gate, and a Retry that never reaches the end of Phase 1 must not lose
+   the record it erased in Phase 0. A two-chapter FINISHED book (both chapters
+   cast + attributed, stage1 on disk), driven through successive subset runs. */
+describe('the subset route: failure records vs the Phase-1 gate and an unfinished Retry (#3435)', () => {
+  beforeAll(async () => {
+    await import('./analysis.js');
+  }, 120_000);
+
+  /** Chapter 1's cached sentences are "collapsed" (narrator); a re-attribution
+      writes nova, so a changed characterId proves the chapter was re-attributed. */
+  const COLLAPSED_ID = 'narrator';
+
+  interface Step {
+    toRun: number[];
+    runStage2Chapter: Analyzer['runStage2Chapter'];
+    /** Overrides the Phase-1 selection model id (split-model case). */
+    phase1Model?: string;
+    /** Runs after the Phase-1 selection is built, with the job (to abort it). */
+    onJob?: (job: AnalysisJob) => void;
+  }
+  interface StepResult {
+    events: CapturedEvent[];
+    job: AnalysisJob;
+  }
+  interface CaseResult {
+    steps: StepResult[];
+    failedChapterIds: number[];
+    failedChapterErrors: Record<string, { code: string }>;
+    chapters: Record<number, Array<{ characterId: string }>>;
+  }
+
+  async function runCase(
+    label: string,
+    seedFailed: Record<number, string>,
+    steps: Step[],
+  ): Promise<CaseResult> {
+    const seed = await seedBook(label, [1, 2], { fullCache: true });
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runSubsetAnalyzerJob } = await import('./analysis.js');
+    const cache = await loadAnalysisCache(seed.manuscriptId);
+    cache.chapterCast = { 1: [novaCharacter()], 2: [novaCharacter()] };
+    cache.chapters = {
+      1: [{ id: 101, chapterId: 1, characterId: COLLAPSED_ID, confidence: 0.9, text: BODIES[1] }],
+      2: [{ id: 201, chapterId: 2, characterId: 'nova', confidence: 0.9, text: BODIES[2] }],
+    } as never;
+    const ids = Object.keys(seedFailed).map(Number);
+    if (ids.length) {
+      cache.failedChapterIds = ids;
+      cache.failedChapterErrors = Object.fromEntries(
+        ids.map((id) => [String(id), { code: seedFailed[id], message: 'seeded', remediation: 'seeded' }]),
+      );
+    }
+    await saveAnalysisCache(seed.manuscriptId, cache);
+    const record = getManuscript(seed.manuscriptId)!;
+    const results: StepResult[] = [];
+    try {
+      for (const step of steps) {
+        const job = {
+          ...seed.job,
+          controller: new AbortController(),
+          subscribers: new Set(),
+          kind: 'subset' as const,
+        } as unknown as AnalysisJob;
+        const events = captureEvents(job, () => {});
+        step.onJob?.(job);
+        await runSubsetAnalyzerJob(
+          job,
+          record,
+          seed.phase0Selection,
+          buildSelection(stubAnalyzer({ runStage2Chapter: step.runStage2Chapter }), step.phase1Model ?? MODEL),
+          record.chapterHints.filter((c) => step.toRun.includes(c.id)),
+          false,
+        );
+        results.push({ events, job });
+      }
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      return {
+        steps: results,
+        failedChapterIds: after.failedChapterIds ?? [],
+        failedChapterErrors: (after.failedChapterErrors ?? {}) as Record<string, { code: string }>,
+        chapters: (after.chapters ?? {}) as CaseResult['chapters'],
+      };
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  it('P3: a Phase-1 failure recorded on chapter 1 does not block a later clean Re-analyse of chapter 2', async () => {
+    const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
+    const ch2Calls: number[] = [];
+    const r = await runCase('p3-gate', {}, [
+      { toRun: [1], runStage2Chapter: () => Promise.reject(new AnalyzerTimeoutError('gemini', MODEL, 90_000, 'thinking-idle')) },
+      {
+        toRun: [2],
+        runStage2Chapter: async (_m, id) => {
+          ch2Calls.push(id);
+          return stage2For(id);
+        },
+      },
+    ]);
+    /* Chapter 1's record is the control: it survived, so the gate saw it. */
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(ch2Calls).toEqual([2]);
+    expect(r.steps[1].events.some((e) => e.kind === 'result')).toBe(true);
+  }, 60_000);
+
+  it('P2: with two attribution-flagged chapters, a Retry of chapter 1 attributes it and leaves chapter 2 flagged', async () => {
+    const calls: number[] = [];
+    const r = await runCase('p2-gate', { 1: 'attribution-collapse', 2: 'attribution-collapse' }, [
+      {
+        toRun: [1],
+        runStage2Chapter: async (_m, id) => {
+          calls.push(id);
+          return stage2For(id);
+        },
+      },
+    ]);
+    expect(calls).toEqual([1]);
+    expect(r.chapters[1][0].characterId).toBe('nova');
+    expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(true);
+    expect(r.failedChapterIds).toEqual([2]);
+  }, 60_000);
+});

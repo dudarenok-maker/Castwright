@@ -7405,7 +7405,16 @@ export async function runSubsetAnalyzerJob(
       characters,
       chapters: record.chapterHints.map((c) => ({ id: c.id, title: c.title })),
     };
-    const remainingFailedCastIds = cache.failedChapterIds ?? [];
+    /* #3435 — only a CAST-phase failure blocks Phase 1: a failed id with no
+       cast (the empty-array failure marker — see isPhase0aCoverageComplete)
+       on a non-excluded chapter. A chapter flagged for an ATTRIBUTION-phase
+       failure (attribution-collapse, a recorded Phase-1 throw) still has its
+       cast, so it must not stop another chapter's Phase 1 — it is only
+       re-attributed when it is itself retried. */
+    const excludedChapterIds = new Set(record.chapterHints.filter((c) => c.excluded).map((c) => c.id));
+    const remainingFailedCastIds = (cache.failedChapterIds ?? []).filter(
+      (id) => !excludedChapterIds.has(id) && !chapterCast[id]?.length,
+    );
     /* Coverage gate (in addition to the no-failed-chapters check) — stage1
        is finalised only when EVERY non-excluded chapter has a non-empty
        chapterCast entry. Without this guard a sparse cache (chapters 1–N
