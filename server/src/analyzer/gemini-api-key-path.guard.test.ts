@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
+import { execFileSync } from 'child_process';
 
 /* Settings moved from Account → (section) to Admin → Model Manager → (section)
    on 2026-07-15 (fs-23 phase A7). This guard reads what the UI actually
@@ -34,6 +36,49 @@ import * as path from 'path';
 const repoRoot = path.resolve(__dirname, '../../../');
 const formPath = path.join(repoRoot, 'src', 'components', 'model-settings-form.tsx');
 
+/* docs/features and docs/superpowers are design history, not live paths.
+   Dotted entries (.git, .venv, .superpowers, .github, …) are skipped at every
+   level, except a file named `.env.example`. */
+const dirsToExclude = [
+  'node_modules',
+  'dist',
+  'build',
+  'coverage',
+  'docs/features',
+  'docs/superpowers',
+];
+
+/* Candidate files come from git (tracked + untracked-but-not-ignored), never a
+   filesystem walk: a walk also reads git-ignored local-only directories
+   (`brand/`, `mockups/`) that exist only in the primary checkout, so the guard
+   failed there on text that is not part of the repo (#3428). Returns
+   repo-relative, forward-slash paths. git failing throws — it must never
+   degrade to scanning nothing. */
+function listScanCandidates(root: string): string[] {
+  /* A git hook exports GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE, which would
+     redirect this git at the wrong repo or index. */
+  const env = { ...process.env };
+  for (const k of ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE']) delete env[k];
+  const out = execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z'], {
+    cwd: root,
+    env,
+    encoding: 'utf8',
+    windowsHide: true,
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  return out.split('\0').filter((rel) => {
+    if (!rel) return false;
+    const segs = rel.split('/');
+    const name = segs[segs.length - 1];
+    if (segs.some((seg) => seg.startsWith('.') && seg !== '.env.example')) return false;
+    for (let i = 1; i < segs.length; i++) {
+      const dir = segs.slice(0, i).join('/');
+      if (dirsToExclude.some((ex) => dir === ex || dir.endsWith(`/${ex}`))) return false;
+    }
+    return /\.(ts|tsx|md|mjs)$/.test(name) || name === '.env.example';
+  });
+}
+
 /* Every file is read through this so a CRLF checkout (the Windows CI runner,
    or any clone with autocrlf on) scans identically to an LF one: every
    line-shaped pattern below — the paragraph break, the wrapped-path
@@ -65,7 +110,7 @@ export function readModelSettingsSectionLabels(): string[] {
   }
   return groupRefs.map((name) => {
     const decl = src.match(new RegExp(`\\bconst ${name}\\b[^=]*=\\s*\\{([\\s\\S]*?)\\n\\};`));
-    const label = decl?.[1].match(/\blabel:\s*(['"])(.*?)\1/);
+    const label = decl?.[1].match(/\blabel:\s*([\u0027\u0022])(.*?)\1/);
     if (!label) throw new Error(`${name} has no literal label: in ${formPath}`);
     return label[2];
   });
@@ -83,10 +128,10 @@ export function readModelSettingsFieldLabels(): string[] {
   const src = readText(formPath);
   const strip = (s: string) => decodeEntities(s).replace(/\s*\([^)]*\)\s*$/, '').trim();
   const labels: string[] = [];
-  for (const m of src.matchAll(/(?<![\w-])label="([^"]+)"/g)) labels.push(strip(m[1]));
+  for (const m of src.matchAll(/(?<![\w-])label=\u0022([^\u0022]+)\u0022/g)) labels.push(strip(m[1]));
   for (const m of src.matchAll(/<h3\b[^>]*>([^<]+)<\/h3>/g)) labels.push(strip(m[1]));
 
-  const siblingImports = [...src.matchAll(/import\s*\{([^}]+)\}\s*from\s*'\.\/([\w-]+)'/g)];
+  const siblingImports = [...src.matchAll(/import\s*\{([^}]+)\}\s*from\s*\u0027\.\/([\w-]+)\u0027/g)];
   for (const [, names, file] of siblingImports) {
     const siblingPath = path.join(path.dirname(formPath), `${file}.tsx`);
     if (!fs.existsSync(siblingPath)) continue;
@@ -96,7 +141,7 @@ export function readModelSettingsFieldLabels(): string[] {
       if (!name || !new RegExp(`<${name}\\b`).test(src)) continue; // imported but not rendered
       const body = siblingSrc.match(new RegExp(`export function ${name}\\b([\\s\\S]*?)(?=\\nexport |$)`));
       if (!body) continue;
-      for (const m of body[1].matchAll(/aria-label="([^"]+)"/g)) labels.push(strip(m[1]));
+      for (const m of body[1].matchAll(/aria-label=\u0022([^\u0022]+)\u0022/g)) labels.push(strip(m[1]));
     }
   }
   if (labels.length === 0) throw new Error(`no field labels resolved from ${formPath}`);
@@ -112,11 +157,11 @@ export function readModelSettingsFieldLabels(): string[] {
 export function readViewSectionLabels(viewFile: string): string[] {
   const viewPath = path.join(repoRoot, 'src', 'views', viewFile);
   const src = readText(viewPath);
-  const nav = [...src.matchAll(/\{\s*id:\s*'[\w-]+',\s*label:\s*'([^']+)'/g)].map((m) => m[1]);
+  const nav = [...src.matchAll(/\{\s*id:\s*\u0027[\w-]+\u0027,\s*label:\s*\u0027([^\u0027]+)\u0027/g)].map((m) => m[1]);
   const headings = (text: string) =>
     [...text.matchAll(/<h[23]\b[^>]*>([^<{]+)<\/h[23]>/g)].map((m) => decodeEntities(m[1]).trim());
   const labels = [...nav, ...headings(src)];
-  for (const m of src.matchAll(/from\s*'\.\.\/components\/([\w/-]+)'/g)) {
+  for (const m of src.matchAll(/from\s*\u0027\.\.\/components\/([\w/-]+)\u0027/g)) {
     const p = path.join(repoRoot, 'src', 'components', `${m[1]}.tsx`);
     if (fs.existsSync(p)) labels.push(...headings(readText(p)));
   }
@@ -422,7 +467,7 @@ describe('Gemini API key path guard', () => {
     const crlf = lf.replace(/\n/g, '\r\n');
     expect(unreleasedReleaseNotes(crlf, '1.14.0')).toBe(unreleasedReleaseNotes(lf, '1.14.0'));
     expect(unreleasedReleaseNotes(crlf, '1.14.0')).not.toContain('- old');
-    expect(() => unreleasedReleaseNotes(crlf, '9.9.9')).toThrow(/no "# Castwright 9.9.9" heading/);
+    expect(() => unreleasedReleaseNotes(crlf, '9.9.9')).toThrow(/no \u0022# Castwright 9.9.9\u0022 heading/);
 
     const wrapped = 'set from Account → Server\r\nConfiguration (or in `server/.env`)';
     expect(findStaleAccountRefLines(wrapped, names).map((h) => h.line)).toEqual([1]);
@@ -441,72 +486,43 @@ describe('Gemini API key path guard', () => {
       return true;
     };
 
-    /* docs/features and docs/superpowers are design history, not live paths.
-       Dotted entries (.git, .venv, .superpowers, …) are skipped by the walk. */
-    const dirsToExclude = [
-      'node_modules',
-      'dist',
-      'build',
-      'coverage',
-      'docs/features',
-      'docs/superpowers',
-    ];
-
-    function shouldExcludeDir(dirPath: string): boolean {
-      const rel = path.relative(repoRoot, dirPath).split(path.sep).join('/');
-      return dirsToExclude.some((ex) => rel === ex || rel.endsWith(`/${ex}`));
-    }
-
     const failing: { file: string; line: number; pattern: string; text: string }[] = [];
 
-    function walkDir(dir: string) {
-      let entries: fs.Dirent[];
+    const candidates = listScanCandidates(repoRoot);
+    /* A broken listing must not pass vacuously. */
+    expect(candidates).toContain('server/src/analyzer/index.ts');
+
+    for (const rel of candidates) {
+      const fullPath = path.join(repoRoot, rel);
+      const name = path.basename(rel);
+      if (fullPath === __filename) continue; // this guard names the stale forms on purpose
+
+      /* Generated per-version wiki pages for RELEASED versions describe the
+         UI of their day (scripts/generate-release-notes-wiki.mjs). A page for
+         a not-yet-released version is still live text. */
+      const releasePage = name.match(/^Release-Notes-v(\d+\.\d+\.\d+)\.md$/);
+      if (releasePage && isReleased(releasePage[1])) continue;
+
+      let content: string;
       try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
+        content = readText(fullPath);
       } catch {
-        return; // unreadable dir
+        continue; // unreadable file, or listed but deleted from disk
       }
-      for (const entry of entries) {
-        if (entry.name.startsWith('.') && entry.name !== '.env.example') continue;
-        const fullPath = path.join(dir, entry.name);
 
-        if (entry.isDirectory()) {
-          if (!shouldExcludeDir(fullPath)) walkDir(fullPath);
-          continue;
-        }
-        if (!entry.isFile()) continue;
-        if (!/\.(ts|tsx|md|mjs)$/.test(entry.name) && entry.name !== '.env.example') continue;
-        if (fullPath === __filename) continue; // this guard names the stale forms on purpose
+      if (fullPath === path.join(repoRoot, 'RELEASE_NOTES.md')) {
+        content = unreleasedReleaseNotes(content, currentVersion);
+      }
 
-        /* Generated per-version wiki pages for RELEASED versions describe the
-           UI of their day (scripts/generate-release-notes-wiki.mjs). A page for
-           a not-yet-released version is still live text. */
-        const releasePage = entry.name.match(/^Release-Notes-v(\d+\.\d+\.\d+)\.md$/);
-        if (releasePage && isReleased(releasePage[1])) continue;
-
-        let content: string;
-        try {
-          content = readText(fullPath);
-        } catch {
-          continue; // unreadable file
-        }
-
-        if (fullPath === path.join(repoRoot, 'RELEASE_NOTES.md')) {
-          content = unreleasedReleaseNotes(content, currentVersion);
-        }
-
-        for (const hit of findStaleAccountRefLines(content, names)) {
-          failing.push({
-            file: path.relative(repoRoot, fullPath).split(path.sep).join('/'),
-            line: hit.line,
-            pattern: `Account + "${hit.name}"`,
-            text: hit.text,
-          });
-        }
+      for (const hit of findStaleAccountRefLines(content, names)) {
+        failing.push({
+          file: rel,
+          line: hit.line,
+          pattern: `Account + "${hit.name}"`,
+          text: hit.text,
+        });
       }
     }
-
-    walkDir(repoRoot);
 
     /* Positive assertion: the corrected path is present in at least one live
        error message, so an over-eager rewrite cannot pass by removing both. */
@@ -535,5 +551,29 @@ describe('Gemini API key path guard', () => {
             .join('\n')}`
         : '';
     expect(failing, errorMsg).toHaveLength(0);
+  });
+
+  it('lists scan candidates from git: ignored dirs and dot-dirs are out (#3428)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'guard-3428-'));
+    try {
+      const env = { ...process.env };
+      for (const k of ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE']) delete env[k];
+      execFileSync('git', ['init', '-q'], { cwd: tmp, env, windowsHide: true });
+      const put = (rel: string, body: string) => {
+        fs.mkdirSync(path.dirname(path.join(tmp, rel)), { recursive: true });
+        fs.writeFileSync(path.join(tmp, rel), body);
+      };
+      put('.gitignore', 'brand/\n');
+      put('brand/x.md', 'ignored\n');
+      put('docs/live.md', 'live\n');
+      put('.github/y.md', 'dot dir\n');
+
+      const got = listScanCandidates(tmp);
+      expect(got).toContain('docs/live.md');
+      expect(got).not.toContain('brand/x.md');
+      expect(got).not.toContain('.github/y.md');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
