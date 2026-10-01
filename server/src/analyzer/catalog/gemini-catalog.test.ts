@@ -129,6 +129,8 @@ describe('warmGeminiCatalog', () => {
     await expect(warmGeminiCatalog('sk-SECRET-123', { client })).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0][0])).not.toContain('sk-SECRET-123');
+    expect(String(warn.mock.calls[0][0])).toContain('keeps being served');
+    expect(String(warn.mock.calls[0][0])).not.toContain('12000');
     expect(getCachedGeminiModelInfo('gemini-3.6-flash')).toBeUndefined();
   });
 

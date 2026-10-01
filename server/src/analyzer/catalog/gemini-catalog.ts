@@ -23,8 +23,9 @@
    listing). A caller's signal releases that caller's wait at once. The shared
    listing is cancelled only when no caller still waits; a cancelled listing
    caches nothing and starts no back-off. A failed or timed-out listing leaves
-   the cache as it was: callers fall back to today's values (12000-token cap,
-   8192 output).
+   the cache as it was: a still-cached listing for the same key keeps being
+   served, and with none Auto max output tokens falls back to 8192. The input
+   cap never comes from the catalog.
 
    Thinking (P27): geminiModelThinks is a static id rule and never reads the
    catalog, so request shape and the thinking window are stable per model. */
@@ -241,7 +242,7 @@ export async function warmGeminiCatalog(
         warnedFailure = true;
         const message = ((err as Error)?.message ?? String(err)).split(apiKey).join('<redacted>');
         console.warn(
-          `[gemini-catalog] models.list failed — using fallback limits (12000-token cap, 8192 output): ${message}`,
+          `[gemini-catalog] models.list failed — any listing still cached for this key keeps being served (even past its TTL); with none, Auto max output tokens falls back to 8192. The input cap is unaffected (it never comes from the catalog): ${message}`,
         );
       }
     },
@@ -288,7 +289,7 @@ export function _resetGeminiCatalogForTest(): void {
     to force the CONDITIONAL `analyzer.gemini.maxOutputTokens` fix to actually
     appear (it only appears when the model's listed `outputTokenLimit` is
     known AND the configured value is below it). Mirrors the shape
-    `listGeminiModels` itself writes at `:1498`/`:1530` above. */
+    `joinListing` itself writes on a successful listing (the `state = …` above). */
 export function _seedGeminiCatalogForTest(apiKey: string, models: GeminiModelInfo[]): void {
   const keyHash = hashKey(apiKey);
   state = { keyHash, fetchedAt: Date.now(), models };
