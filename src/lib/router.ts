@@ -12,6 +12,7 @@ import type { Stage } from './types';
                                            (#/worktrees kept as an inbound alias)
      #/stats                             → { kind: 'stats' }
      #/help?code=                        → { kind: 'help', focusCode? }
+     #/advanced?focus=                   → { kind: 'advanced', focusKey? }
      #/books/:bookId/analysing           → { kind: 'analysing', bookId }
      #/books/:bookId/confirm?profile=    → { kind: 'confirm',   bookId,
                                              openProfileId }
@@ -46,8 +47,17 @@ export function stageToHash(stage: Stage | null | undefined): string {
       const qs = stage.focusCode ? `?code=${encodeURIComponent(stage.focusCode)}` : '';
       return `#/help${qs}`;
     }
-    case 'advanced':
-      return '#/advanced';
+    /* #3084 F7 — `?focus=<knob key>` deep-links the "How to fix" list's
+       Advanced Settings link. Built with URLSearchParams (like the 'ready'
+       case below), NOT a template literal, so wave 5's `reasoningEngine` /
+       `reasoningModel` params extend THIS builder with more `.set()` calls
+       rather than needing a second concatenation scheme. */
+    case 'advanced': {
+      const q = new URLSearchParams();
+      if (stage.focusKey) q.set('focus', stage.focusKey);
+      const s = q.toString();
+      return s ? `#/advanced?${s}` : '#/advanced';
+    }
     case 'release-notes':
       return '#/release-notes';
     case 'analysing':
@@ -92,6 +102,15 @@ export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefi
   }
   if (a.kind === 'help' && b.kind === 'help') {
     return a.focusCode === b.focusCode;
+  }
+  /* #3084 F7 — without this, navigating from one
+     `#/advanced?focus=<key>` link to a DIFFERENT key while already on the
+     Advanced Settings view reads as "the same stage" (the fall-through
+     `return true` below), so `useHydrateStage` never re-runs and the
+     scroll-and-highlight does not fire for the second link. Wave 5's Task
+     5.5c extends this SAME branch to compare `reasoningFocus` too. */
+  if (a.kind === 'advanced' && b.kind === 'advanced') {
+    return a.focusKey === b.focusKey;
   }
   return true;
 }

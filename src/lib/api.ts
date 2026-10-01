@@ -2790,6 +2790,16 @@ async function realUploadManuscript({
   throw new Error('uploadManuscript requires either `text` or `file`.');
 }
 
+/* #3084 F7 — one structured "how to fix this failure" entry, mirroring the
+   server's `AnalysisFailureFix` (server/src/routes/failure-taxonomy.ts) via
+   the generated OpenAPI schema. `settingKey` names an Advanced Settings knob
+   (the frontend deep-links it as `#/advanced?focus=<key>`); `wikiPage` is a
+   docs wiki page NAME (never an anchor) that the renderer narrows with
+   `isWikiPage` before building a URL; a fix with neither (e.g. "switch
+   model") is label-only. `endpointField` (wave 3) / `reasoningSetting`
+   (wave 5) are declared by the contract but not emitted yet. */
+export type AnalysisFailureFix = ApiComponents['schemas']['AnalysisFailureFix'];
+
 interface AnalysisStreamEvent {
   kind:
     | 'phase'
@@ -2811,6 +2821,11 @@ interface AnalysisStreamEvent {
   message?: string;
   code?: string;
   remediation?: string;
+  /** #3084 F7 — terminal `error` frames on the analysis streams carry a
+      structured "how to fix" list when the classifier can name something
+      actionable (e.g. the settings that bound a reasoning overflow). Absent
+      on every route-own terminal code and on pre-2b servers. */
+  fixes?: AnalysisFailureFix[];
   chapterId?: number;
   /** Structured upstream detail (Google's `status` + `details[]` for ApiError
       envelopes; falls back to the raw SDK message). Rendered in a collapsible
@@ -2860,6 +2875,13 @@ export class AnalysisError extends Error {
       classification — mirrors the `remediation` field on `kind:'error'`
       SSE events and surfaces in the run-error panel. */
   remediation?: string;
+  /** #3084 F7 — structured "how to fix" list carried on the terminal
+      `error` frame (mirrors `fixes` on the SSE payload). Undefined for
+      every failure the classifier has nothing actionable for, and for
+      route-own terminal codes. The run-level error panel and the
+      persistent reasoning-overflow toast render it; the middleware
+      copies it into `setHalted` and `pushToast`. */
+  fixes?: AnalysisFailureFix[];
   constructor(
     message: string,
     code: string,
@@ -2867,6 +2889,9 @@ export class AnalysisError extends Error {
     prevCharCount?: number,
     nextCharCount?: number,
     remediation?: string,
+    /* Optional 7th param (#3084 F7) — every pre-2b call site keeps
+       compiling unchanged. */
+    fixes?: AnalysisFailureFix[],
   ) {
     super(message);
     this.name = 'AnalysisError';
@@ -2875,6 +2900,7 @@ export class AnalysisError extends Error {
     this.prevCharCount = prevCharCount;
     this.nextCharCount = nextCharCount;
     this.remediation = remediation;
+    this.fixes = fixes;
   }
 }
 
@@ -3036,6 +3062,7 @@ async function realAnalyseManuscript(
         payload.prevCharCount,
         payload.nextCharCount,
         payload.remediation,
+        payload.fixes,
       );
     }
   };
@@ -5752,6 +5779,7 @@ async function realRunAnalysisForChapters(
         payload.prevCharCount,
         payload.nextCharCount,
         payload.remediation,
+        payload.fixes,
       );
     }
   };

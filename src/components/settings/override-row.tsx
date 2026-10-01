@@ -555,9 +555,19 @@ export interface OverrideRowProps {
   onRevert: () => void | Promise<unknown>;
   /** GPU cards detected via GET /api/gpu/devices — only consumed by type: 'device' knobs. */
   gpuDevices?: GpuDevice[];
+  /** #3084 F7 — the row is the target of an `#/advanced?focus=<key>` deep
+      link: AdvancedView scrolls it into view on mount and highlights it for
+      ~2 s so the user can see WHICH knob a run-error's "How to fix" entry
+      meant. Purely presentational — a highlighted row saves exactly like
+      any other. */
+  focused?: boolean;
+  /** #3084 F7 — the scroll target, attached to this row's OWN root element
+      (rather than a wrapper div around it) so the root's
+      `last:border-b-0` keeps matching the right child. */
+  rowRef?: RefObject<HTMLDivElement | null>;
 }
 
-export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices }: OverrideRowProps) {
+export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices, focused, rowRef }: OverrideRowProps) {
   const locked = value.locked;
   const inputRef = useRef<HTMLInputElement | null>(null);
   // #2209 — per-ROW error state: this is a fresh useState per rendered
@@ -596,7 +606,18 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices 
   };
 
   return (
-    <div className="py-3 border-b border-ink/8 last:border-b-0">
+    <div
+      ref={rowRef}
+      /* #3084 F7 — the deep-link contract with the test: an explicit
+         data attribute, not a class name, so neither side has to track the
+         other's CSS. Set only while the highlight is live. */
+      data-highlighted={focused ? 'true' : undefined}
+      className={`py-3 border-b border-ink/8 last:border-b-0${
+        /* Kept on the row itself (not a wrapper) so `last:border-b-0` above
+           still targets correctly. */
+        focused ? ' rounded-xl bg-magenta/5 ring-2 ring-magenta/30 transition-colors' : ''
+      }`}
+    >
       {/* Header row: label + apply pill (+ env pill when locked) */}
       <div className="flex items-start gap-2 flex-wrap mb-1">
         <span className="text-sm font-medium text-ink flex-1">{descriptor.label}</span>

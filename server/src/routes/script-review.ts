@@ -37,7 +37,7 @@ import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback } from '../works
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { warmOllamaModel } from './ollama-health.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
-import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
+import { AnalyzerReasoningOverflowError, AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
@@ -923,6 +923,9 @@ async function runScriptReviewJob(
          fail the whole pass fast (mirrors quotaErr) instead of emitting a
          chapter-failed and grinding through the remaining chapters. */
       let blockedErr: GeminiContentBlockedError | null = null;
+      /* #3084 P20 — a reasoning overflow fails the whole pass fast for the same
+         reason: the same settings overflow again on every chunk. */
+      let overflowErr: AnalyzerReasoningOverflowError | null = null;
       await withPassEval(
         reviewCall,
         {
@@ -950,6 +953,10 @@ async function runScriptReviewJob(
               }
               if (err instanceof GeminiContentBlockedError) {
                 blockedErr = err;
+                break;
+              }
+              if (err instanceof AnalyzerReasoningOverflowError) {
+                overflowErr = err;
                 break;
               }
               send({ kind: 'chapter-failed', chapterId, message: (err as Error).message });
@@ -981,6 +988,17 @@ async function runScriptReviewJob(
           message: (blockedErr as GeminiContentBlockedError).message,
           model: (blockedErr as GeminiContentBlockedError).model,
           remediation: FAILURE_REMEDIATIONS['analyzer-content-blocked'].remediation,
+        });
+        for (const sub of job.subscribers) sub.res.end();
+        return;
+      }
+      if (overflowErr) {
+        send({
+          kind: 'error',
+          code: 'analyzer-reasoning-overflow',
+          message: (overflowErr as AnalyzerReasoningOverflowError).message,
+          model: (overflowErr as AnalyzerReasoningOverflowError).model,
+          remediation: FAILURE_REMEDIATIONS['analyzer-reasoning-overflow'].remediation,
         });
         for (const sub of job.subscribers) sub.res.end();
         return;

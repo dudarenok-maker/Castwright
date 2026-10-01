@@ -33,10 +33,10 @@ describe('mapFinish — wave 1 reproduces each engine\'s pre-W1 finish handling'
     expect((err as Error).message).toBe('Ollama qwen3.5:9b returned an empty response.');
   });
 
-  it('ollama EMPTY length is still the empty-response Error (emptiness is checked before done_reason)', () => {
+  it('ollama EMPTY length with no reasoning evidence is truncation with 0 bytes, not the empty-response Error (#3084 wave 2)', () => {
     const err = thrown(() => mapFinish(res({ finish: 'length', finishReason: 'length' }), OLLAMA));
-    expect(err).not.toBeInstanceOf(AnalyzerTruncatedError);
-    expect((err as Error).message).toBe('Ollama qwen3.5:9b returned an empty response.');
+    expect(err).toBeInstanceOf(AnalyzerTruncatedError);
+    expect(err).toMatchObject({ engine: 'ollama', reason: 'length', receivedBytes: 0, outputTokens: undefined });
   });
 
   it('ollama non-empty length throws AnalyzerTruncatedError(ollama, length, bytes) with no token count', () => {

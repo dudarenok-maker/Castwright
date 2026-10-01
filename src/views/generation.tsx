@@ -66,6 +66,7 @@ import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { engineForModelId } from '../lib/models';
+import { deliverNonStoryOverflowWarning } from '../lib/analysis-warning-toast';
 import {
   ttsModelLabel,
   effectiveEngineLabel,
@@ -447,6 +448,9 @@ export function GenerationView({
 
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
+        /* #3084 — surfaces the non-story overflow advisory; this subset call
+           is otherwise a silent consumer of `warning` frames. */
+        onWarning: (w) => deliverNonStoryOverflowWarning(dispatch, w),
         onPhase: ({ phaseId, progress }) => {
           applySubsetTick(chapterId, { phaseId: phaseId as 0 | 1, serverProgress: progress });
           /* Snapshot tick — middleware uses this to attach a sticky
@@ -555,6 +559,7 @@ export function GenerationView({
       /* Drop the snapshot on terminal failure — the server-side job
          surfaced an error, and the row's own error state inside subsetByChapter
          carries the message for the user. */
+      haltOnReasoningOverflow(e);
       dispatch(analysisActions.clearActiveStream());
       const message = (e as Error).message || 'Subset analysis failed.';
       patchSubset(chapterId, { error: message });
@@ -568,6 +573,26 @@ export function GenerationView({
   async function rollbackInclude(chapterId: number): Promise<void> {
     await api.setChapterExcluded(bookId, chapterId, true);
     dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
+  }
+
+  /* #3084 F7 — a subset run that fails with a reasoning overflow must still
+     leave the persistent "How to fix" toast. That toast is pushed by the
+     analysis-stream middleware's HALTED hook (never by CLEAR), and the
+     middleware's own copy of the error frame is swallowed once its handle is
+     closed — so when this view's catch clears the snapshot first, nothing
+     pushes it. Dispatching setHalted with the structured fixes BEFORE the
+     clear routes the toast through the same shared builder. */
+  function haltOnReasoningOverflow(e: unknown): void {
+    if (
+      manuscriptId &&
+      e instanceof AnalysisError &&
+      e.code === 'analyzer-reasoning-overflow' &&
+      e.fixes?.length
+    ) {
+      dispatch(
+        analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message, fixes: e.fixes }),
+      );
+    }
   }
 
   function handleCancelSubset(chapterId: number): void {
@@ -636,6 +661,9 @@ export function GenerationView({
     try {
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
+        /* #3084 — surfaces the non-story overflow advisory; this subset call
+           is otherwise a silent consumer of `warning` frames. */
+        onWarning: (w) => deliverNonStoryOverflowWarning(dispatch, w),
         onPhase: ({ phaseId, progress }) => {
           applySubsetTick(chapterId, { phaseId: phaseId as 0 | 1, serverProgress: progress });
           dispatch(
@@ -717,6 +745,7 @@ export function GenerationView({
       /* Drop the snapshot on terminal failure — the server-side job surfaced
          an error, and the row's own error state inside subsetByChapter carries
          the message for the user. */
+      haltOnReasoningOverflow(e);
       dispatch(analysisActions.clearActiveStream());
       patchSubset(chapterId, { error: (e as Error).message || 'Re-analysis failed.' });
     }

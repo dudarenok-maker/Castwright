@@ -227,6 +227,37 @@ describe('stageToHash — fe-29 help route', () => {
   });
 });
 
+/* #3084 F7 — the Advanced Settings deep link. `fixHref` (src/lib/failure-fixes.ts)
+   builds every "How to fix" link through stageToHash, so these two round-trip
+   cases are the contract that keeps the run-error's link and AdvancedRoute's
+   `?focus=` reader spelling the same URL. */
+describe('stageToHash / stageEqual — #3084 F7 advanced focus deep link', () => {
+  it('serialises the advanced stage with and without a focus key', () => {
+    expect(stageToHash({ kind: 'advanced' })).toBe('#/advanced');
+    expect(stageToHash({ kind: 'advanced', focusKey: 'analyzer.gemini.maxInputTokensPerRequest' })).toBe(
+      '#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest',
+    );
+  });
+
+  it('percent-encodes a key that needs it, so the round-trip survives the hash', () => {
+    /* A knob key is normally dotted-and-plain, but the URL is built by
+       URLSearchParams — pin that a '/' or '&' in a future key cannot split the
+       query string (wave 5 widens this same param). */
+    expect(stageToHash({ kind: 'advanced', focusKey: 'a/b&c' })).toBe('#/advanced?focus=a%2Fb%26c');
+  });
+
+  it('stageEqual distinguishes advanced focusKey, mirroring help focusCode', () => {
+    expect(stageEqual({ kind: 'advanced' }, { kind: 'advanced' })).toBe(true);
+    /* Without this the second deep link into an already-open Advanced view
+       reads as "same stage" and useHydrateStage never re-runs, so the
+       scroll-and-highlight silently does not fire. */
+    expect(stageEqual({ kind: 'advanced', focusKey: 'a' }, { kind: 'advanced', focusKey: 'b' })).toBe(
+      false,
+    );
+    expect(stageEqual({ kind: 'advanced', focusKey: 'a' }, { kind: 'advanced' })).toBe(false);
+  });
+});
+
 describe('helpHrefForFailureCode — fe-29', () => {
   it('helpHrefForFailureCode maps codes to help anchors', () => {
     expect(helpHrefForFailureCode('vram-spill')).toBe('#/help?code=vram-spill');

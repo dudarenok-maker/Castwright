@@ -52,9 +52,9 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_MAX_OUTPUT_TOKENS',
     group: 'analyzer-sampling',
     label: 'Gemini max output tokens',
-    help: 'Per-request output-token cap for Gemini; set to match the free-tier ceiling.',
-    type: 'integer', min: 256, max: 32768,
-    default: 8192, // ← DEFAULT_MAX_OUTPUT_TOKENS in analyzer/gemini.ts
+    help: "Per-request output-token cap for Gemini, including the model's thinking tokens. 0 = Auto: the model's own output limit from Gemini's model list (8192 when the list is unavailable). A value above the model's limit is clamped to it; any other value is sent as set.",
+    type: 'integer', min: 0, max: 1_048_576,
+    default: 0, // ← 0 = Auto; resolved by resolveGeminiMaxOutputTokens() in analyzer/capacity.ts
     apply: 'live', risk: 'medium',
   },
   {
@@ -72,9 +72,29 @@ export const KNOBS: ConfigKnob[] = [
     env: 'ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST',
     group: 'analyzer-sampling',
     label: 'Gemini max input tokens per request',
-    help: 'Per-request INPUT-token cap for cloud analyzer passes (stage-1, stage-2, script-review/emotion/instruct). Body chunks are sized to this; must stay below the model TPM (Gemma free tier = 16000/min) so the system prompt + roster fit. Default 12000. Feeds the request-cap family\'s body sizing directly in stage 1 (no further ceiling — cloudBodyCharBudget only floors at 2000 chars, per token-budget.ts:58); stage 2 and the output-heavy passes additionally cap the result at that pass\'s own char ceiling (analyzer.stage2.chunkCharBudget / analyzer.gemini.outputHeavyChunkChars).',
-    type: 'integer', min: 1000, max: 60000,
+    help: 'Per-request INPUT-token cap for cloud analyzer passes (stage-1, stage-2, script-review/emotion/instruct). Body chunks are sized to the smaller of this and the model TPM (Gemma free tier = 16000/min), so the system prompt + roster fit even when this is set higher than a given model allows. Raise it for a model with more headroom (Gemini 3.x accepts up to 1,000,000 input tokens). Feeds the request-cap family\'s body sizing (cloudBodyCharBudget): stage 1 sizes its body from this alone (no further ceiling); stage 2 and the output-heavy passes additionally cap the result at their own char ceiling (analyzer.stage2.chunkCharBudget / analyzer.gemini.outputHeavyChunkChars). Default 12000.',
+    type: 'integer', min: 1000, max: 1_000_000,
     default: 12000,
+    apply: 'live', risk: 'medium',
+  },
+  {
+    key: 'analyzer.gemini.thinkingIdleTimeoutMs',
+    env: 'GEMINI_THINKING_IDLE_MS',
+    group: 'analyzer-sampling',
+    label: 'Gemini thinking idle timeout (ms)',
+    help: "How long a Gemini analysis request may stay silent before its answer starts: the wait for the first streamed chunk, and each gap between the model's thought summaries. Automatic = 2 minutes (0, 120000 ms) for thinking models (Gemini 2.5 Pro and 2.5 Flash, and every Gemini 3.x model); non-thinking models keep the 45 s stream idle window. A positive value applies to every Gemini model. Raise it if long thinks time out; when this window runs out the request fails as analyzer-timeout and is not retried, while a model that does not think, at the automatic value, keeps today's idle retry instead. Once the answer starts, the 45 s idle window applies whatever this is set to. Maximum 290000 (290 seconds): the Gemini SDK streams over Node's built-in fetch, whose network layer ends a request after 300 s without data, so a longer value could never take effect.",
+    type: 'integer', min: 0, max: 290_000,
+    default: 0, // ← 0 = automatic; resolved by resolveGeminiThinkingIdleTimeoutMs() in analyzer/transports/gemini-transport.ts
+    apply: 'live', risk: 'medium',
+  },
+  {
+    key: 'analyzer.gemini.requestCeilingMs',
+    env: 'ANALYZER_GEMINI_REQUEST_CEILING_MS',
+    group: 'analyzer-sampling',
+    label: 'Gemini request ceiling (ms)',
+    help: "Absolute time limit for one Gemini analysis request attempt, counted after rate-limit waits and including the wait for the first chunk. A request that reaches it fails as analyzer-timeout and is not retried. Default 1800000 (30 min).",
+    type: 'integer', min: 60_000, max: 14_400_000,
+    default: 1_800_000,
     apply: 'live', risk: 'medium',
   },
 
