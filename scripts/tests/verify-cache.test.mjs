@@ -1607,6 +1607,32 @@ test('runPipeline computes its step and pipeline budgets via computeStepBudgetMs
   );
 });
 
+// Last COMPLETE heartbeat line of beat.txt ("<t0> <now> <maxGap>\n" per beat).
+// Pure so the empty / torn / garbage cases are pinned deterministically (#3419).
+function parseLastHeartbeat(text) {
+  const lines = text.split('\n').slice(0, -1);
+  assert.ok(lines.length > 0, 'the hanging fixture never completed a heartbeat line');
+  const [, last, maxGap] = lines[lines.length - 1].split(' ').map(Number);
+  assert.ok(
+    Number.isFinite(last) && Number.isFinite(maxGap),
+    `heartbeat line must hold finite numbers, got: ${JSON.stringify(lines[lines.length - 1])}`,
+  );
+  return { last, maxGap };
+}
+
+test('parseLastHeartbeat: empty file fails clearly instead of yielding NaN (Castwright#3419)', () => {
+  assert.throws(() => parseLastHeartbeat(''), /never completed a heartbeat line/);
+});
+
+test('parseLastHeartbeat: a torn tail is dropped, the last complete line wins (Castwright#3419)', () => {
+  assert.deepEqual(parseLastHeartbeat('1 10 3\n1 20 5\n1 3'), { last: 20, maxGap: 5 });
+  assert.throws(() => parseLastHeartbeat('1 10'), /never completed a heartbeat line/);
+});
+
+test('parseLastHeartbeat: a non-numeric complete line fails the finite assertion (Castwright#3419)', () => {
+  assert.throws(() => parseLastHeartbeat('1 10 3\nx y z\n'), /finite numbers/);
+});
+
 // Castwright#3361 behavioural pair. Both measure the span the hanging step was
 // ALIVE for (first heartbeat -> last heartbeat, written by the fixture itself),
 // not the `[timeout] ... after Ns` figure: that one also contains taskkill plus
@@ -1622,11 +1648,11 @@ async function runHangingStepSpanMs(extraEnv) {
   writeHangingFixture(dir, 'test'); // vitest-backed name => affectedByContention
   writeFileSync(
     join(dir, 'hang.mjs'),
-    "import { writeFileSync } from 'node:fs';\n" +
+    "import { appendFileSync } from 'node:fs';\n" +
       'const t0 = Date.now();\n' +
       'let prev = t0;\n' +
       'let maxGap = 0;\n' +
-      "const beat = () => { const n = Date.now(); maxGap = Math.max(maxGap, n - prev); prev = n; writeFileSync('beat.txt', t0 + ' ' + n + ' ' + maxGap); };\n" +
+      "const beat = () => { const n = Date.now(); maxGap = Math.max(maxGap, n - prev); prev = n; appendFileSync('beat.txt', t0 + ' ' + n + ' ' + maxGap + '\\n'); };\n" +
       'beat();\n' +
       'setInterval(beat, 100);\n' +
       'setTimeout(() => process.exit(0), 60_000);\n',
@@ -1660,7 +1686,22 @@ async function runHangingStepSpanMs(extraEnv) {
     `expected the budget (not the fixture) to end the step -- no [timeout] test line, got:\n${logs.join('\n')}`,
   );
   assert.notEqual(runLoggedAt, null, 'expected a `[run] test` log line');
-  const [, last, maxGap] = readFileSync(join(dir, 'beat.txt'), 'utf8').split(' ').map(Number);
+  // The fixture APPENDS one line per beat instead of truncate-then-write. The
+  // fixture is killed mid-run, and a truncating write killed (or read) between
+  // open and write can expose an EMPTY file; the NaN/undefinedms seen on Linux
+  // CI (Castwright#3419) can only come from an empty or truncated beat.txt.
+  // Appending removes that window. The specific trigger on Linux CI was not
+  // reproduced. Only a newline-terminated line is complete; a torn tail is dropped.
+  const beatText = readFileSync(join(dir, 'beat.txt'), 'utf8');
+  const { last, maxGap } = parseLastHeartbeat(beatText);
+  // The span above assumes the fixture died at the kill. With append, a
+  // surviving hang.mjs would keep adding lines unnoticed, so prove it stopped.
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(
+    readFileSync(join(dir, 'beat.txt'), 'utf8').length,
+    beatText.length,
+    'the hanging fixture outlived the step kill: beat.txt kept growing after the step ended',
+  );
   return { spanMs: last - runLoggedAt, maxGapMs: maxGap };
 }
 
