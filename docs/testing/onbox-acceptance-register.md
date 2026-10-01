@@ -3736,12 +3736,16 @@ Qwen character's profile drawer → **Save to my voices**.
 1. **Canonical snapshot keys after a FULL re-render.** Re-render all of
    chapter 19 (every line, not a splice). Open the fresh
    `19-chapter-fifteen-point-blank.segments.json`.
-   *Expect:* `characterSnapshots` has **`the_torment`** (with `voiceEngine:
-   "qwen"`, `resolvedVoiceName: "qwen-YaC5ot82IqTLpeDbHd77F"`) and **no**
-   `the-torment` key; every Torment segment carries `resolvedCharacterId:
-   "the_torment"` and no `renderedFallbackEngine`. The `the-torment` key vs
-   `the_torment` is the discriminator (the buggy build keeps the raw key).
-   (Cast → Voices "Generated" is book-wide, so it is corroboration only.)
+   *Expect:* `characterSnapshots` **has a `the_torment` entry** (with
+   `voiceEngine: "qwen"`, `resolvedVoiceName: "qwen-YaC5ot82IqTLpeDbHd77F"`);
+   every Torment segment carries `resolvedCharacterId: "the_torment"` and no
+   `renderedFallbackEngine`. That entry plus the `resolvedCharacterId` stamps
+   are the discriminator: on `main` the entry is **absent** (its
+   `buildCharacterSnapshots` only writes cast-id keys and never matches the
+   raw `the-torment` spelling) and there are no stamps. A `the-torment` key
+   appears on neither build, so its absence is only a sanity note, not a
+   discriminator. (Cast → Voices "Generated" is book-wide, so it is
+   corroboration only.)
    `Result:`
 2. **Per-line voice drift.** Needs a chapter fully rendered by this build
    (every line has `voiceName`), ≥ 4 lines of one Qwen character, Revisions
@@ -3788,14 +3792,22 @@ Qwen character's profile drawer → **Save to my voices**.
    `resolvedCharacterId` is `the_torment` now carries the new `voiceName`,
    under **both** raw spellings; none keeps the old voice. (Before the fix,
    lines under the non-matching raw spelling kept the old voice.)
-   *Not run on-box:* clearing `renderedFallbackEngine` (and the Cast "Fallback
-   (Kokoro)" pill) on a clean re-take is covered by `chapter-splice.test.ts` —
-   "a clean re-record clears a stale renderedFallbackEngine/CharacterId …
-   (#3362)" and `chapter-qa-repair.test.ts` — "a clean accepted take clears a
-   stale renderedFallbackEngine/CharacterId (#3362)". It has no on-box
-   observable here: unstamped legacy lines (e.g. chapter 19's old
-   `the-torment` ones) are outside Fix audio's reach, and that modal does not
-   list such a chapter.
+   *Not run on-box:* clearing `renderedFallbackEngine` on a clean re-take is
+   covered for the segment's own fields by `chapter-splice.test.ts` — "a clean
+   re-record clears a stale renderedFallbackEngine/CharacterId … (#3362)" and
+   `chapter-qa-repair.test.ts` — "a clean accepted take clears a stale
+   renderedFallbackEngine/CharacterId (#3362)". The Cast "Fallback (Kokoro)"
+   pill reads the per-character snapshot instead, and is pinned by
+   `finalize-chapter-write-refinalize.test.ts` — "a clean re-record of the ONLY
+   fallback-stamped line drops the snapshot fallback and the pill" and "a
+   character with ANOTHER still-fallback line keeps the snapshot fallback and
+   the pill" (the pill clears only once no rendered chapter still has a
+   fallback-stamped line for that character). It has no on-box observable
+   here: the Fix-audio modal lists chapters by `chapters[].characters[<cast
+   id>]`, which `book-state` seeds from the RAW attribution ids, so a chapter
+   whose attribution uses only the other spelling (all 67 of Torment's
+   sentences are `the-torment`) is not listed for `the_torment`, stamped or
+   not. The underlying exact-match join gap is #3440.
    *Stated limit:* an **unstamped** legacy spelling is never resolved here —
    a line with neither `resolvedCharacterId` nor a raw id equal to the request
    is untouched.

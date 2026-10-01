@@ -1044,10 +1044,12 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
 1. **Canonical keys, FULL re-render.** Re-render all of chapter 19. Expect
    `characterSnapshots["the_torment"]` (`voiceEngine: "qwen"`,
-   `resolvedVoiceName: "qwen-YaC5ot82IqTLpeDbHd77F"`), **no** `the-torment` key
-   (the discriminator), every Torment segment `resolvedCharacterId:
-   "the_torment"`, no `renderedFallbackEngine`. (Voices "Generated" is
-   book-wide — corroboration only.)
+   `resolvedVoiceName: "qwen-YaC5ot82IqTLpeDbHd77F"`) present, and every Torment
+   segment `resolvedCharacterId: "the_torment"`, no `renderedFallbackEngine`.
+   The `the_torment` entry plus the stamps are the discriminator: on `main` the
+   entry is absent and there are no stamps. (No `the-torment` key exists on
+   either build — sanity only.) (Voices "Generated" is book-wide —
+   corroboration only.)
 
    Result: _______________________________________________________________
 
@@ -1078,12 +1080,21 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
    My-voices voice (above), then profile drawer → Fix audio → re-record. Expect
    **every** segment with `resolvedCharacterId: "the_torment"` to carry the new
    `voiceName`, under both raw spellings.
-   *Not run on-box:* the Kokoro-fallback stamp clearing on a clean re-take
-   (and the "Fallback (Kokoro)" pill) is covered by `chapter-splice.test.ts`
-   ("a clean re-record clears a stale renderedFallbackEngine/CharacterId …
-   (#3362)") and `chapter-qa-repair.test.ts` ("a clean accepted take clears a
-   stale renderedFallbackEngine/CharacterId (#3362)"); unstamped legacy lines
-   are outside Fix audio's reach and its modal does not list their chapter.
+   *Not run on-box:* the Kokoro-fallback stamp clearing on a clean re-take is
+   covered for the segment's own fields by `chapter-splice.test.ts` ("a clean
+   re-record clears a stale renderedFallbackEngine/CharacterId … (#3362)") and
+   `chapter-qa-repair.test.ts` ("a clean accepted take clears a stale
+   renderedFallbackEngine/CharacterId (#3362)"). The "Fallback (Kokoro)" pill
+   reads the per-character snapshot and is pinned by
+   `finalize-chapter-write-refinalize.test.ts` ("a clean re-record of the ONLY
+   fallback-stamped line drops the snapshot fallback and the pill", "a
+   character with ANOTHER still-fallback line keeps the snapshot fallback and
+   the pill"): it clears only once no rendered chapter still has a
+   fallback-stamped line for that character. No on-box observable here: the
+   Fix-audio modal lists chapters by `chapters[].characters[<cast id>]`, seeded
+   by `book-state` from the RAW attribution ids, so a chapter whose attribution
+   uses only the other spelling (all of Torment's `the-torment`) is not listed
+   for `the_torment`, stamped or not. Underlying gap: #3440.
    *Stated limit:* an unstamped legacy spelling is not reached.
 
    Result: _______________________________________________________________

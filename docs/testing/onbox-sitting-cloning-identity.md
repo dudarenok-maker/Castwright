@@ -226,7 +226,8 @@ last, alone, since it deliberately crashes the sidecar twice.
 13a. Run the **#3362 checks 1–4** (run sheet
     [§11](cast-id-drift-onbox-acceptance.md), register A22 "#3362 checks
     1–5"; check 5 is automated-only): (1) canonical snapshot keys on a full
-    re-render (`the_torment`, no `the-torment`), (2) per-line voice drift —
+    re-render (a `the_torment` entry present plus `resolvedCharacterId` stamps —
+    absent on `main`), (2) per-line voice drift —
     assign a different voice from a **My voices** entry (Cast profile drawer →
     "Or use a voice from My voices"; needs one such entry — a redesign or the
     book-card Assign pill changes nothing), re-record a non-last line, then the
