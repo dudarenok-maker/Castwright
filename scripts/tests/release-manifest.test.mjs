@@ -214,8 +214,10 @@ test('ships the fs-22 bundled demo book (manuscript + cast + voice files)', () =
 // import.meta.url)`), which handles comments and string contents correctly —
 // the previous regex enumeration + line-comment stripping did not (a `/*`
 // inside `'logs/*.log'` ate real imports; `indexOf('//')` ate an import after
-// `'https://…'`). PowerShell has no lexer in this repo, so it gets a small
-// quote-aware comment stripper plus the spellings that reach a script- or
+// `'https://…'`). PowerShell is scanned differently: a lexer exists
+// ([System.Management.Automation.Language.Parser]::ParseFile, on every leg
+// that runs PowerShell) but a Node test cannot call it without spawning a
+// shell, so it gets a small quote-aware comment stripper plus the spellings that reach a script- or
 // module-dir-relative file: `Join-Path <dir> '<rel>'` (with or without
 // -Path / -ChildPath, wrapped in dot-source / `&` / Import-Module or not) and
 // `"$PSScriptRoot\<rel>"` interpolation.

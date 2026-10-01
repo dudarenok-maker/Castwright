@@ -6543,14 +6543,21 @@ until this row runs.
 - If `taskkill`'s own exit code is visible (e.g. by adding a temporary log
   line), record it — the fixed code path no longer depends on it being zero,
   but the real-world value is still useful corroboration.
-- **Negative control:** construct a tree where the **root itself** has
-  exited between the census and the kill (so `taskkill` cannot find it and
-  touches nothing) while a child it spawned is still alive, and confirm this
-  case lands in `KILL FAILED` — the fix must not paper over a
-  genuinely-incomplete kill by declaring success whenever the root reads gone.
-  (A root whose *parent* is dead is NOT this case: that is the ordinary
-  orphan the reaper targets, and `taskkill /T` kills it, so `KILLED` is the
-  correct outcome there.)
+- **Negative control — NOT reproducible on a real push; do not try.** The
+  shape that must read `KILL FAILED` is a tree whose **root itself** exited
+  between the census and the kill (so `taskkill` cannot find it and touches
+  nothing) while a child it spawned is still alive. On a real push the census
+  and the kill run back to back inside one process, so that window is
+  milliseconds and cannot be hit on demand. It is covered in-PR instead by the
+  Windows-only real-process test in `scripts/tests/reap-stale-batteries.test.mjs`
+  ("review pass 1 (Windows-only, real processes): killTree returns false when a
+  real descendant outlives a real dead root"), which spawns real processes and
+  runs the real `taskkill /T`. What to observe on the box instead: across
+  every real push in this row, `KILL FAILED` appears **only** if `Get-Process`
+  still shows a recorded pid alive afterward — never when the whole tree is
+  gone. (A root whose *parent* is dead is NOT the negative shape: that is the
+  ordinary orphan the reaper targets, and `taskkill /T` kills it, so `KILLED`
+  is the correct outcome there.)
 
 *Needs:* a Windows dev box, no GPU. *Cost:* ~10–15 minutes (mostly waiting out
 the reaper's staleness thresholds).

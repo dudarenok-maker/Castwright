@@ -24,10 +24,11 @@
    and — since PR #3404 — so is scripts/setup-lan-certs.mjs, which
    start-app-prod.mjs dynamically imports to provision the LAN cert with
    mkcert. A packaged install with mkcert on PATH can therefore generate the
-   cert, get past server/src/index.ts's missing-cert check (`LAN_HTTPS=1 set
-   but cert files are missing`) and reach the mDNS spawn call below; it used
-   to be a dead end at that check, before this feature. (scripts/print-cert-
-   install-instructions.mjs is still not shipped.) What it reaches is a
+   cert, so server/src/index.ts's effective-LAN check (certs present) passes
+   and it reaches the mDNS spawn call below; before this feature a packaged
+   install had no cert, so index.ts degraded to loopback HTTP at that check
+   and never got this far. (scripts/print-cert-install-instructions.mjs ships
+   too, since the same PR series.) What it reaches is a
    responder script that is NOT in the zip: the child exits asynchronously
    with "Cannot find module", which the exit handler below warns about, so
    castwright.local is not advertised on a packaged install. That is a known

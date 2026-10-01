@@ -574,11 +574,16 @@ export function rowsToProcesses(rows) {
  *  the second is slow (or itself times out) can take up to roughly
  *  2 * 15000ms + 250ms (~30.25s) before returning. The invariant that matters
  *  is unchanged and is the one the hook guard actually enforces: NO POOL.
- *  Single spawn on success or genuine failure, up to one retry spawn on a
- *  genuine transient-empty result (#3238) OR a genuine spawnSync timeout
- *  (#3331) — never both retried in the same run; at most 2 spawn calls
- *  total. Returns [] (never throws) on a non-Windows host or any PowerShell
- *  failure — a census that can't run must never block a push.
+ *  Single spawn on success or a permanent failure (spawn error / nonzero
+ *  status), up to one retry spawn on a transient result: empty rows (#3238), a
+ *  genuine spawnSync timeout (#3331), or unparseable stdout with status 0 (a
+ *  stray PowerShell line ahead of the JSON, PR #3404) — one shared retry
+ *  budget, never stacked; at most 2 spawn calls total. Returns [] (never
+ *  throws) on a non-Windows host or any PowerShell failure — a census that
+ *  can't run must never block a push. A FAILED census (permanent, still
+ *  failing after retry, or still empty after retry) returns an array carrying
+ *  a non-enumerable `snapshotError` so it stays distinguishable from "nothing
+ *  running"; the non-Windows `[]` carries none.
  *
  *  `CreationEpochMs` is computed INSIDE PowerShell via `[DateTimeOffset]` and
  *  cast to `[long]` before `ConvertTo-Json` ever sees it, rather than parsing
@@ -595,10 +600,17 @@ export function collectProcessSnapshot({
 } = {}) {
   if (!windows) return [];
 
-  // The three *Preference assignments are load-bearing: on Windows PowerShell
-  // 5.1 with redirected stdout, Warning / Information / Host records are
+  // On Windows PowerShell 5.1 with redirected stdout, a Warning record is
   // written to STDOUT (exit status stays 0), so a single stray line ahead of
   // the JSON makes the whole output unparseable and blanks the census.
+  // Measured under 5.1 (spawnSync('powershell', ...)): only
+  // `$WarningPreference='SilentlyContinue'` changes the output. Write-Host and
+  // `Write-Information -InformationAction Continue` still reach stdout with
+  // all three preferences set, a bare Write-Information is already silent, and
+  // Progress never reaches stdout — so $InformationPreference and
+  // $ProgressPreference are belt-and-braces no-ops here, kept as cheap
+  // insurance. A stray Host line is covered by the parse-failure retry below,
+  // not by these preferences.
   const queryArgs = [
     '-NoProfile',
     '-Command',
