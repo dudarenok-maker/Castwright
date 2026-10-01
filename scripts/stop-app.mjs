@@ -167,24 +167,34 @@ function probeAndSweep(port) {
   });
 }
 
-async function main() {
+/** The whole stop run. `kill`/`runDirPath`/`probe`/`log`/`exit` are injectable
+ *  purely for testing (PR #3404 review pass 3: the summary wiring below —
+ *  `failedAny`, `stillListening` — was reachable only through a real kill);
+ *  nothing in production passes them. */
+export async function main({
+  kill = killTree,
+  runDirPath = runDir,
+  probe = probeAndSweep,
+  log = info,
+  exit = process.exit,
+} = {}) {
   let killedAny = false;
   let failedAny = false;
   for (const name of ['server', 'tts']) {
-    const pidPath = resolve(runDir, `${name}.pid`);
+    const pidPath = resolve(runDirPath, `${name}.pid`);
     if (!existsSync(pidPath)) continue;
     const raw = readFileSync(pidPath, 'utf8').trim();
     rmSync(pidPath, { force: true });
     const pid = Number.parseInt(raw, 10);
     if (!Number.isInteger(pid) || pid <= 0) continue;
-    const outcome = await killTree(pid);
+    const outcome = await kill(pid);
     if (outcome === 'killed') {
-      info(`[STOP] ${name} pid=${pid}`);
+      log(`[STOP] ${name} pid=${pid}`);
       killedAny = true;
     } else if (outcome === 'gone') {
-      info(`[GONE] ${name} pid=${pid} (already exited)`);
+      log(`[GONE] ${name} pid=${pid} (already exited)`);
     } else {
-      info(`[WARN] ${name} pid=${pid} could not be stopped (still running)`);
+      log(`[WARN] ${name} pid=${pid} could not be stopped (still running)`);
       failedAny = true;
     }
   }
@@ -207,13 +217,13 @@ async function main() {
   const serverPort = resolveConfiguredServerPort(serverEnvPath);
   const basePorts = serverPort ? [serverPort] : [];
   const stillListening = [];
-  const portsToSweep = buildPortsToSweep(basePorts, runDir, serverEnvPath);
+  const portsToSweep = buildPortsToSweep(basePorts, runDirPath, serverEnvPath);
   for (const port of portsToSweep) {
-    if (await probeAndSweep(port)) stillListening.push(port);
+    if (await probe(port)) stillListening.push(port);
   }
 
   if (stillListening.length > 0) {
-    info(
+    log(
       `[WARN] still listening on :${stillListening.join(', :')} — no PID file recorded. ` +
         `Use platform tools (Windows: "netstat -ano | findstr :${stillListening[0]}", ` +
         `POSIX: "lsof -i:${stillListening[0]}") to identify + kill manually.`,
@@ -230,8 +240,8 @@ async function main() {
     isStopSummarySuppressed(failedAny, stillListening.length),
     portsToSweep,
   );
-  if (summary) info(summary);
-  process.exit(0);
+  if (summary) log(summary);
+  exit(0);
 }
 
 if (isDirectlyInvoked(import.meta.url)) {

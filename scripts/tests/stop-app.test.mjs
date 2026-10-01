@@ -19,7 +19,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { killTree, isStopSummarySuppressed } from '../stop-app.mjs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { killTree, isStopSummarySuppressed, main } from '../stop-app.mjs';
 
 // killTree is async since PR #3404 review pass 2 (it now waits a bounded
 // grace period after the kill attempt — see the file's own module-level
@@ -162,4 +165,73 @@ test('killTree: default isAlive wiring reports a real live pid as alive, not "go
   });
   assert.equal(killAttempted, true, 'a real live pid must trigger a kill attempt, not read as already gone');
   assert.equal(outcome, 'failed', 'the no-op kill never actually terminates this process, so it must read as failed');
+});
+
+// PR #3404 review pass 3, yellow B — the shipped defaults and main()'s summary
+// wiring. Every killTree case above injects `graceMs`, so a default of 0
+// (which reads a POSIX SIGTERM that is still shutting down as 'failed')
+// survived the whole suite.
+test('killTree: the default grace period is a real, non-trivial wait (not 0)', async () => {
+  let seen = null;
+  const outcome = await killTree(4242, {
+    isAlive: () => true,
+    kill: () => {},
+    wait: async ({ timeoutMs, intervalMs }) => {
+      seen = { timeoutMs, intervalMs };
+      return true;
+    },
+  });
+  assert.equal(outcome, 'killed');
+  assert.ok(seen.timeoutMs >= 1000, `default grace must be >= 1s, got ${seen.timeoutMs}ms`);
+  assert.ok(seen.intervalMs > 0 && seen.intervalMs < seen.timeoutMs);
+});
+
+// Drive main() end-to-end with an injected kill outcome per pidfile, so the
+// failedAny / stillListening summary wiring is exercised at its call site.
+async function runMain({ server, tts }) {
+  const runDir = mkdtempSync(join(tmpdir(), 'stop-app-main-'));
+  const outcomeByPid = { 1111: server, 2222: tts };
+  if (server) writeFileSync(join(runDir, 'server.pid'), '1111', 'utf8');
+  if (tts) writeFileSync(join(runDir, 'tts.pid'), '2222', 'utf8');
+  const lines = [];
+  let exitCode = null;
+  try {
+    await main({
+      kill: async (pid) => outcomeByPid[pid],
+      runDirPath: runDir,
+      probe: async () => false,
+      log: (l) => lines.push(l),
+      exit: (c) => {
+        exitCode = c;
+      },
+    });
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+  return { out: lines.join('\n'), exitCode };
+}
+
+test('main: a failed kill is reported and never co-prints [OK] nothing to stop', async () => {
+  const { out, exitCode } = await runMain({ server: 'failed' });
+  assert.match(out, /\[WARN\] server pid=1111 could not be stopped/);
+  assert.doesNotMatch(out, /\[OK\]/);
+  assert.equal(exitCode, 0);
+});
+
+test('main: a failed kill stays sticky across a later pid that was already gone', async () => {
+  const { out } = await runMain({ server: 'failed', tts: 'gone' });
+  assert.match(out, /\[GONE\] tts pid=2222/);
+  assert.doesNotMatch(out, /\[OK\]/);
+});
+
+test('main: positive control — every pid already gone prints [GONE] and the OK summary', async () => {
+  const { out } = await runMain({ server: 'gone', tts: 'gone' });
+  assert.match(out, /\[GONE\] server pid=1111/);
+  assert.match(out, /\[OK\] nothing to stop/);
+});
+
+test('main: a killed pid prints [STOP] and no OK summary', async () => {
+  const { out } = await runMain({ server: 'killed' });
+  assert.match(out, /\[STOP\] server pid=1111/);
+  assert.doesNotMatch(out, /\[OK\]/);
 });
