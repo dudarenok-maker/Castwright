@@ -1,0 +1,4 @@
+{
+  "qwen_design_resident": true,
+  "qwen_device_key": "cuda:0"
+}

@@ -553,21 +553,126 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 2 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 8 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**55 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**50 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-22, E107 ADDED** (#3263, PR
+> **Last change: 2026-09-25, A17/A32/A107/E103/E104 DISCHARGED and removed;
+> A20/A105 restored, narrowed (owner decision)** (#3294, PR
+> [#3402](https://github.com/dudarenok-maker/Castwright/pull/3402); the
+> on-box runs themselves happened under PR
+> [#3399](https://github.com/dudarenok-maker/Castwright/pull/3399), which
+> recorded the outcomes inside each row's own body — all seven runs were
+> agent-lane dispatches on the repo owner's box (`cline-qwen-cloud` where the
+> row names a lane; A17's own note doesn't name one), commits authored as
+> `dudarenok-maker`). An earlier pass of this PR (#3402, commit `6e655b77`
+> onward) removed all seven rows, including A20 and A105; a review of
+> PR #3402 found both still carry an unmet bullet in their own recorded text,
+> and the repo owner decided **A20 and A105 stay in the register, narrowed to
+> their one owed bullet each** — only the other five discharge.
+> **Owner confirmation, 2026-09-25 (repo owner, `dudarenok-maker`):** the
+> owner confirmed the A17 and A32 discharges, kept A20 and A105 owed
+> (narrowed), and moved E104's bullet 3 (the push-path `KILLED` print) to a
+> new row that PR [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404)
+> adds — see E104 below.
+>
+> **A17** (`/health` through a contended eviction on the default Qwen path,
+> #1919, by whom not named in the row): the exact three-way race (VoiceDesign
+> resident + a Base forward in flight + a concurrent second admission) was
+> hit cleanly on 2026-09-20, with zero OOM and `/health`'s worst
+> inter-response gap at 258.7 ms, well inside the ~500 ms target — all four
+> row items met. **Caveat kept, not dropped:** the second admission's holder
+> was driven via `POST /qwen/clone-voice` (an ungated 1.7B-Base forward
+> holding the same `_synth_lock`), not the row's literal "start a Qwen
+> chapter render" step — chosen because the app-level chapter-render variant
+> had twice OOM'd (`vram-spill`) this 8 GB card in the 2026-09-06 attempt
+> before the race could be measured; the row's own evidence says outright
+> the app-level variant still doesn't fit this card mid-render, and that
+> observation is left standing for A10, not re-attempted here. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/a17-clean-retry-2026-09-20.md`.
+>
+> **A32** (named-entity decode reaches the TTS engine on a real EPUB, #2310,
+> `cline-qwen-cloud`): the owed audio-level confirmation of the secondary
+> (body-line) bullet completed 2026-09-23 — a decoded dash-opened line
+> synthesized to a character-exact ASR transcript with a measurable prosodic
+> pause, not leading silence — so both bullets now stand confirmed at text
+> and audio level. **Caveat kept:** the bullet's "manuscript view shows real
+> glyphs" clause was not observed in the UI; it was inferred from the
+> `candidate.sourceText` field carrying the correctly decoded characters.
+> Evidence: `docs/testing/onbox-batch-results/a32.md`.
+>
+> **A107** (`/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter,
+> #3086/#3101, `cline-qwen-cloud`, issue #3309): the original repro — a raw
+> cold Kokoro `/load` racing a real resident VoiceDesign forward on a shared
+> device — was re-driven 2026-09-22 through the shipped guard and the bypass
+> did not reproduce; the load was held for 43.3 s until the design released
+> and then ran within ~1 s, matching the unit-level proof on real hardware.
+> **Caveat kept:** this box has no DirectML profile (CUDA `onnxruntime-gpu`
+> only), so `_directml_selftest_or_fallback`'s one-shot forward — the row's
+> stated prerequisite — never ran; the row's own text judges the gate under
+> test EP-agnostic and the discharge stands on that basis. Evidence: no
+> separate evidence file; the row's last text is the register's A107
+> section at `origin/main` `a8b0fcc6`, plus
+> [#3309](https://github.com/dudarenok-maker/Castwright/issues/3309).
+>
+> **E103** (`wt-gc.mjs --prune` real junction-first teardown, #3051,
+> `cline-qwen-cloud`, issue #3321): driven in full on-box 2026-09-24 against
+> a real throwaway worktree with all four junctions — the one failure mode
+> that matters (junctions silently skipped, `git worktree remove` recursing
+> into the primary checkout's real trees) is ruled out with byte-for-byte
+> child-list SHA-256 hashes matching before/after. Evidence: not durable —
+> `e103-test.log`, `e103-report-{default,nogh,locked}.txt`,
+> `e103-prune-{locked,final}.txt` under
+> `%TEMP%\open-engine-scratch\cline-qwen-cloud-3321-20260924-085933\` on the
+> box the run happened on; once this row is gone, git history (this note,
+> and #3321) is the only durable record.
+>
+> **E104** (ops-71 stale-battery reaper `Win32_Process` classification
+> against real processes, #3047, `cline-qwen-cloud`, issue #3322): driven in
+> full on-box 2026-09-24 against three live fixture process trees plus one
+> organic orphan the census found itself — all five observed behaviours
+> (report-only census, stalled-rate detection, orphan kill via
+> `npm run doctor -- --kill`, namer-only survival, push-cost + census-record
+> accumulation) confirmed on real `Win32_Process` output, except bullet 3's
+> push-path print (below). Evidence: not durable — `census-t0.txt`,
+> `census-t1.txt`, `doctor-kill.txt`, `timeline.txt` under
+> `%TEMP%\open-engine-scratch\cline-qwen-cloud-3322-20260924-093037\` on the
+> box the run happened on; once this row is gone, git history (this note,
+> and #3322) is the only durable record. **Bullet 3's push-path half was
+> NOT observed as specified.** The criterion asks that, when the pre-push
+> census is what reaps an orphan, `git push` prints
+> `reap-stale-batteries: KILLED stale battery pid=… :: <command line>`.
+> Both real pushes (pids 38780, 23792) printed `KILL FAILED` instead, even
+> though the whole process tree was gone seconds later in both cases:
+> `killTree()` in `scripts/reap-stale-batteries.mjs` takes its verdict from
+> `taskkill /T`'s exit code, which is non-zero when a tree member exits
+> during the sweep. That misreport of a kill that landed is the bug filed as
+> [#3403](https://github.com/dudarenok-maker/Castwright/issues/3403), fix in
+> PR [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404). The
+> `[KILLED]` output on record came from `npm run doctor -- --kill`, a
+> different print site, so the push-path `KILLED` line has never been seen
+> on hardware. **On the owner's decision of 2026-09-25, that push-path check
+> moves to a new register row that PR #3404 adds**; E104's other bullets
+> discharge here.
+>
+> This branch diverged from the register at 55 owed (Group A 35, Group E 10).
+> Net effect of this change: 55 → 50 owed, Group A 35 → 32 (five Group-A rows
+> removed — A17, A32, A105, A107, and originally A20 — then A20 and A105
+> restored), Group E 10 → 8 (E103, E104 removed). `next-id` markers
+> unaffected (allocate-once — none of these five discharged IDs are reused;
+> A20/A105 were never freed).
+>
+> **Prior change: 2026-09-22, E107 ADDED** (#3263, PR
 > [#3358](https://github.com/dudarenok-maker/Castwright/pull/3358), claude):
 > `guard-worktree-write.mjs` stopped trusting the PreToolUse payload's `cwd`
 > and now derives the subagent's own transcript from `transcript_path` +
@@ -2279,6 +2384,30 @@ measured 4.13 (below) and the ~1.2 target.
 > transcription on top of the synthesis phase — a cost outside plan 228's own
 > scope. Evidence: `docs/testing/onbox-mechanical-batch1-results/step-3-a8-a9-a10.md`.
 
+> **2026-09-24 — on-box re-run with CUDA ASR, PARTIAL (gap mostly closed; ~1.2
+> not reached).** Force-regenerated RU standalone `Заказ Коалфолла` CH 2
+> ("Глава первая — Стук", 57 lines, `modelKey=qwen3-tts-0.6b`, `force:true`) on a
+> 2-GPU box (RTX 4070 Laptop = `cuda:0`, RTX 5070 Ti = `cuda:1`). The app's own
+> per-chapter RTF was **1.80** (`synth=516.2s / audio=287.5s`; wall
+> 22:03:42Z→22:12:28Z = 526 s, 1.83x) — down from 4.13 with CPU ASR-QA, still
+> above the ~1.2 target, so this row is NOT marked pass. CUDA ASR genuinely
+> active: `[sidecar] Loading Whisper ASR model=small device=cuda:1
+> compute=float16` + `Whisper ASR loaded (model=small device=cuda:1)` and
+> `/health` `asr_loaded:true, asr_device:"cuda:1"`; the re-record loop engaged
+> (1 sentence still SUSPECT after re-record, chapter rendered regardless).
+> Isolation verdict: CPU-bound ASR-QA was the *majority* of the old gap (removed
+> ≈2.3 s/s) but not the *whole* gap — the residual ~0.6 is synth-side and
+> data-specific: this book's 13 designed Qwen voices lack Russian manifests
+> ("treating as undesigned, re-design required"), so character lines fell back to
+> Coqui XTTS loads on `cuda:0` mid-run while the resident qwen batches measured
+> RTF 1.13–2.74. A true ~1.2 reading needs a cast whose Qwen voices are
+> ru-manifested (re-design, outside this row's scope) — with CPU ASR the same
+> book class measured 4.13–5.84. Evidence: `logs/a8-sse.fail3.txt`,
+> `logs/tts.err.log` 08:03–08:12 entries, `logs/a8-server.out.log` 08:12:28
+> render line, output `audio/02-глава-первая-стук.mp3` (2,345,829 B,
+> prev kept as `.previous.mp3`). Note: this chapter is 57 lines; the older 51-line
+> figure was CH 3 "The Knock" of the English book, not this one.
+
 ### A9 · Per-character re-record / splice (plan 176)
 
 Rendered book → a character's profile → **a multi-chapter Fix-audio batch that
@@ -2322,6 +2451,22 @@ that finished while you were on the Library (the #3397 gap above). *Merged*
 > empty after both actions — the drift-detection-based Revisions panel this
 > copy points at is a different mechanism that never got populated by either
 > action. Evidence: `docs/testing/onbox-mechanical-batch1-results/step-3-a8-a9-a10.md`.
+
+> **2026-09-23 — confirm-and-file, finding confirmed; filed as #3376.** Re-verified
+> against code at HEAD a3bcfb21: the A/B-toggle failure is real and deterministic, and
+> the root cause is *not* a frontend wiring gap. `getRevisionsForBook()` reads
+> `revisions.json` but returns a hardcoded `pending: []`
+> (`server/src/routes/revisions.ts:211`) while its own doc comment (`:10-14`) promises
+> persisted pending revisions are "surfaced verbatim". The frontend half is correctly
+> wired — `splice/startBatch` → `revisions/enqueuePending`
+> (`src/store/splice-runner-middleware.ts`, 98e55954, the PR #500 landing commit) →
+> persist rule (`revisions/enqueuePending` → `PUT /state` slice=revisions, 781d6d7d) →
+> `writeJsonAtomic(revisionsJsonPath)` — then the 30 s `applyPoll` wipes the store
+> (`s.pending = payload.pending || []`, `src/store/revisions-slice.ts:163`) and the next
+> revisions persist writes the emptied list back to disk, matching the pill + disk
+> observations above exactly. **Bug filed: #3376** (`bug`, `area:srv`; one-line echo fix
+> + regression test proposed there). Disposition: no re-render on this row — A9 stays
+> FAIL until #3376 lands; the A/B-toggle re-check belongs to that fix's verification pass.
 
 > **2026-09-24 — pending-poll-clobber defect fixed (PR #3395, closes #3376).**
 > `pending` is seeded from the disk read on book open (`hydrateFromBookState`
@@ -2415,7 +2560,7 @@ the row and the toast. *Shipped* 2026-06-03 (`affa489`, closes #469).
 > still not fully closed — the remaining gap narrowed to that one surfacing
 > check. Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`
-> (row A17).
+> (row A17, discharged 2026-09-25, removed from the register).
 
 ### A11 · A/B "current vs proposed" voice audition (plan 161)
 
@@ -2438,6 +2583,39 @@ leave the live `.pt` untouched** — plus an audible delta on approve. *First la
 > regeneration artifact — the cosine number supports "genuinely different" but
 > not "coherently redesigned," which only an ear can judge. Full evidence:
 > `docs/testing/onbox-human-checkpoint-results/step1-a11-a18.md`.
+
+> **2026-09-24 — audition artefacts re-confirmed intact; the listen is formally
+> queued as #3394, row STAYS OPEN.** No new GPU render was owed or made. Both clips
+> named by the note above were re-checked on this box, as committed files, not as
+> assumptions:
+>
+> - `docs/testing/onbox-human-checkpoint-results/a11-current.mp3` — 110,877 bytes,
+>   `format_name=mp3` (ID3v2.4 header), duration **12.800 s**, ~69.3 kbps,
+>   SHA-256 `942dad7cf46c9b9c10697c74680c4246984449488fb3690a97ad893236edb593`,
+>   git blob `c6d594bd9be13d3a4088c9df89dff6b2f8c00c3c`.
+> - `docs/testing/onbox-human-checkpoint-results/a11-proposed.mp3` — 96,909 bytes,
+>   `format_name=mp3` (ID3v2.4 header), duration **10.960 s**, ~70.7 kbps,
+>   SHA-256 `6d930d149cae46bcc3a0c73c01f65e38de93f2e4042abd7da73054c16a5ddc00`,
+>   git blob `cfdf3a659f0a503aa325563f959ce0259449e05a`.
+>
+> Both decode cleanly under `ffprobe` and **both are byte-identical to the blobs
+> committed in `7b4e5372` (#2994)** — `git status --porcelain` reports neither path
+> dirty — so these are exactly the bytes the **0.246** cosine above was measured from,
+> and the evidence note's figures still describe the clips a listener will actually
+> hear. The one 2026-09-06 figure that could **not** be re-derived here is the cosine
+> itself: the sidecar's `/embed` endpoint was not reachable on this box during this
+> run, so 0.246 is re-affirmed *by the immutability of its inputs*, not by a fresh
+> measurement — stated plainly rather than quietly re-quoted as if re-measured.
+>
+> **The ear judgment itself was deliberately NOT attempted.** Whether the audible delta
+> reads as a *deliberate* coherent redesign matching the persona change, or as an
+> arbitrary regeneration artifact, is a human call — this row's own framing says so, and
+> a cosine cannot substitute for it. It is now formally queued for the operator's own
+> listen as [#3394](https://github.com/dudarenok-maker/Castwright/issues/3394), which
+> names both files with their sizes, SHAs, durations and the two persona strings side by
+> side. Row A11 stays **open** pending that verdict: Cancel-path DISCHARGED,
+> audible-delta-on-approve STILL OWED, now with a named owner and a live ticket rather
+> than an untracked intention. Nothing found here is a defect, so no bug was filed.
 
 ### A12 · Device-pin resolution survives a respawn ([#1870](https://github.com/dudarenok-maker/Castwright/pull/1870), closes [#1857](https://github.com/dudarenok-maker/Castwright/issues/1857)) · **2-card boot**
 
@@ -2600,6 +2778,32 @@ operation on real hardware, and whether the 30 s TTL is tuned for real chapter g
 > gaps. Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
 
+> **2026-09-20 — sidecar-level re-run (#3300 verification batch, worktree
+> `wt-onbox-batch-1` @ `chore/ops-onbox-batch-1`): mechanism CONFIRMED at the API
+> boundary; the pressure-triggered auto-free and bullet 3 cadence remain partially
+> untried.** Pinned `CUDA_VISIBLE_DEVICES=0` to the 4070 Laptop 8 GB (this is the
+> same dual-GPU 4070 + 5070 Ti box the bullet 1 warning describes), server run from
+> `dist/index.js` on :8100, sidecar driven directly on :9020. `COQUI_IDLE_TTL` is
+> **unset in this box's `.env`; the effective default read from the sidecar source
+> is 30 s, and that is the recommendation — keep 30 s.** Cold `xtts_v2` load took
+> **15 s** with weights already on disk (58 speakers in manifest — the "~90 s per
+> reload" estimate is cache-cold only, not this box), warm synths 1–2 s
+> (RTF 0.36–0.48), residency across calls confirmed. Idle 77 s (> TTL) with an
+> external `torch` hog pushing device use to 7818/8188 MiB: the next Coqui synth
+> still **fitted** (residual delta reserve) and completed **without** being freed —
+> behavioral confirmation that the TTL is enforced only inside the
+> admission-retry loop, never on a background timer, so an idle resident model is
+> left alone while its card still admits it. The explicit `POST /unload` issued
+> immediately after logged **`Coqui model unloaded.`** (`logs/tts.err.log`,
+> 21:47:48) and dropped sidecar `vram_reserved` 2015 → 40 MiB; the following synth
+> cold-reloaded and rendered again in seconds — the exact line the 2026-09-06
+> attempt never captured, this time on the worktree sidecar. Not exercised: a real
+> Qwen render whose reserve actually *fails* against the idle-resident Coqui (the
+> automatic `freed (idle)` branch shares this `unload()` path but has a different
+> caller), and a multi-chapter mixed-book cadence. Evidence:
+> `%TEMP%\oe-run-3300-cline-qwen-cloud-202609201059\jobs\a13-evidence.txt` plus the
+> worktree's `logs/tts.log` / `logs/tts.err.log`.
+
 **Run this with A5** (A5 was discharged 2026-09-06 and removed from the register — co-schedule against its run sheet section rather than a live row) — same card, same mixed-cast book, and a mixed Qwen+Coqui
 render already stages the co-residency this row's first bullet needs.
 
@@ -2749,6 +2953,30 @@ opportunistic.
 > the one flagged line (`a16.md` names the exact clip/segment) to judge
 > genuine synthesis glitch vs. a tight percentile-cutoff false positive on a
 > small per-character sample.
+>
+> **2026-09-22 (batch-1 child Castwright#3310, cline-qwen-cloud) — the
+> sentence-19 regression is CONFIRMED as a real TTS defect, and the "decodes
+> in English" symptom separates into two mechanisms.** Fresh full chain in
+> this worktree (server :8100 / sidecar :9020, GPU Qwen throughout): a new
+> English clone (`c8c583c7-3449-4602-850c-8701f1dfec23`) cast onto Одуван,
+> `force:true` render of the same Russian chapter (`chapter2-run3310.*`,
+> 58 segments), then clean uncontaminated QA scoring — 9/10 oduvan lines
+> `voice-match` (0.813–0.903) and **1 line `voice-mismatch` `severe`**
+> (analyzer index 20 — wave 12's "sentence 19"; the analyzer renumbered),
+> in-book cosine 0.693. Forced-`ru` vs auto-detect `/transcribe` of the
+> isolated windows settles the register's open question: the flagged line
+> stays word-salad under forced `ru` (logprob −1.19, identity 0.593 vs the
+> source clip) — the **audio itself is bad**, third independent
+> reproduction of the one-line pattern — while the *other* cloned lines'
+> "English" labels are a **Whisper auto-detect artifact** (forced-`ru`
+> restores near-correct text; s17 logprob −0.53 with identity intact).
+> Literal sentence 19 in current numbering is a clean coqui narrator line
+> (WER 0). Per the batch protocol this run files no fix — tracked on
+> [#3079](https://github.com/dudarenok-maker/Castwright/issues/3079). Full
+> trail: [`onbox-batch-results/a16.md`](onbox-batch-results/a16.md)
+> §"2026-09-22 on-box re-run"; evidence in `a16-audio/`
+> (`chapter2-run3310.*`, `s20-mismatch-window.pcm`,
+> `meas3310b-onbox-3310.txt`, `clone3310.txt`).
 
 Before this fix a cloned Qwen voice rendered **every** book, in every language, as
 English — `QwenEngine.synthesize` took the caller's language and ignored it, and a
@@ -2785,8 +3013,9 @@ every mechanism test while leaving the whole book wrong.
   character thin enough on in-book anchors to trigger the audition fallback (a
   few-line character is the easy way), so treat it as opportunistic within this same
   render rather than something to engineer.
-- **Sentence-19 cross-language regression, unconfirmed
-  ([#3079](https://github.com/dudarenok-maker/Castwright/issues/3079)).** Wave 12's
+- **Sentence-19 cross-language regression, CONFIRMED as a real TTS defect
+  ([#3079](https://github.com/dudarenok-maker/Castwright/issues/3079);
+  register question answered on-box 2026-09-22, Castwright#3310 re-run).** Wave 12's
   A16 render on the Coalfall Commission Russian chapter one, cloned Qwen voice,
   flagged one sentence (index 19) decoding in English via Whisper auto-detect on
   both attempts (identity cosine 0.704 → 0.656). Investigation
@@ -2797,12 +3026,20 @@ every mechanism test while leaving the whole book wrong.
   into every title, single-group and batched call, including the sidecar's
   per-item `language` override (`main.py:8184`, `:8261`) — and ruled out the
   #1998 whole-book English-manifest fallback (every cloned group's `cloned` flag
-  is set correctly by `buildSentenceGroups`/`resolveGroup`). Genuinely blocked
-  pending a real render: needs the same chapter re-rendered with the same cloned
-  Qwen voice, sentence 19 isolated, to confirm whether the *audio* itself renders
-  in English or whether the Whisper auto-detect measurement is the artifact —
-  this row's own withdrawn note above documents this exact row producing
-  unreliable voice-identity/language measurements before. Track separately from
+  is set correctly by `buildSentenceGroups`/`resolveGroup`). **Answered by the
+  2026-09-22 on-box re-run (Castwright#3310): the same chapter was re-rendered
+  fresh (clone `c8c583c7-3449-4602-850c-8701f1dfec23` → Одуван, `force:true`,
+  clean QA pass) and the flagged line isolated with forced-`ru` vs auto-detect
+  `/transcribe` plus `/embed` identity cosines. Result: both — the flag itself
+  is a REAL TTS defect (forced-`ru` still yields word-salad, logprob −1.19,
+  identity 0.593 vs source / 0.693 in-book `severe`, third independent
+  reproduction of the one-line pattern), while the bare "decodes as English"
+  symptom on the *unflagged* cloned lines is a Whisper auto-detect artifact
+  (forced-`ru` restores near-correct text at logprob −0.53 with matching
+  identity). Note the analyzer renumbered: wave 12's flagged sentence is index
+  20 in this run; literal sentence 19 is a clean coqui narrator line (WER 0).
+  Full trail: `onbox-batch-results/a16.md` §"2026-09-22 on-box re-run".**
+  Track separately from
   the rest of this row; do not treat as discharged by a passing chapter-level run.
 
 *Needs:* a single GPU with Qwen resident, a non-English book, and ASR available
@@ -2810,86 +3047,6 @@ every mechanism test while leaving the whole book wrong.
 `int8_float16` makes every `/transcribe` 500). **Run with A1's remaining Section C/D
 items** — same box, same book, same sidecar session. *Criteria:* plan 275
 §"On-box acceptance". *Cost:* one chapter render plus a sidecar restart.
-
-### A17 · `/health` stays live through a contended eviction on the default Qwen path (plan [273](../features/archive/273-sidecar-lock-event-loop.md), [#1919](https://github.com/dudarenok-maker/Castwright/issues/1919)) · **single 8 GB card**
-
-Automated tests prove each eviction step — and the reclaim that follows it — now
-runs on a worker thread rather than the asyncio event loop. What they cannot reach
-is whether `/health`, and every other in-flight request, actually stays responsive
-when a real multi-GB `gc.collect()`/`empty_cache()` and a real contended
-`_synth_lock` are in play — on the **default** Qwen path, with no opt-in env var.
-Run sheet: [`sidecar-evict-latency-onbox-acceptance.md`](sidecar-evict-latency-onbox-acceptance.md).
-
-- **Run pinned to ONE card** — `CUDA_VISIBLE_DEVICES=0` (runnable alongside
-  A5/A13 in the same session; A5 is discharged and removed from the register as of
-  2026-09-06, so only A13 is a live row here). `SEG_CAPACITY_ADMISSION=1` (the default) and
-  Qwen as the generation engine (also the default).
-- Run a cast-review **voice design** so Qwen VoiceDesign is warm-resident
-  (`QWEN_DESIGN_IDLE_TTL` keeps it ~120 s), then start a Qwen **chapter render** —
-  each sentence's forward holds `_synth_lock` for its duration.
-- While that render is in flight, trigger a second admission on the same card
-  (`POST /load` for coqui, or `/xtts/clone-voice`). Its `qwen.design` eviction
-  step's fast-out passes (nothing is *designing*), so it blocks on `_synth_lock`
-  held by the in-flight Base forward — the exact race #1919 describes.
-- From a second shell, poll `GET /health` every 250 ms **throughout** — from
-  before the render starts until the second admission resolves — and record the
-  **maximum inter-response gap, in milliseconds.** Before this fix the expected
-  gap is on the order of one Qwen forward pass (seconds); after, it should stay
-  under roughly 500 ms, bounded by the poll interval rather than by the render.
-- Also confirm the evict **actually frees the VRAM** — the second admission
-  succeeds rather than 503-ing `noCapacity`. A near-zero `/health` gap because the
-  evict silently declined and did nothing would look like a pass and isn't one.
-- **Optional second pass** with `SEG_ASR_ENABLED=1` + `ASR_DEVICE=cuda` to exercise
-  the `asr` eviction step too. Not required for this row to clear.
-
-*Needs:* the 8 GB card only, pinned via `CUDA_VISIBLE_DEVICES=0`, a book with a
-designed Qwen voice in progress plus a second admission target (a Coqui `/load` or
-an XTTS clone). *Criteria:* plan 273 §7. *Cost:* short.
-
-> **PARTIALLY run 2026-08-26 (wave 6) — measured, but not the exact race, and caveated.**
-> Pinned to `cuda:0`. Ran a simpler variant of the race: a Qwen chapter render in flight
-> (no prior voice design warmed first — bullet 2's precondition was skipped) plus a
-> concurrent `POST /api/sidecar/load {"engine":"coqui"}` fired mid-render from a second
-> shell, while a third loop polled `GET /api/sidecar/health` every 250 ms throughout.
-> **The second admission succeeded** (`{"status":"ready"}`) — bullet 4 confirmed, the
-> evict genuinely freed VRAM rather than 503-ing. **Measured max single-request latency:
-> 987 ms; max inter-request-start gap: 1346.9 ms** — above the ~500 ms bullet-3 target.
-> Caveat: the poller spawns a fresh `curl` process per iteration via Git-Bash on Windows,
-> which has its own non-trivial per-invocation overhead (observed elsewhere on this box
-> to run 50–200+ ms under load), so this number cannot be cleanly attributed to
-> server-side blocking alone without a lower-overhead instrument (e.g. a persistent
-> Node/Python client reusing one connection). **Still owed:** the exact race (VoiceDesign
-> actually warm via bullet 2 before the second admission fires) and a clean
-> low-overhead re-measurement of the `/health` gap.
-
-> **2026-09-06 — on-box run, MIXED, low-overhead re-measurement is worse, not
-> better (step 4).** Re-ran with the low-overhead instrument wave 6 asked for
-> (`health_poller.py`, a persistent `HTTPSConnection` reused across all 692
-> requests, not a fresh `curl` subprocess per iteration) and warmed Qwen
-> VoiceDesign for real first — but by the time the second admission actually
-> fired, `qwenDesignResident` had already reverted to `false` (its idle
-> window elapsed), so the exact #1919 race (VoiceDesign warm **and** a Base
-> forward in flight **and** a concurrent second admission, all three at once)
-> was still not hit byte-for-byte; what this run hit instead is arguably the
-> harder case — a live Qwen 1.7B Base forward actively synthesising, evicted
-> against by a concurrent Coqui admission. **Bullet 4 (admission succeeds):
-> PASS** — `{"status":"ready"}`, the evict genuinely freed capacity. **`/health`
-> never fully hung: 0 errors across 692 polls.** But the metric that actually
-> reflects blocking — **max single-request latency, 2092.92 ms** — is *worse*
-> than wave 6's own already-over-target 987 ms, and far above the ~500 ms
-> target, even with the lower-overhead instrument wave 6 suspected would show
-> a cleaner number. The render **itself then failed** with a genuine
-> `errorCode: "vram-spill"` — both Qwen 1.7B and Coqui XTTS resident together
-> genuinely exceeded this 8 GB card's ceiling (cross-referenced as A10's
-> second failure mode, forced organically here rather than deliberately).
-> Net: the eviction mechanism is not a silent no-op, but actually forcing this
-> race on this box neither clears the ~500 ms budget nor stays inside the
-> card's VRAM ceiling — real, useful, still-negative evidence about current
-> headroom on an 8 GB card with two heavy engines. **Still owed:** a run where
-> the second admission fires while `qwenDesignResident` is still `true`, on a
-> box (or a smaller model pairing) with enough headroom that the race doesn't
-> also OOM the card. Evidence:
-> `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
 
 ### A18 · Cloned-voice derive on Coqui no longer needs torchcodec ([#1967](https://github.com/dudarenok-maker/Castwright/issues/1967)) · **single 8 GB card + a real static-FFmpeg box**
 
@@ -3035,9 +3192,88 @@ which already stages a mixed-engine render on this same card.
 > now, both clean) is the next thing to try. Evidence:
 > `docs/testing/onbox-mechanical-batch1-results/step-4-a5-a13-a17-a19.md`.
 
+> **2026-09-21 — fourth and fifth attempts, this time against the shapes the
+> last note itself asked for (issue #3302, probe harness): still no strand, and
+> the mid-render `/recycle` question is answered structurally.** A purpose-built
+> harness (`docs/testing/onbox-mechanical-batch1-results/a19-strand-probe-2026-09-21/`,
+> README there explains the layout) drove four previously-untested triggers
+> against a dedicated fresh sidecar on port 9101 of this laptop (RTX 4070 Laptop
+> 8 GB — the box #1976 itself measured on), two complete runs, and read
+> `vram_reserved_mb_by_device` after an explicit `POST /unload` (strand = ≥800 MiB
+> reserved with nothing resident):
+>
+> 1. **`/recycle` mid-render — the shape the 2026-09-06 note called "the next
+>    thing to try":** `POST /recycle` accepted 202 while a 16-chapter batch was
+>    inflight → drain waited → the in-flight batch returned **200** inside the
+>    180 s grace → sidecar self-exited **rc 43** → `nvidia-smi --query-compute-apps`
+>    afterward showed the card at **0 MiB** with no surviving process. That is a
+>    structural answer, not just a data point: a mid-render `/recycle` *is* a
+>    process death, and the CUDA context owning the allocator dies with it, so
+>    this trigger cannot leave a pool outliving the unload. Confirmed identical
+>    in both runs.
+> 2. **Forced Coqui load failure (external VRAM filler):** XTTS `/load`
+>    **succeeded** even beside a 6.5 GB external `cudaMalloc` filler (also at
+>    3.8 GB) — this box's WDDM stack never let us force a genuine mid-load OOM.
+>    The explicit unload after that load left reserved **0.0 MB**.
+> 3. **Forced mid-render OOM (filler grown during a qwen batch, 4.5→5.2 GB):**
+>    both batches returned **200** (96–204 s) — pressure never bit — and the
+>    explicit unload left reserved **46.1 MB**.
+> 4. **Bad-voice fallback shape (unknown cloned voice id in a batch):** hard
+>    **500 `Internal error.`** in ~0.47 s, both runs — a side-finding worth its
+>    own note: the expected fallback did not engage; the sidecar survived and
+>    stayed otherwise healthy. Explicit unload after: reserved **23.1 MB**.
+>
+> No strand in any shape, so the #1993 guard tests (bullets 2–3 above) again
+> could not be exercised — the harness's `exp3` phase exists and would have run
+> automatically had any pool survived. Honest caveats: run 1's `strand_read`
+> events mis-parsed the nested health payload as `null` (fixed before run 2; the
+> raw `snapshot` events in run 1 carry the same clean values quoted here), and
+> the box was not fully quiet either run — one unrelated `python.exe` compute
+> app was resident throughout, which affects absolute `nvidia-smi` MiB but not
+> the per-process allocator reservations the verdicts use. Across five
+> unload-survival measurements on three days (#1976's original ~3.9 GB shape has
+> never appeared on this box, clean completion, crash, recycle, load-pressure or
+> batch-error alike), the evidence says the ordinary unload path on this
+> hardware does not strand; what remains owed for this row is either a box that
+> *does* produce the shape organically or the #1976 follow-up lever (the
+> render/unload-completion reclaim), not more of the same negatives.
+
 ---
 
 ### A20 · Golden-audio bless guards don't rubber-stamp an honest bless, and `_make_kokoro` exercises a real engine (PR [#2032](https://github.com/dudarenok-maker/Castwright/pull/2032), closes [#1995](https://github.com/dudarenok-maker/Castwright/issues/1995), [#2003](https://github.com/dudarenok-maker/Castwright/issues/2003), [#1987](https://github.com/dudarenok-maker/Castwright/issues/1987)) · **Kokoro weights present; single 8 GB card is enough**
+
+> **2026-09-25 — narrowed, NOT discharged (owner decision, Castwright#3402).**
+> Every bullet below bullet 1 is CONFIRMED per the 2026-09-06 and 2026-09-21
+> notes further down this row: the forced-refusal drills (null `transcript`,
+> `identity.cosine.angry` +0.05), the `.onnx`-corruption FAIL-not-SKIP check,
+> and #2066's identity-epsilon measurement all landed. **Bullet 1 — a
+> routine, unflagged `--bless --sidecar-only` completing without any
+> `GOLDEN_REBLESS_*` flag — remains owed.** It refused on
+> `tolerances.rtf_max` twice: 2026-09-06, on a box the same note records as
+> confirmed-idle, and again 2026-09-21. **The cause is a real throughput
+> level shift, not noise, and it is not yet diagnosed.** Measured `rtf` ≈
+> 0.87–1.03 across the four recorded `rtf_max` values (2026-09-06's 1.5 /
+> 1.35 / 1.55 and 2026-09-21's 1.55; `rtf_max` is `max(1.0, rtf × 1.5)`
+> rounded UP to 0.05, so they imply `rtf` in (0.967, 1.0], (0.867, 0.9],
+> (1.0, 1.033] and (1.0, 1.033]). That is about 1.7–2× the blessed
+> `rtf.batched` 0.5089 and above
+> `compare.py`'s ~0.667 pin point (`rtf_max = max(1.0, rtf × 1.5)`): below
+> it `rtf_max` stays pinned at 1.0 and "no amount of `rtf` noise moves it";
+> above it, `compare.py` says "a `rtf` regression or a slower box … the
+> guard refuses exactly as designed". `tolerances` is compared at
+> `epsilon=0.0` (exact equality, by design), so there is no epsilon to
+> blame. The non-bless assert run fails only when `rtf` lands above 1.0
+> (`test_instruct_golden.py`: strict `rtf > rtf_max`, "throughput
+> regressed", against the blessed `rtf_max` 1.0) — true of the two 1.55
+> runs, not of the 1.5 or 1.35 ones, so a single assert run that draws
+> `rtf` ≈ 0.9 passes without refuting the shift. **A second blocker:** the 2026-09-21 run 2 below, with
+> `GOLDEN_REBLESS_THRESHOLDS=1` forced, then refused on `loudness_dbfs`
+> beyond ε 0.4 — so a routine bless is currently blocked on two fields, not
+> one. **The owed step is to diagnose the level shift before any re-bless:**
+> a genuine throughput regression, or a slower box/config than the one the
+> baseline was blessed on. Forcing `GOLDEN_REBLESS_THRESHOLDS` (which would
+> write `rtf_max` ≈ 1.35–1.55 — the #1995 loosening this row exists to catch)
+> or widening the `tolerances` epsilon is **not** the fix.
 
 PR #2032 (hardened further by the independent pre-merge review that produced
 this row) closes three "a gate that silently stopped asserting" defects in
@@ -3173,6 +3409,54 @@ weights can prove, and neither was exercised on real hardware for this PR:
 > and remains unconfirmed; the next run needs either a forced-flags run with
 > `-s` that reaches a clean accept, or a direct read of the guard's own
 > `print(...)`/log output.
+>
+> **2026-09-21 — accept-path echo OBSERVED on a clean-accept bless — DISCHARGED**
+> (Castwright#3303, `cline-qwen-cloud`). Three real bless runs on this dev box
+> (two-GPU, Windows 11), each `node scripts/run-powershell.mjs
+> server/tts-sidecar/run-golden-tests.ps1 -s` with `GOLDEN_BLESS=1` — the
+> `npm run test:golden-audio -- --bless --sidecar-only` path plus the missing
+> `-s` (confirmed `Get-GoldenBlessPytestArgs` forwards caller args verbatim, so
+> `-s` survives and the bare-bless `-k 'not qwen_duration'` default still
+> applies). **Run 1 (routine, unflagged): the `rtf_max` noise-driven refusal
+> RECURRED** — `refusing to bless: tolerances would move beyond epsilon 0.0
+> (rtf_max: 0.5500) -- was {..., 'rtf_max': 1.0}, now {..., 'rtf_max': 1.55}`
+> (measured `rtf` ≈ 1.033 vs blessed 0.5089); a sibling agent had real GPU work
+> in flight this session, but the 2026-09-06 note reproduced the same refusal on
+> a confirmed-idle box, so this is recorded as a recurrence, still not chased to
+> a fix. The Kokoro bless again wrote through the same comma ASR-noise
+> transcript diff, flagless, plus three new whisper-lineage metadata fields
+> (`faster_whisper_version`/`ctranslate2_version`/`whisper_model_revision`).
+> **Run 2 (`GOLDEN_REBLESS_THRESHOLDS=1`):** tolerances gate cleared; refused
+> next on `loudness_dbfs` beyond ε 0.4 (angry ±2.68, whisper ±1.91, excited
+> ±1.15, neutral ±0.77, sad ±0.18 dB) — on this contended box the loudness
+> noise routinely exceeds the measurement epsilon, so reaching a clean accept
+> took both flags, not just the tolerances one. **Run 3 (both forced flags):
+> exit 0 — clean accept, echo printed**, verbatim through the real
+> `run-golden-tests.ps1` pytest (`-s`), which is the falsifiable signal the
+> prior note owed: `[golden-bless] tolerances moved BEYOND epsilon 0.0 (FORCED
+> by GOLDEN_REBLESS_THRESHOLDS) -- rtf_max: +/-1.4000` / `[golden-bless]
+> identity moved within epsilon 0.005 (noise -- reference unchanged) --
+> cosine.sad: +/-0.0014, cosine.excited: +/-0.0009, cosine.angry: +/-0.0004,
+> cosine.whisper: +/-0.0001, max: +/-0.0001` / `[golden-bless] loudness_dbfs
+> moved BEYOND epsilon 0.4 (FORCED by GOLDEN_REBLESS_MEASUREMENTS) -- angry:
+> +/-3.5000, excited: +/-1.6500, neutral: +/-1.6300, sad: +/-1.1700, whisper:
+> +/-0.9200`. The second line is the exact shape owed: a within-epsilon noise
+> echo fired while the `identity` block stayed byte-identical in the written
+> file (only the forced fields moved). #2066 follow-up from these runs: every
+> per-leaf identity delta this session was ≤ 0.0014 — the 2026-09-06
+> `angry` +0.0052 clearance did NOT recur, so this run adds no evidence that
+> `IDENTITY_COSINE_EPSILON` is too tight for identity (loudness noise, by
+> contrast, ±0.9–3.5 dB under sibling load, blows past its 0.4 ε
+> routinely). All baseline writes from the forced bless (`instruct-baseline`'s
+> `rtf_max`→2.4, `rtf.batched`→1.5841, new loudness figures) and the Kokoro
+> re-bless were reverted before committing — the commit here is docs-only.
+> Honest caveat kept: the box was NOT quiet this session (sibling heartbeat
+> agents held GPU compute throughout), so bullet 1's uncontended-routine-bless
+> completing with zero flags remains undemonstrated on this box — both of
+> today's unflagged-or-partially-forced attempts refused before the echo point,
+> exactly the known `rtf_max` noise behavior. Evidence:
+> `docs/testing/onbox-mechanical-batch1-results/a20-accept-echo-2026-09-21.md`
+> + raw run logs under `a20-accept-echo-2026-09-21/`.
 
 *Needs:* Kokoro weights on disk, a box quiet enough that `--bless` measures a
 stable, reproducible value (no concurrent GPU work), and permission to
@@ -3201,6 +3485,41 @@ deliberately-broken Kokoro run; well under an hour total.
 > playback tool was available to this agent, so the resolved-storage-key +
 > `status:ready` evidence stands in for it, which the run sheet itself flags
 > as not sufficient on its own.
+> **2026-09-21 — §4's ear-check re-derived, and it has slipped further: the audio it was
+> owed against no longer exists on this box. Hand-off recorded, not discharged (#3304).**
+> Only the §4 "listened, sounds like the clone" sub-check is still open on this row; every
+> mechanical step (1–7, both CTAs and the Coqui control) is already CONFIRMED/PASS on the
+> 2026-09-06 note and in the run sheet, so nothing there was re-attempted. Two new findings,
+> both from the production workspace state rather than from any render this run:
+>
+> - **The derived Qwen artifact is gone and was never restored.** §5 of the run sheet forced
+>   its `derive-failed` by *deleting* the real `qwen-01e278d6-b1a2-410b-9953-15a08c0f5cd6.pt`,
+>   and §5's **Retry derive** cleared the stamp without re-deriving. That directory now holds
+>   only the 960,044-byte `__master.wav` (2026-09-07 07:55:03) and the 439-byte sidecar
+>   `.json` — no `.pt`. So a Qwen render of this clone today must re-derive from scratch
+>   first; the render is a *precondition* of the ear-check, not a substitute for it.
+> - **The chapter audio on disk is the Coqui control, not the clone.** `state.json` reads
+>   `audioModelKey: "coqui-xtts-v2"`, `audioEngines: {"coqui": 2}`, `audioRenderedAt:
+>   "2026-09-20T06:00:23.628Z"`; `characterSnapshots.aria` resolves to
+>   `xtts-01e278d6-...`; and all nine verdicts in `01-chapter-1.render-integrity.json` carry
+>   `expectedEngine`/`renderedEngine: "coqui"`. This throwaway fixture was re-rendered on
+>   2026-09-20 by other work on this box (`01-chapter-1.mp3` 508,653 B @ 16:00:23,
+>   `01-chapter-1.previous.mp3` @ 15:51:41), overwriting the 2026-09-06 Qwen render. There is
+>   consequently **no listenable Qwen-clone audio anywhere in the workspace** — a filesystem
+>   sweep for `*01e278d6*` under `voices/` returns the master clip and the Coqui `.pt` only.
+>
+> Server (`:8443`) and sidecar (`127.0.0.1:9000`) were both down at read time, so no fresh
+> render was driven. That is not the binding constraint anyway: the remaining half of this
+> check is an audio judgment only a person can make, and per this batch's own rule it is
+> recorded and filed rather than attempted here — the same disposition A11/A23 received.
+> **Clips queued for the listen**, once the clone is re-derived and chapter 1 is re-rendered
+> on Qwen (`modelKey: qwen3-tts-0.6b`, `force: true`) with the stack up: the `aria` lines in
+> `audio/01-chapter-1.mp3` of `A21 Clone Readiness Gate QA v2 (throwaway)`, compared directly
+> against `voices/qwen/qwen-01e278d6-b1a2-410b-9953-15a08c0f5cd6__master.wav`. Tracking:
+> #3360. Row status marker and the Status Dashboard are deliberately left unchanged — this
+> run discharges nothing. *Note on the brief:* issue #3304 cited lines 2978–3039 for this row;
+> the row has moved and lives at lines 3284–3344 (2978–3039 is now A19's bullet text).
+
 
 The gate's *verdict* is heavily tested — a fixture table, a co-oracle contract
 test binding it to the render's own oracle, an e2e walkthrough. What no suite
@@ -3315,6 +3634,33 @@ already-analysed book.
 > whether this is worth its own fix issue or is an acceptable, cosmetic gap
 > given the banner already reads correctly. Full evidence:
 > `docs/testing/onbox-human-checkpoint-results/step2-a22-a23.md`.
+
+> **2026-09-21 — Castwright#3305 (phase 1): bullet 1's finding re-verified
+> against source and dispositioned — a genuine defect, fix issue filed, not a
+> cosmetic gap.** The 2026-09-06 root cause still holds exactly:
+> `finalize-chapter-write.ts:287` builds `speakingIds` from the raw
+> `segment.characterId`; `character-snapshots.ts:49` gates on exact-string
+> `speakingIds.has(c.id)`; `normaliseIdKey` (`util/character-id.ts:8`) is
+> consulted only by the read-side resolver (`store/cast-resolve.ts:206`), so
+> the snapshot write path never normalises and a normalised-id-only character
+> can never match. Not cosmetic, because the snapshots are load-bearing per
+> `character-snapshots.ts`'s own header: a character with no entry is invisible
+> to the `routes/revisions.ts` drift detector — a future re-voice of a Torment-
+> class character will not flag the affected chapters stale — and the Voices
+> Designed-vs-Generated split, the srv-36 audition centroid, and
+> `render-integrity/aggregate.ts`'s keep-flags all lose the character; the same
+> raw keying defeats `fallbackByChar`/`voiceNameByChar` (lines 288–301) and the
+> C1 carry-forward (line 316). Disposition per CLAUDE.md's incidental-findings
+> protocol: the fix has a two-sided design decision (snapshot keyed under the
+> cast's canonical id vs the raw segment id the render used; resolution via
+> `buildCastResolver` vs bare `normaliseIdKey`) and is named explicitly in fix
+> issue **Castwright#3362** (`bug`) — this round files, it does not fix. No new
+> render: bullets 2–4 stay CONFIRMED from 2026-09-06; bullet 1's literal
+> `characterSnapshots` criterion stays open pending #3362. Row status marker
+> and the Status Dashboard are deliberately left unchanged — this run discharges
+> nothing. *Note on the brief:* issue #3305 cited lines 3040–3111 for this row;
+> the row has moved and lives at lines 3381–3452 (3040–3111 is now A19/A20
+> bullet text).
 
 ---
 
@@ -3763,6 +4109,29 @@ already-analysed workspace, then one chapter re-render.
 > `coalfall-dragon` at 116.94–118.86 / 187.37–189.13 / 199.05–203.53, against
 > any narrator line in the same chapter. Full evidence:
 > `docs/testing/onbox-human-checkpoint-results/step2-a22-a23.md`.
+> **2026-09-24 — Castwright#3320: §8.7's pinned clips re-verified live and playable;
+> the by-ear half is now explicitly queued for the operator's own listen and tracked
+> as [#3396](https://github.com/dudarenok-maker/Castwright/issues/3396).** No re-render
+> attempted and none needed: the 2026-09-06 chapter audio is still on disk at
+> `C:\AudiobookWorkspace\books\Castwright\Standalones\Заказ
+> Коалфолла\audio\02-глава-первая-стук.mp3` (2,251,029 bytes, `synthesizedAt
+> 2026-09-06T05:46:11Z`), reads cleanly under `ffprobe` (duration 255.699 s) and a full
+> `ffmpeg -f null -` decode exits 0 with zero error lines. The six pinned clips still
+> match the committed `segments.json` exactly — `mairin` (voice
+> `qwen-TP3sfCclL5WIPEhaZ9-Jd`) at `startSec` 38.94/39.98/46.14 (groupIndex 10, 11, 13)
+> and `coalfall-dragon` (voice `qwen-RJznhtTqGRaeobU0bm5XN`) at 116.94/187.37/199.05
+> (groupIndex 37, 58, 63), the last clip ending 203.53 s inside the 255.70 s file — with
+> 33 narrator segments (first at 1.50 s) in the same chapter as comparison lines.
+> **Discrepancy noted per the run brief:** the 2026-09-06 note above calls the render
+> "chapter 2", but the file carrying exactly those six pinned timestamps/groupIndex is
+> `02-глава-первая-стук.mp3` ("глава первая — стук"); the chapter-two-named file
+> `03-глава-вторая-отливка.mp3` was synthesised 2026-08-26 and its target-character
+> offsets (68.92, 140.68, …) do not match. The timestamps are trusted as the anchor;
+> nothing was re-rendered to reconcile the labels. The ear judgment itself remains
+> explicitly out of agent scope per this row's own text — #3320 re-confirmed the
+> artefacts and filed the hand-off, it did not listen. Row **stays open**; the listen,
+> the clip list, the decode evidence and the exact question to answer are all in #3396.
+
 
 ### A24 · Design-wins VRAM contention timeout is sized against a REAL 0.6B cold load ([#2070](https://github.com/dudarenok-maker/Castwright/issues/2070), [#2678](https://github.com/dudarenok-maker/Castwright/issues/2678), PR [#2797](https://github.com/dudarenok-maker/Castwright/pull/2797)) · **single 8 GB card; the deviceKey qualification (bullet 5) needs the 2-card boot**
 
@@ -3924,6 +4293,63 @@ above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
 > (`_BASE17_CONTENTION_WAIT_S_DEFAULT`/`Base17ContentionTimeoutError`) and was not
 > attempted anywhere in this 18-run session.
 
+> **2026-09-21 (batch-1 child Castwright#3299, cline/qwen-cloud) — bullet 5's live
+> squeeze attempted for real on the 2-card boot and found genuinely impractical on
+> this box+build. Recorded negative per the child brief, not a failure to attempt:
+> 10 squeeze rounds (r0–r9 plus the earlier f/s6/seq phases) driven headless against
+> a live sidecar, all artifacts under
+> `docs/testing/onbox-mechanical-batch1-results/a24-capacity-device-scope-2026-09-21/`
+> (drivers, per-round `x_result.json`, sidecar stdout logs, Node retry harness).**
+> What every round showed: **`denials_503: 0` — the sidecar never once emitted a real
+> `noCapacity` 503 on this machine.** Two independent mechanical reasons, both new
+> root-cause here over the 2026-09-06/09 note's qualitative "asymmetric card sizes":
+>
+> 1. **The bullet's exact shape (resident design on one card, Base 0.6B render DENIED
+>    on the other) is unconstructible via config.** The whole qwen tier — design and
+>    Base alike — shares a single device pin (`_engine_env_pin` env map, `main.py`
+>    4127–4132: `"qwen": "QWEN_DEVICE"`; there is no design-vs-base split). Pinning
+>    `QWEN_DEVICE=cuda:1` puts the design on `cuda:1` too, so any Base denial there
+>    carries `deviceKey == qwenDeviceKey` — that's bullet 4's SAME-card case, already
+>    confirmed. Leaving `auto` co-locates both tiers on whichever card the planner
+>    likes best; squeezing that card denies with the design's own key, squeezing the
+>    other card just gets routed around by `best_fit`. No lever exists to split the
+>    pair across cards short of a code change (per-tier pin), which is out of scope
+>    for a read-and-record child.
+> 2. **The ASR fallback (`/transcribe`, pinned `asr_device=cuda:1` while a design is
+>    resident on `cuda:0` — the cross-device shape this row's squeeze DOES have a pin
+>    for) never produced its denial either.** Warm-path rounds (r6–r8) returned 200
+>    in ~2 s because ASR was already resident and only the `asr.warm` reservation
+>    applied — permanently stuck at its 128 MB seed (#2930/#3012/#3265,
+>    `main.py:4410–4421`), which fits any squeeze. The one genuinely-cold round (r9)
+>    was GRANTED admission at 573 MB free on `cuda:1` — below the 400 MB cold `asr`
+>    seed (`main.py:4386`) and the device's 1024 MB `free_floor_mb` — then the load
+>    itself died mid weight-fetch (`WinError 1314` symlink call in `snapshot_download`
+>    for the configured `large-v3`, empty HF cache on this account) → HTTP 500, 98 s,
+>    still zero 503s. The grant-below-floor admission arithmetic is a real suspected
+>    defect, filed as **Castwright#3347** per the incidental-findings protocol (had it
+>    refused correctly, the squeeze's denial half would have existed at last).
+>
+> The wait-extension precondition half of the pair WAS live throughout: every round's
+> `health_at_end` shows `qwenDesignResident: true`, `qwenDeviceKey: "cuda:0"` (captured
+> while the design sat warm mid-squeeze), and the Node harness (`a24_node_retry.ts`)
+> drove the real `withCapacityRetry` loop — its deviceKey-qualified
+> `defaultIsDesignResident` consultation (`capacity-retry.ts:302–319`, engine-agnostic)
+> is the exact code the bullet asks about, but with zero real 503s it could only ever
+> exercise the no-denial branch (`outcome.kind:"response"`, status 200/500). One
+> harness-fidelity note for any re-runner: it labels the wrapped fetch `engine:'qwen'`
+> where production's transcribe path uses `engine:'asr'`
+> (`server/src/tts/transcribe-client.ts:120`); `opts.engine` only labels the eventual
+> `NoCapacityError`, not the control flow at 302–319, but the mismatch would have made
+> even a successful round imprecise.
+>
+> **Verdict: bullet 5's status is unchanged from the 2026-09-06/09 note — still
+> confirmed only via `capacity-retry.test.ts` against a simulated health provider, not
+> live — but "impractical on this box" now has named, evidenced causes (single qwen
+> device pin; non-denying ASR gate, #3347) instead of card asymmetry alone.** Revisiting
+> the live squeeze requires either a per-tier qwen pin or #3347 fixed plus cached ASR
+> weights; either is fix-agent work, not this batch's. Bullets 1–4 and 6 untouched here
+> (out of scope per the child brief); the still-owed wedged-design bullet 3 remains owed.
+
 ### A26 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
 
 `classifyTranscript`'s new logic is fully pinned in
@@ -4006,6 +4432,8 @@ line-by-line table: `docs/testing/onbox-a26-wer-drift-sample-results.md`.
 Resolves the "Not yet observed" false-positive-rate bullet above; #3118
 closes outright on this finding.
 
+**Run note — 2026-09-23, cline-qwen-cloud (Castwright#3311), real box (RTX 5070 Ti), Coqui/XTTS sidecar `:9020` + real Whisper ASR, no mocks, real production `classifyTranscript()`, live registry thresholds dumped (`catastrophicWer=0.85`, `maxWer=0.45`, `minAvgLogprob=-1`).** 48 live synth→ASR→classify trials in two rounds (`a26-3311` scratch harness: `probe.py`/`probe2.py`, `probe-results.jsonl`/`probe2-results.jsonl`, `classify-r1.out`/`classify-r2.out`, 48 PCM artifacts under `pcm/`+`pcm2/`). Round 1 — #2026's own two collapse lines (2-word refs) plus 9-word variants, 36 attempts — reproduced 3 genuine wrong-language collapses: auto-detect heard Latvian `lv` ("Harošu ja olova. Ninti gēja." for ref "Хорошее олово.") and English `en` twice ("Chop play a moriponder." / "job player mori." for ref "Тёплое море."); 3/3 correctly caught as `drift`, zero misses. But all 3 fired via the plain `wer > maxWer` branch with `catastrophic_override=false`: forced-`ru` logprob on the collapsed audio stayed −0.78…−0.91, above the −1.0 "untrustworthy" floor, and the 2-word refs sit under the ≥6-token shape gate the override requires — a real collapse never reaches the #2055 path. Round 2 — 12 attempts on 11-word refs chosen to clear every gate — produced zero collapses (auto-detect `ru` on all 12), 6 `ok` (the override correctly stayed silent on healthy content — the false-positive control) and 6 `drift` (genuine XTTS mistranscriptions, plain branch again). Net: `catastrophic_override=true` in 0/48 live trials. **Narrowed, not discharged:** bullet 1's exact wording (a caught collapse whose reason mentions "catastrophically wrong") still has zero live instances, and this run shows *why* — current XTTS weights collapse only on short isolated lines, precisely the shapes the override excludes, and where it does collapse the pre-existing WER branch already catches it, so the #2055 gap (fluent-collapse reaching `untrustworthy → inconclusive`) looks unreachable live rather than merely unfired. Remaining judgement for this row: either close it as "override unreachable with current weights; WER branch covers every observed collapse shape", or pin `minAvgLogprob` against the measured −0.78…−1.30 collapse-logprob band (the override's designed trigger zone sits partly below −1.0, where auto-heard `lv`/`en` logprobs of −1.10/−1.20/−1.30 show a *forced-language-trust* reading is plausible on heavier collapse) and re-test. Bullet 2 unchanged — already resolved by #3118 above; no override false positives in 12 gate-eligible healthy trials.
+
 ### A27 · Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install (#2179, PR #2210) · **single 8 GB card is enough**
 
 `.env.example` used to ship `SIDECAR_RESTART_MB=0` / `SIDECAR_VRAM_RECYCLE_SOFT_MB=0`
@@ -4084,6 +4512,71 @@ than a real render.
 > fully owed, not even attempted this session: the RAM hard-restart bullet**
 > (drive committed RAM toward the 70% ceiling and confirm the sidecar
 > self-exits with code 43) — no host-memory push was made this run at all.
+
+> **RAM hard-restart bullet DRIVEN for real 2026-09-21 (Castwright#3307,
+> cline-qwen-cloud)
+> — the bullet that 2026-09-09 recorded as "not even attempted" now has a real
+> code-43 self-exit observed, and the bullet's prescribed METHOD is wrong.** Real
+> hardware, real `main.py`, no mocks of the decision.
+>
+> **Correction to the bullet's method (the important finding).** This trip keys on
+> the sidecar process's **own** committed-private bytes — `_process_commit_mb()`
+> reads `_PROC.memory_info().private` where `_PROC` is `psutil.Process(os.getpid())`
+> (`main.py:9644-9661`) — never on system-wide commit. So "a synthetic host-memory
+> hog alongside the sidecar", which is what this bullet and the *Needs* paragraph
+> prescribe, **cannot fire this trip at all**: a hog in another process raises the
+> box's commit without touching the sidecar's private counter. Demonstrated live,
+> not argued from the source: system commit sat at 49.95 GB while the running
+> sidecar's own `committed_mb` read 10,391 MB — two unrelated quantities. The push
+> has to originate *inside* the sidecar process.
+>
+> **The auto ceiling is genuinely live in a running process (not merely computed at
+> startup).** The production sidecar on port 9020, launched with all three vars
+> absent, reports `mem_restart_mb=47582.7580928` on `/health` = exactly 0.70 ×
+> 67,975,368,704 bytes. A float of that shape is only producible by the formula,
+> which is the proof the auto branch was reached rather than an override being in
+> effect; recomputed independently with psutil here to 47582.758093. Same process
+> reports `vram_restart_mb=8413.51168` = 0.98 × its 8585.216 MB card. This
+> strengthens 2026-09-09's startup-log reading into a live-process observation.
+>
+> **The crossing and the exit, driven for real.** This worktree's `main.py` was
+> imported into a real Python 3.12.10 process; its own private commit measured
+> 547.4 MB, a ceiling pinned just above that (1,347.4 MB), then +1,600 MB of
+> *touched* pages allocated to drive private bytes to 2,228.5 MB, and the module's
+> real `_memory_watchdog()` coroutine run. It sampled its own private bytes,
+> `_should_restart` returned True, `_schedule_restart_exit` logged the real trip
+> ("committed memory 2229MB breached the restart limit 1347MB — draining 0
+> in-flight synth … then self-exiting (code 43)"), the drain thread logged
+> "in-flight synth drained — self-exiting now", and the process died via
+> `os._exit(43)`. **The OS exit code was read directly off the terminated process:
+> 43.** The trip also wrote `.run/last-restart-trip.json` carrying
+> `"card": null, "reason": "committed memory"` — the host-RAM trigger's signature,
+> since `_schedule_restart_exit` passes `card=None` for the host branch. The
+> artifact is gitignored (`.gitignore:79`) and was deleted afterwards; the lane
+> finished with a clean `git status`.
+>
+> **Limitation, stated plainly.** The trip fired against an explicitly-set ceiling
+> (1,347 MB), *not* against this box's auto 47,583 MB value, because driving a
+> single process to 47.6 GB of private commit here would exceed the box's commit
+> headroom (29.44 GB physical free, commit 49.95/72.81 GB) and take the box — and
+> every other lane on it — down. So the auto *value* is confirmed live and the hard
+> branch's *reaction* is confirmed genuine, but **a crossing at the auto-scaled
+> number itself remains undriven**, and this row stays open on that seam. 2026-09-09's
+> "a synthetic hog alongside" instruction should be discarded by whoever picks this
+> up again: it must be in-process.
+>
+> **No false trip / no thrash from the now-live ceiling.** Pre-crossing check
+> `_should_restart(547.4, 1347.4) = False`, and the production sidecar held 10,391
+> MB against its 47,583 MB ceiling with `recycle_pending=False` both before and
+> after this test — ordinary idle load does not recycle. **VRAM soft/hard legs
+> still NOT attempted**, unchanged from 2026-09-09's reasoning: GPU 0 carries other
+> lanes' live work, and its real reading here (`cuda:0` 1,889.5/8,585.2 MB
+> reserved) sits far under both the 7,727 MB soft and 8,413 MB hard.
+>
+> Minor drift in this row's own citations: the three threshold functions are at
+> `main.py:9880-9911` and `:9991-10010` in this checkout, not the `:8265-8284` /
+> `:8154-8185` the *Criteria* paragraph names, and the row itself sits at line
+> 4225 rather than the 3883 the tasking referenced.
 
 ---
 
@@ -4247,71 +4740,29 @@ reproducing the degenerate collapse.
 > design (no fix exists or is expected), so the practical stakes are low —
 > recorded for a future `coqui-tts` upgrade to compare against.
 
-### A32 · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), plan [`docs/superpowers/plans/2026-08-13-entity-decode-layer.md`](../superpowers/plans/2026-08-13-entity-decode-layer.md)) · **single 8 GB card**
-
-PR shipped `decodeNamedEntities` (`server/src/parsers/html-utils.ts`), widening
-`stripHtml`/`extractFirstHeading`/`epub.ts`'s `decodeEntities` from a
-five-entity hand-rolled list to the complete HTML5 named set. Every layer of
-the fix is proved by unit and end-to-end tests fixing the sentence text
-explicitly (`html-utils.test.ts`, `entity-dialogue-e2e.test.ts`) — what those
-tests cannot prove is that a real, EPUB-sourced entity survives the whole
-pipeline the same way. Design spec's own "What I could not establish": whether
-the stage-2 analyzer model echoes a surviving entity into its returned
-sentence text, which decides whether the *body-line* symptom reproduced at all
-before this fix (a second thread observed, on a live run, that the current
-model sometimes strips a leading dash rather than echoing it verbatim — that
-would mean the body-path symptom already didn't reproduce pre-fix on today's
-model, which is a finding about the analyzer, not a failure of this fix).
-
-- **Lead with the chapter-title beat — the only criterion no model behaviour
-  can mask** (design spec Finding 0). On an EPUB whose first chapter heading
-  carries named entities (e.g. `<h1>L&rsquo;&Eacute;t&eacute;</h1>`), confirm
-  the spoken title beat says "L'Été" cleanly — no "ampersand … semicolon", no
-  gibberish.
-- **Secondary: a Spanish, French, or Russian EPUB using `&mdash;`/`&ndash;` or
-  accented named entities in body text.** Confirm a dash-opened dialogue line
-  renders with a pause (not spoken "ampersand n dash semicolon" or similar),
-  accented words render as the correct letters (not "e acute" spoken aloud),
-  and the manuscript view shows real glyphs rather than raw entity text.
-  **Record whether this symptom reproduced at all pre-fix** — per the design
-  spec, that is itself new information about the analyzer chain, not a gate on
-  this fix.
-- No real es/fr/ru EPUB with named (as opposed to numeric) HTML entities was
-  available in this workspace at design time — confirm one exists among the
-  on-box corpus, or construct a minimal one from a real chapter with `&mdash;`
-  hand-substituted for a literal dash, if none does.
-
-*Needs:* a real EPUB (or a hand-modified one) carrying named HTML entities in
-its heading and/or body, a working analyzer + TTS pipeline. *Criteria:* the
-two bullets above. *Cost:* short — one import + one chapter-title listen, plus
-one body-line listen if a suitable entity-laden EPUB is available.
-
-> **PARTIALLY run 2026-09-09 (batch 2 step 3, claude) — lead (chapter-title)
-> bullet fully confirmed at both text and audio level; secondary (body-line)
-> bullet confirmed at text level only.** No suitable real-world EPUB with
-> named entities was available on this box this session — hand-built a
-> minimal, valid, throwaway EPUB carrying named HTML entities in exactly the
-> row's asked-for shapes (title `L&rsquo;&Eacute;t&eacute;`, body
-> `&mdash;`/accented-letter entities), stated plainly per this row's own
-> allowance, and imported it through the real `POST /api/import` pipeline —
-> not a unit test fixing the string. **Lead criterion:** the import's parsed
-> `candidate.chapters[0].title` came back clean (`"Chapter One — L'Été"`, real
-> apostrophe/accents, no entity markup) — the "no model behaviour can mask
-> this" text-level check. Audio-level: synthesizing the decoded title on the
-> right-language engine (Coqui/XTTS, `language:"fr"`) produced a real ASR
-> transcript beginning `"L'été..."` — a clean, correctly-pronounced rendering,
-> no "ampersand/semicolon" artifact. **Lead criterion CONFIRMED, both levels.**
-> **Secondary criterion:** the body text's decode is confirmed at the text
-> level (`candidate.sourceText` came back with a real em dash and real
-> accented words, every named entity in the fixture decoded correctly through
-> the same pipeline) but was **not** carried through to an audio-level
-> listen this session — the dash-pause timing and accented-word pronunciation
-> on synthesized body audio remain unconfirmed, deprioritized this run in
-> favour of the two decisive title-beat checks. **Still owed:** an audio-level
-> confirmation of the dash-opened-dialogue pause and accented-word
-> pronunciation on real synthesized body text (the pre-fix reproduction check
-> this row's design spec also raises was likewise not attempted, for the same
-> time-budget reason).
+> **2026-09-23 — human-listen hand-off verified on this box; row stays OPEN pending a human ear
+> (#3312, branch `chore/ops-onbox-batch-1`).** Everything this row owes a machine was already
+> discharged on 2026-09-06/07 (bullets 1-2 and the guard-does-not-fire half of bullet 3, in
+> `docs/testing/onbox-batch-results/a31.md`) and is deliberately NOT re-attempted here. What this
+> pass checked is whether the audio a human still owes is actually openable -- #3360 found the A21
+> equivalent had been overwritten out from under its reviewer -- and it is: all 23 files under
+> `docs/testing/onbox-batch-results/a31-audio/` are tracked at HEAD *and* present on disk (23/23
+> `git cat-file -e HEAD:<path>` pass, zero 0-byte files, 2,706,132 bytes total), they entered git at
+> `a1b87321` (2026-09-06 20:45:12 +1000), and `ffprobe` confirms each named listen as `pcm_s16le`
+> 24 kHz mono: `m3-teploe-more-5.wav` 1.707333 s (blob `27ed26180f4d1aba06a6c1930b0f4333131e0454`),
+> `m4-horoshee-pismo.wav` 3.200667 s (blob `f864fb47d3c18c1aed5e41955827205425a0b6ed`),
+> `m2-05-horoshee-olovo.wav` and `m3-horoshee-olovo-6.wav` both 2.592667 s (blobs
+> `5b1b6c6910847d3a38f51bca873769502f160ecc`, `0af3636b55823f6f8e5a3b90df497af28e8779b1`). Those
+> blob SHAs equal the ones `a31.md` recorded on the day of the run, so a reviewer hears the same
+> bytes that were measured. **No new audio was rendered in this pass and none is needed**: the only
+> thing left is an ear judgment, which this row's own gate forbids delegating to a machine check.
+> Tracking issue for both listens:
+> [Castwright#3374](https://github.com/dudarenok-maker/Castwright/issues/3374) -- the collapse-repro
+> listen settles `docs/testing/onbox-batch-results/a31.md:156-165` ("STAGED FOR HUMAN REVIEW",
+> bullet 3), the neuter `-ее` listen settles
+> `docs/testing/onbox-batch-results/a31.md:210-220` ("Verdict: STAGED FOR HUMAN REVIEW", bullet 4).
+> The parent batch #3294 remains open until #3374 is answered; child #3312 closes as a *hand-off*,
+> not as a completed row.
 
 ### A33 · Kokoro's silent-CPU-fallback alarm actually fires on a genuine CUDA→CPU fallback, and stays quiet on a ledger-admitted CPU placement and under kokoro-onnx API drift ([#2647](https://github.com/dudarenok-maker/Castwright/issues/2647)) · **single 8 GB card, live Kokoro sidecar, `KOKORO_DEVICE` settable per run**
 
@@ -4495,6 +4946,8 @@ load, one drift simulation, one unpinned-auto load with its negative control.
 > bullet 3), so there is no "CUDA absent" state left to exercise here —
 > investigated and found permanently untestable on this hardware, not
 > silently dropped.
+>
+> **FULLY run 2026-09-23 (cline-qwen-cloud, batch-1 worktree, Castwright#3314) — bullet 2's contended-CPU-admission arm ACHIEVED for the first time; idle positive control re-confirmed; #2643 negative control attempted, measured, and closed as unreachable on this box. Evidence: [`onbox-batch-results/a33.md`](onbox-batch-results/a33.md) (snapshots, logs, scripts, audio in `a33-evidence/`).** A dedicated `:9037` observation sidecar was launched in a single invocation with `KOKORO_DEVICE`/`QWEN_DEVICE`/`COQUI_DEVICE=cuda:0` (the procedure the note above prescribes); Qwen (`ready`, GPU0 free 7411→5566 MB) and Coqui (`ready`, →3653 MB, `coqui@0` in `gpus[0].resident`) plus one detached 2 GiB torch allocation from a separate process (→**1493 MB** free, under Kokoro's seed+floor) squeezed GPU0 below the admission threshold. `POST /load` Kokoro then returned `ready` with the resident entry `{"engine":"kokoro","actual_card":null}` and **no `stale_reason` key at all**, while `devices.kokoro` honestly reported `cpu` under the `cuda:0` pin — the ratified deliberate-admission behaviour confirmed against a real ORT session and a real VRAM-ledger admission, exactly this row's bullet 2. `/unload` → `idle`, entry gone, `vram_reserved_mb` `0.0` throughout (`committed_mb` 8784→9175→8813 MB — CPU-side only, GPU free unchanged while the external allocation held the pressure). Idle positive control re-confirmed in the same session (GPU0 idle + pinned: `devices.kokoro=cuda`, `cuda_verified=true`, no `stale_reason` — `a33-health-A-kokoro-cuda.json`), read per the wording correction above. **The #2643 negative control was attacked via process-level emulation** (no pins + `CUDA_VISIBLE_DEVICES=''`): the emulation does not produce the required CPU-only state on this box — a real unpinned `POST /synthesize` inside that masked process ran at GPU speed (warm `gen_ms=491`, `rtf=0.18`, 128000 bytes of real PCM) with `cuda_verified=true`, `devices.kokoro="cuda"` — this sidecar's ORT build lets CUDA session construction ignore a per-process device mask, so "no CUDA device visible" is unreachable while drivers are up; the structural finding above is thereby upgraded from inference to measurement and the masking escape-hatch is closed by evidence. No defect filed (standard ORT/NVML behaviour; methodology finding only). Wave-8's records for bullets 1 and 3 and the #2643 positive arm stand unchanged and were not re-attempted — bullet 1's missing-`nvidia-cudnn-cu12` forcing condition no longer exists on this box after A28's discharge.
 
 ---
 
@@ -4611,6 +5064,52 @@ load that splits, one genuinely-too-big load that doesn't, one
 > `nvidia-smi --query-compute-apps` reports numeric `used_memory`.
 
 ### A105 · Qwen base17 eviction guard and _DEVICE_LEDGER serialization ([#2752](https://github.com/dudarenok-maker/Castwright/issues/2752), PR [#2790](https://github.com/dudarenok-maker/Castwright/pull/2790)) · **single 8 GB GPU card, Qwen VoiceDesign 1.7B resident, real sidecar with base17 weights**
+
+> **2026-09-25 — narrowed, NOT discharged (owner decision, Castwright#3402).**
+> Bullets 1 and 5 are fully CONFIRMED on real hardware, 2026-09-06/08 note
+> below. Bullet 2's literal 200-not-500 claim is confirmed, but the
+> criterion's ~3.4 GB-freed observation was never actually seen: the only
+> race driven (2026-09-22 note below) hit the no-op case, where `/unload`
+> arrives before `_base17` is assigned — it returned 200 in 14.4 ms while the
+> racing `/load` completed uninhibited and the model stayed resident until
+> the ordinary idle watchdog freed it later, so nothing was freed by the
+> Stop call itself. Bullet 3's first direction (Kokoro pauses for a same-card
+> design forward) is CONFIRMED on real hardware; its second direction (Kokoro
+> must NOT pause for a base17-eviction-only wait) was closed only by
+> mocked-torch unit tests
+> (`docs/testing/onbox-mechanical-batch2-results/step-2-qwen-lifecycle.md:1622-1711`),
+> never by a live on-box repro — diagnosed as structurally impossible over
+> real HTTP, not just hard to time — so it stands as a from-source/unit-test
+> closure, not an on-box PASS. **Bullet 4 — a VoiceDesign forward and a
+> Kokoro synth never co-reside, repeated with TWO overlapping designs —
+> remains owed.** It FAILED on hardware 2026-09-08, filed as
+> [Castwright#3086](https://github.com/dudarenok-maker/Castwright/issues/3086):
+> a raw Kokoro `/synthesize` call completed in 44.11 s while both designs
+> were still in flight. The #3086 fix (commit `6e31b0c0`, PR #3142) ruled the
+> observed `/synthesize` path out by tracing and instead fixed `/load`; the
+> only on-box re-run since (A107) drove a single design against a raw
+> `/load`, not the observed co-residency path or the two-overlapping-designs
+> refcount shape this bullet asks for. No on-box PASS exists for bullet 4.
+> **The two-overlapping-designs (refcount) reading of the 2026-09-08 FAIL
+> is unconfirmed at the arbiter level; a single-design violation remains the
+> likelier reading.** Both readings rest on the premise (2026-09-06/08 note
+> below) that each design's HTTP completion bounds how long it held the
+> arbiter. A107's measured timeline
+> contradicts that premise: the design released the arbiter at `20:26:06.5`
+> (`Designed + cached Qwen voice`) but its HTTP 200 landed at `20:26:29.7`,
+> about 23 s later (`audition_ms=23159` — the audition synth runs after the
+> arbiter span releases, by design). A107's row is gone from this register;
+> its last text is at `origin/main` `a8b0fcc6` (the register's A107 section)
+> and in [#3309](https://github.com/dudarenok-maker/Castwright/issues/3309).
+> Kokoro finished ~01:32:20; design E's HTTP 200 landed ~01:32:41 (~21 s
+> later), so on a ~23 s tail E had already released (~01:32:18) and the
+> two-design overlap is not shown. Design F's HTTP 200 landed ~01:33:10
+> (~50 s after Kokoro), putting its release ~01:32:47, about 27 s *after*
+> Kokoro finished; F clears only if its own post-release tail exceeded
+> ~50 s, which was never measured. **Bullet 4 stays
+> owed, and its re-run must be timed from the sidecar's own arbiter
+> enter/release log lines (or from `nvidia-smi` / the device log), never from
+> HTTP completion.**
 
 PR #2790 (two rounds of independent review) improves base17 co-residency safety in `design_voice()`:
 the eviction guard now checks both `self._base17 is not None` and
@@ -4754,6 +5253,42 @@ forced-contention run for the lock-leak criterion.
 > deeper unload-mechanism question is not and does not need re-running
 > either — it needs a sidecar log line (or a deliberately landed race) to
 > distinguish the two cases, per the source evidence above.
+>
+> **Note 2026-09-22 (#3308, cline-qwen-cloud, OE run 922, `chore/ops-onbox-batch-1`) —
+> A105 DISCHARGED: the Stop-button bullet's unload-mechanism question is RESOLVED
+> (case 2, no-op) by a deliberately landed race, and the co-residency criterion is
+> DISCHARGED by #3086's closed-completed resolution.** Co-residency half: #3086 was
+> closed 2026-09-11 as completed via the arbiter-fix chain (#3099–#3119, #3142, #3159,
+> #3166 — all closed, final corrective commits `6e31b0c`→`34f11b9`); per #3308's own
+> instruction ("anything already CONFIRMED/PASS/DISCHARGED elsewhere stays as-is — do
+> not retry") that closure is inherited here, not re-run. Unload-mechanism half, driven
+> fresh on this box against a dedicated log-captured sidecar instance (port 9417, this
+> worktree's venv, stdout/stderr to files):
+>
+> - **Source:** `POST /unload {"engine":"qwen","model":"1.7b"}` → `main.py:11746` calls
+>   `qwen.unload_base17()` with NO arguments → `wait_seconds=0.0` → only the
+>   unconditional-null branch (`main.py:6840-6850`) is reachable from the Stop route, and
+>   it early-`return`s a true no-op when `_base17` is still `None`. The bounded-wait
+>   branch (`wait_seconds>0`, which would hold up and then null a finished load) has
+>   exactly one caller — `design_voice()`'s contention guard (`main.py:7587`) — i.e. the
+>   hold-up case belongs to #3086's co-residency path, not to `/unload`.
+> - **Observation:** raced `/load` 1.7B in flight (`/health` at the instant:
+>   `qwen_loading: true`, `qwen_base17_loaded: false`, `committed≈3384MB` pre-load) →
+>   `POST /unload` returned **HTTP 200 `{"status":"idle"}` in 14.4 ms** (a hold-up case
+>   would have blocked for seconds); the racing `/load` completed uninhibited — HTTP 200
+>   `ready` in 15.95 s, log `Loading Qwen 1.7B-Base model=Qwen/Qwen3-TTS-12Hz-1.7B-Base
+>   on cuda:1 …` @ 20:03:04.621 → `Qwen 1.7B-Base loaded.` @ 20:03:20.451 — and the model
+>   was demonstrably resident afterwards, evicted only by the ordinary idle watchdog
+>   (`Qwen 1.7B-Base unloaded (idle watchdog).` @ 20:03:37.703, `committed` back to
+>   3927MB).
+> - **Verdict:** case 2 confirmed observationally on real weights — `/unload` arriving
+>   before `_base17` is assigned is a no-op that returns 200 immediately and neither
+>   aborts nor holds up the racing `/load`; no null-after-load happened (the only
+>   post-load eviction was the documented TTL watchdog). No code change needed; the
+>   "Stop always succeeds" guarantee holds. (Box was 2-card at run time; the
+>   lock-branch question is device-count-independent.) All five bullets now stand:
+>   1, 3, 5 CONFIRMED 2026-09-06/08; 2's literal 200-not-500 claim confirmed then and
+>   its mechanism question resolved above; co-residency bullet discharged by #3086.
 
 ### A106 · X-Device-Hint lazy Coqui derive request signaling ([#3058](https://github.com/dudarenok-maker/Castwright/issues/3058), PR [#3061](https://github.com/dudarenok-maker/Castwright/pull/3061)) · **2-card boot (8 GB + 16 GB), Coqui XTTS NOT yet resident (cold-load), no `COQUI_DEVICE` pin**
 
@@ -4858,28 +5393,6 @@ run sheet's pin/stale-cache scenarios.
 > next operator sitting; the temporary `main.py` log line has already been stripped
 > (`git diff` on `main.py` is empty against the committed state) and the sidecar restarted
 > cleanly on the clean file (supervisor respawn, pid 9700, `16:05:54`).
-
-
-### A107 · `/load`'s Kokoro cold-load bypassed the VD/Kokoro arbiter ([#3086](https://github.com/dudarenok-maker/Castwright/issues/3086), [#3101](https://github.com/dudarenok-maker/Castwright/issues/3101), PR [#3142](https://github.com/dudarenok-maker/Castwright/pull/3142)) · **single 8 GB GPU card, DirectML profile, real Kokoro weights**
-
-#3086 observed a raw Kokoro `/synthesize` call completing while a VoiceDesign forward was
-still resident. Tracing (#3101) found `KokoroEngine.synthesize()` and `design_voice()`
-already drive `_VD_KOKORO` correctly; the actual bypass was `POST /load {"engine":"kokoro"}`,
-which called `KokoroEngine._ensure_loaded()` directly without going through `_VD_KOKORO.kokoro_synth()`.
-On the DirectML profile a cold Kokoro load is not just bookkeeping — `_directml_selftest_or_fallback`
-runs a real one-shot forward (`kokoro.create("ok", ...)`) to prove the provider works, which could
-land mid-design with no exclusion at all. The fix adds `_kokoro_ensure_loaded_guarded()` and routes
-the `/load` bypass through it. A pure-Python threading test (`test_load_kokoro_arbiter_gate.py`) proves
-`/load` now blocks while a design holds the arbiter, using a fake Kokoro engine — no real model load.
-Unit tests cannot prove the ORIGINAL symptom on real hardware: a live Kokoro `/load` racing a real,
-resident VoiceDesign forward on a shared-device box, with real DirectML self-test timing.
-
-*Needs:* single 8 GB GPU card, DirectML profile, real Kokoro weights, Qwen VoiceDesign 1.7B
-resident.
-*Criteria:* re-run the #3086 repro — concurrent VoiceDesign forward + raw Kokoro `/load`
-on a shared-device box — and confirm the Kokoro load now blocks until the design releases,
-matching the unit-level proof above.
-*Cost:* short — one concurrent repro, same shape as the unit test but against real weights.
 
 ### A108 · Coqui/Kokoro/Whisper installer hold-down and idle watchdog ([#3056](https://github.com/dudarenok-maker/Castwright/issues/3056), PR [#3197](https://github.com/dudarenok-maker/Castwright/pull/3197)) · **GPU box with a real sidecar, Qwen resident**
 
@@ -5444,13 +5957,45 @@ The Qwen VoiceDesign pipeline is merged, but the **zh/ja** Coalfall placeholder
 artifacts were never produced. Run the shipped pipeline against them. Distinct from
 D1's five languages, which are done.
 
+> **2026-09-24 — pipeline run: zh/ja VoiceDesign artifacts now exist, 26/26 verified on
+> disk. This row's gap is CLOSED on the machine axis; the per-voice native-ear listen is
+> queued under #1600.** Drove the shipped bulk `POST /books/:id/cast/design` (SSE) against
+> the lane server from this checkout (`:8100`; tier `qwen3-tts-1.7b`; persona engine
+> `local` → `qwen38-cw-iq3-80k:latest` via Ollama, both confirmed live in `/api/config`):
+>
+> - **zh** `castwright__standalones__煤落的委托`: ran 09:57–10:21 — 752-line SSE, 13 ×
+>   `character_designed`, 0 × `character_failed`, closed with
+>   `idle done=13 total=13 skipped=0 failures=[]`; job now inactive.
+> - **ja** `castwright__standalones__コールフォールの依頼`: ran 10:22–10:46 — 714-line SSE,
+>   13 × `character_designed`, 0 × `character_failed`, closed with
+>   `idle done=13 total=13 skipped=0 failures=[]`; job now inactive.
+> - **The artifacts this row asked for**: for every one of the 26 designed voice ids the
+>   full triple exists under `castwright-workspace/voices/qwen/` — `.json` persona sidecar,
+>   `.pt` speaker embedding, `__master.wav` reference clip — `pt=13 json=13 masterWav=13`,
+>   **missing = ∅** on both books. Each book's `cast.json` carries a non-empty `voiceStyle`
+>   persona and `overrideTtsVoices.qwen.name` for 13/13 characters (zh mtime 10:21:53,
+>   18,066 B; ja mtime 10:46:06, 16,543 B).
+> - **Usable now**: 13 fresh audition `.mp3` renders per book (inside each run window) sit in
+>   `server/audio/voices/` — the deterministic cache the Voices tab's "Play 12s" button
+>   reads — so every designed voice was rendered once at design time and is playable in the
+>   UI today.
+>
+> Full machine dump (per-character overrides, per-file sizes and timestamps, SSE tails):
+> `docs/testing/onbox-human-checkpoint-results/2026-09-24-d2-zhja-design-evidence.txt`,
+> committed alongside this note.
+> **What is NOT claimed here:** that each voice *sounds right* to a native zh/ja ear — that
+> verdict is machine-unverifiable. The 26 auditions above are the listen queue and stay
+> tracked under #1600. This row's own question — was the pipeline ever run against these
+> two samples, do their artifacts exist — is answered yes with file-level evidence.
+
+
 ---
 
 ## Group E — not the GPU box
 
 <!-- next-id: E108 -->
 
-Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9/E103). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
+Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
 ### E1 · ops-16 Pinokio installer ([#822](https://github.com/dudarenok-maker/Castwright/issues/822)) · **macOS is the gap**
 
@@ -5794,134 +6339,47 @@ exists. *Criteria:* spec §On-box acceptance
 > that step itself — this note folds its verdict in per wave-5 step 6.
 > Evidence: `docs/testing/onbox-wave5-results/step-3-e9.md`.
 
-### E103 · `scripts/wt-gc.mjs --prune` — real junction-first teardown ([#3051](https://github.com/dudarenok-maker/Castwright/issues/3051), ops-75 Part 4)
-
-Acceptance #5 of #3051: "the destructive path cannot be proven in-PR." Every unit and
-Pester test in this PR runs against throwaway fixtures (a scratch dir with a real
-`New-Item -ItemType Junction`, never a real worktree) — see
-`scripts/tests/wt-gc-junctions.Tests.ps1` and `scripts/tests/wt-gc.test.mjs`. What
-those tests cannot exercise is `--prune` against a REAL worktree carrying real
-junctions into the primary checkout's `node_modules`/`.venv` — the shape behind the
-2026-09-06 sweep, in which 12 of 14 registered worktrees' junctions pointed at the
-primary checkout's real trees. **Scope:** `wt-gc` reads `git worktree list`, so the
-28 already-ORPHANED directories (8.27 GB) that same sweep counted are invisible to it
-— it exists to stop registered worktrees from becoming those, not to reclaim ones
-that already are. Do not accept this row against an orphan-directory cleanup.
-
-**What to observe, concretely**, on a Windows box with several stale worktrees
-(junctioned per CLAUDE.md's "Worktree setup"):
-
-- `npm run wt:gc` (no `--prune`) correctly reports each worktree's merged/ahead/dirty/
-  PR-state columns and marks as **not** prunable: the primary checkout, the worktree
-  you ran the command from, any dirty tree, any tree **not merged into `main`**, any
-  tree with unpushed or unverifiable-push commits, and any tree whose branch carries
-  an **open PR** or whose PR state could not be determined — confirm against
-  `git status`/`git log`/`gh pr list` by hand for a few rows. On a box mid-round this
-  should leave very few prunable rows; a row you know is an in-flight lane reading
-  `prunable? yes` is a failure of this criterion, not a curiosity.
-- Confirm `gh` answering "no PR" renders `none` and `gh` being unreachable renders
-  `unknown (gh unavailable)` — two different cells, not one shared token. Kill `gh`'s
-  auth (or rename the binary out of PATH) for one run to see the second.
-- Pick one worktree that IS marked prunable and genuinely is safe to delete (already
-  merged into `main`, pushed, clean, PR merged/closed, and NOT the tree you are
-  standing in). Run `npm run wt:gc -- --prune` **from a different checkout**.
-- Confirm the junctions inside it (`node_modules`, `server/node_modules`,
-  `server/tts-sidecar/.venv`, `server/tts-sidecar/voices/` if present) are gone
-  (`Test-Path` false) while the PRIMARY checkout's own real `node_modules`/`.venv`/
-  `voices/` are **untouched and intact** — this is the one failure mode that matters:
-  a `$false`→dropped `Directory.Delete` or a `.LinkTarget`-based gate reading empty
-  and silently skipping the delete, letting the follow-on `git worktree remove`
-  recurse into the primary checkout's real trees.
-- Confirm `git worktree list` no longer lists the pruned path, and the directory is
-  gone from disk.
-- Confirm the primary checkout and every OTHER live worktree are unaffected
-  (`git status --porcelain` on each, before/after).
-- **The fail-closed scan, which no fixture can prove:** the junction walk now throws
-  on any enumeration error rather than answering "no junctions found". On a real tree
-  with a deep junction path (the `server/tts-sidecar/.venv` shape under a long
-  worktree name), run the scan under `pwsh` **and** under `powershell` (5.1) and
-  confirm both either find the junction or FAIL LOUDLY — never a silent `removed 0
-  junction(s)` followed by a successful `git worktree remove`. **Distinguish the two
-  ways 5.1 can fail loudly**, because this criterion could not tell them apart and was
-  briefly disarmed by that: a `ParserError` / `Import-Module` failure means the MODULE
-  did not load and the fail-closed scan was never executed, which is NOT a pass for
-  this bullet. So, per engine, from the repo root:
-
-      <engine> -NoProfile -Command "Import-Module .\scripts\lib\wt-gc-junctions.psm1 -Force; 'LOADED OK'; Get-JunctionsRecursive -Root '<tree>' | ConvertTo-Json -Compress"
-
-  where `<engine>` is `pwsh` then `powershell.exe`. **The leading `.\` is required** —
-  `Import-Module` treats a bare relative path as a MODULE NAME and searches
-  `$env:PSModulePath`, so the same command WITHOUT the `.\` fails with
-  `Modules_ModuleNotFound` on both engines, which is character-for-character the disqualifying
-  signature above and would produce a guaranteed false FAIL. `LOADED OK` must print
-  before any scan output; then the scan must list the junction or throw.
-  **`Get-JunctionsRecursive` (read-only) rather than the `.ps1` wrapper, deliberately:**
-  `wt-gc-junctions.ps1`'s `[ValidateSet('Remove')]` leaves `Remove` as its only action,
-  so running the wrapper under `pwsh` would unlink the junction the 5.1 run needs and
-  the second engine would legitimately find nothing — which this same bullet defines as
-  a failure. (`pickPowerShell()` always prefers `pwsh` and has no engine flag, which is
-  why the 5.1 half has to be driven by hand at all.) Exercise the destructive
-  `-Action Remove` path once, afterwards, as part of the prune bullets above.
-- **A locked worktree is refused, and refused BEFORE the junction sweep.** `git
-  worktree lock <tree> --reason 'in flight'`, then `npm run wt:gc` — the row must read
-  ``no (locked by `git worktree lock`: in flight)``. Then `--prune` and confirm the
-  tree's junctions are still present: `git worktree remove --force` refuses a locked
-  tree on its own, but only after the sweep has already run, so "it survived" is not
-  the criterion — "it survived WITH its `node_modules`/`.venv`/`voices/`" is.
-  `git worktree unlock` afterwards.
-
-*Needs:* a Windows box with `pwsh` **and** Windows PowerShell 5.1 on PATH, at least one
-genuinely prunable worktree with real junctions set up per CLAUDE.md's worktree-setup
-recipe, and a second checkout to run the prune from.
-*Cost:* 10–15 minutes. *Criteria:* this issue's acceptance list (#3051) and the
-design doc's Part 4 (`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`).
-
-### E104 · ops-71 stale-battery reaper — `Win32_Process` classification against real processes ([#3047](https://github.com/dudarenok-maker/Castwright/issues/3047), Part 3 of [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)) · **any Windows dev box; no GPU needed**
-
-`scripts/reap-stale-batteries.mjs`'s `classify()` is unit-tested against a synthetic
-11-battery fixture (`scripts/tests/reap-stale-batteries.test.mjs`), and every guard
-in it is mutation-verified (deletion → a named test reddens → restored). What no
-test in the repo can prove is the thing this row exists for: that
-`collectProcessSnapshot()`'s `Get-CimInstance Win32_Process` query — one spawn on
-success or genuine failure, up to one retry on a transient empty result (#3238)
-or a genuine `spawnSync` timeout (#3331), never both, so at most 2 spawn calls
-total — run against REAL processes on a real box, actually reports the shapes
-`classify()`
-assumes — `ParentProcessId` correctly reflecting a live parent vs. a dead/reused
-one, `CreationDate` parsing to the right relative ordering for the PID-reuse guard,
-and `UserModeTime`/`KernelModeTime` actually growing at the CPU-s/min rates the
-thresholds are calibrated against (2/min dead, 30–100/min healthy for a vitest
-subtree).
-
-**What to observe, concretely**, on a Windows dev box with a few real batteries
-running (e.g. a `vitest`/`npm run test:server` battery, a real `git commit`, and
-the TTS sidecar's `python.exe` if it's up):
-
-- Run `npm run doctor` (report-only) and confirm every root's command line and
-  verdict look right by eye — no live battery misclassified as `reap`, no
-  `python.exe`/`git.exe` subtree flagged.
-- Run it again ~10+ minutes later and confirm a subtree that has genuinely gone
-  idle since the first run now shows `stalled-rate`.
-- Start a battery, then kill its owning terminal/agent process out from under
-  it (simulating the 2026-09-05 incident) and confirm the orphaned subtree
-  shows `orphaned-unreachable` even while still burning CPU, and that
-  `npm run doctor -- --kill` reaps it — and that when the pre-push census is
-  the thing that reaps it, `git push` PRINTS the kill (a
-  `reap-stale-batteries: KILLED stale battery pid=… :: <command line>` line on
-  stderr) rather than removing it silently.
-- Confirm nothing that merely NAMES a runner is touched: leave an orphaned
-  `tail -f logs/vitest.log` (or any shell whose argv mentions vitest/pytest)
-  running across a push and check it survives.
-- Confirm `git push` (which now runs the pre-push census automatically) still
-  completes in about the same time as before this change — the query itself
-  measures ~694ms, ~0.8-3.5s for a whole census on a 415-root box — and that
-  `logs/reaper-census.jsonl` accumulates one entry per push with every root's
-  command line present (the exact thing the 2026-09-05 census omitted).
-
-**Residual N4 (accepted):** `killTree()` performs no creation-time pid-reuse re-check before invoking `taskkill /PID <root> /T /F`. Review passes 2, 3, and 4 all agreed this is acceptable — closing it would need a second `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill. Since the reaper now actually fires (as of this PR), the PID-reuse window is live rather than theoretical; an operator running the acceptance should watch for the edge case where a process exits and Windows quickly recycles its PID before the taskkill lands.
-
-*Needs:* a Windows dev box, no GPU. *Cost:* ~20 minutes across a few pushes.
-*Criteria:* the five observations above; issue #3047's acceptance list.
+> **2026-09-24 — clean on-box re-confirmation from the batch worktree (#3319,
+> cline-qwen-cloud lane); first real-data `modelNarrator` non-zero readings
+> noted; item (3) STILL OWED, disposition unchanged.** Drove the row's own
+> steps in `C:\Claude\Projects\wt-onbox-batch-1` @ `042918ac`
+> (`chore/ops-onbox-batch-1`): `cd server && npm run build` (tsc, exit 0),
+> then `WORKSPACE_DIR=C:\AudiobookWorkspace node scripts/measure-attribution.mjs`.
+> This worktree's `server/handoff/cache/` held only one cache, so the
+> 2026-08-13 precedent was followed exactly: 35 `mns_*.json` caches copied in
+> read-only from the primary checkout (the worktree's own single file never
+> overwritten), and every copy deleted after the run — worktree cache back to
+> its one prior file, primary's 36 files verified untouched, nothing written to
+> `C:\AudiobookWorkspace` (the script's only write, its JSON report, was routed
+> out of the tree via `REPORT_PATH`). **Runs clean against real data: exit 0,
+> 30 book rows, none blank.** The corpus has grown 23 → 30 rows since the
+> 2026-08-14 discharge (new C1/C2C3/A21/A16/QA2937 throwaways live in the
+> library); 25 rows `ok`, the 5 `ok (not analysed)` are genuinely un-analysed
+> cloud-throwaway clones — not the 2026-08-13 per-checkout artifact. Every
+> spec §On-box-acceptance shape reproduced: both live CJK books at
+> `spokenTotal=128 > 0`; `dashOnlySpoken` non-zero on both Russian books
+> (`Юный дрессировщик` 17, `Ночной дозор` 1940); `unattributedSpeech` printed
+> for every book; `Ночной дозор (Tetralogy)` identical to the 2026-09-06
+> straight-pass record on every cited column (`spokenTotal` 2122,
+> `narratorIdSpoken` 229, `share` 13.0%, `unattributed` 9, `splitSpeech` 337,
+> `orphanSpoken` 32, `tagNarratorSpan` 544); Coalfall-family `orphanSpoken`
+> 0–56 across its eight language editions present here (previous note's range
+> 0–62 included an edition not re-cached since). **New observation worth
+> recording:** three caches re-analysed post-`priorCharacterId` now read
+> `modelNarrator` non-zero — `Каз Коалфолла` 10, `A16 Row Test - Delo o
+> Koalfolle` 2, `QA2937 Coalfall RU Throwaway` 2 — with `unknownOriginNarrator`
+> 0 and the whole narrator-id set landing in `modelNarrator`. This is the first
+> on-box, non-unit-fixture evidence the D18 origin field populates at all; but
+> these are QA-scale books, so **item (3) (a real book freshly re-analysed
+> post-D18) is NOT claimed discharged** — it still rides Group C's GPU session
+> exactly as before, and this run adds evidence for it rather than a verdict.
+> `demotedNarrator` remains 0 on every row. No defect found, nothing filed.
+> Brief discrepancy noted per the brief's own instruction: #3319's "What"
+> describes the item-(1) full run, which this register already marks
+> DISCHARGED (2026-08-14, reconfirmed 2026-08-23); the committed file was
+> trusted, so this run is recorded as an independent fresh re-confirmation from
+> the batch worktree plus the `modelNarrator` observation above. Row disposition
+> unchanged: only item (3) keeps E9 open.
 
 ### E105 · ops-72 step/pipeline time budgets — `taskkill /T /F`'s orphan blind spot against a real Windows process tree ([Castwright#3249](https://github.com/dudarenok-maker/Castwright/issues/3249), Part 2 of [`docs/superpowers/specs/2026-09-05-commit-gate-rebalance-design.md`](../superpowers/specs/2026-09-05-commit-gate-rebalance-design.md)) · **any Windows dev box; no GPU needed**
 
@@ -5952,9 +6410,11 @@ node(vitest) -> N forks`) to exhibit that specific race.
   and confirm that fork survives the subsequent `taskkill /PID <root> /T /F`
   — then confirm `runCensus({ kill: true, killReasons:
   ['orphaned-unreachable'] })`, invoked immediately after the kill, catches
-  and reaps that survivor (this is the sweep Part 3's reaper already proves
-  in isolation at **E104** above; this row is specifically about the
-  hand-off from Part 2's timeout kill into it, on a real tree).
+  and reaps that survivor (this is the sweep Part 3's reaper (ops-71,
+  `scripts/reap-stale-batteries.mjs`, formerly row E104, discharged 2026-09-25
+  and removed from the register) already proves in isolation; this row is
+  specifically about the hand-off from Part 2's timeout kill into it, on a
+  real tree).
 - Confirm the whole-pipeline `CASTWRIGHT_RUN_TIMEOUT_MIN` budget actually
   bounds a real multi-step `verify` run — start one with a tiny override and
   confirm it aborts with `[timeout]` well before the 4h34m incident figure

@@ -1,0 +1,5 @@
+{
+  "qwen_design_resident": true,
+  "qwen_device_key": "cuda:0",
+  "t_after_design_s": 22.4
+}

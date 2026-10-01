@@ -20,6 +20,7 @@
 import { resolveStage1ChunkCharBudget } from './stage1-chunk.js';
 import { configValue } from '../config/resolver.js';
 import { cloudBodyCharBudget } from './token-budget.js';
+import type { EngineCapacity } from './capacity.js';
 
 export interface SentenceChunk<S> {
   core: S[];
@@ -113,8 +114,8 @@ export const OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS = 4000;
 
 /* Per-chunk char budget for the OUTPUT-heavy passes (script review,
    annotate-emotion, instruct-annotation — each emits per-sentence output).
-   - local  ⇒ num_ctx-derived (delegates to resolveStage1ChunkCharBudget).
-   - gemini ⇒ a FINITE budget (registry knob analyzer.gemini.outputHeavyChunkChars),
+   - context capacity (local)  ⇒ num_ctx-derived (delegates to resolveStage1ChunkCharBudget).
+   - request-cap capacity (gemini) ⇒ a FINITE budget (registry knob analyzer.gemini.outputHeavyChunkChars),
      the body sized to the per-request token cap minus `reservedChars` (roster +
      template scaffold, char-space) AND `reservedTokens` (the fixed system-prompt
      overhead, token-space — see OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS). Both are
@@ -128,12 +129,15 @@ export const OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS = 4000;
    the chapter body so gemini sizes to the per-request token cap) — a clean,
    separate seam untouched by this. */
 export function chapterChunkBudget(
-  engine: 'gemini' | 'local',
+  capacity: EngineCapacity,
   reservedChars = 0,
   sampleText = '',
   reservedTokens = 0,
 ): number {
-  if (engine === 'local') return resolveStage1ChunkCharBudget('local'); // roster rides on num_ctx; local truncation is the stage-2 fraction knob's domain
+  if (capacity.family === 'context') return resolveStage1ChunkCharBudget(capacity); // roster rides on num_ctx; local truncation is the stage-2 fraction knob's domain
   const outputCap = configValue<number>('analyzer.gemini.outputHeavyChunkChars');
-  return Math.min(outputCap, cloudBodyCharBudget(sampleText, reservedChars, reservedTokens));
+  return Math.min(
+    outputCap,
+    cloudBodyCharBudget(sampleText, reservedChars, reservedTokens, capacity.perRequestInputCap),
+  );
 }

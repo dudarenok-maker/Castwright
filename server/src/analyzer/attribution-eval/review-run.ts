@@ -36,6 +36,7 @@ import { planApply, type LiveSentence } from './review-apply-core.js';
 import { AnalyzerTruncatedError, GeminiContentBlockedError } from '../errors.js';
 import { AnalysisAbortedError } from '../ollama.js';
 import { DailyQuotaExhaustedError } from '../rate-limit.js';
+import type { EngineCapacity } from '../capacity.js';
 
 /* The route's `MAX_FORCE_SPLIT_DEPTH` and `CHUNK_OVERLAP` are both 3 but not
    exported — redeclared locally to match (server/src/routes/script-review.ts). */
@@ -44,7 +45,7 @@ const CHUNK_OVERLAP = 3;
 
 export async function runReviewOverChapter(opts: {
   analyzer: Analyzer;
-  engine: 'local' | 'gemini';
+  capacity: EngineCapacity;
   manuscriptId: string;
   chapterId: number;
   sentences: SentenceOutput[];
@@ -53,12 +54,12 @@ export async function runReviewOverChapter(opts: {
   evidence?: Map<number, string>;
   call: StageCall;
 }): Promise<{ ops: ScriptReviewOp[]; accepted: ScriptReviewOp[]; droppedChunks: number }> {
-  const { analyzer, engine, manuscriptId, chapterId, sentences, roster, priorExchange, evidence, call } =
+  const { analyzer, capacity, manuscriptId, chapterId, sentences, roster, priorExchange, evidence, call } =
     opts;
 
   const chunks = chunkSentencesByBudget(sentences, {
     charBudget: chapterChunkBudget(
-      engine,
+      capacity,
       JSON.stringify(roster).length + 800, // roster payload + fixed template scaffold
       sentences.map((s) => s.text).join(' '), // sample → chars/token
       OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS, // reserve system-prompt overhead so the whole request clears the TPM guard

@@ -1,0 +1,299 @@
+{
+  "capturedFrom": "369b644ed00eea21b3c848e210819bc875336cce",
+  "cases": [
+    {
+      "id": "stage1|local-qwen3.5:4b@32768|latin",
+      "resolver": "stage1",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "latin",
+      "value": 24000
+    },
+    {
+      "id": "stage1|local-qwen3.5:4b@32768|cyrillic",
+      "resolver": "stage1",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "cyrillic",
+      "value": 24000
+    },
+    {
+      "id": "stage1|local-qwen3.5:4b@32768|han",
+      "resolver": "stage1",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "han",
+      "value": 24000
+    },
+    {
+      "id": "stage1|local-qwen3.5:4b@32768|kana",
+      "resolver": "stage1",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "kana",
+      "value": 24000
+    },
+    {
+      "id": "stage1+roster|local-qwen3.5:4b@32768|latin",
+      "resolver": "stage1+roster",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "latin",
+      "value": 24000
+    },
+    {
+      "id": "stage1+roster|local-qwen3.5:4b@32768|cyrillic",
+      "resolver": "stage1+roster",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "cyrillic",
+      "value": 24000
+    },
+    {
+      "id": "stage1+roster|local-qwen3.5:4b@32768|han",
+      "resolver": "stage1+roster",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "han",
+      "value": 24000
+    },
+    {
+      "id": "stage1+roster|local-qwen3.5:4b@32768|kana",
+      "resolver": "stage1+roster",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "kana",
+      "value": 24000
+    },
+    {
+      "id": "stage2|local-qwen3.5:4b@32768|latin",
+      "resolver": "stage2",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "latin",
+      "value": 9000
+    },
+    {
+      "id": "stage2|local-qwen3.5:4b@32768|cyrillic",
+      "resolver": "stage2",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "cyrillic",
+      "value": 9000
+    },
+    {
+      "id": "stage2|local-qwen3.5:4b@32768|han",
+      "resolver": "stage2",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "han",
+      "value": 9000
+    },
+    {
+      "id": "stage2|local-qwen3.5:4b@32768|kana",
+      "resolver": "stage2",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "kana",
+      "value": 9000
+    },
+    {
+      "id": "chapter:defaults|local-qwen3.5:4b@32768|latin",
+      "resolver": "chapter:defaults",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "latin",
+      "value": 24000
+    },
+    {
+      "id": "chapter:emotion-instruct|local-qwen3.5:4b@32768|latin",
+      "resolver": "chapter:emotion-instruct",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "latin",
+      "value": 24000
+    },
+    {
+      "id": "chapter:emotion-instruct|local-qwen3.5:4b@32768|cyrillic",
+      "resolver": "chapter:emotion-instruct",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "cyrillic",
+      "value": 24000
+    },
+    {
+      "id": "chapter:emotion-instruct|local-qwen3.5:4b@32768|han",
+      "resolver": "chapter:emotion-instruct",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "han",
+      "value": 24000
+    },
+    {
+      "id": "chapter:emotion-instruct|local-qwen3.5:4b@32768|kana",
+      "resolver": "chapter:emotion-instruct",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "kana",
+      "value": 24000
+    },
+    {
+      "id": "chapter:script-review|local-qwen3.5:4b@32768|latin",
+      "resolver": "chapter:script-review",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "latin",
+      "value": 24000
+    },
+    {
+      "id": "chapter:script-review|local-qwen3.5:4b@32768|cyrillic",
+      "resolver": "chapter:script-review",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "cyrillic",
+      "value": 24000
+    },
+    {
+      "id": "chapter:script-review|local-qwen3.5:4b@32768|han",
+      "resolver": "chapter:script-review",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "han",
+      "value": 24000
+    },
+    {
+      "id": "chapter:script-review|local-qwen3.5:4b@32768|kana",
+      "resolver": "chapter:script-review",
+      "engine": "local-qwen3.5:4b@32768",
+      "script": "kana",
+      "value": 24000
+    },
+    {
+      "id": "stage1|gemini-3.5-flash-lite@12000|latin",
+      "resolver": "stage1",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "latin",
+      "value": 20000
+    },
+    {
+      "id": "stage1|gemini-3.5-flash-lite@12000|cyrillic",
+      "resolver": "stage1",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "cyrillic",
+      "value": 14270
+    },
+    {
+      "id": "stage1|gemini-3.5-flash-lite@12000|han",
+      "resolver": "stage1",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "han",
+      "value": 8940
+    },
+    {
+      "id": "stage1|gemini-3.5-flash-lite@12000|kana",
+      "resolver": "stage1",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "kana",
+      "value": 8041
+    },
+    {
+      "id": "stage1+roster|gemini-3.5-flash-lite@12000|latin",
+      "resolver": "stage1+roster",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "latin",
+      "value": 16298
+    },
+    {
+      "id": "stage1+roster|gemini-3.5-flash-lite@12000|cyrillic",
+      "resolver": "stage1+roster",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "cyrillic",
+      "value": 10568
+    },
+    {
+      "id": "stage1+roster|gemini-3.5-flash-lite@12000|han",
+      "resolver": "stage1+roster",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "han",
+      "value": 5238
+    },
+    {
+      "id": "stage1+roster|gemini-3.5-flash-lite@12000|kana",
+      "resolver": "stage1+roster",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "kana",
+      "value": 4339
+    },
+    {
+      "id": "stage2|gemini-3.5-flash-lite@12000|latin",
+      "resolver": "stage2",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "latin",
+      "value": 9000
+    },
+    {
+      "id": "stage2|gemini-3.5-flash-lite@12000|cyrillic",
+      "resolver": "stage2",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "cyrillic",
+      "value": 9000
+    },
+    {
+      "id": "stage2|gemini-3.5-flash-lite@12000|han",
+      "resolver": "stage2",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "han",
+      "value": 9000
+    },
+    {
+      "id": "stage2|gemini-3.5-flash-lite@12000|kana",
+      "resolver": "stage2",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "kana",
+      "value": 9000
+    },
+    {
+      "id": "chapter:defaults|gemini-3.5-flash-lite@12000|latin",
+      "resolver": "chapter:defaults",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "latin",
+      "value": 32000
+    },
+    {
+      "id": "chapter:emotion-instruct|gemini-3.5-flash-lite@12000|latin",
+      "resolver": "chapter:emotion-instruct",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "latin",
+      "value": 32000
+    },
+    {
+      "id": "chapter:emotion-instruct|gemini-3.5-flash-lite@12000|cyrillic",
+      "resolver": "chapter:emotion-instruct",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "cyrillic",
+      "value": 22832
+    },
+    {
+      "id": "chapter:emotion-instruct|gemini-3.5-flash-lite@12000|han",
+      "resolver": "chapter:emotion-instruct",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "han",
+      "value": 14304
+    },
+    {
+      "id": "chapter:emotion-instruct|gemini-3.5-flash-lite@12000|kana",
+      "resolver": "chapter:emotion-instruct",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "kana",
+      "value": 12865
+    },
+    {
+      "id": "chapter:script-review|gemini-3.5-flash-lite@12000|latin",
+      "resolver": "chapter:script-review",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "latin",
+      "value": 27739
+    },
+    {
+      "id": "chapter:script-review|gemini-3.5-flash-lite@12000|cyrillic",
+      "resolver": "chapter:script-review",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "cyrillic",
+      "value": 18571
+    },
+    {
+      "id": "chapter:script-review|gemini-3.5-flash-lite@12000|han",
+      "resolver": "chapter:script-review",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "han",
+      "value": 10043
+    },
+    {
+      "id": "chapter:script-review|gemini-3.5-flash-lite@12000|kana",
+      "resolver": "chapter:script-review",
+      "engine": "gemini-3.5-flash-lite@12000",
+      "script": "kana",
+      "value": 8604
+    }
+  ]
+}

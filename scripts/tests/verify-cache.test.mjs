@@ -15,6 +15,7 @@ import {
   readFileSync,
   copyFileSync,
   rmSync,
+  utimesSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
@@ -26,6 +27,7 @@ import {
   composeInputHash,
   decide,
   hashFile,
+  makeStatHashMemo,
   hashEntries,
   loadCache,
   saveCache,
@@ -51,6 +53,7 @@ import {
   computeBudgetMs,
   computeStepBudgetMs,
   computeRunBudgetMs,
+  sumQualifiedRunDurationMs,
   qualifiedDurationFor,
   DEFAULT_STEP_TIMEOUT_MIN,
   DEFAULT_RUN_TIMEOUT_MIN,
@@ -1579,8 +1582,136 @@ test('runPipeline computes its step and pipeline budgets via computeStepBudgetMs
   );
   assert.match(
     pipelineBody,
-    /computeRunBudgetMs\(\s*qualifiedRunDurationMs,\s*runTimeoutFloorMs,\s*contentionBudgetMultiplier\s*\)/,
-    'the whole-pipeline budget must go through computeRunBudgetMs, not an inline computeBudgetMs(...) * multiplier',
+    /computeRunBudgetMs\(\s*qualifiedRunDurationMs,\s*runTimeoutFloorMs\s*\)/,
+    'the whole-pipeline budget must go through computeRunBudgetMs with the flat floor — no throttle multiplier argument (Castwright#3361)',
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /contentionBudgetMultiplier/,
+    'runPipeline must no longer compute a pipeline-level contention budget multiplier at all (Castwright#3361)',
+  );
+
+  // Pin the runBudgetMs and runDeadline statements: must contain EXACTLY the expected forms with no multipliers.
+  // These exact-statement pins catch post-call widening mutations like:
+  //   const runBudgetMs = computeRunBudgetMs(...) * pipelineThrottle;
+  //   const runDeadline = Date.now() + runBudgetMs * (lowConcurrency(env) ? 2 : 1);
+  assert.match(
+    pipelineBody,
+    /const\s+runBudgetMs\s*=\s*computeRunBudgetMs\(\s*qualifiedRunDurationMs,\s*runTimeoutFloorMs\s*\)\s*;/,
+    'the runBudgetMs statement must be exactly: const runBudgetMs = computeRunBudgetMs(...);',
+  );
+  assert.match(
+    pipelineBody,
+    /const\s+runDeadline\s*=\s*Date\.now\(\)\s*\+\s*runBudgetMs\s*;/,
+    'the runDeadline statement must be exactly: const runDeadline = Date.now() + runBudgetMs;',
+  );
+});
+
+// Castwright#3361 behavioural pair. Both measure the span the hanging step was
+// ALIVE for (first heartbeat -> last heartbeat, written by the fixture itself),
+// not the `[timeout] ... after Ns` figure: that one also contains taskkill plus
+// a synchronous runCensus (a PowerShell CIM spawn, 0.8-3.5s measured here),
+// which is variance unrelated to the budget under test. The fixture dies at the
+// kill, so the span ends when the budget fires and excludes kill/census time;
+// taskkill latency (a few hundred ms) is NOT excluded and the tolerances allow
+// for it. The span is only returned when the log shows the budget ended the
+// step (a fixture that exits on its own would otherwise be measured as a cut),
+// and the fixture's largest heartbeat gap rides along for failure messages.
+async function runHangingStepSpanMs(extraEnv) {
+  const dir = makeGitFixture();
+  writeHangingFixture(dir, 'test'); // vitest-backed name => affectedByContention
+  writeFileSync(
+    join(dir, 'hang.mjs'),
+    "import { writeFileSync } from 'node:fs';\n" +
+      'const t0 = Date.now();\n' +
+      'let prev = t0;\n' +
+      'let maxGap = 0;\n' +
+      "const beat = () => { const n = Date.now(); maxGap = Math.max(maxGap, n - prev); prev = n; writeFileSync('beat.txt', t0 + ' ' + n + ' ' + maxGap); };\n" +
+      'beat();\n' +
+      'setInterval(beat, 100);\n' +
+      'setTimeout(() => process.exit(0), 60_000);\n',
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+  const originalLog = console.log;
+  let runLoggedAt = null;
+  const logs = [];
+  console.log = (...args) => {
+    logs.push(args.map(String).join(' '));
+    // `[run] test` is logged immediately before the step is spawned, so it
+    // stands in for the budget timer's own start (npm/node startup, which
+    // varies by seconds under load, is not part of the budget under test).
+    if (runLoggedAt === null && String(args[0]).startsWith('[run] test')) runLoggedAt = Date.now();
+  };
+  let code;
+  try {
+    code = await runPipeline({
+      argv: ['--steps', 'test'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1', ...extraEnv },
+    });
+  } finally {
+    console.log = originalLog;
+  }
+  assert.notEqual(code, 0, 'the hanging step must time out, not pass');
+  assert.ok(
+    logs.some((l) => l.startsWith('[timeout] test')),
+    `expected the budget (not the fixture) to end the step -- no [timeout] test line, got:\n${logs.join('\n')}`,
+  );
+  assert.notEqual(runLoggedAt, null, 'expected a `[run] test` log line');
+  const [, last, maxGap] = readFileSync(join(dir, 'beat.txt'), 'utf8').split(' ').map(Number);
+  return { spanMs: last - runLoggedAt, maxGapMs: maxGap };
+}
+
+test('runPipeline: the pipeline budget is not widened under LOW_CONCURRENCY (Castwright#3361, behavioural)', async () => {
+  // Pipeline deadline is the binding constraint in both runs: the step's own
+  // budget (10 min, x2 under throttle) dwarfs the run floor, so the step is
+  // clamped to the deadline and its live span is the pipeline budget itself.
+  // Correct code: throttled - control ~ 0 (startup jitter only). A 2x widening
+  // of the pipeline budget: ~ +FLOOR_MS.
+  const FLOOR_MS = 4000;
+  const env = {
+    CASTWRIGHT_RUN_TIMEOUT_MIN: String(FLOOR_MS / 60000),
+    CASTWRIGHT_STEP_TIMEOUT_MIN: '10',
+  };
+  const throttled = await runHangingStepSpanMs({ ...env, LOW_CONCURRENCY: '1' });
+  const control = await runHangingStepSpanMs(env);
+  const throttledMs = throttled.spanMs;
+  const controlMs = control.spanMs;
+  const gaps = `(max heartbeat gap: throttled ${throttled.maxGapMs}ms, control ${control.maxGapMs}ms)`;
+  // The control ceiling stops a never-clamped control from passing vacuously.
+  assert.ok(
+    controlMs < 2 * FLOOR_MS,
+    `control run must be clamped near the flat ${FLOOR_MS}ms floor, was alive ${controlMs}ms ${gaps}`,
+  );
+  assert.ok(
+    Math.abs(throttledMs - controlMs) <= FLOOR_MS / 2,
+    `pipeline budget must not widen under throttle: throttled alive ${throttledMs}ms vs control ${controlMs}ms ${gaps}`,
+  );
+});
+
+test('runPipeline: the per-step budget IS widened under LOW_CONCURRENCY for a vitest-backed step (Castwright#3361, behavioural)', async () => {
+  // Mirror image: the run budget is huge, the step floor small, so the step's
+  // own budget binds. Correct code: throttled ~ 2x control (diff ~ +FLOOR_MS).
+  // stepContentionMultiplier forced to 1: diff ~ 0.
+  const FLOOR_MS = 4000;
+  const env = {
+    CASTWRIGHT_RUN_TIMEOUT_MIN: '10',
+    CASTWRIGHT_STEP_TIMEOUT_MIN: String(FLOOR_MS / 60000),
+  };
+  const throttled = await runHangingStepSpanMs({ ...env, LOW_CONCURRENCY: '1' });
+  const control = await runHangingStepSpanMs(env);
+  const throttledMs = throttled.spanMs;
+  const controlMs = control.spanMs;
+  const gaps = `(max heartbeat gap: throttled ${throttled.maxGapMs}ms, control ${control.maxGapMs}ms)`;
+  assert.ok(
+    controlMs < 2 * FLOOR_MS,
+    `control run must be bounded by the ${FLOOR_MS}ms step floor, was alive ${controlMs}ms ${gaps}`,
+  );
+  assert.ok(
+    throttledMs - controlMs >= FLOOR_MS / 2,
+    `step budget must widen under throttle: throttled alive ${throttledMs}ms vs control ${controlMs}ms ${gaps}`,
   );
 });
 
@@ -1616,44 +1747,592 @@ test('computeStepBudgetMs widens the FLOOR, not the calibrated (K x lastGreenDur
   assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a baseline the prior throttled run already absorbed');
 });
 
-test('computeRunBudgetMs leaves the uncalibrated pipeline floor UNWIDENED under throttle (#3272, decision C)', () => {
-  // #3272 decision C: an uncalibrated run (no qualified/calibrated pipeline
-  // baseline) keeps the flat, unwidened floor even under contention throttle.
-  // The old shape widened it by multiplying floorMs BEFORE computeBudgetMs —
-  // algebraically identical to multiplying the result, since
-  // computeBudgetMs(null, F) returns F verbatim regardless of k — which put
-  // the whole-pipeline budget at 2x DEFAULT_RUN_TIMEOUT_MIN (360 min) under
-  // throttle, past the 273.8-min incident this budget exists to bound. The
-  // per-step budgets (still widened by the same `multiplier`) are always
-  // subordinate to the pipeline deadline via runPipeline's own `Math.min(...)`
-  // clamp — that subordination bites hardest right here, in the uncalibrated
-  // case decision C just tightened; this pipeline-level floor is only the
+test('computeRunBudgetMs keeps the uncalibrated pipeline floor flat — never widened, throttle or no throttle (#3272 decision C, #3361)', () => {
+  // #3272 decision C settled that an uncalibrated run (no qualified pipeline
+  // baseline) keeps the flat floor; #3361 removed the last multiplier
+  // parameter so the pipeline-level budget can no longer be widened at all.
+  // The per-step budgets (computeStepBudgetMs, widened by
+  // stepContentionMultiplier) remain subordinate to the pipeline deadline via
+  // runPipeline's own `Math.min(...)` clamp; this pipeline-level floor is the
   // outer, incident-bounding backstop and stays at 180 min.
   const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000;
-  assert.equal(computeRunBudgetMs(0, floorMs, 2), floorMs, 'uncalibrated: throttle must not widen the pipeline floor');
-  assert.equal(computeRunBudgetMs(0, floorMs, 1), floorMs, 'sanity: unthrottled uncalibrated floor is unchanged');
+  assert.equal(computeRunBudgetMs(0, floorMs), floorMs, 'uncalibrated: the pipeline floor is the flat floorMs');
 });
 
-test('computeRunBudgetMs widens the FLOOR, not the calibrated branch, for a CALIBRATED pipeline baseline (B5, the case this PR does fix)', () => {
+test('computeRunBudgetMs returns max(floorMs, 2.5 x qualified) for a calibrated run, widened by nothing (#3361)', () => {
   const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000; // 180 min
-  const throttledBaselineMs = 200 * 60 * 1000; // exceeds the 180-min floor, so the calibrated branch dominates
-  const oldBuggyShape = computeBudgetMs(throttledBaselineMs, floorMs) * 2;
-  const fixed = computeRunBudgetMs(throttledBaselineMs, floorMs, 2);
-  assert.ok(fixed < oldBuggyShape, 'the fix must not double-count a calibrated pipeline baseline either');
-});
-
-test('computeRunBudgetMs still widens the calibrated floor by `multiplier` under throttle — #3272 decision C left this branch untouched', () => {
-  // A tiny qualified duration so the floor term dominates max(F x mult, k x
-  // duration) — pins the calibrated branch's actual value directly, unlike
-  // the test above (whose large baseline makes the floor term irrelevant and
-  // only proves an inequality). Fails if the calibrated arm is ever changed
-  // to skip widening (e.g. `effectiveFloorMs = floorMs` unconditionally).
-  const floorMs = DEFAULT_RUN_TIMEOUT_MIN * 60 * 1000; // 180 min
+  // A qualified baseline where the calibrated branch dominates: 2.5 x 90 min
+  // = 225 min > 180-min floor. The old shape doubled the FLOOR here too
+  // (max(2 x 180, 225) = 360 min — past the 273.8-min incident bound); the
+  // fix lands on 2.5 x q with no pipeline-level widening at all.
+  const qAboveFloor = 90 * 60 * 1000;
   assert.equal(
-    computeRunBudgetMs(60_000, floorMs, 2),
-    floorMs * 2,
-    'a calibrated (qualifiedRunDurationMs > 0) throttled run must still land on floorMs x multiplier, unchanged by #3272',
+    computeRunBudgetMs(qAboveFloor, floorMs),
+    2.5 * qAboveFloor,
+    'calibrated with 2.5q > floor: budget is exactly 2.5 x qualifiedRunDurationMs, not a widened floor',
   );
+  // A qualified baseline where the floor dominates: 2.5 x 60 min = 150 min <
+  // 180-min floor. Pins the floor term directly — fails if the calibrated arm
+  // ever multiplies the floor again (the removed 2 x 180 = 360 min shape).
+  const qBelowFloor = 60 * 60 * 1000;
+  assert.equal(
+    computeRunBudgetMs(qBelowFloor, floorMs),
+    floorMs,
+    'calibrated with 2.5q < floor: budget is the FLAT floorMs — the pipeline budget is never widened under throttle',
+  );
+});
+
+// Castwright#3361 (task 2): the whole-pipeline calibration sum must count
+// only the steps this run will actually execute — a scoped run whose only
+// in-scope step is `lint` must not be budgeted on the strength of `test`/
+// `test:server` baselines it will never run. Same extraction rationale as
+// the computeStepBudgetMs/computeRunBudgetMs tests above: direct value
+// assertions on the pure helper PLUS source-regex assertions that
+// runPipeline's real call sites go through it and the shared `outOfScope`
+// predicate, rather than reimplementing either inline.
+
+test('sumQualifiedRunDurationMs sums only the steps the include predicate admits (#3361)', () => {
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { durationMs: 60000, attempts: 1 },
+      test: { durationMs: 1200000, attempts: 1 },
+    },
+  };
+  const steps = [{ name: 'lint' }, { name: 'test' }];
+  assert.equal(
+    sumQualifiedRunDurationMs(cache, steps, (s) => s.name === 'lint'),
+    60000,
+    'a scoped sum must exclude the out-of-scope 20-min test baseline entirely',
+  );
+  assert.equal(
+    sumQualifiedRunDurationMs(cache, steps, () => true),
+    1260000,
+    'include-all sums every qualified baseline, exactly as the old inline reduce did',
+  );
+});
+
+test('sumQualifiedRunDurationMs: an attempts > 1 (crash-inflated) baseline contributes 0 (#3361)', () => {
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { durationMs: 60000, attempts: 1 },
+      test: { durationMs: 1200000, attempts: 2 },
+    },
+  };
+  assert.equal(
+    sumQualifiedRunDurationMs(cache, [{ name: 'lint' }, { name: 'test' }], () => true),
+    60000,
+    'the sum must honour qualifiedDurationFor\'s attempts === 1 rule: an unqualified entry adds nothing',
+  );
+});
+
+test('runPipeline budgets only in-scope steps, via one shared outOfScope predicate — sum and loop cannot diverge (#3361)', () => {
+  const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
+  assert.match(
+    pipelineBody,
+    /const outOfScope = \(step\) =>/,
+    'the scope test must be defined once inside runPipeline, after scopeDiff/scopeShared are known',
+  );
+  assert.match(
+    pipelineBody,
+    /const qualifiedRunDurationMs = sumQualifiedRunDurationMs\(\s*cache,\s*activeSteps,\s*\(s\) => !outOfScope\(s\) && stepPlan\.get\(s\.name\)\.action !== 'skip',?\s*\)/,
+    'the sum must go through sumQualifiedRunDurationMs filtered by the shared outOfScope predicate AND the stepPlan pre-pass\' planned action — never an unfiltered inline reduce',
+  );
+  assert.match(
+    pipelineBody,
+    /if \(outOfScope\(step\)\) \{/,
+    "the step loop's skip must call the SAME outOfScope predicate, not re-derive the scope test inline",
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /if \(scopeDiff !== null && !scopeShared && !stepTouchedByDiff\(step, scopeDiff\)\)/,
+    'no inline re-derivation of the scope test may remain at the loop skip',
+  );
+});
+
+// Castwright#3361 (task 3): the calibration sum must ALSO exclude steps this
+// run will skip as `[cached]`. The per-step hash + decide() moved from the
+// step loop into a stepPlan pre-pass that runs before the budget is fixed, so
+// `include` can see the planned action. Same evidence shape as task 2: a
+// direct value assertion on the pure helper (include rejects a cached step →
+// its baseline drops out) PLUS source pins that runPipeline really consults
+// the planned action for the BUDGET, while the loop re-plans each step at
+// execution time through the same single planStep helper (never reading the
+// pre-pass's hash back — see the #3393 tests below).
+
+test('sumQualifiedRunDurationMs: an include that rejects a cached step drops its baseline (#3361)', () => {
+  const cache = {
+    schemaVersion: SCHEMA_VERSION,
+    steps: {
+      lint: { durationMs: 60000, attempts: 1 },
+      test: { durationMs: 1200000, attempts: 1 },
+    },
+  };
+  const steps = [{ name: 'lint' }, { name: 'test' }];
+  // Mirrors runPipeline's real wiring: every active step is in scope, but the
+  // pre-pass planned `test` as 'skip' (cached), so it must contribute nothing.
+  const outOfScope = () => false;
+  const stepPlan = new Map([
+    ['lint', { currentHash: 'hash-lint', action: 'run' }],
+    ['test', { currentHash: 'hash-test', action: 'skip' }],
+  ]);
+  assert.equal(
+    sumQualifiedRunDurationMs(
+      cache,
+      steps,
+      (s) => !outOfScope(s) && stepPlan.get(s.name).action !== 'skip',
+    ),
+    60000,
+    "a step planned as 'skip' must not inflate the budget of a run that will print [cached] for it",
+  );
+});
+
+test('runPipeline plans hashes/actions in a stepPlan pre-pass and the budget sum excludes cached steps (#3361 task 3)', () => {
+  const pipelineBody = src.match(/export async function runPipeline\([\s\S]*?\n\}\n/)[0];
+  assert.match(
+    pipelineBody,
+    /function planStep\(step\) \{/,
+    'the per-step hash + decide() must live in ONE planStep helper — never an inline duplicate in the loop',
+  );
+  assert.match(
+    pipelineBody,
+    /const hashOf = makeStatHashMemo\(cwd\);/,
+    'the run-wide memo must be the stat-validated one; a bare Map would serve a stale hash after an earlier step rewrites a file',
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /memo\.get\(|new Map\(\)\);/,
+    'no unvalidated memo may sit between planStep and the files: every lookup goes through the stat-validated hashOf',
+  );
+  assert.match(
+    pipelineBody,
+    /if \(outOfScope\(step\)\) continue;\s*\n\s*stepPlan\.set\(step\.name, planStep\(step\)\);/,
+    'the pre-pass must plan every active step exactly once and never hash an out-of-scope step',
+  );
+  assert.match(
+    pipelineBody,
+    /const qualifiedRunDurationMs = sumQualifiedRunDurationMs\(\s*cache,\s*activeSteps,\s*\(s\) => !outOfScope\(s\) && stepPlan\.get\(s\.name\)\.action !== 'skip',?\s*\)/,
+    "the sum's include must consult BOTH outOfScope AND the planned action !== 'skip' — nothing later in the body may satisfy this pin",
+  );
+  assert.match(
+    pipelineBody,
+    /const \{ currentHash, action \} = planStep\(step\);/,
+    "the step loop must re-plan at execution time (stat-validated lookups; the pre-pass result may predate an earlier step's edit) — the cache write uses this currentHash",
+  );
+  assert.match(
+    pipelineBody,
+    /if \(fileList !== null\) \{\s*fileList = gitFileList\(cwd\);[^]*?\}\s*\n\s*const \{ currentHash, action \} = planStep\(step\);/,
+    "the step loop must re-take the file list immediately before its planStep (an earlier step may have created a file in this step's globs); a failed up-front listing stays uncached",
+  );
+  assert.doesNotMatch(
+    pipelineBody,
+    /stepPlan\.get\(step\.name\)\.(currentHash|action)|=\s*stepPlan\.get\(step\.name\)/,
+    'the step loop must never read currentHash/action back out of the pre-pass',
+  );
+  assert.equal(
+    (pipelineBody.match(/composeInputHash\(/g) || []).length,
+    1,
+    'exactly one composeInputHash(...) call site may remain in runPipeline — one helper, never an inline duplicate',
+  );
+});
+
+// Castwright#3393 review pass 3 (efficiency): the run-wide memo re-reads a file
+// only when its stat identity changed, so an unchanged file is hashed once per
+// run rather than once per step.
+test('makeStatHashMemo: an unchanged file is hashed once across repeated lookups (#3393)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stat-memo-'));
+  try {
+    writeFileSync(join(dir, 'f.txt'), 'hello', 'utf8');
+    let hashes = 0;
+    const hashOf = makeStatHashMemo(dir, {
+      hash: (abs) => {
+        hashes++;
+        return hashFile(abs);
+      },
+    });
+    const first = hashOf('f.txt');
+    for (let i = 0; i < 17; i++) assert.equal(hashOf('f.txt'), first);
+    assert.equal(hashes, 1, '18 lookups of an unchanged file must read it once');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('makeStatHashMemo: size, mtime, or existence changes force a re-hash; missing matches hashFile (#3393)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'stat-memo-'));
+  try {
+    const p = join(dir, 'f.txt');
+    let hashes = 0;
+    const hashOf = makeStatHashMemo(dir, {
+      hash: (abs) => {
+        hashes++;
+        return hashFile(abs);
+      },
+    });
+    assert.equal(hashOf('f.txt'), hashFile(p), 'a missing file hashes as hashFile does');
+    assert.equal(hashOf('f.txt'), '__missing__');
+    assert.equal(hashes, 2, 'a missing file is never memoized');
+
+    writeFileSync(p, 'orig', 'utf8');
+    const created = hashOf('f.txt');
+    assert.notEqual(created, '__missing__', 'a file created after a miss is seen');
+
+    writeFileSync(p, 'mutated', 'utf8'); // size changes
+    const grown = hashOf('f.txt');
+    assert.notEqual(grown, created);
+    assert.equal(grown, hashFile(p));
+
+    writeFileSync(p, 'MUTATED', 'utf8'); // same size, new mtime
+    utimesSync(p, new Date(), new Date(Date.now() + 5000));
+    assert.equal(hashOf('f.txt'), hashFile(p), 'a same-size rewrite with a new mtime is seen');
+
+    rmSync(p);
+    assert.equal(hashOf('f.txt'), '__missing__', 'a deleted file is seen');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Castwright#3393 review pass 4: pin each stat-identity component on its own,
+// deterministically (stubbed stat, no filesystem, no timestamps) — the real-fs
+// test above cannot, since utimesSync may leave ctime alone on some platforms.
+test('makeStatHashMemo: each of size, mtimeMs, ctimeMs, ino alone invalidates the memo (#3393)', () => {
+  const base = { size: 5, mtimeMs: 1000, ctimeMs: 2000, ino: 42 };
+  for (const field of ['size', 'mtimeMs', 'ctimeMs', 'ino']) {
+    let current = base;
+    let hashes = 0;
+    const hashOf = makeStatHashMemo('/nowhere', {
+      hash: () => `h${++hashes}`,
+      stat: () => current,
+    });
+    assert.equal(hashOf('f.txt'), 'h1');
+    current = { ...base };
+    assert.equal(hashOf('f.txt'), 'h1', 'an identical stat is served from the memo');
+    assert.equal(hashes, 1);
+    current = { ...base, [field]: base[field] + 1 };
+    assert.equal(hashOf('f.txt'), 'h2', `a changed ${field} alone must re-hash`);
+    assert.equal(hashes, 2, `a changed ${field} alone must re-hash`);
+  }
+});
+
+// Castwright#3393 review pass 2: the cache entry must record the step's inputs
+// as they were when THAT step started, not as they were when the pre-pass
+// planned the run. Step A (`lint`) rewrites a file that only step B
+// (`check:onbox-register`) reads; B passes only on the rewritten content. The
+// test then restores the file and re-runs: B's inputs are now different from
+// what B actually ran against, so it must run again (and fail), never
+// print `[cached]`.
+async function runTwoStepFixture({ sharedFile, createsFile = false }) {
+  const dir = makeGitFixture();
+  // `sharedFile` true: the mutated file is ALSO an input of step A (a `.mjs`
+  // matched by both `lint` and `check:onbox-register`), so a per-run memo
+  // populated while planning/running A would serve B a stale hash.
+  // `createsFile` true: the target does not exist (never `git add`ed) until A
+  // creates it, so it is absent from any file LIST taken before A ran — the
+  // file SET, not just the hashes, must be taken at B's start.
+  const target = createsFile
+    ? 'scripts/new.mjs'
+    : sharedFile
+      ? 'scripts/shared.mjs'
+      : 'docs/testing/onbox-acceptance-register.md';
+  mkdirSync(dirname(join(dir, target)), { recursive: true });
+  if (!createsFile) writeFileSync(join(dir, target), 'orig', 'utf8');
+  writeFileSync(
+    join(dir, 'a.mjs'),
+    `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(join(dir, target))}, 'mutated');\n`,
+    'utf8',
+  );
+  writeFileSync(
+    join(dir, 'b.mjs'),
+    `import { readFileSync } from 'node:fs';\nprocess.exit(readFileSync(${JSON.stringify(join(dir, target))}, 'utf8') === 'mutated' ? 0 : 1);\n`,
+    'utf8',
+  );
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'stale-hash-fixture',
+      private: true,
+      scripts: { lint: 'node a.mjs', 'check:onbox-register': 'node b.mjs' },
+    }),
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  const run = async () => {
+    const logs = [];
+    const originalLog = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try {
+      const result = await runPipeline({
+        argv: ['--steps', 'lint,check:onbox-register'],
+        cwd: dir,
+        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+      });
+      return { result, logs };
+    } finally {
+      console.log = originalLog;
+    }
+  };
+
+  const first = await run();
+  assert.equal(first.result, 0, `run 1 must pass (B sees the mutated file):\n${first.logs.join('\n')}`);
+  // put the input back (or, for a file A created, take it away again)
+  if (createsFile) rmSync(join(dir, target));
+  else writeFileSync(join(dir, target), 'orig', 'utf8');
+  const second = await run();
+  return { second };
+}
+
+for (const [label, sharedFile] of [
+  ['an input only the later step reads', false],
+  ['an input BOTH steps read (per-run memo route)', true],
+]) {
+  test(`runPipeline: a step's cache entry reflects its inputs at START, not at plan time — ${label} (#3393)`, async () => {
+    const { second } = await runTwoStepFixture({ sharedFile });
+    assert.ok(
+      !second.logs.some((l) => l.includes('[cached] check:onbox-register')),
+      `check:onbox-register ran against content that no longer exists on disk; it must not be [cached]:\n${second.logs.join('\n')}`,
+    );
+    assert.ok(second.logs.some((l) => l.includes('[run] check:onbox-register')));
+    assert.equal(second.result, 1, 'B fails on the restored content');
+  });
+}
+
+test("runPipeline: a file an earlier step CREATES inside a later step's globs is in that step's hash (#3393 pass 3)", async () => {
+  const { second } = await runTwoStepFixture({ sharedFile: true, createsFile: true });
+  assert.ok(
+    !second.logs.some((l) => l.includes('[cached] check:onbox-register')),
+    `check:onbox-register passed only because step A created scripts/new.mjs, which is gone now; it must not be [cached]:\n${second.logs.join('\n')}`,
+  );
+  assert.ok(second.logs.some((l) => l.includes('[run] check:onbox-register')));
+  assert.equal(second.result, 1, 'B fails once the created file is deleted');
+});
+
+test('runPipeline: a per-step file listing that fails mid-run logs the uncached notice once and writes no entry (#3393 pass 4)', async () => {
+  const dir = makeGitFixture();
+  // Step A corrupts the git index, so step B's re-taken `git ls-files` fails.
+  writeFileSync(
+    join(dir, 'a.mjs'),
+    `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(join(dir, '.git', 'index'))}, 'garbage');\n`,
+    'utf8',
+  );
+  writeFileSync(join(dir, 'b.mjs'), 'process.exit(0);\n', 'utf8');
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'listing-fails-fixture',
+      private: true,
+      scripts: { lint: 'node a.mjs', 'check:onbox-register': 'node b.mjs' },
+    }),
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  let result;
+  try {
+    result = await runPipeline({
+      argv: ['--steps', 'lint,check:onbox-register'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+    });
+  } finally {
+    console.log = originalLog;
+  }
+  assert.equal(result, 0, `both steps must still run and pass:\n${logs.join('\n')}`);
+  assert.ok(logs.some((l) => l.includes('[run] check:onbox-register')), logs.join('\n'));
+  assert.equal(
+    logs.filter((l) => l.includes('[verify-cache] git ls-files failed; running uncached')).length,
+    1,
+    `the mid-run listing failure must be announced exactly once:\n${logs.join('\n')}`,
+  );
+  const cache = JSON.parse(readFileSync(join(dir, '.verify-cache.json'), 'utf8'));
+  assert.equal(cache.steps['check:onbox-register'], undefined, 'no cache entry for the uncached step');
+});
+
+test('runPipeline with scope filtering: a step not touched by the diff prints [skip] and does not execute (#3393)', async () => {
+  // Verifies the scope filter correctly identifies and skips steps outside the diff.
+  // Edited file (src/index.ts) matches lint glob but not config:check glob.
+  const dir = makeGitFixture();
+  const srcFile = join(dir, 'src', 'index.ts');
+  const markerFile = join(dir, '.marker');
+  mkdirSync(dirname(srcFile), { recursive: true });
+  writeFileSync(srcFile, 'export default 1;', 'utf8');
+  writeFileSync(join(dir, 'mark.cjs'), `require('fs').appendFileSync('.marker', '1');`, 'utf8');
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'scope-fixture',
+      private: true,
+      scripts: { lint: 'node mark.cjs && exit 0' },
+    }),
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'base']);
+  gitAt(dir, ['switch', '-q', '-c', 'feature']);
+
+  writeFileSync(srcFile, 'export default 2;', 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'edit src']);
+
+  const logs = [];
+  const originalLog = console.log;
+  console.log = (...args) => logs.push(args.join(' '));
+  try {
+    const result = await runPipeline({
+      argv: ['--steps', 'lint,config:check', '--scope-branch'],
+      cwd: dir,
+      env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+    });
+    const lintLog = logs.find((l) => l.match(/^\[run\] lint\b/));
+    const checkLog = logs.find((l) => l.match(/^\[skip\] config:check\b/));
+
+    assert.ok(lintLog, `expected [run] lint, got:\n${logs.join('\n')}`);
+    assert.ok(checkLog, `expected [skip] config:check, got:\n${logs.join('\n')}`);
+    assert.ok(
+      existsSync(markerFile),
+      'lint ran (marker file created)',
+    );
+    assert.equal(result, 0);
+  } finally {
+    console.log = originalLog;
+  }
+});
+
+test('runPipeline with unchanged inputs: step prints [cached], does not execute, then [run] again after input change (#3393)', async () => {
+  // Verifies: (1) unchanged inputs trigger cache hit and skip execution,
+  // (2) changed inputs clear cache and force re-execution.
+  const dir = makeGitFixture();
+  const envFile = join(dir, 'server', '.env.example');
+  mkdirSync(dirname(envFile), { recursive: true });
+  writeFileSync(envFile, 'FOO=1', 'utf8');
+  writeFileSync(join(dir, 'increment.cjs'), `
+const fs = require('fs');
+const count = parseInt(fs.readFileSync('.exec-count', 'utf8')) + 1;
+fs.writeFileSync('.exec-count', String(count));
+`, 'utf8');
+  writeFileSync(join(dir, '.exec-count'), '0', 'utf8');
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({
+      name: 'cache-fixture',
+      private: true,
+      scripts: { 'config:check': 'node increment.cjs && exit 0' },
+    }),
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'base']);
+
+  const run = async () => {
+    const logs = [];
+    const originalLog = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try {
+      const result = await runPipeline({
+        argv: ['--steps', 'config:check'],
+        cwd: dir,
+        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+      });
+      return { result, logs };
+    } finally {
+      console.log = originalLog;
+    }
+  };
+
+  // Run 1: no cache, step executes
+  const first = await run();
+  assert.equal(first.result, 0);
+  const firstLog = first.logs.find((l) => l.match(/^\[run\] config:check\b/));
+  assert.ok(firstLog, `run 1 expected [run], got:\n${first.logs.join('\n')}`);
+  assert.equal(readFileSync(join(dir, '.exec-count'), 'utf8'), '1', 'marker shows step executed once');
+
+  // Run 2: unchanged inputs, cache hits, step does NOT execute
+  const second = await run();
+  assert.equal(second.result, 0);
+  const secondLog = second.logs.find((l) => l.match(/^\[cached\] config:check\b/));
+  assert.ok(
+    secondLog,
+    `run 2 expected [cached], got:\n${second.logs.join('\n')}`,
+  );
+  assert.equal(
+    readFileSync(join(dir, '.exec-count'), 'utf8'),
+    '1',
+    'marker unchanged: step did NOT execute on cache hit',
+  );
+
+  // Run 3: change an input (server/.env.example is in config:check inputs), cache invalidates, step re-executes
+  writeFileSync(envFile, 'FOO=2', 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'change env']);
+
+  const third = await run();
+  assert.equal(third.result, 0);
+  const thirdLog = third.logs.find((l) => l.match(/^\[run\] config:check\b/));
+  assert.ok(
+    thirdLog,
+    `run 3 expected [run] after input change, got:\n${third.logs.join('\n')}`,
+  );
+  assert.equal(
+    readFileSync(join(dir, '.exec-count'), 'utf8'),
+    '2',
+    'marker shows step executed a second time after input change',
+  );
+});
+
+test('runPipeline: a lockfile edit alone re-runs a step whose only input is its lockfile (planStep lock hashing)', async () => {
+  const dir = makeGitFixture();
+  writeFileSync(join(dir, 'package-lock.json'), '{"v":1}', 'utf8');
+  writeFileSync(join(dir, 'increment.cjs'), `
+const fs = require('fs');
+fs.writeFileSync('.exec-count', String(parseInt(fs.readFileSync('.exec-count', 'utf8')) + 1));
+`, 'utf8');
+  writeFileSync(join(dir, '.exec-count'), '0', 'utf8');
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'cache-fixture', private: true, scripts: { audit: 'node increment.cjs' } }),
+    'utf8',
+  );
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'base']);
+
+  const run = async () => {
+    const logs = [];
+    const originalLog = console.log;
+    console.log = (...args) => logs.push(args.join(' '));
+    try {
+      const result = await runPipeline({
+        argv: ['--steps', 'audit'],
+        cwd: dir,
+        env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+      });
+      return { result, logs };
+    } finally {
+      console.log = originalLog;
+    }
+  };
+
+  assert.equal((await run()).result, 0);
+  const second = await run();
+  assert.ok(
+    second.logs.some((l) => /^\[cached\] audit\b/.test(l)),
+    `run 2 expected [cached], got:\n${second.logs.join('\n')}`,
+  );
+  writeFileSync(join(dir, 'package-lock.json'), '{"v":2}', 'utf8');
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'bump lock']);
+  const third = await run();
+  assert.ok(
+    third.logs.some((l) => /^\[run\] audit\b/.test(l)),
+    `run 3 expected [run] after lockfile edit, got:\n${third.logs.join('\n')}`,
+  );
+  assert.equal(readFileSync(join(dir, '.exec-count'), 'utf8'), '2');
 });
 
 test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout], never a [retry]/[fail] crash-exhaustion line (mutation test)', async () => {
@@ -2457,10 +3136,18 @@ test('#3271: runPipeline calls the unconditional checks unguarded, outside the c
     /stepTouchedByDiff\([^)]*register-citations/,
     'the register-citation check must not be scope-filtered — it scans the whole tracked tree',
   );
+  // Scope-gating pin, aimed at the current spelling (the scope test is the
+  // shared `outOfScope` predicate over scopeDiff/scopeShared, defined AFTER the
+  // call). Everything before the call must be free of all three names: the call
+  // sits ahead of the scope machinery, so any of them appearing earlier means it
+  // was moved under (or after) a scope guard. Asserts the call was located first,
+  // so a failed extraction cannot pass vacuously.
+  const callIdx = body.indexOf('runUnconditionalLocalChecks({');
+  assert.ok(callIdx > 0, 'could not locate the runUnconditionalLocalChecks call in runPipeline');
   assert.doesNotMatch(
-    body,
-    /if \(scopeDiff !== null && !scopeShared[\s\S]{0,400}?runUnconditionalLocalChecks/,
-    'the unconditional checks must not be moved under a scopeDiff/scopeShared guard — ' +
+    body.slice(0, callIdx),
+    /outOfScope|scopeDiff|scopeShared/,
+    'the unconditional checks must not be moved under a scope guard — ' +
       'that is exactly the `--scope-branch`/`--scope-staged` skip this issue removes',
   );
 });
@@ -2557,6 +3244,29 @@ test('#3271: a full run executes the citation check every time, and never report
       `run ${run}: the checker must have been spawned exactly once per full run`,
     );
   }
+});
+
+test('#3271: a --scope-branch run with EVERY step out of scope still runs the citation check', async () => {
+  // makeGitFixture is on `main` with no diff vs main, so scopeDiff is [] and
+  // every STEPS[] entry is out of scope. The check must still run: it scans the
+  // whole tracked tree, so it can never be scope-gated.
+  const dir = makeGitFixture();
+  const marker = writeRegisterCitationFixture(dir);
+  gitAt(dir, ['add', '.']);
+  gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+  const env = { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' };
+
+  const { logs } = await captureLogs(() => runPipeline({ argv: ['--scope-branch'], cwd: dir, env }));
+
+  assert.ok(
+    logs.some((l) => l.includes('nothing in scope')),
+    `expected the all-out-of-scope path — got:\n${logs.join('\n')}`,
+  );
+  assert.ok(
+    logs.some((l) => l.startsWith(`[pass] ${CHECK_SCRIPT}`)),
+    `the citation check must run and pass under an all-out-of-scope --scope-branch run — got:\n${logs.join('\n')}`,
+  );
+  assert.equal(readFileSync(marker, 'utf8').length, 1, 'the checker must have been spawned once');
 });
 
 test('#3271: a broken citation fails the whole run with the checker error visible', async () => {

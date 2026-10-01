@@ -43,9 +43,11 @@ import {
 import { buildEmotionChapterInbox } from '../routes/annotate-emotion.js';
 import { buildInstructChapterInbox } from '../routes/instruct-annotation.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
+import { resolveCapacity } from './capacity.js';
 
 const GEMMA_TPM = 16000;
 const MARGIN_CEILING = 14500; // 16000 − 1500 safety margin
+const GEMMA = () => resolveCapacity({ engine: 'gemini', model: 'gemma-4-31b-it' });
 
 /* Dense Cyrillic prose (~2.5 chars/token). Includes a space every ~33 chars so
    the token estimate isn't distorted by an unbroken run. */
@@ -93,7 +95,7 @@ describe('#1682 — output-heavy cloud passes clear the Gemma TPM guard', () => 
     // Size + pack exactly the way the route does (chapter-chunker + the real
     // per-sentence serialize that counts evidence/instruct).
     const budget = chapterChunkBudget(
-      'gemini',
+      GEMMA(),
       JSON.stringify(roster).length + 800,
       sentences.map((s) => s.text).join(' '),
       OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
@@ -119,7 +121,7 @@ describe('#1682 — output-heavy cloud passes clear the Gemma TPM guard', () => 
     // Reconstruct the pre-#1682 sizing: reservedTokens=0 (3-arg chapterChunkBudget)
     // and the bare {id,characterId,text} serialize that ignored evidence/instruct.
     const budget = chapterChunkBudget(
-      'gemini',
+      GEMMA(),
       JSON.stringify(roster).length + 800,
       sentences.map((s) => s.text).join(' '),
     );
@@ -149,7 +151,7 @@ describe('#1682 — output-heavy cloud passes clear the Gemma TPM guard', () => 
     const plain: SentenceOutput[] = sentences.map((s) => ({ ...s, instruct: undefined })) as SentenceOutput[];
 
     const budget = chapterChunkBudget(
-      'gemini',
+      GEMMA(),
       0,
       plain.map((s) => s.text).join(' '),
       OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
@@ -174,8 +176,8 @@ describe('#1682 — output-heavy cloud passes clear the Gemma TPM guard', () => 
     const reserved = cloudBodyCharBudget(sample, 0, OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS);
     expect(reserved).toBe(zeroReserve - OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS * 2.5);
     // And chapterChunkBudget threads it through (below the 32000 output cap here).
-    expect(chapterChunkBudget('gemini', 0, sample, OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS)).toBeLessThan(
-      chapterChunkBudget('gemini', 0, sample, 0),
+    expect(chapterChunkBudget(GEMMA(), 0, sample, OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS)).toBeLessThan(
+      chapterChunkBudget(GEMMA(), 0, sample, 0),
     );
   });
 });

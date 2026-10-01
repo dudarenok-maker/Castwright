@@ -1,0 +1,93 @@
+﻿=== EVIDENCE DUMP 2026-09-24 10:51:58 ===
+
+--- zh bookId=castwright__standalones__煤落的委托 ---
+zh STATUS: {"active":false}
+zh BOOKDIR: C:\Claude\Projects\wt-onbox-batch-1\castwright-workspace\books\Castwright\Standalones\煤落的委托\.audiobook
+zh CAST: file=C:\Claude\Projects\wt-onbox-batch-1\castwright-workspace\books\Castwright\Standalones\煤落的委托\.audiobook\cast.json chars=13 withOverrideTtsVoices=13
+  char id=narrator style=HAS_STYLE override={"qwen":{"name":"qwen-7OMlAv-nKx9V7Sp95tPMC"}}
+  char id=oduwan style=HAS_STYLE override={"qwen":{"name":"qwen-jBZe_Pn0RAJHjPw_Oknyf"}}
+  char id=marlien style=HAS_STYLE override={"qwen":{"name":"qwen-yS5LrYsDUuQSNRz9N4NBc"}}
+  char id=ruin style=HAS_STYLE override={"qwen":{"name":"qwen-7Zl6x83jyxPqmeLLsB42M"}}
+  char id=coalfall style=HAS_STYLE override={"qwen":{"name":"qwen-aOQUaUnnpMUhd-1Ws96N4"}}
+  char id=paul-holis style=HAS_STYLE override={"qwen":{"name":"qwen-Nnb6qG2LEBbn6GfPDK7Sl"}}
+  char id=casper-widow style=HAS_STYLE override={"qwen":{"name":"qwen-Fw_hgWIuWJ38aywJiLo85"}}
+  char id=blan-vill style=HAS_STYLE override={"qwen":{"name":"qwen-lXKcAm9KQb006rBM7nVvE"}}
+  char id=benlin-vill style=HAS_STYLE override={"qwen":{"name":"qwen-BIU7FcN31lCSaqgQlV0zG"}}
+  char id=priest-lesrem style=HAS_STYLE override={"qwen":{"name":"qwen-iU_hkLjbAKbyzVoyG_yr_"}}
+  char id=ivo style=HAS_STYLE override={"qwen":{"name":"qwen-FHDhvjPesQJs38ZiyAnp9"}}
+  char id=sela style=HAS_STYLE override={"qwen":{"name":"qwen-LIlrTCpRntZL0n6E5IFeI"}}
+  char id=hart style=HAS_STYLE override={"qwen":{"name":"qwen-aSkvjq4cOCiaHy94UYdDZ"}}
+zh cast.json mtime=09/24/2026 10:21:53 size=18066
+zh SIDECARS dir=C:\Claude\Projects\wt-onbox-batch-1\castwright-workspace\voices\qwen voices=13 pt=13 json=13 masterWav=13 missing=
+zh AUDITIONS dir=C:\Claude\Projects\wt-onbox-batch-1\server\audio\voices window=09/24/2026 09:30:00..09/24/2026 10:22:00 count=13
+  AUD |char-castwright__standalones_____benlin-vill-i81s2b-qwen3-tts-1.7b-9wjqm8.mp3| 49317B 24/09/2026 10:14:30 AM
+  AUD |char-castwright__standalones_____blan-vill-oabc0o-qwen3-tts-1.7b-o9i1qj.mp3| 13893B 24/09/2026 10:13:08 AM
+  AUD |char-castwright__standalones_____casper-widow-13u16c-qwen3-tts-1.7b-uls618.mp3| 97677B 24/09/2026 10:12:18 AM
+  AUD |char-castwright__standalones_____coalfall-bpb5vv-qwen3-tts-1.7b-dq9ce9.mp3| 178005B 24/09/2026 10:07:27 AM
+  AUD |char-castwright__standalones_____hart-7o7b16-qwen3-tts-1.7b-3tybep.mp3| 83037B 24/09/2026 10:21:53 AM
+  AUD |char-castwright__standalones_____ivo-gzjcf9-qwen3-tts-1.7b-b28auj.mp3| 93933B 24/09/2026 10:18:40 AM
+  AUD |char-castwright__standalones_____marlien-cw7n29-qwen3-tts-1.7b-7sq3wy.mp3| 102669B 24/09/2026 10:03:28 AM
+  AUD |char-castwright__standalones_____narrator-4pgin4-qwen3-tts-1.7b-srlc53.mp3| 100317B 24/09/2026 9:59:51 AM
+  AUD |char-castwright__standalones_____oduwan-v3k3ol-qwen3-tts-1.7b-vyjvln.mp3| 125157B 24/09/2026 10:02:02 AM
+  AUD |char-castwright__standalones_____paul-holis-oydi2d-qwen3-tts-1.7b-5vn8qs.mp3| 179901B 24/09/2026 10:10:17 AM
+  AUD |char-castwright__standalones_____priest-lesrem-zfrfk3-qwen3-tts-1.7b-p61qo4.mp3| 105525B 24/09/2026 10:16:49 AM
+  AUD |char-castwright__standalones_____ruin-7nz563-qwen3-tts-1.7b-vls534.mp3| 50421B 24/09/2026 10:04:39 AM
+  AUD |char-castwright__standalones_____sela-7nyqtg-qwen3-tts-1.7b-m7ixk0.mp3| 64509B 24/09/2026 10:20:09 AM
+zh SSE(752 lines): designed=13 failed=0 doneEvents=0
+  sse: data: {"type":"character_designed","characterId":"benlin-vill","voiceId":"qwen-BIU7FcN31lCSaqgQlV0zG"}
+  sse: data: {"type":"progress","characterId":"priest-lesrem","name":"莱瑟姆神父","done":9,"total":13}
+  sse: data: {"type":"character_designed","characterId":"priest-lesrem","voiceId":"qwen-iU_hkLjbAKbyzVoyG_yr_"}
+  sse: data: {"type":"progress","characterId":"ivo","name":"伊沃","done":10,"total":13}
+  sse: data: {"type":"character_designed","characterId":"ivo","voiceId":"qwen-FHDhvjPesQJs38ZiyAnp9"}
+  sse: data: {"type":"progress","characterId":"sela","name":"塞拉","done":11,"total":13}
+  sse: data: {"type":"character_designed","characterId":"sela","voiceId":"qwen-LIlrTCpRntZL0n6E5IFeI"}
+  sse: data: {"type":"progress","characterId":"hart","name":"烧炭人哈特","done":12,"total":13}
+  sse: data: {"type":"character_designed","characterId":"hart","voiceId":"qwen-aSkvjq4cOCiaHy94UYdDZ"}
+  sse: data: {"type":"idle","done":13,"total":13,"skipped":0,"clonedSkips":[],"failures":[]}
+
+--- ja bookId=castwright__standalones__コールフォールの依頼 ---
+ja STATUS: {"active":false}
+ja BOOKDIR: C:\Claude\Projects\wt-onbox-batch-1\castwright-workspace\books\Castwright\Standalones\コールフォールの依頼\.audiobook
+ja CAST: file=C:\Claude\Projects\wt-onbox-batch-1\castwright-workspace\books\Castwright\Standalones\コールフォールの依頼\.audiobook\cast.json chars=13 withOverrideTtsVoices=13
+  char id=narrator style=HAS_STYLE override={"qwen":{"name":"qwen-u5h6_Q50fdDcAwsmwip7l"}}
+  char id=oduvan style=HAS_STYLE override={"qwen":{"name":"qwen-Oknxqyi3EzlFORtnYYsGv"}}
+  char id=maelin style=HAS_STYLE override={"qwen":{"name":"qwen-H9VQRU1G9clVV_OGMx6cd"}}
+  char id=ren style=HAS_STYLE override={"qwen":{"name":"qwen-s7M7hT6qpfkqNHvbli6az"}}
+  char id=dragon style=HAS_STYLE override={"qwen":{"name":"qwen-Wqn8_K1oorW-pmaupQHNQ"}}
+  char id=pel-holis style=HAS_STYLE override={"qwen":{"name":"qwen-6hlj7pWutB08-09Jfkzvt"}}
+  char id=casper-widow style=HAS_STYLE override={"qwen":{"name":"qwen-DYTrXvO89tpIJd7fPVVT0"}}
+  char id=blan-wye style=HAS_STYLE override={"qwen":{"name":"qwen-Lw24Y4AR1xRDAv70CISOx"}}
+  char id=berlin-wye style=HAS_STYLE override={"qwen":{"name":"qwen-ti1M0H0lwcrKSKkzpo0W6"}}
+  char id=lesom-priest style=HAS_STYLE override={"qwen":{"name":"qwen-nObuVy9yh0iKD5iXSHw96"}}
+  char id=ivo style=HAS_STYLE override={"qwen":{"name":"qwen-zZd9m9vZ__38oJRMS9CZJ"}}
+  char id=sela style=HAS_STYLE override={"qwen":{"name":"qwen-vk9AVzR-7rJbXRjlAeGQu"}}
+  char id=heart style=HAS_STYLE override={"qwen":{"name":"qwen-MlAksuDf-nW0g7WCtKuzS"}}
+ja cast.json mtime=09/24/2026 10:46:06 size=16543
+ja SIDECARS dir=C:\Claude\Projects\wt-onbox-batch-1\castwright-workspace\voices\qwen voices=13 pt=13 json=13 masterWav=13 missing=
+ja AUDITIONS dir=C:\Claude\Projects\wt-onbox-batch-1\server\audio\voices window=09/24/2026 10:22:00..09/24/2026 10:56:59 count=13
+  AUD |char-castwright__standalones_____berlin-wye-td8osq-qwen3-tts-1.7b-9wwb3h.mp3| 14445B 24/09/2026 10:38:36 AM
+  AUD |char-castwright__standalones_____blan-wye-8t2npx-qwen3-tts-1.7b-oddn26.mp3| 51981B 24/09/2026 10:37:29 AM
+  AUD |char-castwright__standalones_____casper-widow-l3x94v-qwen3-tts-1.7b-trvfrv.mp3| 86709B 24/09/2026 10:36:03 AM
+  AUD |char-castwright__standalones_____dragon-ljzys9-qwen3-tts-1.7b-7ntx91.mp3| 40557B 24/09/2026 10:31:49 AM
+  AUD |char-castwright__standalones_____heart-n3eh40-qwen3-tts-1.7b-fm4lql.mp3| 102165B 24/09/2026 10:46:06 AM
+  AUD |char-castwright__standalones_____ivo-imstfq-qwen3-tts-1.7b-iny1kr.mp3| 105693B 24/09/2026 10:42:58 AM
+  AUD |char-castwright__standalones_____lesom-priest-l2zoeo-qwen3-tts-1.7b-bgb1y8.mp3| 73557B 24/09/2026 10:40:52 AM
+  AUD |char-castwright__standalones_____maelin-g27mbi-qwen3-tts-1.7b-tp0szt.mp3| 85197B 24/09/2026 10:28:37 AM
+  AUD |char-castwright__standalones_____narrator-e910bv-qwen3-tts-1.7b-3kaq5h.mp3| 83637B 24/09/2026 10:24:39 AM
+  AUD |char-castwright__standalones_____oduvan-ep5753-qwen3-tts-1.7b-g7db9e.mp3| 85197B 24/09/2026 10:26:44 AM
+  AUD |char-castwright__standalones_____pel-holis-vz2n47-qwen3-tts-1.7b-8ndzcw.mp3| 113109B 24/09/2026 10:34:09 AM
+  AUD |char-castwright__standalones_____ren-imsmb3-qwen3-tts-1.7b-1bvh1j.mp3| 54213B 24/09/2026 10:30:19 AM
+  AUD |char-castwright__standalones_____sela-odstdd-qwen3-tts-1.7b-zgeh79.mp3| 72237B 24/09/2026 10:44:43 AM
+ja SSE(714 lines): designed=13 failed=0 doneEvents=0
+  sse: data: {"type":"character_designed","characterId":"berlin-wye","voiceId":"qwen-ti1M0H0lwcrKSKkzpo0W6"}
+  sse: data: {"type":"progress","characterId":"lesom-priest","name":"レッソム神父","done":9,"total":13}
+  sse: data: {"type":"character_designed","characterId":"lesom-priest","voiceId":"qwen-nObuVy9yh0iKD5iXSHw96"}
+  sse: data: {"type":"progress","characterId":"ivo","name":"イーヴォ","done":10,"total":13}
+  sse: data: {"type":"character_designed","characterId":"ivo","voiceId":"qwen-zZd9m9vZ__38oJRMS9CZJ"}
+  sse: data: {"type":"progress","characterId":"sela","name":"セラ","done":11,"total":13}
+  sse: data: {"type":"character_designed","characterId":"sela","voiceId":"qwen-vk9AVzR-7rJbXRjlAeGQu"}
+  sse: data: {"type":"progress","characterId":"heart","name":"ハート","done":12,"total":13}
+  sse: data: {"type":"character_designed","characterId":"heart","voiceId":"qwen-MlAksuDf-nW0g7WCtKuzS"}
+  sse: data: {"type":"idle","done":13,"total":13,"skipped":0,"clonedSkips":[],"failures":[]}
+
+=== END EVIDENCE ===

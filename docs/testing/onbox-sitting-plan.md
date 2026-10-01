@@ -44,15 +44,15 @@ These need the operator's GPU box — a live card, real engine residency, a real
 TTS sidecar, a real analyzer, or a real phone/browser on the LAN. Each is one
 sitting; A1 is several sittings inside one pack.
 
-| Pack file | Rows (each pack file's own current heading labels) | Est. min |
+| Pack file | Rows (current register IDs of each pack's live rows; discharged rows noted) | Est. min |
 |---|---|---|
-| [`onbox-sitting-two-card-boot.md`](onbox-sitting-two-card-boot.md) | A2, A3, A8, A18 | 110 |
-| `onbox-sitting-vram-contention.md` | A5, A16, A19, A20, A24, A26, A31, A32, A33 | 155 |
-| `onbox-sitting-voice-design.md` | A4, A6, A7, A14, A15, A17, A27 | 155 |
-| `onbox-sitting-qa-gate.md` | A9, A10, A11, A12, A13, A21, A22, A34 | 145 |
-| `onbox-sitting-cloning-identity.md` | A23, A25, A28, A29, A30, A39, A40, A41, A42 | 185 |
-| `onbox-sitting-multilanguage.md` | D1, D2, A35, E4 | 165 |
-| `onbox-sitting-device-browser.md` | E1, E2, E3, E5, E6, E7, E8 | 135 |
+| [`onbox-sitting-two-card-boot.md`](onbox-sitting-two-card-boot.md) | A3, A12 (A2 discharged 2026-09-08; old A8 discharged 2026-08-27) | 110 |
+| `onbox-sitting-vram-contention.md` | A13, A19, A24 (A5 discharged 2026-09-06, A25 2026-09-20, A17 2026-09-25; old A16, old A19, old A31 discharged 2026-08-26) | 155 |
+| `onbox-sitting-voice-design.md` | A4, A6, A7, A11, A20 (old A14, old A17 discharged 2026-08-26) | 155 |
+| `onbox-sitting-qa-gate.md` | A8, A9, A10, A14, A15, A26 (old A12, old A13 discharged 2026-08-26) | 145 |
+| `onbox-sitting-cloning-identity.md` | A16, A18, A21, A22, A23, A31 (A32 discharged 2026-09-25; old A34 discharged 2026-08-27; the #1969 audition-centroid row discharged 2026-09-06 as A36) | 185 |
+| `onbox-sitting-multilanguage.md` | D2, A27 (E4 discharged 2026-09-06, D1 2026-09-07) | 165 |
+| `onbox-sitting-device-browser.md` | E1, E2, E3, plus E5 — still owed, binned to wave-3 in §2.2 (E6, E8 discharged 2026-09-06, E7 2026-09-08) | 135 |
 | `onbox-sitting-fs38-wave3.md` | A1 | multi-hour, several sittings |
 
 > **Wave-4 note (#2551 step 6), 2026-08-21.** This wave's retirements/
@@ -69,6 +69,15 @@ sitting; A1 is several sittings inside one pack.
 > "Rows" column above has now been reconciled to each pack file's current,
 > post-renumbering row labels — it no longer names rows by the number they
 > carried when originally written.
+>
+> **Correction, 2026-09-25 (#3405).** The "Rows" column had drifted again: it
+> mixed pre-renumbering IDs with current ones (e.g. `A26, A32, A33` for the
+> VRAM pack). Each cell is now rebuilt by matching every pack section's
+> subject and issue/plan number against the register's current `###`
+> headings — never by ID alone — and lists that pack's live rows by their
+> current register ID, with discharged rows noted. The "Est. min" column and
+> the row-count arithmetic below are this plan's original wave-2 binning and
+> are left as that historical record; they are not re-derived here.
 
 > **Correction, 2026-08-23 (`check:register-citations` mechanical sweep).**
 > `main`'s A38 discharge (register row A38 at the time, "ORT marker refuses —
@@ -289,7 +298,7 @@ acquisition.
 
 | Pack file | Rows | Est. min |
 |---|---|---|
-| `onbox-sitting-blocked-prerequisites.md` | H1, H2, D3 | 50 |
+| `onbox-sitting-blocked-prerequisites.md` | H1, H2 (D3 discharged 2026-09-06) | 50 |
 
 **Row count:** **3** (was 4 — **F1** discharged by the repo owner 2026-08-21,
 confirmed live end-to-end on a real device; Group F no longer exists in the
@@ -317,7 +326,12 @@ subsection of the same set — no row count change from that move alone. Net:
 row's OWED/DISCHARGED status changed.)
 ---
 
-## 3. A16 — re-derived binning and reasoning
+## 3. old A16 — re-derived binning and reasoning
+
+> Every `A16` in this section is the **old A16** (fe-16 Qwen auto-load, plan
+> 165), discharged 2026-08-26 and removed from the register. Today's
+> register A16 is an unrelated row (cloned voice renders a non-English book,
+> #1951). (#3405)
 
 The audit bins **A16** (`fe-16 Qwen auto-load on a Russian book`, plan 165) as
 `Hardware still required: real workspace, no GPU`. **That field is wrong**, and
@@ -334,9 +348,10 @@ the audit's own evidence contradicts it:
 Qwen is a GPU-resident model; "Qwen loads" means it loads into VRAM. "Analyzer
  evicted" is VRAM contention — the analyzer is reclaimed to make room for Qwen.
 That is unambiguous GPU work, identical in kind to the eviction rows in the
-VRAM-contention pack (A19 mixed Qwen+Coqui evict, A20 idle Coqui reclaimed under
-VRAM pressure, A24 `/health` through a contended eviction, A26 stranded VRAM
-pool reclaimed). The audit's `no GPU` field appears to have followed the row's
+VRAM-contention pack (old A19 mixed Qwen+Coqui evict, discharged 2026-08-26;
+A13 idle Coqui reclaimed under VRAM pressure; A17 `/health` through a contended
+eviction, discharged 2026-09-25; A19 stranded VRAM pool reclaimed — current
+register IDs, #3405). The audit's `no GPU` field appears to have followed the row's
 *frontend* framing ("open a cast view, see a banner") rather than what the
 owed step actually exercises on the box.
 

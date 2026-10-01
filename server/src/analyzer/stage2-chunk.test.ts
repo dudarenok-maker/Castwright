@@ -17,6 +17,7 @@ import {
   runStage2ChapterChunked,
   lastSpokenSpeaker,
 } from './stage2-chunk.js';
+import { resolveCapacity } from './capacity.js';
 
 /* A fake "model": one sentence per paragraph, text copied verbatim so the
    coverage guard (word-overlap vs the body) passes. */
@@ -159,7 +160,7 @@ describe('stage2ChunkBudgetForEngine (num_ctx-aware budget sizing)', () => {
 
   it('cloud stage-2 caps to min(configured, token-derived)', () => {
     const ruBody = 'а'.repeat(60000);
-    const budget = resolveStage2ChunkCharBudget('gemini', ruBody);
+    const budget = resolveStage2ChunkCharBudget(resolveCapacity({ engine: 'gemini', model: 'gemini-3.5-flash-lite' }), ruBody);
     expect(budget).toBeLessThanOrEqual(9000); // configured default
     expect(budget).toBeGreaterThan(0);
   });
@@ -195,8 +196,8 @@ describe('resolveStage2ChunkCharBudget (cloud min() wiring lock, #1682)', () => 
   it('at default config, the token-derived term never binds — cloud returns the configured cap regardless of script', () => {
     const cyrillicBody = 'а'.repeat(60000);
     const latinBody = 'a'.repeat(60000);
-    expect(resolveStage2ChunkCharBudget('gemini', cyrillicBody)).toBe(9000);
-    expect(resolveStage2ChunkCharBudget('gemini', latinBody)).toBe(9000);
+    expect(resolveStage2ChunkCharBudget(resolveCapacity({ engine: 'gemini', model: 'gemini-3.5-flash-lite' }), cyrillicBody)).toBe(9000);
+    expect(resolveStage2ChunkCharBudget(resolveCapacity({ engine: 'gemini', model: 'gemini-3.5-flash-lite' }), latinBody)).toBe(9000);
   });
 
   it('LOCK: once the per-request token cap is lowered enough to bind, cloud routes through cloudBodyCharBudget (script-aware) — a flat `configured` return would not vary by script', () => {
@@ -206,8 +207,8 @@ describe('resolveStage2ChunkCharBudget (cloud min() wiring lock, #1682)', () => 
     process.env.ANALYZER_MAX_INPUT_TOKENS_PER_REQUEST = '1000';
     const cyrillicBody = 'а'.repeat(60000);
     const latinBody = 'a'.repeat(60000);
-    const cyrillicBudget = resolveStage2ChunkCharBudget('gemini', cyrillicBody);
-    const latinBudget = resolveStage2ChunkCharBudget('gemini', latinBody);
+    const cyrillicBudget = resolveStage2ChunkCharBudget(resolveCapacity({ engine: 'gemini', model: 'gemini-3.5-flash-lite' }), cyrillicBody);
+    const latinBudget = resolveStage2ChunkCharBudget(resolveCapacity({ engine: 'gemini', model: 'gemini-3.5-flash-lite' }), latinBody);
     expect(cyrillicBudget).toBeLessThan(9000); // token-derived term now binds
     expect(latinBudget).toBeLessThan(9000);
     // Script-aware: Cyrillic (2.5 chars/token) yields a SMALLER budget than an

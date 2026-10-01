@@ -7,26 +7,28 @@ import {
   chapterChunkBudget,
 } from './chapter-chunker.js';
 import { resolveStage1ChunkCharBudget } from './stage1-chunk.js';
+import { resolveCapacity, TODAY_LOCAL_CAPACITY } from './capacity.js';
 
 const S = (id: number, len = 10) => ({ id, text: 'x'.repeat(len) });
+const gemini = () => resolveCapacity({ engine: 'gemini', model: 'gemini-3.5-flash-lite' });
 
 describe('chapterChunkBudget (Part 4 — finite Gemini budget for output-heavy passes)', () => {
   it('gemini is FINITE now (not MAX_SAFE_INTEGER) so a large chapter splits', () => {
-    const budget = chapterChunkBudget('gemini');
+    const budget = chapterChunkBudget(gemini());
     expect(budget).toBeLessThan(Number.MAX_SAFE_INTEGER);
     expect(budget).toBe(32000); // registry default analyzer.gemini.outputHeavyChunkChars
   });
 
   it('local stays the num_ctx-derived stage-1 budget (unchanged behaviour)', () => {
-    expect(chapterChunkBudget('local')).toBe(resolveStage1ChunkCharBudget('local'));
+    expect(chapterChunkBudget(TODAY_LOCAL_CAPACITY())).toBe(resolveStage1ChunkCharBudget(TODAY_LOCAL_CAPACITY()));
   });
 
   it('stage-1 cast detection now sizes gemini to a finite token-derived budget (no longer MAX_SAFE_INTEGER)', () => {
-    expect(resolveStage1ChunkCharBudget('gemini', 'x'.repeat(200000))).toBeLessThan(200000);
+    expect(resolveStage1ChunkCharBudget(gemini(), 'x'.repeat(200000))).toBeLessThan(200000);
   });
 
   it('a Night-Watch-sized chapter yields >=2 gemini chunks (was exactly 1 under MAX_SAFE_INTEGER)', () => {
-    const budget = chapterChunkBudget('gemini');
+    const budget = chapterChunkBudget(gemini());
     // ~60k chars — 600 sentences of ~100 chars.
     const sentences = Array.from({ length: 600 }, (_, i) => ({ id: i + 1, text: 'x'.repeat(100) }));
     const chunks = chunkSentencesByBudget(sentences, { charBudget: budget, overlap: 3, serialize: (s) => s.text });
@@ -38,18 +40,24 @@ describe('chapterChunkBudget (Part 4 — finite Gemini budget for output-heavy p
 
   it('gemini output-heavy budget shrinks as reserved (roster) chars grow', () => {
     const sample = 'а'.repeat(5000);
-    const noRoster = chapterChunkBudget('gemini', 0, sample);
-    const bigRoster = chapterChunkBudget('gemini', 14000, sample);
+    const noRoster = chapterChunkBudget(gemini(), 0, sample);
+    const bigRoster = chapterChunkBudget(gemini(), 14000, sample);
     expect(bigRoster).toBeLessThan(noRoster);
   });
 
   it('gemini output-heavy budget never exceeds outputHeavyChunkChars', () => {
     const sample = 'a'.repeat(5000);
-    expect(chapterChunkBudget('gemini', 0, sample)).toBeLessThanOrEqual(32000);
+    expect(chapterChunkBudget(gemini(), 0, sample)).toBeLessThanOrEqual(32000);
   });
 
   it('local output-heavy budget is unchanged (num_ctx-derived, roster ignored)', () => {
-    expect(chapterChunkBudget('local', 14000, 'x')).toBe(resolveStage1ChunkCharBudget('local'));
+    expect(chapterChunkBudget(TODAY_LOCAL_CAPACITY(), 14000, 'x')).toBe(resolveStage1ChunkCharBudget(TODAY_LOCAL_CAPACITY()));
+  });
+
+  it('a request-cap capacity sizes the body to ITS perRequestInputCap, not the registry cap (#3084)', () => {
+    const sample = 'a'.repeat(200000);
+    const tight = { ...gemini(), perRequestInputCap: 6000 };
+    expect(chapterChunkBudget(tight, 0, sample)).toBeLessThan(chapterChunkBudget(gemini(), 0, sample));
   });
 });
 
