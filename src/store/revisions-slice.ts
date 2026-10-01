@@ -51,6 +51,25 @@ export interface RevisionsState {
       would be skipped and the reset four fields would never get their disk
       snapshot back. */
   hydratedFor: string | null;
+  /** #3395 pass 4, S1 — the per-book revisions writes dispatched while that
+      book was active but not yet hydrated (`bookId` set, `hydratedFor`
+      behind). Each is still applied to in-memory state at once, but
+      `persistence-middleware` refuses to write it to disk until the
+      hydrate lands, and the hydrate then replaces every per-book field with
+      the disk snapshot. So the hydrate REPLAYS these recorded actions, in
+      dispatch order, on top of that snapshot, and Layout persists the result
+      once. One uniform mechanism for every write (enqueue, playable flip,
+      dismiss, accept, reject, rollback), with no per-field merge. Keyed by
+      book so a write recorded for a book the user leaves before its hydrate
+      lands is replayed when that book does hydrate, rather than dropped. */
+  windowActions: Record<string, RecordedRevisionsAction[]>;
+}
+
+/** A plain-object copy of a recorded revisions action (type + payload) —
+    serializable, so it can live on the slice. */
+export interface RecordedRevisionsAction {
+  type: string;
+  payload?: unknown;
 }
 
 const initialState: RevisionsState = {
@@ -62,27 +81,22 @@ const initialState: RevisionsState = {
   loaded: false,
   bookId: null,
   hydratedFor: null,
+  windowActions: {},
 };
 
-/** Merge in-memory `pending` accumulated during the window between a book's
-    `bookScopeChanged` (bookId already updated) and its `hydrateFromBookState`
-    landing (hydratedFor still behind) with the disk snapshot the hydrate just
-    fetched. Writes that land in that window — `enqueuePending` (a fresh
-    regen/splice stub) and `markRevisionPlayable` (a chapter_complete flip) —
-    are gated on `revisions.bookId` already matching the target book, so
-    they're for THIS book, and they're chronologically newer than the disk
-    read (the `getBookState` request was already in flight when they fired).
-    So where an id collides the window entry wins wholesale; an id only the
-    disk knows about keeps its disk shape; an id only the window created
-    (a revision enqueued before the disk read resolved) is kept too — losing
-    it would drop a regen/splice take the user is already watching render
-    (#3395 pass 3, R2). */
-function mergePendingWithWindow(windowPending: Revision[], diskPending: Revision[]): Revision[] {
-  if (windowPending.length === 0) return diskPending;
-  const byId = new Map(diskPending.map((r) => [r.id, r] as const));
-  for (const w of windowPending) byId.set(w.id, w);
-  return Array.from(byId.values());
+/** Record a per-book write dispatched while the active book is not yet
+    hydrated (see `windowActions`). A no-op once hydrated, and when no book is
+    active (there is no disk snapshot it could be replayed onto). */
+function recordIfUnhydrated(s: RevisionsState, a: { type: string; payload?: unknown }): void {
+  if (s.bookId === null || s.hydratedFor === s.bookId) return;
+  (s.windowActions[s.bookId] ??= []).push({ type: a.type, payload: a.payload });
 }
+
+/* Assigned once the slice exists, below: `hydrateFromBookState` replays the
+   recorded actions through the slice's own reducer. A module-level binding
+   rather than a direct `revisionsSlice` reference so the slice's initializer
+   doesn't refer to itself. */
+let replayRecorded: (s: RevisionsState, a: RecordedRevisionsAction) => void = () => {};
 
 /* Multi-book-aware drift merge shared by applyPoll and applyBackgroundPoll
    (#3376). When the caller stamps `bookId` onto the payload, only that book's
@@ -107,10 +121,12 @@ export const revisionsSlice = createSlice({
   name: 'revisions',
   initialState,
   reducers: {
-    acceptAllPending: (s) => {
+    acceptAllPending: (s, a: PayloadAction) => {
+      recordIfUnhydrated(s, a);
       s.pending = [];
     },
-    rejectAllPending: (s) => {
+    rejectAllPending: (s, a: PayloadAction) => {
+      recordIfUnhydrated(s, a);
       s.pending = [];
     },
     /** Per-item accept: drops one revision from pending and records the
@@ -126,6 +142,7 @@ export const revisionsSlice = createSlice({
       s,
       a: PayloadAction<{ revisionId: string; selection: Record<number, 'A' | 'B'> }>,
     ) => {
+      recordIfUnhydrated(s, a);
       const rev = s.pending.find((r) => r.id === a.payload.revisionId);
       s.pending = s.pending.filter((r) => r.id !== a.payload.revisionId);
       s.acceptedSelections[a.payload.revisionId] = a.payload.selection;
@@ -147,6 +164,7 @@ export const revisionsSlice = createSlice({
         accept, a rejection is reversible via plan 20's restore (the
         previous take, untouched by the regen, is still on disk). */
     rejectRevision: (s, a: PayloadAction<string>) => {
+      recordIfUnhydrated(s, a);
       const rev = s.pending.find((r) => r.id === a.payload);
       s.pending = s.pending.filter((r) => r.id !== a.payload);
       if (rev) {
@@ -170,6 +188,7 @@ export const revisionsSlice = createSlice({
       s,
       a: PayloadAction<{ chapterId: number; timelineEntryId: string; rolledBackId: string }>,
     ) => {
+      recordIfUnhydrated(s, a);
       const list = s.timeline[a.payload.chapterId];
       if (!list) return;
       for (const entry of list) {
@@ -210,6 +229,7 @@ export const revisionsSlice = createSlice({
       s.hydratedFor = null;
     },
     dismissDrift: (s, a: PayloadAction<string>) => {
+      recordIfUnhydrated(s, a);
       s.drift = s.drift.filter((e) => e.id !== a.payload);
       if (!s.dismissed.includes(a.payload)) s.dismissed.push(a.payload);
     },
@@ -222,6 +242,7 @@ export const revisionsSlice = createSlice({
        state until then. Dedupe by id so a regen restart replaces the
        prior stub rather than queueing duplicates. */
     enqueuePending: (s, a: PayloadAction<Revision>) => {
+      recordIfUnhydrated(s, a);
       s.pending = [...s.pending.filter((r) => r.id !== a.payload.id), a.payload];
     },
     /* Flip `playable: true` for every pending revision whose chapterId
@@ -230,6 +251,7 @@ export const revisionsSlice = createSlice({
        target the same chapter (e.g. parallel character regens) — flip
        them all. */
     markRevisionPlayable: (s, a: PayloadAction<{ chapterId: number }>) => {
+      recordIfUnhydrated(s, a);
       s.pending = s.pending.map((r) =>
         r.chapterId === a.payload.chapterId ? { ...r, playable: true } : r,
       );
@@ -331,7 +353,7 @@ export const revisionsSlice = createSlice({
            R1/R2). */
         s.hydratedFor = payload.bookId;
       }
-      s.pending = mergePendingWithWindow(s.pending, payload.pending ?? []);
+      s.pending = payload.pending ?? [];
       if (payload.bookId) {
         const bid = payload.bookId;
         const incoming = payload.drift ?? [];
@@ -346,16 +368,24 @@ export const revisionsSlice = createSlice({
       s.acceptedSelections = payload.acceptedSelections ?? {};
       s.timeline = normaliseTimelineKeys(payload.timeline);
       s.loaded = true;
+      /* #3395 pass 4, S1 — replay this book's pre-hydrate-window writes on
+         top of the snapshot just applied. `hydratedFor` already matches, so
+         the replay itself records nothing. */
+      if (payload.bookId) {
+        const recorded = s.windowActions[payload.bookId];
+        delete s.windowActions[payload.bookId];
+        for (const r of recorded ?? []) replayRecorded(s, r);
+      }
     },
     /** No-op state transition whose only job is to be a `PERSIST_RULES`-
         recognised action type (#3395 pass 3, R2). `hydrateFromBookState`
         itself is deliberately absent from `PERSIST_RULES` — persisting a
-        hydrate response would create a write-loop — but when that hydrate's
-        merge (`mergePendingWithWindow`) actually folded a pre-hydrate-window
-        write into the disk snapshot, the merged `pending` needs to reach
-        disk once; otherwise it lives only in memory until the next ordinary
-        mutation. `layout.tsx` dispatches this immediately after a hydrate
-        that had a non-empty window to merge. */
+        hydrate response would create a write-loop — but when that hydrate
+        replayed recorded pre-hydrate-window writes (`windowActions`) on top
+        of the disk snapshot, the result needs to reach disk once; otherwise
+        it lives only in memory until the next ordinary mutation.
+        `layout.tsx` dispatches this immediately after a hydrate that had
+        recorded writes to replay. */
     persistPendingAfterHydrateMerge: (_s) => {},
   },
 });
@@ -389,6 +419,12 @@ function normaliseTimelineKeys(
 function nowIso(): string {
   return new Date().toISOString();
 }
+
+/* RTK's reducer applies a case reducer to an Immer draft in place, so the
+   replay mutates the hydrate's own draft. */
+replayRecorded = (s, a) => {
+  revisionsSlice.reducer(s, a as Parameters<typeof revisionsSlice.reducer>[1]);
+};
 
 export const revisionsActions = revisionsSlice.actions;
 

@@ -39,7 +39,7 @@ import {
   buildNameChangeEvent,
 } from '../lib/change-log';
 import { api, ApiError, type SeriesRosterEntry } from '../lib/api';
-import type { Character, BookExportJob, Revision } from '../lib/types';
+import type { Character, BookExportJob } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { computeReanalyseProgress } from '../lib/reanalyse-progress';
@@ -790,23 +790,20 @@ export function Layout() {
        getBookState (the only endpoint that serves revisions.json) and
        dispatch just the revisions hydrate. */
     const revisionsOnly = manuscriptReady && !revisionsReady;
-    /* Read the CURRENT window pending right before dispatching the hydrate —
-       not once at effect-mount time. A pre-hydrate-window write
-       (enqueuePending / markRevisionPlayable, both gated on
-       `revisions.bookId` already matching this book — see
-       generation-stream-runner.ts / splice-runner-middleware.ts) can land
-       any time between this effect starting and `getBookState` resolving,
-       so capturing it up front would miss a write that arrives during the
-       fetch itself. `mergePendingWithWindow` (revisions-slice.ts) folds it
-       into the disk snapshot; this local helper tells us whether there was
-       anything to fold, so we know whether to persist the merged result once
-       hydrated (#3395 pass 3, R2) — `hydrateFromBookState` itself is never
-       persisted (would create a write-loop), so nothing else carries it to
-       disk. */
-    const windowPendingNow = (): Revision[] => {
-      const rev = store.getState().revisions;
-      return rev.bookId === bookId ? rev.pending : [];
-    };
+    /* Read the CURRENT recorded window writes right before dispatching the
+       hydrate — not once at effect-mount time. Any revisions write for this
+       book dispatched before its disk snapshot lands (a splice/regen
+       enqueue or playable flip, a dismiss, an accept/reject, a rollback) is
+       recorded in `revisions.windowActions` and replayed by
+       `hydrateFromBookState` on top of the snapshot (#3395 pass 4, S1). It
+       can land any time between this effect starting and `getBookState`
+       resolving, so capturing it up front would miss one that arrives
+       during the fetch itself. This tells us whether the hydrate will
+       replay anything, so we know to persist the result once —
+       `hydrateFromBookState` itself is never persisted (would create a
+       write-loop), so nothing else carries it to disk. */
+    const hasWindowWrites = (): boolean =>
+      (store.getState().revisions.windowActions[bookId]?.length ?? 0) > 0;
     let cancelled = false;
     api
       .getBookState(bookId)
@@ -821,9 +818,9 @@ export function Layout() {
                a full reload, leave every per-book slice on its in-memory
                defaults as before — the library-fallback hydrate below seeds
                bookMeta from the library entry. */
-            const hadWindowPending = windowPendingNow().length > 0;
+            const hadWindowWrites = hasWindowWrites();
             dispatch(revisionsActions.hydrateFromBookState({ bookId }));
-            if (hadWindowPending) {
+            if (hadWindowWrites) {
               dispatch(revisionsActions.persistPendingAfterHydrateMerge());
             }
           }
@@ -891,9 +888,9 @@ export function Layout() {
            fetch), so a null `res.revisions` landing here is a confirmation,
            not the only thing standing between books' pending lists
            (#3395 pass 2, N1). */
-        const hadWindowPending = windowPendingNow().length > 0;
+        const hadWindowWrites = hasWindowWrites();
         dispatch(revisionsActions.hydrateFromBookState({ bookId, ...(res.revisions ?? {}) }));
-        if (hadWindowPending) {
+        if (hadWindowWrites) {
           dispatch(revisionsActions.persistPendingAfterHydrateMerge());
         }
         if (revisionsOnly) return;

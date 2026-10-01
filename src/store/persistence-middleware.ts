@@ -107,11 +107,11 @@ function debounceMs(s: PersistableRootState): number {
    exception, and it's a distinct action type from `hydrateFromBookState`
    itself — not that action re-added. It's a no-op reducer (see
    revisions-slice.ts) that `layout.tsx` dispatches immediately AFTER a
-   hydrate whose merge actually folded a pre-hydrate-window write into the
-   disk snapshot; without it that merged `pending` would live only in memory
-   until the next ordinary mutation (#3395 pass 3, R2). It doesn't create a
+   hydrate that replayed recorded pre-hydrate-window writes on top of the
+   disk snapshot; without it that result would live only in memory until the
+   next ordinary mutation (#3395 pass 3 R2, pass 4 S1). It doesn't create a
    write-loop the way echoing the hydrate itself would: it only fires when
-   there was something local to merge, not on every hydrate. */
+   there was something local to replay, not on every hydrate. */
 const PERSIST_RULES: Record<
   string,
   { slice: StateSlice; build: (s: PersistableRootState, bookId: string) => unknown }
@@ -419,12 +419,12 @@ export const persistenceMiddleware: Middleware = (store) => {
        queued in the gap before that book's own disk snapshot has been read
        (a chapter_complete/splice write racing the just-opened book's
        getBookState) must never reach disk first and clobber whatever WAS
-       already there with an empty/partial patch. `hydrateFromBookState`
-       merges any such pre-hydrate window write with the disk snapshot (see
-       `mergePendingWithWindow` in revisions-slice.ts) and
-       `persistPendingAfterHydrateMerge` — also routed through this same
-       gate, which by then passes — carries the merged result to disk once
-       hydrated. */
+       already there with an empty/partial patch. The revisions slice records
+       any such pre-hydrate-window write (`windowActions`) and
+       `hydrateFromBookState` replays it on top of the disk snapshot
+       (#3395 pass 4, S1); `persistPendingAfterHydrateMerge` — also routed
+       through this same gate, which by then passes — carries the result to
+       disk once hydrated. */
     if (
       rule.slice === 'revisions' &&
       (after.revisions.bookId !== bookId || after.revisions.hydratedFor !== bookId)

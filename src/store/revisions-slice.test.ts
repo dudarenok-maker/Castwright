@@ -42,6 +42,7 @@ describe('revisionsSlice — initial state', () => {
       loaded: false,
       hydratedFor: null,
       bookId: null,
+      windowActions: {},
     });
   });
 });
@@ -462,7 +463,7 @@ describe('revisionsSlice — hydrateFromBookState', () => {
     expect(stale.hydratedFor).toBeNull();
   });
 
-  it('merges a pre-hydrate-window pending entry with the disk snapshot, window entry wins on id collision (R2)', () => {
+  it('replays a pre-hydrate-window enqueuePending on top of the disk snapshot (R2)', () => {
     let s = revisionsSlice.reducer(
       undefined,
       revisionsActions.bookScopeChanged('book-B'),
@@ -475,24 +476,166 @@ describe('revisionsSlice — hydrateFromBookState', () => {
       s,
       revisionsActions.enqueuePending(rev('window-only', { playable: false })),
     );
-    s = revisionsSlice.reducer(
-      s,
-      revisionsActions.enqueuePending(rev('collides', { playable: true, chapterId: 9 })),
-    );
     const disk = revisionsSlice.reducer(
       s,
       revisionsActions.hydrateFromBookState({
         bookId: 'book-B',
-        pending: [rev('disk-only'), rev('collides', { playable: false, chapterId: 9 })],
+        pending: [rev('disk-only')],
         drift: [],
       }),
     );
     expect(disk.hydratedFor).toBe('book-B');
-    const byId = Object.fromEntries(disk.pending.map((r) => [r.id, r]));
-    expect(Object.keys(byId).sort()).toEqual(['collides', 'disk-only', 'window-only']);
-    /* The window's write (playable: true) wins over the disk's stale
-       snapshot (playable: false) for the colliding id. */
-    expect(byId.collides.playable).toBe(true);
+    expect(disk.pending.map((r) => r.id).sort()).toEqual(['disk-only', 'window-only']);
+    expect(disk.windowActions).toEqual({});
+  });
+
+  /* #3395 pass 4, S1 — every revisions write in the window, not only an
+     enqueue, survives the hydrate: it is recorded while unhydrated and
+     replayed on top of the disk snapshot. */
+  describe('pre-hydrate window replay (#3395 pass 4, S1)', () => {
+    const unhydratedB = () =>
+      revisionsSlice.reducer(undefined, revisionsActions.bookScopeChanged('book-B'));
+
+    it('Repro A: a window markRevisionPlayable flips an entry that only the disk knows about', () => {
+      let s = unhydratedB();
+      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 3 }));
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.hydrateFromBookState({
+          bookId: 'book-B',
+          pending: [rev('splice-book-B-3-nora', { chapterId: 3, playable: false })],
+          drift: [],
+        }),
+      );
+      expect(s.pending).toEqual([
+        expect.objectContaining({ id: 'splice-book-B-3-nora', playable: true }),
+      ]);
+    });
+
+    it('Repro B: a window dismissDrift survives the hydrate replacing dismissed/drift from disk', () => {
+      let s = revisionsSlice.reducer(
+        undefined,
+        revisionsActions.applyBackgroundPoll({ bookId: 'book-B', drift: [drift('d1', { bookId: 'book-B' })] }),
+      );
+      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-B'));
+      s = revisionsSlice.reducer(s, revisionsActions.dismissDrift('d1'));
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.hydrateFromBookState({
+          bookId: 'book-B',
+          pending: [],
+          drift: [drift('d1', { bookId: 'book-B' })],
+          dismissed: [],
+        }),
+      );
+      expect(s.dismissed).toEqual(['d1']);
+      expect(s.drift.map((d) => d.id)).toEqual([]);
+    });
+
+    it('a window acceptRevision of a disk-only take records its timeline entry and selection', () => {
+      let s = unhydratedB();
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.acceptRevision({ revisionId: 'rA', selection: { 0: 'B' } }),
+      );
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.hydrateFromBookState({
+          bookId: 'book-B',
+          pending: [rev('rA', { chapterId: 7 })],
+          drift: [],
+        }),
+      );
+      expect(s.pending).toEqual([]);
+      expect(s.acceptedSelections).toEqual({ rA: { 0: 'B' } });
+      expect(s.timeline[7]?.map((e) => e.eventKind)).toEqual(['accepted']);
+    });
+
+    it('a window rejectRevision of a disk-only take records its timeline entry', () => {
+      let s = unhydratedB();
+      s = revisionsSlice.reducer(s, revisionsActions.rejectRevision('rA'));
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.hydrateFromBookState({
+          bookId: 'book-B',
+          pending: [rev('rA', { chapterId: 7 })],
+          drift: [],
+        }),
+      );
+      expect(s.pending).toEqual([]);
+      expect(s.timeline[7]?.map((e) => e.eventKind)).toEqual(['rejected']);
+    });
+
+    it('a window rolledBack applies to the disk timeline', () => {
+      let s = unhydratedB();
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.rolledBack({ chapterId: 7, timelineEntryId: 't1', rolledBackId: 'rb1' }),
+      );
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.hydrateFromBookState({
+          bookId: 'book-B',
+          pending: [],
+          drift: [],
+          timeline: {
+            7: [
+              {
+                id: 't1',
+                chapterId: 7,
+                eventKind: 'accepted',
+                timestamp: '2026-01-01T00:00:00Z',
+                status: 'active',
+                reversible: true,
+              },
+            ],
+          },
+        }),
+      );
+      expect(s.timeline[7]?.map((e) => [e.id, e.status])).toEqual([
+        ['t1', 'rolled-back-from'],
+        ['rb1', 'active'],
+      ]);
+    });
+
+    it('replays in dispatch order (enqueue then flip)', () => {
+      let s = unhydratedB();
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.enqueuePending(rev('w', { chapterId: 4, playable: false })),
+      );
+      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 4 }));
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.hydrateFromBookState({ bookId: 'book-B', pending: [], drift: [] }),
+      );
+      expect(s.pending).toEqual([expect.objectContaining({ id: 'w', playable: true })]);
+    });
+
+    it('records nothing once the book is hydrated', () => {
+      let s = revisionsSlice.reducer(
+        undefined,
+        revisionsActions.hydrateFromBookState({ bookId: 'book-B', pending: [], drift: [] }),
+      );
+      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 4 }));
+      expect(s.windowActions).toEqual({});
+    });
+
+    it('keeps a book\'s recorded writes across a trip to another book and replays them on return', () => {
+      let s = unhydratedB();
+      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 3 }));
+      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged(null));
+      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-B'));
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.hydrateFromBookState({
+          bookId: 'book-B',
+          pending: [rev('r3', { chapterId: 3, playable: false })],
+          drift: [],
+        }),
+      );
+      expect(s.pending).toEqual([expect.objectContaining({ id: 'r3', playable: true })]);
+    });
   });
 
   it('keeps the disk pending list untouched when there was no pre-hydrate window write', () => {

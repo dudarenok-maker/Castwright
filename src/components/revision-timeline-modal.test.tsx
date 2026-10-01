@@ -24,6 +24,7 @@ function makeStore(timeline: Record<number, TimelineEntry[]>) {
         loaded: true,
         bookId: null,
         hydratedFor: null,
+        windowActions: {},
       },
     },
   });

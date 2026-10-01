@@ -678,6 +678,50 @@ describe('Layout — revisions persist only after the book is hydrated (#3395 pa
     );
   }
 
+  /** #3395 pass 4 — a disk model: the PUT mock writes what the GET mock
+      serves, so a test can assert on what actually ends up on disk rather
+      than only on which PUTs went out. `hold(bookId)` makes that book's next
+      GET wait for `release(bookId)`, which serves the disk as it stands at
+      release time; `fail(bookId, n)` rejects that book's next `n` GETs. */
+  function makeDisk(initial: Record<string, Record<string, unknown>>) {
+    const disk = new Map<string, Record<string, unknown>>(Object.entries(initial));
+    const held = new Map<string, Array<() => void>>();
+    const holding = new Set<string>();
+    const failures = new Map<string, number>();
+    getBookStateMock.mockImplementation(async (bookId: string) => {
+      const left = failures.get(bookId) ?? 0;
+      if (left > 0) {
+        failures.set(bookId, left - 1);
+        throw new TypeError('Failed to fetch');
+      }
+      if (holding.has(bookId)) {
+        await new Promise<void>((resolve) => {
+          held.set(bookId, [...(held.get(bookId) ?? []), resolve]);
+        });
+      }
+      return minimalState(bookId, { revisions: disk.get(bookId) ?? null });
+    });
+    putBookStateMock.mockImplementation(async (bookId: string, req: { slice: string; patch: unknown }) => {
+      if (req.slice === 'revisions') disk.set(bookId, req.patch as Record<string, unknown>);
+    });
+    return {
+      disk,
+      hold: (bookId: string) => holding.add(bookId),
+      release: (bookId: string) => {
+        holding.delete(bookId);
+        for (const r of held.get(bookId) ?? []) r();
+        held.delete(bookId);
+      },
+      fail: (bookId: string, n: number) => failures.set(bookId, n),
+    };
+  }
+
+  /** Every revisions PUT sent to `bookId`, in order. */
+  const revisionsPuts = (bookId: string) =>
+    putBookStateMock.mock.calls
+      .filter(([id, req]) => id === bookId && (req as { slice: string }).slice === 'revisions')
+      .map(([, req]) => (req as { patch: Record<string, unknown> }).patch);
+
   it('R1: leaving to a non-book view and back re-hydrates revisions; the next markRevisionPlayable persists pending + timeline', async () => {
     getBookStateMock.mockImplementation(async (bookId: string) =>
       minimalState(bookId, {
@@ -925,6 +969,93 @@ describe('Layout — revisions persist only after the book is hydrated (#3395 pa
       'splice-B-1-nora',
       'splice-B-2-nora',
     ]);
+  });
+
+  /* #3395 pass 4, S1 — every revisions write in the pre-hydrate window
+     survives, not only an enqueue. The reviewer's repros, through the real
+     Layout + scope + persistence middleware and a disk model. */
+  it('S1 Repro A: a markRevisionPlayable inside book B\'s hydrate window reaches B\'s disk', async () => {
+    const d = makeDisk({
+      'book-A': { pending: [], drift: [] },
+      'book-B': {
+        pending: [{ id: 'splice-book-B-3-nora', chapterId: 3, characterId: 'nora', playable: false, segments: [] }],
+        drift: [],
+      },
+    });
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    renderAt(store, '/books/book-A');
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-A'));
+
+    d.hold('book-B');
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-B', status: 'complete' }));
+    });
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('book-B'));
+    /* What splice-runner-middleware / generation-stream-runner dispatch on
+       completion — their `revisions.bookId === B` guard passes. */
+    store.dispatch(revisionsActions.markRevisionPlayable({ chapterId: 3 }));
+    d.release('book-B');
+
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-B'));
+    expect(store.getState().revisions.pending).toEqual([
+      expect.objectContaining({ id: 'splice-book-B-3-nora', playable: true }),
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    const puts = revisionsPuts('book-B');
+    expect(puts.length).toBeGreaterThan(0);
+    for (const patch of puts) {
+      expect(patch.pending).toEqual([
+        expect.objectContaining({ id: 'splice-book-B-3-nora', playable: true }),
+      ]);
+    }
+    expect(d.disk.get('book-B')?.pending).toEqual([
+      expect.objectContaining({ id: 'splice-book-B-3-nora', playable: true }),
+    ]);
+    expect(revisionsPuts('book-A')).toEqual([]);
+  });
+
+  it('S1 Repro B: a dismissDrift inside book B\'s hydrate window is not undone by the hydrate', async () => {
+    const d1 = {
+      id: 'd1',
+      bookId: 'book-B',
+      chapterTitle: 'Chapter One',
+      characterId: 'nora',
+      chapterId: 1,
+      severity: 'mild',
+      factor: 'register',
+    };
+    const d = makeDisk({
+      'book-A': { pending: [], drift: [] },
+      'book-B': { pending: [], drift: [d1], dismissed: [] },
+    });
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    renderAt(store, '/books/book-A');
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-A'));
+    /* B's drift is already in the slice from the background poll. */
+    store.dispatch(
+      revisionsActions.applyBackgroundPoll({ bookId: 'book-B', drift: [d1 as DriftEvent] }),
+    );
+
+    d.hold('book-B');
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-B', status: 'complete' }));
+    });
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('book-B'));
+    store.dispatch(revisionsActions.dismissDrift('d1'));
+    d.release('book-B');
+
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-B'));
+    expect(store.getState().revisions.dismissed).toEqual(['d1']);
+    expect(store.getState().revisions.drift.map((e) => e.id)).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    const puts = revisionsPuts('book-B');
+    expect(puts.length).toBeGreaterThan(0);
+    for (const patch of puts) expect(patch.dismissed).toEqual(['d1']);
+    expect(d.disk.get('book-B')?.dismissed).toEqual(['d1']);
   });
 });
 
