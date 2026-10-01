@@ -3694,6 +3694,20 @@ const CAST_MERGE_BASE_STALE_MESSAGE =
   'Another change to this book’s cast landed while the analysis was running. ' +
   'The analysis result was applied on top of the older cast, so that change may have been overwritten.';
 
+/* #3084 P20 — the non-story classifier (Signal 2 of the front-matter guard)
+   runs after both tail overflow checks, so an overflow only it saw cannot halt
+   the run: the result is already complete. It is reported as a non-fatal
+   warning instead of a silent fallback to title-only detection. Shared by the
+   main and subset routes; the caller sends it at most once, and only when no
+   earlier overflow halted the run (that rethrew before the guard ran). */
+const NONSTORY_OVERFLOW_WARNING_CODE = 'analyzer-reasoning-overflow-nonstory';
+const NONSTORY_OVERFLOW_WARNING_MESSAGE =
+  'The analyzer model ran out of output while reasoning during the front-matter (non-story) check, so ' +
+  'front-matter detection used chapter titles only for this run. The analysis itself completed. To give ' +
+  "the model more room: for Gemini, raise 'Gemini max output tokens' in Advanced Settings (or set it back to " +
+  "0, Auto); for Ollama, raise 'Ollama num_predict' (ANALYZER_NUM_PREDICT) or set it to -1, otherwise raise " +
+  "'Ollama num_ctx' (ANALYZER_NUM_CTX); or switch to a different analyzer model.";
+
 export async function runMainAnalyzerJob(
   job: AnalysisJob,
   record: NonNullable<Awaited<ReturnType<typeof getOrHydrateManuscript>>>,
@@ -5969,6 +5983,9 @@ export async function runMainAnalyzerJob(
       guardChapters,
       { minLines: userSettings.minorCastMinLines, classifyNonStory },
     );
+    if (job.reasoningOverflowed) {
+      send({ kind: 'warning', code: NONSTORY_OVERFLOW_WARNING_CODE, message: NONSTORY_OVERFLOW_WARNING_MESSAGE });
+    }
     if (guarded.stripped.length > 0) {
       log(
         1,
@@ -7761,6 +7778,9 @@ export async function runSubsetAnalyzerJob(
       guardChapters,
       { classifyNonStory },
     );
+    if (job.reasoningOverflowed) {
+      send({ kind: 'warning', code: NONSTORY_OVERFLOW_WARNING_CODE, message: NONSTORY_OVERFLOW_WARNING_MESSAGE });
+    }
     if (guarded.stripped.length > 0) {
       log(
         1,

@@ -659,4 +659,102 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
       expect(r.events.some((e) => e.kind === 'result')).toBe(false);
     }, 60_000);
   });
+
+  /* #3084 P20 — the Signal-2 non-story classifier runs AFTER both tail checks, so
+     an overflow only it sees cannot halt the run (owner decision: warn, don't
+     halt). The run completes and the client gets ONE non-fatal warning. Chapter 2
+     attributed to the narrator leaves `nova` in a single (front) chapter, which
+     is what makes the third-party guard consult the classifier at all. */
+  async function runClassifierCase(
+    route: 'main' | 'subset',
+    opts: { classifierOverflows: boolean; escalationOverflowsOnChapter?: number },
+  ): Promise<{ classify: ReturnType<typeof vi.fn>; job: AnalysisJob; events: CapturedEvent[] }> {
+    const seed = await seedBook(
+      `cls-${route}-${opts.classifierOverflows}-${opts.escalationOverflowsOnChapter ?? 'x'}`,
+      [1, 2],
+      { fullCache: route === 'subset' },
+    );
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    const classify = vi.fn(async () => {
+      if (opts.classifierOverflows) throw new AnalyzerReasoningOverflowError('gemini', MODEL, 8100);
+      return { nonStory: false };
+    });
+    const escalate = vi.fn(async (_m: string, chapterId: number, _w: number, _p: string, call: StageCall) => {
+      if (chapterId === opts.escalationOverflowsOnChapter) {
+        call.onReasoningOverflow?.(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100));
+      }
+      return null;
+    });
+    const stage2 = async (_m: string, chapterId: number): Promise<Stage2ChapterOutput> =>
+      chapterId === 2
+        ? { sentences: [{ id: 201, chapterId: 2, characterId: 'narrator', confidence: 0.9, text: BODIES[2] }] }
+        : stage2For(chapterId);
+    const phase1Selection = buildSelection(stubAnalyzer({ runAttributionEscalation: escalate, runStage2Chapter: stage2 }), MODEL);
+    const phase0Selection = buildSelection(
+      stubAnalyzer({
+        async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+          return { characters: [novaCharacter()] };
+        },
+        runStage2Chapter: () => Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+        runNonStoryClassification: classify as never,
+      } as Partial<Analyzer>),
+      'phase0-model',
+    );
+    const { runMainAnalyzerJob, runSubsetAnalyzerJob } = await import('./analysis.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    try {
+      const record = getManuscript(seed.manuscriptId)!;
+      if (route === 'main') {
+        (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection = phase1Selection;
+        const events = captureEvents(seed.job);
+        await runMainAnalyzerJob(seed.job, record as never, phase0Selection, {
+          requestedFresh: true,
+          allowStage1Shrink: true,
+          requestedModel: undefined,
+        });
+        return { classify, job: seed.job, events };
+      }
+      const job = { ...seed.job, kind: 'subset', subsetChapterIds: [1, 2] } as unknown as AnalysisJob;
+      const events = captureEvents(job);
+      await runSubsetAnalyzerJob(job, record as never, phase0Selection, phase1Selection, record.chapterHints, false);
+      return { classify, job, events };
+    } finally {
+      process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  describe('a reasoning overflow only the non-story classifier saw (#3084 P20, owner: warn, do not halt)', () => {
+    for (const route of ['main', 'subset'] as const) {
+      it(`${route}: the run still sends its result with no error, and exactly one warning names the title-only fallback`, async () => {
+        /* Positive control: the fixture consults the classifier, and a clean
+           classifier run emits no warning, so "one warning" cannot pass vacuously. */
+        const control = await runClassifierCase(route, { classifierOverflows: false });
+        expect(control.classify).toHaveBeenCalled();
+        expect(control.events.filter((e) => e.kind === 'warning')).toEqual([]);
+
+        const r = await runClassifierCase(route, { classifierOverflows: true });
+        expect(r.classify).toHaveBeenCalled();
+        expect(r.job.reasoningOverflowed).toBe(true);
+        expect(r.events.filter((e) => e.kind === 'error')).toEqual([]);
+        expect(r.events.some((e) => e.kind === 'result')).toBe(true);
+        const warnings = r.events.filter((e) => e.kind === 'warning');
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].code).toBe('analyzer-reasoning-overflow-nonstory');
+        expect(warnings[0].message).toMatch(/front-matter/i);
+        expect(warnings[0].message).toMatch(/chapter titles only/i);
+        expect(warnings[0].message).toMatch(/num_predict|max output tokens/i);
+      }, 60_000);
+
+      it(`${route}: a run an earlier overflow already halted emits no non-story warning`, async () => {
+        const r = await runClassifierCase(route, { classifierOverflows: true, escalationOverflowsOnChapter: 2 });
+        expect(r.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
+        expect(r.events.some((e) => e.kind === 'result')).toBe(false);
+        expect(r.events.filter((e) => e.kind === 'warning')).toEqual([]);
+      }, 60_000);
+    }
+  });
 });
