@@ -580,6 +580,75 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     expect(putBookStateMock).not.toHaveBeenCalled();
   });
 
+  /* #3395 pass 6, O1 — each handler's "is the wiped book open?" guard must
+     read the LIVE stage after its await. The render-time `bookId` is always
+     null on the Library, so a book opened while the RPC was in flight kept
+     its pre-wipe revisions and wrote them back into the wiped file. */
+  describe('leaves a book opened while its wipe RPC was in flight', () => {
+    function openedBookId(store: ReturnType<typeof makeStore>) {
+      return (store.getState().ui.stage as { bookId?: string }).bookId;
+    }
+
+    beforeEach(() => {
+      getLibraryMock.mockResolvedValue({ authors: [] });
+      getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+    });
+
+    it('re-parse', async () => {
+      const store = makePopulatedStore();
+      let resolveReparse!: (v: unknown) => void;
+      reparseBookMock.mockReturnValue(new Promise((r) => (resolveReparse = r)));
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
+      const confirm = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
+      fireEvent.click(confirm[confirm.length - 1]);
+      await waitFor(() => expect(reparseBookMock).toHaveBeenCalledWith('b1'));
+
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      expect(openedBookId(store)).toBe('b1');
+      resolveReparse({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+
+      await waitFor(() => expect(store.getState().ui.stage.kind).toBe('books'));
+    });
+
+    it('manuscript replace', async () => {
+      const store = makePopulatedStore();
+      let resolveReplace!: (v: unknown) => void;
+      replaceManuscriptMock.mockReturnValue(new Promise((r) => (resolveReplace = r)));
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      fireEvent.change(screen.getByTestId('replace-manuscript-input'), {
+        target: { files: [new File(['# One'], 'new.md', { type: 'text/markdown' })] },
+      });
+      const confirm = screen.getAllByRole('button', { name: /Replace manuscript/i });
+      fireEvent.click(confirm[confirm.length - 1]);
+      await waitFor(() => expect(replaceManuscriptMock).toHaveBeenCalledWith('b1', expect.any(File)));
+
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      resolveReplace({ chapterCount: 1 });
+
+      await waitFor(() => expect(store.getState().ui.stage.kind).toBe('books'));
+    });
+
+    it('delete', async () => {
+      const store = makePopulatedStore();
+      let resolveDelete!: (v?: unknown) => void;
+      deleteBookMock.mockReturnValue(new Promise((r) => (resolveDelete = r)));
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
+      const confirm = screen.getAllByRole('button', { name: /Delete book/i });
+      fireEvent.click(confirm[confirm.length - 1]);
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('b1'));
+
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+      resolveDelete();
+
+      await waitFor(() => expect(store.getState().ui.stage.kind).toBe('books'));
+    });
+  });
+
   /* #3395 pass 5, N1 — a revisions write recorded for b1 before its disk
      read landed (the user left first) is replayed on b1's next hydrate. The
      server has wiped b1 by then, so each handler that mirrors a wipe must

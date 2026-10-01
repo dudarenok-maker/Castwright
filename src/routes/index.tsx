@@ -12,7 +12,9 @@ import {
   useParams,
   useSearchParams,
 } from 'react-router';
+import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, store } from '../store';
+import type { RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { accountActions } from '../store/account-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
@@ -125,6 +127,11 @@ export function BooksRoute() {
   const dispatch = useAppDispatch();
   const library = useAppSelector((s) => s.library);
   const bookId = useAppSelector((s) => (s.ui.stage as { bookId?: string }).bookId ?? null);
+  /* Live stage read for the post-await "is the wiped book open?" guards: the
+     render-time `bookId` is always null on the Library, so a book opened while a
+     wipe RPC was in flight would keep its pre-wipe revisions (#3395 pass 6, O1). */
+  const reduxStore = useStore<RootState>();
+  const openBookId = () => (reduxStore.getState().ui.stage as { bookId?: string }).bookId;
   const { showInfo, showError, pushToast } = useOutletContext<LayoutContext>();
 
   return (
@@ -148,7 +155,7 @@ export function BooksRoute() {
         dispatch(revisionsActions.bookWiped(b.bookId));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
-        if (bookId === b.bookId) dispatch(uiActions.goHome());
+        if (openBookId() === b.bookId) dispatch(uiActions.goHome());
       }}
       onEditBook={async (b, patch) => {
         try {
@@ -187,7 +194,7 @@ export function BooksRoute() {
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
         dispatch(revisionsActions.bookWiped(b.bookId));
-        if (bookId === b.bookId) dispatch(uiActions.goHome());
+        if (openBookId() === b.bookId) dispatch(uiActions.goHome());
         const refreshed = await api.getLibrary().catch(() => null);
         if (refreshed) dispatch(libraryActions.hydrate(refreshed));
         showInfo({
@@ -241,7 +248,7 @@ export function BooksRoute() {
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
         dispatch(revisionsActions.bookWiped(b.bookId));
-        if (bookId === b.bookId) dispatch(uiActions.goHome());
+        if (openBookId() === b.bookId) dispatch(uiActions.goHome());
 
         /* Kick off the library rescan in the background — it only feeds
            `updatedBook` for the onPrimary handler, which only fires
