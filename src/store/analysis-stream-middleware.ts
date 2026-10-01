@@ -29,7 +29,7 @@
    B-series doc) — the navigation pattern that triggers this is rare.
 
    What the middleware consumes vs leaves to the view: snapshot-only
-   subset (onPhase / onEta / onSeriesPrior / AnalysisError /
+   subset (onPhase / onEta / onSeriesPrior / the non-story onWarning / AnalysisError /
    onComplete). Log lines, cast-update merges, chapter-failed rows,
    and heartbeats stay view-only — the middleware would either
    double-dispatch (idempotent but wasteful) or fight the view for
@@ -46,6 +46,7 @@ import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { notificationsActions } from './notifications-slice';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { emitLanguageGuard } from '../lib/language-guard-bus';
+import { deliverNonStoryOverflowWarning } from '../lib/analysis-warning-toast';
 
 interface AnalysisRootState {
   analysis: { activeStream: AnalysisStreamSnapshot | null };
@@ -176,6 +177,12 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           }),
         );
       },
+      /* #3084 — the non-story overflow advisory only. With the Analysing view
+         unmounted this stream is the sole consumer, so without it the warning
+         is dropped. Same toast + dedupeKey as the view's own onWarning, so a
+         double delivery collapses to one. Every other warning code stays
+         view-only. */
+      onWarning: (w: { code: string; message: string }) => deliverNonStoryOverflowWarning(dispatch, w),
       /* Intentionally NOT consumed by the middleware (view-only):
          onLog, onCastUpdate, onChapterFailed, onChapterResolved,
          onThrottle. */

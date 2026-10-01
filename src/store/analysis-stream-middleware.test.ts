@@ -25,7 +25,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
-import { notificationsSlice } from './notifications-slice';
+import { notificationsSlice, notificationsActions } from './notifications-slice';
 
 const pauseAnalysisSpy = vi.fn().mockResolvedValue(undefined);
 const analyseManuscriptMock = vi.fn();
@@ -90,6 +90,7 @@ interface CapturedAnalysisCall {
   onEta?: (e: { remainingMs: number }) => void;
   onSeriesPrior?: (e: { count: number; names: string[] }) => void;
   onHeartbeat?: (e: unknown) => void;
+  onWarning?: (w: { code: string; message: string }) => void;
   resolve: () => void;
   reject: (e: unknown) => void;
 }
@@ -136,6 +137,7 @@ beforeEach(() => {
         onEta?: (e: { remainingMs: number }) => void;
         onSeriesPrior?: (e: { count: number; names: string[] }) => void;
         onHeartbeat?: (e: unknown) => void;
+        onWarning?: (w: { code: string; message: string }) => void;
       },
     ) => {
       const opts = (kindMarker === 'subset' ? maybeOpts : chapterIdsOrOpts) as {
@@ -144,6 +146,7 @@ beforeEach(() => {
         onEta?: (e: { remainingMs: number }) => void;
         onSeriesPrior?: (e: { count: number; names: string[] }) => void;
         onHeartbeat?: (e: unknown) => void;
+        onWarning?: (w: { code: string; message: string }) => void;
       };
       const chapterIds = kindMarker === 'subset' ? (chapterIdsOrOpts as number[]) : undefined;
       return new Promise<void>((resolve, reject) => {
@@ -156,6 +159,7 @@ beforeEach(() => {
           onEta: opts.onEta,
           onSeriesPrior: opts.onSeriesPrior,
           onHeartbeat: opts.onHeartbeat,
+          onWarning: opts.onWarning,
           resolve: () => resolve(),
           reject: (e: unknown) => reject(e),
         };
@@ -393,6 +397,55 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     lastCall().onSeriesPrior?.({ count: 3, names: ['Wren', 'Marlow', 'Maerin'] });
     const snap = store.getState().analysis.activeStream;
     expect(snap?.seriesPrior).toEqual({ count: 3, names: ['Wren', 'Marlow', 'Maerin'] });
+  });
+
+  /* #3084 pass-3 — the non-story overflow advisory must reach the user with
+     NO Analysing view mounted: the middleware's stream is the only consumer
+     once the user navigates away. */
+  const NONSTORY = {
+    code: 'analyzer-reasoning-overflow-nonstory',
+    message: 'Front-matter detection fell back for this run.',
+  };
+  const openMain = () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+    );
+    return store;
+  };
+
+  it('delivers the non-story overflow warning as a warn toast with no view mounted (#3084)', () => {
+    const store = openMain();
+    lastCall().onWarning?.(NONSTORY);
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+    expect(store.getState().notifications.toasts[0]).toMatchObject({
+      kind: 'warn',
+      dedupeKey: NONSTORY.code,
+      message: NONSTORY.message,
+    });
+  });
+
+  it('delivers it on the subset route too, and ignores warning codes the view owns', () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream({ ...baseSnapshot, kind: 'subset', subsetChapterIds: [3] }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+    );
+    lastCall().onWarning?.({ code: 'cast_merge_base_stale', message: 'x' });
+    expect(store.getState().notifications.toasts).toHaveLength(0);
+    lastCall().onWarning?.(NONSTORY);
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+  });
+
+  it('a view push plus a middleware push of the same warning collapse to ONE toast', () => {
+    const store = openMain();
+    /* What analysing.tsx's own onWarning pushes. */
+    store.dispatch(
+      notificationsActions.pushToast({ kind: 'warn', message: NONSTORY.message, dedupeKey: NONSTORY.code }),
+    );
+    lastCall().onWarning?.(NONSTORY);
+    expect(store.getState().notifications.toasts).toHaveLength(1);
   });
 
   it('clears the snapshot when the SSE resolves cleanly (terminal result)', async () => {

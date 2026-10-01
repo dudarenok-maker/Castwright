@@ -66,6 +66,7 @@ import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { useReverseLocalAnalyzerGuard } from '../hooks/use-reverse-local-analyzer-guard';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { engineForModelId } from '../lib/models';
+import { deliverNonStoryOverflowWarning } from '../lib/analysis-warning-toast';
 import {
   ttsModelLabel,
   effectiveEngineLabel,
@@ -447,6 +448,9 @@ export function GenerationView({
 
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
+        /* #3084 — surfaces the non-story overflow advisory; this subset call
+           is otherwise a silent consumer of `warning` frames. */
+        onWarning: (w) => deliverNonStoryOverflowWarning(dispatch, w),
         onPhase: ({ phaseId, progress }) => {
           applySubsetTick(chapterId, { phaseId: phaseId as 0 | 1, serverProgress: progress });
           /* Snapshot tick — middleware uses this to attach a sticky
@@ -657,6 +661,9 @@ export function GenerationView({
     try {
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
+        /* #3084 — surfaces the non-story overflow advisory; this subset call
+           is otherwise a silent consumer of `warning` frames. */
+        onWarning: (w) => deliverNonStoryOverflowWarning(dispatch, w),
         onPhase: ({ phaseId, progress }) => {
           applySubsetTick(chapterId, { phaseId: phaseId as 0 | 1, serverProgress: progress });
           dispatch(

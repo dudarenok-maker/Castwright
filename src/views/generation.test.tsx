@@ -2156,6 +2156,43 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledWith('m1', [1], expect.anything());
   });
 
+  it('#3084 a non-story overflow warning on the Re-analyse subset call surfaces as a warn toast', async () => {
+    const store = makeIncludeStore();
+    runAnalysisForChaptersSpy.mockReturnValue(new Promise(() => {}));
+    renderInclude(store);
+    fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+    fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+    const opts = runAnalysisForChaptersSpy.mock.calls[0][2] as {
+      onWarning?: (w: { code: string; message: string }) => void;
+    };
+    act(() => {
+      opts.onWarning?.({ code: 'cast_merge_base_stale', message: 'other' });
+      opts.onWarning?.({ code: 'analyzer-reasoning-overflow-nonstory', message: 'fell back' });
+    });
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({
+      kind: 'warn',
+      dedupeKey: 'analyzer-reasoning-overflow-nonstory',
+      message: 'fell back',
+    });
+  });
+
+  it('#3084 a non-story overflow warning on the Include subset call surfaces as a warn toast', async () => {
+    const store = makeIncludeStore();
+    runAnalysisForChaptersSpy.mockReturnValue(new Promise(() => {}));
+    renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalled());
+    const opts = runAnalysisForChaptersSpy.mock.calls[0][2] as {
+      onWarning?: (w: { code: string; message: string }) => void;
+    };
+    act(() => {
+      opts.onWarning?.({ code: 'analyzer-reasoning-overflow-nonstory', message: 'fell back' });
+    });
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+  });
+
   it('#3202 on subset_in_progress (Re-analyse flow), surfaces the server message instead of a generic failure', async () => {
     const store = makeIncludeStore();
     runAnalysisForChaptersSpy.mockRejectedValueOnce(
