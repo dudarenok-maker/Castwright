@@ -1127,10 +1127,10 @@ describe('finalizeChapterAudioWrite re-embeds by the segment a row replaces (#33
    after this write (fresh + untouched lines both fold); the pill is the union
    of those snapshots over every rendered chapter. */
 describe('finalizeChapterAudioWrite clears the per-character fallback snapshot (#3362 pass-13 🟡B)', () => {
-  const CAST = [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }];
+  const CAST = [{ id: 'mairin', name: 'Mairin', gender: 'female' as const, attributes: [] }];
 
   async function finalize(
-    segments: Array<Record<string, unknown>>,
+    segments: ChapterSegmentsFile['segments'],
     resynthesizedIndices: 'all' | number[],
   ): Promise<void> {
     await finalizeChapterAudioWrite({
@@ -1140,17 +1140,17 @@ describe('finalizeChapterAudioWrite clears the per-character fallback snapshot (
       pcm: tone(2.0, 12000),
       sampleRate: SR,
       durationSec: 2.0,
-      segments: segments as never,
+      segments,
       cast: CAST,
       castIdHistory: { schema: 1, supersededBy: {} },
-      defaultEngine: 'qwen',
-      modelKey: 'qwen-v1',
+      defaultEngine: 'kokoro',
+      modelKey: 'kokoro-v1',
       audioFormat: 'mp3',
       resynthesizedIndices,
     });
   }
 
-  const line = (i: number, extra: Record<string, unknown> = {}) => ({
+  const line = (i: number, extra: Partial<ChapterSegmentsFile['segments'][number]> = {}) => ({
     groupIndex: i,
     characterId: 'mairin',
     sentenceIds: [i],
@@ -1159,7 +1159,7 @@ describe('finalizeChapterAudioWrite clears the per-character fallback snapshot (
     voiceName: 'v-mairin',
     ...extra,
   });
-  const FALLBACK = { renderedFallbackEngine: 'kokoro', renderedFallbackCharacterId: 'mairin' };
+  const FALLBACK = { renderedFallbackEngine: 'kokoro' as const, renderedFallbackCharacterId: 'mairin' };
 
   async function pill(): Promise<Record<string, string>> {
     const { collectRenderedFallbackEngines } = await import('./segments-io.js');
@@ -1177,10 +1177,7 @@ describe('finalizeChapterAudioWrite clears the per-character fallback snapshot (
     expect(await pill()).toEqual({ mairin: 'kokoro' });
 
     // Re-record line 0 cleanly (the take carries no fallback stamp).
-    const { renderedFallbackEngine: _e, renderedFallbackCharacterId: _c, ...clean } = readSegFile().segments[0] as Record<
-      string,
-      unknown
-    >;
+    const { renderedFallbackEngine: _e, renderedFallbackCharacterId: _c, ...clean } = readSegFile().segments[0];
     await finalize([clean, readSegFile().segments[1]], [0]);
 
     expect(readSegFile().characterSnapshots?.mairin?.renderedFallbackEngine).toBeUndefined();
@@ -1190,10 +1187,7 @@ describe('finalizeChapterAudioWrite clears the per-character fallback snapshot (
   it('a character with ANOTHER still-fallback line keeps the snapshot fallback and the pill', async () => {
     await finalize([line(0, FALLBACK), line(1, FALLBACK)], 'all');
 
-    const { renderedFallbackEngine: _e, renderedFallbackCharacterId: _c, ...clean } = readSegFile().segments[0] as Record<
-      string,
-      unknown
-    >;
+    const { renderedFallbackEngine: _e, renderedFallbackCharacterId: _c, ...clean } = readSegFile().segments[0];
     await finalize([clean, readSegFile().segments[1]], [0]);
 
     expect(readSegFile().characterSnapshots?.mairin?.renderedFallbackEngine).toBe('kokoro');
