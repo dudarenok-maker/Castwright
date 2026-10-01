@@ -5593,10 +5593,10 @@ export async function runMainAnalyzerJob(
       const chDurationForCache = Date.now() - startedAt;
       stage2Durations[ch.id] = chDurationForCache;
       cache.stage2Durations = stage2Durations;
-      /* Cache + edits writes are atomic-rename and JS is single-threaded, so
-         concurrent saves serialise naturally. Worst case is two near-
-         simultaneous writes overlap and the second wins — both contain the
-         same set + the freshly-completed chapter, so the merge is safe. */
+      /* Cache writes are atomic-rename, but atomic-rename alone does NOT order
+         overlapping writes to one path. `saveAnalysisCache` serialises them
+         per manuscript (#3427), so they land in call order and the last call
+         wins. */
       await saveAnalysisCache(manuscriptId, cache);
       if (recordRef.bookDir) {
         try {

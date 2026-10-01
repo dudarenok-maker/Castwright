@@ -139,12 +139,36 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
   };
 }
 
+/* #3427 — per-manuscript write chain. `writeJsonAtomic` does not order
+   same-path writes (and its EPERM retry jitters), so two overlapping saves
+   could land out of call order and let an older snapshot clobber a newer one.
+   Each save awaits the previous save for the same manuscript before writing.
+   A plain in-process chain rather than `withKeyLock`: that helper's 10s
+   acquisition timeout would turn a slow disk into a thrown save. The tail is
+   stored as a never-rejecting promise so a failed save cannot wedge the chain;
+   the caller still gets the real rejection from its own write. */
+const saveTails = new Map<string, Promise<void>>();
+
 export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCache): Promise<void> {
-  await writeJsonAtomic(cachePath(manuscriptId), {
+  const path = cachePath(manuscriptId);
+  /* Snapshot at call time (as before) — the chain only orders the writes. */
+  const payload = {
     ...cache,
     chapters: seedEmotionsFromTags(cache.chapters ?? {}),
     updatedAt: new Date().toISOString(),
-  });
+  };
+  const prev = saveTails.get(path) ?? Promise.resolve();
+  const run = prev.then(() => writeJsonAtomic(path, payload));
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  saveTails.set(path, tail);
+  try {
+    await run;
+  } finally {
+    if (saveTails.get(path) === tail) saveTails.delete(path);
+  }
 }
 
 /* Discard any partial progress for a manuscript so the next analysis runs
