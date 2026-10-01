@@ -21,15 +21,17 @@
    scripts/mdns-responder.mjs is intentionally NOT part of the release
    manifest (scripts/build-release-zip.mjs). To be precise about what DOES
    ship: `start:lan`'s own script + start-app-prod.mjs ARE in the manifest,
-   so a packaged install can technically invoke `npm run start:lan` — but
-   scripts/setup-lan-certs.mjs and scripts/print-cert-install-instructions.mjs
-   (the ONLY way to generate the LAN cert) are NOT shipped, so that path was
-   already a dead end before this feature: server/src/index.ts's own
-   existing missing-cert check (`LAN_HTTPS=1 set but cert files are missing`)
-   exits the process before ever reaching the mDNS spawn call added here. A
-   packaged install genuinely running start:lan is a pre-existing, unrelated
-   gap this plan doesn't touch — this responder simply follows the same
-   dev-checkout-only boundary its cert-generation dependency already has. */
+   and — since PR #3404 — so is scripts/setup-lan-certs.mjs, which
+   start-app-prod.mjs dynamically imports to provision the LAN cert with
+   mkcert. A packaged install with mkcert on PATH can therefore generate the
+   cert, get past server/src/index.ts's missing-cert check (`LAN_HTTPS=1 set
+   but cert files are missing`) and reach the mDNS spawn call below; it used
+   to be a dead end at that check, before this feature. (scripts/print-cert-
+   install-instructions.mjs is still not shipped.) What it reaches is a
+   responder script that is NOT in the zip: the child exits asynchronously
+   with "Cannot find module", which the exit handler below warns about, so
+   castwright.local is not advertised on a packaged install. That is a known
+   gap this plan doesn't touch. */
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
