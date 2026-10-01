@@ -595,10 +595,15 @@ export function collectProcessSnapshot({
 } = {}) {
   if (!windows) return [];
 
+  // The three *Preference assignments are load-bearing: on Windows PowerShell
+  // 5.1 with redirected stdout, Warning / Information / Host records are
+  // written to STDOUT (exit status stays 0), so a single stray line ahead of
+  // the JSON makes the whole output unparseable and blanks the census.
   const queryArgs = [
     '-NoProfile',
     '-Command',
-    "Get-CimInstance Win32_Process | " +
+    "$WarningPreference='SilentlyContinue'; $InformationPreference='SilentlyContinue'; $ProgressPreference='SilentlyContinue'; " +
+      "Get-CimInstance Win32_Process | " +
       "Select-Object ProcessId,ParentProcessId,Name,CommandLine," +
       "@{N='CreationEpochMs';E={ if ($_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { $null } }}," +
       "@{N='CpuSeconds';E={([double]$_.UserModeTime + [double]$_.KernelModeTime)/1e7}} | " +
@@ -616,10 +621,10 @@ export function collectProcessSnapshot({
     // retry. Return a distinguishable outcome carrying the error code so the
     // caller can log it (#3331).
     if (result.error?.code === 'ETIMEDOUT') {
-      return { success: false, data: null, transient: true, errorCode: result.error.code };
+      return { success: false, data: null, transient: true, kind: 'timeout', errorCode: result.error.code };
     }
     // Distinguish between genuine failure and "no data returned".
-    // Genuine failure: error set, non-zero status, or parse failure — these never retry.
+    // Genuine failure: error set or non-zero status — these never retry.
     if (result.error || result.status !== 0) {
       return { success: false, data: null, error: result.error, status: result.status };
     }
@@ -630,17 +635,43 @@ export function collectProcessSnapshot({
       const rows = Array.isArray(parsed) ? parsed : [parsed];
       return { success: true, data: rows };
     } catch {
-      // Parse failure is a genuine failure, not a transient.
-      return { success: false, data: null, error: { code: 'PARSE_ERROR' }, status: result.status };
+      // Unparseable stdout with status 0 is a stray-output class of failure
+      // (a PowerShell warning line ahead of the JSON), not a broken runner —
+      // so it is transient and gets the one retry, and the stdout head is
+      // carried so the next occurrence is diagnosable.
+      return {
+        success: false,
+        data: null,
+        transient: true,
+        kind: 'parse',
+        errorCode: 'PARSE_ERROR',
+        stdoutPrefix: JSON.stringify(String(result.stdout).slice(0, 120)),
+      };
     }
   };
 
-  // Single bounded retry loop — at most 2 spawn calls total, covering BOTH
-  // timeouts (#3331) and the empty-rows transient (#3238). A first attempt
-  // that times out and a second that returns empty rows still makes exactly
-  // two spawn calls; there is no stacked second retry (#3331).
+  const describeTransient = (r) =>
+    r.kind === 'parse'
+      ? `output was not JSON, error code ${r.errorCode}, stdout prefix ${r.stdoutPrefix}`
+      : `Win32_Process query timed out, error code ${r.errorCode}`;
+
+  // A failed census must stay distinguishable from "nothing running": the
+  // returned array carries the reason on a non-enumerable `snapshotError`
+  // (non-enumerable so the array still compares equal to [] and every caller
+  // that only reads rows is unaffected); runCensus copies it into the log.
+  const failedSnapshot = (reason) => {
+    const out = [];
+    Object.defineProperty(out, 'snapshotError', { value: reason, enumerable: false });
+    return out;
+  };
+
+  // Single bounded retry loop — at most 2 spawn calls total, covering
+  // timeouts (#3331), unparseable output, and the empty-rows transient
+  // (#3238). A first attempt that times out and a second that returns empty
+  // rows still makes exactly two spawn calls; there is no stacked second
+  // retry (#3331).
   const MAX_ATTEMPTS = 2;
-  let lastFailReason = null; // { kind: 'timeout', errorCode } | { kind: 'empty' } | null
+  let lastFailReason = null; // { kind: 'timeout' | 'parse', errorCode, ... } | { kind: 'empty' } | null
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     if (i > 0) {
@@ -648,31 +679,31 @@ export function collectProcessSnapshot({
     }
     const a = attempt();
 
-    // Permanent failures (error, non-zero status, or parse error) — return []
-    // immediately, no retry. Timeouts have transient: true and fall through.
+    // Permanent failures (error or non-zero status) — return []
+    // immediately, no retry. Timeouts and parse errors have transient: true
+    // and fall through.
     if (!a.success && !a.transient) {
       // Log why, even when this is the second attempt after a first-attempt
-      // timeout — otherwise that ordering (timeout, then a genuine permanent
-      // failure) discards lastFailReason and returns [] with zero output.
-      if (lastFailReason?.kind === 'timeout') {
+      // transient failure — otherwise that ordering discards lastFailReason
+      // and returns [] with zero output.
+      const permanent = `error code ${a.error?.code ?? 'n/a'}, status ${a.status ?? 'n/a'}`;
+      if (lastFailReason && lastFailReason.kind !== 'empty') {
         console.warn(
-          `collectProcessSnapshot: returning [] — first Win32_Process query timed out ` +
-            `(error code ${lastFailReason.errorCode}), then retry hit a permanent failure ` +
-            `(error code ${a.error?.code ?? 'n/a'}, status ${a.status ?? 'n/a'})`,
+          `collectProcessSnapshot: returning [] — first Win32_Process query failed (${describeTransient(lastFailReason)}), ` +
+            `then retry hit a permanent failure (${permanent})`,
         );
       } else {
         console.warn(
-          `collectProcessSnapshot: returning [] — Win32_Process query hit a permanent failure ` +
-            `(error code ${a.error?.code ?? 'n/a'}, status ${a.status ?? 'n/a'})`,
+          `collectProcessSnapshot: returning [] — Win32_Process query hit a permanent failure (${permanent})`,
         );
       }
-      return [];
+      return failedSnapshot(`permanent failure (${permanent})`);
     }
 
-    // Timeout is transient — record the error code and continue to the next
-    // attempt (the retry, if any remaining).
+    // A transient failure — record it and continue to the next attempt (the
+    // retry, if any remaining).
     if (!a.success && a.transient) {
-      lastFailReason = { kind: 'timeout', errorCode: a.errorCode };
+      lastFailReason = a;
       continue;
     }
 
@@ -680,9 +711,9 @@ export function collectProcessSnapshot({
     const processes = rowsToProcesses(a.data ?? []);
     if (processes.length > 0) {
       if (i > 0) {
-        if (lastFailReason?.kind === 'timeout') {
+        if (lastFailReason && lastFailReason.kind !== 'empty') {
           console.warn(
-            `collectProcessSnapshot: recovered on retry — first Win32_Process query timed out (error code ${lastFailReason.errorCode})`,
+            `collectProcessSnapshot: recovered on retry — first Win32_Process query failed (${describeTransient(lastFailReason)})`,
           );
         } else {
           console.warn(
@@ -699,16 +730,13 @@ export function collectProcessSnapshot({
   }
 
   // All attempts exhausted — log the reason and return [].
-  if (lastFailReason?.kind === 'timeout') {
-    console.warn(
-      `collectProcessSnapshot: still failing after retry — returning [] (Win32_Process query timed out, error code ${lastFailReason.errorCode})`,
-    );
-  } else {
-    console.warn(
-      'collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)',
-    );
+  if (lastFailReason && lastFailReason.kind !== 'empty') {
+    const detail = describeTransient(lastFailReason);
+    console.warn(`collectProcessSnapshot: still failing after retry — returning [] (${detail})`);
+    return failedSnapshot(detail);
   }
-  return [];
+  console.warn('collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)');
+  return failedSnapshot('empty Win32_Process result after retry');
 }
 
 /** This process's own ancestor pids, resolved from `processes` — never
@@ -1120,6 +1148,9 @@ export function runCensus({
   appendLog(
     {
       ts: now,
+      // A failed census must not read as "nothing running" (see
+      // collectProcessSnapshot's failedSnapshot).
+      ...(processes.snapshotError ? { snapshotError: processes.snapshotError } : {}),
       roots: verdicts.map((v) => ({
         rootPid: v.rootPid,
         name: v.name,

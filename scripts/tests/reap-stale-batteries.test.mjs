@@ -1661,15 +1661,80 @@ test('#3238: collectProcessSnapshot does NOT retry on a non-zero exit status', (
   assert.deepEqual(result, [], 'must return [] on non-zero exit');
 });
 
-test('#3238: collectProcessSnapshot does NOT retry on a JSON parse failure', () => {
+// PR #3404 review pass 3 — a stray PowerShell Warning/Information line on
+// stdout (status 0) used to be a PERMANENT PARSE_ERROR: the whole census came
+// back [] and the census log read as "nothing running".
+const WARNING_PREFIXED_STDOUT = `WARNING: something noisy\n${JSON.stringify([PLAUSIBLE_ROW])}`;
+
+test('pass 3: collectProcessSnapshot query silences the Warning/Information/Progress streams', () => {
+  let queryArgs = null;
+  const fakeSpawn = (_cmd, args) => {
+    queryArgs = args;
+    return realRowSpawn();
+  };
+  collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  const command = queryArgs[queryArgs.indexOf('-Command') + 1];
+  assert.match(command, /\$WarningPreference\s*=\s*'SilentlyContinue'/);
+  assert.match(command, /\$InformationPreference\s*=\s*'SilentlyContinue'/);
+  assert.match(command, /\$ProgressPreference\s*=\s*'SilentlyContinue'/);
+});
+
+test('pass 3: collectProcessSnapshot retries ONCE on a JSON parse failure and recovers', () => {
   let callCount = 0;
   const fakeSpawn = () => {
     callCount += 1;
-    return { status: 0, stdout: 'not valid json{{{', stderr: '' };
+    return callCount === 1 ? { status: 0, stdout: WARNING_PREFIXED_STDOUT, stderr: '' } : realRowSpawn();
   };
   const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
-  assert.equal(callCount, 1, 'must have called spawn only once — no retry on parse failure');
-  assert.deepEqual(result, [], 'must return [] on parse failure');
+  assert.equal(callCount, 2, 'a parse failure gets exactly one retry');
+  assert.equal(result.length, 1);
+  assert.equal(result[0].pid, PLAUSIBLE_ROW.ProcessId);
+});
+
+test('pass 3: a persistent parse failure returns [] carrying snapshotError, and the warning names a stdout prefix', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return { status: 0, stdout: WARNING_PREFIXED_STDOUT, stderr: '' };
+  };
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+    assert.equal(callCount, 2, 'initial + one retry, no stacked retry');
+    assert.deepEqual(result, [], 'still an empty array to every row-reading caller');
+    assert.match(String(result.snapshotError), /PARSE_ERROR/);
+    assert.ok(
+      warnings.some((w) => /PARSE_ERROR/.test(w) && /WARNING: something noisy/.test(w)),
+      `expected the warning to carry the stdout prefix, got: ${JSON.stringify(warnings)}`,
+    );
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('pass 3: runCensus copies a failed snapshot\'s snapshotError onto the log entry, and omits it on a healthy one', () => {
+  const failedSnapshot = [];
+  Object.defineProperty(failedSnapshot, 'snapshotError', { value: 'output was not JSON', enumerable: false });
+  const appended = [];
+  runCensus({
+    collectSnapshot: () => failedSnapshot,
+    readPrior: () => new Map(),
+    appendLog: (entry) => appended.push(entry),
+    now: 1_000_000,
+  });
+  assert.equal(appended[0].snapshotError, 'output was not JSON');
+  assert.deepEqual(appended[0].roots, []);
+
+  const healthy = [];
+  runCensus({
+    collectSnapshot: () => [],
+    readPrior: () => new Map(),
+    appendLog: (entry) => healthy.push(entry),
+    now: 1_000_000,
+  });
+  assert.equal('snapshotError' in healthy[0], false);
 });
 
 test('#3238: collectProcessSnapshot logs a recovery warning when retry succeeds', () => {
@@ -1856,15 +1921,15 @@ test('#3331: collectProcessSnapshot does NOT retry on a non-zero exit status (ti
   assert.deepEqual(result, [], 'must return [] on non-zero exit');
 });
 
-test('#3331: collectProcessSnapshot does NOT retry on a JSON parse failure (timeout-aware path)', () => {
+test('#3331: a timeout then a parse failure is still bounded at two spawns (no stacked retry)', () => {
   let callCount = 0;
   const fakeSpawn = () => {
     callCount += 1;
-    return { status: 0, stdout: 'not valid json{{{', stderr: '' };
+    return callCount === 1 ? timeoutSpawn() : { status: 0, stdout: 'not valid json{{{', stderr: '' };
   };
   const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
-  assert.equal(callCount, 1, 'must have called spawn only once — no retry on parse failure');
-  assert.deepEqual(result, [], 'must return [] on parse failure');
+  assert.equal(callCount, 2, 'must have called spawn exactly twice');
+  assert.deepEqual(result, [], 'must return [] when the retry is also unusable');
 });
 
 test('#3331: collectProcessSnapshot does NOT retry on a non-timeout error (e.g. ENOENT)', () => {
