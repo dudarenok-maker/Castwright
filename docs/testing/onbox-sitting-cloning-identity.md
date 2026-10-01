@@ -221,15 +221,18 @@ last, alone, since it deliberately crashes the sidecar twice.
     §3 (re-render chapter 19 — `the-torment` recovery, `characterSnapshots`
     check, by-ear distinct-voice listen). The canonical-key expectation holds
     for this FULL re-render; a partial re-record or splice carries untouched
-    legacy lines' raw/retired keys forward. Also confirm Revisions voice drift
-    is per line (#3362): after a voice change, re-record only some lines and
-    Revisions must keep flagging the chapter until every line is re-recorded.
-    This holds for chapters whose lines all carry a per-segment voice stamp
-    (`voiceName`/`baseVoiceName`, #1992, merged 2026-07-31, not yet in a release); in an older mixed chapter
-    (voiceless legacy lines plus re-recorded stamped lines) drift can clear
-    while legacy lines are still in the old voice — not a regression. Use a
-    chapter rendered after 2026-07-31.
+    legacy lines' raw/retired keys forward.
     - Result:
+13a. Run the five **#3362 checks** (run sheet
+    [§11](cast-id-drift-onbox-acceptance.md), register A22 "#3362 checks
+    1–5"): (1) canonical snapshot keys on a full re-render, (2) per-line voice
+    drift — change a voice, re-record only some lines, Revisions must still
+    flag until every line is redone (chapter rendered after 2026-07-31 only;
+    pre-stamp legacy/mixed chapters can clear early — not a regression),
+    (3) Fix audio reaches every stamped spelling, (4) re-record after a cast
+    merge keeps the chapter in `chaptersScored`, (5) unstamped orphan rows do
+    not pool into a re-minted character's centroid. Speaker QA on for 4–5.
+    - Result (1–5, one line each):
 14. Run §4 (re-render chapter 16 — `lightning-dave` recovery **and**
     `pool-player-2` negative control in the same chapter).
     - Result:

@@ -1017,3 +1017,54 @@ run's backup) before writing either.
 - Only 2 of the 4 real call sites in `server/src/routes/analysis.ts` are independently asserted by route-level `runMainAnalyzerJob`/`runSubsetAnalyzerJob` wiring tests in `analysis.test.ts` — the two `cumulativeForRemap` sites feeding `remapFreshToPriorIds` (main-route and subset-route). The other 2 (`cumulative`, feeding `applyRewriteToPriorCast`) execute during the same test runs but are not independently asserted: a revert of either to the bare `composeRewrites(...)` call (skipping the strip) still leaves the whole `analysis.test.ts` suite green, because their effect is currently masked by an unrelated mechanism, `refuseRetirementsOfLiveIds` — verified during round 5 (this same finding was also recorded on register row A34 while that row existed and in `docs/release-notes-next.md`; A34 itself has since been discharged and removed from the register).
 
 Defects NOT filed: none. The fix is narrowly scoped (one function's gating condition changed, four call sites re-plumbed to pass the fresh roster instead of a tier-membership set) and passes the full server test suite, including `analysis.test.ts`'s 222 tests.
+
+## 11. #3362 (PR #3375) — snapshot keying, per-line drift, repair/QA identity
+
+Register row: [A22 "#3362 checks 1–5"](onbox-acceptance-register.md) (extends A22; no new row).
+**Needs:** the 8 GB card, real sidecar with Qwen resident, the *Playing with Fire*
+workspace book, speaker QA (render-integrity) **on** for checks 4–5, a backup of
+each chapter's `.segments.json` + `.mp3` before every re-record.
+
+SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
+
+1. **Canonical keys, FULL re-render.** Re-render all of chapter 19. Expect
+   `characterSnapshots["the_torment"]` (`voiceEngine: "qwen"`,
+   `resolvedVoiceName: "qwen-YaC5ot82IqTLpeDbHd77F"`), **no** `the-torment` key,
+   every Torment segment `resolvedCharacterId: "the_torment"`, no
+   `renderedFallbackEngine`; Voices lists that voice as Generated.
+
+   Result: _______________________________________________________________
+
+2. **Per-line voice drift.** Chapter rendered **after 2026-07-31**, ≥ 4 lines of
+   one Qwen character, no drift showing. Change the character's voice →
+   Revisions flags the chapter (voice row). Re-record 2 of 4 lines → Revisions
+   **still** flags it; `segments.json` shows new `voiceName` on those 2 and the
+   old on the other 2; Voices still lists the **old** designed voice as
+   Generated. Re-record the rest → flag clears.
+   *Stated limit:* pre-stamp (#1992) legacy, or voiceless-legacy + stamped
+   mixed, chapters can clear drift early (not a regression) — do not use one.
+
+   Result: _______________________________________________________________
+
+3. **Fix audio reaches every stamped spelling.** Chapter with lines under both
+   `characterId: "the-torment"` and `"the_torment"`, all
+   `resolvedCharacterId: "the_torment"`. Press Fix audio for Torment. Expect all
+   those lines re-synthesised (segments/take mtimes), none left on the old take.
+   *Stated limit:* an unstamped legacy spelling is not reached.
+
+   Result: _______________________________________________________________
+
+4. **Re-record after cast merge stays scored.** Speaker QA on, chapter scored.
+   Merge two entries of one character, re-record that character's lines.
+   Expect the chapter in `chaptersScored`, **not** `chaptersEmbedFailed`, with
+   a centroid and verdicts on the re-recorded lines.
+
+   Result: _______________________________________________________________
+
+5. **Unstamped orphan rows do not pool.** *Заказ Коалфолла* (orphan `mayrin`,
+   re-minted `mairin`): run the QA scan. Expect the re-minted character's
+   centroid built only from its own chapter's stamped rows (row count equals
+   the stamped-segment count), no pooled orphan rows, `chaptersScored <=
+   chaptersEligible`.
+
+   Result: _______________________________________________________________
