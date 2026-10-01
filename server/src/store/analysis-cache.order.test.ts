@@ -11,6 +11,9 @@ import { existsSync } from 'node:fs';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
 const landed: Array<{ path: string; stage1: unknown }> = [];
+/* Event log of stub entries and landings, in real order: 'enter:<tag>' when the
+   stub starts a write, 'land:<tag>' once it has landed. */
+const events: string[] = [];
 let callNo = 0;
 
 vi.mock('../workspace/state-io.js', async () => {
@@ -21,12 +24,14 @@ vi.mock('../workspace/state-io.js', async () => {
     ...actual,
     writeJsonAtomic: async (path: string, data: { stage1?: unknown }): Promise<void> => {
       const n = callNo++;
+      events.push(`enter:${String(data.stage1)}`);
       /* Earlier-called writes take longer, so an unserialised implementation
          lands them last. */
       await new Promise((r) => setTimeout(r, n === 0 ? 40 : n === 1 ? 20 : 1));
       if (n === 3 && (data as { fail?: boolean }).fail) throw new Error('boom');
       await actual.writeJsonAtomic(path, data);
       landed.push({ path, stage1: data.stage1 });
+      events.push(`land:${String(data.stage1)}`);
     },
   };
 });
@@ -40,6 +45,7 @@ afterEach(async () => {
     await clearAnalysisCache(id);
   }
   landed.length = 0;
+  events.length = 0;
   callNo = 0;
 });
 
@@ -76,7 +82,10 @@ describe('saveAnalysisCache call ordering (#3427)', () => {
     const slow = saveAnalysisCache('order-c', snap('slow')); // 40ms stub
     const fast = saveAnalysisCache('order-d', snap('fast')); // 20ms stub
     await Promise.all([slow, fast]);
-    expect(landed.map((l) => l.stage1)).toEqual(['fast', 'slow']);
+    /* No wall-clock margin: the property is that `fast` was not made to wait
+       for `slow` — its write ENTERED the stub before `slow` landed. */
+    expect(events.indexOf('enter:fast')).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf('enter:fast')).toBeLessThan(events.indexOf('land:slow'));
   });
 
   it('a nested member mutated after a queued save is called does not leak into that write', async () => {

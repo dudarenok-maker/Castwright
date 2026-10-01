@@ -1,6 +1,6 @@
 # Castwright 1.15.0
 
-- **Resuming an analysis no longer occasionally redoes work it had already saved.** In rare cases two progress saves landed in the wrong order, so the older one overwrote the newer. Progress is now always saved in the order it happened.
+- **Resuming an analysis no longer occasionally redoes work it had already saved.** In rare cases two progress saves landed in the wrong order, so the older one overwrote the newer. Analysis progress and the manuscript's chapter text are now saved in the order they happened.
 
 - **A model that "thinks out loud" before answering no longer trips up analysis.** Some models open their reply with a private reasoning note before the actual answer. Castwright used to stumble over that note, try the chapter again, and often give up on it. It now sets the note aside and reads the answer that follows.
 
