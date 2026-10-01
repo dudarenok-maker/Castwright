@@ -37,7 +37,6 @@ import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-
 import { selectAnalyzerSplitIsActive, fetchAnalyzerModels } from '../store/account-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 import { notificationsActions } from '../store/notifications-slice';
-import { ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 
 /* Heuristic estimate matched to the server's analysis pacing (server/src/
    routes/analysis.ts: STAGE1_BASELINE_RATE × STAGE2_STRETCH ≈ 4 ms per input
@@ -1029,20 +1028,17 @@ export function AnalysingView({
           setConn('idle');
           return;
         }
-        /* #3084 — a real analyzer error ending the subset job (e.g. the
-           reasoning-overflow terminal frame, which arrives as an `error`
-           event with NO chapter-failed) is a FAILURE of this Retry, not the
-           benign no-result case below. Keep the row, halt the run-level
+        /* #3084 — the reasoning-overflow terminal frame arrives as an `error`
+           event with NO chapter-failed, so it is a FAILURE of this Retry, not
+           the benign no-result case below. Deliberately an allowlist of one:
+           other codes (cast_incomplete after a Retry that SUCCEEDED,
+           stage1_shrink_refused, ...) keep their pre-existing paths. Keep the row, halt the run-level
            state with the fixes so "How to fix" renders and the middleware's
            HALTED hook pushes the persistent toast, and tell the finally
            block not to clear the snapshot or resume the main run (which
            would only overflow again on the same settings). The retained row
            also keeps the cast_incomplete auto-resume effect disarmed. */
-        if (
-          err instanceof AnalysisError &&
-          err.code !== ANALYSIS_STREAM_NO_RESULT &&
-          err.code !== 'aborted'
-        ) {
+        if (err instanceof AnalysisError && err.code === 'analyzer-reasoning-overflow') {
           retryHaltedRef.current = true;
           setFailedChapters((prev) => {
             const filtered = prev.filter((f) => f.chapterId !== chapterId);

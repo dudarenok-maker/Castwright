@@ -1663,6 +1663,54 @@ describe('AnalysingView — failed-chapter retry', () => {
       { label: 'Switch to a different analyzer model' },
     ];
 
+    /* Retry clicked while the main run is streaming: the view aborts the main
+       run and runs the subset alone (PAUSE-AND-RETRY). Real slices + middleware
+       so the HALTED hook's toast is observable; capturedOpts is cleared so a
+       later defined value means the main run was re-POSTed. */
+    async function pausedMainRetry() {
+      getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+      const { analysisStreamMiddleware } = await import('../store/analysis-stream-middleware');
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          account: accountSlice.reducer,
+          bookMeta: bookMetaSlice.reducer,
+          analysis: analysisSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        middleware: (g) => g().concat(analysisStreamMiddleware),
+      });
+      render(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m1"
+            bookId="b1"
+            title="t"
+            wordCount={2440}
+            onComplete={() => {}}
+          />
+        </Provider>,
+      );
+      const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+      await act(async () => {
+        fireEvent.click(startBtn);
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+      const mainSignal = capturedOpts!.signal!;
+      await act(async () => {
+        capturedOpts!.onPhase!({ phaseId: 0, progress: 0.4 });
+      });
+      const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+      capturedOpts = undefined;
+      await act(async () => {
+        fireEvent.click(retryBtn);
+      });
+      expect(mainSignal.aborted).toBe(true);
+      expect(capturedSubsetCall!.chapterIds).toEqual([44]);
+      return { store };
+    }
+
     async function startRetry() {
       getBookStateImpl = () => Promise.resolve(makeBookState([44]));
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
@@ -1750,10 +1798,91 @@ describe('AnalysingView — failed-chapter retry', () => {
         const toasts = store.getState().notifications.toasts;
         expect(toasts.filter((t) => t.fixes?.length)).toHaveLength(1);
         expect(screen.getAllByText(/How to fix/i).length).toBeGreaterThan(0);
-        expect(capturedOpts).toBeUndefined();
         expect(store.getState().analysis.activeStream?.state).toBe('halted');
       });
     }
+
+    /* The loop above starts from a halted snapshot with NO main run, so a
+       leaked `.finally` there only clears the snapshot (asserted above). This
+       one starts from a RUNNING main run that the Retry pauses, so a leaked
+       `.finally` would re-POST the main run — a second analyseManuscript call
+       (capturedOpts defined). */
+    it('overflow on a Retry that paused a running main run does NOT re-POST the main run', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await pausedMainRetry();
+      await act(async () => {
+        rejectSubset?.(
+          new AnalysisError(
+            'The analyzer model spent its whole output budget reasoning.',
+            'analyzer-reasoning-overflow',
+            undefined,
+            undefined,
+            undefined,
+            'Apply one of the fixes below, then resume.',
+            FIXES as never,
+          ),
+        );
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(capturedOpts).toBeUndefined();
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+    });
+
+    /* cast_incomplete is the subset route's DESIGNED pause-and-retry frame: the
+       retried chapter SUCCEEDED (chapter-resolved first), no other chapter
+       failed, but Phase 0a coverage is incomplete. Row dropped, main re-POSTed,
+       snapshot running — NOT halted. */
+    it('cast_incomplete after a successful Retry drops the row, re-POSTs the main run, and does not halt', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      const { store } = await pausedMainRetry();
+      await act(async () => {
+        capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
+      });
+      await act(async () => {
+        rejectSubset?.(
+          new AnalysisError(
+            'Phase 0a covers 5 of 20 chapters — run main analysis to detect the rest before stage1 can finalise.',
+            'cast_incomplete',
+          ),
+        );
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+      expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+      expect(store.getState().analysis.activeStream?.state).not.toBe('halted');
+    });
+
+    /* stage1_shrink_refused on a Retry: the main run is re-POSTed and its own
+       guard raises the Accept banner, exactly as on main. */
+    it('stage1_shrink_refused on a Retry reaches the Accept-smaller-roster banner via the resumed main run', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await pausedMainRetry();
+      await act(async () => {
+        capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
+      });
+      /* The resumed main run is what raises the banner on main. */
+      analyseManuscriptRejection = new AnalysisError(
+        'Cast finalisation would drop from 9 to 4 characters.',
+        'stage1_shrink_refused',
+        undefined,
+        9,
+        4,
+      );
+      await act(async () => {
+        rejectSubset?.(
+          new AnalysisError(
+            'Cast finalisation would drop from 9 to 4 characters. Confirm via allowStage1Shrink.',
+            'stage1_shrink_refused',
+            undefined,
+            9,
+            4,
+          ),
+        );
+      });
+      expect(await screen.findByTestId('stage1-shrink-refused-banner')).toBeInTheDocument();
+      expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+    });
 
     it('control: a Retry that ends without a result still drops the row and raises nothing', async () => {
       const { store, AnalysisError, viewReject } = await startRetry();
