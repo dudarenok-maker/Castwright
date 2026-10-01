@@ -108,6 +108,20 @@ recite:
     where it now runs and where its result is used — and is the value an
     estimate (safe to take early) or a record of what actually happened
     (must be taken at the time)?
+15. **A test that cannot pass on the CI leg that runs it** — it uses a
+    Windows-only cmdlet parameter (`Start-Process -WindowStyle`, `-Verb`) or
+    a Windows-only API, and the author ran it only on Windows, while the leg
+    that executes it is Ubuntu pwsh (CI's Windows leg runs `test`,
+    `test:server` and `test:hooks`, never `test:scripts`). The author's
+    green run proves nothing about the runner (PR #3404 pass 4: three
+    `Stop-ProcessTreeByLiveness` Pester cases died with `NotSupportedException`
+    on `-WindowStyle`, 99 pass / 3 fail on the required leg). The fix is
+    never a Windows-only skip — that leaves the test running in no leg, and
+    `$IsWindows` is `$null` on Windows PowerShell 5.1 so the naive skip also
+    skips there. Splat the Windows-only parameter conditionally
+    (`$PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows`). Checkable:
+    for every new test, name the CI leg that executes it and whether anything
+    in it is unavailable there.
 
 ### Keeping the catalogue current
 

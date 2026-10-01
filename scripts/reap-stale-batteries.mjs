@@ -34,6 +34,7 @@ import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readSync, r
 import { dirname, posix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { pidIsAlive } from './lib/pid-alive.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(__dirname, '..');
@@ -573,11 +574,16 @@ export function rowsToProcesses(rows) {
  *  the second is slow (or itself times out) can take up to roughly
  *  2 * 15000ms + 250ms (~30.25s) before returning. The invariant that matters
  *  is unchanged and is the one the hook guard actually enforces: NO POOL.
- *  Single spawn on success or genuine failure, up to one retry spawn on a
- *  genuine transient-empty result (#3238) OR a genuine spawnSync timeout
- *  (#3331) — never both retried in the same run; at most 2 spawn calls
- *  total. Returns [] (never throws) on a non-Windows host or any PowerShell
- *  failure — a census that can't run must never block a push.
+ *  Single spawn on success or a permanent failure (spawn error / nonzero
+ *  status), up to one retry spawn on a transient result: empty rows (#3238), a
+ *  genuine spawnSync timeout (#3331), or unparseable stdout with status 0 (a
+ *  stray PowerShell line ahead of the JSON, PR #3404) — one shared retry
+ *  budget, never stacked; at most 2 spawn calls total. Returns [] (never
+ *  throws) on a non-Windows host or any PowerShell failure — a census that
+ *  can't run must never block a push. A FAILED census (permanent, still
+ *  failing after retry, or still empty after retry) returns an array carrying
+ *  a non-enumerable `snapshotError` so it stays distinguishable from "nothing
+ *  running"; the non-Windows `[]` carries none.
  *
  *  `CreationEpochMs` is computed INSIDE PowerShell via `[DateTimeOffset]` and
  *  cast to `[long]` before `ConvertTo-Json` ever sees it, rather than parsing
@@ -594,10 +600,22 @@ export function collectProcessSnapshot({
 } = {}) {
   if (!windows) return [];
 
+  // On Windows PowerShell 5.1 with redirected stdout, a Warning record is
+  // written to STDOUT (exit status stays 0), so a single stray line ahead of
+  // the JSON makes the whole output unparseable and blanks the census.
+  // Measured under 5.1 (spawnSync('powershell', ...)): only
+  // `$WarningPreference='SilentlyContinue'` changes the output. Write-Host and
+  // `Write-Information -InformationAction Continue` still reach stdout with
+  // all three preferences set, a bare Write-Information is already silent, and
+  // Progress never reaches stdout — so $InformationPreference and
+  // $ProgressPreference are belt-and-braces no-ops here, kept as cheap
+  // insurance. A stray Host line is covered by the parse-failure retry below,
+  // not by these preferences.
   const queryArgs = [
     '-NoProfile',
     '-Command',
-    "Get-CimInstance Win32_Process | " +
+    "$WarningPreference='SilentlyContinue'; $InformationPreference='SilentlyContinue'; $ProgressPreference='SilentlyContinue'; " +
+      "Get-CimInstance Win32_Process | " +
       "Select-Object ProcessId,ParentProcessId,Name,CommandLine," +
       "@{N='CreationEpochMs';E={ if ($_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { $null } }}," +
       "@{N='CpuSeconds';E={([double]$_.UserModeTime + [double]$_.KernelModeTime)/1e7}} | " +
@@ -615,10 +633,10 @@ export function collectProcessSnapshot({
     // retry. Return a distinguishable outcome carrying the error code so the
     // caller can log it (#3331).
     if (result.error?.code === 'ETIMEDOUT') {
-      return { success: false, data: null, transient: true, errorCode: result.error.code };
+      return { success: false, data: null, transient: true, kind: 'timeout', errorCode: result.error.code };
     }
     // Distinguish between genuine failure and "no data returned".
-    // Genuine failure: error set, non-zero status, or parse failure — these never retry.
+    // Genuine failure: error set or non-zero status — these never retry.
     if (result.error || result.status !== 0) {
       return { success: false, data: null, error: result.error, status: result.status };
     }
@@ -629,17 +647,43 @@ export function collectProcessSnapshot({
       const rows = Array.isArray(parsed) ? parsed : [parsed];
       return { success: true, data: rows };
     } catch {
-      // Parse failure is a genuine failure, not a transient.
-      return { success: false, data: null, error: { code: 'PARSE_ERROR' }, status: result.status };
+      // Unparseable stdout with status 0 is a stray-output class of failure
+      // (a PowerShell warning line ahead of the JSON), not a broken runner —
+      // so it is transient and gets the one retry, and the stdout head is
+      // carried so the next occurrence is diagnosable.
+      return {
+        success: false,
+        data: null,
+        transient: true,
+        kind: 'parse',
+        errorCode: 'PARSE_ERROR',
+        stdoutPrefix: JSON.stringify(String(result.stdout).slice(0, 120)),
+      };
     }
   };
 
-  // Single bounded retry loop — at most 2 spawn calls total, covering BOTH
-  // timeouts (#3331) and the empty-rows transient (#3238). A first attempt
-  // that times out and a second that returns empty rows still makes exactly
-  // two spawn calls; there is no stacked second retry (#3331).
+  const describeTransient = (r) =>
+    r.kind === 'parse'
+      ? `output was not JSON, error code ${r.errorCode}, stdout prefix ${r.stdoutPrefix}`
+      : `Win32_Process query timed out, error code ${r.errorCode}`;
+
+  // A failed census must stay distinguishable from "nothing running": the
+  // returned array carries the reason on a non-enumerable `snapshotError`
+  // (non-enumerable so the array still compares equal to [] and every caller
+  // that only reads rows is unaffected); runCensus copies it into the log.
+  const failedSnapshot = (reason) => {
+    const out = [];
+    Object.defineProperty(out, 'snapshotError', { value: reason, enumerable: false });
+    return out;
+  };
+
+  // Single bounded retry loop — at most 2 spawn calls total, covering
+  // timeouts (#3331), unparseable output, and the empty-rows transient
+  // (#3238). A first attempt that times out and a second that returns empty
+  // rows still makes exactly two spawn calls; there is no stacked second
+  // retry (#3331).
   const MAX_ATTEMPTS = 2;
-  let lastFailReason = null; // { kind: 'timeout', errorCode } | { kind: 'empty' } | null
+  let lastFailReason = null; // { kind: 'timeout' | 'parse', errorCode, ... } | { kind: 'empty' } | null
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
     if (i > 0) {
@@ -647,31 +691,31 @@ export function collectProcessSnapshot({
     }
     const a = attempt();
 
-    // Permanent failures (error, non-zero status, or parse error) — return []
-    // immediately, no retry. Timeouts have transient: true and fall through.
+    // Permanent failures (error or non-zero status) — return []
+    // immediately, no retry. Timeouts and parse errors have transient: true
+    // and fall through.
     if (!a.success && !a.transient) {
       // Log why, even when this is the second attempt after a first-attempt
-      // timeout — otherwise that ordering (timeout, then a genuine permanent
-      // failure) discards lastFailReason and returns [] with zero output.
-      if (lastFailReason?.kind === 'timeout') {
+      // transient failure — otherwise that ordering discards lastFailReason
+      // and returns [] with zero output.
+      const permanent = `error code ${a.error?.code ?? 'n/a'}, status ${a.status ?? 'n/a'}`;
+      if (lastFailReason && lastFailReason.kind !== 'empty') {
         console.warn(
-          `collectProcessSnapshot: returning [] — first Win32_Process query timed out ` +
-            `(error code ${lastFailReason.errorCode}), then retry hit a permanent failure ` +
-            `(error code ${a.error?.code ?? 'n/a'}, status ${a.status ?? 'n/a'})`,
+          `collectProcessSnapshot: returning [] — first Win32_Process query failed (${describeTransient(lastFailReason)}), ` +
+            `then retry hit a permanent failure (${permanent})`,
         );
       } else {
         console.warn(
-          `collectProcessSnapshot: returning [] — Win32_Process query hit a permanent failure ` +
-            `(error code ${a.error?.code ?? 'n/a'}, status ${a.status ?? 'n/a'})`,
+          `collectProcessSnapshot: returning [] — Win32_Process query hit a permanent failure (${permanent})`,
         );
       }
-      return [];
+      return failedSnapshot(`permanent failure (${permanent})`);
     }
 
-    // Timeout is transient — record the error code and continue to the next
-    // attempt (the retry, if any remaining).
+    // A transient failure — record it and continue to the next attempt (the
+    // retry, if any remaining).
     if (!a.success && a.transient) {
-      lastFailReason = { kind: 'timeout', errorCode: a.errorCode };
+      lastFailReason = a;
       continue;
     }
 
@@ -679,9 +723,9 @@ export function collectProcessSnapshot({
     const processes = rowsToProcesses(a.data ?? []);
     if (processes.length > 0) {
       if (i > 0) {
-        if (lastFailReason?.kind === 'timeout') {
+        if (lastFailReason && lastFailReason.kind !== 'empty') {
           console.warn(
-            `collectProcessSnapshot: recovered on retry — first Win32_Process query timed out (error code ${lastFailReason.errorCode})`,
+            `collectProcessSnapshot: recovered on retry — first Win32_Process query failed (${describeTransient(lastFailReason)})`,
           );
         } else {
           console.warn(
@@ -698,16 +742,13 @@ export function collectProcessSnapshot({
   }
 
   // All attempts exhausted — log the reason and return [].
-  if (lastFailReason?.kind === 'timeout') {
-    console.warn(
-      `collectProcessSnapshot: still failing after retry — returning [] (Win32_Process query timed out, error code ${lastFailReason.errorCode})`,
-    );
-  } else {
-    console.warn(
-      'collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)',
-    );
+  if (lastFailReason && lastFailReason.kind !== 'empty') {
+    const detail = describeTransient(lastFailReason);
+    console.warn(`collectProcessSnapshot: still failing after retry — returning [] (${detail})`);
+    return failedSnapshot(detail);
   }
-  return [];
+  console.warn('collectProcessSnapshot: still empty after retry — returning [] (transient WMI blind spot)');
+  return failedSnapshot('empty Win32_Process result after retry');
 }
 
 /** This process's own ancestor pids, resolved from `processes` — never
@@ -739,10 +780,11 @@ export function ownAncestryPids(processes, selfPid = process.pid) {
 //
 // Measured live (PR #3063 review pass 2, C6): 214,013 bytes per entry on a
 // 415-root box. The previous flat 2 MB therefore held only NINE entries, and
-// E104's own acceptance criterion (2) — "run it again ~10+ minutes later",
-// with a handful of `npm run doctor` runs in between — evicted every
-// sufficiently-old sample from the window, so `stalled-rate` went dark for
-// every root exactly while an operator was using the tool to look for a stall.
+// E104 (discharged 2026-09-25, removed from the register)'s own acceptance
+// criterion (2) — "run it again ~10+ minutes later", with a handful of
+// `npm run doctor` runs in between — evicted every sufficiently-old sample
+// from the window, so `stalled-rate` went dark for every root exactly while
+// an operator was using the tool to look for a stall.
 const CENSUS_ENTRY_BYTES = 220 * 1024;
 // The shortest interval between two censuses worth sizing for: a human
 // running `npm run doctor` repeatedly while investigating, or a burst of
@@ -906,7 +948,15 @@ export const KILL_TIMEOUT_MS = 15000;
  *
  *  `spawn`/`windows` are injectable purely so the spawn BUDGET and the
  *  timed-out-spawn path are testable on any platform — nothing in production
- *  passes them.
+ *  passes them. `isAlive` (default: the shared fail-safe
+ *  scripts/lib/pid-alive.mjs probe) and `descendantPids` (default: just
+ *  `[pid]`, for a caller — including this file's own direct unit tests —
+ *  that never computed a descendant set) ARE meaningfully exercised in
+ *  production: on a nonzero taskkill exit, `runCensus` passes the root's
+ *  real OS descendant closure (`computeOsDescendants`) as `descendantPids`,
+ *  so the outcome is judged by the WHOLE recorded tree reading gone
+ *  afterward, not the root pid alone (PR #3404 review pass 1 — see the
+ *  comment on the nonzero-exit branch below).
  *
  *  Residual, accepted and named rather than fixed (PR #3063 review pass 2,
  *  N4): this call re-validates nothing about `pid` itself. The census
@@ -915,15 +965,46 @@ export const KILL_TIMEOUT_MS = 15000;
  *  unrelated new tree. classify() guards PID reuse for CLASSIFICATION (the
  *  startedAt checks in resolveRoot and the prior-sample match); the kill site
  *  has no equivalent, and closing it would need a second
- *  `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill. */
-export function killTree(pid, { spawn = spawnSync, windows = isWindows } = {}) {
+ *  `Get-CimInstance -Filter ProcessId=<pid>` creation-time re-check per kill.
+ *
+ *  Same class, also residual (PR #3404 review pass 2): `descendantPids` is a
+ *  point-in-time snapshot too — the census's, not a re-walk at kill time. A
+ *  descendant that spawns its OWN child AFTER the census runs, then exits
+ *  itself, leaves that grandchild running while every pid this function
+ *  actually checks reads gone — the whole-tree check above reports `true`
+ *  for a tree that is not, in fact, whole gone. The zero-exit path
+ *  (`result.status === 0`, below) trusts taskkill's own success claim
+ *  outright and has the exact same blindness: taskkill's `/T` walk is a
+ *  point-in-time snapshot of its own, taken independently of the census's.
+ *  Closing either needs a second `Win32_Process` query per kill — the same
+ *  cost N4 already declined. */
+export function killTree(pid, { spawn = spawnSync, windows = isWindows, isAlive = pidIsAlive, descendantPids } = {}) {
   if (!windows) return false;
   const result = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
     stdio: 'ignore',
     windowsHide: true,
     timeout: KILL_TIMEOUT_MS,
   });
-  return !result.error && result.status === 0;
+  if (result.error) return false;
+  if (result.status === 0) return true;
+  // A nonzero exit does NOT mean the tree survived: register row E104,
+  // discharged 2026-09-25, removed from the register, observed `/T` exit
+  // nonzero on real pushes (pids 38780 and 23792) even though the whole
+  // target tree was actually gone — `/T` reports failure when a child had
+  // already exited mid-walk or couldn't be found.
+  //
+  // But a nonzero exit ALSO covers the opposite shape (PR #3404 review pass
+  // 1): the ROOT itself was already gone BEFORE taskkill even ran ("ERROR:
+  // The process ... not found"), so nothing was walked at all and every
+  // descendant survives untouched. The exit code alone cannot distinguish
+  // these two cases. Judge the outcome by whether the WHOLE recorded tree —
+  // the root AND every real OS descendant the caller resolved beforehand —
+  // reads gone afterward, never by the root pid alone: a reaped tree whose
+  // descendants are still running must never be reported as killed.
+  for (const p of descendantPids ?? [pid]) {
+    if (isAlive(p)) return false;
+  }
+  return true;
 }
 
 /**
@@ -1005,11 +1086,15 @@ function findKillRefusalReason(rootPid, processes, protectedPids, pidToRoot, roo
  * `--kill` manual path passes both. Before each kill, `findKillRefusalReason`
  * re-checks the root's real OS descendant closure (not classify()'s subtree)
  * and refuses rather than kills when that closure reaches anything protected
- * or alive — see its own doc comment. Refused roots land in `refused`
- * (`{rootPid, reason}`), never in `killed`. A kill that was ATTEMPTED but
- * whose `taskkill` failed or timed out (`killFn` returns falsy) lands in
- * `failed`, never silently in neither bucket — a failed kill must stay
- * distinguishable from one never attempted at all.
+ * or alive — see its own doc comment. That same descendant closure is also
+ * handed to `killFn` as `descendantPids`, so a nonzero taskkill exit is
+ * judged against the WHOLE recorded tree being gone, not the root pid alone
+ * (PR #3404 review pass 1 — see killTree's own doc comment). Refused roots
+ * land in `refused` (`{rootPid, reason}`), never in `killed`. A kill that was
+ * ATTEMPTED but whose outcome is not actually successful (`killFn` returns
+ * falsy — the tree, or some part of it, is still confirmed alive after the
+ * attempt) lands in `failed`, never silently in neither bucket — a failed
+ * kill must stay distinguishable from one never attempted at all.
  *
  * Every argument the OS/filesystem touches is injectable so tests never
  * need a real Windows box or a real stale process.
@@ -1051,7 +1136,12 @@ export function runCensus({
         refused.push({ rootPid: v.rootPid, reason: refusalReason });
         continue;
       }
-      if (killFn(v.rootPid)) {
+      // Same descendant closure findKillRefusalReason just checked, reused
+      // here rather than recomputed with different semantics: killFn judges
+      // a nonzero taskkill exit by whether the WHOLE tree is gone, not the
+      // root pid alone (PR #3404 review pass 1).
+      const descendantPids = computeOsDescendants(v.rootPid, processes);
+      if (killFn(v.rootPid, { descendantPids })) {
         killed.push(v.rootPid);
       } else {
         failed.push(v.rootPid);
@@ -1070,6 +1160,9 @@ export function runCensus({
   appendLog(
     {
       ts: now,
+      // A failed census must not read as "nothing running" (see
+      // collectProcessSnapshot's failedSnapshot).
+      ...(processes.snapshotError ? { snapshotError: processes.snapshotError } : {}),
       roots: verdicts.map((v) => ({
         rootPid: v.rootPid,
         name: v.name,
