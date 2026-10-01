@@ -217,6 +217,50 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     expect(s3.activeStream).toEqual(s2.activeStream);
   });
 
+  /* #3084 F7 — a halted run carries the classifier's structured "how to
+     fix" list on the SAME snapshot record (never a separate one); this is
+     what lets the analysing view render it for a user who navigated away
+     and back within the session. Mutation: delete
+     `snap.haltFixes = action.payload.fixes;` from the reducer → the first
+     assertion below reddens. */
+  it('setHalted stores fixes as haltFixes; a fixless halt leaves it undefined (#3084 F7)', () => {
+    const fixes = [
+      { label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' },
+      {
+        label: 'Read: When a model thinks past its output limit',
+        wikiPage: 'Analysis-and-the-Analyzer',
+      },
+    ];
+    const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
+    const s2 = analysisSlice.reducer(
+      s1,
+      analysisActions.setHalted({
+        manuscriptId: 'm1',
+        code: 'analyzer-reasoning-overflow',
+        message: 'The model spent its output budget on reasoning.',
+        fixes,
+      }),
+    );
+    expect(s2.activeStream?.haltFixes).toEqual(fixes);
+    /* Same record, same pre-2b fields. */
+    expect(s2.activeStream).toMatchObject({
+      state: 'halted',
+      haltCode: 'analyzer-reasoning-overflow',
+      haltReason: 'The model spent its output budget on reasoning.',
+    });
+    /* Every other halt code omits `fixes` — the field must stay undefined
+       rather than inherit anything. */
+    const s3 = analysisSlice.reducer(
+      s1,
+      analysisActions.setHalted({
+        manuscriptId: 'm1',
+        code: 'attribution_drift',
+        message: 'Phase 1 demoted 60% of sentences.',
+      }),
+    );
+    expect(s3.activeStream?.haltFixes).toBeUndefined();
+  });
+
   it('setPaused flips state to paused; cross-book guarded', () => {
     const s1 = analysisSlice.reducer(undefined, analysisActions.setActiveStream(baseSnapshot));
     const s2 = analysisSlice.reducer(s1, analysisActions.setPaused({ manuscriptId: 'm1' }));

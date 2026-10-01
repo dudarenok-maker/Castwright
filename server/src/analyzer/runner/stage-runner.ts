@@ -6,6 +6,7 @@ import { writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../../handoff/protocol.js';
 import type { StageCall } from '../types.js';
+import { AnalyzerReasoningOverflowError } from '../errors.js';
 import { mapFinish, withThinkEvidence } from './finish.js';
 import { parseAndValidate, persistResponse, summariseDetail } from './parse.js';
 import { buildSystemInstruction, estimateInputTokens, loadSkill, type SkillName } from './prompt.js';
@@ -144,6 +145,10 @@ export class StageRunner {
       text = await this.send('', [{ role: 'user', content: spec.promptMd }], this.policy.initialTemperature(), structuredOutput, call, false);
     } catch (err) {
       if (this.policy.escalationRethrows(err)) throw err;
+      /* #3084 P20 — still skip the window, but report the overflow first: the
+         same settings overflow on every later window, and only the route can
+         stop them (it empties the book's escalation budget). */
+      if (err instanceof AnalyzerReasoningOverflowError) call.onReasoningOverflow?.(err);
       console.warn(`[${tag}] ${model} ${spec.key} produced no usable response: ${(err as Error)?.message ?? err}`);
       return null;
     }
@@ -184,12 +189,20 @@ export class StageRunner {
     call: StageCall,
     withEvalTiming: boolean,
   ): Promise<string> {
+    /* #3084 wave 2b — warm whatever settings resolution reads synchronously
+       (the Gemini model catalog behind Auto max output tokens) BEFORE reading
+       settings, on every request. The caller's signal lets pause release a
+       warm-up (P26). structuredOutput() reads settings().structuredOutput
+       before the first send without this await, so that field must never
+       depend on prepare(). */
+    await this.transport.prepare?.(call.signal);
+    const settings = this.settings();
     const result = await this.transport.send({
       system,
       messages,
       structuredOutput,
       temperature,
-      maxOutputTokens: this.settings().maxOutputTokens,
+      maxOutputTokens: settings.maxOutputTokens,
       estimatedInputTokens: estimateInputTokens(
         system,
         messages.map((m) => ({ role: m.role === 'assistant' ? ('model' as const) : ('user' as const), parts: [{ text: m.content }] })),

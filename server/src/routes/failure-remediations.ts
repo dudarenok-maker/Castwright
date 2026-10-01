@@ -99,6 +99,33 @@ export const FAILURE_REMEDIATIONS = {
       'Retry the chapter. If it recurs, lower STAGE2_CHUNK_CHAR_BUDGET in server/.env (or Advanced ' +
       'Settings) or switch to a stronger analyzer model.',
   },
+  'analyzer-reasoning-overflow': {
+    userMessage:
+      'The analyzer model spent its whole output budget reasoning and returned no answer, so the analysis ' +
+      'stopped: the same settings would overflow again on every chapter, and splitting never shrinks reasoning.',
+    /* #3084 F7 — a step list, ending in the sentence F7 requires verbatim.
+       No "lower the model's reasoning level" here in wave 2: that control
+       does not exist until 5a (Task 5.5b) adds it; mentioning it now would
+       promise a fix the UI cannot yet offer. "Switch to a different model"
+       stands in its place. */
+    remediation:
+      "Give the model more room: for Gemini, if you set 'Gemini max output tokens' in Advanced Settings below " +
+      "Auto, raise it or set it back to 0 (Auto, the model's own limit), otherwise switch to a different " +
+      "analyzer model; for Ollama, if you set 'Ollama num_predict' (ANALYZER_NUM_PREDICT) above -1, raise it or set it " +
+      "back to -1 (unlimited), otherwise raise 'Ollama num_ctx' (ANALYZER_NUM_CTX), the context window the " +
+      'prompt and the whole reply must fit in. Or switch to a different analyzer model. Then resume — ' +
+      'finished chapters are kept.',
+  },
+  'analyzer-timeout': {
+    userMessage:
+      'The analyzer request was stopped because it ran past a time limit without finishing, instead of ' +
+      'being left to hang.',
+    remediation:
+      "Retry the chapter. If it recurs: when a thinking Gemini model stayed silent before answering, raise " +
+      "'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most " +
+      "290000 ms, below the 300 s network timeout); when a request ran too long overall, raise 'Gemini request " +
+      "ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) in Advanced Settings. Or switch to a faster analyzer model.",
+  },
   'analyzer-daily-quota': {
     userMessage: "The analyzer's free-tier daily quota is exhausted.",
     remediation:

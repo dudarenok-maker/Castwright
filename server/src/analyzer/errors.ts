@@ -132,3 +132,50 @@ export class GeminiContentBlockedError extends Error {
     this.name = 'GeminiContentBlockedError';
   }
 }
+
+/* #3084 — a request ran past a time limit without finishing (spec §1 decision
+   1c, spec §7). Wave 2 throws it from the Gemini transport for
+   analyzer.gemini.requestCeilingMs ('ceiling') and for the thinking window,
+   analyzer.gemini.thinkingIdleTimeoutMs ('thinking-idle'); wave 3 reuses it
+   for OpenAI-compatible endpoints ('connect-timeout' too). Never retried, never
+   a fallback: the upstream was reachable and did not finish. */
+export class AnalyzerTimeoutError extends Error {
+  readonly code = 'ANALYZER_TIMEOUT';
+  constructor(
+    public readonly transport: TransportKind,
+    public readonly model: string,
+    public readonly elapsedMs: number,
+    public readonly reason: 'ceiling' | 'connect-timeout' | 'thinking-idle',
+  ) {
+    super(
+      `${transport} ${model} request exceeded its ${
+        reason === 'ceiling' ? 'time ceiling' : reason === 'thinking-idle' ? 'thinking window' : 'connect timeout'
+      } after ${elapsedMs} ms.`,
+    );
+    this.name = 'AnalyzerTimeoutError';
+  }
+}
+
+/* #3084 wave 2 — the model stopped at its OUTPUT cap with no answer text while
+   there is evidence it was reasoning (reasoning tokens reported, thought parts
+   or reasoning deltas seen, or an unterminated <think> block). Unlike
+   AnalyzerTruncatedError this is NOT a size problem: splitting the chunk never
+   shrinks reasoning, so no chunker catches it — runner/finish.ts raises it and
+   the taxonomy maps it to analyzer-reasoning-overflow, naming the engine's
+   max-output and reasoning settings. Deliberately not a subclass of
+   AnalyzerTruncatedError. */
+export class AnalyzerReasoningOverflowError extends Error {
+  readonly code = 'ANALYZER_REASONING_OVERFLOW';
+  constructor(
+    public readonly transport: TransportKind,
+    public readonly model: string,
+    public readonly reasoningTokens: number | undefined,
+  ) {
+    super(
+      `${transport} ${model} used its whole output budget on reasoning` +
+        (reasoningTokens ? ` (${reasoningTokens} reasoning tokens)` : '') +
+        ' and returned no answer — splitting the chunk cannot shrink reasoning.',
+    );
+    this.name = 'AnalyzerReasoningOverflowError';
+  }
+}

@@ -7,10 +7,10 @@ import { z } from 'zod';
 import { StageRunner, identitySchemaAdapter, type EngineRequestSettings, type SchemaAdapter } from './stage-runner.js';
 import { GEMINI_RETRY_POLICY, OLLAMA_RETRY_POLICY, type ValidationRetryPolicy } from './retry-policy.js';
 import type { ChatTransport, TransportRequest, TransportResult } from './transport.js';
-import { AnalysisAbortedError } from '../errors.js';
+import { AnalysisAbortedError, AnalyzerReasoningOverflowError } from '../errors.js';
 
 const HANDOFF_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'handoff');
-const IDS = ['m_sr_first', 'm_sr_json', 'm_sr_retry', 'm_sr_noraw', 'm_sr_raw', 'm_sr_single', 'm_sr_cap'];
+const IDS = ['m_sr_first', 'm_sr_json', 'm_sr_retry', 'm_sr_noraw', 'm_sr_raw', 'm_sr_single', 'm_sr_cap', 'm_sr_prepare', 'm_sr_overflow'];
 
 class FakeTransport implements ChatTransport {
   readonly kind = 'ollama' as const;
@@ -157,5 +157,58 @@ describe('StageRunner (#3084 wave 1)', () => {
     const t = new FakeTransport(['{"a":"ok"}']);
     await makeRunner(t, GEMINI_RETRY_POLICY, { structuredOutput: 'json', maxOutputTokens: 1234 }).runStage(spec('m_sr_cap'), {});
     expect(t.requests[0].maxOutputTokens).toBe(1234);
+  });
+
+  it('awaits transport.prepare(call.signal) before reading settings, on every send (#3084 wave 2b)', async () => {
+    let warmed = false;
+    const t = Object.assign(new FakeTransport(['{"a":1}', '{"a":"ok"}']), {
+      prepare: vi.fn(async (_signal?: AbortSignal) => {
+        await new Promise((r) => setTimeout(r, 5));
+        warmed = true;
+      }),
+    });
+    const runner = new StageRunner({
+      transport: t,
+      policy: GEMINI_RETRY_POLICY,
+      settings: () => ({ structuredOutput: 'json', maxOutputTokens: warmed ? 65_536 : 8192 }),
+      adaptSchema: identitySchemaAdapter,
+    });
+    const controller = new AbortController();
+    /* '{"a":1}' fails the z.string() schema, so the runner sends twice. */
+    await expect(runner.runStage(spec('m_sr_prepare'), { signal: controller.signal })).resolves.toEqual({ a: 'ok' });
+    expect(t.prepare).toHaveBeenCalledTimes(2);
+    /* P26 — each warm-up gets the caller's signal, so pause can release it. */
+    expect(t.prepare.mock.calls.map(([signal]) => signal)).toEqual([controller.signal, controller.signal]);
+    expect(t.requests.map((r) => r.maxOutputTokens)).toEqual([65_536, 65_536]);
+  });
+
+  it('single attempt: a reasoning overflow resolves to null and calls onReasoningOverflow once; other failures do not call it (#3084 P20)', async () => {
+    const single = { manuscriptId: 'm_sr_overflow', key: 'escalation-ch1-w0' as const, promptMd: 'p', grammarSchema: schema, validationSchema: schema };
+    const lengthTransport = (over: Partial<TransportResult>): ChatTransport => ({
+      kind: 'gemini',
+      model: 'gemini-3.6-flash',
+      send: async () => ({ text: '', reasoningSeen: false, finish: 'length', finishReason: 'MAX_TOKENS', receivedBytes: 0, ...over }),
+    });
+
+    /* Overflow: an empty answer at the output cap, with reasoning evidence. */
+    const onReasoningOverflow = vi.fn();
+    const overflowing = lengthTransport({ reasoningSeen: true, usage: { reasoningTokens: 8100 } });
+    expect(await makeRunner(overflowing, GEMINI_RETRY_POLICY, JSON_MODE).runSingleAttempt(single, { onReasoningOverflow })).toBeNull();
+    expect(onReasoningOverflow).toHaveBeenCalledTimes(1);
+    expect(onReasoningOverflow.mock.calls[0][0]).toBeInstanceOf(AnalyzerReasoningOverflowError);
+    expect(onReasoningOverflow.mock.calls[0][0]).toMatchObject({ model: 'gemini-3.6-flash', reasoningTokens: 8100 });
+
+    /* Every other outcome leaves the hook alone: a swallowed transport error, a
+       no-evidence truncation (AnalyzerTruncatedError, also swallowed),
+       unparseable text, and an abort (rethrown). */
+    const notCalled = vi.fn();
+    const call = { onReasoningOverflow: notCalled };
+    expect(await makeRunner(new FakeTransport([new Error('boom')]), GEMINI_RETRY_POLICY, JSON_MODE).runSingleAttempt(single, call)).toBeNull();
+    expect(await makeRunner(lengthTransport({}), GEMINI_RETRY_POLICY, JSON_MODE).runSingleAttempt(single, call)).toBeNull();
+    expect(await makeRunner(new FakeTransport(['not json']), GEMINI_RETRY_POLICY, JSON_MODE).runSingleAttempt(single, call)).toBeNull();
+    await expect(
+      makeRunner(new FakeTransport([new AnalysisAbortedError('gone')]), GEMINI_RETRY_POLICY, JSON_MODE).runSingleAttempt(single, call),
+    ).rejects.toBeInstanceOf(AnalysisAbortedError);
+    expect(notCalled).not.toHaveBeenCalled();
   });
 });

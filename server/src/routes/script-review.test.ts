@@ -410,6 +410,29 @@ describe('POST /api/books/:bookId/script-review', () => {
     expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
   });
 
+  it('a reasoning overflow fast-fails the whole pass with analyzer-reasoning-overflow — no per-chapter grind (#3084 P20)', async () => {
+    /* Same reasoning as the content block above: the same settings overflow
+       again on every chunk, each time spending a full output budget on
+       thinking, so the FIRST overflow stops the pass with one terminal error. */
+    writeBook(SENTENCES);
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    runReview.mockImplementation((): Promise<ScriptReviewOutput> =>
+      Promise.reject(new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100)),
+    );
+
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({});
+    const events = parseSse(res.text);
+
+    const err = events.find((e) => e.kind === 'error') as
+      | { code?: string; message?: string; model?: string; remediation?: string }
+      | undefined;
+    expect(err?.code).toBe('analyzer-reasoning-overflow');
+    expect(err?.model).toBe('gemini-3.6-flash');
+    expect(err?.remediation).toContain('Gemini max output tokens');
+    expect(events.some((e) => e.kind === 'result')).toBe(false);
+    expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
+  });
+
   /* Round-3 review Important Finding 5 — the detached job launch
      (`void runScriptReviewJob(...).finally(...)`) had no `.catch`, so a
      SYNCHRONOUS throw inside runScriptReviewJob (e.g. selectAnalyzerForPhase

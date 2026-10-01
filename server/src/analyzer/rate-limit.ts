@@ -92,7 +92,7 @@ function overrideValue(envName: string): number | undefined {
   return typeof state.effective === 'number' ? state.effective : undefined;
 }
 
-function resolveLimits(model: string): ModelLimits {
+export function resolveLimits(model: string): ModelLimits {
   const base = BUILTIN_LIMITS[model] ?? FALLBACK_LIMITS;
   const slug = envSlug(model);
   return {

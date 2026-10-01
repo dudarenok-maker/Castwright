@@ -29,7 +29,7 @@
    B-series doc) — the navigation pattern that triggers this is rare.
 
    What the middleware consumes vs leaves to the view: snapshot-only
-   subset (onPhase / onEta / onSeriesPrior / AnalysisError /
+   subset (onPhase / onEta / onSeriesPrior / the non-story onWarning / AnalysisError /
    onComplete). Log lines, cast-update merges, chapter-failed rows,
    and heartbeats stay view-only — the middleware would either
    double-dispatch (idempotent but wasteful) or fight the view for
@@ -40,12 +40,13 @@
    Pairs with docs/features/archive/32-sticky-analysis.md. */
 
 import type { Dispatch, Middleware } from '@reduxjs/toolkit';
-import { api, AnalysisError } from '../lib/api';
+import { api, AnalysisError, type AnalysisFailureFix } from '../lib/api';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 import { analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { notificationsActions } from './notifications-slice';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { emitLanguageGuard } from '../lib/language-guard-bus';
+import { deliverNonStoryOverflowWarning } from '../lib/analysis-warning-toast';
 
 interface AnalysisRootState {
   analysis: { activeStream: AnalysisStreamSnapshot | null };
@@ -76,6 +77,15 @@ const APPLY_TICK_TYPE = analysisActions.applyAnalysisSnapshotTick.type;
    on every single tick. Track whether we've already tried a reopen after a heal,
    and if so, dampen subsequent retries. */
 const REOPEN_FAILURE_DAMPEN_TICKS = 2;
+
+/* The one place the persistent reasoning-overflow toast is built. */
+const overflowToast = (message: string, fixes: AnalysisFailureFix[] | undefined) =>
+  notificationsActions.pushToast({
+    kind: 'error',
+    message,
+    fixes,
+    dedupeKey: 'analysis-stream',
+  });
 
 export const analysisStreamMiddleware: Middleware = (store) => {
   let handle: OpenHandle | null = null;
@@ -167,6 +177,12 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           }),
         );
       },
+      /* #3084 — the non-story overflow advisory only. With the Analysing view
+         unmounted this stream is the sole consumer, so without it the warning
+         is dropped. Same toast + dedupeKey as the view's own onWarning, so a
+         double delivery collapses to one. Every other warning code stays
+         view-only. */
+      onWarning: (w: { code: string; message: string }) => deliverNonStoryOverflowWarning(dispatch, w),
       /* Intentionally NOT consumed by the middleware (view-only):
          onLog, onCastUpdate, onChapterFailed, onChapterResolved,
          onThrottle. */
@@ -264,14 +280,38 @@ export const analysisStreamMiddleware: Middleware = (store) => {
           closeHandle();
           return;
         }
+        /* #3084 F7 — the persistent "reasoning overflow" notification is
+           pushed from the store, not from the analysing view, so it does not
+           depend on the view being mounted when the terminal frame arrives
+           (this stream survives navigation; the view's own SSE aborts on
+           unmount). It is pushed from TWO places via the same `overflowToast`
+           builder: here, and in the HALTED_TYPE hook below — the view's catch
+           can dispatch setHalted first, which closes this handle and turns
+           this stream's own copy of the error into a swallowed AbortError.
+           Both arms share `dedupeKey: 'analysis-stream'` — the same key the
+           `language_unset` branch above and the transport-failure branch
+           below use — so the slice's own dedupe-by-key merge REPLACES this
+           run's plain toast rather than stacking a second one. Only the
+           reasoning-overflow arm carries `fixes`; ToastStack routes a
+           `t.fixes` toast to <ReasoningOverflowToast>. Every other code
+           still pushes exactly one plain toast. */
         if (e instanceof AnalysisError) {
-          dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
           dispatch(
-            notificationsActions.pushToast({
-              kind: 'error',
+            analysisActions.setHalted({
+              manuscriptId,
+              code: e.code,
               message: e.message,
-              dedupeKey: 'analysis-stream',
+              fixes: e.fixes,
             }),
+          );
+          dispatch(
+            e.code === 'analyzer-reasoning-overflow'
+              ? overflowToast(e.message, e.fixes)
+              : notificationsActions.pushToast({
+                  kind: 'error',
+                  message: e.message,
+                  dedupeKey: 'analysis-stream',
+                }),
           );
           return;
         }
@@ -324,7 +364,19 @@ export const analysisStreamMiddleware: Middleware = (store) => {
 
     if (a.type === HALTED_TYPE || a.type === CLEAR_TYPE) {
       /* Slice already updated by next(action). Tear down the local
-         handle — there's nothing more to tick for. */
+         handle — there's nothing more to tick for.
+
+         #3084 F7 — if the halted payload carries an analyzer-reasoning-overflow
+         code with fixes, push the persistent overflow toast here. This covers the
+         race where the view's catch dispatches setHalted first, triggering this
+         hook before the middleware's own copy of the error arrives (which would
+         then surface as AbortError and be swallowed without pushing). The slice's
+         dedupe-by-key will collapse a double push. */
+      const halted = a.payload as ReturnType<typeof analysisActions.setHalted>['payload'] | undefined;
+      if (a.type === HALTED_TYPE && halted?.code === 'analyzer-reasoning-overflow' && halted.fixes?.length) {
+        dispatch(overflowToast(halted.message, halted.fixes));
+      }
+
       closeHandle();
       /* Note: we do NOT reset attemptedReopenAfterCurrentHalt or reopenFailureDampenCount
          here. The damping state needs to survive the close so subsequent ticks within
