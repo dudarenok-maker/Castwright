@@ -1692,7 +1692,14 @@ async function runHangingStepSpanMs(extraEnv) {
   // CI (Castwright#3419) can only come from an empty or truncated beat.txt.
   // Appending removes that window. The specific trigger on Linux CI was not
   // reproduced. Only a newline-terminated line is complete; a torn tail is dropped.
-  const beatText = readFileSync(join(dir, 'beat.txt'), 'utf8');
+  const beatPath = join(dir, 'beat.txt');
+  // The budget starts at spawn, so under load npm/node startup can consume all
+  // of it and the step is killed before the fixture's first beat (Castwright#3422).
+  assert.ok(
+    existsSync(beatPath),
+    `fixture never wrote a heartbeat within the budget (startup consumed it); no beat.txt at ${beatPath}\ncaptured logs:\n${logs.join('\n')}`,
+  );
+  const beatText = readFileSync(beatPath, 'utf8');
   const { last, maxGap } = parseLastHeartbeat(beatText);
   // The span above assumes the fixture died at the kill. With append, a
   // surviving hang.mjs would keep adding lines unnoticed, so prove it stopped.
@@ -1711,7 +1718,7 @@ test('runPipeline: the pipeline budget is not widened under LOW_CONCURRENCY (Cas
   // clamped to the deadline and its live span is the pipeline budget itself.
   // Correct code: throttled - control ~ 0 (startup jitter only). A 2x widening
   // of the pipeline budget: ~ +FLOOR_MS.
-  const FLOOR_MS = 4000;
+  const FLOOR_MS = 10000;
   const env = {
     CASTWRIGHT_RUN_TIMEOUT_MIN: String(FLOOR_MS / 60000),
     CASTWRIGHT_STEP_TIMEOUT_MIN: '10',
@@ -1736,7 +1743,7 @@ test('runPipeline: the per-step budget IS widened under LOW_CONCURRENCY for a vi
   // Mirror image: the run budget is huge, the step floor small, so the step's
   // own budget binds. Correct code: throttled ~ 2x control (diff ~ +FLOOR_MS).
   // stepContentionMultiplier forced to 1: diff ~ 0.
-  const FLOOR_MS = 4000;
+  const FLOOR_MS = 10000;
   const env = {
     CASTWRIGHT_RUN_TIMEOUT_MIN: '10',
     CASTWRIGHT_STEP_TIMEOUT_MIN: String(FLOOR_MS / 60000),
