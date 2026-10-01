@@ -7736,10 +7736,12 @@ export async function runSubsetAnalyzerJob(
       });
     }
 
-    /* #3084 P20 — An escalation overflow that occurred after the last chapter
-       dispatch (e.g., while the last chapter's escalation was in flight after
-       the loop exited) was not caught, leaving the job in SUCCESS state despite
-       reasoningOverflowed=true. Rethrow it now. */
+    /* #3084 P20 — the per-chapter dispatch check only fires when a chapter is
+       about to start, so an overflow recorded by the LAST chapter's own
+       escalation (which runs after that chapter's dispatch check) is never seen
+       by it. This loop is sequential, so nothing is still in flight here; without
+       this check the job would end in success with reasoningOverflowed=true.
+       Rethrow it now that the loop has finished. */
     throwIfReasoningOverflowed(job);
 
     /* Stitch the full sentence list across all cached chapters (old + new),

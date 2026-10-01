@@ -49,8 +49,10 @@ the model's whole output budget, the call comes back with no answer text at all
 — a **reasoning overflow** — and Castwright stops the run rather than burning
 the rest of your quota on a setting that can't succeed.
 
-Re-running the chapter will not help, and neither will splitting it, because
-splitting never shrinks the model's reasoning. On Gemini the overflow is about
+Re-running the chapter will not help, and splitting the chapter into smaller
+pieces will not either, because splitting never shrinks the model's reasoning
+(shrinking what you feed a local Ollama model is a different lever, covered
+below). On Gemini the overflow is about
 how much *output* the model had room for, not how much text you fed it (input
 and output limits are separate), so the same settings overflow again on a
 smaller chunk. On Ollama the prompt and the reply share one context window
