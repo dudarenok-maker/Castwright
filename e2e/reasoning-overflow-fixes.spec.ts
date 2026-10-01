@@ -41,7 +41,7 @@ import { bootFreshBookIntoAnalysing, waitForRouteReady } from './helpers';
 
 /* Hand-authored terminal frame. `fixes` is exactly what
    `reasoningOverflowFixes` (server/src/routes/failure-taxonomy.ts) returns for
-   a Gemini run: two setting deep links, the label-only "switch model" advice
+   a Gemini run with a pinned output cap: one setting deep link, the label-only "switch model" advice
    (no `settingKey`, so `fixHref` returns null and it renders as plain text),
    and the one wiki-link entry LAST. No entry ever carries both a `settingKey`
    and a `wikiPage`. */
@@ -52,12 +52,8 @@ const TERMINAL_ERROR_EVENT = {
   remediation: 'Apply one of the fixes below, then resume — finished chapters are kept.',
   fixes: [
     {
-      label: 'Lower Gemini max input tokens per request',
-      settingKey: 'analyzer.gemini.maxInputTokensPerRequest',
-    },
-    {
-      label: 'Lower the Gemini output-heavy chunk size',
-      settingKey: 'analyzer.gemini.outputHeavyChunkChars',
+      label: 'Raise Gemini max output tokens (or set it back to Auto)',
+      settingKey: 'analyzer.gemini.maxOutputTokens',
     },
     { label: 'Switch to a different analyzer model' },
     {
@@ -143,10 +139,10 @@ test.describe('#3084 F7 — reasoning overflow names its fixes', () => {
 
     /* (1) The run-level block renders the structured "How to fix" list, with a
      * link per `settingKey`/`wikiPage` entry and plain text for the label-only
-     * one. Four fixes: two setting links, one wiki link, one plain label.
+     * one. Three fixes: one setting link, one wiki link, one plain label.
      *
      * Every locator below is scoped to the RUN-LEVEL panel, not the page: the
-     * toast injected above renders the same four entries through the same
+     * toast injected above renders the same three entries through the same
      * `failure-fix-list.tsx`, so `getByText('How to fix:')` and a bare `ul`
      * filter each resolve to two elements and trip Playwright's strict mode.
      *
@@ -158,11 +154,11 @@ test.describe('#3084 F7 — reasoning overflow names its fixes', () => {
      * the toast's wrapper is a different element with none of those classes. */
     const runLevelPanel = page
       .locator('div.mt-6.rounded-2xl.border-rose-200')
-      .filter({ hasText: 'Lower Gemini max input tokens per request' });
+      .filter({ hasText: 'Raise Gemini max output tokens' });
     await expect(runLevelPanel.getByText('How to fix:')).toBeVisible({ timeout: 5_000 });
     const fixList = runLevelPanel.locator('ul');
-    await expect(fixList.getByRole('listitem')).toHaveCount(4);
-    await expect(fixList.getByRole('link')).toHaveCount(3);
+    await expect(fixList.getByRole('listitem')).toHaveCount(3);
+    await expect(fixList.getByRole('link')).toHaveCount(2);
     await expect(
       fixList.getByRole('link', { name: 'Switch to a different analyzer model' }),
     ).toHaveCount(0);
@@ -171,20 +167,20 @@ test.describe('#3084 F7 — reasoning overflow names its fixes', () => {
      * focused and highlighted — `fixHref` builds `#/advanced?focus=<key>` and
      * `AdvancedRoute` scrolls the matching row in and marks it. */
     const settingLink = fixList.getByRole('link', {
-      name: 'Lower Gemini max input tokens per request',
+      name: 'Raise Gemini max output tokens (or set it back to Auto)',
     });
     await expect(settingLink).toHaveAttribute(
       'href',
-      '#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest',
+      '#/advanced?focus=analyzer.gemini.maxOutputTokens',
     );
     await settingLink.click();
     await expect(page).toHaveURL(
-      /#\/advanced\?focus=analyzer\.gemini\.maxInputTokensPerRequest$/,
+      /#\/advanced\?focus=analyzer\.gemini\.maxOutputTokens$/,
     );
     await waitForRouteReady(page);
     const highlightedRow = page.locator('[data-highlighted="true"]');
     await expect(highlightedRow).toBeVisible({ timeout: 3_000 });
-    await expect(highlightedRow).toContainText(/max input tokens per request/i);
+    await expect(highlightedRow).toContainText(/max output tokens/i);
 
     /* (3) The notification is the middleware's, not the view's, so it is still
      * there after the user has navigated away — asserted across two in-app

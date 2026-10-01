@@ -707,8 +707,8 @@ describe('AnalyzerReasoningOverflowError (#3084 wave 2b)', () => {
       'Gemini (gemini-3.6-flash)',
     );
     const keys = (r.fixes ?? []).map((f) => f.settingKey);
-    expect(keys).toContain('analyzer.gemini.maxInputTokensPerRequest');
-    expect(keys).toContain('analyzer.gemini.outputHeavyChunkChars');
+    expect(keys).not.toContain('analyzer.gemini.maxInputTokensPerRequest');
+    expect(keys).not.toContain('analyzer.gemini.outputHeavyChunkChars');
     /* Label-only "switch model" (no settingKey, no wikiPage → plain text). */
     const switchModel = (r.fixes ?? []).find((f) => f.label === 'Switch to a different analyzer model');
     expect(switchModel?.settingKey).toBeUndefined();

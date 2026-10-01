@@ -109,8 +109,9 @@ export const FAILURE_REMEDIATIONS = {
        promise a fix the UI cannot yet offer. "Switch to a different model"
        stands in its place. */
     remediation:
-      "Give the model more room: for Gemini, raise 'Gemini max output tokens' in Advanced Settings (0 = Auto, " +
-      "the model's own limit); for Ollama, raise 'Ollama num_ctx' (ANALYZER_NUM_CTX), the context window the " +
+      "Give the model more room: for Gemini, if you set 'Gemini max output tokens' in Advanced Settings below " +
+      "Auto, raise it or set it back to 0 (Auto, the model's own limit), otherwise switch to a different " +
+      "analyzer model; for Ollama, raise 'Ollama num_ctx' (ANALYZER_NUM_CTX), the context window the " +
       'prompt and the whole reply must fit in. Or switch to a different analyzer model. Then resume — ' +
       'finished chapters are kept.',
   },

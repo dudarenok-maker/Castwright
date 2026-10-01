@@ -85,10 +85,28 @@ describe('reasoningOverflowFixes — the RIGHT key, not just a valid one (#3084 
     expect(keys).not.toContain('analyzer.ollama.numPredict');
   });
 
-  it('Gemini names maxInputTokensPerRequest and outputHeavyChunkChars', () => {
+  /* Output-only: an overflow is about OUTPUT room, and Gemini's input and output
+     limits are separate, so a smaller request body never helps — the copy says
+     "splitting never helps", so the fixes must not offer it. */
+  it('Gemini offers no lower-input fix (no maxInputTokensPerRequest / outputHeavyChunkChars)', () => {
     const keys = reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.6-flash' }).map((f) => f.settingKey);
-    expect(keys).toContain('analyzer.gemini.maxInputTokensPerRequest');
-    expect(keys).toContain('analyzer.gemini.outputHeavyChunkChars');
+    expect(keys).not.toContain('analyzer.gemini.maxInputTokensPerRequest');
+    expect(keys).not.toContain('analyzer.gemini.outputHeavyChunkChars');
+  });
+
+  it('Gemini at Auto (0) offers no raise-output entry; a pinned cap below the known limit does', () => {
+    _seedGeminiCatalogForTest('test-key', [{ id: 'gemini-3.6-flash', outputTokenLimit: 65_536 }]);
+    try {
+      process.env.ANALYZER_MAX_OUTPUT_TOKENS = '0';
+      const auto = reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.6-flash' }).map((f) => f.settingKey);
+      expect(auto).not.toContain('analyzer.gemini.maxOutputTokens');
+      process.env.ANALYZER_MAX_OUTPUT_TOKENS = '4096';
+      const pinned = reasoningOverflowFixes({ transport: 'gemini', model: 'gemini-3.6-flash' }).map((f) => f.settingKey);
+      expect(pinned).toContain('analyzer.gemini.maxOutputTokens');
+    } finally {
+      _resetGeminiCatalogForTest();
+      delete process.env.ANALYZER_MAX_OUTPUT_TOKENS;
+    }
   });
 
   it('every "Read:" entry comes after every actionable fix, at least one exists, and none carries a settingKey (#3084 F7, wave-stable structure)', () => {

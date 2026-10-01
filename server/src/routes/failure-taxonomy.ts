@@ -552,17 +552,12 @@ export function reasoningOverflowFixes(ctx: {
   const reads: AnalysisFailureFix[] = []; // wiki-link entries only ("Read: …")
 
   if (ctx.transport === 'gemini') {
-    fixes.push(
-      {
-        label: 'Lower Gemini max input tokens per request',
-        settingKey: 'analyzer.gemini.maxInputTokensPerRequest',
-      },
-      {
-        label: 'Lower the Gemini output-heavy chunk size',
-        settingKey: 'analyzer.gemini.outputHeavyChunkChars',
-      },
-    );
-    /* Conditional: only a NON-ZERO configured output cap that sits BELOW the
+    /* Output-only: Gemini's input and output limits are separate, so lowering
+       the request body (maxInputTokensPerRequest / outputHeavyChunkChars) never
+       buys output room — the user copy says "splitting never helps", and these
+       fixes must not contradict it.
+
+       Conditional: only a NON-ZERO configured output cap that sits BELOW the
        model's known limit can be raised — at Auto (0) there is nothing to
        raise, and with an unknown limit (no cached catalog entry) there is no
        evidence the cap is the binding constraint. Either way the entry is

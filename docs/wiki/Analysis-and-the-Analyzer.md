@@ -66,13 +66,12 @@ is highlighted for you):
   the context window is what Ollama sizes the answer from; lower the **stage-1
   local input fraction** or the **stage-2 local input fraction** if your model
   is the verbose sort that overflows the window; or switch model.
-- **Gemini / Gemma (cloud):** lower **Gemini max input tokens per request**
-  (the analyzer sizes its request bodies from it, so a smaller body leaves more
-  of the window for the answer); lower the **Gemini output-heavy chunk size**
-  (the per-chunk input budget for the output-heavy passes such as script review
-  and emotion annotation); and — only when you've pinned **Gemini max output
+- **Gemini / Gemma (cloud):** only when you've pinned **Gemini max output
   tokens** below what the model can actually do instead of leaving it on
-  **Auto** — raise it, or set it back to Auto.
+  **Auto** — raise it, or set it back to Auto. (Shrinking the request doesn't
+  help here: Gemini's input and output limits are separate, so a smaller body
+  buys no extra room for the answer.) On Auto there's nothing to raise, so
+  switch model.
 - **Any engine:** **switch to a different analyzer model**. Some models simply
   think too long to finish a chunked pass, and no budget tweak fixes that. This
   entry is advice rather than a link — there's nothing to open.
