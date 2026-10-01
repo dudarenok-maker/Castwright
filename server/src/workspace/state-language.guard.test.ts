@@ -194,8 +194,8 @@ const G1_ALLOWED = new Map<string, { writes: number; why: string }>([
   [
     'routes/analysis.ts',
     {
-      writes: 6,
-      why: 'writes cast.json (castJsonPath), logPath and manuscript-edits.json — all OTHER .json. The manuscript-edits.json writes spell writeJsonAtomicOrdered( (#3427), which the scan counts too.',
+      writes: 4,
+      why: 'writes cast.json (castJsonPath), logPath and manuscript-edits.json — all OTHER .json. The two terminal manuscript-edits.json writes spell writeJsonAtomicOrdered( (#3427), which the scan counts too; the two interim edits rolls moved to workspace/edits-roll.ts (which never mentions stateJsonPath), hence 4 not 6.',
     },
   ],
   [
