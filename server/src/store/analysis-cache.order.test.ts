@@ -36,7 +36,7 @@ const { saveAnalysisCache, clearAnalysisCache, cachePath, loadAnalysisCache } = 
 );
 
 afterEach(async () => {
-  for (const id of ['order-a', 'order-b', 'order-c', 'order-d', 'order-e', 'order-f']) {
+  for (const id of ['order-a', 'order-b', 'order-c', 'order-d', 'order-e', 'order-f', 'order-g']) {
     await clearAnalysisCache(id);
   }
   landed.length = 0;
@@ -77,6 +77,19 @@ describe('saveAnalysisCache call ordering (#3427)', () => {
     const fast = saveAnalysisCache('order-d', snap('fast')); // 20ms stub
     await Promise.all([slow, fast]);
     expect(landed.map((l) => l.stage1)).toEqual(['fast', 'slow']);
+  });
+
+  it('a nested member mutated after a queued save is called does not leak into that write', async () => {
+    const errors: Record<string, { code: string }> = { '1': { code: 'early' } };
+    const cache = { chapters: {}, stage1: 'x', failedChapterErrors: errors } as unknown as Parameters<
+      typeof saveAnalysisCache
+    >[1];
+    const first = saveAnalysisCache('order-g', snap('blocker')); // call 0: 40ms stub
+    const second = saveAnalysisCache('order-g', cache); // queued behind it
+    errors['7'] = { code: 'late' }; // in-place mutation after the call
+    await Promise.all([first, second]);
+    const onDisk = await loadAnalysisCache('order-g');
+    expect(onDisk.failedChapterErrors).toEqual({ '1': { code: 'early' } });
   });
 
   it('a clear lands after every save called before it (no resurrection)', async () => {

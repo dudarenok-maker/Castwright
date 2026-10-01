@@ -50,4 +50,15 @@ describe('writeJsonAtomicOrdered (#3427)', () => {
     expect(landed).toEqual(['A', 'A,B']);
     expect(JSON.parse(await readFile(editsPath, 'utf8'))).toEqual({ sentences: ['A', 'B'] });
   });
+
+  it('serialises the payload at call time, not when the queued write runs', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ordered-write-'));
+    const editsPath = join(dir, 'manuscript-edits.json');
+    const rolled = ['A'];
+    const first = writeJsonAtomicOrdered(editsPath, { sentences: ['blocker'] }); // slow stub
+    const second = writeJsonAtomicOrdered(editsPath, { sentences: rolled });
+    rolled.push('late'); // in-place mutation after the call
+    await Promise.all([first, second]);
+    expect(landed).toEqual(['blocker', 'A']);
+  });
 });

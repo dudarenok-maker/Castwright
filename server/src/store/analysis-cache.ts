@@ -145,7 +145,8 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
    order. */
 export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCache): Promise<void> {
   const path = cachePath(manuscriptId);
-  /* Snapshot at call time (as before) — the chain only orders the writes. */
+  /* Built at call time; `writeJsonAtomicOrdered` then deep-snapshots it, so the
+     bytes written are fixed at call time however long the chain delays them. */
   const payload = {
     ...cache,
     chapters: seedEmotionsFromTags(cache.chapters ?? {}),

@@ -4,6 +4,10 @@
 
 import { enqueuePathOp, writeJsonAtomic } from './state-io.js';
 
+/* The payload is serialised at CALL time: the queue can delay the actual
+   write behind earlier ops, and a nested member the caller mutates in place
+   in the meantime must not leak into this write's bytes. */
 export async function writeJsonAtomicOrdered(path: string, value: unknown): Promise<void> {
-  await enqueuePathOp(path, () => writeJsonAtomic(path, value));
+  const snapshot: unknown = JSON.parse(JSON.stringify(value));
+  await enqueuePathOp(path, () => writeJsonAtomic(path, snapshot));
 }
