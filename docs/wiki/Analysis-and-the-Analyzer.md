@@ -62,8 +62,10 @@ notification that stays on screen while you go and change something, and each
 entry opens the exact row in [Advanced Settings](Advanced-Settings) (that row
 is highlighted for you):
 
-- **Ollama (on-device):** raise **Ollama num_ctx** — the binding limit, since
-  the context window is what Ollama sizes the answer from; lower the **stage-1
+- **Ollama (on-device):** if you've set **Ollama num_predict** above -1, raise
+  it or set it back to -1 (unlimited) — a positive cap bounds the answer first,
+  so num_ctx wouldn't help. Otherwise raise **Ollama num_ctx** — the binding
+  limit, since the context window is what Ollama sizes the answer from; lower the **stage-1
   local input fraction** or the **stage-2 local input fraction** if your model
   is the verbose sort that overflows the window; or switch model.
 - **Gemini / Gemma (cloud):** only when you've pinned **Gemini max output

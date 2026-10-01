@@ -578,8 +578,21 @@ export function reasoningOverflowFixes(ctx: {
       wikiPage: 'Analysis-and-the-Analyzer',
     });
   } else if (ctx.transport === 'ollama') {
+    /* num_ctx is the binding limit only while num_predict is unlimited (-1, the
+       default). A positive num_predict bounds the reply first — raising num_ctx
+       would change nothing — so name it first and drop the "binding" claim. */
+    const numPredictPinned = configValue<number>('analyzer.ollama.numPredict') > 0;
+    if (numPredictPinned) {
+      fixes.push({
+        label: 'Raise Ollama num_predict (or set it back to -1, unlimited)',
+        settingKey: 'analyzer.ollama.numPredict',
+      });
+    }
     fixes.push(
-      { label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' },
+      {
+        label: numPredictPinned ? 'Raise Ollama num_ctx' : 'Raise Ollama num_ctx (the binding limit)',
+        settingKey: 'analyzer.ollama.numCtx',
+      },
       { label: 'Lower the stage-1 local input fraction', settingKey: 'analyzer.stage1.localInputFraction' },
       { label: 'Lower the stage-2 local input fraction', settingKey: 'analyzer.stage2.localInputFraction' },
       { label: 'Switch to a different analyzer model' },

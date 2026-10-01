@@ -85,6 +85,30 @@ describe('reasoningOverflowFixes — the RIGHT key, not just a valid one (#3084 
     expect(keys).not.toContain('analyzer.ollama.numPredict');
   });
 
+  it('Ollama with a positive num_predict names it FIRST and stops calling num_ctx the binding limit; at the default the list is unchanged', () => {
+    const ctx = { transport: 'ollama' as const, model: 'qwen3.5:9b' };
+    const defaultFixes = reasoningOverflowFixes(ctx);
+    expect(defaultFixes.map((f) => f.settingKey)).toEqual([
+      'analyzer.ollama.numCtx',
+      'analyzer.stage1.localInputFraction',
+      'analyzer.stage2.localInputFraction',
+      undefined,
+      undefined,
+    ]);
+    expect(defaultFixes[0].label).toBe('Raise Ollama num_ctx (the binding limit)');
+    try {
+      process.env.ANALYZER_NUM_PREDICT = '2048';
+      const pinned = reasoningOverflowFixes(ctx);
+      expect(pinned[0].settingKey).toBe('analyzer.ollama.numPredict');
+      expect(pinned[1].settingKey).toBe('analyzer.ollama.numCtx');
+      expect(pinned[1].label).not.toContain('binding');
+      process.env.ANALYZER_NUM_PREDICT = '-1';
+      expect(reasoningOverflowFixes(ctx)).toEqual(defaultFixes);
+    } finally {
+      delete process.env.ANALYZER_NUM_PREDICT;
+    }
+  });
+
   /* Output-only: an overflow is about OUTPUT room, and Gemini's input and output
      limits are separate, so a smaller request body never helps — the copy says
      "splitting never helps", so the fixes must not offer it. */

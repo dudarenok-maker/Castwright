@@ -672,7 +672,7 @@ describe('AnalyzerReasoningOverflowError (#3084 wave 2b)', () => {
     expect(r.detail).toContain('chapterId=7');
   });
 
-  it('the static remediation names Ollama num_ctx (the binding limit), not num_predict, for an Ollama overflow (#3084 F7)', () => {
+  it('the static remediation names Ollama num_ctx as the default fix and num_predict only when pinned, for an Ollama overflow (#3084 F7)', () => {
     /* #3084 F7 — userMessage is the what-happened headline only (Task 2.9's
        rewrite, this same round); it never names a setting. The setting comes
        from the STATIC remediation (failure-remediations.ts), which is the
@@ -686,7 +686,9 @@ describe('AnalyzerReasoningOverflowError (#3084 wave 2b)', () => {
     expect(r.userMessage).not.toContain('num_ctx');
     expect(r.userMessage).not.toContain('num_predict');
     expect(r.remediation).toContain('Ollama num_ctx');
-    expect(r.remediation).not.toContain('num_predict');
+    /* num_predict is named only as the conditional case (set above -1), with
+       num_ctx still the default advice. */
+    expect(r.remediation).toContain("if you set 'Ollama num_predict'");
     expect(r.remediation).toContain('ANALYZER_NUM_CTX');
   });
 

@@ -111,7 +111,8 @@ export const FAILURE_REMEDIATIONS = {
     remediation:
       "Give the model more room: for Gemini, if you set 'Gemini max output tokens' in Advanced Settings below " +
       "Auto, raise it or set it back to 0 (Auto, the model's own limit), otherwise switch to a different " +
-      "analyzer model; for Ollama, raise 'Ollama num_ctx' (ANALYZER_NUM_CTX), the context window the " +
+      "analyzer model; for Ollama, if you set 'Ollama num_predict' (ANALYZER_NUM_PREDICT) above -1, raise it or set it " +
+      "back to -1 (unlimited), otherwise raise 'Ollama num_ctx' (ANALYZER_NUM_CTX), the context window the " +
       'prompt and the whole reply must fit in. Or switch to a different analyzer model. Then resume — ' +
       'finished chapters are kept.',
   },
