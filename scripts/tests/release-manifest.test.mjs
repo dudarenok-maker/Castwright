@@ -8,9 +8,11 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import ts from 'typescript';
 import {
   MANIFEST,
   matchesManifest,
@@ -199,86 +201,238 @@ test('ships the fs-22 bundled demo book (manuscript + cast + voice files)', () =
   assert.equal(matchesManifest('samples/the-coalfall-commission/voices/qwen/qwen-coalfall.pt'), true);
 });
 
-// PR #3404 review pass 2, orange finding 2 — the same class as the
-// is-main-module.mjs guard in entry-point-guard-convention.test.mjs, made
-// general: a shipped scripts/*.{mjs,cjs,ps1,psm1} file that gains a new
-// relative import (JS `./…`/`../…`, or a `Join-Path $PSScriptRoot …`
-// Import-Module) must have that import target ALSO in MANIFEST.include, or
-// the entry point crashes/no-ops at import/dot-source time on a real zip
-// install. Scoped to literal (non-glob) entries directly under `scripts/`
-// — `server/tts-sidecar/**` and `server/src/**` ship wholesale via a glob,
-// so a relative import that stays inside either tree is already covered by
-// that glob; the one case that reaches OUT of a glob (scripts/lib/is-main-
-// module.mjs, imported by nine server/tts-sidecar/scripts/*.mjs installers)
-// is pinned separately by entry-point-guard-convention.test.mjs's own
-// "shared helper ships in the release zip" test.
-function shippedScriptEntries() {
-  return MANIFEST.include.filter(
-    (p) => p.startsWith('scripts/') && !p.includes('*') && /\.(mjs|cjs|ps1|psm1)$/.test(p),
-  );
+// PR #3404 review pass 2/3 — the same class as the is-main-module.mjs guard in
+// entry-point-guard-convention.test.mjs, made general: a shipped file that
+// gains a relative import must have that import target ALSO shipped, or it
+// crashes/no-ops at import / dot-source time on a real zip install.
+//
+// Scans EVERY tracked file the manifest ships (not just literal scripts/
+// entries — server/src/** and server/tts-sidecar/** reach OUT of their globs
+// too: server/src/index.ts imports sidecar installers, and the
+// attribution-eval CLIs import across trees). JS/TS files go through the
+// TypeScript lexer (`ts.preProcessFile`, plus a token scan for `new URL(…,
+// import.meta.url)`), which handles comments and string contents correctly —
+// the previous regex enumeration + line-comment stripping did not (a `/*`
+// inside `'logs/*.log'` ate real imports; `indexOf('//')` ate an import after
+// `'https://…'`). PowerShell has no lexer in this repo, so it gets a small
+// quote-aware comment stripper plus the spellings that reach a script- or
+// module-dir-relative file: `Join-Path <dir> '<rel>'` (with or without
+// -Path / -ChildPath, wrapped in dot-source / `&` / Import-Module or not) and
+// `"$PSScriptRoot\<rel>"` interpolation.
+const SHIPPED_CODE_EXT = /\.(mjs|cjs|js|jsx|ts|tsx|mts|cts)$/;
+const SHIPPED_PS_EXT = /\.(ps1|psm1)$/;
+const TEST_FILE = /\.(test|spec)\.[cm]?[jt]sx?$|\.Tests\.ps1$/;
+const PS_REFERENCED_EXT =/\.(ps1|psm1|psd1|mjs|cjs|js)$/i;
+
+function trackedFiles() {
+  return execFileSync('git', ['ls-files', '-z'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    maxBuffer: 256 * 1024 * 1024,
+    windowsHide: true,
+  })
+    .split('\0')
+    .filter(Boolean);
 }
 
-const JS_IMPORT_PATTERNS = [
-  /\bfrom\s+['"](\.\.?\/[^'"]+)['"]/g,
-  /\bimport\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
-  /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/g,
-];
-const PS_IMPORT_MODULE_PATTERN =
-  /Import-Module\s*\(\s*Join-Path\s+\$PSScriptRoot\s+['"]([^'"]+)['"]\s*\)/g;
-
-// Strip comments before matching — this repo's scripts are prose-heavy, and
-// a doc comment can itself contain example import text (e.g. is-main-
-// module.mjs's own header shows `import { isDirectlyInvoked } from
-// './lib/is-main-module.mjs';` as guidance for ITS callers, not a real
-// self-import) that a naive scan over raw source mis-reads as a real target.
-function stripLineComments(source, commentToken) {
-  return source
-    .split('\n')
-    .map((line) => {
-      const idx = line.indexOf(commentToken);
-      return idx === -1 ? line : line.slice(0, idx);
-    })
-    .join('\n');
-}
-
-function relativeImportTargets(absPath) {
-  const raw = readFileSync(absPath, 'utf8');
-  const dir = dirname(absPath);
-  const rawTargets = new Set();
-  if (/\.(mjs|cjs)$/.test(absPath)) {
-    const source = stripLineComments(raw.replace(/\/\*[\s\S]*?\*\//g, ''), '//');
-    for (const pattern of JS_IMPORT_PATTERNS) {
-      for (const m of source.matchAll(pattern)) rawTargets.add(m[1]);
-    }
-  } else {
-    const source = stripLineComments(raw, '#');
-    for (const m of source.matchAll(PS_IMPORT_MODULE_PATTERN)) {
-      rawTargets.add(m[1].replace(/\\/g, '/'));
+function relativeJsSpecifiers(source) {
+  const specs = new Set();
+  const info = ts.preProcessFile(source, true, true);
+  for (const f of info.importedFiles) specs.add(f.fileName);
+  // `new URL('./x', import.meta.url)` — a file reference preProcessFile does
+  // not model. Token scan: new URL ( <string> , import . meta . url
+  const scanner = ts.createScanner(ts.ScriptTarget.Latest, true, ts.LanguageVariant.Standard, source);
+  const window = [];
+  for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
+    window.push({ kind, value: scanner.getTokenValue() });
+    if (window.length > 10) window.shift();
+    if (window.length < 10) continue;
+    const [nw, url, lp, str, comma, imp, dot1, meta, dot2, last] = window;
+    if (
+      nw.kind === ts.SyntaxKind.NewKeyword &&
+      url.value === 'URL' &&
+      lp.kind === ts.SyntaxKind.OpenParenToken &&
+      (str.kind === ts.SyntaxKind.StringLiteral || str.kind === ts.SyntaxKind.NoSubstitutionTemplateLiteral) &&
+      comma.kind === ts.SyntaxKind.CommaToken &&
+      imp.kind === ts.SyntaxKind.ImportKeyword &&
+      dot1.kind === ts.SyntaxKind.DotToken &&
+      meta.value === 'meta' &&
+      dot2.kind === ts.SyntaxKind.DotToken &&
+      last.value === 'url'
+    ) {
+      specs.add(str.value);
     }
   }
-  return [...rawTargets].map((t) => resolve(dir, t));
+  return [...specs].filter((s) => /^\.\.?\//.test(s));
 }
 
-test('every relative import target of a MANIFEST-shipped scripts/ file is itself shipped', () => {
+// Strip PowerShell comments (`# …` and `<# … #>`) without touching text inside
+// '…' / "…" strings.
+function stripPsComments(src) {
+  let out = '';
+  let quote = null;
+  for (let i = 0; i < src.length; i += 1) {
+    const c = src[i];
+    if (quote) {
+      out += c;
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '<' && src[i + 1] === '#') {
+      const end = src.indexOf('#>', i + 2);
+      i = end === -1 ? src.length : end + 1;
+      continue;
+    }
+    if (c === '#') {
+      while (i < src.length && src[i] !== '\n') i += 1;
+      out += '\n';
+      continue;
+    }
+    if (c === '"' || c === "'") quote = c;
+    out += c;
+  }
+  return out;
+}
+
+function relativePsReferences(source) {
+  const src = stripPsComments(source);
+  // $PSScriptRoot, plus any variable assigned the script's own directory
+  // (`$here = Split-Path -Parent $MyInvocation.MyCommand.Path`).
+  const dirVars = new Set(['PSScriptRoot']);
+  for (const m of src.matchAll(
+    /\$(\w+)\s*=\s*Split-Path\s+(?:-Parent\s+)?(?:\$MyInvocation\.MyCommand\.(?:Path|Definition)|\$PSCommandPath)/gi,
+  )) {
+    dirVars.add(m[1]);
+  }
+  const vars = [...dirVars].join('|');
+  const refs = new Set();
+  const add = (rel) => {
+    const norm = rel.replace(/\\/g, '/');
+    if (PS_REFERENCED_EXT.test(norm)) refs.add(norm);
+  };
+  // Join-Path $dir 'rel' / Join-Path -Path $dir -ChildPath "rel"
+  const joinRe = new RegExp(
+    String.raw`Join-Path\s+(?:-Path\s+)?\$(?:${vars})\s+(?:-ChildPath\s+)?['"]([^'"]+)['"]`,
+    'gi',
+  );
+  for (const m of src.matchAll(joinRe)) add(m[1]);
+  // "$PSScriptRoot\rel" / "$here\rel" interpolation (dot-source, &, Import-Module -Name …)
+  const interpRe = new RegExp(String.raw`\$(?:${vars})[\\/]([^\s'"` + '`' + String.raw`)]+)`, 'gi');
+  for (const m of src.matchAll(interpRe)) add(m[1]);
+  return [...refs];
+}
+
+// Resolve a specifier the way a TS/Node resolver would, against the tracked
+// file set. Returns the tracked paths it can mean ([] when none is tracked —
+// a generated or non-tracked target this guard cannot judge).
+function resolveTracked(fromRel, spec, trackedSet) {
+  const base = relative(repoRoot, resolve(repoRoot, dirname(fromRel), spec)).split('\\').join('/');
+  const stem = base.replace(/\.(m?js|cjs)$/, '');
+  const candidates = [
+    base,
+    ...['.ts', '.tsx', '.mts', '.cts'].map((e) => stem + e),
+    ...['.ts', '.tsx', '.js', '.mjs', '.cjs', '.json', '.psm1', '.ps1'].map((e) => base + e),
+    ...['/index.ts', '/index.tsx', '/index.js', '/index.mjs'].map((e) => base + e),
+  ];
+  return candidates.filter((c) => trackedSet.has(c));
+}
+
+// A shipped file that reaches an unshipped target, and why that is fine.
+// Each entry is keyed `<importer> -> <target>` so a SECOND unshipped import
+// from the same importer still fails.
+const UNSHIPPED_IMPORT_ALLOWLIST = {
+  // run-golden-tests.ps1 is the opt-in maintainer golden-audio runner: it
+  // drives server/tts-sidecar/tests/golden/, which is itself excluded from the
+  // zip (`server/tts-sidecar/tests/**`), so the script cannot run on an
+  // install regardless of whether its dot-sourced helper ships.
+  'server/tts-sidecar/run-golden-tests.ps1 -> scripts/lib/golden-bless-pytest-args.ps1':
+    'maintainer golden-audio runner; its tests/ tree is not shipped either',
+};
+
+test('every relative import target of a MANIFEST-shipped file is itself shipped', () => {
+  const tracked = trackedFiles();
+  const trackedSet = new Set(tracked);
   const failures = [];
-  for (const rel of shippedScriptEntries()) {
-    const absPath = resolve(repoRoot, rel);
-    for (const targetAbs of relativeImportTargets(absPath)) {
-      const targetRel = relative(repoRoot, targetAbs).split('\\').join('/');
-      if (!matchesManifest(targetRel)) {
-        failures.push(`${rel} imports ${targetRel}, which MANIFEST.include does not ship`);
+  for (const rel of tracked) {
+    if (!matchesManifest(rel)) continue;
+    // A *.test.* / *.Tests.ps1 file ships with its glob but never RUNS on an
+    // install (no vitest/Pester there), so what it imports can't crash one.
+    if (TEST_FILE.test(rel)) continue;
+    const isCode = SHIPPED_CODE_EXT.test(rel);
+    const isPs = SHIPPED_PS_EXT.test(rel);
+    if (!isCode && !isPs) continue;
+    const source = readFileSync(resolve(repoRoot, rel), 'utf8');
+    const specs = isCode ? relativeJsSpecifiers(source) : relativePsReferences(source);
+    for (const spec of specs) {
+      for (const target of resolveTracked(rel, spec, trackedSet)) {
+        if (matchesManifest(target)) continue;
+        if (`${rel} -> ${target}` in UNSHIPPED_IMPORT_ALLOWLIST) continue;
+        failures.push(`${rel} imports ${target}, which MANIFEST.include does not ship`);
       }
     }
   }
   assert.deepEqual(
     failures,
     [],
-    `The following shipped scripts/ files import a target MANIFEST.include does not ship — ` +
-      `add the target to MANIFEST.include:\n${failures.join('\n')}`,
+    `The following shipped files import a target MANIFEST.include does not ship — ` +
+      `add the target to MANIFEST.include (or, for a file that genuinely cannot run on an install, ` +
+      `to UNSHIPPED_IMPORT_ALLOWLIST with a reason):\n${failures.join('\n')}`,
   );
 });
 
-// The general scan above only follows imports FROM a shipped scripts/ file.
+// Positive controls for the scanner itself — every spelling must be FOUND,
+// and the two lossy-comment-stripping shapes must not hide a later import.
+test('relativeJsSpecifiers finds every import spelling, and is not fooled by strings that look like comments', () => {
+  const source = [
+    "import a from './from.mjs';",
+    "import './side-effect.mjs';",
+    "export { b } from './reexport.mjs';",
+    "const c = require('./required.cjs');",
+    "const d = await import('./dynamic.mjs');",
+    'const e = await import(`./template.mjs`);',
+    "const f = new URL('./url-ref.mjs', import.meta.url);",
+    "const glob = 'logs/*.log'; const u = 'https://example.com'; import('./after-strings.mjs');",
+    "// import './commented-out.mjs';",
+    "/* import './block-commented.mjs'; */",
+    "import bare from 'node:fs'; import pkg from 'typescript';",
+  ].join('\n');
+  const found = relativeJsSpecifiers(source).sort();
+  assert.deepEqual(found, [
+    './after-strings.mjs',
+    './dynamic.mjs',
+    './from.mjs',
+    './reexport.mjs',
+    './required.cjs',
+    './side-effect.mjs',
+    './template.mjs',
+    './url-ref.mjs',
+  ]);
+});
+
+test('relativePsReferences finds dot-source / Import-Module / & / Join-Path spellings and ignores comments', () => {
+  const source = [
+    '$here = Split-Path -Parent $MyInvocation.MyCommand.Path',
+    '. (Join-Path $here "..\\..\\scripts\\lib\\dot-join.ps1")',
+    '. "$PSScriptRoot\\lib\\dot-interp.ps1"',
+    'Import-Module (Join-Path $PSScriptRoot "lib\\mod-join.psm1") -Force',
+    'Import-Module -Name "$PSScriptRoot\\lib\\mod-name.psm1"',
+    "& (Join-Path -Path $PSScriptRoot -ChildPath 'amp-child.ps1')",
+    '$m = Join-Path $here "lib\\via-variable.psm1"; Import-Module $m',
+    "# . (Join-Path $PSScriptRoot 'commented.ps1')",
+    '<# Import-Module "$PSScriptRoot\\block-commented.psm1" #>',
+    "$other = Join-Path $someOtherVar 'unrelated.ps1'",
+  ].join('\n');
+  assert.deepEqual(relativePsReferences(source).sort(), [
+    '../../scripts/lib/dot-join.ps1',
+    'amp-child.ps1',
+    'lib/dot-interp.ps1',
+    'lib/mod-join.psm1',
+    'lib/mod-name.psm1',
+    'lib/via-variable.psm1',
+  ]);
+});
+
+// The general scan above only follows static references FROM a shipped file.
 // server/src/system/prevent-sleep.ts reaches scripts/lib/prevent-sleep.ps1
 // the other direction — by spawning a resolve()-built path at runtime, not a
 // static relative import — so no source-level regex over server/src/** can
