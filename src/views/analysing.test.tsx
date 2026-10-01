@@ -1646,6 +1646,126 @@ describe('AnalysingView — failed-chapter retry', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
   });
+
+  /* #3084 PR #3412 pass 2 — a reasoning overflow on the per-chapter Retry
+     (subset route) is a FAILURE. The subset route ends with only an `error`
+     frame (no chapter-failed), so the generic catch used to read it as the
+     benign "ended without a result" case: row dropped, nothing dispatched,
+     and .finally resumed the main run. Real slices + the real middleware, so
+     the HALTED hook's toast and the run-level "How to fix" block are both
+     observable. */
+  describe('#3084 — Retry that fails with a real analyzer error', () => {
+    const FIXES = [
+      {
+        label: 'Raise Gemini max output tokens (or set it back to Auto)',
+        settingKey: 'analyzer.gemini.maxOutputTokens',
+      },
+      { label: 'Switch to a different analyzer model' },
+    ];
+
+    async function startRetry() {
+      getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      const { analysisStreamMiddleware } = await import('../store/analysis-stream-middleware');
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          account: accountSlice.reducer,
+          bookMeta: bookMetaSlice.reducer,
+          analysis: analysisSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        middleware: (g) => g().concat(analysisStreamMiddleware),
+      });
+      /* Real-app shape: the Layout's cold-boot scan already rehydrated this
+         book's halted cast_incomplete snapshot, so the view never starts a
+         main run on its own and the auto-resume effect is armed. */
+      store.dispatch(
+        analysisActions.setActiveStream({
+          bookId: 'b1',
+          manuscriptId: 'm1',
+          phaseId: 0,
+          phaseLabel: 'x',
+          phaseProgress: 0,
+          remainingMs: null,
+          lastTickAt: 1,
+          state: 'halted',
+          haltCode: 'cast_incomplete',
+          haltReason: 'paused',
+        } as never),
+      );
+      render(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m1"
+            bookId="b1"
+            title="t"
+            wordCount={2440}
+            onComplete={() => {}}
+          />
+        </Provider>,
+      );
+      const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+      expect(capturedOpts).toBeUndefined();
+      await act(async () => {
+        fireEvent.click(retryBtn);
+      });
+      const viewReject = rejectSubset!;
+      /* The view's first subset tick lets the middleware attach as a second
+         subscriber on the same subset route. */
+      await act(async () => {
+        capturedSubsetCall!.opts!.onPhase!({ phaseId: 1, progress: 0.1 } as never);
+      });
+      const mwReject = rejectSubset!;
+      expect(mwReject).not.toBe(viewReject);
+      return { store, AnalysisError, viewReject, mwReject };
+    }
+
+    for (const viewFirst of [true, false]) {
+      it(`overflow on Retry keeps the row, surfaces fixes once, and does not resume the main run (${viewFirst ? 'view' : 'middleware'} frame first)`, async () => {
+        const { store, AnalysisError, viewReject, mwReject } = await startRetry();
+        const err = () =>
+          new AnalysisError(
+            'The analyzer model spent its whole output budget reasoning (chapter "Chapter Forty-Two").',
+            'analyzer-reasoning-overflow',
+            undefined,
+            undefined,
+            undefined,
+            'Apply one of the fixes below, then resume.',
+            FIXES as never,
+          );
+        if (viewFirst) {
+          await act(async () => viewReject(err()));
+          await act(async () => mwReject(err()));
+        } else {
+          await act(async () => mwReject(err()));
+          await act(async () => viewReject(err()));
+        }
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 20));
+        });
+
+        expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+        const toasts = store.getState().notifications.toasts;
+        expect(toasts.filter((t) => t.fixes?.length)).toHaveLength(1);
+        expect(screen.getAllByText(/How to fix/i).length).toBeGreaterThan(0);
+        expect(capturedOpts).toBeUndefined();
+        expect(store.getState().analysis.activeStream?.state).toBe('halted');
+      });
+    }
+
+    it('control: a Retry that ends without a result still drops the row and raises nothing', async () => {
+      const { store, AnalysisError, viewReject } = await startRetry();
+      await act(async () =>
+        viewReject(new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result')),
+      );
+      await waitFor(() => {
+        expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+      });
+      expect(store.getState().notifications.toasts.filter((t) => t.fixes?.length)).toHaveLength(0);
+    });
+  });
 });
 
 /* Mid-run recovery surface. With incremental cast.json writes landing on

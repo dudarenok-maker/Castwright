@@ -37,6 +37,7 @@ import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-
 import { selectAnalyzerSplitIsActive, fetchAnalyzerModels } from '../store/account-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 import { notificationsActions } from '../store/notifications-slice';
+import { ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 
 /* Heuristic estimate matched to the server's analysis pacing (server/src/
    routes/analysis.ts: STAGE1_BASELINE_RATE × STAGE2_STRETCH ≈ 4 ms per input
@@ -207,6 +208,9 @@ export function AnalysingView({
      touching the active stream or re-arming the main run when this error
      occurs — the rejection means another subset job is live. */
   const subsetInProgressRef = useRef(false);
+  /* Same shape for a Retry that ended with a real analyzer error (#3084):
+     the catch halted the run, so the finally block must leave it alone. */
+  const retryHaltedRef = useRef(false);
   /* Per-chapter cast-detection failures that survive across reload. Seeded
      from /api/books/:bookId/state on mount; appended to from the SSE's
      chapter-failed event; cleared per id when a Retry succeeds. */
@@ -851,6 +855,7 @@ export function AnalysingView({
     setRetryingChapterId(chapterId);
     /* Reset the subset_in_progress flag for this attempt. */
     subsetInProgressRef.current = false;
+    retryHaltedRef.current = false;
     const markEvent = () => {
       setLastEventAt(Date.now());
       /* First event of any run means we're re-attached — drop the
@@ -1024,6 +1029,39 @@ export function AnalysingView({
           setConn('idle');
           return;
         }
+        /* #3084 — a real analyzer error ending the subset job (e.g. the
+           reasoning-overflow terminal frame, which arrives as an `error`
+           event with NO chapter-failed) is a FAILURE of this Retry, not the
+           benign no-result case below. Keep the row, halt the run-level
+           state with the fixes so "How to fix" renders and the middleware's
+           HALTED hook pushes the persistent toast, and tell the finally
+           block not to clear the snapshot or resume the main run (which
+           would only overflow again on the same settings). The retained row
+           also keeps the cast_incomplete auto-resume effect disarmed. */
+        if (
+          err instanceof AnalysisError &&
+          err.code !== ANALYSIS_STREAM_NO_RESULT &&
+          err.code !== 'aborted'
+        ) {
+          retryHaltedRef.current = true;
+          setFailedChapters((prev) => {
+            const filtered = prev.filter((f) => f.chapterId !== chapterId);
+            return [
+              ...filtered,
+              { chapterId, message: err.message, code: err.code, remediation: err.remediation },
+            ];
+          });
+          dispatch(
+            analysisActions.setHalted({
+              manuscriptId,
+              code: err.code,
+              message: err.message,
+              fixes: err.fixes,
+            }),
+          );
+          setConn('idle');
+          return;
+        }
         /* The subset route ends without a `result` event when other
            chapters still need retry (Phase 1 gate). api.ts throws
            "no result" in that case — not a real failure, drop the
@@ -1045,6 +1083,12 @@ export function AnalysingView({
            contract exists to prevent (see the comment at line 751). Leave the
            main run paused and let the user wait for the other subset to finish. */
         if (subsetInProgressRef.current) {
+          return;
+        }
+        /* Same for a Retry that failed with a real analyzer error (#3084):
+           the halted snapshot is the user's call to action — don't clear it
+           or restart the run behind it. */
+        if (retryHaltedRef.current) {
           return;
         }
         /* Resume the main run if Retry paused it. The analysis effect
