@@ -15,6 +15,7 @@ import type {
   AnalyseResponse,
   VoiceMatchResponse,
   RevisionsResponse,
+  BulkRevisionsResponse,
   ChapterAudio,
   GenerationTick,
   Character,
@@ -1031,7 +1032,15 @@ function buildSolwayBayMockState(): BookStateResponse {
        ANALYSIS_NORTHERN_STAR, so it goes through the normal
        hydrateFromBookState path rather than an empty manuscript. */
     manuscriptEdits: { sentences: initialSentences, mergedAwayKeys: [] },
-    revisions: null,
+    /* #3376 — `pending` is client-owned, seeded only by this disk hydrate
+       (hydrateFromBookState), never by a poll. The e2e a/b-audition spec
+       (revision-diff.spec.ts) needs a pending revision on book-open to
+       reach the Status popover's "N revisions" button, so it has to live
+       here now rather than in mockPollRevisions' PENDING_REVISIONS, which
+       the poll paths no longer write into the slice. Mirrors the real
+       server's getBookState, which reads revisions.json's `pending`
+       straight off disk. */
+    revisions: { pending: PENDING_REVISIONS },
     /* Every chapter is rendered (matches the library card's
        completedChapters: 18). hydrateFromBookState then flips each
        chapter row to state: 'done', which makes them appear as
@@ -1927,20 +1936,28 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
      accumulates entries from each book separately, which is what
      happens when `applyPoll` is called once per book.
 
-     NOTE: `pending` is returned for every book (the slice's `applyPoll`
-     replaces `pending` wholesale regardless of bookId, so scoping it here
-     would let a background poll of an empty book wipe the active book's
-     pending). The fe-15 profile-regen-preview spec clears `pending` itself
-     before opening its preview stub to avoid the phantom-revision collision. */
+     NOTE: `pending` is returned for every book, but as of #3376 round 2
+     neither poll path writes it — `pending` is client-owned once a book is
+     open (seeded only by the one-shot disk hydrate on book-open), and both
+     the active book's 30 s `applyPoll` and the 120 s background fan-out's
+     `applyBackgroundPoll` merge drift only. `pending` here is inert for
+     both; the every-book shape is kept so the mock mirrors the server's
+     per-book endpoint. The fe-15 profile-regen-preview spec clears
+     `pending` itself before opening its preview stub to avoid the
+     phantom-revision collision. */
   /* Quality Gate marketing/wiki screenshots (#1286) — under DEMO_CAPTURE,
      stop the dev-only PENDING_REVISIONS fixture (an Eliza/book-`sb` revision
      with no bookId field, so it always matched every book before) from
      bleeding into the marketing books' poll response. Scoped to the
      DEMO_CAPTURE flag for EVERY book, not specific book ids — the background
      bulk poll (layout.tsx) reaches every non-active marketing book, and
-     applyPoll replaces `pending` wholesale regardless of bookId, so a
-     partial scope wouldn't fully close the bleed (adversarial review round
-     2 caught this when an earlier fix scoped it to hollow-tide-* only). */
+     `applyPoll` (which the bulk fan-out used before #3376 moved it to
+     `applyBackgroundPoll`) replaced `pending` wholesale regardless of
+     bookId at the time, so a partial scope wouldn't have fully closed the
+     bleed (adversarial review round 2 caught this when an earlier fix
+     scoped it to hollow-tide-* only). Since #3376 round 2 neither poll path
+     writes `pending` at all, but the every-book filter is kept so both poll
+     paths see the same scoped mock shape regardless. */
   if (DEMO_CAPTURE) {
     return {
       pending: [],
@@ -10241,7 +10258,7 @@ const real = {
     bookIds,
   }: {
     bookIds: string[];
-  }): Promise<{ byBookId: Record<string, RevisionsResponse> }> => {
+  }): Promise<BulkRevisionsResponse> => {
     if (bookIds.length === 0) return { byBookId: {} };
     const url = `/api/revisions?bookIds=${bookIds.map(encodeURIComponent).join(',')}`;
     const res = await fetch(url);
@@ -10488,7 +10505,7 @@ const mock = {
     bookIds,
   }: {
     bookIds: string[];
-  }): Promise<{ byBookId: Record<string, RevisionsResponse> }> => {
+  }): Promise<BulkRevisionsResponse> => {
     const entries = await Promise.all(
       bookIds.map(async (bookId) => [bookId, await mockPollRevisions({ bookId })] as const),
     );

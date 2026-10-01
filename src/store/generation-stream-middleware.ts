@@ -158,10 +158,14 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
       /* Profile-change preview gate — when the single preview chapter's render
          completes (markRevisionPlayable for the chapter the user is
          previewing), build the now-playable A/B stub and auto-open the diff
-         player. Built fresh on completion so a mid-render revisions poll
-         (applyPoll replaces `pending` wholesale) can't leave the gate without
-         a revision to show. Normal chapter regens never set previewRegen, so
-         this no-ops for them. See docs/features/archive/114-profile-regen-preview.md. */
+         player. Built fresh on completion rather than trusting whatever's
+         already in `pending` — a stub built by a stale in-flight action or
+         race could otherwise leave the gate without a revision to show.
+         (`pending` is client-owned since #3376 round 2: no poll writes it,
+         so a mid-render revisions poll can no longer race this at all —
+         the concern predates that fix but the fresh-build stays cheap
+         insurance.) Normal chapter regens never set previewRegen, so this
+         no-ops for them. See docs/features/archive/114-profile-regen-preview.md. */
       if (type === 'revisions/markRevisionPlayable') {
         const payload = (a as { payload?: { chapterId: number } }).payload;
         if (payload) {

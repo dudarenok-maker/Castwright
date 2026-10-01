@@ -12,7 +12,9 @@ import {
   useParams,
   useSearchParams,
 } from 'react-router';
+import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, store } from '../store';
+import type { RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { accountActions } from '../store/account-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
@@ -23,7 +25,7 @@ import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
-import { selectDriftForBook } from '../store/revisions-slice';
+import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
@@ -125,6 +127,11 @@ export function BooksRoute() {
   const dispatch = useAppDispatch();
   const library = useAppSelector((s) => s.library);
   const bookId = useAppSelector((s) => (s.ui.stage as { bookId?: string }).bookId ?? null);
+  /* Live stage read for the post-await "is the wiped book open?" guards: the
+     render-time `bookId` is always null on the Library, so a book opened while a
+     wipe RPC was in flight would keep its pre-wipe revisions (#3395 pass 6, O1). */
+  const reduxStore = useStore<RootState>();
+  const openBookId = () => (reduxStore.getState().ui.stage as { bookId?: string }).bookId;
   const { showInfo, showError, pushToast } = useOutletContext<LayoutContext>();
 
   return (
@@ -143,9 +150,12 @@ export function BooksRoute() {
           showError(`Couldn't delete "${b.title}"`, (err as Error).message, 'Delete');
           return;
         }
+        /* The book is gone: drop any revisions writes recorded for it before
+           its read landed (#3395 pass 5, N1). */
+        dispatch(revisionsActions.bookWiped(b.bookId));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
-        if (bookId === b.bookId) dispatch(uiActions.goHome());
+        if (openBookId() === b.bookId) dispatch(uiActions.goHome());
       }}
       onEditBook={async (b, patch) => {
         try {
@@ -175,9 +185,16 @@ export function BooksRoute() {
         /* Server wiped cast.json + revisions + audio + cache — mirror the
            reparse handler's redux reset so a stale open-book view can't show
            pre-replace state. */
-        dispatch(castActions.setCharacters([]));
+        /* hydrateCharacters, not the persisted setCharacters: the await above may
+           have let the user open another book, and a persisted reset would PUT an
+           empty cast at it (#3376). Same for the re-parse reset below.
+           `bookWiped` drops revisions writes recorded for this book before
+           its read landed, which would otherwise be replayed onto the wiped
+           book when it is reopened (#3395 pass 5, N1). */
+        dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
-        if (bookId === b.bookId) dispatch(uiActions.goHome());
+        dispatch(revisionsActions.bookWiped(b.bookId));
+        if (openBookId() === b.bookId) dispatch(uiActions.goHome());
         const refreshed = await api.getLibrary().catch(() => null);
         if (refreshed) dispatch(libraryActions.hydrate(refreshed));
         showInfo({
@@ -223,14 +240,17 @@ export function BooksRoute() {
            navigates back into the analysing stage.
 
            Unconditional reset: this code runs from the books library, where
-           ui.stage.bookId is always undefined; gating on `bookId === b.bookId`
-           would never fire. Any per-book state still in redux is by definition
+           ui.stage.bookId is always undefined at the time of the click, so
+           gating on the render-time `bookId === b.bookId` would never fire
+           (the separate "left the book" check after the await reads the LIVE
+           stage instead). Any per-book state still in redux is by definition
            the *previous* open's residue, so wiping it is correct regardless
            of which book is being re-parsed — the next book open re-hydrates
            from disk. */
-        dispatch(castActions.setCharacters([]));
+        dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
-        if (bookId === b.bookId) dispatch(uiActions.goHome());
+        dispatch(revisionsActions.bookWiped(b.bookId));
+        if (openBookId() === b.bookId) dispatch(uiActions.goHome());
 
         /* Kick off the library rescan in the background — it only feeds
            `updatedBook` for the onPrimary handler, which only fires
@@ -629,7 +649,9 @@ export function ConfirmRoute() {
       .getBookState(bookId)
       .then((res) => {
         if (!cancelled && res?.cast?.characters && res.cast.characters.length > 0) {
-          dispatch(castActions.setCharacters(res.cast.characters));
+          /* hydrate, not an edit: setCharacters is persisted and would echo
+             this disk snapshot straight back as a cast.json PUT (#3376). */
+          dispatch(castActions.hydrateCharacters(res.cast.characters));
         }
       })
       .catch(() => {
