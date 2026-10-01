@@ -2290,13 +2290,20 @@ per-book scoping (#3376): with a take pending on book A, open a book with no
 revisions history of its own — its Status pill must show no pending revisions,
 not book A's; and start a multi-chapter Fix-audio batch on book A, then open
 book B before the batch finishes — book B must show none of book A's takes.
-Switching books mid-batch is a known gap (#3397, design owed) — record what
-was observed there rather than treating it as an A9 fail. One more step, added
-2026-09-24 (PR #3395 review pass 3) to pin the revisions slice's hydrate
-gating: with a take pending and at least one Revision History entry on a book,
-go to Library and back to the book — the pending take and Revision History are
-still there, and after the next chapter completes they're still on disk
-(reload). *Merged* 2026-06-03, PR #500.
+Leaving the book mid-batch — for a different book or for any non-book view
+(Library, Voices, Admin, Settings, Help, New book) — is a known gap (#3397,
+design owed): the batch's enqueue and playable-flip are skipped while no book,
+or a different book, is active, so a take that finishes while you're away
+comes back stuck "rendering" or without an A/B prompt. Record what was
+observed there rather than treating it as an A9 fail. One more step, added
+2026-09-24 (PR #3395 review pass 3, widened in pass 4) to pin the revisions
+slice's hydrate gating: with a take pending and at least one Revision History
+entry on a book, start a multi-chapter Fix-audio batch, then go to Library and
+back to the book while it is still running — the earlier pending take and
+Revision History are still there, and after the next chapter completes they're
+still on disk (reload); record separately what happened to the batch takes
+that finished while you were on the Library (the #3397 gap above). *Merged*
+2026-06-03, PR #500.
 
 > **2026-09-06 — on-box run, PARTIAL.** Loudness (+3 dB, Master Oduvan, CH 3):
 > `.previous.mp3`/`.previous.segments.json` written; his own lines measured
@@ -2325,9 +2332,10 @@ still there, and after the next chapter completes they're still on disk
 > take now stays in the Status pill's Revisions section for audition/accept/
 > rollback. (`GET /revisions` also echoes the persisted `pending` list now,
 > but that echo is harmless, not load-bearing — nothing reads it from a
-> poll.) Known remaining gap: a batch that finishes while you're on a
-> different book leaves that take stuck "rendering," or without an A/B
-> prompt, when you return — it no longer lands in the other book at all
+> poll.) Known remaining gap: a batch chapter that finishes while you're
+> away from the book — on a different book or on any non-book view, such as
+> the Library — leaves that take stuck "rendering," or without an A/B
+> prompt, when you return; it no longer lands in another book at all
 > (#3397, design owed). The on-box re-run above is **still owed** — the row
 > stays open.
 
@@ -2347,10 +2355,23 @@ still there, and after the next chapter completes they're still on disk
 > has actually been read (distinct from `bookId`, which flips the instant
 > navigation targets a new book): persistence now refuses to write a
 > revisions patch until `hydratedFor` matches, Layout re-hydrates just the
-> revisions slice (not the whole book) whenever it's found stale, and a write
-> landing in the pre-hydrate gap is merged into the disk snapshot once it
-> arrives rather than lost. The on-box re-run above is **still owed** — the
-> row stays open.
+> revisions slice (not the whole book) whenever it's found stale, and a new
+> take enqueued in the pre-hydrate gap is merged into the disk snapshot once
+> it arrives. (Every other write in that gap — a playable flip, a dismiss, an
+> accept/reject, a rollback — was still lost at this point; see the next
+> note.) The on-box re-run above is **still owed** — the row stays open.
+
+> **2026-10-01 — remaining hydrate-gate gaps closed (PR #3395 review pass
+> 4).** Every revisions write made while a book's disk read is still pending
+> (a new take, a playable flip, a dismiss, an accept/reject, a rollback) is
+> now recorded and replayed on top of the disk snapshot when it lands, then
+> saved once. A failed `GET /book-state` on the way back into a book is
+> retried with backoff until it lands, with a notice meanwhile, instead of
+> leaving the book's revisions unsaveable for the rest of the visit. Leaving
+> a book sends its queued writes at once, and the re-read on return waits
+> for any still in flight, so an accept made just before a Library round trip
+> is not read back stale and erased. Not covered: the #3397 gap above. The
+> on-box re-run above is **still owed** — the row stays open.
 
 ### A10 · Structured failure taxonomy (plan 173, fs-19)
 
