@@ -10,21 +10,16 @@
 // distinctly from "we killed it") and AGAIN afterward (to judge success by
 // liveness, not by taskkill's exit code).
 //
-// Importing stop-app.mjs must NOT stop or sweep anything — main() is guarded
-// behind an invoked-directly check (mirrors start-app-prod.mjs), so importing
-// killTree() alone is side-effect-free.
+// Importing stop-app.mjs must NOT stop or sweep anything — that guard is
+// pinned in stop-app-import-guard.test.mjs, which deliberately never imports
+// stop-app.mjs itself (a test file that statically imports it would run the
+// guard's own mutant inside the importing process).
 // Discovered by `npm run test:hooks` (node --test scripts/tests/*.test.mjs).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { killTree, isStopSummarySuppressed } from '../stop-app.mjs';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // killTree is async since PR #3404 review pass 2 (it now waits a bounded
 // grace period after the kill attempt — see the file's own module-level
@@ -131,10 +126,10 @@ test('isStopSummarySuppressed: no failure and nothing listening does not suppres
 // override, so the default scripts/lib/pid-alive.mjs probe is what actually
 // classifies the pid:
 test('killTree: default isAlive wiring classifies an already-dead real pid as "gone"', async () => {
-  // A pid this large is never a real running process (Windows caps live pids
-  // well under this; POSIX pid_max is far lower too), so the default
-  // pidIsAlive probe reads it as ESRCH -> gone without any override.
-  const definitelyDeadPid = 999999;
+  // The pid of a child that has just exited — a real pid that is genuinely
+  // dead, unlike a made-up large number (Windows ignores a pid's low two bits,
+  // so a fixed "999999" can alias a live pid).
+  const definitelyDeadPid = spawnSync(process.execPath, ['-e', ''], { windowsHide: true }).pid;
   let attempted = false;
   const outcome = await killTree(definitelyDeadPid, {
     kill: () => {
@@ -167,45 +162,4 @@ test('killTree: default isAlive wiring reports a real live pid as alive, not "go
   });
   assert.equal(killAttempted, true, 'a real live pid must trigger a kill attempt, not read as already gone');
   assert.equal(outcome, 'failed', 'the no-op kill never actually terminates this process, so it must read as failed');
-});
-
-// Pass 2, yellow finding 4b — the `isDirectlyInvoked` guard at the bottom of
-// stop-app.mjs is not exercised by importing killTree() alone (that's the
-// whole point: import must be side-effect-free). A POSITIVE control is
-// required, not just "no stdout" — an empty .run/ dir would print nothing
-// from a correctly-guarded import AND from an unguarded one that ran main()
-// and found nothing to do, so that alone can't distinguish the mutation.
-// Instead: plant a `server.pid` file in a real temp APP_RUN_DIR holding a
-// pid that is definitely dead (999999 — see the sibling default-wiring test
-// above for why). If the guard is intact, importing the module touches
-// nothing: no stdout, and the pidfile survives (main() always rmSync's the
-// pidfile it processes, before it even checks liveness). If the guard is
-// removed (bare `main();`), main() reads that pid file, deletes it,
-// classifies the pid 'gone' via the real default pidIsAlive probe, and
-// prints `[GONE] server pid=999999 (already exited)` — this test fails on
-// both counts under that mutation (verified by hand — see the PR report).
-test('importing stop-app.mjs does not invoke main() (positive control: a dead-pid pidfile stays untouched)', () => {
-  const runDir = mkdtempSync(join(tmpdir(), 'stop-app-guard-'));
-  writeFileSync(join(runDir, 'server.pid'), '999999', 'utf8');
-  try {
-    const moduleUrl = pathToFileURL(resolve(__dirname, '..', 'stop-app.mjs')).href;
-    const result = spawnSync(
-      process.execPath,
-      ['--input-type=module', '-e', `import(${JSON.stringify(moduleUrl)});`],
-      {
-        cwd: resolve(__dirname, '..', '..'),
-        env: { ...process.env, APP_RUN_DIR: runDir },
-        encoding: 'utf8',
-        windowsHide: true,
-      },
-    );
-    assert.equal(result.status, 0, `import should not throw/exit nonzero: ${result.stderr}`);
-    assert.equal(result.stdout, '', 'importing the module must not run main() or print anything');
-    assert.ok(
-      existsSync(join(runDir, 'server.pid')),
-      'main() removes the pidfile it processes — it surviving proves main() never ran',
-    );
-  } finally {
-    rmSync(runDir, { recursive: true, force: true });
-  }
 });
