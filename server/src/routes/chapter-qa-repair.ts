@@ -562,6 +562,8 @@ chapterQaRepairRouter.post(
             voiceName?: string;
             baseVoiceName?: string;
             voiceSubstitutedFrom?: string;
+            renderedFallbackEngine?: ChapterSegment['renderedFallbackEngine'];
+            renderedFallbackCharacterId?: string;
             embeddings?: EmbeddingRow[];
           } | null = null;
           let bestVerdict: SegmentQaVerdict | null = null;
@@ -656,6 +658,8 @@ chapterQaRepairRouter.post(
                 voiceName: bestSeg?.voiceName,
                 baseVoiceName: bestSeg?.baseVoiceName,
                 voiceSubstitutedFrom: bestSeg?.voiceSubstitutedFrom,
+                renderedFallbackEngine: bestSeg?.renderedFallbackEngine,
+                renderedFallbackCharacterId: bestSeg?.renderedFallbackCharacterId,
                 embeddings: r.embeddings,
               };
               bestVerdict = v;
@@ -732,6 +736,9 @@ chapterQaRepairRouter.post(
             // this per-segment; threading it through here is what lets the
             // diagnostic survive a repair instead of going stale.
             voiceSubstitutedFrom: best.voiceSubstitutedFrom,
+            // #3362 — the ACCEPTED take's own fallback stamps (replace/clear).
+            renderedFallbackEngine: best.renderedFallbackEngine,
+            renderedFallbackCharacterId: best.renderedFallbackCharacterId,
             /* fs-51 follow-up — unlike the splice route, THIS route's whole job
                is signal-QA repair: `bestVerdict` above is always populated by
                `evaluateSegmentPcm` regardless of any config gate, so the

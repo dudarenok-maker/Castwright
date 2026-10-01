@@ -477,6 +477,10 @@ chapterSpliceRouter.post(
               // computes this per-segment; threading it through here is what
               // lets the diagnostic survive a re-record instead of going stale.
               voiceSubstitutedFrom: s?.voiceSubstitutedFrom,
+              // #3362 — the take's own fallback stamps, so a re-record
+              // replaces (or clears) the prior render's instead of keeping it.
+              renderedFallbackEngine: s?.renderedFallbackEngine,
+              renderedFallbackCharacterId: s?.renderedFallbackCharacterId,
               /* fs-51 follow-up — the signal-QA gate only actually evaluates a
                  verdict when `maxSegmentRerecords > 0` (synthesiseChapter's own
                  gate); ASR only runs when `asrOn`. Without these flags,

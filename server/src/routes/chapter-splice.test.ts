@@ -584,6 +584,93 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
     expect(segFile.segments[1].voiceSubstitutedFrom).toBeUndefined();
   });
 
+  /* #3362 pass 11 🟠A — a re-record's take always has a definite answer for
+     "did THIS take fall back", exactly like voiceSubstitutedFrom, so
+     renderedFallbackEngine/renderedFallbackCharacterId must be overwritten
+     unconditionally: a clean take clears a stale Kokoro stamp, a fallback take
+     stamps the fresh one onto a previously clean segment. */
+  it('a clean re-record clears a stale renderedFallbackEngine/CharacterId, so the line counts as a Qwen line again (#3362)', async () => {
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    const { renderedSegmentVoices } = await import('../audio/segments-io.js');
+    const segPath = join(titleLedAudioRoot, `${SLUG}.segments.json`);
+    const originalSegs = readFileSync(segPath, 'utf8');
+    try {
+      const before = JSON.parse(originalSegs);
+      before.segments[1].renderedFallbackEngine = 'kokoro';
+      before.segments[1].renderedFallbackCharacterId = 'narrator';
+      writeFileSync(segPath, JSON.stringify(before));
+
+      synthMock.mockImplementationOnce(async () => ({
+        pcm: tone(0.3, 9000),
+        sampleRate: SR,
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 0.3, voiceName: 'qwen-amy' },
+        ],
+        durationSec: 0.3,
+        rerecordMs: 0,
+        transcribeMs: 0,
+        embedMs: 0,
+      }));
+      const res = await request(app)
+        .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+        .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+      expect(parseSse(res.text).some((e) => e.type === 'splice_complete'), `got ${res.text}`).toBe(true);
+
+      const segFile = JSON.parse(readFileSync(segPath, 'utf8')) as {
+        segments: Array<{ characterId: string; voiceName?: string; renderedFallbackEngine?: string; renderedFallbackCharacterId?: string }>;
+      };
+      expect(segFile.segments[1].voiceName).toBe('qwen-amy');
+      expect('renderedFallbackEngine' in segFile.segments[1]).toBe(false);
+      expect('renderedFallbackCharacterId' in segFile.segments[1]).toBe(false);
+      // Downstream: the per-line voice drift / Voices split no longer skips it.
+      expect(renderedSegmentVoices(segFile.segments as never, segFile.segments[1].characterId)).toContain('qwen-amy');
+    } finally {
+      writeFileSync(segPath, originalSegs);
+    }
+  });
+
+  it('a fallback re-record stamps the new take\'s renderedFallbackEngine/CharacterId onto a clean segment (#3362)', async () => {
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    const segPath = join(titleLedAudioRoot, `${SLUG}.segments.json`);
+    const originalSegs = readFileSync(segPath, 'utf8');
+    try {
+      synthMock.mockImplementationOnce(async () => ({
+        pcm: tone(0.3, 9000),
+        sampleRate: SR,
+        segments: [
+          {
+            groupIndex: 0,
+            characterId: 'amy',
+            sentenceIds: [1],
+            startSec: 0,
+            endSec: 0.3,
+            voiceName: 'af_bella',
+            renderedFallbackEngine: 'kokoro',
+            renderedFallbackCharacterId: 'narrator',
+          },
+        ],
+        durationSec: 0.3,
+        rerecordMs: 0,
+        transcribeMs: 0,
+        embedMs: 0,
+      }));
+      const res = await request(app)
+        .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+        .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+      expect(parseSse(res.text).some((e) => e.type === 'splice_complete'), `got ${res.text}`).toBe(true);
+
+      const segFile = JSON.parse(readFileSync(segPath, 'utf8')) as {
+        segments: Array<{ renderedFallbackEngine?: string; renderedFallbackCharacterId?: string }>;
+      };
+      expect(segFile.segments[1].renderedFallbackEngine).toBe('kokoro');
+      expect(segFile.segments[1].renderedFallbackCharacterId).toBe('narrator');
+    } finally {
+      writeFileSync(segPath, originalSegs);
+    }
+  });
+
   it('rejects targeting the title beat (index 0) directly with the title-only error', async () => {
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)

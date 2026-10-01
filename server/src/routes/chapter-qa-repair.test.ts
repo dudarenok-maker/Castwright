@@ -531,6 +531,69 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(segFile.segments[1].voiceSubstitutedFrom).toBeUndefined();
   });
 
+  /* #3362 pass 11 🟠A — same unconditional-overwrite rule as
+     voiceSubstitutedFrom, for the per-segment fallback stamps. */
+  it('a clean accepted take clears a stale renderedFallbackEngine/CharacterId (#3362)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+      segments: [{ groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 0, endSec: 0.5 }],
+    }));
+
+    const { bookId: id, chapterSlug } = await scaffoldVerdictBook('Cleared Fallback Story');
+    const segPath = join(
+      audioDirFn(join(workspaceRoot, 'books', 'Verdict Author', 'Standalones', 'Cleared Fallback Story')),
+      `${chapterSlug}.segments.json`,
+    );
+    const segFileBefore = JSON.parse(readFileSync(segPath, 'utf8'));
+    segFileBefore.segments[1].renderedFallbackEngine = 'kokoro';
+    segFileBefore.segments[1].renderedFallbackCharacterId = 'narrator';
+    writeFileSync(segPath, JSON.stringify(segFileBefore));
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+    const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+
+    const seg = readSegmentsJson('Cleared Fallback Story', chapterSlug).segments[1] as Record<string, unknown>;
+    expect('renderedFallbackEngine' in seg).toBe(false);
+    expect('renderedFallbackCharacterId' in seg).toBe(false);
+  });
+
+  it('a fallback accepted take stamps its renderedFallbackEngine/CharacterId onto a clean segment (#3362)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+      segments: [
+        {
+          groupIndex: 1,
+          characterId: 'castor',
+          sentenceIds: [2],
+          startSec: 0,
+          endSec: 0.5,
+          renderedFallbackEngine: 'kokoro',
+          renderedFallbackCharacterId: 'narrator',
+        },
+      ],
+    }));
+
+    const { bookId: id, chapterSlug } = await scaffoldVerdictBook('Stamped Fallback Story');
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+    const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+
+    const seg = readSegmentsJson('Stamped Fallback Story', chapterSlug).segments[1] as Record<string, unknown>;
+    expect(seg.renderedFallbackEngine).toBe('kokoro');
+    expect(seg.renderedFallbackCharacterId).toBe('narrator');
+  });
+
   it('#1839 finding 3 — resolveForEngine("qwen") delegates to the shared canonicalModelKeyForEngine mapper, not a local hardcoded copy', async () => {
     synthesiseChapterMock.mockReset();
     synthesiseChapterMock.mockImplementation(async () => ({
