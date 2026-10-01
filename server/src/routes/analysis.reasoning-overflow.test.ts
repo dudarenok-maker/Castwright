@@ -49,6 +49,20 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
   };
 });
 
+/* Passthrough spy: reports every save that already carries Phase 0b's stage1 roster. Reading the
+   cache FILE instead is racy — Phase 1's own saves of the shared cache object can land after (and
+   clobber) Phase 0b's write, so the file can lack stage1 even though Phase 0b ran. */
+vi.mock('../store/analysis-cache.js', async () => {
+  const actual = await vi.importActual<typeof import('../store/analysis-cache.js')>('../store/analysis-cache.js');
+  return {
+    ...actual,
+    saveAnalysisCache: async (...args: Parameters<typeof actual.saveAnalysisCache>) => {
+      if (args[1].stage1) (globalThis as Record<string, unknown> & { __overflow_spend_test_stage1_saved?: () => void }).__overflow_spend_test_stage1_saved?.();
+      return actual.saveAnalysisCache(...args);
+    },
+  };
+});
+
 const AUTHOR = 'Overflow Spend Author';
 const SERIES = 'Standalones';
 const MODEL = 'gemini-3.6-flash';
@@ -607,24 +621,17 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
       openChapterTwoCast = resolve;
     });
     const failSafe = setTimeout(() => openChapterTwoCast(), 20_000);
-    let chapterTwoCastStarted!: () => void;
-    const chapterTwoCastStartedP = new Promise<void>((resolve) => {
-      chapterTwoCastStarted = resolve;
-    });
     const phase0Analyzer = stubAnalyzer({
       async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
-        if (chapterId === 2) {
-          chapterTwoCastStarted();
-          await chapterTwoCastHeld;
-        }
+        if (chapterId === 2) await chapterTwoCastHeld;
         return { characters: [novaCharacter()] };
       },
       runStage2Chapter: () => Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
     });
     const escalate = vi.fn(async (_m: string, _chapterId: number, _w: number, _p: string, call: StageCall) => {
-      /* The overflow is recorded only once chapter 2's cast call is already in flight, i.e. after
-         the Phase-0 pool's last dispatch check has passed. */
-      await chapterTwoCastStartedP;
+      /* Pool width 2 (below) dispatches both cast chapters up front, so chapter 2's cast call is
+         already held in flight — every Phase-0 dispatch check has passed — before Phase 1 can
+         start, and nothing here has to wait for it (a wait would deadlock a shared call slot). */
       call.onReasoningOverflow?.(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100));
       openChapterTwoCast();
       return null;
@@ -634,24 +641,34 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
     g.__overflow_spend_test_pipelined = true;
     const originalMinLag = process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS;
     process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '0';
-    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    let stage1Saved = false;
+    let onStage1Saved!: () => void;
+    const stage1SavedP = new Promise<void>((resolve) => {
+      onStage1Saved = resolve;
+    });
+    g.__overflow_spend_test_stage1_saved = () => {
+      stage1Saved = true;
+      onStage1Saved();
+    };
     const events = captureEvents(seed.job);
     const { runMainAnalyzerJob } = await import('./analysis.js');
     const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
-    const { loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
     try {
       await runMainAnalyzerJob(seed.job, getManuscript(seed.manuscriptId)! as never, buildSelection(phase0Analyzer, 'phase0-model'), {
         requestedFresh: true,
         allowStage1Shrink: true,
         requestedModel: undefined,
       });
-      /* The run can end on Phase 1's own check while Phase 0 chapter 2 is still finishing; give
-         a Phase 0b the tail check failed to stop time to land. */
-      await new Promise((r) => setTimeout(r, 500));
+      /* The run can end on Phase 1's own check while Phase 0 chapter 2 is still finishing. A
+         Phase 0b the tail check failed to stop resolves the latch as soon as it saves; the bound
+         only limits how long the absence case waits. */
+      await Promise.race([stage1SavedP, new Promise((r) => setTimeout(r, 1_500))]);
       expect(escalate).toHaveBeenCalledTimes(1);
       expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
-      expect((await loadAnalysisCache(seed.manuscriptId)).stage1).toBeUndefined();
+      expect(stage1Saved).toBe(false);
     } finally {
+      delete g.__overflow_spend_test_stage1_saved;
       clearTimeout(failSafe);
       openChapterTwoCast();
       process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
