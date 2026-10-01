@@ -349,7 +349,26 @@ export const analysisStreamMiddleware: Middleware = (store) => {
 
     if (a.type === HALTED_TYPE || a.type === CLEAR_TYPE) {
       /* Slice already updated by next(action). Tear down the local
-         handle — there's nothing more to tick for. */
+         handle — there's nothing more to tick for.
+
+         #3084 F7 — if the halted payload carries an analyzer-reasoning-overflow
+         code with fixes, push the persistent overflow toast here. This covers the
+         race where the view's catch dispatches setHalted first, triggering this
+         hook before the middleware's own copy of the error arrives (which would
+         then surface as AbortError and be swallowed without pushing). The slice's
+         dedupe-by-key will collapse a double push. */
+      const haltedAction = a.payload as { code?: string; message?: string; fixes?: Array<{label: string; settingKey?: string; wikiPage?: string}> } | undefined;
+      if (haltedAction?.code === 'analyzer-reasoning-overflow' && haltedAction?.fixes?.length) {
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'error',
+            message: haltedAction.message || 'Reasoning overflow',
+            fixes: haltedAction.fixes,
+            dedupeKey: 'analysis-stream',
+          }),
+        );
+      }
+
       closeHandle();
       /* Note: we do NOT reset attemptedReopenAfterCurrentHalt or reopenFailureDampenCount
          here. The damping state needs to survive the close so subsequent ticks within
