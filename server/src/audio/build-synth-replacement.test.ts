@@ -404,10 +404,25 @@ describe('SynthOutput#voiceSubstitutedFrom (#2034 — required, not optional)', 
      `npm run typecheck` goes red. Mutation-verified by reverting the `:71`
      production line and re-running `npm run typecheck` (see PR description /
      commit message for the pasted red output). */
+  // One assertion PER required field, each literal supplying every OTHER
+  // required field and omitting only the one under test — so each directive
+  // goes unused (TS2578) iff THAT field alone turns optional (#3362 pass 12).
   it('a SynthOutput literal that omits voiceSubstitutedFrom fails typecheck', () => {
     // @ts-expect-error — voiceSubstitutedFrom is a required key (value still
     // permits `undefined`); omitting the key entirely must not compile (#2034).
-    const bad: SynthOutput = { pcm: Buffer.alloc(0), sampleRate: 24_000 };
+    const bad: SynthOutput = { pcm: Buffer.alloc(0), sampleRate: 24_000, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined };
+    expect(bad).toBeTruthy();
+  });
+
+  it('a SynthOutput literal that omits renderedFallbackEngine fails typecheck', () => {
+    // @ts-expect-error — renderedFallbackEngine is a required key (#3362).
+    const bad: SynthOutput = { pcm: Buffer.alloc(0), sampleRate: 24_000, voiceSubstitutedFrom: undefined, renderedFallbackCharacterId: undefined };
+    expect(bad).toBeTruthy();
+  });
+
+  it('a SynthOutput literal that omits renderedFallbackCharacterId fails typecheck', () => {
+    // @ts-expect-error — renderedFallbackCharacterId is a required key (#3362).
+    const bad: SynthOutput = { pcm: Buffer.alloc(0), sampleRate: 24_000, voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined };
     expect(bad).toBeTruthy();
   });
 });
