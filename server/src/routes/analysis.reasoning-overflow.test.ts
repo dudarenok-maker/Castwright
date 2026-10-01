@@ -890,6 +890,14 @@ describe('nonStoryOverflowWarningMessage — advice follows the fixes list (#308
    `error`. The Phase-1 catch now re-records it and sends chapter-failed, the
    same way the route's Phase-0 failure path does. */
 describe('a Retry whose Phase 1 fails keeps its failure on record and reports it (#3435)', () => {
+  /* The first dynamic import of ./analysis.js costs ~14 s cold (it pulls the whole
+     analyzer/TTS graph). Left inside the first test's 30 s budget it times out
+     under load — the control, being first, hung at --retry=0 and was only
+     rescued by the repo's default retry. Pay it here, with its own budget. */
+  beforeAll(async () => {
+    await import('./analysis.js');
+  }, 120_000);
+
   async function runRetry(
     label: string,
     runStage2Chapter: Analyzer['runStage2Chapter'],
