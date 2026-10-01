@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { queueSlice, type QueueEntry } from './queue-slice';
 import { chaptersSlice } from './chapters-slice';
+import { revisionsSlice } from './revisions-slice';
 import { uiSlice } from './ui-slice';
 import { accountSlice } from './account-slice';
 import { notificationsSlice } from './notifications-slice';
@@ -137,6 +138,7 @@ function makeStore(generationWorkers = 1) {
       ui: uiSlice.reducer,
       queue: queueSlice.reducer,
       chapters: chaptersSlice.reducer,
+      revisions: revisionsSlice.reducer,
       account: accountSlice.reducer,
       notifications: notificationsSlice.reducer,
     },

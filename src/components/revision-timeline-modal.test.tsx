@@ -22,6 +22,9 @@ function makeStore(timeline: Record<number, TimelineEntry[]>) {
         acceptedSelections: {},
         timeline,
         loaded: true,
+        bookId: null,
+        hydratedFor: null,
+        windowActions: {},
       },
     },
   });

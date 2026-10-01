@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="43" data-publish-id="1188a173c21b"></div>
+  <div hidden data-published-as="42" data-publish-id="039b916cab1b"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">50</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">53</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,11 +209,11 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->32<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->33<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->2<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->8<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->10<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">32 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">33 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -333,10 +333,14 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A9</span><span class="iname">Per-character re-record / splice (plan 176)</span><span class="risk hot">A/B toggle FAILs</span><span class="chev">›</span></summary>
+      <summary><span class="num">A9</span><span class="iname">Per-character re-record / splice (plan 176)</span><span class="risk hot">Multi-chapter batch re-run owed</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>Rendered book → a character's profile → Fix audio → <b>+3 dB gain</b> — confirm the promised A/B audition actually populates the Revisions panel.</p>
-        <div class="flag"><b>2026-09-06 — PARTIAL.</b> Loudness (+1.63 dB measured on the character's own lines), duration-unchanged, <code>.previous.*</code> backup, and chapter-loudness-holds-at-target are all confirmed with real numbers, as is re-record timing integrity (every segment boundary contiguous, no seam, no doubled content). <b>A/B toggle — FAIL:</b> the Fix-audio dialog promises review "in the revisions panel," but the Status pill's Revisions list read "No pending revisions" and <code>revisions.json</code> stayed empty after both actions — that panel is wired to a different, drift-detection-only mechanism.</div>
+        <p>Rendered book → a character's profile → <b>a multi-chapter Fix-audio batch that spans a 30s active-revisions poll tick</b> — confirm every chapter's A/B revision appears in the Status pill's Revisions panel and stays auditable/playable (nothing reverts to "No pending revisions" mid-batch), then reload the app and confirm the entries persist. Two more steps, added 2026-09-24 to pin <code>pending</code>'s per-book scoping (#3376): with a take pending on book A, open a book with no revisions history of its own — its Status pill must show no pending revisions, not book A's; and start a multi-chapter Fix-audio batch on book A, then open book B before the batch finishes — book B must show none of book A's takes. Leaving the book mid-batch — for a different book or for any non-book view (Library, Voices, Admin, Settings, Help, New book) — is a known gap (#3397, design owed): the batch's enqueue and playable-flip are skipped while no book, or a different book, is active, so a take that finishes while you're away comes back stuck "rendering" or without an A/B prompt. Record what was observed there rather than treating it as an A9 fail. One more step, added 2026-09-24 (PR #3395 review pass 3, widened in pass 4) to pin the revisions slice's hydrate gating: with a take pending and at least one Revision History entry on a book, start a multi-chapter Fix-audio batch, then go to Library and back to the book while it is still running — the earlier pending take and Revision History are still there, and after the next chapter completes they're still on disk (reload); record separately what happened to the batch takes that finished while you were on the Library (the #3397 gap above).</p>
+        <div class="flag"><b>2026-09-06 — PARTIAL.</b> Loudness (+1.63 dB measured on the character's own lines), duration-unchanged, <code>.previous.*</code> backup, and chapter-loudness-holds-at-target are all confirmed with real numbers, as is re-record timing integrity (every segment boundary contiguous, no seam, no doubled content). <b>A/B toggle — FAIL:</b> the Fix-audio dialog promised review "in the revisions panel," but the Status pill's Revisions list read "No pending revisions" and <code>revisions.json</code> stayed empty after both actions — <code>GET /revisions</code> never echoed the persisted pending entries.</div>
+        <div class="flag"><b>2026-09-24 — pending-poll-clobber defect fixed (PR #3395, closes #3376).</b> <code>pending</code> is seeded from the disk read on book open (<code>hydrateFromBookState</code> off <code>GET /book-state</code>); the active book's 30s poll reducer no longer writes <code>pending</code> at all, so a poll landing mid-debounce can't overwrite a take the user just enqueued; and the revisions slice now tracks the <code>bookId</code> it belongs to, resetting <code>pending</code> on any book change. A Fix-audio or regen take now stays in the Status pill's Revisions section for audition/accept/reject. (<code>GET /revisions</code> also echoes the persisted <code>pending</code> list now, but that echo is harmless, not load-bearing — nothing reads it from a poll.) Known remaining gap: a batch chapter that finishes while you're away from the book — on a different book or on any non-book view, such as the Library — leaves that take stuck "rendering," or without an A/B prompt, when you return; it no longer lands in another book at all (#3397, design owed). The on-box re-run above is still owed — the row stays open.</div>
+        <div class="flag"><b>2026-09-24 — two more ways a pending take could go missing, fixed (PR #3395 review pass 3).</b> The flag above claiming <code>pending</code> is "seeded exactly once per book" was itself wrong: a trip to a non-book view (Library, Voices, Admin, Settings, Help, New book) resets the revisions slice's <code>pending</code>/timeline, but manuscript/cast/chapters stay loaded across that trip — so Layout's reload-skip check (keyed only on those three) never re-read the book's revisions off disk, and the next chapter-complete flip persisted an empty <code>revisions.json</code> over whatever was really there (R1). Separately, a write racing a book's own hydrate — a chapter finishing (or a Fix-audio batch chapter landing) while that book's <code>GET /book-state</code> was still in flight right after opening it — could persist first and wipe out the disk snapshot with an empty/partial patch (R2). Fixed with a new <code>revisions.hydratedFor</code> field tracking whether THIS book's disk snapshot has actually been read (distinct from <code>bookId</code>, which flips the instant navigation targets a new book): persistence now refuses to write a revisions patch until <code>hydratedFor</code> matches, Layout re-hydrates just the revisions slice (not the whole book) whenever it's found stale, and a new take enqueued in the pre-hydrate gap is merged into the disk snapshot once it arrives. (Every other write in that gap — a playable flip, a dismiss, an accept/reject — was still lost at this point; see the next flag.) The on-box re-run above is still owed — the row stays open.</div>
+        <div class="flag"><b>2026-10-01 — remaining hydrate-gate gaps closed (PR #3395 review pass 4).</b> Every revisions write made while a book's disk read is still pending (a new take, a playable flip, a dismiss, an accept/reject) is now recorded and replayed on top of the disk snapshot when it lands, then saved once. A failed <code>GET /book-state</code> on the way back into a book is retried with backoff until it lands, with a notice meanwhile, instead of leaving the book's revisions unsaveable for the rest of the visit. Leaving a book sends its queued writes at once, and the re-read on return waits for any still in flight, so an accept made just before a Library round trip is not read back stale and erased. Not covered: the #3397 gap above. The on-box re-run above is still owed — the row stays open.</div>
+<div class="flag"><b>2026-10-01 — review pass 5 (PR #3395).</b> A write recorded for a book left before its read landed is now dropped when that book is re-parsed, replaced or deleted, instead of being replayed onto the wiped book; a replayed accept/reject keeps the time it was clicked; and the failed-read notice no longer lingers onto the next book. Known limit: if the save sent on leaving a book <em>fails</em>, the re-read on return still runs and erases that change, silently (#3421, decision owed). The on-box re-run above is still owed — the row stays open.</div>
         <p class="src">Merged 2026-06-03 (PR #500); still <code>active</code> as of a 2026-07-24 commit saying “Still owed: live-GPU re-record acceptance” · <code>plan 176:50,55,59</code></p>
       </div>
     </details>
@@ -737,6 +741,18 @@
         <p class="src">single GPU card, <code>ASR_DEVICE=cuda</code>, <code>ASR_MODEL=large-v3</code> (or another non-<code>tiny</code>/<code>base</code>/<code>small</code> tag), a squeezable card (able to be driven down to ~500–900 MB free) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3347">#3347</a>, <a href="https://github.com/dudarenok-maker/Castwright/pull/3357">#3357</a> &#183; no separate run sheet &#183; medium — needs <code>faster-whisper</code>&#39;s <code>large-v3</code> weights installed, a GPU card that can be driven down to the ~500–900 MB free range (e.g. holding a Qwen or Coqui model resident alongside), and one cold <code>/transcribe</code> call in each state. No golden-audio comparison.</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">A111</span><span class="iname">A real installed release-zip exercises the restarter, <code>stop:prod</code>, and Windows sleep prevention</span><span class="risk">a real installed castwright-vX.Y.Z.zip, Windows for the sleep-prevention leg; no GPU strictly needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>#3406 (filed in PR #3404&#39;s own review, pass 2) found <code>scripts/build-release-zip.mjs</code>&#39;s MANIFEST omitted <code>scripts/lib/</code> files that shipped scripts import: the already-published v1.14.0 zip shipped <code>server/src/system/prevent-sleep.ts</code> spawning a <code>scripts/lib/prevent-sleep.ps1</code> that was never in the box, so Windows sleep prevention was silently inert during every render on that zip; <code>stop-app.mjs</code>&#39;s <code>./lib/sidecar-sweep-port.mjs</code> import and <code>stop-app.ps1</code>&#39;s two <code>.psm1</code> imports were in the same state on <strong>unreleased <code>main</code></strong> (v1.14.0&#39;s own <code>stop-app.mjs</code> imports nothing from <code>scripts/lib/</code>, so no released zip&#39;s <code>stop:prod</code> crashed &#8212; the crash was one release away). PR #3404 fixes all seven now-identified stray relative imports and adds a static <code>scripts/tests/release-manifest.test.mjs</code> guard, but that guard only proves every import target is present in the zip, never that the code importing it actually runs correctly once unpacked and installed for real. No packaged release directory exists on this box (same conclusion as A30), so none of this has been driven end-to-end against a real install.</p>
+        <ul>
+          <li>The in-app upgrade&#39;s restarter relaunches the app: trigger (or simulate) the in-app upgrade path and confirm the detached restarter actually brings the app back up &#8212; before this fix it crashed at import with <code>ERR_MODULE_NOT_FOUND</code> and left the app down until relaunched by hand.</li>
+          <li><code>npm run stop:prod</code> works from the installed release &#8212; prints <code>[STOP]</code>/succeeds rather than crashing on a missing <code>scripts/lib/*</code> import, and the server process is actually gone afterward.</li>
+          <li>Windows sleep prevention actually engages during a render: start a real chapter render on this install and, while it is in flight, run <code>powercfg /requests</code> and confirm it shows a live request entry attributable to the running process.</li>
+        </ul>
+        <p class="src">A real installed release built from this change (its natural moment is the next release cut), Windows for the sleep-prevention leg &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3406">Castwright#3406</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3404">#3404</a> &#183; no separate run sheet &#183; the three observations above; issue #3406 and PR #3404&#39;s manifest-guard section for the exact defect each leg closes</p>
+      </div>
+    </details>
 
 
 </section>
@@ -1047,7 +1063,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">8 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">10 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1137,6 +1153,30 @@
         </ul>
         <p>A negative result on the first two is not a regression &#8212; the guard fails open to <code>cwd</code>, i.e. the pre-#3263 behaviour &#8212; but it would mean the 99.1% never reaches production, and the feature would need the coordinator-set signal #3263 originally called direction (a) instead.</p>
         <p class="src">Any dev box that can dispatch a subagent, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3263">Castwright#3263</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3358">#3358</a> &#183; the four observations above; <code>docs/ops/3263-transcript-signal-measurement.md</code> (&#8220;Which file this is about&#8221;) for why each one matters &#183; ~20 minutes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E108</span><span class="iname">ops-71 stale-battery reaper &#8212; the push-path <code>KILLED</code> print on a real orphaned Windows tree</span><span class="risk">any Windows dev box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Row E104 (discharged 2026-09-25, removed from the register) drove the reaper&#39;s report-only census, stalled-rate detection, and <code>npm run doctor -- --kill</code> paths against real process trees, but its bullet 3 &#8212; that a <code>git push</code> whose pre-push census reaps an orphan prints <code>reap-stale-batteries: KILLED stale battery pid=&#8230; :: &lt;command line&gt;</code> &#8212; was <strong>not</strong> observed as specified: two real pushes (pids 38780, 23792) printed <code>KILL FAILED</code> instead, even though the whole tree was gone seconds later, because <code>killTree()</code> took its verdict from <code>taskkill /T</code>&#39;s own exit code, which goes nonzero when a tree member exits mid-walk. On the owner&#39;s 2026-09-25 decision, that unproven bullet moves here rather than discharging with the rest of E104. <code>killTree</code> now re-checks whether the WHOLE recorded tree (root + every OS descendant <code>runCensus</code> resolved beforehand) reads gone on a nonzero exit, via the shared <code>pid-alive.mjs</code> probe, and only reports <code>KILL FAILED</code> if something in that tree is still alive.</p>
+        <ul>
+          <li>Start a real, long-running battery (e.g. <code>npm run test:server</code>), then kill its owning terminal so the whole subtree is orphaned. Run a real <code>git push</code> and confirm its pre-push census reaps the orphan, printing <code>reap-stale-batteries: KILLED stale battery pid=&#8230; :: &lt;command line&gt;</code> on stderr &#8212; not <code>KILL FAILED</code> &#8212; and confirm via <code>Get-Process</code> that every PID the census recorded for that root is actually gone afterward.</li>
+          <li>If <code>taskkill</code>&#39;s own exit code is visible, record it for corroboration.</li>
+          <li><strong>Negative control &#8212; not reproducible on a real push; do not try.</strong> The shape that must read <code>KILL FAILED</code> is a tree whose <strong>root itself</strong> exited between the census and the kill (so <code>taskkill</code> cannot find it and touches nothing) while a child it spawned is still alive. On a real push the census and the kill run back to back inside one process, so that window is milliseconds and cannot be hit on demand. It is covered in-PR instead by the Windows-only real-process test in <code>scripts/tests/reap-stale-batteries.test.mjs</code> (&#8220;killTree returns false when a real descendant outlives a real dead root&#8221;), which spawns real processes and runs the real <code>taskkill /T</code>. What to observe on the box instead: across every real push in this row, <code>KILL FAILED</code> appears <strong>only</strong> if <code>Get-Process</code> still shows a recorded pid alive afterward &#8212; never when the whole tree is gone. (A root whose <em>parent</em> is dead is not the negative shape: that is the ordinary orphan the reaper targets, and <code>taskkill /T</code> kills it, so <code>KILLED</code> is correct there.)</li>
+        </ul>
+        <p class="src">A Windows dev box, no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3403">Castwright#3403</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3404">#3404</a> &#183; the observations above; issue #3403&#39;s repro; E104&#39;s own discharge note for the exact bug this closes &#183; ~10&#8211;15 minutes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E109</span><span class="iname"><code>npm run stop:prod</code> on a real POSIX box &#8212; the async-shutdown grace period</span><span class="risk">a Mac or Linux dev box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Review pass 2 of PR #3404 found <code>npm run stop:prod</code> reported EVERY successful stop as a failure on POSIX: the liveness re-check ran the instant after <code>SIGTERM</code> was sent, but the server&#39;s own shutdown is asynchronous (it reaps the sidecar, then exits), so a stop that was actually succeeding always read as still-running and printed <code>[WARN] &#8230; could not be stopped</code>. <code>killTree</code> now polls liveness for a bounded grace period (reusing <code>restart-after-upgrade.mjs</code>&#39;s <code>waitForExit</code>) before judging a kill failed, on both platforms &#8212; proven in the unit suite via a stub process, never against a real server process on a real POSIX kernel, which this repo&#39;s own dev box (Windows) cannot exercise.</p>
+        <ul>
+          <li>With the app running via <code>npm run start:prod</code>, run <code>npm run stop:prod</code> and confirm it prints <code>[STOP]</code> (not <code>[WARN] &#8230; could not be stopped</code>) within the grace period, and that the server process is actually gone once the command returns.</li>
+          <li>Confirm the TTS sidecar the server owns is also gone afterward.</li>
+          <li>Repeat once with a genuinely wedged server: <code>kill -STOP &lt;pid&gt;</code> the server process (it can no longer run its shutdown handler), then <code>npm run stop:prod</code>, and confirm it eventually reports <code>[WARN] &#8230; could not be stopped</code> after the grace period rather than waiting forever (<code>kill -CONT</code> and stop it for real afterward). The server has no shutdown drain step to slow down, so stopping the process is the way to make shutdown not finish.</li>
+        </ul>
+        <p class="src">A Mac or Linux dev box, no GPU, the app running via <code>start:prod</code> &#183; PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3404">#3404</a> &#183; the observations above; PR #3404&#39;s stop-app section for the exact defect and fix &#183; ~10 minutes</p>
       </div>
     </details>
 

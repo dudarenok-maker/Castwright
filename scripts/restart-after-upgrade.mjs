@@ -19,17 +19,13 @@ import { spawn } from 'node:child_process';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { pidIsAlive } from './lib/pid-alive.mjs';
 
-/** True while `pid` is still alive. `process.kill(pid, 0)` throws ESRCH once
-    it's gone (EPERM means alive-but-not-ours → still alive). */
-export function pidIsAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return err.code === 'EPERM';
-  }
-}
+// Re-exported for any existing caller importing pidIsAlive from this module
+// directly — the fail-safe implementation itself now lives in
+// scripts/lib/pid-alive.mjs, shared with scripts/reap-stale-batteries.mjs and
+// scripts/stop-app.mjs rather than duplicated per-file.
+export { pidIsAlive };
 
 /**
  * Poll until `pid` exits or `timeoutMs` elapses. Pure-ish: `isAlive` and

@@ -27,6 +27,7 @@ function Write-Status($msg) { try { Write-Host $msg } catch {} }
 
 $names = @("frontend", "server", "tts")
 $killedAny = $false
+$failedAny = $false
 
 foreach ($name in $names) {
     $pidPath = Join-Path $runDir "$name.pid"
@@ -35,13 +36,19 @@ foreach ($name in $names) {
     Remove-Item $pidPath -Force -ErrorAction SilentlyContinue
     $procId = 0
     if (-not [int]::TryParse($raw, [ref]$procId)) { continue }
-    # /T = tree, /F = force. Suppress output; we'll report ourselves.
-    & taskkill /PID $procId /T /F *> $null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Status "[STOP] $name pid=$procId"
-        $killedAny = $true
-    } else {
-        Write-Status "[GONE] $name pid=$procId (already exited)"
+    # taskkill /T /F, judged by LIVENESS not by taskkill's exit code (E104:
+    # /T exits 128 on a tree that is in fact gone) — see
+    # Stop-ProcessTreeByLiveness in lib\log-utils.psm1.
+    switch (Stop-ProcessTreeByLiveness -ProcessId $procId) {
+        'killed' {
+            Write-Status "[STOP] $name pid=$procId"
+            $killedAny = $true
+        }
+        'gone' { Write-Status "[GONE] $name pid=$procId (already exited)" }
+        default {
+            Write-Status "[WARN] $name pid=$procId could not be stopped (still running)"
+            $failedAny = $true
+        }
     }
 }
 
@@ -84,7 +91,9 @@ $serverPort = Get-ConfiguredServerPort -ServerEnvPath $serverEnvPath
 $basePorts = @()
 if ($serverPort) { $basePorts = @($serverPort) + $basePorts }
 if ($vitePort) { $basePorts = @($vitePort) + $basePorts }
-$ports = Get-PortsToSweep -BasePorts $basePorts -RunDir $runDir -ServerEnvPath $serverEnvPath
+# @(...) so an empty result stays an empty array: a bare `$ports = @()` return
+# unrolls to $null, which fails Get-StopSummaryMessage's Mandatory -Ports binding.
+$ports = @(Get-PortsToSweep -BasePorts $basePorts -RunDir $runDir -ServerEnvPath $serverEnvPath)
 $sweepIncomplete = $false
 if ($ports) {
     $conns = Get-NetTCPConnection -LocalPort $ports -State Listen -ErrorAction SilentlyContinue
@@ -105,6 +114,6 @@ if ($ports) {
 # #2632 N53 — a denied sweep-kill, or zero ports resolved for this
 # checkout, must not both read as the same "[OK] nothing to stop" claim.
 # See Get-StopSummaryMessage's own comment.
-$summary = Get-StopSummaryMessage -KilledAny $killedAny -SweepIncomplete $sweepIncomplete -Ports $ports
+$summary = Get-StopSummaryMessage -KilledAny $killedAny -SweepIncomplete ($sweepIncomplete -or $failedAny) -Ports $ports
 if ($summary) { Write-Status $summary }
 exit 0
