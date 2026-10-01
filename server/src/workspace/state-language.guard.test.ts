@@ -68,6 +68,8 @@
      M5  alias stateJsonPath in one file                              → G3
      M6  revert one migrated writer to writeJsonAtomic(statePath,…)  → G1
      M6b same, spelled writeJsonAtomicOrdered(statePath,…) (#3427)   → G1
+     M7  writeJsonAtomicOrdered(join(dir,'state.json'),…) in a file
+         that never mentions stateJsonPath (#3427)                   → G2
    Negative control (stays GREEN): a prose comment quoting
    `writeJsonAtomic(stateJsonPath(` and a string literal `join(dir,'state.json')`
    — both opaque, never sites. `git diff` empty of mutations before finalise. */
@@ -238,7 +240,7 @@ const G1_ALLOWED = new Map<string, { writes: number; why: string }>([
 // ---------------------------------------------------------------- G2
 
 const RAW_STATE_WRITE_RE = /\b(?:planEntry|writeFile)\(\s*stateJsonPath\(/g;
-const JOIN_STATE_WRITE_RE = /\b(?:writeFile|writeJsonAtomic|planEntry)\([^)]*state\.json'/g;
+const JOIN_STATE_WRITE_RE = /\b(?:writeFile|writeJsonAtomic(?:Ordered)?|planEntry)\([^)]*state\.json'/g;
 
 /* The one raw-to-state-path writer that exists today, pinned with its count AND
    a required normalisation marker: the bundle importer writes state.json through
@@ -418,6 +420,17 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
     ].join('\n');
     expect(countInCode(src, WRITE_JSON_ATOMIC_RE, [])).toBe(2);
     expect(countInCode('await writeJsonAtomicXOrdered(statePath, next);', WRITE_JSON_ATOMIC_RE, [])).toBe(0);
+  });
+
+  /* M7 (#3427): G2's join regex once listed the bare `writeJsonAtomic` only, so a
+     new file feeding a hand-built join(..., 'state.json') to the ordered writer
+     was invisible to every guard. Same fixture, both spellings must count. */
+  it("G2 counts a writeJsonAtomicOrdered(join(..., 'state.json')) bypass (M7)", () => {
+    const ordered = "await writeJsonAtomicOrdered(join(dir, 'state.json'), { v: 1 });";
+    const bare = "await writeJsonAtomic(join(dir, 'state.json'), { v: 1 });";
+    expect(countRawStateWrites(ordered, [])).toBe(1);
+    expect(countRawStateWrites(bare, [])).toBe(1);
+    expect(countRawStateWrites("await writeJsonAtomicXOrdered(join(dir, 'state.json'), 1);", [])).toBe(0);
   });
 
   it('G3: fail closed — global floors plus the per-file expected-count map for stateJsonPath(', () => {
