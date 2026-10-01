@@ -192,7 +192,12 @@ test('importing stop-app.mjs does not invoke main() (positive control: a dead-pi
     const result = spawnSync(
       process.execPath,
       ['--input-type=module', '-e', `import(${JSON.stringify(moduleUrl)});`],
-      { cwd: resolve(__dirname, '..', '..'), env: { ...process.env, APP_RUN_DIR: runDir }, encoding: 'utf8' },
+      {
+        cwd: resolve(__dirname, '..', '..'),
+        env: { ...process.env, APP_RUN_DIR: runDir },
+        encoding: 'utf8',
+        windowsHide: true,
+      },
     );
     assert.equal(result.status, 0, `import should not throw/exit nonzero: ${result.stderr}`);
     assert.equal(result.stdout, '', 'importing the module must not run main() or print anything');
