@@ -332,7 +332,8 @@ async function aggregateVoices(
           /* srv-43 Wave 2 — the on-disk storage key for this character's bespoke
              Qwen voice (qwen-<uuid> when a uuid exists, else qwen-<voiceId>).
              Used to key generated-flag lookups against renderedQwenNames (which
-             contains STORAGE keys from segment snapshots), independently of the
+             contains the STORAGE keys of voices rendered lines were stamped
+             with, snapshot voice only as the legacy fallback), independently of the
              human display name emitted on ttsVoice.name below. */
           const qwenStoreKey =
             engine === 'qwen' ? qwenStorageKey({ voiceUuid: c.voiceUuid, voiceId: c.voiceId }, id) : null;
@@ -481,7 +482,8 @@ async function aggregateVoices(
             pinned: (pinned.has(dedupKey) || pinned.has(id)) || undefined,
             /* srv-43 Wave 2: key on the STORAGE key (qwenStoreKey) so a uuid-
                bearing voice (storage key = qwen-<uuid>) still matches the
-               rendered snapshot even though ttsVoice.name is now qwen-<voiceId>. */
+               voice its rendered lines carry even though ttsVoice.name is now
+               qwen-<voiceId>. */
             generated: (qwenStoreKey ? renderedQwenNames.has(qwenStoreKey) : false) || undefined,
             sampled: hasCachedQwenSample(sampleScope) || undefined,
             ttsVoice,

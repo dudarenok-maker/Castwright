@@ -2,10 +2,12 @@
    that generation.ts writes after a successful render.
 
    Two consumers read these back:
-     - the drift detector (`routes/revisions.ts`) compares each snapshot
-       against the live cast.json, and
+     - the drift detector (`routes/revisions.ts`) compares the voices the
+       per-line stamps record against the live cast.json (the snapshot only
+       when no line under a key carries a stamp), and
      - the voice library aggregator (`routes/voices.ts`) stamps a bespoke
-       Qwen voice as `generated` once it appears in a rendered snapshot.
+       Qwen voice as `generated` once a rendered line carries it (the
+       snapshot's voice only as the legacy fallback).
 
    The on-disk shape is the strict `ChapterSegmentsFile` written by
    generation.ts; here we model the loose READ view (every field optional)
