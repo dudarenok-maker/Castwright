@@ -338,8 +338,11 @@ function flushKey(bookId: string, slice: StateSlice): FlushKey {
    writes now and the dispatch returns a promise that settles once every
    write for the book still in flight has settled (success or failure), or
    `null` when nothing is queued or in flight — so the re-read never sees
-   disk from before a write the user already made. Not a reducer action:
-   no slice handles it. */
+   disk from before a write that LANDED. A write that FAILED settles the
+   same way, so the re-read still runs, reads disk from before it, and the
+   hydrate erases it from memory with no toast (revisions has no
+   `TOAST_ON_PERSIST_FAILURE` entry). Re-send vs. surface is owed in #3421.
+   Not a reducer action: no slice handles it. */
 const FLUSH_BOOK = 'persistence/flushBook';
 export const flushBookPersistence = (bookId: string) => ({ type: FLUSH_BOOK, payload: bookId });
 

@@ -2503,12 +2503,12 @@ that finished while you were on the Library (the #3397 gap above). *Merged*
 > revisions slice (not the whole book) whenever it's found stale, and a new
 > take enqueued in the pre-hydrate gap is merged into the disk snapshot once
 > it arrives. (Every other write in that gap — a playable flip, a dismiss, an
-> accept/reject, a rollback — was still lost at this point; see the next
-> note.) The on-box re-run above is **still owed** — the row stays open.
+> accept/reject — was still lost at this point; see the next note.) The
+> on-box re-run above is **still owed** — the row stays open.
 
 > **2026-10-01 — remaining hydrate-gate gaps closed (PR #3395 review pass
 > 4).** Every revisions write made while a book's disk read is still pending
-> (a new take, a playable flip, a dismiss, an accept/reject, a rollback) is
+> (a new take, a playable flip, a dismiss, an accept/reject) is
 > now recorded and replayed on top of the disk snapshot when it lands, then
 > saved once. A failed `GET /book-state` on the way back into a book is
 > retried with backoff until it lands, with a notice meanwhile, instead of
@@ -2517,6 +2517,15 @@ that finished while you were on the Library (the #3397 gap above). *Merged*
 > for any still in flight, so an accept made just before a Library round trip
 > is not read back stale and erased. Not covered: the #3397 gap above. The
 > on-box re-run above is **still owed** — the row stays open.
+
+> **2026-10-01 — review pass 5 (PR #3395).** A write recorded for a book
+> left before its read landed is now dropped when that book is re-parsed,
+> replaced or deleted, instead of being replayed onto the wiped book; a
+> replayed accept/reject keeps the time it was clicked; and the failed-read
+> notice no longer lingers onto the next book. Known limit: if the save sent
+> on leaving a book *fails*, the re-read on return still runs and erases
+> that change, silently (#3421, decision owed). The on-box re-run above is
+> **still owed** — the row stays open.
 
 ### A10 · Structured failure taxonomy (plan 173, fs-19)
 
