@@ -2492,7 +2492,7 @@ that finished while you were on the Library (the #3397 gap above). *Merged*
 > user just enqueued; and the revisions slice now tracks the `bookId` it
 > belongs to, resetting `pending` on any book change. A Fix-audio or regen
 > take now stays in the Status pill's Revisions section for audition/accept/
-> rollback. (`GET /revisions` also echoes the persisted `pending` list now,
+> reject. (`GET /revisions` also echoes the persisted `pending` list now,
 > but that echo is harmless, not load-bearing — nothing reads it from a
 > poll.) Known remaining gap: a batch chapter that finishes while you're
 > away from the book — on a different book or on any non-book view, such as
