@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="43" data-publish-id="3b55e0949850"></div>
+  <div hidden data-published-as="43" data-publish-id="a5c6117b97a4"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">53</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">56</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -210,10 +210,10 @@
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
       <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->33<!-- END GENERATED:glance:A --></td></tr>
-      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->2<!-- END GENERATED:glance:B --></td></tr>
+      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->3<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->10<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->12<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -760,7 +760,7 @@
   <!-- B -->
   <section class="group" id="gb">
     <header>
-      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">2 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">3 rows</span></h3>
       <p class="setup">
         A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a
         <strong>CPU-only sub-case</strong> — the analogous B2-step-7 CPU-only case retired to
@@ -793,6 +793,18 @@
           <li>A local thinking tag with a leading <code>&lt;think&gt;</code> block validates on the first attempt.</li>
         </ul>
         <p class="src"><code>#3084 wave 1 · PR #3349</code></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B102</span><span class="iname">Capacity recalibration measured before any capacity default changes (#3084 wave 2)</span><span class="risk low">Measurement, 3 parts</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Wave 2 moved every chunk-budget resolver onto an <code>EngineCapacity</code> descriptor, with budgets pinned byte-identical to <code>main</code> (<code>capacity-pinning.test.ts</code>). Nothing here is a regression check: it is the measurement the design requires <b>before</b> any capacity default changes.</p>
+        <ul>
+          <li><b>Baseline:</b> three large chapters at today's defaults (<code>num_ctx</code> 32768, fractions 0.7 / 0.3) — stage-1/stage-2 section counts, truncation count, attribution quality.</li>
+          <li><b>Large context:</b> the same chapters with a large-context model at its served context on the 16 GB card — the same figures, plus <code>ollama ps</code> VRAM.</li>
+          <li><b>Short-context tags:</b> for at least two tags, <code>num_ctx</code> sent (32768) against <code>/api/show</code> native context, and one chapter's truncation count.</li>
+        </ul>
+        <p class="src">The 16 GB card, Ollama only, no TTS engine · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
       </div>
     </details>
   </section>
@@ -1063,7 +1075,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">10 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">12 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1177,6 +1189,30 @@
           <li>Repeat once with a genuinely wedged server: <code>kill -STOP &lt;pid&gt;</code> the server process (it can no longer run its shutdown handler), then <code>npm run stop:prod</code>, and confirm it eventually reports <code>[WARN] &#8230; could not be stopped</code> after the grace period rather than waiting forever (<code>kill -CONT</code> and stop it for real afterward). The server has no shutdown drain step to slow down, so stopping the process is the way to make shutdown not finish.</li>
         </ul>
         <p class="src">A Mac or Linux dev box, no GPU, the app running via <code>start:prod</code> &#183; PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3404">#3404</a> &#183; the observations above; PR #3404&#39;s stop-app section for the exact defect and fix &#183; ~10 minutes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E110</span><span class="iname">Gemini thinking-window timing measured on real chapters (#3084 wave 2)</span><span class="risk low">Measurement, gates nothing</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Wave 2 gives a thinking Gemini model a 120 s thinking window (every silent gap before its answer text, at most 290 s) and any other model today's 45 s, and logs <code>firstChunkMs</code>, <code>firstAnswerMs</code> and <code>thoughtPartsBeforeAnswer</code> for every attempt. No real chapter has measured those waits; this row records them so the default can be tuned.</p>
+        <ul>
+          <li>On a 19,000–21,000-character chapter, for stage 1 and stage 2, on <code>gemini-3.5-flash-lite</code>, <code>gemini-3.6-flash</code> and <code>gemma-4-31b-it</code>: request count, largest and median <code>firstChunkMs</code> and <code>firstAnswerMs</code>, largest <code>thoughtPartsBeforeAnswer</code>, any <code>firstAnswerMs=none</code>, <code>stream idle</code> or thinking-window <code>analyzer-timeout</code> line.</li>
+          <li><b>Record:</b> keep, lower, or raise (to at most 290 s) the 120 s default.</li>
+        </ul>
+        <p class="src">Any machine with a Gemini key; no GPU · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E111</span><span class="iname">A thinking Gemini model completes a 20,000-character chapter with Auto output, and Gemma still splits (#3084 wave 2)</span><span class="risk hot">The reporter's stall</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Wave 2 made Gemini's output cap Auto (the model's own limit, not 8192), asks thinking models for thought summaries and lets them stay silent for up to 120 s at a time before their answer text, and fails an empty <code>MAX_TOKENS</code> response with reasoning evidence as <code>analyzer-reasoning-overflow</code> instead of splitting. On Gemma only a thought part counts as evidence, so its empty <code>MAX_TOKENS</code> must still split. Unit tests drive all of this against a mocked stream; only real runs prove it.</p>
+        <ul>
+          <li>On a 19,000–21,000-character chapter at <b>Auto</b> on <code>gemini-3.6-flash</code>: time to first chunk and to first answer text, whether the heartbeat moves during thinking, idle retries, <code>analyzer-timeout</code> failures, truncations, reasoning-overflow failures, request count.</li>
+          <li>The same chapter at <b>8192</b> (Advanced Settings → Gemini max output tokens) as the baseline.</li>
+          <li><b>Gemma:</b> <code>gemma-4-31b-it</code> at a 64-token cap — at least one <code>bytes=0</code> truncation appears (the row fails if none can be reproduced), every one is followed by a re-split, and no <code>analyzer-reasoning-overflow</code> failure occurs.</li>
+          <li><b>Pass:</b> Auto completes with no <code>analyzer-timeout</code> and no overflow, using no more requests than the 8192 run, and the Gemma check holds.</li>
+        </ul>
+        <p class="src">Any machine with a Gemini key; no GPU; two chapter runs within <code>gemini-3.6-flash</code>'s 20 requests a day · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §2 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
       </div>
     </details>
 

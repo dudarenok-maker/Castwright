@@ -29,6 +29,7 @@ import { persistenceMiddleware } from '../store/persistence-middleware';
 import { router as appRouter } from './index';
 import {
   AnalysingRoute,
+  AdvancedRoute,
   BooksRoute,
   ChangelogRoute,
   ConfirmRoute,
@@ -60,6 +61,14 @@ vi.mock('../views/setup', () => ({
       Finish setup
     </button>
   ),
+}));
+
+/* #3084 F7 — the AdvancedRoute case below pins the URL → stage derivation
+   only; AdvancedView's own rows, scrolling and highlighting are pinned by
+   src/views/advanced.test.tsx (and it would call api.getConfig, which this
+   file's api mock does not carry). Same shape as the SetupView stub above. */
+vi.mock('../views/advanced', () => ({
+  AdvancedView: () => <div data-testid="advanced-view" />,
 }));
 
 vi.mock('../lib/api', () => ({
@@ -376,6 +385,58 @@ describe('AnalysingRoute manuscriptId derivation', () => {
 
     expect(screen.getByText(/No manuscript loaded/i)).toBeInTheDocument();
     expect(analyseMock).not.toHaveBeenCalled();
+  });
+});
+
+/* #3084 F7 — AdvancedRoute is the FIRST route in this file whose stage
+   carries a query param, so this is the file's first "reads a search param
+   into ui.stage" case (there is no HelpRoute equivalent to copy from).
+   Modelled on renderAtAnalysing above; Suspense is required because the
+   route leaf views are React.lazy. */
+function renderAtAdvanced(store: ReturnType<typeof makeStore>, path = '/advanced') {
+  return render(
+    <Provider store={store}>
+      <MemoryRouter initialEntries={[path]}>
+        <Suspense fallback={<div data-testid="suspense-loading" />}>
+          <Routes>
+            <Route path="/advanced" element={<AdvancedRoute />} />
+          </Routes>
+        </Suspense>
+      </MemoryRouter>
+    </Provider>,
+  );
+}
+
+describe('AdvancedRoute — focus query param hydrates the stage (#3084 wave 2b, F7)', () => {
+  /* The `await`s here are load-bearing, not decoration. AdvancedView is
+     React.lazy (src/routes/index.tsx:82), so the FIRST render suspends: React
+     throws that render away and re-renders from the Suspense boundary, and
+     AdvancedRoute's own useHydrateStage effect only commits once the lazily
+     imported module has resolved. Reading store.getState() synchronously
+     therefore reads the stage BEFORE hydration. That passed only while an
+     earlier test in the same worker had already warmed the module registry,
+     and failed when this file's tests ran alone — verified: the no-param
+     sibling below failed identically in a cold process. Waiting for the
+     stubbed AdvancedView to mount is what makes these deterministic in either
+     order. */
+  it('reads ?focus= into ui.stage.focusKey', async () => {
+    const store = makeStore();
+    renderAtAdvanced(store, '/advanced?focus=analyzer.gemini.maxInputTokensPerRequest');
+    await screen.findByTestId('advanced-view');
+    await waitFor(() =>
+      expect(store.getState().ui.stage).toMatchObject({
+        kind: 'advanced',
+        focusKey: 'analyzer.gemini.maxInputTokensPerRequest',
+      }),
+    );
+  });
+
+  it('omits focusKey with no query param', async () => {
+    const store = makeStore();
+    renderAtAdvanced(store);
+    await screen.findByTestId('advanced-view');
+    await waitFor(() => expect(store.getState().ui.stage).toMatchObject({ kind: 'advanced' }));
+    expect((store.getState().ui.stage as { focusKey?: string }).focusKey).toBeUndefined();
   });
 });
 

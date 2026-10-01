@@ -15,6 +15,8 @@ import { accountSlice } from '../store/account-slice';
 import { queueSlice } from '../store/queue-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
+import { notificationsSlice } from '../store/notifications-slice';
+import { analysisStreamMiddleware } from '../store/analysis-stream-middleware';
 import { GenerationView, ChapterSegmentStrip } from './generation';
 import { textHashForStale } from '../lib/stale-chapters';
 import { MOCK_QA_REPORT } from '../data/qa-report';
@@ -2051,9 +2053,11 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
   function makeIncludeStore({
     selectedModel,
     activeStream,
+    withMiddleware,
   }: {
     selectedModel?: string;
     activeStream?: { bookId: string; modelKey: string };
+    withMiddleware?: boolean;
   } = {}) {
     const store = configureStore({
       reducer: {
@@ -2066,7 +2070,9 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         queue: queueSlice.reducer,
         bookMeta: bookMetaSlice.reducer,
         analysis: analysisSlice.reducer,
+        notifications: notificationsSlice.reducer,
       },
+      middleware: (g) => (withMiddleware ? g().concat(analysisStreamMiddleware) : g()),
     });
     store.dispatch(chaptersSlice.actions.setChapters([chapter1, chapter2, ch3Excluded]));
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
@@ -2148,6 +2154,43 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
 
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledWith('m1', [1], expect.anything());
+  });
+
+  it('#3084 a non-story overflow warning on the Re-analyse subset call surfaces as a warn toast', async () => {
+    const store = makeIncludeStore();
+    runAnalysisForChaptersSpy.mockReturnValue(new Promise(() => {}));
+    renderInclude(store);
+    fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+    fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+    const opts = runAnalysisForChaptersSpy.mock.calls[0][2] as {
+      onWarning?: (w: { code: string; message: string }) => void;
+    };
+    act(() => {
+      opts.onWarning?.({ code: 'cast_merge_base_stale', message: 'other' });
+      opts.onWarning?.({ code: 'analyzer-reasoning-overflow-nonstory', message: 'fell back' });
+    });
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({
+      kind: 'warn',
+      dedupeKey: 'analyzer-reasoning-overflow-nonstory',
+      message: 'fell back',
+    });
+  });
+
+  it('#3084 a non-story overflow warning on the Include subset call surfaces as a warn toast', async () => {
+    const store = makeIncludeStore();
+    runAnalysisForChaptersSpy.mockReturnValue(new Promise(() => {}));
+    renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalled());
+    const opts = runAnalysisForChaptersSpy.mock.calls[0][2] as {
+      onWarning?: (w: { code: string; message: string }) => void;
+    };
+    act(() => {
+      opts.onWarning?.({ code: 'analyzer-reasoning-overflow-nonstory', message: 'fell back' });
+    });
+    expect(store.getState().notifications.toasts).toHaveLength(1);
   });
 
   it('#3202 on subset_in_progress (Re-analyse flow), surfaces the server message instead of a generic failure', async () => {
@@ -2252,6 +2295,72 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     );
 
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
+  });
+
+  /* #3084 pass-3 — a reasoning overflow from a subset run must leave exactly
+     one persistent toast carrying the structured fixes, whichever subscriber
+     (this view's own stream vs the middleware's) sees the terminal frame
+     first. The middleware pushes the toast only from its HALTED hook, so a
+     view catch that CLEARs without halting first (view-first order) lost it. */
+  describe('reasoning overflow leaves one persistent fixes toast (both frame orders)', () => {
+    const FIXES = [{ label: 'Switch to a different analyzer model' }];
+    const makeErr = (code: string) => {
+      const err = new AnalysisError('Analyzer ran out of reasoning room.', code);
+      (err as unknown as { fixes: unknown }).fixes = code === 'analyzer-reasoning-overflow' ? FIXES : undefined;
+      return err;
+    };
+
+    type Entry = 'reanalyse' | 'include';
+    async function run(entry: Entry, code: string, order: 'view-first' | 'middleware-first') {
+      const store = makeIncludeStore({ withMiddleware: true });
+      const rejecters: Array<(e: unknown) => void> = [];
+      runAnalysisForChaptersSpy.mockImplementation(
+        () => new Promise((_res, rej) => rejecters.push(rej)),
+      );
+      renderInclude(store);
+      if (entry === 'reanalyse') {
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      } else {
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      }
+      // First tick is the middleware's proof-of-life: it opens its own subscribe stream.
+      await waitFor(() => expect(rejecters).toHaveLength(1));
+      act(() => {
+        store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, lastTickAt: Date.now() }));
+      });
+      await waitFor(() => expect(rejecters).toHaveLength(2));
+      const [viewReject, mwReject] = rejecters;
+      const first = order === 'view-first' ? viewReject : mwReject;
+      const second = order === 'view-first' ? mwReject : viewReject;
+      await act(async () => {
+        first(makeErr(code));
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      await act(async () => {
+        second(makeErr(code));
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      await screen.findByText(/Re-analysis failed/i);
+      return store;
+    }
+
+    for (const entry of ['reanalyse', 'include'] as const) {
+      for (const order of ['view-first', 'middleware-first'] as const) {
+        it(`${entry}, ${order}: exactly one toast carrying the fixes`, async () => {
+          const store = await run(entry, 'analyzer-reasoning-overflow', order);
+          const toasts = store.getState().notifications.toasts;
+          expect(toasts).toHaveLength(1);
+          expect(toasts[0].fixes).toEqual(FIXES);
+        });
+      }
+    }
+
+    it('control: a non-overflow failure still pushes no toast from the view and clears the snapshot', async () => {
+      const store = await run('reanalyse', 'analyzer_offline', 'view-first');
+      expect(store.getState().analysis.activeStream).toBeNull();
+      expect(store.getState().notifications.toasts.filter((t) => t.fixes?.length)).toHaveLength(0);
+    });
   });
 
   it('on success, merges sentences into the manuscript slice, characters into cast, and clears the row excluded flag', async () => {

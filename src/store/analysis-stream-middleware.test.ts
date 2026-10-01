@@ -25,7 +25,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
-import { notificationsSlice } from './notifications-slice';
+import { notificationsSlice, notificationsActions } from './notifications-slice';
 
 const pauseAnalysisSpy = vi.fn().mockResolvedValue(undefined);
 const analyseManuscriptMock = vi.fn();
@@ -37,13 +37,15 @@ vi.mock('../lib/api', () => {
      to the top of the file, so the class must be defined here (referencing
      a top-level class would hit a TDZ error). Shape mirrors the
      `AnalysisError` class in src/lib/api.ts — same positional constructor
-     (message, code, detail?, prevCharCount?, nextCharCount?, remediation?). */
+     (message, code, detail?, prevCharCount?, nextCharCount?, remediation?,
+     fixes? — the 7th, #3084 F7). */
   class AnalysisError extends Error {
     code: string;
     detail?: string;
     prevCharCount?: number;
     nextCharCount?: number;
     remediation?: string;
+    fixes?: { label: string; settingKey?: string; wikiPage?: string }[];
     constructor(
       message: string,
       code: string,
@@ -51,6 +53,7 @@ vi.mock('../lib/api', () => {
       prev?: number,
       next?: number,
       remediation?: string,
+      fixes?: { label: string; settingKey?: string; wikiPage?: string }[],
     ) {
       super(message);
       this.name = 'AnalysisError';
@@ -59,6 +62,7 @@ vi.mock('../lib/api', () => {
       this.prevCharCount = prev;
       this.nextCharCount = next;
       this.remediation = remediation;
+      this.fixes = fixes;
     }
   }
   return {
@@ -86,6 +90,7 @@ interface CapturedAnalysisCall {
   onEta?: (e: { remainingMs: number }) => void;
   onSeriesPrior?: (e: { count: number; names: string[] }) => void;
   onHeartbeat?: (e: unknown) => void;
+  onWarning?: (w: { code: string; message: string }) => void;
   resolve: () => void;
   reject: (e: unknown) => void;
 }
@@ -132,6 +137,7 @@ beforeEach(() => {
         onEta?: (e: { remainingMs: number }) => void;
         onSeriesPrior?: (e: { count: number; names: string[] }) => void;
         onHeartbeat?: (e: unknown) => void;
+        onWarning?: (w: { code: string; message: string }) => void;
       },
     ) => {
       const opts = (kindMarker === 'subset' ? maybeOpts : chapterIdsOrOpts) as {
@@ -140,6 +146,7 @@ beforeEach(() => {
         onEta?: (e: { remainingMs: number }) => void;
         onSeriesPrior?: (e: { count: number; names: string[] }) => void;
         onHeartbeat?: (e: unknown) => void;
+        onWarning?: (w: { code: string; message: string }) => void;
       };
       const chapterIds = kindMarker === 'subset' ? (chapterIdsOrOpts as number[]) : undefined;
       return new Promise<void>((resolve, reject) => {
@@ -152,6 +159,7 @@ beforeEach(() => {
           onEta: opts.onEta,
           onSeriesPrior: opts.onSeriesPrior,
           onHeartbeat: opts.onHeartbeat,
+          onWarning: opts.onWarning,
           resolve: () => resolve(),
           reject: (e: unknown) => reject(e),
         };
@@ -391,6 +399,55 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     expect(snap?.seriesPrior).toEqual({ count: 3, names: ['Wren', 'Marlow', 'Maerin'] });
   });
 
+  /* #3084 pass-3 — the non-story overflow advisory must reach the user with
+     NO Analysing view mounted: the middleware's stream is the only consumer
+     once the user navigates away. */
+  const NONSTORY = {
+    code: 'analyzer-reasoning-overflow-nonstory',
+    message: 'Front-matter detection fell back for this run.',
+  };
+  const openMain = () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+    );
+    return store;
+  };
+
+  it('delivers the non-story overflow warning as a warn toast with no view mounted (#3084)', () => {
+    const store = openMain();
+    lastCall().onWarning?.(NONSTORY);
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+    expect(store.getState().notifications.toasts[0]).toMatchObject({
+      kind: 'warn',
+      dedupeKey: NONSTORY.code,
+      message: NONSTORY.message,
+    });
+  });
+
+  it('delivers it on the subset route too, and ignores warning codes the view owns', () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream({ ...baseSnapshot, kind: 'subset', subsetChapterIds: [3] }));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+    );
+    lastCall().onWarning?.({ code: 'cast_merge_base_stale', message: 'x' });
+    expect(store.getState().notifications.toasts).toHaveLength(0);
+    lastCall().onWarning?.(NONSTORY);
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+  });
+
+  it('a view push plus a middleware push of the same warning collapse to ONE toast', () => {
+    const store = openMain();
+    /* What analysing.tsx's own onWarning pushes. */
+    store.dispatch(
+      notificationsActions.pushToast({ kind: 'warn', message: NONSTORY.message, dedupeKey: NONSTORY.code }),
+    );
+    lastCall().onWarning?.(NONSTORY);
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+  });
+
   it('clears the snapshot when the SSE resolves cleanly (terminal result)', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
@@ -445,6 +502,119 @@ describe('analysisStreamMiddleware — middleware-owned SSE (D1)', () => {
     expect(snap?.haltCode).toBe('attribution_drift');
     /* The setHalted dispatch closes the handle via the HALTED_TYPE hook. */
     expect(captured[0]?.signal.aborted).toBe(true);
+  });
+
+  /* #3084 F7 — the reasoning-overflow toast is pushed from HERE, not from
+     analysing.tsx (this stream survives navigation; the view's aborts on
+     unmount). Mutation: delete `fixes: e.fixes` from the
+     `analyzer-reasoning-overflow` arm of the ternary below → the first test
+     reddens (toasts[0].fixes is undefined). The second test stays green
+     under that mutation — deliberately: it proves the wiring did not leak
+     into a code that must never carry fixes, which is why both exist. */
+  it('a reasoning-overflow AnalysisError pushes ONE toast carrying fixes under dedupeKey analysis-stream (#3084 F7)', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+    );
+    const fixes = [
+      { label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' },
+    ];
+    lastCall().reject(
+      new AnalysisError(
+        'boom',
+        'analyzer-reasoning-overflow',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        fixes,
+      ),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).toMatchObject({ kind: 'error', dedupeKey: 'analysis-stream', fixes });
+    /* The halted-run snapshot carries the same list, so the analysing view
+       still renders "How to fix" after navigating back in this session. */
+    expect(store.getState().analysis.activeStream?.haltFixes).toEqual(fixes);
+  });
+
+  it('a non-reasoning-overflow AnalysisError still pushes the plain toast, with no fixes field (unchanged behaviour)', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(
+      analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+    );
+    lastCall().reject(new AnalysisError('drift', 'attribution_drift'));
+    await Promise.resolve();
+    await Promise.resolve();
+    const toasts = store.getState().notifications.toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]?.fixes).toBeUndefined();
+  });
+
+  /* #3084 F7 — the same terminal frame reaches BOTH the analysing view's SSE
+     and this middleware's. When the view's catch dispatches setHalted first,
+     the HALTED_TYPE hook closes this handle and the middleware's own copy of
+     the error becomes a swallowed AbortError — so the toast must be pushed by
+     the hook. Mutation: delete the `overflowToast(...)` dispatch in the
+     HALTED_TYPE hook and the "view first" case reddens (0 toasts). The
+     "middleware first" case is the control and stays green. Both orders must
+     yield exactly ONE toast with the SAME message. */
+  describe.each([
+    ['middleware first', false],
+    ['view first', true],
+  ])('reasoning-overflow toast, %s (#3084 F7)', (_label, viewFirst) => {
+    it('pushes exactly one toast carrying fixes and the error message', async () => {
+      const store = buildStore();
+      store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+      store.dispatch(
+        analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }),
+      );
+      const fixes = [
+        { label: 'Raise Ollama num_ctx (the binding limit)', settingKey: 'analyzer.ollama.numCtx' },
+      ];
+      const halt = () =>
+        store.dispatch(
+          analysisActions.setHalted({
+            manuscriptId: 'm1',
+            code: 'analyzer-reasoning-overflow',
+            message: 'boom',
+            fixes,
+          }),
+        );
+      const failStream = async () => {
+        lastCall().reject(
+          new AnalysisError(
+            'boom',
+            'analyzer-reasoning-overflow',
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            fixes,
+          ),
+        );
+        await new Promise((r) => setTimeout(r, 0));
+      };
+      if (viewFirst) {
+        halt();
+        await failStream();
+      } else {
+        await failStream();
+        halt();
+      }
+      const toasts = store.getState().notifications.toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0]).toMatchObject({
+        kind: 'error',
+        message: 'boom',
+        dedupeKey: 'analysis-stream',
+        fixes,
+      });
+    });
   });
 
   it('does NOT poison the snapshot when an AbortError surfaces from the SSE (clean cancel)', async () => {

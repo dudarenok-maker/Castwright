@@ -53,17 +53,22 @@ function chunksOf(text: string, size: number): string[] {
 }
 
 const generateContentStream = vi.fn();
+const listModels = vi.fn();
 
 vi.mock('@google/genai', () => {
   return {
     GoogleGenAI: class {
-      models = { generateContentStream };
+      models = { generateContentStream, list: listModels };
     },
   };
 });
 
 beforeEach(async () => {
   generateContentStream.mockReset();
+  listModels.mockReset();
+  listModels.mockRejectedValue(new Error('models.list is unavailable in tests'));
+  const { _resetGeminiCatalogForTest } = await import('./catalog/gemini-catalog.js');
+  _resetGeminiCatalogForTest();
   /* The limiter is a module singleton; reset between tests so RPM/TPM
      bookkeeping from a prior test doesn't bleed across. */
   geminiRateLimiter._reset();
@@ -672,6 +677,59 @@ describe('GeminiAnalyzer — transport retry policy (GeminiTransport + withTrans
       expect(generateContentStream).toHaveBeenCalledTimes(3);
     }, 5_000);
 
+    /* #3084 P5 — the thinking window is automatic per model: today's idle
+       window for a model that does not think, 120 s for a thinking model. */
+    async function* hangBeforeFirstChunk(): AsyncGenerator<{ text: string }> {
+      const hang = new AbortController();
+      hangControllers.push(hang);
+      await new Promise<void>((resolve) => {
+        if (hang.signal.aborted) resolve();
+        else hang.signal.addEventListener('abort', () => resolve(), { once: true });
+      });
+      yield { text: '{' };
+    }
+
+    it('a model that does not think: a stall BEFORE the first chunk throws GeminiStreamIdleError after 3 attempts (#3084 P5)', async () => {
+      vi.resetModules();
+      const { GeminiAnalyzer, GeminiStreamIdleError } = await import('./gemini.js');
+      generateContentStream
+        .mockResolvedValueOnce(hangBeforeFirstChunk())
+        .mockResolvedValueOnce(hangBeforeFirstChunk())
+        .mockResolvedValueOnce(hangBeforeFirstChunk());
+      const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+      await expect(analyzer.runStage1('m_idle_prestall', '# prompt', {})).rejects.toBeInstanceOf(GeminiStreamIdleError);
+      expect(generateContentStream).toHaveBeenCalledTimes(3);
+    }, 5_000);
+
+    it('a thinking model: a pre-first-chunk wait longer than the idle window completes, inside its automatic 120 s thinking window (#3084 P5)', async () => {
+      vi.resetModules();
+      const { GeminiAnalyzer } = await import('./gemini.js');
+      /* asyncFromArray (:76) sleeps delayMs before each item, the first included. */
+      generateContentStream.mockResolvedValueOnce(asyncFromArray([{ text: STAGE1_RESPONSE }], 400));
+      /* gemini-2.5-flash thinks by the static id rule (Task 2.5). */
+      const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+      const result = await analyzer.runStage1('m_idle_prewait', '# prompt', {});
+      expect(result.characters).toHaveLength(3);
+      expect(generateContentStream).toHaveBeenCalledTimes(1);
+    }, 5_000);
+
+    it('a thinking model: silence past its thinking window before any answer text fails once as AnalyzerTimeoutError, through the whole analyzer (#3084 P5)', async () => {
+      process.env.GEMINI_THINKING_IDLE_MS = '300';
+      try {
+        vi.resetModules();
+        const { GeminiAnalyzer } = await import('./gemini.js');
+        generateContentStream.mockResolvedValueOnce(hangBeforeFirstChunk());
+        const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-2.5-flash' });
+        await expect(analyzer.runStage1('m_thinking_stall', '# prompt', {})).rejects.toMatchObject({
+          name: 'AnalyzerTimeoutError',
+          reason: 'thinking-idle',
+        });
+        expect(generateContentStream).toHaveBeenCalledTimes(1);
+      } finally {
+        delete process.env.GEMINI_THINKING_IDLE_MS;
+      }
+    }, 5_000);
+
     it('aborts in-flight stream and throws AnalysisAbortedError when caller signal fires', async () => {
       vi.resetModules();
       const { GeminiAnalyzer } = await import('./gemini.js');
@@ -744,6 +802,17 @@ describe('GeminiAnalyzer — transport retry policy (GeminiTransport + withTrans
 });
 
 describe('GeminiAnalyzer — output truncation (#528)', () => {
+  /* The earlier `stream watchdog + abort` describe calls vi.resetModules(),
+     detaching this file's static geminiRateLimiter (reset in the top-level
+     beforeEach) from the instance gemini.js uses. This describe sends seven
+     gemma-4-31b-it requests (TPM 16 000), so without resetting the live
+     limiter the #3084 wave 2b overflow cases wait on the TPM window past the
+     test timeout. Same workaround as the runAttributionEscalation describe. */
+  beforeEach(async () => {
+    const { geminiRateLimiter: limiter } = await import('./rate-limit.js');
+    limiter._reset();
+  });
+
   it('throws AnalyzerTruncatedError when the stream ends with finishReason MAX_TOKENS, without retrying', async () => {
     /* A truncated (mid-JSON) payload whose final chunk reports MAX_TOKENS.
        The truncation gate fires before parseAndValidate, so the corrupt
@@ -770,13 +839,26 @@ describe('GeminiAnalyzer — output truncation (#528)', () => {
     expect(generateContentStream).toHaveBeenCalledTimes(1);
   });
 
-  it('sets an explicit maxOutputTokens on the request', async () => {
+  it('sends Auto max output tokens: 8192 while the model list is unavailable (#3084 wave 2b)', async () => {
     generateContentStream.mockResolvedValue(asyncFromArray([{ text: STAGE1_RESPONSE }]));
-    const { GeminiAnalyzer, resolveMaxOutputTokens } = await import('./gemini.js');
+    const { GeminiAnalyzer } = await import('./gemini.js');
     const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
     await analyzer.runStage1('m_maxtok', '# stage 1 prompt', {});
-    const cfg = generateContentStream.mock.calls[0][0].config;
-    expect(cfg.maxOutputTokens).toBe(resolveMaxOutputTokens());
+    expect(generateContentStream.mock.calls[0][0].config.maxOutputTokens).toBe(8192);
+  });
+
+  it('sends Auto max output tokens = the listed outputTokenLimit — the catalog is warmed BEFORE the request is built', async () => {
+    listModels.mockResolvedValue(
+      asyncFromArray([
+        { name: 'models/gemma-4-31b-it', supportedActions: ['generateContent'], inputTokenLimit: 131_072, outputTokenLimit: 32_768 },
+      ]),
+    );
+    generateContentStream.mockResolvedValue(asyncFromArray([{ text: STAGE1_RESPONSE }]));
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+    await analyzer.runStage1('m_maxtok_auto', '# stage 1 prompt', {});
+    expect(listModels).toHaveBeenCalledTimes(1);
+    expect(generateContentStream.mock.calls[0][0].config.maxOutputTokens).toBe(32_768);
   });
 
   it('returns normally when the stream ends with finishReason STOP', async () => {
@@ -800,10 +882,58 @@ describe('GeminiAnalyzer — output truncation (#528)', () => {
       expect.objectContaining({ config: expect.objectContaining({ temperature: 0.2 }) }),
     );
   });
+
+  it('an empty MAX_TOKENS response WITH thoughtsTokenCount fails as reasoning overflow — no split, no retry (#3084)', async () => {
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([
+        { text: undefined, candidates: [{ finishReason: 'MAX_TOKENS' }], usageMetadata: { thoughtsTokenCount: 50 } },
+      ]),
+    );
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const { AnalyzerReasoningOverflowError } = await import('./errors.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemini-3.6-flash' });
+    await expect(analyzer.runStage1('m_overflow', '# stage 1 prompt', {})).rejects.toBeInstanceOf(
+      AnalyzerReasoningOverflowError,
+    );
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('an empty MAX_TOKENS response with NO reasoning evidence still raises AnalyzerTruncatedError (Gemma size problem, gemini.ts:784-804)', async () => {
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([{ text: undefined, candidates: [{ finishReason: 'MAX_TOKENS' }] }]),
+    );
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const { AnalyzerTruncatedError } = await import('./errors.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+    await expect(analyzer.runStage1('m_overflow_gemma', '# stage 1 prompt', {})).rejects.toBeInstanceOf(
+      AnalyzerTruncatedError,
+    );
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('a Gemma empty MAX_TOKENS response WITH thoughtsTokenCount but no thought parts still splits — Gemma asked for no thoughts, so the count is not evidence (#3084 P27)', async () => {
+    /* The same response the gemini-3.6-flash case above fails as an overflow. */
+    generateContentStream.mockResolvedValue(
+      asyncFromArray([
+        { text: undefined, candidates: [{ finishReason: 'MAX_TOKENS' }], usageMetadata: { thoughtsTokenCount: 50 } },
+      ]),
+    );
+    const { GeminiAnalyzer } = await import('./gemini.js');
+    const { AnalyzerTruncatedError } = await import('./errors.js');
+    const analyzer = new GeminiAnalyzer({ apiKey: 'test-key', model: 'gemma-4-31b-it' });
+    await expect(analyzer.runStage1('m_overflow_gemma_tokens', '# stage 1 prompt', {})).rejects.toBeInstanceOf(
+      AnalyzerTruncatedError,
+    );
+    expect(generateContentStream).toHaveBeenCalledTimes(1);
+  });
 });
 
 afterAll(async () => {
   /* Tidy the test inbox/outbox we touched so the workspace stays clean. */
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_idle_prestall-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_idle_prewait-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_idle_prewait-stage1.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_thinking_stall-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_test-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_trunc-stage1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_maxtok-stage1.md'), { force: true });
@@ -824,6 +954,11 @@ afterAll(async () => {
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_429_retry-stage1.json'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_gemini_no_tone-stage1-ch1.md'), { force: true });
   await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_gemini_no_tone-stage1-ch1.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_maxtok_auto-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_maxtok_auto-stage1.json'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_overflow-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_overflow_gemma-stage1.md'), { force: true });
+  await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_overflow_gemma_tokens-stage1.md'), { force: true });
 });
 
 describe('GeminiAnalyzer.runStage1Chapter — two-schema runStage tolerates a tone-less response (srv-45)', () => {
@@ -968,6 +1103,17 @@ describe('GeminiAnalyzer.runStage3Chapter — fs-57 instruct-annotation pass', (
 describe('GeminiAnalyzer.runAttributionEscalation (srv-59 Task 9)', () => {
   const VALID_ESCALATION = JSON.stringify({
     assignments: [{ line: 12, characterId: 'wren' }],
+  });
+
+  /* An earlier describe calls vi.resetModules(), detaching this file's static
+     geminiRateLimiter import from the instance gemini.js uses (same gap the
+     'runner characterisation' describe below already works around) — reset
+     the live one so real RPM/TPM usage from earlier tests in this file (incl.
+     wave 2b's two new 'output truncation' tests, same gemma-4-31b-it model)
+     never carries into these tests. */
+  beforeEach(async () => {
+    const { geminiRateLimiter: limiter } = await import('./rate-limit.js');
+    limiter._reset();
   });
 
   it('round-trips a valid {assignments} reply and still goes through the per-model rate limiter', async () => {

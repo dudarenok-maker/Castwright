@@ -8,6 +8,7 @@ import { MANIFESTO } from '../lib/brand';
 import {
   api,
   AnalysisError,
+  type AnalysisFailureFix,
   type AnalysisLiveInfo,
   type AnalysisHeartbeat,
   type OllamaHealth,
@@ -26,6 +27,7 @@ import {
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
+import { FailureFixList } from '../components/failure-fix-list';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
@@ -149,6 +151,11 @@ export function AnalysingView({
     code: string;
     detail?: string;
     remediation?: string;
+    /* #3084 F7 — structured "How to fix" list carried on the terminal error
+       frame (see `AnalysisError.fixes`). Present only when the classifier can
+       name something actionable; the run-level block renders it when non-empty
+       and renders nothing at all otherwise. */
+    fixes?: AnalysisFailureFix[];
   } | null>(null);
   const [retry, setRetry] = useState<{
     nonce: number;
@@ -200,6 +207,9 @@ export function AnalysingView({
      touching the active stream or re-arming the main run when this error
      occurs — the rejection means another subset job is live. */
   const subsetInProgressRef = useRef(false);
+  /* Same shape for a Retry that ended with a real analyzer error (#3084):
+     the catch halted the run, so the finally block must leave it alone. */
+  const retryHaltedRef = useRef(false);
   /* Per-chapter cast-detection failures that survive across reload. Seeded
      from /api/books/:bookId/state on mount; appended to from the SSE's
      chapter-failed event; cleared per id when a Retry succeeds. */
@@ -283,6 +293,31 @@ export function AnalysingView({
       (s as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis
         ?.activeStream ?? null,
   );
+  /* #3084 F7 — the run-level "How to fix" list must survive the user leaving
+     the view and coming back in the same session. This view's own `error`
+     state does not (it is per-mount), but the halted-run snapshot the
+     analysis-stream middleware wrote does — so the block near the bottom of
+     this file falls back to `haltFixes` when `error` is null.
+
+     Three guards, all load-bearing:
+     - manuscriptId: a DIFFERENT book's halt must not leak this book's chrome;
+     - state === 'halted': a running/paused snapshot has no fixes to show;
+     - !isNotAFailureHaltCode: `cast_incomplete` and `stage1_shrink_refused`
+       also leave `error` null while halted (their catch branches dispatch
+       setHalted and deliberately never setError, see below), and #3244 renders
+       those as a neutral "Needs action" state. Without this exclusion a future
+       task attaching fixes to either code would print a "How to fix" list
+       inside failure chrome for a state that is explicitly not a failure.
+       Neither code carries fixes today, so this is a guard, not a carve-out. */
+  const haltFixes = useAppSelector((s) => {
+    const snap = (s as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis
+      ?.activeStream;
+    if (!snap) return undefined;
+    if (snap.manuscriptId !== manuscriptId) return undefined;
+    if (snap.state !== 'halted') return undefined;
+    if (isNotAFailureHaltCode(snap.haltCode)) return undefined;
+    return snap.haltFixes;
+  });
   const coldBootRehydratedRef = useRef(false);
   useEffect(() => {
     if (coldBootRehydratedRef.current) return;
@@ -688,11 +723,18 @@ export function AnalysingView({
         const code = e instanceof AnalysisError ? e.code : 'unknown';
         const detail = e instanceof AnalysisError ? e.detail : undefined;
         const remediation = e instanceof AnalysisError ? e.remediation : undefined;
+        /* #3084 F7 — carried to BOTH sinks below so the view agrees with the
+           analysis-stream middleware's own setHalted/pushToast for the same
+           failure (the middleware is what keeps the toast alive after
+           navigation; this view's copy is what renders the run-level list
+           inline without waiting for a re-mount). */
+        const fixes = e instanceof AnalysisError ? e.fixes : undefined;
         dispatch(
           analysisActions.setHalted({
             manuscriptId,
             code,
             message: (e as Error)?.message ?? 'Analysis failed.',
+            fixes,
           }),
         );
         setError({
@@ -700,6 +742,7 @@ export function AnalysingView({
           code,
           detail,
           remediation,
+          fixes,
         });
       }
     })();
@@ -811,6 +854,7 @@ export function AnalysingView({
     setRetryingChapterId(chapterId);
     /* Reset the subset_in_progress flag for this attempt. */
     subsetInProgressRef.current = false;
+    retryHaltedRef.current = false;
     const markEvent = () => {
       setLastEventAt(Date.now());
       /* First event of any run means we're re-attached — drop the
@@ -984,6 +1028,36 @@ export function AnalysingView({
           setConn('idle');
           return;
         }
+        /* #3084 — the reasoning-overflow terminal frame arrives as an `error`
+           event with NO chapter-failed, so it is a FAILURE of this Retry, not
+           the benign no-result case below. Deliberately an allowlist of one:
+           other codes (cast_incomplete after a Retry that SUCCEEDED,
+           stage1_shrink_refused, ...) keep their pre-existing paths. Keep the row, halt the run-level
+           state with the fixes so "How to fix" renders and the middleware's
+           HALTED hook pushes the persistent toast, and tell the finally
+           block not to clear the snapshot or resume the main run (which
+           would only overflow again on the same settings). The retained row
+           also keeps the cast_incomplete auto-resume effect disarmed. */
+        if (err instanceof AnalysisError && err.code === 'analyzer-reasoning-overflow') {
+          retryHaltedRef.current = true;
+          setFailedChapters((prev) => {
+            const filtered = prev.filter((f) => f.chapterId !== chapterId);
+            return [
+              ...filtered,
+              { chapterId, message: err.message, code: err.code, remediation: err.remediation },
+            ];
+          });
+          dispatch(
+            analysisActions.setHalted({
+              manuscriptId,
+              code: err.code,
+              message: err.message,
+              fixes: err.fixes,
+            }),
+          );
+          setConn('idle');
+          return;
+        }
         /* The subset route ends without a `result` event when other
            chapters still need retry (Phase 1 gate). api.ts throws
            "no result" in that case — not a real failure, drop the
@@ -1005,6 +1079,12 @@ export function AnalysingView({
            contract exists to prevent (see the comment at line 751). Leave the
            main run paused and let the user wait for the other subset to finish. */
         if (subsetInProgressRef.current) {
+          return;
+        }
+        /* Same for a Retry that failed with a real analyzer error (#3084):
+           the halted snapshot is the user's call to action — don't clear it
+           or restart the run behind it. */
+        if (retryHaltedRef.current) {
           return;
         }
         /* Resume the main run if Retry paused it. The analysis effect
@@ -1446,6 +1526,12 @@ export function AnalysingView({
                   )}
                 </p>
               )}
+              {error.fixes && error.fixes.length > 0 && (
+                <div className="mt-3">
+                  <p className="mb-1 text-xs font-semibold text-red-900">How to fix:</p>
+                  <FailureFixList fixes={error.fixes} className="flex flex-col gap-1" />
+                </div>
+              )}
               {error.detail && (
                 <details className="mt-2 text-xs text-red-800/90">
                   <summary className="cursor-pointer font-medium hover:text-red-900">
@@ -1506,6 +1592,23 @@ export function AnalysingView({
                 Try again resumes from the first uncached chapter. Start fresh discards all cached
                 progress and re-runs stage 1.
               </p>
+            </div>
+          )}
+          {!error && haltFixes && haltFixes.length > 0 && (
+            /* #3084 F7 — run-level survival path: this run failed (or was
+               rejoined after a reload) while the user was elsewhere, so the
+               inline block above never mounted. The halted-run snapshot still
+               carries the fixes, so they render here instead — same list
+               renderer, same call to action.
+               Gated on `!error` so the two blocks can never both render the
+               same list: when `error` is set, its inline copy is authoritative.
+               `haltFixes` (not the raw `activeStream` read) is what keeps this
+               render honest — see its definition for the three guards, the
+               `cast_incomplete`/`stage1_shrink_refused` exclusion in
+               particular. */
+            <div className="mt-6 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-left">
+              <p className="text-sm font-semibold text-rose-900">How to fix:</p>
+              <FailureFixList fixes={haltFixes} className="mt-1 flex flex-col gap-1" />
             </div>
           )}
         </div>

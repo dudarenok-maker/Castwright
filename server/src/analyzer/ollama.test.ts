@@ -1622,3 +1622,36 @@ afterAll(async () => {
     await rm(resolve(HANDOFF_ROOT, 'outbox', `${id}-stage2-ch1.attempt2.raw.txt`), { force: true });
   }
 });
+
+describe('OllamaAnalyzer — the runner-resolved output cap reaches the wire (#3084 wave 2b)', () => {
+  afterAll(async () => {
+    await rm(resolve(HANDOFF_ROOT, 'inbox', 'm_ollama_num_predict-stage1-ch1.md'), { force: true });
+    await rm(resolve(HANDOFF_ROOT, 'outbox', 'm_ollama_num_predict-stage1-ch1.json'), { force: true });
+  });
+
+  it('sends options.num_predict from the settings provider (analyzer.ollama.numPredict = 4096)', async () => {
+    const fileSwitch = configValueMock.getMockImplementation();
+    expect(fileSwitch).toBeTypeOf('function'); // the reset at :216 restored the file-level switch
+    configValueMock.mockImplementation(
+      ((key: string) => (key === 'analyzer.ollama.numPredict' ? 4096 : fileSwitch!(key))) as unknown as Parameters<
+        typeof configValueMock.mockImplementation
+      >[0],
+    );
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 64))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    await analyzer.runStage1Chapter('m_ollama_num_predict', 1, '# stage1 prompt', {});
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.options.num_predict).toBe(4096);
+  });
+
+  it('keeps -1 (predict until the context fills) by default', async () => {
+    fetchMock.mockResolvedValue(okResponse(ndjsonStream(chunksOf(VALID_RESPONSE, 64))));
+    const { OllamaAnalyzer } = await import('./ollama.js');
+    const analyzer = new OllamaAnalyzer({ url: 'http://localhost:11434', model: 'qwen3.5:9b' });
+    await analyzer.runStage1Chapter('m_ollama_num_predict', 1, '# stage1 prompt', {});
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.options.num_predict).toBe(-1);
+  });
+});
+
