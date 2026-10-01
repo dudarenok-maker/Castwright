@@ -1056,6 +1056,22 @@ describe('castSlice — renameCharacter (rename + promote alias)', () => {
   });
 });
 
+describe('castSlice — hydrateCharacters (#3395 pass 4)', () => {
+  it('replaces the roster wholesale, like setCharacters, under its own action type', () => {
+    const start = castSlice.reducer(
+      undefined,
+      castActions.setCharacters([{ id: 'old', name: 'Old' } as Character]),
+    );
+    const next = castSlice.reducer(
+      start,
+      castActions.hydrateCharacters([{ id: 'nora', name: 'Nora' } as Character]),
+    );
+    expect(next.characters.map((c) => c.id)).toEqual(['nora']);
+    /* Its type is not a PERSIST_RULES key — that is the whole point. */
+    expect(castActions.hydrateCharacters([]).type).not.toBe(castActions.setCharacters([]).type);
+  });
+});
+
 describe('castSlice — setRenderedFallback (fe-16)', () => {
   it('overwrites the fallback map from the book-state hydrate', () => {
     const start = { characters: [makeChar('marrow')], renderedFallbackByCharacter: {} };

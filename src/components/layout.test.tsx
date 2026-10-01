@@ -623,19 +623,14 @@ describe('Layout — revisions persist only after the book is hydrated (#3395 pa
      persistenceMiddleware alongside a full per-book hydration (every other
      test that uses persistenceMiddleware — persistence-middleware.test.ts —
      dispatches its persist-triggering action directly, never through
-     Layout's own hydrate effect). A full hydrate's `castActions.setCharacters`
-     /`manuscriptActions.hydrateFromBookState`/etc. dispatches are the SAME
-     action types a live edit uses, so persistence-middleware schedules a
-     real (500 ms-debounced) PUT for them too, indistinguishable from a user
-     edit — a pre-existing quirk of the shared PERSIST_RULES map, not
-     something these tests introduce. Those timers are real `setTimeout`s
-     outside React's tree, so they aren't cancelled by anything this test
-     does — only by actually firing. A generous drain after every test in
-     this block (in excess of the 500 ms debounce) keeps a straggler from
-     firing mid-way through the NEXT test and polluting its `putBookStateMock`
-     call count, which was observed flaking exactly one of the four tests
-     below (whichever ran right after book-A's full hydrate had a late
-     dispatch close to its own final wait). */
+     Layout's own hydrate effect). The hydrate itself schedules no PUT (its
+     cast goes through the non-persisted `castActions.hydrateCharacters`;
+     #3395 pass 4, 🟡c — pinned by the first test below), but the writes a
+     test makes are real (500 ms-debounced) `setTimeout`s outside React's
+     tree, cancelled by nothing this test does — only by actually firing. A
+     generous drain after every test in this block (in excess of the 500 ms
+     debounce) keeps such a straggler from firing mid-way through the NEXT
+     test and polluting its `putBookStateMock` calls. */
   afterEach(async () => {
     await new Promise((resolve) => setTimeout(resolve, 600));
   });
@@ -723,6 +718,24 @@ describe('Layout — revisions persist only after the book is hydrated (#3395 pa
     putBookStateMock.mock.calls
       .filter(([id, req]) => id === bookId && (req as { slice: string }).slice === 'revisions')
       .map(([, req]) => (req as { patch: Record<string, unknown> }).patch);
+
+  /* #3395 pass 4, 🟡c — hydration actions must not persist
+     (persistence-middleware.ts's PERSIST_RULES rule). The full hydrate used
+     to seed cast through `cast/setCharacters`, a user-edit action type, so
+     every first open echoed cast.json back to the server. */
+  it('a first open sends no PUT at all — the hydrate is never echoed back to disk', async () => {
+    getBookStateMock.mockImplementation(async (bookId: string) =>
+      minimalState(bookId, { revisions: { pending: [], drift: [] } }),
+    );
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    renderAt(store, '/books/book-A');
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-A'));
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['nora']);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(putBookStateMock.mock.calls.filter(([, req]) => (req as { slice: string }).slice === 'cast')).toEqual([]);
+    expect(putBookStateMock).not.toHaveBeenCalled();
+  });
 
   it('R1: leaving to a non-book view and back re-hydrates revisions; the next markRevisionPlayable persists pending + timeline', async () => {
     getBookStateMock.mockImplementation(async (bookId: string) =>

@@ -859,8 +859,10 @@ export function Layout() {
                case. A reparse deletes cast.json server-side, and without this
                the previous run's roster would survive in redux and the
                Analysing view's "Cast so far" pill would start at 24 instead
-               of 0 as Phase 0a streams in fresh detections. */
-            dispatch(castActions.setCharacters(res.cast?.characters ?? []));
+               of 0 as Phase 0a streams in fresh detections. Through
+             `hydrateCharacters`, which is never persisted: this is the disk
+             snapshot, not an edit (#3395 pass 4). */
+            dispatch(castActions.hydrateCharacters(res.cast?.characters ?? []));
             /* fe-16 — per-character render fallback engine (Qwen → Kokoro). Empty
                map clears stale entries when a re-render dropped the fallback. */
             dispatch(castActions.setRenderedFallback(res.renderedFallbackByCharacter ?? {}));
