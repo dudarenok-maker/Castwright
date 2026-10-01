@@ -175,7 +175,10 @@ export function BooksRoute() {
         /* Server wiped cast.json + revisions + audio + cache — mirror the
            reparse handler's redux reset so a stale open-book view can't show
            pre-replace state. */
-        dispatch(castActions.setCharacters([]));
+        /* hydrateCharacters, not the persisted setCharacters: the await above may
+           have let the user open another book, and a persisted reset would PUT an
+           empty cast at it (#3376). Same for the re-parse reset below. */
+        dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
         if (bookId === b.bookId) dispatch(uiActions.goHome());
         const refreshed = await api.getLibrary().catch(() => null);
@@ -228,7 +231,7 @@ export function BooksRoute() {
            the *previous* open's residue, so wiping it is correct regardless
            of which book is being re-parsed — the next book open re-hydrates
            from disk. */
-        dispatch(castActions.setCharacters([]));
+        dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
         if (bookId === b.bookId) dispatch(uiActions.goHome());
 
@@ -629,7 +632,9 @@ export function ConfirmRoute() {
       .getBookState(bookId)
       .then((res) => {
         if (!cancelled && res?.cast?.characters && res.cast.characters.length > 0) {
-          dispatch(castActions.setCharacters(res.cast.characters));
+          /* hydrate, not an edit: setCharacters is persisted and would echo
+             this disk snapshot straight back as a cast.json PUT (#3376). */
+          dispatch(castActions.hydrateCharacters(res.cast.characters));
         }
       })
       .catch(() => {

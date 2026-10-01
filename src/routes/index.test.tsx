@@ -25,8 +25,16 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { tourSlice } from '../store/tour-slice';
+import { persistenceMiddleware } from '../store/persistence-middleware';
 import { router as appRouter } from './index';
-import { AnalysingRoute, BooksRoute, ChangelogRoute, ReadyRoute, SetupRoute } from './index';
+import {
+  AnalysingRoute,
+  BooksRoute,
+  ChangelogRoute,
+  ConfirmRoute,
+  ReadyRoute,
+  SetupRoute,
+} from './index';
 import { chaptersActions } from '../store/chapters-slice';
 import type { LayoutContext } from '../components/layout';
 import type { Chapter, Character, LibraryBook, ChangeLogEvent } from '../lib/types';
@@ -37,6 +45,7 @@ const reparseBookMock = vi.fn();
 const getLibraryMock = vi.fn();
 const deleteBookMock = vi.fn();
 const putBookStateMock = vi.fn();
+const getBookStateMock = vi.fn();
 const getWorkspaceInfoMock = vi.fn();
 const completeSetupMock = vi.fn();
 
@@ -100,7 +109,7 @@ vi.mock('../lib/api', () => ({
     /* AnalysingView fetches book-state on mount to hydrate the
        per-chapter failed list. These tests don't exercise that surface;
        reject so the catch path silently skips hydration. */
-    getBookState: () => Promise.reject(new Error('not mocked')),
+    getBookState: (bookId: string) => getBookStateMock(bookId),
     /* Same idea for the dropped-quotes panel — it fetches on mount.
        Resolve with an empty envelope so the panel renders nothing
        and these route tests stay focused on manuscriptId derivation. */
@@ -138,7 +147,7 @@ vi.mock('../lib/api', () => ({
    real route table mounts. */
 void appRouter;
 
-function makeStore() {
+function makeStore(opts: { persist?: boolean } = {}) {
   return configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -154,6 +163,9 @@ function makeStore() {
       queue: queueSlice.reducer,
       tour: tourSlice.reducer,
     },
+    ...(opts.persist
+      ? { middleware: (getDefault) => getDefault().concat(persistenceMiddleware) }
+      : {}),
   });
 }
 
@@ -201,6 +213,9 @@ beforeEach(() => {
   getLibraryMock.mockReset();
   deleteBookMock.mockReset();
   putBookStateMock.mockReset();
+  putBookStateMock.mockResolvedValue(undefined);
+  getBookStateMock.mockReset();
+  getBookStateMock.mockRejectedValue(new Error('not mocked'));
   getWorkspaceInfoMock.mockReset();
   completeSetupMock.mockReset();
 });
@@ -373,11 +388,11 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
      run's 24-character roster, and the Analysing view's "Cast so far"
      pill opened at 24 instead of 0.
 
-     The fix dispatches castActions.setCharacters([]) and
+     The fix dispatches castActions.hydrateCharacters([]) and
      manuscriptActions.reset() right after a successful reparse RPC. */
 
-  function makePopulatedStore() {
-    const store = makeStore();
+  function makePopulatedStore(opts: { persist?: boolean } = {}) {
+    const store = makeStore(opts);
     /* Seed the library with one cast_pending book so the BooksRoute has
        a card to render and a target for the re-parse menu. */
     store.dispatch(
@@ -530,6 +545,36 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
        won't short-circuit when the user clicks "Analyse now". */
     expect(store.getState().manuscript.manuscriptId).toBeNull();
     expect(store.getState().manuscript.title).toBeNull();
+  });
+
+  /* #3376 — the redux reset is a hydrate-style mirror of a wipe the server
+     already did, not a user edit. The RPC is async, so by the time it
+     resolves the user may have opened ANOTHER book (ui.stage now names it);
+     a persisted `cast/setCharacters([])` would then schedule a cast PUT of
+     an empty roster at that book's real cast.json. */
+  it('does not persist an empty cast at whichever book is open when the re-parse resolves', async () => {
+    const store = makePopulatedStore({ persist: true });
+    let resolveReparse!: (v: unknown) => void;
+    reparseBookMock.mockReturnValue(new Promise((r) => (resolveReparse = r)));
+    getLibraryMock.mockResolvedValue({ authors: [] });
+    getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+
+    renderBooks(store);
+    fireEvent.click(screen.getByLabelText('Book options'));
+    fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
+    const reparseButtons = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
+    fireEvent.click(reparseButtons[reparseButtons.length - 1]);
+    await waitFor(() => expect(reparseBookMock).toHaveBeenCalledWith('b1'));
+
+    /* The user opens a different book while the re-parse is still in flight. */
+    store.dispatch(uiActions.openBook({ id: 'b2', status: 'complete' }));
+    resolveReparse({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+
+    await waitFor(() => expect(store.getState().cast.characters).toHaveLength(0));
+    expect((store.getState().ui.stage as { bookId?: string }).bookId).toBe('b2');
+    /* Outlast the 500 ms persist debounce. */
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(putBookStateMock).not.toHaveBeenCalled();
   });
 });
 
@@ -729,6 +774,31 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
     );
     /* Library refetch must NOT have fired on the failure path. */
     expect(getLibraryMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('ConfirmRoute — authoritative cast re-read is a hydrate, not an edit (#3376)', () => {
+  it('re-reading cast.json on confirm entry schedules no cast PUT echoing it back', async () => {
+    const store = makeStore({ persist: true });
+    getBookStateMock.mockResolvedValue({
+      cast: { characters: [{ id: 'nora', name: 'Nora', voiceState: 'generated' }] },
+    });
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => expect(store.getState().cast.characters.map((c: Character) => c.id)).toEqual(['nora']));
+    expect((store.getState().ui.stage as { bookId?: string }).bookId).toBe('b1');
+    /* Outlast the 500 ms persist debounce. */
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(putBookStateMock).not.toHaveBeenCalled();
   });
 });
 
