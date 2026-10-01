@@ -208,10 +208,36 @@ export async function loadSegmentsFiles(
   return out;
 }
 
+/* The distinct voices (pre-emotion-variant `baseVoiceName`, else `voiceName`)
+   the segments stamped under one snapshot key were actually rendered in.
+   A segment joins a key by its stamped `resolvedCharacterId`, else its raw
+   `characterId` — exact match only, never through the resolver, matching every
+   other reader of that stamp. Kokoro-fallback lines are skipped: their voice
+   is the fallback engine's, not a voice choice, and the snapshot path already
+   owns that case. Empty when no line carries a stamp (legacy chapter). */
+export function renderedSegmentVoices(
+  segments: NonNullable<SegmentsFile['segments']> | undefined,
+  snapshotKey: string,
+): string[] {
+  const voices = new Set<string>();
+  for (const s of segments ?? []) {
+    if ((s.resolvedCharacterId ?? s.characterId) !== snapshotKey) continue;
+    if (s.renderedFallbackEngine) continue;
+    const v = s.baseVoiceName ?? s.voiceName;
+    if (v) voices.add(v);
+  }
+  return [...voices];
+}
+
 /* Collect the set of bespoke-Qwen voice NAMES (designed voiceIds) that have
-   actually rendered audio in a book — the union of every rendered snapshot
-   whose `voiceEngine === 'qwen'`. Used by the voices aggregator to split
-   "Designed" from "Generated" for Qwen voices. */
+   actually rendered audio in a book — every voice a rendered `voiceEngine ===
+   'qwen'` snapshot's lines were stamped with, or that snapshot's own
+   `resolvedVoiceName` when no line under its key carries a stamp (legacy
+   chapter). The snapshot holds ONE voice per character (last-wins), so after a
+   voice change plus a partial re-record it names only the new voice and the
+   old one — still rendered in the untouched lines — would be missed (#3362).
+   Used by the voices aggregator to split "Designed" from "Generated" for Qwen
+   voices. */
 export async function collectRenderedQwenVoiceNames(
   bookDir: string,
   chapters: Array<{ id: number; slug: string }>,
@@ -219,8 +245,12 @@ export async function collectRenderedQwenVoiceNames(
   const names = new Set<string>();
   const segs = await loadSegmentsFiles(bookDir, chapters);
   for (const seg of segs) {
-    for (const snap of Object.values(seg.characterSnapshots ?? {})) {
-      if (snap.voiceEngine === 'qwen' && snap.resolvedVoiceName) {
+    for (const [key, snap] of Object.entries(seg.characterSnapshots ?? {})) {
+      if (snap.voiceEngine !== 'qwen') continue;
+      const lineVoices = renderedSegmentVoices(seg.segments, key);
+      if (lineVoices.length > 0) {
+        for (const v of lineVoices) names.add(v);
+      } else if (snap.resolvedVoiceName) {
         names.add(snap.resolvedVoiceName);
       }
     }

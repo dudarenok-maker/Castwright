@@ -111,6 +111,46 @@ describe('collectRenderedFallbackEngines (fe-16)', () => {
   });
 });
 
+describe('collectRenderedQwenVoiceNames per-line voices (#3362)', () => {
+  function writeChapter(snapshots: Record<string, object>, segments?: Array<Record<string, unknown>>) {
+    writeFileSync(
+      join(bookDir, 'audio', '01-one.segments.json'),
+      JSON.stringify({ chapterId: 1, characterSnapshots: snapshots, segments }),
+    );
+  }
+  const qwenSnap = { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-new' };
+
+  it('keeps BOTH voices of a mixed-voice chapter (partial re-record after a voice change)', async () => {
+    /* The snapshot is last-wins: it names only the NEW voice while the lines
+       that were not re-recorded are still in the OLD one. */
+    writeChapter({ wren: qwenSnap }, [
+      { characterId: 'wren', resolvedCharacterId: 'wren', voiceName: 'qwen-old' },
+      { characterId: 'wren', resolvedCharacterId: 'wren', voiceName: 'qwen-new' },
+    ]);
+    await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
+      new Set(['qwen-old', 'qwen-new']),
+    );
+  });
+
+  it('falls back to the snapshot voice when no line carries a stamp (legacy chapter)', async () => {
+    writeChapter({ wren: qwenSnap }, [{ characterId: 'wren', sentenceIds: [1] }]);
+    await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
+      new Set(['qwen-new']),
+    );
+  });
+
+  it('ignores Kokoro-fallback lines and lines of other characters', async () => {
+    writeChapter({ wren: qwenSnap, marlow: { voiceEngine: 'kokoro', resolvedVoiceName: 'af_x' } }, [
+      { characterId: 'wren', voiceName: 'af_fallback', renderedFallbackEngine: 'kokoro' },
+      { characterId: 'wren', voiceName: 'qwen-new' },
+      { characterId: 'marlow', voiceName: 'qwen-marlow' },
+    ]);
+    await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
+      new Set(['qwen-new']),
+    );
+  });
+});
+
 describe('collectOrphanedCharacterFallbacks (#2023 Piece 1, widened #2040 Wave 3 task 16, #2092/#2089 task 3)', () => {
   const liveCast = [{ id: 'narrator' }, { id: 'mairin' }];
 

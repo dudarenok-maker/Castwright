@@ -22,7 +22,7 @@ import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { pickVoiceForEngine } from '../tts/voice-mapping.js';
 import { toVoiceLike, buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine } from '../tts/index.js';
-import { loadSegmentsFiles, type CharacterSnapshot, type SegmentsFile } from '../audio/segments-io.js';
+import { loadSegmentsFiles, renderedSegmentVoices, type CharacterSnapshot } from '../audio/segments-io.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 
@@ -272,27 +272,6 @@ revisionsBulkRouter.get('/revisions', async (req: Request, res: Response) => {
     res.status(500).json({ error: (e as Error).message || 'Failed to compute bulk revisions.' });
   }
 });
-
-/* The distinct voices (pre-emotion-variant `baseVoiceName`, else `voiceName`)
-   the segments stamped under one snapshot key were actually rendered in.
-   A segment joins a key by its stamped `resolvedCharacterId`, else its raw
-   `characterId` — exact match only, never through the resolver, matching every
-   other reader of that stamp. Kokoro-fallback lines are skipped: their voice
-   is the fallback engine's, not a voice choice, and the snapshot path already
-   owns that case. Empty when no line carries a stamp (legacy chapter). */
-function renderedSegmentVoices(
-  segments: NonNullable<SegmentsFile['segments']> | undefined,
-  snapshotKey: string,
-): string[] {
-  const voices = new Set<string>();
-  for (const s of segments ?? []) {
-    if ((s.resolvedCharacterId ?? s.characterId) !== snapshotKey) continue;
-    if (s.renderedFallbackEngine) continue;
-    const v = s.baseVoiceName ?? s.voiceName;
-    if (v) voices.add(v);
-  }
-  return [...voices];
-}
 
 interface DriftContext {
   bookId: string;
