@@ -67,6 +67,7 @@
      M4  revert scan-import-folder to stage the un-normalised buffer → G2
      M5  alias stateJsonPath in one file                              → G3
      M6  revert one migrated writer to writeJsonAtomic(statePath,…)  → G1
+     M6b same, spelled writeJsonAtomicOrdered(statePath,…) (#3427)   → G1
    Negative control (stays GREEN): a prose comment quoting
    `writeJsonAtomic(stateJsonPath(` and a string literal `join(dir,'state.json')`
    — both opaque, never sites. `git diff` empty of mutations before finalise. */
@@ -176,7 +177,7 @@ function countInCode(
 // ---------------------------------------------------------------- G1
 
 const STATE_PATH_RE = /\bstateJsonPath\(/g;
-const WRITE_JSON_ATOMIC_RE = /\bwriteJsonAtomic\(/g;
+const WRITE_JSON_ATOMIC_RE = /\bwriteJsonAtomic(?:Ordered)?\(/g;
 
 /* Files that mention stateJsonPath and legitimately call writeJsonAtomic for
    OTHER .json files, never for state.json. Keyed on RELATIVE PATH AND COUNT,
@@ -194,7 +195,7 @@ const G1_ALLOWED = new Map<string, { writes: number; why: string }>([
     'routes/analysis.ts',
     {
       writes: 6,
-      why: 'writes cast.json (castJsonPath), logPath and manuscript-edits.json — all OTHER .json.',
+      why: 'writes cast.json (castJsonPath), logPath and manuscript-edits.json — all OTHER .json. The manuscript-edits.json writes spell writeJsonAtomicOrdered( (#3427), which the scan counts too.',
     },
   ],
   [
@@ -404,6 +405,19 @@ describe('state.json write seam — static guard (#2246 Task 7)', () => {
     }
 
     expect(problems, problems.join('\n\n')).toEqual([]);
+  });
+
+  /* M6 via the ordered spelling (#3427). The write-site regex once matched only
+     the bare name, so reverting a migrated `writeStateJsonAtomic(statePath, …)`
+     to `writeJsonAtomicOrdered(statePath, next)` was invisible to G1. Proves the
+     regex counts both spellings and that a bare-name look-alike stays uncounted. */
+  it('G1 counts writeJsonAtomicOrdered( as a write site (M6 via the ordered spelling)', () => {
+    const src = [
+      'await writeJsonAtomicOrdered(statePath, next);',
+      'await writeJsonAtomic(statePath, next);',
+    ].join('\n');
+    expect(countInCode(src, WRITE_JSON_ATOMIC_RE, [])).toBe(2);
+    expect(countInCode('await writeJsonAtomicXOrdered(statePath, next);', WRITE_JSON_ATOMIC_RE, [])).toBe(0);
   });
 
   it('G3: fail closed — global floors plus the per-file expected-count map for stateJsonPath(', () => {

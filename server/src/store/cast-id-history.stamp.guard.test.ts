@@ -80,7 +80,7 @@ const SRC = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'cast-id-
 
 /** Indexed assignment, never comparison. */
 export const ASSIGN_RE = /supersededBy\[[^\]]+\]\s*=(?!=)/g;
-const WRITE_RE = /await writeJsonAtomic\(castIdHistoryPath/g;
+const WRITE_RE = /await writeJsonAtomic(?:Ordered)?\(castIdHistoryPath/g;
 const STAMP_RE = /bumpSeqAndStamp\(/g;
 
 /** Split the module at top-level `function`/`export ... function` boundaries,
@@ -180,6 +180,11 @@ describe('guard 5 — the stamp pairing (#2128)', () => {
     // both the "pairs" and "leaves no ... unstamped" tests below, not
     // merely harmless inside one.
     expect(SRC.match(ASSIGN_RE)?.length ?? 0).toBe(9);
+  });
+
+  it('the write-site regex also matches writeJsonAtomicOrdered( (#3427)', () => {
+    const src = 'await writeJsonAtomicOrdered(castIdHistoryPath, history);';
+    expect(src.match(WRITE_RE)?.length ?? 0).toBe(1);
   });
 
   it('pairs every writing function with a bumpSeqAndStamp before its write — per write, not merely per first occurrence', () => {

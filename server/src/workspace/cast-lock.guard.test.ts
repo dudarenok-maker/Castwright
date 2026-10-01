@@ -521,7 +521,7 @@ function lineOf(content: string, index: number): number {
 // printWidth:100 wraps a long argument onto its own line, which would
 // otherwise silently drop a real occurrence out of coverage (see file
 // header, false negatives).
-const WRITE_RE = /\bwriteJsonAtomic\(\s*castJsonPath\(/g;
+const WRITE_RE = /\bwriteJsonAtomic(?:Ordered)?\(\s*castJsonPath\(/g;
 const RM_RE = /\brm\(\s*castJsonPath\(/g;
 
 interface ScanResult {
@@ -727,5 +727,14 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
     expect(result?.writes, `fabricated lock range: ${JSON.stringify(result)}`).toBe(1);
     expect(result?.details.join('\n')).toContain('line 7');
     expect(collectLockRanges(src, computeOpaqueRanges(src))).toEqual([]);
+  });
+
+  /* #3427: the ordered spelling of the same write must be seen too. */
+  it('an unlocked writeJsonAtomicOrdered(castJsonPath(...)) is reported like a bare writeJsonAtomic', () => {
+    const src = 'await writeJsonAtomicOrdered(castJsonPath(dir), cast);';
+
+    const result = scanFile(src);
+    expect(result?.writes, JSON.stringify(result)).toBe(1);
+    expect(result?.details.join('\n')).toContain('line 1');
   });
 });
