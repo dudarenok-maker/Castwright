@@ -91,7 +91,9 @@ $serverPort = Get-ConfiguredServerPort -ServerEnvPath $serverEnvPath
 $basePorts = @()
 if ($serverPort) { $basePorts = @($serverPort) + $basePorts }
 if ($vitePort) { $basePorts = @($vitePort) + $basePorts }
-$ports = Get-PortsToSweep -BasePorts $basePorts -RunDir $runDir -ServerEnvPath $serverEnvPath
+# @(...) so an empty result stays an empty array: a bare `$ports = @()` return
+# unrolls to $null, which fails Get-StopSummaryMessage's Mandatory -Ports binding.
+$ports = @(Get-PortsToSweep -BasePorts $basePorts -RunDir $runDir -ServerEnvPath $serverEnvPath)
 $sweepIncomplete = $false
 if ($ports) {
     $conns = Get-NetTCPConnection -LocalPort $ports -State Listen -ErrorAction SilentlyContinue
