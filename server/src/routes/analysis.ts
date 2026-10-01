@@ -7630,6 +7630,24 @@ export async function runSubsetAnalyzerJob(
            un-marked throw always has. noteReasoningOverflow is a no-op (and
            the chapter is not recorded) for any other error. */
         noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title });
+        /* #3435 — Phase 0 already cleared this chapter's failure record and sent
+           chapter-resolved, so without re-recording it here a Phase-1 failure
+           reads as a clean Retry and the record is gone on disk. Mirror the
+           Phase-0 failure path (record, save, chapter-failed) BEFORE the
+           rethrow; the terminal handler still ends the run as before. An
+           abort is the user pausing, not a failure of the chapter. */
+        if (!(err instanceof AnalysisAbortedError)) {
+          const classified = classifyAnalysisFailure(err, phase1AnalyzerLabel);
+          recordFailedChapter(cache, ch.id, classified);
+          await saveAnalysisCache(manuscriptId, cache);
+          send({
+            kind: 'chapter-failed',
+            chapterId: ch.id,
+            message: classified.userMessage,
+            code: classified.code,
+            remediation: classified.remediation,
+          });
+        }
         throw err;
       }
       if (subsetChunkCount > 1) {

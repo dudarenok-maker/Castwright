@@ -882,3 +882,96 @@ describe('nonStoryOverflowWarningMessage — advice follows the fixes list (#308
     }
   });
 });
+
+/* #3435 — a Retry (subset route) whose Phase 1 (attribution) fails. Phase 0
+   clears the chapter's failure record and sends chapter-resolved BEFORE
+   attribution runs, so a Phase-1 failure used to leave the chapter looking
+   retried-clean: nothing re-recorded it and the terminal handler sent only
+   `error`. The Phase-1 catch now re-records it and sends chapter-failed, the
+   same way the route's Phase-0 failure path does. */
+describe('a Retry whose Phase 1 fails keeps its failure on record and reports it (#3435)', () => {
+  async function runRetry(
+    label: string,
+    runStage2Chapter: Analyzer['runStage2Chapter'],
+    seedFailed: boolean,
+  ): Promise<{ events: CapturedEvent[]; failedChapterIds: number[]; failedChapterErrors: Record<string, { code: string }> }> {
+    const seed = await seedBook(label, [1], { fullCache: true });
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runSubsetAnalyzerJob } = await import('./analysis.js');
+    if (seedFailed) {
+      const cache = await loadAnalysisCache(seed.manuscriptId);
+      cache.failedChapterIds = [1];
+      cache.failedChapterErrors = {
+        '1': { code: 'attribution-collapse', message: 'seeded', remediation: 'seeded' },
+      };
+      await saveAnalysisCache(seed.manuscriptId, cache);
+    }
+    const record = getManuscript(seed.manuscriptId)!;
+    const subsetJob = { ...seed.job, kind: 'subset' as const };
+    const events = captureEvents(subsetJob, () => {});
+    try {
+      await runSubsetAnalyzerJob(
+        subsetJob,
+        record,
+        seed.phase0Selection,
+        buildSelection(stubAnalyzer({ runStage2Chapter }), MODEL),
+        record.chapterHints,
+        false,
+      );
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      return {
+        events,
+        failedChapterIds: after.failedChapterIds ?? [],
+        failedChapterErrors: (after.failedChapterErrors ?? {}) as Record<string, { code: string }>,
+      };
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  it('control: a clean Retry clears the record and sends chapter-resolved only', async () => {
+    const r = await runRetry('p1-clean', async (_m, id) => stage2For(id), true);
+    expect(r.events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+    expect(r.events.some((e) => e.kind === 'chapter-failed')).toBe(false);
+    expect(r.failedChapterIds).toEqual([]);
+  }, 30_000);
+
+  it('a Phase-1 timeout sends chapter-resolved then chapter-failed, and the chapter stays in failedChapterIds', async () => {
+    const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
+    const { classifyAnalysisFailure } = await import('./failure-taxonomy.js');
+    const err = new AnalyzerTimeoutError('gemini', MODEL, 90_000, 'thinking-idle');
+    const r = await runRetry('p1-timeout', () => Promise.reject(err), true);
+    const kinds = r.events.map((e) => e.kind).filter((k) => ['chapter-resolved', 'chapter-failed', 'error'].includes(k));
+    expect(kinds).toEqual(['chapter-resolved', 'chapter-failed', 'error']);
+    const classified = classifyAnalysisFailure(err, 'gemini');
+    const failed = r.events.find((e) => e.kind === 'chapter-failed')!;
+    expect(failed).toMatchObject({ chapterId: 1, code: classified.code, message: expect.stringContaining('thinking window') });
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.failedChapterErrors['1'].code).toBe(classified.code);
+  }, 30_000);
+
+  it('a Phase-1 unreachable analyzer is recorded and reported the same way', async () => {
+    const { AnalyzerUnreachableError } = await import('../analyzer/errors.js');
+    const { classifyAnalysisFailure } = await import('./failure-taxonomy.js');
+    const err = new AnalyzerUnreachableError('connection refused', 'ollama');
+    const r = await runRetry('p1-unreachable', () => Promise.reject(err), true);
+    const classified = classifyAnalysisFailure(err, 'ollama');
+    expect(r.events.find((e) => e.kind === 'chapter-failed')).toMatchObject({ chapterId: 1, code: classified.code });
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.failedChapterErrors['1'].code).toBe(classified.code);
+  }, 30_000);
+
+  it('a Phase-1 reasoning overflow still ends the run with its code AND now survives a reload', async () => {
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    const r = await runRetry(
+      'p1-overflow',
+      () => Promise.reject(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100)),
+      true,
+    );
+    expect(r.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.failedChapterErrors['1'].code).toBe('analyzer-reasoning-overflow');
+  }, 30_000);
+});

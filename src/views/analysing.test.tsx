@@ -1830,6 +1830,34 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
     });
 
+    /* #3435 — a Retry whose Phase 1 fails with a non-overflow analyzer error.
+       The server now sends chapter-resolved (Phase 0 cleared it), then
+       chapter-failed (the Phase-1 catch re-records it), then the terminal
+       `error`. The row must stay with its message, not be dropped as the
+       benign "ended without a result" case. */
+    it('a Phase-1 failure on Retry (chapter-resolved, chapter-failed, error analyzer-timeout) keeps the row with its message', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await pausedMainRetry();
+      const message = 'Gemini stayed silent longer than its thinking window.';
+      await act(async () => {
+        capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
+        capturedSubsetCall!.opts!.onChapterFailed!({
+          chapterId: 44,
+          message,
+          code: 'analyzer-timeout',
+          remediation: 'Raise the thinking idle timeout, then retry.',
+        });
+      });
+      await act(async () => {
+        rejectSubset?.(new AnalysisError(message, 'analyzer-timeout'));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+      expect(screen.getByText(message)).toBeInTheDocument();
+    });
+
     /* cast_incomplete is the subset route's DESIGNED pause-and-retry frame: the
        retried chapter SUCCEEDED (chapter-resolved first), no other chapter
        failed, but Phase 0a coverage is incomplete. Row dropped, main re-POSTed,
