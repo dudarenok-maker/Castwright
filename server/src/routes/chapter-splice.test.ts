@@ -599,7 +599,19 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
       const before = JSON.parse(originalSegs);
       before.segments[1].renderedFallbackEngine = 'kokoro';
       before.segments[1].renderedFallbackCharacterId = 'narrator';
+      /* #3362 pass-13 🟡B — the Cast pill reads the per-character SNAPSHOT
+         (collectRenderedFallbackEngines), not the segment: seed the snapshot's
+         stamp too so the route-level result pins it clearing. */
+      before.characterSnapshots = {
+        ...before.characterSnapshots,
+        amy: { ...before.characterSnapshots?.amy, renderedFallbackEngine: 'kokoro' },
+      };
       writeFileSync(segPath, JSON.stringify(before));
+      const { collectRenderedFallbackEngines } = await import('../audio/segments-io.js');
+      const chaptersForPill = [{ id: 1, slug: SLUG }];
+      const titleLedBookDir = join(titleLedAudioRoot, '..');
+      expect(await collectRenderedFallbackEngines(titleLedBookDir, chaptersForPill)).toEqual({ amy: 'kokoro' });
+      const pillAfter = () => collectRenderedFallbackEngines(titleLedBookDir, chaptersForPill);
 
       synthMock.mockImplementationOnce(async () => ({
         pcm: tone(0.3, 9000),
@@ -623,6 +635,10 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
       expect(segFile.segments[1].voiceName).toBe('qwen-amy');
       expect('renderedFallbackEngine' in segFile.segments[1]).toBe(false);
       expect('renderedFallbackCharacterId' in segFile.segments[1]).toBe(false);
+      const snaps = (JSON.parse(readFileSync(segPath, 'utf8')) as { characterSnapshots?: Record<string, { renderedFallbackEngine?: string }> })
+        .characterSnapshots;
+      expect(snaps?.amy?.renderedFallbackEngine).toBeUndefined();
+      expect(await pillAfter()).toEqual({});
       // Downstream: the per-line voice drift / Voices split no longer skips it.
       expect(renderedSegmentVoices(segFile.segments as never, segFile.segments[1].characterId)).toContain('qwen-amy');
     } finally {

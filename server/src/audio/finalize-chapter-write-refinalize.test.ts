@@ -1116,3 +1116,87 @@ describe('finalizeChapterAudioWrite re-embeds by the segment a row replaces (#33
     expect(Array.from(five.vec)).toEqual(Array.from(vec(0.02 * 5)));
   });
 });
+
+/* #3362 pass-13 🟡B — the Cast "Fallback (Kokoro)" pill reads the PER-CHARACTER
+   snapshot (`collectRenderedFallbackEngines`, segments-io.ts), not the
+   segment's own stamp. The splice/qa-repair tests only assert the segment, so
+   a carry of the PRIOR snapshot's `renderedFallbackEngine` (the pill sticking)
+   left them green. These pin the snapshot itself. The per-character condition
+   the code implements: a chapter's snapshot carries the fallback iff some line
+   keyed to that character in the chapter STILL has `renderedFallbackEngine`
+   after this write (fresh + untouched lines both fold); the pill is the union
+   of those snapshots over every rendered chapter. */
+describe('finalizeChapterAudioWrite clears the per-character fallback snapshot (#3362 pass-13 🟡B)', () => {
+  const CAST = [{ id: 'mairin', name: 'Mairin', gender: 'female', attributes: [] }];
+
+  async function finalize(
+    segments: Array<Record<string, unknown>>,
+    resynthesizedIndices: 'all' | number[],
+  ): Promise<void> {
+    await finalizeChapterAudioWrite({
+      bookId,
+      bookDir,
+      chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      pcm: tone(2.0, 12000),
+      sampleRate: SR,
+      durationSec: 2.0,
+      segments: segments as never,
+      cast: CAST,
+      castIdHistory: { schema: 1, supersededBy: {} },
+      defaultEngine: 'qwen',
+      modelKey: 'qwen-v1',
+      audioFormat: 'mp3',
+      resynthesizedIndices,
+    });
+  }
+
+  const line = (i: number, extra: Record<string, unknown> = {}) => ({
+    groupIndex: i,
+    characterId: 'mairin',
+    sentenceIds: [i],
+    startSec: i,
+    endSec: i + 1,
+    voiceName: 'v-mairin',
+    ...extra,
+  });
+  const FALLBACK = { renderedFallbackEngine: 'kokoro', renderedFallbackCharacterId: 'mairin' };
+
+  async function pill(): Promise<Record<string, string>> {
+    const { collectRenderedFallbackEngines } = await import('./segments-io.js');
+    return collectRenderedFallbackEngines(bookDir, [{ id: 1, slug: SLUG }]);
+  }
+
+  beforeEach(() => {
+    writeCast([{ id: 'mairin', name: 'Mairin' }]);
+    writeHistory({ schema: 1, supersededBy: {} });
+  });
+
+  it('a clean re-record of the ONLY fallback-stamped line drops the snapshot fallback and the pill', async () => {
+    await finalize([line(0, FALLBACK), line(1)], 'all');
+    expect(readSegFile().characterSnapshots?.mairin?.renderedFallbackEngine).toBe('kokoro');
+    expect(await pill()).toEqual({ mairin: 'kokoro' });
+
+    // Re-record line 0 cleanly (the take carries no fallback stamp).
+    const { renderedFallbackEngine: _e, renderedFallbackCharacterId: _c, ...clean } = readSegFile().segments[0] as Record<
+      string,
+      unknown
+    >;
+    await finalize([clean, readSegFile().segments[1]], [0]);
+
+    expect(readSegFile().characterSnapshots?.mairin?.renderedFallbackEngine).toBeUndefined();
+    expect(await pill()).toEqual({});
+  });
+
+  it('a character with ANOTHER still-fallback line keeps the snapshot fallback and the pill', async () => {
+    await finalize([line(0, FALLBACK), line(1, FALLBACK)], 'all');
+
+    const { renderedFallbackEngine: _e, renderedFallbackCharacterId: _c, ...clean } = readSegFile().segments[0] as Record<
+      string,
+      unknown
+    >;
+    await finalize([clean, readSegFile().segments[1]], [0]);
+
+    expect(readSegFile().characterSnapshots?.mairin?.renderedFallbackEngine).toBe('kokoro');
+    expect(await pill()).toEqual({ mairin: 'kokoro' });
+  });
+});
