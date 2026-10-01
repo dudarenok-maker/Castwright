@@ -265,10 +265,10 @@ jobs:
         if: fromJSON(needs.detect.outputs.scopes).step_audit_server || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run audit:server
 
-      # No-ops with a banner on a runner without Pester 5 (the GitHub
-      # ubuntu image ships pwsh but not Pester 5), exactly as the old
-      # `npm run verify` leg did. Kept gated on `test:scripts` so it provides
-      # real coverage if/when Pester 5 is bootstrapped on the runner.
+      # Runs for real on the ubuntu runner: the image ships pwsh AND Pester 5
+      # (PR #3404 CI executed 102 tests here), so a Pester test must be portable
+      # to pwsh on Linux. scripts/tests/run.ps1 exits 1, not a no-op banner,
+      # when Pester 5 is absent.
       # Deliberate coverage WIDENING (was: scripts, with no `shared` disjunct
       # at all): a root package-lock.json diff touches zero steps via
       # stepTouchedByDiff, so `shared` is the only thing that would catch a

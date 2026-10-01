@@ -197,13 +197,21 @@ Describe 'start-app.ps1 / stop-app.ps1 agree on $runDir (#2632 N35)' {
 # is the .mjs shape: pre-probe, kill, then a bounded wait on LIVENESS.
 Describe 'Stop-ProcessTreeByLiveness (PR #3404 pass 3)' {
     BeforeAll {
+        # -WindowStyle is a Windows-only Start-Process parameter: pwsh on Linux
+        # throws NotSupportedException for it. $IsWindows is $null on Windows
+        # PowerShell 5.1, so Desktop edition is tested explicitly (a plain
+        # `-not $IsWindows` skip would also skip on 5.1).
+        $script:hideWindow = @{}
+        if ($PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows) { $script:hideWindow = @{ WindowStyle = 'Hidden' } }
         function Start-Sleeper {
-            Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 120' -WindowStyle Hidden -PassThru
+            $hide = $script:hideWindow
+            Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList '-NoProfile', '-Command', 'Start-Sleep -Seconds 120' -PassThru @hide
         }
     }
 
     It "returns 'gone' and never attempts a kill for a pid that is already dead" {
-        $p = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList '-NoProfile', '-Command', 'exit 0' -WindowStyle Hidden -PassThru
+        $hide = $script:hideWindow
+        $p = Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList '-NoProfile', '-Command', 'exit 0' -PassThru @hide
         $p.WaitForExit()
         $script:attempted = $false
         $r = Stop-ProcessTreeByLiveness -ProcessId $p.Id -KillAction { param($x) $script:attempted = $true }
