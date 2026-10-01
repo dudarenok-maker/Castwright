@@ -67,7 +67,6 @@ is disabled.
 | Gemini max input tokens per request | Per-request INPUT-token cap for cloud analyzer passes; body chunks are sized to this | 12000 | 1000–1000000 | live | medium |
 | Gemini thinking idle timeout (ms) | Silence allowed before a Gemini answer starts: the wait for the first chunk, and each gap between thought summaries. 0 = automatic: 2 min for thinking models, else the 45 s idle window | 0 | integer, 0–290000 | live | medium |
 | Gemini request ceiling (ms) | Absolute time limit for one Gemini analysis request attempt | 1800000 | integer, 60000–14400000 | live | medium |
-
 | Ollama num_ctx | Context-window size sent on every /api/chat call; feeds the local (context-family) chunk-budget formulas below, Gemini ignores it | 32768 | integer, min 0 | live | medium |
 | Ollama num_gpu | GPU layers for Ollama (999 = all) | 999 | integer, min 0 | live | medium |
 | Ollama analyzer concurrency (K) | Max analyzer /api/chat calls in flight at once; also set Ollama-side OLLAMA_NUM_PARALLEL >= K | 2 | integer, min 1 | live | high |
