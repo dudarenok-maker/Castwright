@@ -67,7 +67,7 @@ describe('rollManuscriptEdits ordering (#3427)', () => {
     expect(landed[landed.length - 1]).toEqual(['A', 'B']);
   });
 
-  it('with no transient read the rolls land in call order', async () => {
+  it('with no transient read every roll writes the latest snapshot (identical snapshots; order is pinned by the next test)', async () => {
     const done: string[] = [];
     const rolls: Array<Promise<void>> = [];
     for (const ch of ['A', 'B', 'C']) {

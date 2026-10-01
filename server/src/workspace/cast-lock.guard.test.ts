@@ -7,7 +7,8 @@
 
    WHAT IT CHECKS: walks every `.ts` file under `server/src` (recursively,
    excluding `*.test.ts`) that mentions `castJsonPath`, and for each
-   `writeJsonAtomic(castJsonPath(` / `rm(castJsonPath(` occurrence, asserts it
+   `writeJsonAtomic(castJsonPath(` (or `writeJsonAtomicOrdered(castJsonPath(`) /
+   `rm(castJsonPath(` occurrence, asserts it
    sits inside a `withCastLock(...)` / `withCastLocks(...)` call. Only those
    two are accepted — `withLibraryVoiceLock` guards a DIFFERENT map key
    (`library-voice:<uuid>`), so a cast write enclosed by it and nothing else
@@ -46,7 +47,7 @@
         it existed for is now on the pinned allowlist below instead, with an
         honest "can't prove it, human-verified" `why`.
      3. Each `writeJsonAtomic(castJsonPath(` / `rm(castJsonPath(` occurrence
-        is a match of `/\bwriteJsonAtomic\(\s*castJsonPath\(/` /
+        is a match of `/\bwriteJsonAtomic(?:Ordered)?\(\s*castJsonPath\(/` /
         `/\brm\(\s*castJsonPath\(/` (whitespace-tolerant between the two
         opening parens — see "Prettier-wrap" in the false-negatives list
         below for why the earlier exact-adjacency version was itself a hole)
