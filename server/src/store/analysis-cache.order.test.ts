@@ -7,6 +7,7 @@
    the later ones would — without per-manuscript serialisation the stale
    snapshot lands last. */
 
+import { existsSync } from 'node:fs';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
 const landed: Array<{ path: string; stage1: unknown }> = [];
@@ -24,14 +25,20 @@ vi.mock('../workspace/state-io.js', async () => {
          lands them last. */
       await new Promise((r) => setTimeout(r, n === 0 ? 40 : n === 1 ? 20 : 1));
       if (n === 3 && (data as { fail?: boolean }).fail) throw new Error('boom');
+      await actual.writeJsonAtomic(path, data);
       landed.push({ path, stage1: data.stage1 });
     },
   };
 });
 
-const { saveAnalysisCache } = await import('./analysis-cache.js');
+const { saveAnalysisCache, clearAnalysisCache, cachePath, loadAnalysisCache } = await import(
+  './analysis-cache.js'
+);
 
-afterEach(() => {
+afterEach(async () => {
+  for (const id of ['order-a', 'order-b', 'order-c', 'order-d', 'order-e', 'order-f']) {
+    await clearAnalysisCache(id);
+  }
   landed.length = 0;
   callNo = 0;
 });
@@ -70,5 +77,20 @@ describe('saveAnalysisCache call ordering (#3427)', () => {
     const fast = saveAnalysisCache('order-d', snap('fast')); // 20ms stub
     await Promise.all([slow, fast]);
     expect(landed.map((l) => l.stage1)).toEqual(['fast', 'slow']);
+  });
+
+  it('a clear lands after every save called before it (no resurrection)', async () => {
+    const slowSave = saveAnalysisCache('order-e', snap('stale')); // call 0: 40ms stub
+    const clear = clearAnalysisCache('order-e');
+    await Promise.all([slowSave, clear]);
+    expect(existsSync(cachePath('order-e'))).toBe(false);
+  });
+
+  it('a save called after a clear lands after the clear', async () => {
+    const before = saveAnalysisCache('order-f', snap('old'));
+    const clear = clearAnalysisCache('order-f');
+    const after = saveAnalysisCache('order-f', snap('new'));
+    await Promise.all([before, clear, after]);
+    expect((await loadAnalysisCache('order-f')).stage1).toBe('new');
   });
 });

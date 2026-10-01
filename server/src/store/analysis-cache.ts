@@ -149,16 +149,10 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
    the caller still gets the real rejection from its own write. */
 const saveTails = new Map<string, Promise<void>>();
 
-export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCache): Promise<void> {
-  const path = cachePath(manuscriptId);
-  /* Snapshot at call time (as before) — the chain only orders the writes. */
-  const payload = {
-    ...cache,
-    chapters: seedEmotionsFromTags(cache.chapters ?? {}),
-    updatedAt: new Date().toISOString(),
-  };
+/* Run `op` after every earlier-called op for the same path has settled. */
+async function enqueueCacheOp(path: string, op: () => Promise<void>): Promise<void> {
   const prev = saveTails.get(path) ?? Promise.resolve();
-  const run = prev.then(() => writeJsonAtomic(path, payload));
+  const run = prev.then(op);
   const tail = run.then(
     () => undefined,
     () => undefined,
@@ -171,8 +165,22 @@ export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCac
   }
 }
 
+export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCache): Promise<void> {
+  const path = cachePath(manuscriptId);
+  /* Snapshot at call time (as before) — the chain only orders the writes. */
+  const payload = {
+    ...cache,
+    chapters: seedEmotionsFromTags(cache.chapters ?? {}),
+    updatedAt: new Date().toISOString(),
+  };
+  await enqueueCacheOp(path, () => writeJsonAtomic(path, payload));
+}
+
 /* Discard any partial progress for a manuscript so the next analysis runs
    from scratch. Idempotent — no-op if the cache file doesn't exist. */
 export async function clearAnalysisCache(manuscriptId: string): Promise<void> {
-  await rm(cachePath(manuscriptId), { force: true });
+  /* Joins the same per-path chain as saves (#3427): lands after every save
+     called before it, and a later save lands after it. */
+  const path = cachePath(manuscriptId);
+  await enqueueCacheOp(path, () => rm(path, { force: true }));
 }
