@@ -804,18 +804,19 @@ describe('Layout — revisions persist only after the book is hydrated (#3395 pa
     store.dispatch(revisionsActions.markRevisionPlayable({ chapterId: 1 }));
     await new Promise((resolve) => setTimeout(resolve, 700));
 
-    expect(putBookStateMock).toHaveBeenCalledWith(
-      'book-A',
-      expect.objectContaining({
-        slice: 'revisions',
-        patch: expect.objectContaining({
-          pending: [expect.objectContaining({ id: 'rA', playable: true })],
-          timeline: expect.objectContaining({
-            1: expect.arrayContaining([expect.objectContaining({ id: 't1' })]),
-          }),
+    /* #3395 pass 4, finding b — over EVERY revisions PUT to the book, not
+       just "the right one exists": R1's defect was an empty PUT, which a
+       toHaveBeenCalledWith on the good patch can't rule out. */
+    const puts = revisionsPuts('book-A');
+    expect(puts.length).toBeGreaterThan(0);
+    for (const patch of puts) {
+      expect(patch.pending).toEqual([expect.objectContaining({ id: 'rA', playable: true })]);
+      expect(patch.timeline).toEqual(
+        expect.objectContaining({
+          1: expect.arrayContaining([expect.objectContaining({ id: 't1' })]),
         }),
-      }),
-    );
+      );
+    }
   });
 
   it('R1b: A -> B -> A before B\'s own getBookState resolves — A still re-hydrates revisions', async () => {
