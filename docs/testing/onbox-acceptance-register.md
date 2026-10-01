@@ -577,9 +577,10 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > `stop:prod` async-shutdown grace period the same PR's review pass 2 found
 > and fixed (no issue of its own — found and fixed in the same round).
 > **A111** is the real-installed-release-zip row [#3406](https://github.com/dudarenok-maker/Castwright/issues/3406)
-> owes: the manifest omission that left Windows sleep prevention inert and
-> `stop:prod` crashing on a real zip install, closed by the same PR but
-> unprovable without a packaged release directory this box doesn't have.
+> owes: the manifest omission that left Windows sleep prevention inert on
+> the released zip (and would have crashed `stop:prod` on the next one), closed
+> by the same PR but unprovable without a packaged release directory this box
+> doesn't have.
 > 50 → 53 owed, Group A 32 → 33, Group E 8 → 10. `next-id` bumped E108 →
 > E110 and A111 → A112 in the same change.
 >
@@ -5452,9 +5453,10 @@ already-published v1.14.0 zip shipped `server/src/system/prevent-sleep.ts`
 spawning a `scripts/lib/prevent-sleep.ps1` that was never in the box, so
 Windows sleep prevention was silently inert during every render on that zip;
 `stop-app.mjs`'s `./lib/sidecar-sweep-port.mjs` import and `stop-app.ps1`'s
-two `.psm1` imports were in the same state, so `npm run stop:prod` crashed
-outright on a zip install rather than stopping anything. PR #3404 fixes all
-of this (all six now-identified stray relative imports ship, plus the new
+two `.psm1` imports were in the same state on **unreleased `main`** (v1.14.0's
+own `stop-app.mjs` imports nothing from `scripts/lib/`, so no released zip's
+`stop:prod` crashed — the crash was one release away). PR #3404 fixes all
+of this (all seven now-identified stray relative imports ship, plus the new
 `scripts/lib/pid-alive.mjs` this same PR adds), and adds a static
 `scripts/tests/release-manifest.test.mjs` guard so a future hoisted helper
 can't repeat it silently — but that guard only proves every import
@@ -6531,8 +6533,8 @@ until this row runs.
 
 **What to observe, concretely**, on a Windows dev box:
 
-- Start a real battery that will not exit on its own (e.g. `npm run
-  test:server`), then kill its owning terminal so the whole subtree is
+- Start a real, long-running battery (e.g. `npm run test:server`), then kill
+  its owning terminal so the whole subtree is
   orphaned but stays busy or idle past the reaper's thresholds. Run a real
   `git push` and confirm its pre-push census reaps the orphan, printing
   `reap-stale-batteries: KILLED stale battery pid=… :: <command line>` on
@@ -6541,11 +6543,14 @@ until this row runs.
 - If `taskkill`'s own exit code is visible (e.g. by adding a temporary log
   line), record it — the fixed code path no longer depends on it being zero,
   but the real-world value is still useful corroboration.
-- **Negative control:** construct a tree whose root's immediate parent is
-  already dead *before* the kill runs but whose child subtree survives (the
-  E104-recorded race `taskkill /T` cannot see), and confirm this case still
-  lands in `KILL FAILED` — the fix must not paper over a genuinely-incomplete
-  kill by declaring success whenever *any* prior exit happened.
+- **Negative control:** construct a tree where the **root itself** has
+  exited between the census and the kill (so `taskkill` cannot find it and
+  touches nothing) while a child it spawned is still alive, and confirm this
+  case lands in `KILL FAILED` — the fix must not paper over a
+  genuinely-incomplete kill by declaring success whenever the root reads gone.
+  (A root whose *parent* is dead is NOT this case: that is the ordinary
+  orphan the reaper targets, and `taskkill /T` kills it, so `KILLED` is the
+  correct outcome there.)
 
 *Needs:* a Windows dev box, no GPU. *Cost:* ~10–15 minutes (mostly waiting out
 the reaper's staleness thresholds).
@@ -6556,8 +6561,8 @@ note (above) for the exact bug this closes.
 
 Review pass 2 of PR #3404 found `npm run stop:prod` reported EVERY successful
 stop as a failure on POSIX: the liveness re-check ran the instant after
-`SIGTERM` was sent, but the server's own shutdown is asynchronous (drains,
-reaps the sidecar, then exits), so a stop that was actually succeeding always
+`SIGTERM` was sent, but the server's own shutdown is asynchronous (it reaps
+the sidecar, then exits), so a stop that was actually succeeding always
 read as still-running and printed `[WARN] … could not be stopped`. `killTree`
 now polls liveness for a bounded grace period (reusing
 `restart-after-upgrade.mjs`'s `waitForExit`) before judging a kill failed, on
@@ -6576,11 +6581,13 @@ via `npm run start:prod` (or `start-app-prod.mjs` directly):
   stopping the server without the sidecar reaping in turn is a different,
   narrower failure than the one this row targets, but worth ruling out in the
   same run.
-- If practical, repeat once with the server intentionally slowed at shutdown
-  (e.g. a mid-drain chapter) to confirm the grace period is long enough to
-  cover a real, not just instantaneous, shutdown — and that a genuinely wedged
-  process (one that never exits) still eventually reports failure rather than
-  waiting forever.
+- Repeat once with a genuinely wedged server: `kill -STOP <pid>` the server
+  process (it can no longer run its shutdown handler), then `npm run
+  stop:prod`, and confirm it eventually reports `[WARN] … could not be
+  stopped` after the grace period rather than waiting forever (`kill -CONT`
+  and stop it for real afterward). The server has no shutdown drain step to
+  slow down (`server/src/index.ts`'s shutdown sequence reaps the sidecar and
+  exits), so stopping the process is the way to make shutdown not finish.
 
 *Needs:* a Mac or Linux dev box, no GPU, the app running via `start:prod`.
 *Cost:* ~10 minutes.
