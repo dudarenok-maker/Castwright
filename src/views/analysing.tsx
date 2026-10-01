@@ -1062,9 +1062,16 @@ export function AnalysingView({
            chapters still need retry (Phase 1 gate). api.ts throws
            "no result" in that case — not a real failure, drop the
            row if this chapter itself succeeded. */
-        if (!retryReFailed) {
+        /* #3435 — a Pause or a stage1_shrink_refused during the Retry ends it
+           before the chapter's Phase 1 finished. The server keeps the chapter's
+           failure record and sends chapter-resolved only once it completes, so a
+           chapter whose row is still here was NOT resolved: keep it (a resolved
+           one was already dropped by onChapterResolved above). */
+        const retryUnfinished =
+          err instanceof AnalysisError && (err.code === 'aborted' || err.code === 'stage1_shrink_refused');
+        if (!retryReFailed && !retryUnfinished) {
           setFailedChapters((prev) => prev.filter((f) => f.chapterId !== chapterId));
-        } else {
+        } else if (retryReFailed) {
           console.warn('[analysing] retry failed:', err);
         }
         setConn('idle');

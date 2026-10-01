@@ -7303,9 +7303,19 @@ export async function runSubsetAnalyzerJob(
             }),
           () => null,
         );
+        /* #3435 — a chapter that already HAD a cast and is flagged failed was
+           flagged for its attribution (Phase 1), not its cast. Phase 0 re-running
+           its cast does not resolve that, so on a finished book (stage1Existed:
+           Phase 1 runs below) its record is cleared — and chapter-resolved sent —
+           only once Phase 1 completes for it. Clearing here lost the record on
+           every exit before then (Pause, stage1_shrink_refused, a coverage-gate
+           skip). A cast-phase failure (no cast on file) is fixed by this very
+           step, and when no Phase 1 follows in this run (!stage1Existed) there is
+           nothing to defer to, so both still clear here. */
+        const deferToPhase1 = stage1Existed && !!chapterCast[ch.id]?.length;
         chapterCast[ch.id] = result.characters;
         cache.chapterCast = chapterCast;
-        const wasFailed = clearFailedChapterId(cache, ch.id);
+        const wasFailed = deferToPhase1 ? false : clearFailedChapterId(cache, ch.id);
         await saveAnalysisCache(manuscriptId, cache);
         /* Emit chapter-resolved so the analysing view's Retry row clears
            in real time. The view used to rely on the next book-state
@@ -7639,12 +7649,14 @@ export async function runSubsetAnalyzerJob(
            un-marked throw always has. noteReasoningOverflow is a no-op (and
            the chapter is not recorded) for any other error. */
         noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title });
-        /* #3435 — Phase 0 already cleared this chapter's failure record and sent
-           chapter-resolved, so without re-recording it here a Phase-1 failure
-           reads as a clean Retry and the record is gone on disk. Mirror the
+        /* #3435 — a chapter with NO prior record (a Re-analyse or an Include)
+           would otherwise read as a clean run: nothing records its Phase-1
+           failure and the terminal handler sends only `error`. Mirror the
            Phase-0 failure path (record, save, chapter-failed) BEFORE the
            rethrow; the terminal handler still ends the run as before. An
-           abort is the user pausing, not a failure of the chapter. */
+           abort is the user pausing, not a failure of the chapter — and any
+           PRIOR record on a Retried chapter is still on disk (Phase 0 defers
+           clearing it, see deferToPhase1). */
         if (!(err instanceof AnalysisAbortedError)) {
           const classified = classifyAnalysisFailure(err, phase1AnalyzerLabel);
           recordFailedChapter(cache, ch.id, classified);
@@ -7659,6 +7671,11 @@ export async function runSubsetAnalyzerJob(
         }
         throw err;
       }
+      /* #3435 — Phase 1 completed for this chapter: the record Phase 0 deferred
+         clearing (deferToPhase1) goes now, ahead of the coverage re-flag below
+         so a still-collapsed chapter reads resolved-then-failed, as before. The
+         persist below saves it. */
+      if (clearFailedChapterId(cache, ch.id)) send({ kind: 'chapter-resolved', chapterId: ch.id });
       if (subsetChunkCount > 1) {
         log(
           1,

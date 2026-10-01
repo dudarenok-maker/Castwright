@@ -1831,10 +1831,11 @@ describe('AnalysingView — failed-chapter retry', () => {
     });
 
     /* #3435 — a Retry whose Phase 1 fails with a non-overflow analyzer error.
-       The server now sends chapter-resolved (Phase 0 cleared it), then
-       chapter-failed (the Phase-1 catch re-records it), then the terminal
-       `error`. The row must stay with its message, not be dropped as the
-       benign "ended without a result" case. */
+       The server sends chapter-failed (the Phase-1 catch re-records it; the
+       chapter's old record was never cleared), then the terminal `error`. The
+       row must stay with its message, not be dropped as the benign "ended
+       without a result" case. (A chapter that had NO cast on file is cleared in
+       Phase 0, so chapter-resolved may still precede chapter-failed.) */
     it('a Phase-1 failure on Retry (chapter-resolved, chapter-failed, error analyzer-timeout) keeps the row with its message', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       await pausedMainRetry();
@@ -1856,6 +1857,47 @@ describe('AnalysingView — failed-chapter retry', () => {
       });
       expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
       expect(screen.getByText(message)).toBeInTheDocument();
+    });
+
+    /* #3435 — a Pause (server `error` code `aborted`) during the Retry's Phase 1:
+       the server keeps the chapter's record and sends NO chapter-resolved, so
+       the row must stay. The generic "ended without a result" drop below would
+       otherwise remove a chapter that was never resolved. */
+    it('a Pause during a Retry (error aborted, no chapter-resolved) keeps the row', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await pausedMainRetry();
+      await act(async () => {
+        rejectSubset?.(new AnalysisError('Analysis aborted (paused or displaced).', 'aborted'));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+    });
+
+    it('stage1_shrink_refused on a Retry that never resolved the chapter keeps the row', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await pausedMainRetry();
+      analyseManuscriptRejection = new AnalysisError(
+        'Cast finalisation would drop from 9 to 4 characters.',
+        'stage1_shrink_refused',
+        undefined,
+        9,
+        4,
+      );
+      await act(async () => {
+        rejectSubset?.(
+          new AnalysisError(
+            'Cast finalisation would drop from 9 to 4 characters. Confirm via allowStage1Shrink.',
+            'stage1_shrink_refused',
+            undefined,
+            9,
+            4,
+          ),
+        );
+      });
+      expect(await screen.findByTestId('stage1-shrink-refused-banner')).toBeInTheDocument();
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
     });
 
     /* cast_incomplete is the subset route's DESIGNED pause-and-retry frame: the

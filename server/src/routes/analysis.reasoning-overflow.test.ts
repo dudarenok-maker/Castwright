@@ -884,11 +884,12 @@ describe('nonStoryOverflowWarningMessage — advice follows the fixes list (#308
 });
 
 /* #3435 — a Retry (subset route) whose Phase 1 (attribution) fails. Phase 0
-   clears the chapter's failure record and sends chapter-resolved BEFORE
-   attribution runs, so a Phase-1 failure used to leave the chapter looking
-   retried-clean: nothing re-recorded it and the terminal handler sent only
-   `error`. The Phase-1 catch now re-records it and sends chapter-failed, the
-   same way the route's Phase-0 failure path does. */
+   used to clear the chapter's failure record and send chapter-resolved BEFORE
+   attribution ran, so a Phase-1 failure left the chapter looking retried-clean:
+   nothing re-recorded it and the terminal handler sent only `error`. The
+   record is now kept until Phase 1 completes, and the Phase-1 catch records it
+   (for a chapter with no prior record) and sends chapter-failed, the same way
+   the route's Phase-0 failure path does. */
 describe('a Retry whose Phase 1 fails keeps its failure on record and reports it (#3435)', () => {
   /* The first dynamic import of ./analysis.js costs ~14 s cold (it pulls the whole
      analyzer/TTS graph). Left inside the first test's 30 s budget it times out
@@ -909,6 +910,8 @@ describe('a Retry whose Phase 1 fails keeps its failure on record and reports it
     const { runSubsetAnalyzerJob } = await import('./analysis.js');
     if (seedFailed) {
       const cache = await loadAnalysisCache(seed.manuscriptId);
+      /* An attribution-phase failure: the chapter already has its cast. */
+      cache.chapterCast = { 1: [novaCharacter()] };
       cache.failedChapterIds = [1];
       cache.failedChapterErrors = {
         '1': { code: 'attribution-collapse', message: 'seeded', remediation: 'seeded' },
@@ -946,13 +949,13 @@ describe('a Retry whose Phase 1 fails keeps its failure on record and reports it
     expect(r.failedChapterIds).toEqual([]);
   }, 30_000);
 
-  it('a Phase-1 timeout sends chapter-resolved then chapter-failed, and the chapter stays in failedChapterIds', async () => {
+  it('a Phase-1 timeout sends chapter-failed (no chapter-resolved), and the chapter stays in failedChapterIds', async () => {
     const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
     const { classifyAnalysisFailure } = await import('./failure-taxonomy.js');
     const err = new AnalyzerTimeoutError('gemini', MODEL, 90_000, 'thinking-idle');
     const r = await runRetry('p1-timeout', () => Promise.reject(err), true);
     const kinds = r.events.map((e) => e.kind).filter((k) => ['chapter-resolved', 'chapter-failed', 'error'].includes(k));
-    expect(kinds).toEqual(['chapter-resolved', 'chapter-failed', 'error']);
+    expect(kinds).toEqual(['chapter-failed', 'error']);
     const classified = classifyAnalysisFailure(err, 'gemini');
     const failed = r.events.find((e) => e.kind === 'chapter-failed')!;
     expect(failed).toMatchObject({ chapterId: 1, code: classified.code, message: expect.stringContaining('thinking window') });
@@ -1020,6 +1023,7 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
     label: string,
     seedFailed: Record<number, string>,
     steps: Step[],
+    opts: { prevStage1Size?: number; emptyCast?: number[] } = {},
   ): Promise<CaseResult> {
     const seed = await seedBook(label, [1, 2], { fullCache: true });
     const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
@@ -1027,6 +1031,19 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
     const { runSubsetAnalyzerJob } = await import('./analysis.js');
     const cache = await loadAnalysisCache(seed.manuscriptId);
     cache.chapterCast = { 1: [novaCharacter()], 2: [novaCharacter()] };
+    for (const id of opts.emptyCast ?? []) cache.chapterCast[id] = [];
+    if (opts.prevStage1Size) {
+      /* A larger roster on disk than Phase 0 will rebuild (nova only) trips the
+         stage-1 shrink guard once it is 3+ and the rebuild is under half. */
+      cache.stage1 = {
+        characters: Array.from({ length: opts.prevStage1Size }, (_, i) => ({
+          ...novaCharacter(),
+          id: `extra-${i}`,
+          name: `Extra ${i}`,
+        })),
+        chapters: [1, 2].map((id) => ({ id, title: CHAPTER_TITLES[id] })),
+      };
+    }
     cache.chapters = {
       1: [{ id: 101, chapterId: 1, characterId: COLLAPSED_ID, confidence: 0.9, text: BODIES[1] }],
       2: [{ id: 201, chapterId: 2, characterId: 'nova', confidence: 0.9, text: BODIES[2] }],
@@ -1108,5 +1125,65 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
     expect(r.chapters[1][0].characterId).toBe('nova');
     expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(true);
     expect(r.failedChapterIds).toEqual([2]);
+  }, 60_000);
+
+  it('P1: pausing during a Retry\'s Phase 1 keeps the chapter\'s prior failure record and its collapsed sentences', async () => {
+    const { AnalysisAbortedError } = await import('../analyzer/errors.js');
+    const r = await runCase('p1-abort', { 1: 'attribution-collapse' }, [
+      { toRun: [1], runStage2Chapter: () => Promise.reject(new AnalysisAbortedError('paused')) },
+    ]);
+    const { events } = r.steps[0];
+    expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['aborted']);
+    /* The view drops its row on chapter-resolved, so none may be sent for a
+       chapter whose Phase 1 never ran. */
+    expect(events.some((e) => e.kind === 'chapter-resolved')).toBe(false);
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.failedChapterErrors['1'].code).toBe('attribution-collapse');
+    expect(r.chapters[1][0].characterId).toBe(COLLAPSED_ID);
+  }, 60_000);
+
+  it('a Retry that ends in stage1_shrink_refused keeps the chapter\'s prior failure record', async () => {
+    const calls: number[] = [];
+    const r = await runCase(
+      'p1-shrink',
+      { 1: 'attribution-collapse' },
+      [
+        {
+          toRun: [1],
+          runStage2Chapter: async (_m, id) => {
+            calls.push(id);
+            return stage2For(id);
+          },
+        },
+      ],
+      { prevStage1Size: 6 },
+    );
+    const { events } = r.steps[0];
+    expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['stage1_shrink_refused']);
+    expect(calls).toEqual([]);
+    expect(events.some((e) => e.kind === 'chapter-resolved')).toBe(false);
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.chapters[1][0].characterId).toBe(COLLAPSED_ID);
+  }, 60_000);
+
+  it('control: a Retry that completes Phase 1 clears the record and sends chapter-resolved once', async () => {
+    const r = await runCase('p1-clean', { 1: 'attribution-collapse' }, [
+      { toRun: [1], runStage2Chapter: async (_m, id) => stage2For(id) },
+    ]);
+    const { events } = r.steps[0];
+    expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+    expect(events.some((e) => e.kind === 'result')).toBe(true);
+    expect(r.failedChapterIds).toEqual([]);
+    expect(r.chapters[1][0].characterId).toBe('nova');
+  }, 60_000);
+
+  it('a cast-phase failure (no cast on file) is still cleared and announced when Phase 0 fixes it, even with stage1 on disk', async () => {
+    const r = await runCase(
+      'p1-castfix',
+      { 1: 'analyzer-timeout' },
+      [{ toRun: [1], runStage2Chapter: () => Promise.reject(new Error('Phase 1 fails after Phase 0 fixed the cast')) }],
+      { emptyCast: [1] },
+    );
+    expect(r.steps[0].events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
   }, 60_000);
 });
