@@ -1,6 +1,6 @@
 // Pairs with docs/features/archive/20-revisions-and-drift.md
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   revisionsSlice,
   revisionsActions,
@@ -635,6 +635,56 @@ describe('revisionsSlice — hydrateFromBookState', () => {
         }),
       );
       expect(s.pending).toEqual([expect.objectContaining({ id: 'r3', playable: true })]);
+    });
+
+    /* #3395 pass 5, minor a — the hydrate can land long after the click
+       (a slow or retried read), and Revision History shows the stamp. */
+    it('a replayed accept/reject keeps the time it was dispatched, not the replay time', () => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date('2026-10-01T10:00:00.000Z'));
+        let s = unhydratedB();
+        s = revisionsSlice.reducer(
+          s,
+          revisionsActions.acceptRevision({ revisionId: 'rA', selection: { 0: 'B' } }),
+        );
+        s = revisionsSlice.reducer(s, revisionsActions.rejectRevision('rB'));
+        vi.setSystemTime(new Date('2026-10-01T10:05:00.000Z'));
+        s = revisionsSlice.reducer(
+          s,
+          revisionsActions.hydrateFromBookState({
+            bookId: 'book-B',
+            pending: [rev('rA', { chapterId: 7 }), rev('rB', { chapterId: 8 })],
+            drift: [],
+          }),
+        );
+        expect(s.timeline[7]?.map((e) => e.timestamp)).toEqual(['2026-10-01T10:00:00.000Z']);
+        expect(s.timeline[8]?.map((e) => e.timestamp)).toEqual(['2026-10-01T10:00:00.000Z']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    /* #3395 pass 5, N1 — a record outlives a server-side wipe of its book
+       unless the client drops it when it mirrors that wipe. */
+    it('bookWiped drops only that book\'s recorded writes', () => {
+      let s = unhydratedB();
+      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 3 }));
+      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-C'));
+      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 4 }));
+      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged(null));
+      s = revisionsSlice.reducer(s, revisionsActions.bookWiped('book-B'));
+      expect(Object.keys(s.windowActions)).toEqual(['book-C']);
+      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-B'));
+      s = revisionsSlice.reducer(
+        s,
+        revisionsActions.hydrateFromBookState({
+          bookId: 'book-B',
+          pending: [rev('r3', { chapterId: 3, playable: false })],
+          drift: [],
+        }),
+      );
+      expect(s.pending).toEqual([expect.objectContaining({ id: 'r3', playable: false })]);
     });
   });
 

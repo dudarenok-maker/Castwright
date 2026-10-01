@@ -1172,6 +1172,99 @@ describe('Layout — revisions persist only after the book is hydrated (#3395 pa
       'accepted',
     ]);
   });
+
+  /* #3395 pass 5, N1 — the reviewer's repro. A write recorded for book B
+     (left before its read landed) used to outlive a re-parse of B and be
+     replayed onto the wiped book when it was reopened. */
+  it('N1: a write recorded for a book left before its read landed is not replayed after that book is re-parsed', async () => {
+    const d = makeDisk({ 'book-A': { pending: [], drift: [] }, 'book-B': { pending: [], drift: [] } });
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    renderAt(store, '/books/book-A');
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-A'));
+
+    d.hold('book-B');
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-B', status: 'complete' }));
+    });
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('book-B'));
+    store.dispatch(
+      revisionsActions.enqueuePending({
+        id: 'splice-book-B-3-nora',
+        chapterId: 3,
+        characterId: 'nora',
+        playable: false,
+        segments: [],
+      }),
+    );
+    act(() => {
+      store.dispatch(uiActions.goHome());
+    });
+    expect(store.getState().revisions.windowActions['book-B']).toHaveLength(1);
+    d.release('book-B');
+
+    /* Re-parse B from the Library: the server wipes B's revisions, and the
+       route mirrors the wipe in redux — the same three actions
+       `onReparseBook` dispatches (routes/index.tsx; pinned by
+       routes/index.test.tsx). */
+    d.disk.set('book-B', { pending: [] });
+    store.dispatch(castSlice.actions.hydrateCharacters([]));
+    store.dispatch(manuscriptSlice.actions.reset());
+    store.dispatch(revisionsActions.bookWiped('book-B'));
+
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-B', status: 'complete' }));
+    });
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-B'));
+    expect(store.getState().revisions.pending).toEqual([]);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(revisionsPuts('book-B')).toEqual([]);
+    expect(d.disk.get('book-B')?.pending).toEqual([]);
+  });
+
+  /* #3395 pass 5, minor c — the failed-read notice belongs to the book whose
+     read failed; leaving that book must take the notice with it. */
+  it('the failed-read notice is dismissed when the user moves on to another book', async () => {
+    const d = makeDisk({ 'book-A': { pending: [], drift: [] }, 'book-B': { pending: [], drift: [] } });
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    renderAt(store, '/books/book-A');
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-A'));
+
+    act(() => {
+      store.dispatch(uiActions.goHome());
+    });
+    d.fail('book-A', 99);
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    });
+    const failedToast = () =>
+      store.getState().notifications.toasts.find((t) => t.dedupeKey === 'revisions-hydrate-failed');
+    await waitFor(() => expect(failedToast()).toBeDefined());
+
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-B', status: 'complete' }));
+    });
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-B'));
+    expect(failedToast()).toBeUndefined();
+  });
+
+  /* #3395 pass 5, minor c — on a first open the whole book failed to load,
+     not just its revisions, so the notice must not say only "revisions". */
+  it('a failed first open says the book failed to load, not just its revisions', async () => {
+    const d = makeDisk({ 'book-A': { pending: [], drift: [] } });
+    d.fail('book-A', 1);
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    renderAt(store, '/books/book-A');
+    const failedToast = () =>
+      store.getState().notifications.toasts.find((t) => t.dedupeKey === 'revisions-hydrate-failed');
+    await waitFor(() => expect(failedToast()).toBeDefined());
+    expect(failedToast()?.message).toMatch(/Couldn't load this book\b/);
+    expect(failedToast()?.message).not.toMatch(/revisions/i);
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-A'), { timeout: 4000 });
+    expect(failedToast()).toBeUndefined();
+  }, 10000);
 });
 
 /* Task 6 (fix round 1, finding 2) — the first-load library-hydrate dispatcher

@@ -44,6 +44,7 @@ const workspaceChangelogMock = vi.fn();
 const reparseBookMock = vi.fn();
 const getLibraryMock = vi.fn();
 const deleteBookMock = vi.fn();
+const replaceManuscriptMock = vi.fn();
 const putBookStateMock = vi.fn();
 const getBookStateMock = vi.fn();
 const getWorkspaceInfoMock = vi.fn();
@@ -74,6 +75,7 @@ vi.mock('../lib/api', () => ({
     reparseBook: (bookId: string) => reparseBookMock(bookId),
     getLibrary: () => getLibraryMock(),
     deleteBook: (bookId: string) => deleteBookMock(bookId),
+    replaceManuscript: (bookId: string, file: File) => replaceManuscriptMock(bookId, file),
     putBookState: (bookId: string, req: unknown) => putBookStateMock(bookId, req),
     getWorkspaceInfo: () => getWorkspaceInfoMock(),
     /* Local-model lifecycle stubs — AnalysingView polls /api/ollama/health
@@ -212,6 +214,7 @@ beforeEach(() => {
   reparseBookMock.mockReset();
   getLibraryMock.mockReset();
   deleteBookMock.mockReset();
+  replaceManuscriptMock.mockReset();
   putBookStateMock.mockReset();
   putBookStateMock.mockResolvedValue(undefined);
   getBookStateMock.mockReset();
@@ -575,6 +578,69 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     /* Outlast the 500 ms persist debounce. */
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(putBookStateMock).not.toHaveBeenCalled();
+  });
+
+  /* #3395 pass 5, N1 — a revisions write recorded for b1 before its disk
+     read landed (the user left first) is replayed on b1's next hydrate. The
+     server has wiped b1 by then, so each handler that mirrors a wipe must
+     drop the record too, or the stale take comes back on the wiped book. */
+  describe('drops the book\'s recorded pre-hydrate revisions writes', () => {
+    function seedRecordedWrites(store: ReturnType<typeof makeStore>) {
+      store.dispatch(revisionsSlice.actions.bookScopeChanged('b1'));
+      store.dispatch(revisionsSlice.actions.markRevisionPlayable({ chapterId: 3 }));
+      store.dispatch(revisionsSlice.actions.bookScopeChanged(null));
+      expect(store.getState().revisions.windowActions.b1).toHaveLength(1);
+    }
+
+    beforeEach(() => {
+      getLibraryMock.mockResolvedValue({ authors: [] });
+      getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+    });
+
+    it('after a re-parse', async () => {
+      const store = makePopulatedStore();
+      seedRecordedWrites(store);
+      reparseBookMock.mockResolvedValue({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
+      const confirm = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
+      fireEvent.click(confirm[confirm.length - 1]);
+      await waitFor(() => expect(store.getState().cast.characters).toHaveLength(0));
+      expect(store.getState().revisions.windowActions.b1).toBeUndefined();
+    });
+
+    it('after a manuscript replace', async () => {
+      const store = makePopulatedStore();
+      seedRecordedWrites(store);
+      replaceManuscriptMock.mockResolvedValue({ chapterCount: 1 });
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      fireEvent.change(screen.getByTestId('replace-manuscript-input'), {
+        target: { files: [new File(['# One'], 'new.md', { type: 'text/markdown' })] },
+      });
+      const confirm = screen.getAllByRole('button', { name: /Replace manuscript/i });
+      fireEvent.click(confirm[confirm.length - 1]);
+      await waitFor(() => expect(replaceManuscriptMock).toHaveBeenCalledWith('b1', expect.any(File)));
+      await waitFor(() => expect(store.getState().cast.characters).toHaveLength(0));
+      expect(store.getState().revisions.windowActions.b1).toBeUndefined();
+    });
+
+    it('after a delete', async () => {
+      const store = makePopulatedStore();
+      seedRecordedWrites(store);
+      deleteBookMock.mockResolvedValue(undefined);
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
+      const confirm = screen.getAllByRole('button', { name: /Delete book/i });
+      fireEvent.click(confirm[confirm.length - 1]);
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('b1'));
+      /* Let the handler's library refresh settle before asserting. */
+      await waitFor(() => expect(getLibraryMock).toHaveBeenCalled());
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(store.getState().revisions.windowActions.b1).toBeUndefined();
+    });
   });
 });
 

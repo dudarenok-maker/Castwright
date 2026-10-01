@@ -23,7 +23,7 @@ import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
 import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/book-meta-slice';
-import { selectDriftForBook } from '../store/revisions-slice';
+import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
 import { stageEqual } from '../lib/router';
@@ -143,6 +143,9 @@ export function BooksRoute() {
           showError(`Couldn't delete "${b.title}"`, (err as Error).message, 'Delete');
           return;
         }
+        /* The book is gone: drop any revisions writes recorded for it before
+           its read landed (#3395 pass 5, N1). */
+        dispatch(revisionsActions.bookWiped(b.bookId));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
         if (bookId === b.bookId) dispatch(uiActions.goHome());
@@ -177,9 +180,13 @@ export function BooksRoute() {
            pre-replace state. */
         /* hydrateCharacters, not the persisted setCharacters: the await above may
            have let the user open another book, and a persisted reset would PUT an
-           empty cast at it (#3376). Same for the re-parse reset below. */
+           empty cast at it (#3376). Same for the re-parse reset below.
+           `bookWiped` drops revisions writes recorded for this book before
+           its read landed, which would otherwise be replayed onto the wiped
+           book when it is reopened (#3395 pass 5, N1). */
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
+        dispatch(revisionsActions.bookWiped(b.bookId));
         if (bookId === b.bookId) dispatch(uiActions.goHome());
         const refreshed = await api.getLibrary().catch(() => null);
         if (refreshed) dispatch(libraryActions.hydrate(refreshed));
@@ -233,6 +240,7 @@ export function BooksRoute() {
            from disk. */
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
+        dispatch(revisionsActions.bookWiped(b.bookId));
         if (bookId === b.bookId) dispatch(uiActions.goHome());
 
         /* Kick off the library rescan in the background — it only feeds

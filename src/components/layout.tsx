@@ -821,6 +821,9 @@ export function Layout() {
        can't, and the writes made meanwhile are recorded and replayed when
        it does (see `windowActions`, revisions-slice.ts). */
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    /* The notice belongs to this book's read: dismissed on cleanup, so it
+       never carries over onto the next book (#3395 pass 5, minor c). */
+    let failureNoticeShown = false;
     const load = (attempt: number): void => {
       api
         .getBookState(bookId)
@@ -995,14 +998,18 @@ export function Layout() {
         }, (err) => {
           console.warn('[book-state] hydrate failed, retrying:', err?.message);
           if (cancelled) return;
+          /* Only the revisions are missing on the revisions-only path; on a
+             full load the whole book is (#3395 pass 5, minor c). */
           dispatch(
             notificationsActions.pushToast({
               kind: 'warn',
-              message:
-                "Couldn't load this book's revisions. Retrying — changes to takes will save once it loads.",
+              message: revisionsOnly
+                ? "Couldn't load this book's revisions. Retrying — changes to takes will save once it loads."
+                : "Couldn't load this book. Retrying — it will appear once it loads.",
               dedupeKey: REVISIONS_HYDRATE_FAILED_KEY,
             }),
           );
+          failureNoticeShown = true;
           retryTimer = setTimeout(
             () => load(attempt + 1),
             Math.min(REVISIONS_HYDRATE_RETRY_BASE_MS * 2 ** attempt, REVISIONS_HYDRATE_RETRY_MAX_MS),
@@ -1029,6 +1036,7 @@ export function Layout() {
     return () => {
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
+      if (failureNoticeShown) dispatch(notificationsActions.dismissByKey(REVISIONS_HYDRATE_FAILED_KEY));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookId, stageKind]);

@@ -61,15 +61,26 @@ export interface RevisionsState {
       once. One uniform mechanism for every write (enqueue, playable flip,
       dismiss, accept, reject, rollback), with no per-field merge. Keyed by
       book so a write recorded for a book the user leaves before its hydrate
-      lands is replayed when that book does hydrate, rather than dropped. */
+      lands is replayed when that book does hydrate, rather than dropped.
+      Dropped by `bookWiped` when the server wipes the book (#3395 pass 5,
+      N1). */
   windowActions: Record<string, RecordedRevisionsAction[]>;
 }
 
-/** A plain-object copy of a recorded revisions action (type + payload) —
-    serializable, so it can live on the slice. */
+/** A plain-object copy of a recorded revisions action (type + payload +
+    meta) — serializable, so it can live on the slice. `meta` carries the
+    dispatch time of an accept/reject, so a replay stamps the time the user
+    acted (#3395 pass 5, minor a). */
 export interface RecordedRevisionsAction {
   type: string;
   payload?: unknown;
+  meta?: unknown;
+}
+
+/** `meta` of the actions whose timeline entry is stamped with the time they
+    were dispatched (see `RecordedRevisionsAction`). */
+interface DispatchedAt {
+  at: string;
 }
 
 const initialState: RevisionsState = {
@@ -87,9 +98,12 @@ const initialState: RevisionsState = {
 /** Record a per-book write dispatched while the active book is not yet
     hydrated (see `windowActions`). A no-op once hydrated, and when no book is
     active (there is no disk snapshot it could be replayed onto). */
-function recordIfUnhydrated(s: RevisionsState, a: { type: string; payload?: unknown }): void {
+function recordIfUnhydrated(
+  s: RevisionsState,
+  a: { type: string; payload?: unknown; meta?: unknown },
+): void {
   if (s.bookId === null || s.hydratedFor === s.bookId) return;
-  (s.windowActions[s.bookId] ??= []).push({ type: a.type, payload: a.payload });
+  (s.windowActions[s.bookId] ??= []).push({ type: a.type, payload: a.payload, meta: a.meta });
 }
 
 /* Assigned once the slice exists, below: `hydrateFromBookState` replays the
@@ -137,47 +151,62 @@ export const revisionsSlice = createSlice({
         (plan 20 preserved the prior take as `.previous.mp3`) and any prior
         `reversible` entry on the same chapter is flipped to non-reversible
         — only the most-recent reversible accept/reject on a chapter rolls
-        back via plan 20's single-previous chain. */
-    acceptRevision: (
-      s,
-      a: PayloadAction<{ revisionId: string; selection: Record<number, 'A' | 'B'> }>,
-    ) => {
-      recordIfUnhydrated(s, a);
-      const rev = s.pending.find((r) => r.id === a.payload.revisionId);
-      s.pending = s.pending.filter((r) => r.id !== a.payload.revisionId);
-      s.acceptedSelections[a.payload.revisionId] = a.payload.selection;
-      if (rev) {
-        appendTimelineEntryHelper(s, {
-          id: a.payload.revisionId,
-          chapterId: rev.chapterId,
-          characterId: rev.characterId,
-          eventKind: 'accepted',
-          timestamp: nowIso(),
-          status: 'active',
-          reversible: true,
-        });
-      }
+        back via plan 20's single-previous chain. The entry is stamped in
+        `prepare`, so a pre-hydrate-window replay keeps the click's time. */
+    acceptRevision: {
+      reducer: (
+        s,
+        a: PayloadAction<
+          { revisionId: string; selection: Record<number, 'A' | 'B'> },
+          string,
+          DispatchedAt
+        >,
+      ) => {
+        recordIfUnhydrated(s, a);
+        const rev = s.pending.find((r) => r.id === a.payload.revisionId);
+        s.pending = s.pending.filter((r) => r.id !== a.payload.revisionId);
+        s.acceptedSelections[a.payload.revisionId] = a.payload.selection;
+        if (rev) {
+          appendTimelineEntryHelper(s, {
+            id: a.payload.revisionId,
+            chapterId: rev.chapterId,
+            characterId: rev.characterId,
+            eventKind: 'accepted',
+            timestamp: a.meta.at,
+            status: 'active',
+            reversible: true,
+          });
+        }
+      },
+      prepare: (payload: { revisionId: string; selection: Record<number, 'A' | 'B'> }) => ({
+        payload,
+        meta: { at: nowIso() },
+      }),
     },
     /** Per-item reject: drops one revision from pending. No selection
         captured — reject means "this revision is unwelcome, throw it away
         wholesale", not "I have feelings about specific segments." Like
         accept, a rejection is reversible via plan 20's restore (the
-        previous take, untouched by the regen, is still on disk). */
-    rejectRevision: (s, a: PayloadAction<string>) => {
-      recordIfUnhydrated(s, a);
-      const rev = s.pending.find((r) => r.id === a.payload);
-      s.pending = s.pending.filter((r) => r.id !== a.payload);
-      if (rev) {
-        appendTimelineEntryHelper(s, {
-          id: a.payload,
-          chapterId: rev.chapterId,
-          characterId: rev.characterId,
-          eventKind: 'rejected',
-          timestamp: nowIso(),
-          status: 'active',
-          reversible: true,
-        });
-      }
+        previous take, untouched by the regen, is still on disk). Stamped in
+        `prepare`, like accept. */
+    rejectRevision: {
+      reducer: (s, a: PayloadAction<string, string, DispatchedAt>) => {
+        recordIfUnhydrated(s, a);
+        const rev = s.pending.find((r) => r.id === a.payload);
+        s.pending = s.pending.filter((r) => r.id !== a.payload);
+        if (rev) {
+          appendTimelineEntryHelper(s, {
+            id: a.payload,
+            chapterId: rev.chapterId,
+            characterId: rev.characterId,
+            eventKind: 'rejected',
+            timestamp: a.meta.at,
+            status: 'active',
+            reversible: true,
+          });
+        }
+      },
+      prepare: (revisionId: string) => ({ payload: revisionId, meta: { at: nowIso() } }),
     },
     /** Plan 55 rollback. Flips the targeted entry's status to
         `rolled-back-from` and appends a new `rolled-back` entry marking the
@@ -227,6 +256,14 @@ export const revisionsSlice = createSlice({
       /* The new book's disk snapshot hasn't been read yet — belongs to
          `hydrateFromBookState` alone (#3395 pass 3, R1/R2). */
       s.hydratedFor = null;
+    },
+    /** #3395 pass 5, N1 — the server wiped this book (re-parse, manuscript
+        replace, delete), so writes recorded for it before its read landed
+        describe a book that no longer exists and must not be replayed onto
+        its next hydrate. Dispatched wherever the client mirrors that wipe
+        (routes/index.tsx). */
+    bookWiped: (s, a: PayloadAction<string>) => {
+      delete s.windowActions[a.payload];
     },
     dismissDrift: (s, a: PayloadAction<string>) => {
       recordIfUnhydrated(s, a);
