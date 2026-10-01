@@ -4868,9 +4868,12 @@ export async function runMainAnalyzerJob(
         await Promise.all(castWorkers);
         log(0, analyzerConcurrencyPeakLine('Cast detection', castTaskIndices.length));
 
-        /* #3084 P20 — In pipelined mode, Phase 1 escalation can overflow while Phase 0a
-           is still running. If the overflow occurred after the last Phase 0a dispatch,
-           it must be caught here before Phase 0b runs. */
+        /* #3084 P20 — stop new spend: skip Phase 0b. In pipelined mode Phase 1
+           escalation can record an overflow while a Phase-0 cast chapter is already
+           in flight, after the per-chapter dispatch check above has passed for every
+           chapter. The run still ends with the overflow code via Phase 1's own checks
+           either way; this check is what keeps Phase 0b (roster finalisation, the
+           stage-1 cache write, series reuse linking) from running after it. */
         throwIfReasoningOverflowed(job);
 
         /* Phase 1+ MUST NOT advance while any chapter is missing its cast —
@@ -5859,10 +5862,11 @@ export async function runMainAnalyzerJob(
     if (phase0PoolPromise) armsToJoin.push(phase0PoolPromise);
     await Promise.all(armsToJoin);
 
-    /* #3084 P20 — An escalation overflow that occurred after the last chapter
-       dispatch (e.g., while the last chapter's escalation was in flight after
-       the pool joined) was not caught here, leaving the job in SUCCESS state
-       despite reasoningOverflowed=true. Rethrow it now. */
+    /* #3084 P20 — the dispatch checks only fire when a chapter is about to start,
+       so an overflow recorded by the last chapter's own escalation (which runs
+       after that chapter's dispatch check) is never seen by them. Without this
+       check the job would end in success with reasoningOverflowed=true; rethrow
+       it now that both pools have joined. */
     throwIfReasoningOverflowed(job);
 
     /* Plan 88 follow-up — Phase 0 ended with failed cast chapters; emit

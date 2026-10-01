@@ -594,6 +594,74 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
     expect(run.job.controller.signal.aborted).toBe(false);
   }, 90_000);
 
+  /* #3084 P20 — the check after the Phase-0 pool joins. Here the overflow lands while the LAST
+     Phase-0 chapter (2) is still casting, so the per-chapter dispatch check (already passed for
+     chapter 2) cannot catch it. Without the tail check the run still ends with the overflow
+     code (via Phase 1's own checks), but Phase 0b runs anyway after chapter 2 finishes and
+     persists `cache.stage1`; with it, Phase 0b is skipped. */
+  it('pipelined main route: an overflow recorded while the last Phase-0 chapter casts skips Phase 0b (#3084 P20)', async () => {
+    const seed = await seedBook('pipelined-phase0b-skip', [1, 2]);
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    let openChapterTwoCast!: () => void;
+    const chapterTwoCastHeld = new Promise<void>((resolve) => {
+      openChapterTwoCast = resolve;
+    });
+    const failSafe = setTimeout(() => openChapterTwoCast(), 20_000);
+    let chapterTwoCastStarted!: () => void;
+    const chapterTwoCastStartedP = new Promise<void>((resolve) => {
+      chapterTwoCastStarted = resolve;
+    });
+    const phase0Analyzer = stubAnalyzer({
+      async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
+        if (chapterId === 2) {
+          chapterTwoCastStarted();
+          await chapterTwoCastHeld;
+        }
+        return { characters: [novaCharacter()] };
+      },
+      runStage2Chapter: () => Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+    });
+    const escalate = vi.fn(async (_m: string, _chapterId: number, _w: number, _p: string, call: StageCall) => {
+      /* The overflow is recorded only once chapter 2's cast call is already in flight, i.e. after
+         the Phase-0 pool's last dispatch check has passed. */
+      await chapterTwoCastStartedP;
+      call.onReasoningOverflow?.(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100));
+      openChapterTwoCast();
+      return null;
+    });
+    const g = globalThis as Record<string, unknown>;
+    g.__overflow_spend_test_phase1_selection = buildSelection(stubAnalyzer({ runAttributionEscalation: escalate }), MODEL);
+    g.__overflow_spend_test_pipelined = true;
+    const originalMinLag = process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS;
+    process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '0';
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    const events = captureEvents(seed.job);
+    const { runMainAnalyzerJob } = await import('./analysis.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    try {
+      await runMainAnalyzerJob(seed.job, getManuscript(seed.manuscriptId)! as never, buildSelection(phase0Analyzer, 'phase0-model'), {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      /* The run can end on Phase 1's own check while Phase 0 chapter 2 is still finishing; give
+         a Phase 0b the tail check failed to stop time to land. */
+      await new Promise((r) => setTimeout(r, 500));
+      expect(escalate).toHaveBeenCalledTimes(1);
+      expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
+      expect((await loadAnalysisCache(seed.manuscriptId)).stage1).toBeUndefined();
+    } finally {
+      clearTimeout(failSafe);
+      openChapterTwoCast();
+      process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
+      restoreEnv('ANALYZER_PHASE1_MIN_LAG_CHAPTERS', originalMinLag);
+      delete g.__overflow_spend_test_pipelined;
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }, 60_000);
+
   /* #3084 P20 — Tail-call gap detection: escalation overflows that occur after
      the last chapter dispatch (or after all in-flight dispatches join) were not
      checked, so the job ended as SUCCESS even though reasoningOverflowed was true.
