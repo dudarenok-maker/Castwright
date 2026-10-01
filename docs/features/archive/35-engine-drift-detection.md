@@ -318,7 +318,9 @@ a. **Drift event ids include `bookId`** (`drift:<bookId>:<chapterId>:<characterI
 b. **`applyPoll({bookId, ...response})` only replaces that book's
    events** — events from other books survive the poll. Same for
    `hydrateFromBookState({bookId, ...})`. Stamps `bookId` defensively
-   onto incoming events that don't carry one (older deploys).
+   onto incoming events that don't carry one (older deploys). (Superseded by
+   #3376: `applyPoll` no longer touches `pending` at all — `pending` is
+   client-owned, seeded only on book open.)
 
 c. **`persistence-middleware` filters drift by active bookId before
    writing each book's revisions.json.** The flat slice list spans books,

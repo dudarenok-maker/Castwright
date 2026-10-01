@@ -446,8 +446,39 @@ Describe 'stop-app.ps1 call site (#2632 N34)' {
     # pinning those identifiers is what reddened on a plain rename in pass 7.
     It '$ports is assigned from Get-PortsToSweep, not a hardcoded array' {
         $source = Get-Content (Join-Path $PSScriptRoot "..\stop-app.ps1") -Raw
-        $source | Should -Match '\$ports\s*=\s*Get-PortsToSweep\b'
+        $source | Should -Match '\$ports\s*=\s*@\(\s*Get-PortsToSweep\b'
         $source | Should -Not -Match '\$ports\s*=\s*@\([^)]*9000[^)]*\)'
+    }
+
+    # PR #3404 pass 4, yellow C — through the REAL assignment: with no port
+    # resolvable, Get-PortsToSweep returns @() which unrolls to $null unless
+    # the call site wraps it in @(...), and the Mandatory -Ports binding of
+    # Get-StopSummaryMessage then threw instead of printing the OK line. A
+    # scratch checkout (no server\.env, no .env.local, empty run dir) is the
+    # nothing-to-stop shape; port-bearing env vars are cleared so the host's
+    # own config cannot resolve one.
+    It 'prints the no-ports-resolved OK message (no binding error) when nothing resolves' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ("stop-app-noports-" + [guid]::NewGuid().ToString('N'))
+        $savedEnv = @{}
+        try {
+            New-Item -ItemType Directory -Path (Join-Path $root 'scripts') -Force | Out-Null
+            Copy-Item (Join-Path $PSScriptRoot '..\stop-app.ps1') (Join-Path $root 'scripts')
+            Copy-Item (Join-Path $PSScriptRoot '..\lib') (Join-Path $root 'scripts\lib') -Recurse
+            $runDir = Join-Path $root 'run'
+            New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+            foreach ($k in 'PORT', 'VITE_PORT', 'LOCAL_TTS_PORT', 'APP_RUN_DIR') {
+                $savedEnv[$k] = [Environment]::GetEnvironmentVariable($k)
+                [Environment]::SetEnvironmentVariable($k, $null)
+            }
+            [Environment]::SetEnvironmentVariable('APP_RUN_DIR', $runDir)
+            $shell = (Get-Process -Id $PID).Path
+            $out = & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\stop-app.ps1') 2>&1 | Out-String
+            $out | Should -Match 'nothing to stop \(no ports resolved'
+            $out | Should -Not -Match 'Cannot bind'
+        } finally {
+            foreach ($k in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($k, $savedEnv[$k]) }
+            Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+        }
     }
 
     # #2632 N39 — the base-port half of the same hazard: stop-app.ps1 used to

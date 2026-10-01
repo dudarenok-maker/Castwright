@@ -7,6 +7,10 @@
      - Tone-metric delta thresholds: < 25 → nothing; 25-39 → moderate; ≥ 40 → severe.
      - Dismissed-id filter: an id present in revisions.json#dismissed never
        surfaces in the response, even when the underlying signal still holds.
+   - Persisted pending echo (#3376 part 1): revisions.json#pending is
+     surfaced verbatim by both the single-book route and the bulk
+     GET /api/revisions; a non-array value falls back to [].
+
 
    Workspace tempdir + supertest pattern matches book-state.reparse.test.ts. */
 
@@ -61,7 +65,7 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-revisions-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ revisionsRouter }, { makeBookId }] = await Promise.all([
+  const [{ revisionsRouter, revisionsBulkRouter }, { makeBookId }] = await Promise.all([
     import('./revisions.js'),
     import('../workspace/paths.js'),
   ]);
@@ -76,6 +80,7 @@ beforeAll(async () => {
   app = express();
   app.use(express.json());
   app.use('/api/books', revisionsRouter);
+  app.use('/api', revisionsBulkRouter);
 });
 
 afterAll(() => {
@@ -529,6 +534,54 @@ describe('GET /api/books/:bookId/revisions — dismissed filter', () => {
     expect(factors).toEqual(['gender']);
   });
 });
+describe('GET /api/books/:bookId/revisions — persisted pending echo (#3376 part 1)', () => {
+  /* The regen flow persists a `pending` array in revisions.json. Both the
+     single-book route and the bulk route must surface it verbatim instead of
+     the old hardcoded []. Mirrors the dismissed guard: a non-array value
+     falls back to []. */
+  function seedPending(pending: unknown): void {
+    writeFileSync(join(bookDir, '.audiobook', 'revisions.json'), JSON.stringify({ pending }));
+  }
+
+  it('echoes the persisted pending array verbatim, alongside drift', async () => {
+    seed({
+      snapshots: { eliza: { voiceId: 'old' } },
+      cast: [{ id: 'eliza', voiceId: 'new' }],
+    });
+    const pending = [{ id: 'rev-1', chapterId: 1, characterId: 'x', segments: [] }];
+    seedPending(pending);
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.status).toBe(200);
+    expect(res.body.pending).toEqual(pending);
+    const factors = (res.body.drift as DriftEventOut[]).map((d) => d.factor);
+    expect(factors).toEqual(['voice']);
+  });
+
+  it('falls back to [] when persisted pending is not an array', async () => {
+    seed({
+      snapshots: { eliza: { voiceId: 'v1' } },
+      cast: [{ id: 'eliza', voiceId: 'v1' }],
+    });
+    seedPending('garbage');
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.status).toBe(200);
+    expect(res.body.pending).toEqual([]);
+    expect(res.body.drift).toEqual([]);
+  });
+
+  it('bulk GET /api/revisions echoes persisted pending per book', async () => {
+    seed({
+      snapshots: { eliza: { voiceId: 'old' } },
+      cast: [{ id: 'eliza', voiceId: 'new' }],
+    });
+    const pending = [{ id: 'rev-1', chapterId: 1, characterId: 'x', segments: [] }];
+    seedPending(pending);
+    const res = await request(app).get(`/api/revisions?bookIds=${bookId}`);
+    expect(res.status).toBe(200);
+    expect(res.body.byBookId[bookId].pending).toEqual(pending);
+  });
+});
+
 
 describe('GET .../revisions — engine + resolved-voice drift (plan 108 R5)', () => {
   it('fires both engine drift AND voice drift when a character moves to a new engine + designed voice', async () => {

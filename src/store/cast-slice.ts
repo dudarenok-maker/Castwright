@@ -123,7 +123,7 @@ export interface CastState {
    ../data/characters) used to live here so the demo had something to show,
    but that meant a real book's Cast view briefly displayed fixture
    characters between click and async hydration. Hydration via
-   `hydrateFromAnalysis` / `setCharacters` (from the layout's getBookState
+   `hydrateFromAnalysis` / `hydrateCharacters` (from the layout's getBookState
    handler) is the only legitimate source for a real book. */
 const initialState: CastState = {
   characters: [],
@@ -136,6 +136,13 @@ export const castSlice = createSlice({
   initialState,
   reducers: {
     setCharacters: (s, a: PayloadAction<Character[]>) => {
+      s.characters = a.payload;
+    },
+    /* Same state change as `setCharacters`, but a distinct action type the
+       persistence middleware does not persist — for seeding the roster FROM
+       disk (Layout's book-state hydrate), which must never echo cast.json
+       back to the server (#3395 pass 4). */
+    hydrateCharacters: (s, a: PayloadAction<Character[]>) => {
       s.characters = a.payload;
     },
     /* fe-16 — overwrite the per-character render fallback map from the

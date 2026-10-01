@@ -553,30 +553,47 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 32 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 10 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 12 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**53 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**56 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-27 (#3084 wave 2b), 50 → 53.** Rows **B102** (capacity
+> **Last change: 2026-09-27 (#3084 wave 2b), 53 → 56.** Rows **B102** (capacity
 > recalibration — the measurement owed before any capacity default changes),
-> **E108** (Gemini thinking-window timing on real chapters — a measurement
-> that gates nothing) and **E109** (a thinking Gemini model on a 20,000-
+> **E110** (Gemini thinking-window timing on real chapters — a measurement
+> that gates nothing) and **E111** (a thinking Gemini model on a 20,000-
 > character chapter at Auto output, and Gemma's empty-`MAX_TOKENS` split)
 > added from #3084 wave 2's run sheet
 > (`3084-openai-analyzer-onbox-acceptance.md` §1–§3). Group B `next-id`
 > marker bumped by one, Group E by two.
 
-> **Last change: 2026-09-25, A17/A32/A107/E103/E104 DISCHARGED and removed;
+> **Prior change: 2026-09-25, E108/E109/A111 ADDED** (#3403, #3406, PR
+> [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404)): three
+> rows this same PR owes. **E108** carries forward E104's own unproven
+> bullet 3 (the push-path `KILLED` print) against the fix for
+> [#3403](https://github.com/dudarenok-maker/Castwright/issues/3403) — a
+> `taskkill /T` nonzero exit no longer means the kill failed by itself, only
+> a re-checked whole-tree liveness probe does. **E109** is the POSIX
+> `stop:prod` async-shutdown grace period the same PR's review pass 2 found
+> and fixed (no issue of its own — found and fixed in the same round).
+> **A111** is the real-installed-release-zip row [#3406](https://github.com/dudarenok-maker/Castwright/issues/3406)
+> owes: the manifest omission that left Windows sleep prevention inert on
+> the released zip (and would have crashed `stop:prod` on the next one), closed
+> by the same PR but unprovable without a packaged release directory this box
+> doesn't have.
+> 50 → 53 owed, Group A 32 → 33, Group E 8 → 10. `next-id` bumped E108 →
+> E110 and A111 → A112 in the same change.
+>
+> **Prior change: 2026-09-25, A17/A32/A107/E103/E104 DISCHARGED and removed;
 > A20/A105 restored, narrowed (owner decision)** (#3294, PR
 > [#3402](https://github.com/dudarenok-maker/Castwright/pull/3402); the
 > on-box runs themselves happened under PR
@@ -1573,7 +1590,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A111 -->
+<!-- next-id: A112 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -2419,10 +2436,29 @@ measured 4.13 (below) and the ~1.2 target.
 
 ### A9 · Per-character re-record / splice (plan 176)
 
-Rendered book → a character's profile → Fix audio → **+3 dB gain** — confirm the
-promised A/B audition actually populates the Revisions panel (currently wired to
-a different, drift-detection-only mechanism; see below). *Merged* 2026-06-03,
-PR #500.
+Rendered book → a character's profile → **a multi-chapter Fix-audio batch that
+spans a 30s active-revisions poll tick** — confirm every chapter's A/B revision
+appears in the Status pill's Revisions panel and stays auditable/playable
+(nothing reverts to "No pending revisions" mid-batch), then reload the app and
+confirm the entries persist. Two more steps, added 2026-09-24 to pin `pending`'s
+per-book scoping (#3376): with a take pending on book A, open a book with no
+revisions history of its own — its Status pill must show no pending revisions,
+not book A's; and start a multi-chapter Fix-audio batch on book A, then open
+book B before the batch finishes — book B must show none of book A's takes.
+Leaving the book mid-batch — for a different book or for any non-book view
+(Library, Voices, Admin, Settings, Help, New book) — is a known gap (#3397,
+design owed): the batch's enqueue and playable-flip are skipped while no book,
+or a different book, is active, so a take that finishes while you're away
+comes back stuck "rendering" or without an A/B prompt. Record what was
+observed there rather than treating it as an A9 fail. One more step, added
+2026-09-24 (PR #3395 review pass 3, widened in pass 4) to pin the revisions
+slice's hydrate gating: with a take pending and at least one Revision History
+entry on a book, start a multi-chapter Fix-audio batch, then go to Library and
+back to the book while it is still running — the earlier pending take and
+Revision History are still there, and after the next chapter completes they're
+still on disk (reload); record separately what happened to the batch takes
+that finished while you were on the Library (the #3397 gap above). *Merged*
+2026-06-03, PR #500.
 
 > **2026-09-06 — on-box run, PARTIAL.** Loudness (+3 dB, Master Oduvan, CH 3):
 > `.previous.mp3`/`.previous.segments.json` written; his own lines measured
@@ -2457,6 +2493,65 @@ PR #500.
 > observations above exactly. **Bug filed: #3376** (`bug`, `area:srv`; one-line echo fix
 > + regression test proposed there). Disposition: no re-render on this row — A9 stays
 > FAIL until #3376 lands; the A/B-toggle re-check belongs to that fix's verification pass.
+
+> **2026-09-24 — pending-poll-clobber defect fixed (PR #3395, closes #3376).**
+> `pending` is seeded from the disk read on book open (`hydrateFromBookState`
+> off `GET /book-state`); the active book's 30s poll reducer no longer writes
+> `pending` at all, so a poll landing mid-debounce can't overwrite a take the
+> user just enqueued; and the revisions slice now tracks the `bookId` it
+> belongs to, resetting `pending` on any book change. A Fix-audio or regen
+> take now stays in the Status pill's Revisions section for audition/accept/
+> reject. (`GET /revisions` also echoes the persisted `pending` list now,
+> but that echo is harmless, not load-bearing — nothing reads it from a
+> poll.) Known remaining gap: a batch chapter that finishes while you're
+> away from the book — on a different book or on any non-book view, such as
+> the Library — leaves that take stuck "rendering," or without an A/B
+> prompt, when you return; it no longer lands in another book at all
+> (#3397, design owed). The on-box re-run above is **still owed** — the row
+> stays open.
+
+> **2026-09-24 — two more ways a pending take could go missing, fixed
+> (PR #3395 review pass 3).** The line above claiming `pending` is "seeded
+> exactly once per book" was itself wrong: a trip to a non-book view
+> (Library, Voices, Admin, Settings, Help, New book) resets the revisions
+> slice's `pending`/timeline, but manuscript/cast/chapters stay loaded across
+> that trip — so Layout's reload-skip check (keyed only on those three) never
+> re-read the book's revisions off disk, and the next chapter-complete flip
+> persisted an empty `revisions.json` over whatever was really there (R1).
+> Separately, a write racing a book's own hydrate — a chapter finishing (or a
+> Fix-audio batch chapter landing) while that book's `GET /book-state` was
+> still in flight right after opening it — could persist first and wipe out
+> the disk snapshot with an empty/partial patch (R2). Fixed with a new
+> `revisions.hydratedFor` field tracking whether THIS book's disk snapshot
+> has actually been read (distinct from `bookId`, which flips the instant
+> navigation targets a new book): persistence now refuses to write a
+> revisions patch until `hydratedFor` matches, Layout re-hydrates just the
+> revisions slice (not the whole book) whenever it's found stale, and a new
+> take enqueued in the pre-hydrate gap is merged into the disk snapshot once
+> it arrives. (Every other write in that gap — a playable flip, a dismiss, an
+> accept/reject — was still lost at this point; see the next note.) The
+> on-box re-run above is **still owed** — the row stays open.
+
+> **2026-10-01 — remaining hydrate-gate gaps closed (PR #3395 review pass
+> 4).** Every revisions write made while a book's disk read is still pending
+> (a new take, a playable flip, a dismiss, an accept/reject) is
+> now recorded and replayed on top of the disk snapshot when it lands, then
+> saved once. A failed `GET /book-state` on the way back into a book is
+> retried with backoff until it lands, with a notice meanwhile, instead of
+> leaving the book's revisions unsaveable for the rest of the visit. Leaving
+> a book sends its queued writes at once, and the re-read on return waits
+> for any still in flight, so an accept made just before a Library round trip
+> is not read back stale and erased. Not covered: the #3397 gap above. The
+> on-box re-run above is **still owed** — the row stays open.
+
+> **2026-10-01 — review pass 5 (PR #3395).** A write recorded for a book
+> left before its read landed is now dropped when that book is re-parsed,
+> replaced or deleted, instead of being replayed onto the wiped book; a
+> replayed accept/reject keeps the time it was clicked; and the failed-read
+> notice no longer lingers onto the next book. Known limit: if the save sent
+> on leaving a book *fails*, the re-read on return still runs and erases
+> that change, silently (#3421, decision owed). The on-box re-run above is
+> **still owed** — the row stays open.
 
 ### A10 · Structured failure taxonomy (plan 173, fs-19)
 
@@ -5437,6 +5532,53 @@ question — these criteria only measure `large-v3`. `docs/local-llm.md`'s
 tier table flags `medium`'s reservation as likely ~2x over-sized; that gap
 is not covered by this row and isn't tracked elsewhere.
 
+### A111 · A real installed release-zip exercises the restarter, `stop:prod`, and Windows sleep prevention ([Castwright#3406](https://github.com/dudarenok-maker/Castwright/issues/3406), PR [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404)) · **a real installed `castwright-vX.Y.Z.zip`, Windows for the sleep-prevention leg; no GPU strictly needed but a real render exercises it end-to-end**
+
+#3406 (filed in PR #3404's own review, pass 2) found `scripts/build-release-zip.mjs`'s
+MANIFEST omitted `scripts/lib/` files that shipped scripts import: the
+already-published v1.14.0 zip shipped `server/src/system/prevent-sleep.ts`
+spawning a `scripts/lib/prevent-sleep.ps1` that was never in the box, so
+Windows sleep prevention was silently inert during every render on that zip;
+`stop-app.mjs`'s `./lib/sidecar-sweep-port.mjs` import and `stop-app.ps1`'s
+two `.psm1` imports were in the same state on **unreleased `main`** (v1.14.0's
+own `stop-app.mjs` imports nothing from `scripts/lib/`, so no released zip's
+`stop:prod` crashed — the crash was one release away). PR #3404 fixes all
+of this (all seven now-identified stray relative imports ship, plus the new
+`scripts/lib/pid-alive.mjs` this same PR adds), and adds a static
+`scripts/tests/release-manifest.test.mjs` guard so a future hoisted helper
+can't repeat it silently — but that guard only proves every import
+*target* is present in the zip, never that the code importing it actually
+runs correctly once unpacked and installed for real. **No packaged release
+directory exists on this box** (confirmed exhaustively for A30, same
+conclusion applies here), so none of this has been driven end-to-end against
+a real install.
+
+**What to observe, concretely**, on a real installed `castwright-vX.Y.Z.zip`
+built from a commit at or after this PR:
+
+- **The in-app upgrade's restarter relaunches the app.** Trigger (or
+  simulate) the in-app upgrade path and confirm the detached restarter
+  (`server/src/upgrade/apply.ts`'s spawn of the release's own restart
+  script) actually brings the app back up — before this fix it crashed at
+  import with `ERR_MODULE_NOT_FOUND` and left the app down until relaunched
+  by hand.
+- **`npm run stop:prod` works.** From the installed release, run it and
+  confirm it prints `[STOP]`/succeeds rather than crashing on a missing
+  `scripts/lib/*` import, and that the server process is actually gone
+  afterward.
+- **Windows sleep prevention actually engages during a render.** Start a
+  real chapter render on this install and, while it is in flight, run
+  `powercfg /requests` and confirm it shows a live `SYSTEM` (or
+  display/execution, per `prevent-sleep.ps1`'s own request type) entry
+  attributable to the running process — not just that the script file is
+  present in the zip.
+
+*Needs:* a real installed release built from this change (its natural moment
+is the next release cut, per CLAUDE.md's release-notes-gate step), Windows
+for the sleep-prevention leg specifically; the other two legs are
+platform-general. *Criteria:* the three observations above; issue #3406 and
+PR #3404's manifest-guard section for the exact defect each leg closes.
+
 ## Group B — local Ollama analyzer only
 
 <!-- next-id: B103 -->
@@ -5946,7 +6088,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E110 -->
+<!-- next-id: E112 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -6466,7 +6608,100 @@ reaches production, and the feature would need the coordinator-set signal
 *Criteria:* the four observations above; `docs/ops/3263-transcript-signal-measurement.md`
 ("Which file this is about") for why each one matters.
 
-### E108 · Gemini thinking-window timing measured on real chapters ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 2) · **any machine with a Gemini key; no GPU**
+### E108 · ops-71 stale-battery reaper — the push-path `KILLED` print on a real orphaned Windows tree ([Castwright#3403](https://github.com/dudarenok-maker/Castwright/issues/3403), PR [#3404](https://github.com/dudarenok-maker/Castwright/pull/3404)) · **any Windows dev box; no GPU needed**
+
+Row E104 (discharged 2026-09-25, removed from the register) drove the reaper's
+report-only census, stalled-rate detection, and `npm run doctor -- --kill`
+paths against real process trees, but its bullet 3 — that a `git push` whose
+**pre-push** census is what reaps an orphan prints
+`reap-stale-batteries: KILLED stale battery pid=… :: <command line>` — was
+**not** observed as specified: two real pushes (pids 38780, 23792) printed
+`KILL FAILED` instead, even though the whole tree was gone seconds later,
+because `killTree()` took its verdict from `taskkill /T`'s own exit code,
+which goes nonzero when a tree member exits mid-walk. On the owner's
+2026-09-25 decision, that unproven bullet moves here rather than discharging
+with the rest of E104 — this row is what's left, now against the fix
+(#3404) rather than the bug.
+
+`killTree` no longer trusts the exit code alone: on a nonzero exit it
+re-checks whether the WHOLE recorded tree (root + every OS descendant
+`runCensus` resolved beforehand) reads gone, via the shared `pid-alive.mjs`
+probe, and only reports `KILL FAILED` if something in that tree is still
+alive. A zero exit is still trusted outright. Unit-tested against a
+synthetic census and a stub `taskkill`; unproven against a real `git push`
+until this row runs.
+
+**What to observe, concretely**, on a Windows dev box:
+
+- Start a real, long-running battery (e.g. `npm run test:server`), then kill
+  its owning terminal so the whole subtree is
+  orphaned but stays busy or idle past the reaper's thresholds. Run a real
+  `git push` and confirm its pre-push census reaps the orphan, printing
+  `reap-stale-batteries: KILLED stale battery pid=… :: <command line>` on
+  stderr — not `KILL FAILED` — and confirm via `Get-Process` that every PID
+  the census recorded for that root is actually gone afterward.
+- If `taskkill`'s own exit code is visible (e.g. by adding a temporary log
+  line), record it — the fixed code path no longer depends on it being zero,
+  but the real-world value is still useful corroboration.
+- **Negative control — NOT reproducible on a real push; do not try.** The
+  shape that must read `KILL FAILED` is a tree whose **root itself** exited
+  between the census and the kill (so `taskkill` cannot find it and touches
+  nothing) while a child it spawned is still alive. On a real push the census
+  and the kill run back to back inside one process, so that window is
+  milliseconds and cannot be hit on demand. It is covered in-PR instead by the
+  Windows-only real-process test in `scripts/tests/reap-stale-batteries.test.mjs`
+  ("review pass 1 (Windows-only, real processes): killTree returns false when a
+  real descendant outlives a real dead root"), which spawns real processes and
+  runs the real `taskkill /T`. What to observe on the box instead: across
+  every real push in this row, `KILL FAILED` appears **only** if `Get-Process`
+  still shows a recorded pid alive afterward — never when the whole tree is
+  gone. (A root whose *parent* is dead is NOT the negative shape: that is the
+  ordinary orphan the reaper targets, and `taskkill /T` kills it, so `KILLED`
+  is the correct outcome there.)
+
+*Needs:* a Windows dev box, no GPU. *Cost:* ~10–15 minutes (mostly waiting out
+the reaper's staleness thresholds).
+*Criteria:* the observations above; issue #3403's repro; E104's own discharge
+note (above) for the exact bug this closes.
+
+### E109 · `npm run stop:prod` on a real POSIX box — the async-shutdown grace period ([PR #3404](https://github.com/dudarenok-maker/Castwright/pull/3404)) · **a Mac or Linux dev box; no GPU needed**
+
+Review pass 2 of PR #3404 found `npm run stop:prod` reported EVERY successful
+stop as a failure on POSIX: the liveness re-check ran the instant after
+`SIGTERM` was sent, but the server's own shutdown is asynchronous (it reaps
+the sidecar, then exits), so a stop that was actually succeeding always
+read as still-running and printed `[WARN] … could not be stopped`. `killTree`
+now polls liveness for a bounded grace period (reusing
+`restart-after-upgrade.mjs`'s `waitForExit`) before judging a kill failed, on
+both platforms — proven in the unit suite via a stub process that exits after
+a short delay, never against a real server process exiting for real reasons
+on a real POSIX kernel, which this repo's own dev box (Windows) cannot
+exercise.
+
+**What to observe, concretely**, on a Mac or Linux box, with the app running
+via `npm run start:prod` (or `start-app-prod.mjs` directly):
+
+- Run `npm run stop:prod` and confirm it prints `[STOP]` (not `[WARN] …
+  could not be stopped`) within the grace period, and that the server process
+  is actually gone (`ps`/`pgrep`) once the command returns.
+- Confirm the TTS sidecar the server owns is also gone afterward — `stop:prod`
+  stopping the server without the sidecar reaping in turn is a different,
+  narrower failure than the one this row targets, but worth ruling out in the
+  same run.
+- Repeat once with a genuinely wedged server: `kill -STOP <pid>` the server
+  process (it can no longer run its shutdown handler), then `npm run
+  stop:prod`, and confirm it eventually reports `[WARN] … could not be
+  stopped` after the grace period rather than waiting forever (`kill -CONT`
+  and stop it for real afterward). The server has no shutdown drain step to
+  slow down (`server/src/index.ts`'s shutdown sequence reaps the sidecar and
+  exits), so stopping the process is the way to make shutdown not finish.
+
+*Needs:* a Mac or Linux dev box, no GPU, the app running via `start:prod`.
+*Cost:* ~10 minutes.
+*Criteria:* the observations above; PR #3404's stop-app section for the exact
+defect and fix.
+
+### E110 · Gemini thinking-window timing measured on real chapters ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 2) · **any machine with a Gemini key; no GPU**
 
 Wave 2 bounds the silence before a Gemini request's answer text instead of probing each model: a thinking model gets a 120 s thinking window (`GEMINI_THINKING_IDLE_TIMEOUT_MS`, at most 290 s) for the wait for the first chunk and each gap between thought parts, any other model today's 45 s, and each attempt logs `[gemini] stream-timing model=… firstChunkMs=… firstAnswerMs=… thoughtPartsBeforeAnswer=…`. No real chapter has measured those waits. **This row is a measurement: it gates nothing, and it clears once recorded.**
 
@@ -6474,7 +6709,7 @@ On a 19,000–21,000-character chapter, for stage 1 and stage 2 separately, on `
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §1](3084-openai-analyzer-onbox-acceptance.md). Clears when §1's three `Result:` lines and its recommendation are filled.
 
-### E109 · A thinking Gemini model completes a 20,000-character chapter with Auto output, and Gemma still splits an empty MAX_TOKENS ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 2) · **any machine with a Gemini key; no GPU**
+### E111 · A thinking Gemini model completes a 20,000-character chapter with Auto output, and Gemma still splits an empty MAX_TOKENS ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 2) · **any machine with a Gemini key; no GPU**
 
 Wave 2 made four changes to Gemini analysis:
 

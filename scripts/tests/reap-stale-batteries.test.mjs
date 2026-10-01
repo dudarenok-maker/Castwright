@@ -35,6 +35,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -1112,6 +1113,175 @@ test('C5: a taskkill that times out reports false, so the root is never recorded
 });
 
 // ---------------------------------------------------------------------------
+// E104 (discharged 2026-09-25, removed from the register) — taskkill's own
+// exit code lied about the outcome on real pushes (pids 38780 and 23792):
+// `/T` reports failure when a child had already exited mid-walk or couldn't
+// be found, even though the whole target tree was actually gone. killTree
+// must judge success by whether the root pid is actually gone afterward, not
+// by taskkill's exit code alone.
+// ---------------------------------------------------------------------------
+
+test('E104: taskkill exits nonzero but the root pid is actually gone -> reports success', () => {
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 1 }),
+      isAlive: () => false,
+    }),
+    true,
+    'a nonzero /T exit with the root pid confirmed gone is a successful kill, not a failed one',
+  );
+});
+
+test('E104: taskkill exits nonzero and the root pid is still alive -> reports failure', () => {
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 1 }),
+      isAlive: () => true,
+    }),
+    false,
+    'a nonzero /T exit with the root pid still alive is a genuinely failed kill',
+  );
+});
+
+test('E104: taskkill exits zero -> reports success without needing the liveness check', () => {
+  let checked = false;
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 0 }),
+      isAlive: () => {
+        checked = true;
+        return true;
+      },
+    }),
+    true,
+  );
+  assert.equal(checked, false, 'a zero exit is already conclusive; the liveness re-check is only needed on failure');
+});
+
+// ---------------------------------------------------------------------------
+// PR #3404 review pass 1, main defect — "root gone" is NOT the same as
+// "tree gone". A nonzero taskkill exit also covers the shape where the ROOT
+// was already gone BEFORE taskkill even ran (nothing walked at all), leaving
+// every real descendant untouched — the old root-only check reported that as
+// a success. killTree must be told the whole recorded tree (via
+// `descendantPids`, exactly what runCensus passes from
+// `computeOsDescendants`) and judge success by the WHOLE set reading gone,
+// not the root alone.
+// ---------------------------------------------------------------------------
+
+test('review pass 1: exit 128, root gone but a recorded descendant still alive -> reports failure', () => {
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 128 }),
+      isAlive: (pid) => pid === 4243, // root (4242) gone; child 4243 survived
+      descendantPids: [4242, 4243],
+    }),
+    false,
+    'a surviving descendant must never be reported as a successful kill, even with the root gone',
+  );
+});
+
+test('review pass 1: exit 128, root AND every recorded descendant gone -> reports success', () => {
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 128 }),
+      isAlive: () => false,
+      descendantPids: [4242, 4243, 4244],
+    }),
+    true,
+    'the whole recorded tree reading gone is a genuine success, even on a nonzero exit',
+  );
+});
+
+test('review pass 1: exit 128, root still alive -> reports failure', () => {
+  assert.equal(
+    killTree(4242, {
+      windows: true,
+      spawn: () => ({ status: 128 }),
+      isAlive: (pid) => pid === 4242,
+      descendantPids: [4242],
+    }),
+    false,
+  );
+});
+
+test('review pass 1: runCensus passes the real OS descendant closure to killFn, not just the root pid', () => {
+  let seenDescendants = null;
+  runCensus({
+    collectSnapshot: () => processes,
+    readPrior: () => priorSamples,
+    appendLog: () => {},
+    kill: true,
+    killReasons: ['orphaned-unreachable'],
+    thresholds: THRESHOLDS,
+    now: NOW,
+    killFn: (pid, opts) => {
+      if (pid === 3001) seenDescendants = opts?.descendantPids;
+      return true;
+    },
+  });
+  assert.ok(seenDescendants, 'expected killFn to receive descendantPids for the 3001 subtree');
+  assert.ok([...seenDescendants].includes(3001), 'the descendant set must include the root itself');
+  assert.ok([...seenDescendants].includes(3002), "B3's real OS descendant closure includes pid 3002");
+});
+
+test(
+  'review pass 1 (Windows-only, real processes): killTree returns false when a real descendant outlives a real dead root',
+  { skip: process.platform !== 'win32' ? 'Windows-only: real taskkill /T against real processes' : false },
+  () => {
+    // Parent: spawns a long-lived, detached grandchild (stands in for a
+    // stray worker) and prints its pid, then exits — so by the time
+    // spawnSync returns, the ROOT (parent) pid is already gone and nothing
+    // was ever walked by taskkill, the exact "never found, nothing touched"
+    // shape the fix targets. The grandchild is a REAL, independent process
+    // still running afterward.
+    const parentScript = `
+      const { spawn } = require('node:child_process');
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      child.unref();
+      process.stdout.write(String(child.pid));
+      process.exit(0);
+    `;
+    const result = spawnSync(process.execPath, ['-e', parentScript], { encoding: 'utf8', windowsHide: true });
+    assert.equal(result.status, 0, `expected the parent helper to exit cleanly, got ${JSON.stringify(result)}`);
+    const parentPid = result.pid;
+    const childPid = Number.parseInt(result.stdout.trim(), 10);
+    assert.ok(Number.isInteger(childPid) && childPid > 0, `expected a real child pid, got ${JSON.stringify(result)}`);
+
+    try {
+      // spawnSync already waited for the parent to exit, so parentPid is
+      // confirmed dead before killTree ever runs. Real spawn/windows/isAlive
+      // defaults — nothing injected except the descendant set under test.
+      const outcome = killTree(parentPid, { descendantPids: [parentPid, childPid] });
+      assert.equal(
+        outcome,
+        false,
+        'a real surviving descendant must never be reported as a successful kill, even with the root already gone',
+      );
+    } finally {
+      // Always clean up the real child process, regardless of the assertion
+      // outcome above, so this test never leaks a process.
+      try {
+        execFileSync('taskkill', ['/PID', String(childPid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
+      } catch {
+        // Best-effort cleanup — if it's already gone (e.g. killTree's own
+        // taskkill call above reached it despite the assertion), there is
+        // nothing left to clean up.
+      }
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
 // C6 — the tail window is sized against the trust window, not a round number
 // ---------------------------------------------------------------------------
 
@@ -1130,8 +1300,9 @@ test('C6: with realistically-sized entries, a 10-minute-old sample is still insi
   withTempLog((logPath) => {
     const rootPid = 77001;
     // 21 entries at one every 30s — the fastest cadence worth sizing for, and
-    // roughly what E104's own criterion (2) produces while an operator pokes
-    // at `npm run doctor`. The oldest sits exactly at the 10-minute bar.
+    // roughly what E104 (discharged 2026-09-25, removed from the register)'s
+    // own criterion (2) produces while an operator pokes at `npm run doctor`.
+    // The oldest sits exactly at the 10-minute bar.
     const lines = [];
     for (let i = 20; i >= 0; i -= 1) {
       const entry = { ts: NOW - i * 30_000, pad: '', roots: [{ rootPid, cpuSecondsNow: 100 + (20 - i), startedAt: 500 }] };
@@ -1490,15 +1661,80 @@ test('#3238: collectProcessSnapshot does NOT retry on a non-zero exit status', (
   assert.deepEqual(result, [], 'must return [] on non-zero exit');
 });
 
-test('#3238: collectProcessSnapshot does NOT retry on a JSON parse failure', () => {
+// PR #3404 review pass 3 — a stray PowerShell Warning/Information line on
+// stdout (status 0) used to be a PERMANENT PARSE_ERROR: the whole census came
+// back [] and the census log read as "nothing running".
+const WARNING_PREFIXED_STDOUT = `WARNING: something noisy\n${JSON.stringify([PLAUSIBLE_ROW])}`;
+
+test('pass 3: collectProcessSnapshot query silences the Warning/Information/Progress streams', () => {
+  let queryArgs = null;
+  const fakeSpawn = (_cmd, args) => {
+    queryArgs = args;
+    return realRowSpawn();
+  };
+  collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+  const command = queryArgs[queryArgs.indexOf('-Command') + 1];
+  assert.match(command, /\$WarningPreference\s*=\s*'SilentlyContinue'/);
+  assert.match(command, /\$InformationPreference\s*=\s*'SilentlyContinue'/);
+  assert.match(command, /\$ProgressPreference\s*=\s*'SilentlyContinue'/);
+});
+
+test('pass 3: collectProcessSnapshot retries ONCE on a JSON parse failure and recovers', () => {
   let callCount = 0;
   const fakeSpawn = () => {
     callCount += 1;
-    return { status: 0, stdout: 'not valid json{{{', stderr: '' };
+    return callCount === 1 ? { status: 0, stdout: WARNING_PREFIXED_STDOUT, stderr: '' } : realRowSpawn();
   };
   const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
-  assert.equal(callCount, 1, 'must have called spawn only once — no retry on parse failure');
-  assert.deepEqual(result, [], 'must return [] on parse failure');
+  assert.equal(callCount, 2, 'a parse failure gets exactly one retry');
+  assert.equal(result.length, 1);
+  assert.equal(result[0].pid, PLAUSIBLE_ROW.ProcessId);
+});
+
+test('pass 3: a persistent parse failure returns [] carrying snapshotError, and the warning names a stdout prefix', () => {
+  let callCount = 0;
+  const fakeSpawn = () => {
+    callCount += 1;
+    return { status: 0, stdout: WARNING_PREFIXED_STDOUT, stderr: '' };
+  };
+  const warnings = [];
+  const origWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(' '));
+  try {
+    const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
+    assert.equal(callCount, 2, 'initial + one retry, no stacked retry');
+    assert.deepEqual(result, [], 'still an empty array to every row-reading caller');
+    assert.match(String(result.snapshotError), /PARSE_ERROR/);
+    assert.ok(
+      warnings.some((w) => /PARSE_ERROR/.test(w) && /WARNING: something noisy/.test(w)),
+      `expected the warning to carry the stdout prefix, got: ${JSON.stringify(warnings)}`,
+    );
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('pass 3: runCensus copies a failed snapshot\'s snapshotError onto the log entry, and omits it on a healthy one', () => {
+  const failedSnapshot = [];
+  Object.defineProperty(failedSnapshot, 'snapshotError', { value: 'output was not JSON', enumerable: false });
+  const appended = [];
+  runCensus({
+    collectSnapshot: () => failedSnapshot,
+    readPrior: () => new Map(),
+    appendLog: (entry) => appended.push(entry),
+    now: 1_000_000,
+  });
+  assert.equal(appended[0].snapshotError, 'output was not JSON');
+  assert.deepEqual(appended[0].roots, []);
+
+  const healthy = [];
+  runCensus({
+    collectSnapshot: () => [],
+    readPrior: () => new Map(),
+    appendLog: (entry) => healthy.push(entry),
+    now: 1_000_000,
+  });
+  assert.equal('snapshotError' in healthy[0], false);
 });
 
 test('#3238: collectProcessSnapshot logs a recovery warning when retry succeeds', () => {
@@ -1685,15 +1921,15 @@ test('#3331: collectProcessSnapshot does NOT retry on a non-zero exit status (ti
   assert.deepEqual(result, [], 'must return [] on non-zero exit');
 });
 
-test('#3331: collectProcessSnapshot does NOT retry on a JSON parse failure (timeout-aware path)', () => {
+test('#3331: a timeout then a parse failure is still bounded at two spawns (no stacked retry)', () => {
   let callCount = 0;
   const fakeSpawn = () => {
     callCount += 1;
-    return { status: 0, stdout: 'not valid json{{{', stderr: '' };
+    return callCount === 1 ? timeoutSpawn() : { status: 0, stdout: 'not valid json{{{', stderr: '' };
   };
   const result = collectProcessSnapshot({ spawn: fakeSpawn, windows: true });
-  assert.equal(callCount, 1, 'must have called spawn only once — no retry on parse failure');
-  assert.deepEqual(result, [], 'must return [] on parse failure');
+  assert.equal(callCount, 2, 'must have called spawn exactly twice');
+  assert.deepEqual(result, [], 'must return [] when the retry is also unusable');
 });
 
 test('#3331: collectProcessSnapshot does NOT retry on a non-timeout error (e.g. ENOENT)', () => {
@@ -1739,6 +1975,37 @@ test('#3331: collectProcessSnapshot logs a warning when the first attempt times 
       warnings.some((w) => /permanent failure/.test(w)),
       `expected the warning to mention the permanent failure, got: ${JSON.stringify(warnings)}`,
     );
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+// PR #3404 pass 4, yellow B — snapshotError was pinned only on the parse path.
+// A failed census must read as "failed", not "nothing running", on EVERY path
+// that returns [] (R3: permanent failure, R4: empty after retry).
+test('pass 4: a permanent failure returns [] carrying snapshotError (a failed census must not read as nothing running)', () => {
+  const origWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const result = collectProcessSnapshot({
+      spawn: () => ({ status: 1, stdout: '', stderr: 'some error' }),
+      windows: true,
+    });
+    assert.deepEqual(result, []);
+    assert.match(String(result.snapshotError), /permanent failure/);
+    assert.equal(Object.keys(result).includes('snapshotError'), false, 'must stay non-enumerable');
+  } finally {
+    console.warn = origWarn;
+  }
+});
+
+test('pass 4: an empty result after the retry returns [] carrying snapshotError', () => {
+  const origWarn = console.warn;
+  console.warn = () => {};
+  try {
+    const result = collectProcessSnapshot({ spawn: () => emptyArraySpawn(), windows: true });
+    assert.deepEqual(result, []);
+    assert.match(String(result.snapshotError), /empty Win32_Process result after retry/);
   } finally {
     console.warn = origWarn;
   }

@@ -89,6 +89,39 @@ recite:
     would resolve). Checkable: does the fix's condition name the invariant,
     or the repro's state? Does the paired test vary the conditions the repro
     held fixed?
+14. **A computation moved earlier "verbatim" now records a stale observation**
+    — code that was correct because it ran immediately before the thing it
+    describes is hoisted into an up-front pass (to let an earlier decision
+    see its result), and the later consumer reads the early value back
+    instead of recomputing. Each line is unchanged, so the diff reads as
+    a pure move — what changed is WHEN it runs relative to the side effects
+    in between. A pre-pass hashes every step's inputs before the first step
+    runs so the pipeline budget can exclude steps that would be `[cached]`;
+    a passing step then writes that plan-time hash to the cache. An input
+    rewritten while an earlier step ran is tested in its new state and
+    recorded under the hash of its old one, so restoring the file produces
+    `[cached]`, exit 0, for content the step never ran against. The suite
+    was green and a source pin actively REQUIRED the bug: "the loop must
+    read the hash from the pre-pass, not recompute" (PR #3393 —
+    `scripts/verify-cache.mjs`). Checkable: for anything hoisted out of
+    a loop or moved ahead of side-effecting work, what can change between
+    where it now runs and where its result is used — and is the value an
+    estimate (safe to take early) or a record of what actually happened
+    (must be taken at the time)?
+15. **A test that cannot pass on the CI leg that runs it** — it uses a
+    Windows-only cmdlet parameter (`Start-Process -WindowStyle`, `-Verb`) or
+    a Windows-only API, and the author ran it only on Windows, while the leg
+    that executes it is Ubuntu pwsh (CI's Windows leg runs `test`,
+    `test:server` and `test:hooks`, never `test:scripts`). The author's
+    green run proves nothing about the runner (PR #3404 pass 4: three
+    `Stop-ProcessTreeByLiveness` Pester cases died with `NotSupportedException`
+    on `-WindowStyle`, 99 pass / 3 fail on the required leg). The fix is
+    never a Windows-only skip — that leaves the test running in no leg, and
+    `$IsWindows` is `$null` on Windows PowerShell 5.1 so the naive skip also
+    skips there. Splat the Windows-only parameter conditionally
+    (`$PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows`). Checkable:
+    for every new test, name the CI leg that executes it and whether anything
+    in it is unavailable there.
 
 ### Keeping the catalogue current
 

@@ -15,7 +15,7 @@ owner: dudarenok@gmail.com
 
 - **User:** drift on a background book (e.g. you adjusted Book B's cast while listening to Book A) now surfaces in Book A's Drift Report modal within ~2 min, no navigate needed. Honors the concurrent-multibook invariant for drift. Closes BACKLOG Could #2.
 - **Technical:** new bulk endpoint `GET /api/revisions?bookIds=A,B,C` keyed-by-bookId response; frontend two-tier poller (active 30 s + background 120 s) keeps the active-book latency unchanged while picking up cross-book drift on a slower cadence.
-- **Architectural:** zero new redux state. The slice's `applyPoll` action is already multi-book-aware (per-bookId event merge at `src/store/revisions-slice.ts:160-174`), so dispatching the bulk response per entry just works.
+- **Architectural:** zero new redux state. The slice's `applyBackgroundPoll` action is already multi-book-aware (per-bookId event merge at `src/store/revisions-slice.ts:160-174`), so dispatching the bulk response per entry just works.
 
 ## Architectural impact
 
@@ -29,7 +29,8 @@ owner: dudarenok@gmail.com
 2. `getRevisionsForBook` returns `null` for unknown bookIds — the single-book route translates that to 404, the bulk route silently omits.
 3. Bulk endpoint is GET-with-query-param (idempotent + caching-friendly); query-param size limit (50 ids) sized to fit comfortably under HTTP-line-length limits.
 4. Frontend background poller fires only when there's ≥1 qualifying book (no idle ticker spinning on empty libraries).
-5. `applyPoll` invocations stamp `bookId` so the slice merges per-book — never replaces the whole drift array.
+5. `applyBackgroundPoll` invocations stamp `bookId` so the slice merges per-book — never replaces the whole drift array.
+6. No poll — active (`applyPoll`) or background (`applyBackgroundPoll`) — ever writes `pending`; `pending` is client-owned, seeded only on book open (`revisionsActions.hydrateFromBookState`).
 
 ## Test plan
 

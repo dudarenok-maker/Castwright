@@ -10,7 +10,7 @@
 
 ---
 
-## 1. Gemini thinking-window timing on real chapters — register row E108
+## 1. Gemini thinking-window timing on real chapters — register row E110
 
 **A measurement that gates nothing.** Wave 2 gives a thinking Gemini model a
 thinking window of 120 000 ms (`GEMINI_THINKING_IDLE_TIMEOUT_MS`): every silent
@@ -79,7 +79,7 @@ Run by / date / SHA:
 
 ---
 
-## 2. Thinking-model output with Auto max output tokens, and Gemma's split — register row E109
+## 2. Thinking-model output with Auto max output tokens, and Gemma's split — register row E111
 
 **Hardware:** any machine with a Gemini API key; no GPU. **Quota:**
 `gemini-3.6-flash` allows 20 requests a day, and this section runs one chapter
