@@ -1057,6 +1057,61 @@ describe('Layout — revisions persist only after the book is hydrated (#3395 pa
     for (const patch of puts) expect(patch.dismissed).toEqual(['d1']);
     expect(d.disk.get('book-B')?.dismissed).toEqual(['d1']);
   });
+
+  /* #3395 pass 4, S2 — a failed getBookState on the way back into a book
+     used to leave its revisions unhydrated (and so read-only) for the rest
+     of the visit, with no retry and no signal. */
+  it('S2: a failed return-trip getBookState is retried, a notice shows meanwhile, and the take persists', async () => {
+    const d = makeDisk({ 'book-A': { pending: [], drift: [] } });
+    const store = makeStoreWithScopeAndPersistence();
+    store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    renderAt(store, '/books/book-A');
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-A'));
+
+    act(() => {
+      store.dispatch(uiActions.goHome());
+    });
+    d.fail('book-A', 1);
+    act(() => {
+      store.dispatch(uiActions.openBook({ id: 'book-A', status: 'complete' }));
+    });
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(
+        store.getState().notifications.toasts.some((t) => t.dedupeKey === 'revisions-hydrate-failed'),
+      ).toBe(true),
+    );
+    expect(store.getState().revisions.hydratedFor).toBeNull();
+
+    store.dispatch(
+      revisionsActions.enqueuePending({
+        id: 'splice-book-A-4-nora',
+        chapterId: 4,
+        characterId: 'nora',
+        playable: false,
+        segments: [],
+      }),
+    );
+    store.dispatch(revisionsActions.markRevisionPlayable({ chapterId: 4 }));
+
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledTimes(3), { timeout: 4000 });
+    await waitFor(() => expect(store.getState().revisions.hydratedFor).toBe('book-A'));
+    expect(
+      store.getState().notifications.toasts.some((t) => t.dedupeKey === 'revisions-hydrate-failed'),
+    ).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    const puts = revisionsPuts('book-A');
+    expect(puts.length).toBeGreaterThan(0);
+    for (const patch of puts) {
+      expect(patch.pending).toEqual([
+        expect.objectContaining({ id: 'splice-book-A-4-nora', playable: true }),
+      ]);
+    }
+    expect(d.disk.get('book-A')?.pending).toEqual([
+      expect.objectContaining({ id: 'splice-book-A-4-nora', playable: true }),
+    ]);
+  }, 15000);
 });
 
 /* Task 6 (fix round 1, finding 2) — the first-load library-hydrate dispatcher
