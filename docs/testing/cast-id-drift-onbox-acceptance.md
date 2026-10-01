@@ -1021,37 +1021,50 @@ Defects NOT filed: none. The fix is narrowly scoped (one function's gating condi
 ## 11. #3362 (PR #3375) — snapshot keying, per-line drift, repair/QA identity
 
 Register row: [A22 "#3362 checks 1–5"](onbox-acceptance-register.md) (extends A22; no new row).
-**Needs:** the 8 GB card, real sidecar with Qwen resident, the *Playing with Fire*
-workspace book, a backup of each chapter's `.segments.json` + `.mp3` before every
-re-record. Checks 4–5: turn on **"Render-integrity QA (voice match)"**
-(`qa.speaker.enabled`, env `SEG_SPK_ENABLED`, default off, live) **before** the
-renders/re-records. Files live in the book's `audio/` folder:
+**Needs (checks 1–4):** the 8 GB card, real sidecar with Qwen resident, the
+*Playing with Fire* workspace book, a backup of each chapter's `.segments.json`
++ `.mp3` before every re-record. Check 4: turn on **"Render-integrity QA (voice
+match)"** (`qa.speaker.enabled`, env `SEG_SPK_ENABLED`, default off, live)
+**before** the renders/re-records. Files live in the book's `audio/` folder:
 `<slug>.segments.json`, `<slug>.embeddings.json`, `<slug>.render-integrity.json`
-(verdict rows), `render-integrity.centroids.json`.
+(verdict rows), `render-integrity.centroids.json`. Check 5 is automated-only.
+
+**Assigning a different voice (checks 2, 3):** use a **My voices** entry — Cast →
+the character's profile drawer → "Or use a voice from My voices", or the Cast
+Voice library panel's **My voices** group → *Assign* → tap the character. Both
+call `POST /api/voice-library/:uuid/assign`, the only path that writes
+`overrideTtsVoices.qwen.libraryUuid` (name becomes `qwen-<libraryUuid>`). The
+panel's other Assign pill (book voice card) only sets `voiceId` — a designed,
+uuid-keyed character still renders `qwen-<voiceUuid>`, so (2b) would FAIL on
+correct code. **Precondition:** one My-voices entry that is not this character's
+own designed voice must exist (group hidden when empty); create one via a
+*different* designed Qwen character's profile drawer → **Save to my voices**.
 
 SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 
 1. **Canonical keys, FULL re-render.** Re-render all of chapter 19. Expect
    `characterSnapshots["the_torment"]` (`voiceEngine: "qwen"`,
-   `resolvedVoiceName: "qwen-YaC5ot82IqTLpeDbHd77F"`), **no** `the-torment` key,
-   every Torment segment `resolvedCharacterId: "the_torment"`, no
-   `renderedFallbackEngine`; Voices lists that voice as Generated.
+   `resolvedVoiceName: "qwen-YaC5ot82IqTLpeDbHd77F"`), **no** `the-torment` key
+   (the discriminator), every Torment segment `resolvedCharacterId:
+   "the_torment"`, no `renderedFallbackEngine`. (Voices "Generated" is
+   book-wide — corroboration only.)
 
    Result: _______________________________________________________________
 
 2. **Per-line voice drift.** Chapter fully rendered by this build, ≥ 4 lines of
    one Qwen character, no drift showing.
-   (a) *Assign* a **different Qwen library voice** (Cast → voice library) — not
-   a redesign, which keeps `qwen-<voiceUuid>` and changes nothing.
-   (b) Revisions flags the chapter (Voice row). (c) Per-line re-record ONE
-   **non-last** line → still flagged (sanity only). (d) Also re-record the
-   character's **LAST** line, leave ≥ 1 earlier line untouched → Revisions
-   **still** flags it; `segments.json` shows new `voiceName` on the last line,
-   old on the untouched one; Voices still lists the **old** designed voice as
-   Generated. This step discriminates: the snapshot is last-wins, so
-   snapshot-only logic would clear here. (e) Re-record the rest → flag clears.
-   (f) Engine-switch variant: switch the character to Kokoro, re-record only its
-   last line → its Qwen voice still reads Generated on Voices.
+   (a) Assign a different voice via a **My voices** entry (above) — not a
+   redesign, not the book-card pill. (b) Revisions flags the chapter (Voice
+   row). (c) Per-line re-record ONE **non-last** line → still flagged (sanity
+   only). (d) Also re-record the character's **LAST** line, leave ≥ 1 earlier
+   line untouched → Revisions **still** flags it; `segments.json` shows new
+   `voiceName` on the last line, old on the untouched one. This step
+   discriminates: the snapshot is last-wins, so snapshot-only logic would
+   clear here. (e) Re-record the rest → flag clears.
+   *Not run on-box:* Voices "Generated" is book-wide, and the Qwen→Kokoro
+   engine-switch case is covered by `segments-io.test.ts` ("keeps a Qwen voice
+   still on stamped lines after the character switched to Kokoro (#3362 pass
+   11)", "keeps BOTH voices of a mixed-voice chapter").
    *Stated limit:* pre-stamp (#1992) legacy, or voiceless-legacy + stamped
    mixed, chapters can clear drift early (not a regression) — do not use one.
 
@@ -1061,13 +1074,16 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
    this build** whose fresh `segments.json` has lines under both
    `characterId: "the-torment"` and `"the_torment"`, all
    `resolvedCharacterId: "the_torment"` (a re-record cannot create this — if no
-   chapter renders that way, record SKIP, not PASS). *Assign* Torment a
-   different library voice, then profile drawer → Fix audio → re-record. Expect
+   chapter renders that way, record SKIP, not PASS). Assign Torment a different
+   My-voices voice (above), then profile drawer → Fix audio → re-record. Expect
    **every** segment with `resolvedCharacterId: "the_torment"` to carry the new
-   `voiceName`, under both raw spellings. Also: lines that had
-   `renderedFallbackEngine: "kokoro"` lose it after a clean re-take and the Cast
-   "Fallback (Kokoro)" pill clears when none remain (use chapter 19 before check
-   1's re-render; skip if none).
+   `voiceName`, under both raw spellings.
+   *Not run on-box:* the Kokoro-fallback stamp clearing on a clean re-take
+   (and the "Fallback (Kokoro)" pill) is covered by `chapter-splice.test.ts`
+   ("a clean re-record clears a stale renderedFallbackEngine/CharacterId …
+   (#3362)") and `chapter-qa-repair.test.ts` ("a clean accepted take clears a
+   stale renderedFallbackEngine/CharacterId (#3362)"); unstamped legacy lines
+   are outside Fix audio's reach and its modal does not list their chapter.
    *Stated limit:* an unstamped legacy spelling is not reached.
 
    Result: _______________________________________________________________
@@ -1075,25 +1091,28 @@ SHA: `____________`  Clean tree: ☐  Date: `__________`  Run by: `__________`
 4. **Re-record after cast merge keeps embeddings, scores under the survivor.**
    Speaker QA on during the original render. Chapter lines stamped `X`
    (merged away) and survivor `Y`; note N = `characterId: "X"` rows in
-   `<slug>.embeddings.json`. Merge `X` into `Y`, then Listen per-line re-record
-   each `X` line (Fix audio on `Y` cannot reach them — stamped-only). Expect:
-   (i) rows under `"X"` still present (N; before the fix: 0; lines under the
-   duration floor have none); (ii) QA report before any rescan shows `Y`
-   unchecked with **Resume scoring** and `chaptersScored` possibly lower —
-   expected, not a failure; (iii) after Resume scoring,
-   `<slug>.render-integrity.json` has verdict rows with `characterId: "Y"` for
-   those sentence ids (before the fix: only `X` + narrator).
+   `<slug>.embeddings.json`. Merge `X` into `Y`, then — **in the same browser
+   session, before any reload** — Listen per-line re-record each `X` line (Fix
+   audio on `Y` cannot reach them — stamped-only). After a reload the merge's
+   rewrite of `manuscript-edits.json` drops `X` from the speaker map and the
+   per-line modal shows "no rendered chapters yet" (record SKIP, redo in one
+   session). Expect: (i) rows under `"X"` still present (N; before the fix: 0;
+   lines under the duration floor have none); (ii) *only if `Y` has no row in
+   `render-integrity.centroids.json`* (otherwise no Voice match row / Resume
+   button renders — skip it): QA report before any rescan shows `Y` unchecked
+   with **Resume scoring**, `chaptersScored` possibly lower — expected; (iii)
+   trigger scoring — **Resume scoring**, or else finish a render of another
+   chapter (rescores the whole book) — then `<slug>.render-integrity.json` has
+   verdict rows with `characterId: "Y"` for those sentence ids (before the fix:
+   only `X` + narrator).
 
    Result: _______________________________________________________________
 
-5. **Unstamped orphan rows do not pool.** Chapter rendered **before** this fix
-   and not re-rendered (orphan `mayrin` lines have no `resolvedCharacterId`;
-   `mairin` later re-minted), e.g. *Заказ Коалфолла*. Trigger one `scoreBook`
-   pass by finishing a render of another chapter (a re-record does not rescore).
-   Expect that chapter's `<slug>.render-integrity.json` has **no** rows under
-   `"mairin"` for the orphan's sentence ids, and `render-integrity.centroids.json`
-   `mairin.referenceKind` is `in-book` only if its own stamped lines supply
-   enough anchors, else `audition` (centroids store a vector, no row count). Pooling arithmetic is pinned by `aggregate.test.ts`
-   (S8; 🟠A) — corroboration only; SKIP acceptable if the old chapter is gone.
+5. **Unstamped orphan rows do not pool — automated-only.** The `mayrin`→`mairin`
+   example cannot discriminate (`main` joined by exact raw id too), and the
+   raw-id-equals-re-minted-id case reads FAIL on correct code (old `mairin`
+   verdict rows survive a rescore). Pinned by `aggregate.test.ts` S8 and 🟠A
+   (both the `mairin` and `mayrin` cases) and `qa-report.test.ts` "scopes each
+   row's roster join to its OWN chapter's snapshot …".
 
-   Result: _______________________________________________________________
+   Result: n/a (automated)
