@@ -13,6 +13,7 @@ import {
   collectRenderedQwenVoiceNames,
   collectRenderedSpeakerMaps,
   collectRenderedTextHashesByChapter,
+  renderedSegmentVoices,
   textHashForStale,
 } from './segments-io.js';
 import type { CastIdHistory } from '../store/cast-id-history.js';
@@ -170,6 +171,23 @@ describe('collectRenderedQwenVoiceNames per-line voices (#3362)', () => {
       { characterId: 'wren', sentenceIds: [1] },
     ]);
     await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(new Set());
+  });
+});
+
+describe('renderedSegmentVoices voice-name preference (#1972)', () => {
+  it('prefers baseVoiceName (pre-emotion-variant) over voiceName', () => {
+    expect(
+      renderedSegmentVoices(
+        [{ characterId: 'wren', voiceName: 'qwen-wren__angry', baseVoiceName: 'qwen-wren' }],
+        'wren',
+      ),
+    ).toEqual(['qwen-wren']);
+  });
+
+  it('falls back to voiceName when baseVoiceName is absent', () => {
+    expect(
+      renderedSegmentVoices([{ characterId: 'wren', voiceName: 'qwen-wren' }], 'wren'),
+    ).toEqual(['qwen-wren']);
   });
 });
 
