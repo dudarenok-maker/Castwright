@@ -2003,14 +2003,26 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
       // same hash) read [cached] and skip a full run that never actually
       // happened (review finding: this silently removed the full-suite net
       // pre-push and CI both depend on). Only a full run is cache-worthy.
+      // The entry is keyed on the START-time hash, so it is written only if
+      // the step's inputs hash the same after it finished: an input edited
+      // while the step ran would otherwise be vouched for under its old
+      // content (#3413). The file list is re-taken first — the step may have
+      // created a file inside its own globs.
       if (fileList !== null && !changedOnlyScript) {
-        cache.steps[step.name] = {
-          inputHash: currentHash,
-          lastGreenAt: new Date().toISOString(),
-          durationMs: dt,
-          attempts,
-        };
-        saveCache(cachePath, cache);
+        fileList = gitFileList(cwd);
+        if (fileList === null) {
+          console.log('[verify-cache] git ls-files failed; running uncached');
+        } else if (planStep(step).currentHash !== currentHash) {
+          console.log(`[verify-cache] ${step.name} inputs changed while it ran; not caching`);
+        } else {
+          cache.steps[step.name] = {
+            inputHash: currentHash,
+            lastGreenAt: new Date().toISOString(),
+            durationMs: dt,
+            attempts,
+          };
+          saveCache(cachePath, cache);
+        }
       }
     } else {
       console.log(`[fail] ${step.name} (exit ${code}, took ${formatSecs(dt)}${attemptsNote})`);
