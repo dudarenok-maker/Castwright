@@ -240,8 +240,10 @@ export function BooksRoute() {
            navigates back into the analysing stage.
 
            Unconditional reset: this code runs from the books library, where
-           ui.stage.bookId is always undefined; gating on `bookId === b.bookId`
-           would never fire. Any per-book state still in redux is by definition
+           ui.stage.bookId is always undefined at the time of the click, so
+           gating on the render-time `bookId === b.bookId` would never fire
+           (the separate "left the book" check after the await reads the LIVE
+           stage instead). Any per-book state still in redux is by definition
            the *previous* open's residue, so wiping it is correct regardless
            of which book is being re-parsed — the next book open re-hydrates
            from disk. */
