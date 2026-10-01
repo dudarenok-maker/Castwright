@@ -57,6 +57,8 @@ vi.mock('../store/analysis-cache.js', async () => {
   return {
     ...actual,
     saveAnalysisCache: async (...args: Parameters<typeof actual.saveAnalysisCache>) => {
+      /* A case sets this to make chosen saves throw (fs failure: ENOSPC, rename retries exhausted). */
+      (globalThis as Record<string, unknown> & { __overflow_spend_test_save_hook?: (c: typeof args[1]) => void }).__overflow_spend_test_save_hook?.(args[1]);
       if (args[1].stage1) (globalThis as Record<string, unknown> & { __overflow_spend_test_stage1_saved?: () => void }).__overflow_spend_test_stage1_saved?.();
       return actual.saveAnalysisCache(...args);
     },
@@ -85,14 +87,18 @@ function restoreEnv(name: string, value: string | undefined): void {
   else process.env[name] = value;
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-overflow-spend-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
   /* Both pools size from analyzerPoolWidth() (analysis.ts:1277-1280): 2 puts
      both chapters in flight at once. */
   process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
   process.env.STAGE2_COVERAGE_RETRIES = '0';
-});
+  /* The first dynamic import of ./analysis.js costs 14 s+ cold (the whole
+     analyzer/TTS graph); inside the first test's 30 s budget it times out at
+     --retry=0 and only the repo's default retry hid it. Pay it here. */
+  await import('./analysis.js');
+}, 120_000);
 
 afterAll(() => {
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
@@ -104,6 +110,7 @@ afterAll(() => {
 afterEach(() => {
   delete (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection;
   delete (globalThis as Record<string, unknown>).__overflow_spend_test_pipelined;
+  delete (globalThis as Record<string, unknown>).__overflow_spend_test_save_hook;
 });
 
 function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
@@ -1005,8 +1012,8 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
     runStage2Chapter: Analyzer['runStage2Chapter'];
     /** Overrides the Phase-1 selection model id (split-model case). */
     phase1Model?: string;
-    /** Runs after the Phase-1 selection is built, with the job (to abort it). */
-    onJob?: (job: AnalysisJob) => void;
+    /** Replaces the Phase-0 (cast) analyzer's per-chapter call. */
+    runStage1Chapter?: Analyzer['runStage1Chapter'];
   }
   interface StepResult {
     events: CapturedEvent[];
@@ -1067,11 +1074,12 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
           kind: 'subset' as const,
         } as unknown as AnalysisJob;
         const events = captureEvents(job, () => {});
-        step.onJob?.(job);
         await runSubsetAnalyzerJob(
           job,
           record,
-          seed.phase0Selection,
+          step.runStage1Chapter
+            ? buildSelection(stubAnalyzer({ runStage1Chapter: step.runStage1Chapter }), 'phase0-model')
+            : seed.phase0Selection,
           buildSelection(stubAnalyzer({ runStage2Chapter: step.runStage2Chapter }), step.phase1Model ?? MODEL),
           record.chapterHints.filter((c) => step.toRun.includes(c.id)),
           false,
@@ -1175,6 +1183,63 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
     expect(events.some((e) => e.kind === 'result')).toBe(true);
     expect(r.failedChapterIds).toEqual([]);
     expect(r.chapters[1][0].characterId).toBe('nova');
+  }, 60_000);
+
+  it('with split phase models, a Phase-1 failure\'s terminal error names the Phase-1 model, not the Phase-0 one', async () => {
+    const { AnalyzerTruncatedError } = await import('../analyzer/errors.js');
+    const r = await runCase('label', {}, [
+      {
+        toRun: [1],
+        phase1Model: 'phase1-only-model',
+        runStage2Chapter: () => Promise.reject(new AnalyzerTruncatedError('gemini', 'MAX_TOKENS', 100)),
+      },
+    ]);
+    const terminal = r.steps[0].events.find((e) => e.kind === 'error')!;
+    expect(terminal.code).toBe('analyzer-truncated');
+    expect(String(terminal.message)).toContain('phase1-only-model');
+    expect(String(terminal.message)).not.toContain('phase0-model');
+  }, 60_000);
+
+  it('a save that throws while recording a Phase-1 failure does not replace the real error or swallow chapter-failed', async () => {
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    (globalThis as Record<string, unknown>).__overflow_spend_test_save_hook = (c: {
+      failedChapterErrors?: Record<string, { code: string }>;
+    }) => {
+      if (c.failedChapterErrors?.['1']?.code === 'analyzer-reasoning-overflow') throw new Error('ENOSPC: disk full');
+    };
+    const r = await runCase('save-throws-p1', {}, [
+      { toRun: [1], runStage2Chapter: () => Promise.reject(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100)) },
+    ]);
+    const { events } = r.steps[0];
+    const terminal = events.find((e) => e.kind === 'error')!;
+    expect(terminal.code).toBe('analyzer-reasoning-overflow');
+    expect(String(terminal.message)).not.toMatch(/ENOSPC/);
+    expect((terminal.fixes as unknown[]).length).toBeGreaterThan(0);
+    expect(events.find((e) => e.kind === 'chapter-failed')).toMatchObject({ chapterId: 1, code: 'analyzer-reasoning-overflow' });
+  }, 60_000);
+
+  it('a save that throws while recording a Phase-0 failure still reports chapter-failed and does not end the run on the fs error', async () => {
+    let thrown = false;
+    (globalThis as Record<string, unknown>).__overflow_spend_test_save_hook = (c: {
+      failedChapterErrors?: Record<string, unknown>;
+      chapterCast?: Record<number, unknown[]>;
+    }) => {
+      /* Only the save inside the failure catch: later saves are a different path. */
+      if (!thrown && c.failedChapterErrors?.['1'] && !c.chapterCast?.[1]?.length) {
+        thrown = true;
+        throw new Error('ENOSPC: disk full');
+      }
+    };
+    const r = await runCase('save-throws-p0', {}, [
+      {
+        toRun: [1],
+        runStage1Chapter: () => Promise.reject(new Error('cast model exploded')),
+        runStage2Chapter: async (_m, id) => stage2For(id),
+      },
+    ]);
+    const { events } = r.steps[0];
+    expect(events.find((e) => e.kind === 'chapter-failed')).toMatchObject({ chapterId: 1 });
+    expect(events.filter((e) => e.kind === 'error' && /ENOSPC/.test(String(e.message)))).toEqual([]);
   }, 60_000);
 
   it('a cast-phase failure (no cast on file) is still cleared and announced when Phase 0 fixes it, even with stage1 on disk', async () => {

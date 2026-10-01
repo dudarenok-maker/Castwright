@@ -1423,6 +1423,26 @@ export function recordFailedChapter(
   };
 }
 
+/* #3435 — save the cache from INSIDE a per-chapter failure catch. That save
+   can itself throw (ENOSPC, `renameWithRetry` exhausted); unguarded, its error
+   replaces the one being handled (an overflow loses its code and fixes) and the
+   `chapter-failed` that follows is never sent. Log it and carry on: the record
+   is also in memory and the next save of the cache persists it. */
+async function saveCacheInFailureCatch(
+  manuscriptId: string,
+  cache: AnalysisCache,
+  chapterId: number,
+): Promise<void> {
+  try {
+    await saveAnalysisCache(manuscriptId, cache);
+  } catch (saveErr) {
+    console.warn(
+      `[analysis] could not persist chapter ${chapterId}'s failure record (reporting the original failure)`,
+      saveErr,
+    );
+  }
+}
+
 /* Phase 0a coverage check — every non-excluded chapter must have a
    non-empty `chapterCast[id]` entry before stage1 can be finalised.
 
@@ -4707,7 +4727,7 @@ export async function runMainAnalyzerJob(
           cache.chapterCast = chapterCast;
           const classified = classifyAnalysisFailure(chErr, analyzerLabel);
           recordFailedChapter(cache, ch.id, classified);
-          await saveAnalysisCache(manuscriptId, cache);
+          await saveCacheInFailureCatch(manuscriptId, cache, ch.id);
           send({
             kind: 'chapter-failed',
             chapterId: ch.id,
@@ -6975,6 +6995,9 @@ export async function runSubsetAnalyzerJob(
      surfaced only as "sentences.map is not a function" with no
      phase/chapter context. */
   const analyzerLabel = engineLabel(selection.engine, selection.model);
+  /* #3435 — the label the terminal handler classifies with: Phase 0's until
+     Phase 1 starts, then Phase 1's (they differ under split phase models). */
+  let failingPhaseLabel = analyzerLabel;
   let lastStep = 'init';
 
   try {
@@ -7373,7 +7396,7 @@ export async function runSubsetAnalyzerJob(
         cache.chapterCast = chapterCast;
         const classified = classifyAnalysisFailure(chErr, analyzerLabel);
         recordFailedChapter(cache, ch.id, classified);
-        await saveAnalysisCache(manuscriptId, cache);
+        await saveCacheInFailureCatch(manuscriptId, cache, ch.id);
         log(0, `❌ Chapter ${ch.id} cast FAILED — ${ch.title}: ${(chErr as Error).message}`);
         send({
           kind: 'chapter-failed',
@@ -7523,6 +7546,7 @@ export async function runSubsetAnalyzerJob(
       endJob(job);
       return;
     }
+    failingPhaseLabel = phase1AnalyzerLabel;
     send({
       kind: 'phase',
       phaseId: 1,
@@ -7660,7 +7684,7 @@ export async function runSubsetAnalyzerJob(
         if (!(err instanceof AnalysisAbortedError)) {
           const classified = classifyAnalysisFailure(err, phase1AnalyzerLabel);
           recordFailedChapter(cache, ch.id, classified);
-          await saveAnalysisCache(manuscriptId, cache);
+          await saveCacheInFailureCatch(manuscriptId, cache, ch.id);
           send({
             kind: 'chapter-failed',
             chapterId: ch.id,
@@ -8314,7 +8338,7 @@ export async function runSubsetAnalyzerJob(
       remediation,
       detail,
       fixes,
-    } = classifyAnalysisFailure(e, analyzerLabel, { chapter: job.reasoningOverflowChapter });
+    } = classifyAnalysisFailure(e, failingPhaseLabel, { chapter: job.reasoningOverflowChapter });
     console.error('[analysis-subset] failed', {
       manuscriptId,
       code,
