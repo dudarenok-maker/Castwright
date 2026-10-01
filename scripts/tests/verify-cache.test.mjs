@@ -1622,11 +1622,11 @@ async function runHangingStepSpanMs(extraEnv) {
   writeHangingFixture(dir, 'test'); // vitest-backed name => affectedByContention
   writeFileSync(
     join(dir, 'hang.mjs'),
-    "import { writeFileSync } from 'node:fs';\n" +
+    "import { appendFileSync } from 'node:fs';\n" +
       'const t0 = Date.now();\n' +
       'let prev = t0;\n' +
       'let maxGap = 0;\n' +
-      "const beat = () => { const n = Date.now(); maxGap = Math.max(maxGap, n - prev); prev = n; writeFileSync('beat.txt', t0 + ' ' + n + ' ' + maxGap); };\n" +
+      "const beat = () => { const n = Date.now(); maxGap = Math.max(maxGap, n - prev); prev = n; appendFileSync('beat.txt', t0 + ' ' + n + ' ' + maxGap + '\\n'); };\n" +
       'beat();\n' +
       'setInterval(beat, 100);\n' +
       'setTimeout(() => process.exit(0), 60_000);\n',
@@ -1660,7 +1660,17 @@ async function runHangingStepSpanMs(extraEnv) {
     `expected the budget (not the fixture) to end the step -- no [timeout] test line, got:\n${logs.join('\n')}`,
   );
   assert.notEqual(runLoggedAt, null, 'expected a `[run] test` log line');
-  const [, last, maxGap] = readFileSync(join(dir, 'beat.txt'), 'utf8').split(' ').map(Number);
+  // The fixture APPENDS one line per beat (never truncate-then-write): it is
+  // killed mid-run, and a truncating writeFileSync killed between open and
+  // write left an EMPTY file on Linux CI -> NaN/undefined here (Castwright#3419).
+  // Only a newline-terminated line is complete; a torn tail is dropped.
+  const lines = readFileSync(join(dir, 'beat.txt'), 'utf8').split('\n').slice(0, -1);
+  assert.ok(lines.length > 0, 'the hanging fixture never completed a heartbeat line');
+  const [, last, maxGap] = lines[lines.length - 1].split(' ').map(Number);
+  assert.ok(
+    Number.isFinite(last) && Number.isFinite(maxGap),
+    `heartbeat line must hold finite numbers, got: ${JSON.stringify(lines[lines.length - 1])}`,
+  );
   return { spanMs: last - runLoggedAt, maxGapMs: maxGap };
 }
 
