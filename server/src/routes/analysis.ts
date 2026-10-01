@@ -111,6 +111,7 @@ import {
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
 import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
+import { rollManuscriptEdits } from '../workspace/edits-roll.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import {
@@ -5750,21 +5751,23 @@ export async function runMainAnalyzerJob(
       await saveAnalysisCache(manuscriptId, cache);
       if (recordRef.bookDir) {
         try {
-          /* Rebuild the running narrative from the chapter map so order is
-             always correct regardless of which chapter completes first. */
-          const running: SentenceOutput[] = [];
-          for (const order of recordRef.chapterHints) {
-            const arr = sentencesByChapter.get(order.id);
-            if (arr) running.push(...arr);
-          }
           /* #2196 — rolling manuscript-edits is guarded in mode:'drop': a
              stale (moved/gone) dir is NOT recreated by writeJsonAtomic here.
              Interim rolls simply skip on an unresolvable path; the terminal
-             persist block is the single halt gate (C4). */
-          await withVerifiedBookDir(
+             persist block is the single halt gate (C4).
+             The snapshot is built inside `rollManuscriptEdits`, in the same
+             synchronous step that joins the write queue (#3427). */
+          await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
-            async (bookDir) => {
-              await writeJsonAtomicOrdered(manuscriptEditsJsonPath(bookDir), { sentences: running });
+            () => {
+              /* Rebuild the running narrative from the chapter map so order is
+                 always correct regardless of which chapter completes first. */
+              const running: SentenceOutput[] = [];
+              for (const order of recordRef.chapterHints) {
+                const arr = sentencesByChapter.get(order.id);
+                if (arr) running.push(...arr);
+              }
+              return running;
             },
           );
         } catch (persistErr) {
@@ -7713,18 +7716,18 @@ export async function runSubsetAnalyzerJob(
          very end). Mirrors the main route's per-chapter persist. */
       if (record.bookDir) {
         try {
-          const running: SentenceOutput[] = [];
-          for (const order of record.chapterHints) {
-            if (order.excluded) continue;
-            const arr = cachedChapters[order.id];
-            if (arr) running.push(...arr);
-          }
           /* #2196 — subset rolling manuscript-edits: guard in mode:'drop'
              (no stale-dir recreation); the terminal persist halt-gates. */
-          await withVerifiedBookDir(
+          await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
-            async (bookDir) => {
-              await writeJsonAtomicOrdered(manuscriptEditsJsonPath(bookDir), { sentences: running });
+            () => {
+              const running: SentenceOutput[] = [];
+              for (const order of record.chapterHints) {
+                if (order.excluded) continue;
+                const arr = cachedChapters[order.id];
+                if (arr) running.push(...arr);
+              }
+              return running;
             },
           );
         } catch (persistErr) {
