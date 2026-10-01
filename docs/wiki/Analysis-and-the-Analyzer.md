@@ -49,10 +49,14 @@ the model's whole output budget, the call comes back with no answer text at all
 — a **reasoning overflow** — and Castwright stops the run rather than burning
 the rest of your quota on a setting that can't succeed.
 
-Re-running the chapter will not help, and neither will splitting it. The
-overflow is about how much *output* the model had room for, not how much text
-you fed it, so the same settings overflow again on a smaller chunk. Change one
-of the settings the failure names, then resume: chapters that already finished
+Re-running the chapter will not help, and neither will splitting it, because
+splitting never shrinks the model's reasoning. On Gemini the overflow is about
+how much *output* the model had room for, not how much text you fed it (input
+and output limits are separate), so the same settings overflow again on a
+smaller chunk. On Ollama the prompt and the reply share one context window
+(`num_ctx`), so a prompt that fills less of it leaves more room — which is why
+the local input fractions below can help. Try one of the fixes the failure
+lists, then resume: chapters that already finished
 are kept, and a reasoning overflow never sends you back to the start of the
 book.
 
