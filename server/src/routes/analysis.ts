@@ -5751,8 +5751,14 @@ export async function runMainAnalyzerJob(
       /* #3435 — Phase 1 completed for this chapter: a record kept for a
          re-attribution (reattributeIds) goes now, ahead of the coverage re-flag
          below so a still-collapsed chapter reads resolved-then-failed, as in the
-         subset route. */
-      if (clearFailedChapterId(cache, ch.id)) send({ kind: 'chapter-resolved', chapterId: ch.id });
+         subset route. Only a chapter WITH a cast: a cast-phase record (the
+         empty-array failure marker) is cleared by a Phase-0a success alone —
+         in pipelined mode this chapter's Phase 1 can run while its own cast
+         detection has failed, and clearing then would lose the record the
+         resume needs to re-cast it. */
+      if (cache.chapterCast?.[ch.id]?.length && clearFailedChapterId(cache, ch.id)) {
+        send({ kind: 'chapter-resolved', chapterId: ch.id });
+      }
       if (!coverageVerdict.ok) {
         console.warn(
           `[analysis] chapter ${ch.id} stage2 coverage SUSPECT after retries: ${coverageVerdict.issues.join(' ')}`,

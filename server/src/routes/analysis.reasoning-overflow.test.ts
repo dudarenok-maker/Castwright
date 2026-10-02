@@ -58,7 +58,7 @@ vi.mock('../store/analysis-cache.js', async () => {
     ...actual,
     saveAnalysisCache: async (...args: Parameters<typeof actual.saveAnalysisCache>) => {
       /* A case sets this to make chosen saves throw (fs failure: ENOSPC, rename retries exhausted). */
-      (globalThis as Record<string, unknown> & { __overflow_spend_test_save_hook?: (c: typeof args[1]) => void }).__overflow_spend_test_save_hook?.(args[1]);
+      await (globalThis as Record<string, unknown> & { __overflow_spend_test_save_hook?: (c: typeof args[1]) => void | Promise<void> }).__overflow_spend_test_save_hook?.(args[1]);
       if (args[1].stage1) (globalThis as Record<string, unknown> & { __overflow_spend_test_stage1_saved?: () => void }).__overflow_spend_test_stage1_saved?.();
       return actual.saveAnalysisCache(...args);
     },
@@ -1464,4 +1464,145 @@ describe('main-route resume: which failed chapters re-enter cast detection (#343
     expect(events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1)).toBeDefined();
     expect(events.filter((e) => e.kind === 'error' && /ENOSPC/.test(String(e.message)))).toEqual([]);
   }, 60_000);
+});
+
+/* #3435 review pass 3 — pipelined mode. Chapter i's Phase 1 dispatches once the
+   watermark (the highest Phase-0 index completed, NOT a contiguous prefix)
+   reaches i + minLag, and `phase0FailedCount` is only set after the Phase-0 pool
+   drains, so a chapter whose OWN Phase 0a failed is still attributed. Its Phase-1
+   success must not clear its cast-phase record: only a Phase-0a success does,
+   otherwise the resume never re-casts it and the book completes without that
+   chapter's characters. */
+describe('pipelined main route: a cast-phase failure record survives the same chapter\'s Phase 1 (#3435)', () => {
+  beforeAll(async () => {
+    await import('./analysis.js');
+  }, 120_000);
+
+  async function runCastFailurePipelined(label: string, opts: { delayFailureSave?: boolean } = {}) {
+    const seed = await seedBook(label, [1, 2, 3]);
+    const { loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runMainAnalyzerJob } = await import('./analysis.js');
+    const g = globalThis as Record<string, unknown>;
+    const stage2Calls: number[] = [];
+    let ch1Phase1Done = false;
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    const failSafe = setTimeout(() => openGate(), 20_000);
+    /* Opens once chapter 1's Phase 1 has returned, plus a beat for its post-call
+       bookkeeping (the clear) to run. */
+    const afterCh1Phase1 = async (): Promise<void> => {
+      while (!ch1Phase1Done) await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 300));
+    };
+    let failChapterOne = true;
+    const castCalls: number[] = [];
+    const phase0 = buildSelection(
+      stubAnalyzer({
+        async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
+          castCalls.push(chapterId);
+          if (chapterId === 1 && failChapterOne) throw new Error('cast model exploded');
+          if (chapterId === 3 && failChapterOne) await gate;
+          return { characters: [novaCharacter()] };
+        },
+      }),
+      'phase0-model',
+    );
+    g.__overflow_spend_test_phase1_selection = buildSelection(
+      stubAnalyzer({
+        async runStage2Chapter(_m: string, chapterId: number): Promise<Stage2ChapterOutput> {
+          stage2Calls.push(chapterId);
+          if (chapterId === 1 && failChapterOne) {
+            ch1Phase1Done = true;
+            void afterCh1Phase1().then(openGate);
+          }
+          return stage2For(chapterId);
+        },
+      }),
+      MODEL,
+    );
+    g.__overflow_spend_test_pipelined = true;
+    if (opts.delayFailureSave) {
+      /* Hold the Phase-0a catch's save for chapter 1 until its Phase 1 has finished,
+         so the two bookkeeping paths interleave the other way round. */
+      let held = false;
+      g.__overflow_spend_test_save_hook = async (c: {
+        failedChapterErrors?: Record<string, unknown>;
+        chapterCast?: Record<number, unknown[]>;
+      }) => {
+        if (!held && c.failedChapterErrors?.['1'] && c.chapterCast?.[1] && !c.chapterCast[1].length) {
+          held = true;
+          await afterCh1Phase1();
+        }
+      };
+    }
+    const originalMinLag = process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS;
+    process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '0';
+    const events1 = captureEvents(seed.job);
+    try {
+      await runMainAnalyzerJob(seed.job, getManuscript(seed.manuscriptId)! as never, phase0, {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      const mid = await loadAnalysisCache(seed.manuscriptId);
+      const stage2Run1 = [...stage2Calls];
+      const castCallsRun1 = [...castCalls];
+
+      /* The resume (what the view's cast_incomplete auto-resume POSTs). */
+      failChapterOne = false;
+      delete g.__overflow_spend_test_save_hook;
+      castCalls.length = 0;
+      stage2Calls.length = 0;
+      const resumeJob = { ...seed.job, controller: new AbortController(), subscribers: new Set() } as unknown as AnalysisJob;
+      const events2 = captureEvents(resumeJob);
+      await runMainAnalyzerJob(resumeJob, getManuscript(seed.manuscriptId)! as never, phase0, {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      return { events1, events2, mid, after, stage2Run1, castCallsRun1, castCallsRun2: [...castCalls], stage2Run2: [...stage2Calls] };
+    } finally {
+      clearTimeout(failSafe);
+      openGate();
+      restoreEnv('ANALYZER_PHASE1_MIN_LAG_CHAPTERS', originalMinLag);
+      delete g.__overflow_spend_test_pipelined;
+      delete g.__overflow_spend_test_save_hook;
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  it('P-alpha: chapter 1\'s cast failure survives its own Phase 1; the resume re-casts and re-attributes it', async () => {
+    const r = await runCastFailurePipelined('p-alpha');
+    /* Control: chapter 1 really was attributed in run 1 while its cast had failed. */
+    expect(r.stage2Run1).toContain(1);
+    expect(r.events1.some((e) => e.kind === 'chapter-failed' && e.chapterId === 1)).toBe(true);
+    expect(r.events1.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).not.toContain(1);
+    expect(r.events1.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['cast_incomplete']);
+    expect(r.mid.failedChapterIds).toEqual([1]);
+    expect(r.mid.chapterCast?.[1]).toEqual([]);
+
+    expect(r.castCallsRun2).toEqual([1]);
+    expect(r.stage2Run2).toContain(1);
+    expect(r.events2.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+    expect(r.after.failedChapterIds ?? []).toEqual([]);
+    expect(r.after.chapterCast?.[1]?.length).toBeGreaterThan(0);
+  }, 90_000);
+
+  it('the other interleaving: chapter 1\'s Phase 1 finishing while the Phase-0a catch\'s save is pending leaves record and events consistent', async () => {
+    const r = await runCastFailurePipelined('p-alpha-delayed', { delayFailureSave: true });
+    expect(r.stage2Run1).toContain(1);
+    const kinds = r.events1
+      .filter((e) => (e.kind === 'chapter-failed' || e.kind === 'chapter-resolved') && e.chapterId === 1)
+      .map((e) => e.kind);
+    expect(kinds).toEqual(['chapter-failed']);
+    expect(r.mid.failedChapterIds).toEqual([1]);
+    expect(r.mid.chapterCast?.[1]).toEqual([]);
+    expect(r.castCallsRun2).toEqual([1]);
+    expect(r.after.failedChapterIds ?? []).toEqual([]);
+  }, 90_000);
 });
