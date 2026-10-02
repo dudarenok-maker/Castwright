@@ -1,6 +1,6 @@
 ---
 status: draft
-revision: 7 (revisions-only scope, chosen by the operator 2026-10-02 after four assumption-checker passes; passes 5-6 folded)
+revision: 8 (revisions-only scope, chosen by the operator 2026-10-02 after four assumption-checker passes; passes 5-7 folded)
 issues: "#3400, #3397"
 supersedes-client-guards-from: "#3376 / PR #3395 (merged 9f379fb6)"
 ---
@@ -82,7 +82,7 @@ Recorded by the operator on #3400/#3397 and in session, 2026-10-01/02:
 **File shape, `schema: 1`:**
 ```ts
 { schema: 1,
-  fileId: string | null, // minted (random) on the store's first write; a missing or legacy file reads as null
+  fileId: string | null, // `${epochMs}-${random}`, minted on the store's first write and on every reset; a missing or legacy file reads as null
   rev: number,           // +1 on every write within one fileId; a missing file reads as 0
   pending: Revision[],   // ≤1 entry per chapterId
   dismissed: string[],
@@ -128,7 +128,7 @@ Body: `{ selection?: Record<segmentIndex,'A'|'B'> }`.
    - Otherwise absent → 404 `revision_not_found`.
    - The entry's `chapterId` is no longer in `state.chapters` (a restructure whose best-effort drop failed) → drop the entry (one write) and return 404 `revision_not_found`. The prompt clears instead of looping.
 2. **Outside the lock:**
-   - **Refuse to delete the last copy.** If no live chapter audio exists (`findChapterAudio`) **and** `.previous` does exist, return 409 `live_audio_missing` and change nothing. That is exactly the state a failed restore leaves (`chapter-audio.ts:422-434`), and accepting would delete the only copy. This is a read-only pre-check; the audio code is unchanged. **The recovery is to retry Reject**, which works while `.previous` is intact. If neither file exists, there is nothing to lose: accept proceeds and clears the entry, as main does today, where the old client treats the DELETE's 404 as success (`api.ts:10220`).
+   - **Refuse to delete the last copy.** If no live chapter audio exists (`findChapterAudio`) **and** `.previous` does exist, return 409 `live_audio_missing` and change nothing. A failed restore leaves exactly this state (`chapter-audio.ts:422-434`), and so does a failed finalize rename. Either way, accepting would delete the only copy. After a failed finalize rename, `.previous` holds the take under review, and after a server restart fsck may already have promoted `.previous`. In both cases the timeline can still record an outcome that doesn't match the audio. That is a residual for the take-lifecycle issue; no audio is lost. This is a read-only pre-check; the audio code is unchanged. **The recovery is to retry Reject**, which works while `.previous` is intact. If neither file exists, there is nothing to lose: accept proceeds and clears the entry, as main does today, where the old client treats the DELETE's 404 as success (`api.ts:10220`).
    - Otherwise run `acceptPreviousAudio`. Both `'deleted'` and `'none'` proceed; `'none'` is today's 404-as-success.
 3. **Under the lock:** re-read.
    - **If the entry is no longer present** and the timeline already holds this op's outcome for this id (another tab finished the same op), return 200 with the current state.
@@ -142,7 +142,10 @@ Body: `{ selection?: Record<segmentIndex,'A'|'B'> }`.
    - `isGenerationActive(bookId)` → 409 `chapter_busy`. This is the same check today's route makes.
    - Run `restorePreviousAudio`. `'none'` → 409 `no_previous_audio`, and the UI offers **Keep new take**, which is accept.
    - **If it throws** → 500 `restore_failed`. The JSON is untouched. Live audio may now be missing while `.previous` is intact. **Retrying Reject is the recovery**, and accept's pre-check refuses until then.
-3. **Under the lock:** re-read. Same rule as accept step 3: if the entry is gone, return 409 `revision_gone` and write nothing. Otherwise remove the entry and append `rejected`. One write, `rev + 1`.
+3. **Under the lock:** re-read. Same rule as accept step 3:
+   - the entry is gone and the timeline already has `rejected` for this id → 200;
+   - the entry is gone otherwise → 409 `revision_gone`, writing nothing;
+   - otherwise remove the entry and append `rejected`. One write, `rev + 1`.
 
 **Residual (filed with the take-lifecycle issue):** if the audio step succeeds and step 3's write then fails, the response is 500, the entry stays, and the audio is the restored take. A retried reject gets `no_previous_audio`. Choosing Keep new take would then record `accepted` while the old take is live. Making that impossible needs the lifecycle design. It requires a JSON write failure right after a successful rename, both on the same disk.
 
@@ -228,7 +231,10 @@ A server test round-trips `review` through enqueue and claim into the request.
 - `mockPollRevisions` reads `MOCK_BOOK_STATES` (D7).
 - `mockStreamSplice` records pending as finalize does, takes `bookId`, and takes a test-controllable delay.
 - **`mockStreamGeneration`** (`api.ts:1625`) records pending for a `review` request exactly as finalize does. For a first render it records nothing. It also emits `reviewChapter:true` on that chapter's `chapter_complete`.
-- Mock book state gains `previousChapterIds: number[]`. The mock splice and the mock review generation add the chapter to it. The mock accept removes it, and the mock reject returns `'restored'` when the chapter is present (`'none'` otherwise).
+- Mock book state gains `previousChapterIds: number[]`, mirroring `.previous` on disk.
+  - The mock splice and the mock review generation add the chapter **only when it already had audio**. A first render adds nothing.
+  - Mock accept removes it.
+  - Mock reject and the mock `restore-unrecorded` return `'restored'` and **remove it** when the chapter is present, `'none'` otherwise.
 - A window hook, **`window.__mockRevisions`** (`seed(bookId, {state, previousChapterIds})`, `get(bookId)`), installed in mock mode next to the existing `window.__mockQueue` (`main.tsx:61`), lets `e2e/marketing/scenes.ts` and the Playwright specs seed `MOCK_BOOK_STATES` (`api.ts:917`).
 - Remove `acceptChapterRevision` and `rejectChapterRevision`.
 
@@ -237,12 +243,13 @@ A server test round-trips `review` through enqueue and claim into the request.
 `src/store/revisions-slice.ts` keeps `pending`, `drift`, `dismissed`, `acceptedSelections`, `timeline`, `loaded`, `bookId`, `fileId` and `rev`.
 
 **Writers:**
-- `hydrate({bookId, state})` adopts any other book unconditionally. For the same book it follows the same-book rule below.
+- `hydrate({bookId, state})` **always adopts**. It is the fresh read issued when a book is opened, so it is authoritative. That covers a book that was deleted and re-imported under its deterministic id (`paths.ts:123-124`), whose file reads `fileId: null` (the book DELETE removes the directory, `book-state.ts:1563-1571`). A slow book-open read can at worst briefly show slightly older state, which the next poll repairs.
+- **Book delete** (`routes/index.tsx:146-158`, which today dispatches `bookWiped`) dispatches `revisions/forgetBook(bookId)`. That resets the cache if it holds that book.
 - `applyServerState` and `applyPoll`:
   - **Callers dispatch only payloads whose `bookId` equals the current `ui.stage.bookId`**, read at dispatch time. That covers the thunks, the active poll, and the runners' refetches, which use the active book, never "the cached book".
   - The reducer adopts a different `bookId`.
   - For the same book:
-    - a different non-null `fileId` adopts, because the file was recreated;
+    - a different non-null `fileId` adopts only if it is **newer**, compared by its epoch prefix, because the file was reset. A late response from before a reset can't win;
     - a `fileId: null` payload while the cache holds a non-null `fileId` is **ignored**. It can only be a response that read the legacy file before the store's first write and landed late, because the store never deletes, it resets (§1);
     - otherwise, with equal `fileId`s (null and null included), it ignores `state.rev < cache.rev`.
 - `applyDismiss({bookId, driftId, state})`:
@@ -263,7 +270,8 @@ A server test round-trips `review` through enqueue and claim into the request.
 
 | Dispatch site | Change |
 |---|---|
-| `src/routes/index.tsx:155,196,252` (`bookWiped`) | removed |
+| `src/routes/index.tsx:155` (`bookWiped` on book delete) | becomes `revisions/forgetBook` |
+| `src/routes/index.tsx:196,252` (`bookWiped` on replace/reparse) | removed: the server resets the file, and the next hydrate adopts it |
 | `e2e/profile-regen-preview.spec.ts:96-101` (phantom workaround) | removed |
 | `e2e/marketing/scenes.ts:1060,1087` | seed mock state instead |
 | `src/store/generation-stream-middleware.ts:169-179` (preview gate) | replaced by `chapters/previewChapterComplete` |
@@ -288,7 +296,7 @@ A server test round-trips `review` through enqueue and claim into the request.
 | `chapter_busy` | Toast: "This chapter is busy — try again when it finishes". |
 | `no_previous_audio` | "Original audio not preserved", with **Keep new take**. |
 | `revision_not_found` / `revision_gone` | "This take was replaced by a newer render", then apply the returned state or refetch. |
-| `live_audio_missing` | Error toast: "This chapter's current audio is missing — choose Reject to restore the original". Approve stays refused. |
+| `live_audio_missing` | Error toast: "This chapter's current audio is missing. Reject restores the earlier take; re-rendering the chapter replaces it". Approve stays refused. |
 | `restore_failed` | Error toast "Couldn't restore the original — try Reject again". Refetch and keep the entry; Reject stays enabled. |
 | anything else | Toast; the cache is unchanged. |
 
@@ -300,7 +308,7 @@ A server test round-trips `review` through enqueue and claim into the request.
   - The preview side effects run **only after success**: drop the preview, add the change-log entry, fan out the remaining chapters.
 - **Dismiss** (`:2199`) dispatches `dismissDriftOp`.
 - **The active poll** (`:1108-1125`) dispatches `applyPoll`.
-- **The A/B player opens a specific entry** (D6), via `ui.openRevision`. If a `server` entry it shows disappears from the cache (another tab, or a poll) while `previewRegen` is set, the preview is cleared with a toast "This preview was resolved elsewhere", so it is never left stranded.
+- **The A/B player opens a specific entry** (D6), via `ui.openRevision`. If a `server` entry it shows disappears from the cache **while no op of this player is in flight** (another tab, or a poll), and `previewRegen` is set, the preview is cleared with a toast "This preview was resolved elsewhere", so it is never left stranded. The thunks clear `ui.openRevision` before applying their own success, so the user's own Approve never triggers that toast. The fan-out uses the `previewRegen` captured at click time, as `layout.tsx:2494` does today.
 
 **`PreviewRegenCtx`** (`src/store/ui-slice.ts:22-33`) gains `bookId`, and the fan-out uses it. It stays transient: after a reload, Approve does not fan out, which is today's behaviour and is stated in the regression plan.
 
@@ -321,12 +329,19 @@ A server test round-trips `review` through enqueue and claim into the request.
 
 **`generation-stream-runner.ts`** dispatches `chapters/previewChapterComplete({bookId, chapterId, reviewRecorded})` only for a `chapter_complete` with `reviewChapter: true`. It does this for any book. `handleTickFor` already runs for every book (`:356`); today's `markRevisionPlayable` is the part gated on the cached book (`:413`).
 - **Active book:** the middleware refetches and opens the player on that chapter's entry.
-- **`reviewRecorded:false`, or no entry for the chapter after the refetch** (a first render, a failed preserve): the player opens on a **preview stub**.
+- **`reviewRecorded:false`, or a refetch that succeeded and has no entry for the chapter** (a first render, a failed preserve): the player opens on a **preview stub**. A refetch that **failed** does not open a stub: the middleware toasts "Couldn't load the preview — retrying" and retries the refetch once.
   - **Where it lives:** in `ui.previewRegen.stub`, **not** in the revisions cache. Polls and `applyServerState` never touch it. It is never sent to the server.
   - **How it's routed:** the player is opened with `ui.openRevision = { kind: 'preview-stub' }`. Routing is by that explicit `kind`, never by id or by a missing `origin`, so a legacy on-disk `revision:<ch>:<char>` entry is never mistaken for a stub.
-  - **What it shows:** it is built by today's builder (`build-pending-revision.ts`, renamed `buildPreviewStub`), with `hasPreviousAudio: true`. As today, A flips to "Original audio not preserved" when the `.previous` fetch returns 404 (`revision-diff.tsx:71`, `:244-246`).
-  - **Approve / Keep new take:** runs only the preview side effects (fan-out, change-log entry) and issues no revisions op. A `.previous` left behind is harmless: the next render overwrites it, and fsck only promotes it when live audio is missing.
-  - **Reject & re-adjust:** when `.previous` exists (the `reviewRecorded:false` case, where preserve did succeed), it calls the narrow new route **`POST /api/books/{bookId}/chapters/{chapterId}/audio/previous/restore-unrecorded`**. That route runs the same `restorePreviousAudio`, behind the same busy check, and never touches revisions.json. Then it drops the preview. When there is no `.previous`, it just drops the preview, as today.
+  - **What it shows:** it is built by today's builder (`build-pending-revision.ts`, renamed `buildPreviewStub`). Its stale docstring claim (`:8-12`, `:49-51`) is corrected. **Before opening**, the middleware asks whether `.previous` exists, using the existing previous-audio metadata GET (`chapter-audio.ts:215`), and sets `hasPreviousAudio` from the answer. When it is false, A shows "Original audio not preserved" (`revision-diff.tsx:71`, `:244-251`). That flag also decides the Reject branch below.
+  - **Approve / Keep new take:** runs only the preview side effects (fan-out, change-log entry) and issues no revisions op. A `.previous` left behind is harmless **once the fsck m4a/ogg fix has merged**: the next render overwrites it, and the fixed fsck promotes it only when no live audio of any extension exists. **PR 2 must merge after that fix.**
+  - **Reject & re-adjust:**
+    - When `hasPreviousAudio` is true (the `reviewRecorded:false` case, where preserve did succeed), it calls the narrow new route **`POST /api/books/{bookId}/chapters/{chapterId}/audio/previous/restore-unrecorded`**, then drops the preview.
+    - When it is false, it just drops the preview.
+  - **The `restore-unrecorded` route** lands in **PR 2**, with its OpenAPI entry, `api.restorePreviousUnrecorded`, a mock, and a paired server test.
+    - It keeps today's restore route order: the `isGenerationActive` 409 first, then the chapter parse and book/chapter lookups with their 404s.
+    - It returns **409 `has_revision` if revisions.json has a pending entry for that chapter**. That entry must go through the recorded reject, so the timeline can't disagree with the audio.
+    - It then runs `restorePreviousAudio`: `'restored'` → 204, `'none'` → 404, a throw → 500.
+    - It never writes revisions.json.
   - When `reviewRecorded:false` and an older stale entry for the chapter survives, the stub is opened anyway. The stale entry stays in the list, and its accept/reject follows the normal rules.
 - **Otherwise:** toast "Preview ready in ‹book›".
 - Its `markRevisionPlayable` dispatch is removed.
@@ -340,7 +355,7 @@ A server test round-trips `review` through enqueue and claim into the request.
 - `PUT /state` with `slice:'revisions'` is still accepted;
 - `GET /state` returns revisions.json **raw**, so the old client's `hydrateFromBookState` still sees `drift` (`revisions-slice.ts:396-402`).
 
-The new routes and the store exist but nothing calls them. The only PR 1 changes an old client could observe are the reparse wipe moving under the lock (same result), and D8 (pending with an empty cast), which the old `applyPoll` ignores (`revisions-slice.ts:318-322`).
+The new routes and the store exist but nothing calls them. The only PR 1 changes an old client could observe are reparse/replace **resetting** the file under the lock instead of deleting it (observably the same: the old client's hydrate spreads the payload, `layout.tsx:915`, and an empty file reads like a missing one, `revisions.ts:149-153`), and D8 (pending with an empty cast), which the old `applyPoll` ignores (`revisions-slice.ts:318-322`).
 
 **Invariant on `main` between PR 1 and PR 2: the client is the only writer of `pending`.**
 
@@ -364,7 +379,7 @@ Every behavioural item has a paired test, mutation-checked: revert the fix and o
 - **the JSON is untouched when reject is refused as busy, finds no `.previous`, or its audio step throws**;
 - **accept refuses with `live_audio_missing` after a restore that threw mid-way**, `.previous` still exists afterwards, and a retried reject then succeeds. Accept with neither file proceeds and clears the entry;
 - reparse and replace reset the file to a new `fileId`; they never delete it;
-- step 3 writes nothing and returns `revision_gone` when the entry vanished between steps 1 and 3. Cover a concurrent accept, a newer upsert and a wipe; a wipe must not recreate the file;
+- step 3 writes nothing and returns `revision_gone` when the entry vanished between steps 1 and 3. Cover a concurrent accept, a newer upsert and a reset; nothing may be written into a reset file;
 - an entry whose chapter no longer exists is dropped and returns 404;
 - lock serialisation: accept racing `recordPending` on one book, in both orders;
 - normalisation;
@@ -401,7 +416,13 @@ Every behavioural item has a paired test, mutation-checked: revert the fix and o
 - the mock/real contract test;
 - the mock poll reads per-book state;
 - `applyDismiss` for a foreign book leaves the active book's `rev` and `dismissed` unchanged;
-- a null-`fileId` payload is ignored over a non-null cache;
+- a null-`fileId` poll is ignored over a non-null cache, but a null-`fileId` hydrate adopts;
+- delete → re-import under the same bookId shows a clean cache;
+- an older-epoch `fileId` is ignored after a reset;
+- `restore-unrecorded` returns `has_revision` when a server entry exists for the chapter;
+- a failed refetch at preview completion does not open a stub;
+- the stub's `hasPreviousAudio` comes from the metadata check;
+- the user's own Approve does not fire the "resolved elsewhere" toast;
 - the preview stub survives polls and refetches, Approve on it makes no revisions call, and Reject on it calls `restore-unrecorded`;
 - a vanishing `server` entry under an open preview clears `previewRegen`;
 - mock generation records pending for `review` and emits `reviewChapter`.
@@ -432,6 +453,7 @@ Every behavioural item has a paired test, mutation-checked: revert the fix and o
   - release notes. PR 1's are none: dark, with no shippable delta. Say so explicitly in the PR.
 - **PR 2 also adds:** release notes, and the on-box register row on all three surfaces.
 - **Before PR 1 starts:**
-  - file the take-lifecycle design issue, carrying the four passes' findings;
+  - file the take-lifecycle design issue, carrying the passes' findings and this spec's named residuals;
   - file the fsck fix's issue and dispatch the fix.
+- **PR 2 depends on the fsck fix being merged** (the stub-Approve case above).
 - **Expected size:** PR 1 about 6 children plus verify, PR 2 about 7 plus verify.
