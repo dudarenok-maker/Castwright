@@ -1426,8 +1426,11 @@ export function recordFailedChapter(
 /* #3435 — save the cache from INSIDE a per-chapter failure catch. That save
    can itself throw (ENOSPC, `renameWithRetry` exhausted); unguarded, its error
    replaces the one being handled (an overflow loses its code and fixes) and the
-   `chapter-failed` that follows is never sent. Log it and carry on: the record
-   is also in memory and the next save of the cache persists it. */
+   `chapter-failed` that follows is never sent. Log it and carry on. The record
+   may be lost on disk (the subset Phase-1 site rethrows straight to a terminal
+   handler that never saves the analysis cache), but it is a failure record, not
+   user content: the live `chapter-failed` and the original error still reach
+   the user. */
 async function saveCacheInFailureCatch(
   manuscriptId: string,
   cache: AnalysisCache,

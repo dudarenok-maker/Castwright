@@ -1030,7 +1030,7 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
     label: string,
     seedFailed: Record<number, string>,
     steps: Step[],
-    opts: { prevStage1Size?: number; emptyCast?: number[] } = {},
+    opts: { prevStage1Size?: number; emptyCast?: number[]; excluded?: number[] } = {},
   ): Promise<CaseResult> {
     const seed = await seedBook(label, [1, 2], { fullCache: true });
     const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
@@ -1064,6 +1064,7 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
     }
     await saveAnalysisCache(seed.manuscriptId, cache);
     const record = getManuscript(seed.manuscriptId)!;
+    for (const h of record.chapterHints) if (opts.excluded?.includes(h.id)) h.excluded = true;
     const results: StepResult[] = [];
     try {
       for (const step of steps) {
@@ -1242,6 +1243,28 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
     expect(events.filter((e) => e.kind === 'error' && /ENOSPC/.test(String(e.message)))).toEqual([]);
   }, 60_000);
 
+  it('PB: an excluded chapter carrying a cast-phase record does not block a Re-analyse of another chapter', async () => {
+    const calls: number[] = [];
+    const r = await runCase(
+      'pb-excluded',
+      { 2: 'analyzer-timeout' },
+      [
+        {
+          toRun: [1],
+          runStage2Chapter: async (_m, id) => {
+            calls.push(id);
+            return stage2For(id);
+          },
+        },
+      ],
+      { emptyCast: [2], excluded: [2] },
+    );
+    expect(calls).toEqual([1]);
+    expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(true);
+    /* The excluded chapter's record is untouched. */
+    expect(r.failedChapterIds).toEqual([2]);
+  }, 60_000);
+
   it('a cast-phase failure fixed by Phase 0 is NOT cleared or announced when its Phase 1 then fails (stage1 on disk)', async () => {
     const r = await runCase(
       'p1-castfix',
@@ -1340,5 +1363,41 @@ describe('main-route resume: which failed chapters re-enter cast detection (#343
     expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([2]);
     expect(after.failedChapterIds).toEqual([1]);
     expect(after.failedChapterErrors?.['1']?.code).toBe('attribution-collapse');
+  }, 60_000);
+
+  it('a save that throws in the Phase-0a failure catch keeps the original error and still sends chapter-failed', async () => {
+    const seed = await seedBook('save-throws-main', [1, 2]);
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runMainAnalyzerJob } = await import('./analysis.js');
+    let thrown = false;
+    (globalThis as Record<string, unknown>).__overflow_spend_test_save_hook = (c: {
+      failedChapterErrors?: Record<string, unknown>;
+      chapterCast?: Record<number, unknown[]>;
+    }) => {
+      /* Only the save inside the failure catch (the record is there, the cast is the empty marker). */
+      if (!thrown && c.failedChapterErrors?.['1'] && c.chapterCast?.[1] && !c.chapterCast[1].length) {
+        thrown = true;
+        throw new Error('ENOSPC: disk full');
+      }
+    };
+    const phase0 = buildSelection(
+      stubAnalyzer({ runStage1Chapter: () => Promise.reject(new Error('cast model exploded')) }),
+      'phase0-model',
+    );
+    const events = captureEvents(seed.job);
+    try {
+      await runMainAnalyzerJob(seed.job, getManuscript(seed.manuscriptId)! as never, phase0, {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+    expect(thrown).toBe(true);
+    expect(events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1)).toBeDefined();
+    expect(events.filter((e) => e.kind === 'error' && /ENOSPC/.test(String(e.message)))).toEqual([]);
   }, 60_000);
 });
