@@ -22,7 +22,7 @@ import {
   LEGACY_USER_SETTINGS_PATH,
 } from './user-settings-path.js';
 import type { CloneEngine } from '../tts/clone-engines.js';
-import type { AnalysisEngine } from '../analyzer/model-id.js';
+import { inferEngineFromModelId, type AnalysisEngine } from '../analyzer/model-id.js';
 
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that
@@ -734,6 +734,48 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
     if (FORBIDDEN_KEYS.has(k)) continue;
     out[k] = v;
+  }
+  return out;
+}
+/* #3084 P23 — until PR 3d, no saved selection may name an OpenAI-compatible
+   endpoint. `defaultAnalysisModel` is the only settings field left to check
+   here — `analyzerPhase0Model`/`analyzerPhase1Model` no longer exist on the
+   schema at all (A5) and are unconditionally refused for an unrelated
+   reason by this file's own RETIRED_ANALYZER_FIELDS (routes/user-settings.ts)
+   before this check would ever run. `analyzer.ollama.model` joins the two
+   phase knobs (A3 — it is Advanced-editable and read at runtime now, so a
+   saved endpoint id there would reach an Ollama probe exactly like a phase
+   knob would). Checked on CLIENT input only (the general PUT and
+   PUT /api/config): the schema also parses the file on read, and the
+   override upsert below rewrites the whole overrides map. PR 3d deletes
+   ENDPOINT_ID_REFUSED_FIELDS and narrows ENDPOINT_ID_REFUSED_KNOBS to
+   ['analyzer.ollama.model'] rather than deleting it — that knob keeps its
+   save refusal permanently (coordinator ruling): it is the Ollama tag, so
+   an endpoint id there can never be what the user meant, and this is the
+   only guard that stops one being WRITTEN in the first place (3a.4's
+   getResolvedOllamaModel merely keeps a written one off the wire). The
+   general PUT, PUT /api/config, and this helper therefore all survive PR
+   3d, narrowed to that one knob; only the mock PUT's defaultAnalysisModel
+   block is fully deleted there. */
+export const ENDPOINT_ID_REFUSED_FIELDS = ['defaultAnalysisModel'] as const;
+export const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model'] as const;
+const ENDPOINT_ID_REFUSAL = 'OpenAI-compatible endpoint models cannot be selected in this build.';
+
+export function endpointModelIdRefusals(patch: unknown): Array<{ path: string[]; message: string }> {
+  if (!patch || typeof patch !== 'object') return [];
+  const p = patch as Record<string, unknown>;
+  const isEndpointId = (v: unknown): boolean => typeof v === 'string' && inferEngineFromModelId(v.trim()) === 'openai';
+  const out: Array<{ path: string[]; message: string }> = [];
+  for (const field of ENDPOINT_ID_REFUSED_FIELDS) {
+    if (isEndpointId(p[field])) out.push({ path: [field], message: ENDPOINT_ID_REFUSAL });
+  }
+  const overrides = p.configOverrides;
+  if (overrides && typeof overrides === 'object') {
+    for (const knob of ENDPOINT_ID_REFUSED_KNOBS) {
+      if (isEndpointId((overrides as Record<string, unknown>)[knob])) {
+        out.push({ path: ['configOverrides', knob], message: ENDPOINT_ID_REFUSAL });
+      }
+    }
   }
   return out;
 }

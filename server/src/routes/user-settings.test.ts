@@ -531,4 +531,51 @@ describe('user-settings router', () => {
     expect(after.body.analysisEngine).toBe('local');
   });
 
+  it('refuses an endpoint model id in defaultAnalysisModel until endpoints are selectable (#3084 P23)', async () => {
+    const res = await request(app).put('/api/user/settings').send({ defaultAnalysisModel: 'openai:lab::qwen3:30b' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid user settings.');
+    expect(res.body.issues).toEqual([
+      { path: ['defaultAnalysisModel'], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' },
+    ]);
+    const after = await request(app).get('/api/user/settings');
+    expect(after.body.defaultAnalysisModel).not.toBe('openai:lab::qwen3:30b');
+  });
+
+  /* #3084 A4 (re-pin to 80be2f1d) — analyzerPhase0Model/analyzerPhase1Model
+     are unconditionally rejected by main's own RETIRED_ANALYZER_FIELDS check
+     now (`error` names them "managed in Advanced Settings…"), with or
+     without an endpoint id, so this task has nothing left to add for those
+     two field names — no test names them here any more. */
+  /* Split into two cases (coordinator ruling): PR 3d lifts the refusal for
+     the two phase-model knobs but NOT for analyzer.ollama.model, which keeps
+     its save refusal permanently — that knob is the Ollama tag, so an
+     endpoint id there can never be what the user meant. Task 3d.4a flips
+     only the phase-model case to "accepts"; the ollama-model case survives
+     unchanged into PR 3d. */
+  it('refuses an endpoint model id in a phase-model override, and still saves a still-writable field (#3084 P23)', async () => {
+    for (const key of ['analyzer.phase0.model', 'analyzer.phase1.model']) {
+      const refused = await request(app)
+        .put('/api/user/settings')
+        .send({ configOverrides: { [key]: 'openai:lab::m' } });
+      expect(refused.status).toBe(400);
+      expect(refused.body.issues.map((i: { path: string[] }) => i.path)).toEqual([['configOverrides', key]]);
+    }
+    /* Any field the general PUT can still write, unaffected by either
+       refusal above (A4: use `displayName`, not `ollamaUrl` — also retired). */
+    const ok = await request(app).put('/api/user/settings').send({ displayName: 'Still writable' });
+    expect(ok.status).toBe(200);
+    expect(ok.body.displayName).toBe('Still writable');
+  });
+
+  it('refuses an endpoint model id in the analyzer.ollama.model override (#3084 P23)', async () => {
+    const refused = await request(app)
+      .put('/api/user/settings')
+      .send({ configOverrides: { 'analyzer.ollama.model': 'openai:lab::m' } });
+    expect(refused.status).toBe(400);
+    expect(refused.body.issues.map((i: { path: string[] }) => i.path)).toEqual([
+      ['configOverrides', 'analyzer.ollama.model'],
+    ]);
+  });
+
 });

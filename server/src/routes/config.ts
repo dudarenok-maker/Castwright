@@ -23,6 +23,7 @@ import {
   writeConfigOverride,
   clearConfigOverride,
   clearAllConfigOverrides,
+  endpointModelIdRefusals,
 } from '../workspace/user-settings.js';
 import { PROMPT_IDS, readPrompt, writeForkedPrompt, resetPrompt } from '../config/prompts.js';
 import { toUuidForm, needsUuidTranslation } from './gpu-uuid.js';
@@ -113,6 +114,12 @@ configRouter.put('/', async (req, res) => {
     }
     if (resolveKnob(knob).locked) {
       res.status(409).json({ error: `${key} is set in environment` });
+      return;
+    }
+    /* #3084 P23 — PR 3d narrows this refusal to analyzer.ollama.model only
+       (coordinator ruling); it does not delete it. */
+    if (endpointModelIdRefusals({ configOverrides: { [key]: raw } }).length > 0) {
+      res.status(400).json({ error: `${key}: OpenAI-compatible endpoint models cannot be selected in this build.` });
       return;
     }
     const r = coerceAndValidate(knob, raw);

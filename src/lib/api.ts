@@ -67,7 +67,7 @@ import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
-import type { AnalysisEngine } from './model-id';
+import { engineForModelId, type AnalysisEngine } from './model-id';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -7427,6 +7427,19 @@ const RETIRED_ANALYZER_FIELDS = [
 
 async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
   await wait(50);
+  /* #3084 P23 — mirrors the server's refusal of an endpoint model id in a saved
+     selection (server/src/workspace/user-settings.ts endpointModelIdRefusals),
+     with realPutUserSettings' error text. PR 3d deletes this block. Only
+     defaultAnalysisModel — A5 removed the two phase fields from the schema
+     entirely, so the mock (like the server) never sees them here at all. */
+  if (typeof patch.defaultAnalysisModel === 'string' && engineForModelId(patch.defaultAnalysisModel.trim()) === 'openai') {
+    throw new Error(
+      `User settings save failed (400): ${JSON.stringify({
+        error: 'Invalid user settings.',
+        issues: [{ path: ['defaultAnalysisModel'], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' }],
+      })}`,
+    );
+  }
   const offending = RETIRED_ANALYZER_FIELDS.filter(
     (field) => field in (patch as Record<string, unknown>),
   );
@@ -7466,6 +7479,22 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
       }).filter(([, v]) => v !== undefined),
     ),
   );
+  /* #3084 P23 — mirror the server's configOverrides persistence. The PUT
+     route passes configOverrides through to writeUserSettings, which merges
+     them into the on-disk file. The frontend UserSettings type doesn't
+     surface configOverrides (it's server-only, behind the retired resolver
+     fields), so the mock persists it via a type assertion. */
+  const patchRecord = patch as Record<string, unknown>;
+  if (patchRecord.configOverrides && typeof patchRecord.configOverrides === 'object') {
+    const mockRecord = MOCK_USER_SETTINGS as Record<string, unknown>;
+    if (!mockRecord.configOverrides || typeof mockRecord.configOverrides !== 'object') {
+      mockRecord.configOverrides = {};
+    }
+    Object.assign(
+      mockRecord.configOverrides as Record<string, unknown>,
+      patchRecord.configOverrides as Record<string, unknown>,
+    );
+  }
   return { ...MOCK_USER_SETTINGS };
 }
 
