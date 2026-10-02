@@ -107,6 +107,15 @@ beforeAll(() => {
   process.env.STRUCTURE_ENGINE = '0';
 });
 
+/* The first case lazily imports ./analysis.js inside its own 30s budget, and a
+   cold transform of that module takes ~20s alone and longer under CPU
+   contention (a second vitest process) — the first case then timed out for
+   reasons unrelated to the rename. Pay for the import here instead. Placed
+   after the settings env above so USER_SETTINGS_FILE still lands first. */
+beforeAll(async () => {
+  await import('./analysis.js');
+}, 120_000);
+
 afterAll(() => {
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
