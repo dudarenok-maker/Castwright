@@ -8876,6 +8876,9 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       bookDir,
     });
 
+    let server: import('node:http').Server | undefined;
+    let port = 0;
+    let syntheticEndedAt = 0;
     try {
       const job = {
         controller: new AbortController(),
@@ -8906,7 +8909,10 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       const deadline = Date.now() + 2_000;
       for (;;) {
         const outcome = await readAnalysisLastOutcome(bookDir);
-        if (outcome) break;
+        if (outcome) {
+          syntheticEndedAt = (outcome as { endedAt: number }).endedAt;
+          break;
+        }
         if (Date.now() > deadline) throw new Error('outcome file never landed within 2s');
         await new Promise((r) => setTimeout(r, 20));
       }
@@ -8914,8 +8920,8 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       const app = express();
       app.use(express.json());
       app.use('/api/manuscripts', analysisRouter);
-      const server = app.listen(0);
-      const port = (server.address() as { port: number }).port;
+      server = app.listen(0);
+      port = (server.address() as { port: number }).port;
 
       const sseText = await new Promise<string>((resolvePromise, reject) => {
         const req = http.request(
@@ -8942,7 +8948,6 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
         });
         req.end(JSON.stringify({}));
       });
-      server.close();
 
       expect(sseText).toContain('rejoin-miss');
       const line = sseText.split('\n').find((l) => l.includes('rejoin-miss'));
@@ -8959,12 +8964,36 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
          starts one after a miss), and destroying the socket does not stop it.
          Left running it logs after this file ends and vitest raises
          "Closing rpc while onUserConsoleLog was pending" at worker teardown
-         (PR #3430 CI). Wait for it to settle before tearing the fixture down. */
-      const settleDeadline = Date.now() + 15_000;
-      while (isAnalysisJobRunning(manuscriptId) && Date.now() < settleDeadline) {
+         (PR #3430 CI). It also talks to whatever analyzer the box has (a local
+         Ollama can take well over any fixed budget), so do not wait for it to
+         finish: cancel it through the real pause route, then wait for the
+         run's own endJob to land a NEWER outcome than the synthetic one —
+         isAnalysisJobRunning alone is true->false the instant the controller
+         aborts, before the run has actually unwound. */
+      if (server) {
+        await new Promise<void>((resolvePause) => {
+          const preq = http.request(
+            { host: '127.0.0.1', port, path: `/api/manuscripts/${manuscriptId}/analysis/pause`, method: 'POST' },
+            (pres) => {
+              pres.resume();
+              pres.on('end', () => resolvePause());
+            },
+          );
+          preq.on('error', () => resolvePause());
+          preq.end();
+        });
+      }
+      const { readAnalysisLastOutcome: readOutcomeAfter } = await import('../store/analysis-state.js');
+      const settleDeadline = Date.now() + 5_000;
+      for (;;) {
+        const o = (await readOutcomeAfter(bookDir)) as { endedAt?: number } | null | undefined;
+        if (!isAnalysisJobRunning(manuscriptId) && (o?.endedAt ?? 0) > syntheticEndedAt) break;
+        if (Date.now() > settleDeadline) break;
         await new Promise((r) => setTimeout(r, 20));
       }
-      const stillRunning = isAnalysisJobRunning(manuscriptId);
+      const o2 = (await readOutcomeAfter(bookDir)) as { endedAt?: number } | null | undefined;
+      const stillRunning = isAnalysisJobRunning(manuscriptId) || !((o2?.endedAt ?? 0) > syntheticEndedAt);
+      server?.close();
       removeManuscript(manuscriptId);
       rmSync(workspaceRoot, { recursive: true, force: true });
       if (prevWorkspaceDir === undefined) delete process.env.WORKSPACE_DIR;
