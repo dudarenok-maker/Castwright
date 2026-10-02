@@ -20,11 +20,12 @@
  *         failed first. Either way the segments file is dead state.
  *         Recovery: delete the orphan.
  *
- *   (3) Both `<slug>.previous.mp3` and `<slug>.mp3` exist.
+ *   (3) `<slug>.previous.mp3` exists alongside a live take of any
+ *       supported extension (`<slug>.{mp3,m4a,ogg}`).
  *       — Interpretation: valid pending-revision state. Leave alone.
  *
  * Safe to run on every server start: the operations are idempotent and
- * only ever rename / delete the `.previous.*` halves — the live `.mp3`
+ * only ever rename / delete the `.previous.*` halves — the live audio
  * is never touched by this fsck. */
 
 import { existsSync, readdirSync } from 'node:fs';
