@@ -6,14 +6,14 @@ owner: null
 
 # 285 — revisions.json becomes server-owned: per-operation writes (PR 1, server, dark) (#3400, #3397)
 
-> Status: active. This is PR 1 of 2 (server, dark). PR 2 (the client cutover) gets its own plan revision once PR 1 merges.
+> Status: active. This is PR 1 of 2 (server, dark). PR 2, the client cutover, gets its own plan revision after PR 1 merges.
 >
 > Key files:
 > - `server/src/workspace/revisions-store.ts` (new): the only reader and writer of revisions.json.
-> - `server/src/audio/previous-audio.ts` (new): today's A/B audio steps, moved without changes.
-> - `server/src/routes/revision-ops.ts` (new): accept, reject and dismiss.
+> - `server/src/audio/previous-audio.ts` (new): today's A/B audio steps, moved unchanged.
+> - `server/src/routes/revision-ops.ts` (new): the accept, reject and dismiss routes.
 > - `server/src/routes/review-request.ts` (new): the shared `review` validator.
-> - Server files modified: `server/src/routes/revisions.ts`, `server/src/routes/chapter-audio.ts`, `server/src/routes/book-state.ts`, `server/src/routes/generation.ts`, `server/src/routes/queue.ts`, `server/src/workspace/queue-io.ts`, `server/src/audio/finalize-chapter-write.ts`, `server/src/routes/chapter-splice.ts`, `server/src/routes/chapter-qa-repair.ts`, `server/src/app.ts`.
+> - Server files modified: `server/src/routes/revisions.ts`, `server/src/routes/qa-report.ts`, `server/src/routes/chapter-audio.ts`, `server/src/routes/book-state.ts`, `server/src/routes/generation.ts`, `server/src/routes/queue.ts`, `server/src/workspace/queue-io.ts`, `server/src/audio/finalize-chapter-write.ts`, `server/src/routes/chapter-splice.ts`, `server/src/routes/chapter-qa-repair.ts`, `server/src/app.ts`.
 > - Contract and client files modified: `openapi.yaml`, `src/lib/api-types.ts` (generated), `src/lib/api.ts`, `src/lib/types.ts`, `src/store/queue-thunks.ts`, `src/store/generation-stream-runner.ts`, `src/store/queue-dispatcher-middleware.ts`.
 >
 > URL surface: none. PR 1 makes no UI change.
@@ -24,67 +24,76 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User:** nothing visible in PR 1, because the change is dark. PR 2 builds on it to fix #3397 (a Fix-audio prompt that gets stuck or lost when the user leaves the book) and #3400 (stale client state erasing revisions.json).
-- **Technical:** revisions.json gets a single owner with a per-book lock, a `fileId`/`rev` version stamp, the existing `schema-migrate.ts` seam, and read-time normalisation. Accept and reject each become one server request, and the JSON is written only after the audio step succeeds (D1). `pending` is returned even when the cast is empty (D8).
+- **User:** none visible in PR 1, because the change is dark. PR 2 builds on it to fix #3397, where a Fix-audio prompt gets stuck or lost when the user leaves the book. It also fixes #3400, where stale client state erases revisions.json.
+- **Technical:** revisions.json gets a single owner with a per-book lock. It also gets a `fileId`/`rev` version stamp, the existing `schema-migrate.ts` seam, and read-time normalisation. Accept and reject each become one server request, and the JSON is written only after the audio step succeeds (D1). `pending` is returned even when the cast is empty (D8).
 - **Architectural:** adds a leaf lock class, `revisions:<abs bookDir>`, which sits outside the `design → library-voice → cast` order. The A/B audio steps move into `audio/previous-audio.ts` with no import of `routes/generation.ts`. Finalize gains a tri-state `review` seam that PR 2 switches on.
 
 ## Architectural impact
 
 - **New seams:**
-  - `revisions-store.ts` (the store API below);
+  - `revisions-store.ts`;
   - `previous-audio.ts`;
   - `FinalizeChapterAudioInput.review` and `FinalizeChapterAudioResult.reviewRecorded`;
   - `review` on the queue entry and on the generation request;
   - `reviewChapter` and `reviewRecorded` on the SSE completion events.
 - **Invariants preserved:**
-  - Cast-lock rules 1–4 still hold. The revisions lock is a leaf: nothing else is acquired while it is held, and nothing but revisions.json is written under it.
+  - cast-lock rules 1–4. The revisions lock is a leaf: nothing else is acquired while it is held, and nothing but revisions.json is written under it.
   - OpenAPI remains the type source.
   - Every field added to an existing schema is optional.
 - **Migration:**
-  - revisions.json is stamped `schema: 1` through `schema-migrate.ts`'s `stampSeamSchema` and read through `migrateSeamDoc`.
-  - A newer-schema file refuses both reads and writes.
-  - A corrupt file throws, as it does on main, and is never overwritten by a write.
-  - Legacy files are normalised on read and never rewritten by a read.
+  - The store stamps `schema: 1` through `schema-migrate.ts`'s `stampSeamSchema` and reads through `migrateSeamDoc`.
+  - **The store** refuses to read or write a newer-schema file and never overwrites one. A corrupt file throws, as it does on main.
+  - Legacy files are normalised on read, and a read never rewrites them.
   - The first store write mints `fileId` and sets `rev: 1`.
-  - Reparse and replace now **reset** the file instead of deleting it.
-- **Reversibility:** revert the PR. The only behaviour an old client can observe is that reparse/replace resets the file instead of deleting it, and an empty file hydrates the same way a missing one does.
+  - Reparse and replace **reset** the file instead of deleting it.
+  - In PR 1, the client's whole-file `PUT /state` with `slice:'revisions'` still writes raw, by design (Invariant 7). The store's no-overwrite guarantee does not cover that path.
+- **Reversibility:** revert the PR. The complete list of PR-1 behaviour an old client can observe:
+  1. **Reparse and replace reset revisions.json instead of deleting it.** The old client hydrates an empty file the same way as a missing one.
+  2. **Reparse and replace refuse a newer-schema revisions.json before anything is deleted.** They return a 500 with the curated `UnsupportedSchemaError` message, and the book is left untouched. On main they deleted the file.
+  3. **The poll and qa-report answer 500 for a corrupt or newer-schema revisions.json.** For a book with a cast, the corrupt case is unchanged from main. For a book with no cast, main returned early without reading the file, so this is new.
+  4. **The poll carries extra fields, and `pending` now arrives with an empty cast (D8).** The old client's `applyPoll` and `applyBackgroundPoll` read only `drift`, so it never sees these.
 
 ## Invariants to preserve
 
-1. **Between PR 1 and PR 2, the client is the only writer of `pending`.** Every finalize caller passes no `review`; spy tests in the splice, QA-repair and generation suites assert this. The new routes have no client caller. The reparse reset leaves `pending: []`, the same result the old delete produced.
+1. **Between PR 1 and PR 2, the client is the only writer of `pending`.**
+   - No finalize caller passes `review`. Spy tests in the splice, QA-repair and generation suites assert this.
+   - The new routes have no client caller.
+   - The reparse reset leaves `pending: []`, the same result the old delete produced.
 2. The lock key is `revisions:${path.resolve(bookDir)}`. It is built only by `revisionsLockKey` in `server/src/workspace/revisions-store.ts`.
-3. Under that lock, only revisions.json is written and no other lock is acquired. The only other filesystem access is the read-only `.previous.mp3` existence probe used by normalisation.
+3. While that lock is held, only revisions.json is written and no other lock is acquired. The only other filesystem access is the read-only `.previous.mp3` existence probe used by normalisation.
 4. Reads (`readRevisions`) take no lock and never write.
-5. The old routes `DELETE …/audio/previous` and `POST …/audio/previous/restore` keep today's status codes and order: the `isGenerationActive` 409 comes **before** the chapter-id parse.
+5. The old routes keep today's status codes and order. In `DELETE …/audio/previous` and `POST …/audio/previous/restore`, the `isGenerationActive` 409 comes **before** the chapter-id parse.
 6. `audio/previous-audio.ts` does not import `routes/generation.ts`. `routes/generation.ts` gains no new import from `audio/` or `workspace/`.
 7. `PUT /state` with `slice:'revisions'` is still accepted, and `GET /state` still returns revisions.json **raw**.
-8. No store error text reaches an SSE body. Finalize surfaces a store failure only as `reviewRecorded: false`.
+8. No store error text reaches an SSE body. Finalize reports a store failure only as `reviewRecorded: false`. Every new or reshaped 500 goes through `requestFailureMessage`.
+9. Reparse and replace check that revisions.json can be reset (`assertRevisionsResettable`) **before** they delete or write anything.
 
 ## Test plan
 
 ### Automated coverage
 
-- **Store** (`server/src/workspace/revisions-store.test.ts`, server Vitest):
+- **Store** (`server/src/workspace/revisions-store.test.ts`):
   - normalisation;
-  - schema seam;
+  - the schema seam and the resettable preflight;
   - corrupt-file refusal;
   - `fileId`/`rev`;
-  - upsert/drop/dismiss;
-  - the two-phase accept/reject rules, idempotence, `revision_gone`, and a reset during an op;
+  - upsert, drop and dismiss;
+  - the two-phase accept/reject rules, idempotence and `revision_gone`;
+  - a reset during an op;
   - lock-key normalisation;
   - serialisation in both orders;
   - `selection` validation.
-- **Audio extraction** (`server/src/audio/previous-audio.test.ts`, plus `chapter-audio.test.ts` unchanged and one new 409 test).
-- **Routes** (`server/src/routes/revision-ops.test.ts`): every code in the spec's table, the curated 500, the restore-failed → `live_audio_missing` → retried-reject recovery, and a concurrent double accept.
-- **Polls** (`server/src/routes/revisions.test.ts`, `qa-report.test.ts`): the new poll shape, D8, the corrupt-file 500, and that qa-report still reads drift.
-- **OpenAPI contract** (`src/lib/api-types.revisions-contract.test.ts`, frontend Vitest; compile-time, enforced by `npm run typecheck`).
-- **Finalize** (`finalize-chapter-write.test.ts`): the `review` tri-state, call placement, and the leak-free failure path.
-- **Callers** (`generation.test.ts` via `test:slow`, `chapter-splice.test.ts`, `chapter-qa-repair.test.ts`): no caller passes `review`, and `reviewRecorded` is threaded onto the completion events.
+- **Audio extraction** (`server/src/audio/previous-audio.test.ts`, plus `chapter-audio.test.ts`): the existing tests stay unchanged, plus one new 409.
+- **Routes** (`server/src/routes/revision-ops.test.ts`): every code, the curated 500s, the restore-failed → `live_audio_missing` → retried-reject recovery, and a concurrent double accept.
+- **Polls** (`server/src/routes/revisions.test.ts`, `qa-report.test.ts`): the new shape, D8, a corrupt file returns 500, curated 500s, and qa-report reads drift only.
+- **OpenAPI contract** (`src/lib/api-types.revisions-contract.test.ts`): compile-time, enforced by `npm run typecheck`.
+- **Finalize** (`finalize-chapter-write.test.ts`): the `review` tri-state, placement, and a leak-free failure.
+- **Callers** (`chapter-splice.test.ts`, `chapter-qa-repair.test.ts`, `generation.test.ts` via `test:slow`): no caller passes `review`, and `reviewRecorded` is threaded only when set.
 - **`review` plumbing:**
-  - server: `review-request.test.ts`, `queue.test.ts`, `queue-io.test.ts`, `generation.test.ts` (via `test:slow`);
+  - server: `review-request.test.ts`, `queue.test.ts`, `queue-io.test.ts`, and `generation.test.ts` via `test:slow`;
   - client: `src/lib/api-stream-review.test.ts`, `src/store/queue-dispatcher-middleware.test.ts`, `src/mocks/mock-queue.test.ts`.
-- **Reset** (`book-state.reparse.test.ts`, `book-state.replace-manuscript.test.ts`).
-- No Playwright spec: PR 1 has no UI-visible behaviour, so PR 2 owns the e2e.
+- **Reset and preflight** (`book-state.reparse.test.ts`, `book-state.replace-manuscript.test.ts`).
+- No Playwright spec: PR 1 has no UI-visible behaviour, so PR 2 owns the e2e test.
 
 ### Manual acceptance walkthrough
 
@@ -100,7 +109,7 @@ All of PR 2:
 - callers passing `review`/`null`;
 - the restructure pending drop;
 - `restore-unrecorded`;
-- a normalised `GET /state`;
+- normalised `GET /state`;
 - `PUT slice:'revisions'` → 400;
 - the old routes → 410;
 - every client change in spec §4.
@@ -123,81 +132,88 @@ Also out of scope: the chapter-take lifecycle (#3456) and the fsck m4a/ogg fix (
 - the accept, reject and dismiss routes;
 - the finalize `review` seam;
 - `review` plumbing through the queue and the generation request;
-- the reparse reset.
+- the reparse/replace reset, behind a preflight.
 
 The client remains the only writer of `pending`.
 
-**Architecture:** `workspace/revisions-store.ts` owns revisions.json behind a leaf `withKeyLock`, and uses the existing `schema-migrate.ts` seam. Accept and reject run in two phases:
+**Architecture:** `workspace/revisions-store.ts` owns revisions.json behind a leaf `withKeyLock` and uses the existing `schema-migrate.ts` seam. Accept and reject run in two phases:
 1. Under the lock, read the entry.
 2. Outside the lock, run the audio step. This is today's code, moved to `audio/previous-audio.ts`.
 3. Under the lock again, re-read and write only if the entry is still there.
 
-Finalize gets a tri-state `review` that every caller leaves undefined in PR 1. `review` rides the persisted queue entry into the generation request, where it is validated and stamped `reviewChapter`; nothing consumes it yet.
+Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1. `review` rides the persisted queue entry into the generation request. There it is validated and stamped `reviewChapter`, but nothing consumes it yet.
 
-**Tech Stack:** Node 20 + Express + TypeScript, Vitest 5 + supertest, OpenAPI 3.0.3 + openapi-typescript 7, React/RTK (client type plumbing only).
+**Tech Stack:** Node 20 + Express + TypeScript, Vitest 5 + supertest, OpenAPI 3.0.3 + openapi-typescript 7, and React/RTK (client type plumbing only).
 
 **Spec:** `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md` (rev 9). Read §"Compatibility and the two PRs" first: this plan implements **PR 1 only**.
 
+**Base:** branch `fix/server-3400-revisions-server-ops` with `origin/main` merged in. HEAD is 7ce51045 and the merge-base is 54205283. All `file:line` citations below were re-anchored against that tree. If a cited line has moved, find it by the quoted text, never by the number alone.
+
 ## Global Constraints
 
-**The dark state**
+### Paths and how to run tests
+
+- **`<wt>` means `C:/Claude/Projects/wt-3400-revisions-server-ops` throughout.** Work only there. Never touch `C:/Claude/Projects/Audiobook-Generator`.
+- Never chain commands off `cd` (the Bash permission hook blocks it). Use these forms:
+  - Server, fast pool: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- <path under server/>`
+  - Server, slow pool: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- <path> [-t "<name filter>"]`
+    - This is **required for `src/routes/generation.test.ts` and `src/routes/book-state.test.ts`**. Both are listed in `SLOW_FILES_TO_EXCLUDE` (`server/vitest.config.ts:35-58`), so the fast pool silently prints "No test files found" for them.
+    - Add a `-t` filter wherever the step allows, so each child runs as few slow tests as possible.
+  - Frontend: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- <path under repo root>`
+  - Typecheck (frontend + server): `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`
+  - Full batteries run only in the verify task.
+
+### The dark state
+
 - **PR 1 is dark. Invariant: between PR 1 and PR 2, the client is the only writer of `pending`.** Every task states how it keeps this.
-- Every finalize caller passes no `review`.
+- No finalize caller passes `review`.
 - Restructure's pending drop is **not** wired.
-- `PUT /state` with `slice:'revisions'` is still accepted.
+- `PUT /state` with `slice:'revisions'` is still accepted, and still writes raw.
 - `GET /state` returns revisions.json **raw**.
+- The old routes call the extracted audio functions with **today's status codes and order**. The `isGenerationActive` 409 comes before the chapter-id parse. A bad chapter id is a 404. A failed restore is a 500 with `'Failed to restore previous audio.'`.
 
-**Compatibility with today's routes**
-- The old routes call the extracted audio functions with **today's status codes and order**:
-  - the `isGenerationActive` 409 comes before the chapter-id parse;
-  - a bad chapter id is a 404;
-  - a failed restore is a 500 with `'Failed to restore previous audio.'`.
+### Locking, imports and schema
 
-**Locking and imports**
-- The revisions lock is a **leaf**. Its key is `revisions:${path.resolve(bookDir)}`, built only inside the store.
+- The revisions lock is a **leaf**. Its key, `revisions:${path.resolve(bookDir)}`, is built only by `revisionsLockKey`.
 - While the lock is held, nothing else is acquired and no file other than revisions.json is written.
 - `audio/previous-audio.ts` must not import `routes/generation.ts`.
 - `routes/generation.ts` gains **no new import from `audio/` or `workspace/`**. Its only new import is `./review-request.js`.
 - `npm run check:cycles` must stay clean.
+- revisions.json goes through `server/src/workspace/schema-migrate.ts`: `migrateSeamDoc` on read, `stampSeamSchema` on write. The **store** refuses a newer-schema file on every path. A corrupt file throws, as on main, and no store write ever overwrites it. The one exception is `resetRevisions`, which replaces a corrupt file as the old `rm` did.
+- Reparse and replace call `assertRevisionsResettable(bookDir)` **before** anything is deleted or written.
 
-**Schema and file safety**
-- revisions.json goes through `server/src/workspace/schema-migrate.ts`: `migrateSeamDoc` on read, `stampSeamSchema` on write. A newer-schema file refuses every read and write.
-- A corrupt file throws, as on main, and no write ever overwrites it. The one exception is reset, which replaces a corrupt file the way the old `rm` did.
+### API contract and error text
 
-**API contract and error text**
 - **Every field added to an existing OpenAPI schema is optional.** `RevisionsState` is a new schema and is fully required.
-- No store error text reaches any SSE body or 4xx body. Whole-request 500s go through `requestFailureMessage` (`server/src/workspace/file-lock.ts:214`).
+- No store error text appears in any SSE body or 4xx body.
+- **Every new or reshaped whole-request 500 goes through `requestFailureMessage`** (`server/src/workspace/file-lock.ts:214`). This covers the three revision-ops routes, the two polls in `revisions.ts`, and qa-report's GET.
 
-**Commits and pushes (Open Engine model)**
+### Commits and pushes (Open Engine model)
+
 - **Every task commits and pushes** on `fix/server-3400-revisions-server-ops`, in the foreground, with the message given in its last step.
 - Never use `--no-verify`.
-- The first push uses `-u origin`.
-- Subjects follow `<type>(<scope>): <subject>`, at most 100 characters, with scopes from frontend|server|sidecar|app|scripts|e2e|mocks|openapi|docs|deps|ci|ops. Multi-scope is comma-separated with no spaces.
+- Commit subjects follow `<type>(<scope>): <subject>`, are at most 100 characters, and use scopes from frontend|server|sidecar|app|scripts|e2e|mocks|openapi|docs|deps|ci|ops. Separate multiple scopes with commas and no spaces.
 - No `server/tts-sidecar/**` changes.
 
-**How to run tests**
+### Mutation checks
 
-Never chain commands off `cd`, because the Bash permission hook blocks it. Use these forms instead:
-- **Server, fast pool:** `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- <path under server/>`
-- **Server, slow pool:** `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- <path> [-t "plan 285"]`
-  - **Required for `src/routes/generation.test.ts` and `src/routes/book-state.test.ts`.** Both are in `SLOW_FILES_TO_EXCLUDE` (`server/vitest.config.ts:35-58`). The fast pool silently prints "No test files found" for them.
-- **Frontend:** `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- <path under repo root>`
-- **Typecheck (frontend and server):** `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`
-- Full batteries run only in the final verification task.
-
-**Scope and mutation checks**
-- Work only in `C:\Claude\Projects\wt-3400-revisions-server-ops`. Never touch `C:\Claude\Projects\Audiobook-Generator`.
-- Every task ends with a **mutation check**:
-  1. Make the named change.
-  2. Run the named test and paste the **observed** red output into the report.
-  3. Restore the code.
-  4. Confirm the test is green again and that `git diff --exit-code` shows nothing beyond the task's own diff.
+Every task ends with a **mutation check**:
+1. Make the named change.
+2. Run the named test and paste the **observed** red output into the report.
+3. Restore the change.
+4. Re-run and confirm green.
+5. Run `git -C <wt> diff --stat` and confirm it lists **only the task's own intended files**. The mutated file must show no residue beyond the task's own edits.
 
 ## Review Focus
 
-1. **Corrupt or newer-schema revisions.json.** Expect a loud failure: the poll returns a 500 as today, and every write refuses. The original bytes must never be overwritten, except by a reparse reset. Pinned in Task 1.
-2. **A `revisionId` of `__proto__` / `constructor` in the URL.** Expect a 404, no prototype pollution, and nothing written. Pinned in Tasks 2 and 4.
-3. **A double-click on Approve** (two concurrent accepts for one id). Expect both requests to return 200 and exactly one `accepted` timeline entry. Pinned in Task 4.
+1. **A corrupt or newer-schema revisions.json.**
+   - The store must fail loudly: the poll and qa-report return a 500, every store write refuses, and the store never overwrites the original.
+   - The one deliberate exception: `resetRevisions` replaces a corrupt file.
+   - A newer-schema file makes reparse and replace refuse **before** they delete anything.
+   - In PR 1 the client's raw `PUT /state` still writes, by design.
+   - Pinned in Tasks 1, 5 and 12.
+2. **A `revisionId` of `__proto__` or `constructor` in the URL.** Expect a 404, no prototype pollution, and nothing written. Pinned in Tasks 2 and 4.
+3. **A double-click on Approve** (two concurrent accepts for one id). Expect both to return 200 with exactly one `accepted` timeline entry. Pinned in Task 4.
 4. **Accept when neither live nor `.previous` audio exists.** Expect it to proceed and clear the entry, with no `live_audio_missing`. Pinned in Task 4.
 5. **The same bookDir spelled two ways** (`…/book` and `…/book\audio\..`, built without `path.join`). Expect one lock and no lost update. Pinned in Task 1.
 
@@ -209,7 +225,7 @@ Never chain commands off `cd`, because the Bash permission hook blocks it. Use t
 - Create: `server/src/workspace/revisions-store.ts`
 - Test: `server/src/workspace/revisions-store.test.ts`
 
-**Dark-state note:** this task creates the module and nothing calls it from production code.
+**Dark-state note:** this task creates the module, and nothing in production calls it yet.
 
 **Interfaces:**
 - Consumes:
@@ -217,7 +233,7 @@ Never chain commands off `cd`, because the Bash permission hook blocks it. Use t
   - `revisionsJsonPath`, `audioDir` (`./paths.js`);
   - `withKeyLock` (`./file-lock.js`);
   - `hasPreviousAudio(audioRoot, slug): boolean` (`./preserve-previous-audio.js`);
-  - `SCHEMA_SEAMS`, `migrateSeamDoc`, `stampSeamSchema`, `UnsupportedSchemaError` (`./schema-migrate.js`).
+  - `SCHEMA_SEAMS`, `migrateSeamDoc`, `stampSeamSchema`, `UnsupportedSchemaError` (`./schema-migrate.js`, unchanged on the new base).
 - Produces:
   ```ts
   export interface ChapterRef { id: number; slug: string }
@@ -250,6 +266,7 @@ Never chain commands off `cd`, because the Bash permission hook blocks it. Use t
   export function toRevisionsState(bookId: string, file: RevisionsFile): RevisionsState;
   export function parseSelection(raw: unknown): { ok: true; value: Selection | undefined } | { ok: false; message: string };
   export async function readRevisions(bookDir: string, chapters: readonly ChapterRef[]): Promise<RevisionsFile>;
+  export async function assertRevisionsResettable(bookDir: string): Promise<void>; // throws UnsupportedSchemaError for a newer schema; a corrupt or missing file passes
   export async function resetRevisions(bookDir: string): Promise<RevisionsFile>;
   export async function recordPending(bookDir: string, chapters: readonly ChapterRef[], entry: StoredRevision): Promise<RevisionsFile>;
   export async function dropPendingForChapter(bookDir: string, chapters: readonly ChapterRef[], chapterId: number): Promise<RevisionsFile>;
@@ -268,6 +285,7 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import {
   readRevisions,
+  assertRevisionsResettable,
   resetRevisions,
   recordPending,
   dropPendingForChapter,
@@ -386,8 +404,8 @@ describe('readRevisions — normalisation (never writes)', () => {
   });
 });
 
-describe('refusals — the original bytes are never overwritten', () => {
-  it('a corrupt (unparseable) file THROWS, as on main, and no write overwrites it', async () => {
+describe('refusals — the store never overwrites the original bytes', () => {
+  it('a corrupt (unparseable) file THROWS, as on main, and no store write overwrites it', async () => {
     const corrupt = '{"pending": [';
     writeFileSync(revisionsJsonPath(bookDir), corrupt);
     await expect(readRevisions(bookDir, CHAPTERS)).rejects.toThrow(SyntaxError);
@@ -396,13 +414,22 @@ describe('refusals — the original bytes are never overwritten', () => {
     expect(readFileSync(revisionsJsonPath(bookDir), 'utf8')).toBe(corrupt);
   });
 
-  it('a file from a NEWER schema refuses reads, writes and reset — never downgraded', async () => {
+  it('a file from a NEWER schema refuses reads, writes, the resettable preflight and reset — never downgraded', async () => {
     seedRaw({ schema: 2, pending: [] });
     const before = readFileSync(revisionsJsonPath(bookDir), 'utf8');
     await expect(readRevisions(bookDir, CHAPTERS)).rejects.toThrow(/schema=2/);
     await expect(recordPending(bookDir, CHAPTERS, serverEntry(1))).rejects.toThrow(/schema=2/);
+    await expect(assertRevisionsResettable(bookDir)).rejects.toThrow(/schema=2/);
     await expect(resetRevisions(bookDir)).rejects.toThrow(/schema=2/);
     expect(readFileSync(revisionsJsonPath(bookDir), 'utf8')).toBe(before);
+  });
+
+  it('the resettable preflight passes for a missing, a v1 and a corrupt file', async () => {
+    await expect(assertRevisionsResettable(bookDir)).resolves.toBeUndefined();
+    seedRaw({ schema: 1, pending: [] });
+    await expect(assertRevisionsResettable(bookDir)).resolves.toBeUndefined();
+    writeFileSync(revisionsJsonPath(bookDir), '{"pending": [');
+    await expect(assertRevisionsResettable(bookDir)).resolves.toBeUndefined();
   });
 
   it('a non-parse read failure propagates too (EISDIR)', async () => {
@@ -535,21 +562,23 @@ describe('toRevisionsState', () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [ ] **Step 2: Run to verify it fails**
 
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/workspace/revisions-store.test.ts`
-Expected: FAIL. The suite cannot load and reports `Failed to load url ./revisions-store.js`.
+Expected: FAIL with `Failed to load url ./revisions-store.js`.
 
 - [ ] **Step 3: Write the implementation** `server/src/workspace/revisions-store.ts`
+
+The header comment deliberately spells the key as `revisions:<absolute bookDir>`, not as template-literal syntax. That keeps Task 13's code-only key grep from matching this comment.
 
 ```ts
 /* Plan 285 (#3400) — the ONLY reader/writer of `<bookDir>/.audiobook/revisions.json`.
    Modelled on script-review-ledger.ts.
 
    LOCK. Every write runs under withKeyLock(revisionsLockKey(bookDir)). The key is
-   `revisions:${path.resolve(bookDir)}`, normalised HERE so two callers that spell
-   bookDir differently can never split the lock. The read, and every decision
-   derived from it, happens inside the lock.
+   "revisions:" + the path.resolve'd bookDir, normalised HERE so two callers that
+   spell bookDir differently can never split the lock. The read, and every
+   decision derived from it, happens inside the lock.
 
    LEAF LOCK. Nothing acquires any other lock while holding this one, and no file
    other than revisions.json is WRITTEN under it. (Normalisation probes
@@ -562,8 +591,11 @@ Expected: FAIL. The suite cannot load and reports `Failed to load url ./revision
    SCHEMA. Reads go through schema-migrate.ts's migrateSeamDoc (a newer-schema
    file throws UnsupportedSchemaError — refused, never downgraded); writes are
    stamped with stampSeamSchema. A CORRUPT file throws, exactly as on main
-   (readJson's JSON.parse), so no write ever overwrites it; only resetRevisions
-   (reparse / replace) replaces a corrupt file, as the old `rm` did.
+   (readJson's JSON.parse), so no store write ever overwrites it; only
+   resetRevisions (reparse / replace) replaces a corrupt file, as the old `rm`
+   did. assertRevisionsResettable is the preflight reparse/replace run BEFORE
+   deleting anything. (In PR 1 the client's raw PUT /state still writes the
+   file outside this module, by design.)
 
    PR 1 IS DARK: no production code calls the write ops except resetRevisions.
    The client remains the only writer of `pending`. */
@@ -785,15 +817,21 @@ export async function readRevisions(bookDir: string, chapters: readonly ChapterR
   return load(bookDir, chapters);
 }
 
+/** Preflight for reparse / replace, run BEFORE they delete anything (lock-free
+    read). A reset discards the contents, so a corrupt or missing file is fine
+    to reset; only a NEWER-schema file must be refused (never downgraded). */
+export async function assertRevisionsResettable(bookDir: string): Promise<void> {
+  try {
+    await loadRaw(bookDir);
+  } catch (err) {
+    if (err instanceof UnsupportedSchemaError) throw err;
+  }
+}
+
 export async function resetRevisions(bookDir: string): Promise<RevisionsFile> {
   return withKeyLock(revisionsLockKey(bookDir), async () => {
-    /* A reset discards the contents, so a CORRUPT file is replaced (as the old
-       rm did) — but a NEWER-schema file is refused, never downgraded. */
-    try {
-      await loadRaw(bookDir);
-    } catch (err) {
-      if (err instanceof UnsupportedSchemaError) throw err;
-    }
+    /* Re-checked under the lock (the preflight ran lock-free, earlier). */
+    await assertRevisionsResettable(bookDir);
     const next = emptyRevisionsFile(mintFileId());
     await writeStamped(bookDir, next);
     return next;
@@ -837,7 +875,7 @@ export async function dismissDriftId(
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [ ] **Step 4: Run the test**
 
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/workspace/revisions-store.test.ts`
 Expected: PASS.
@@ -847,13 +885,19 @@ Expected: PASS.
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
 Expected: exit 0.
 
-- [ ] **Step 6: Mutation checks** (report each observed red; restore after each)
+- [ ] **Step 6: Mutation checks.** Report each red, restore after each, and confirm `git -C <wt> diff --stat` lists only this task's files.
 
-  1. In `revisionsLockKey`, replace `resolve(bookDir)` with `bookDir`. Run the Step 4 command. Expected: red on `normalises the key: two spellings of one bookDir share one lock` (`expected 'revisions:…\audio\..' to be 'revisions:…'`), and likely also on `concurrent writes through two spellings lose no update`, which gets one entry instead of two.
-  2. In `normaliseRevisions`, delete `if (!previousExists(e.chapterId)) continue;`. Run Step 4. Expected: red on `drops drift, playable:false legacy entries…` (the `b` entry appears) and on `treats a legacy entry with no playable flag…`.
-  3. In `loadRaw`, change the first line to `const raw = await readJson<unknown>(revisionsJsonPath(bookDir)).catch(() => null);`. Run Step 4. Expected: red on `a corrupt (unparseable) file THROWS…` (the promise resolves instead of rejecting) and on `a non-parse read failure propagates too`.
+  1. In `revisionsLockKey`, replace `resolve(bookDir)` with `bookDir`. Run Step 4.
+     - Expected red: `normalises the key: two spellings of one bookDir share one lock` (`expected 'revisions:…\audio\..' to be 'revisions:…'`).
+     - Probably also red: `concurrent writes through two spellings lose no update`.
+  2. In `normaliseRevisions`, delete `if (!previousExists(e.chapterId)) continue;`. Run Step 4.
+     - Expected red: `drops drift, playable:false legacy entries…` and `treats a legacy entry with no playable flag…`.
+  3. In `loadRaw`, change the first line to `const raw = await readJson<unknown>(revisionsJsonPath(bookDir)).catch(() => null);`. Run Step 4.
+     - Expected red: `a corrupt (unparseable) file THROWS…` and `a non-parse read failure propagates too`.
+  4. In `assertRevisionsResettable`, delete the line `if (err instanceof UnsupportedSchemaError) throw err;`. Run Step 4.
+     - Expected red: `a file from a NEWER schema refuses reads, writes, the resettable preflight and reset…`, because the preflight resolves.
 
-- [ ] **Step 7: Commit and push** (foreground, never `--no-verify`)
+- [ ] **Step 7: Commit and push**
 
 ```bash
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/workspace/revisions-store.ts server/src/workspace/revisions-store.test.ts
@@ -869,10 +913,13 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push -u origin fix/server
 - Modify: `server/src/workspace/revisions-store.ts` (append)
 - Test: `server/src/workspace/revisions-store.test.ts` (append, and extend the import list)
 
-**Dark-state note:** no production caller is added.
+**Dark-state note:** this task adds no production caller.
 
 **Interfaces:**
-- Consumes (from Task 1, all in `revisions-store.ts`): `ChapterRef`, `StoredRevision`, `StoredTimelineEntry`, `Selection`, `RevisionsFile`, `revisionsLockKey`, `readRevisions`, `recordPending`, `resetRevisions`, and the module-private `isDangerousKey`, `load(bookDir, chapters)`, `save(bookDir, file)`.
+- Consumes (Task 1, all in `revisions-store.ts`):
+  - `ChapterRef`, `StoredRevision`, `StoredTimelineEntry`, `Selection`, `RevisionsFile`;
+  - `revisionsLockKey`, `readRevisions`, `recordPending`, `resetRevisions`;
+  - module-private `isDangerousKey`, `load(bookDir, chapters)`, `save(bookDir, file)`.
 - Produces:
   ```ts
   export type RevisionOpKind = 'accept' | 'reject';
@@ -888,7 +935,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push -u origin fix/server
   export async function commitRevisionOp(bookDir: string, chapters: readonly ChapterRef[], op: RevisionOpKind, revisionId: string, selection?: Selection): Promise<CommitResult>;
   ```
 
-- [ ] **Step 1: Write the failing tests.** Add `beginRevisionOp` and `commitRevisionOp` to the test file's import list from `./revisions-store.js`, then append:
+- [ ] **Step 1: Write the failing tests.** Add `beginRevisionOp` and `commitRevisionOp` to the test file's import list, then append:
 
 ```ts
 describe('beginRevisionOp / commitRevisionOp', () => {
@@ -1012,7 +1059,7 @@ describe('lock serialisation — accept racing recordPending', () => {
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/workspace/revisions-store.test.ts`
-Expected: FAIL. The new tests report `beginRevisionOp is not a function` / `commitRevisionOp is not a function`. Task 1's tests still pass.
+Expected: FAIL. The new tests report `beginRevisionOp is not a function` / `commitRevisionOp is not a function`, while Task 1's tests still pass.
 
 - [ ] **Step 3: Append to `server/src/workspace/revisions-store.ts`**
 
@@ -1112,14 +1159,18 @@ export async function commitRevisionOp(
 }
 ```
 
-- [ ] **Step 4: Run the tests and typecheck**
+- [ ] **Step 4: Run the test and typecheck**
 
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/workspace/revisions-store.test.ts`
 Expected: PASS.
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
 Expected: exit 0.
 
-- [ ] **Step 5: Mutation check.** In `commitRevisionOp`, replace `{ kind: 'gone', file }` with `{ kind: 'gone', file: await save(bookDir, file) }`. Run the Step 4 test command. Expected: red on `a reset while an op waits…`, because the on-disk `rev` is 1 instead of 0; also red on `upsert queued first…` (`rev` 3 vs 2). Restore the line and confirm green.
+- [ ] **Step 5: Mutation check.** In `commitRevisionOp`, replace `{ kind: 'gone', file }` with `{ kind: 'gone', file: await save(bookDir, file) }`, then run Step 4.
+  - Expected red: `a reset while an op waits…`, because the on-disk `rev` is 1 instead of 0.
+  - Also red: `upsert queued first…`, because `rev` is 3 instead of 2.
+
+  Restore the line, confirm green, and confirm the diff-stat check.
 
 - [ ] **Step 6: Commit and push**
 
@@ -1135,14 +1186,14 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 **Files:**
 - Create: `server/src/audio/previous-audio.ts`, `server/src/audio/previous-audio.test.ts`
-- Modify: `server/src/routes/chapter-audio.ts`:
-  - imports (`:31-41`);
-  - remove the local `findPreviousChapterAudio` (`:232-237`);
-  - the DELETE body lines `:387-393` (from `const root = …` through `res.status(204).end();`; the route's closing `},` / `);` at `:394-395` stay);
-  - the restore body lines `:416-439` (from `const root = …` through `res.status(204).end();`; the closing `},` / `);` at `:440-441` stay).
-- Test: `server/src/routes/chapter-audio.test.ts` (existing tests unchanged, plus one new)
+- Modify `server/src/routes/chapter-audio.ts`. The file is unchanged on the new base, so these lines are verified:
+  - the imports at `:31-42`;
+  - the local `findPreviousChapterAudio` at `:232-237`, which gets removed;
+  - the DELETE body at `:387-393`, from `const root = audioDir(located.bookDir);` through `res.status(204).end();`. The closing `},` and `);` that follow stay.
+  - the restore body at `:416-439`, from `const root = audioDir(located.bookDir);` through `res.status(204).end();`. The closing `},` and `);` that follow stay.
+- Test: `server/src/routes/chapter-audio.test.ts`. The existing tests stay unchanged, plus one new test.
 
-**Dark-state note:** the old routes answer exactly as they do today, and no revisions.json write is added.
+**Dark-state note:** the old routes answer exactly as they do today, and this task adds no revisions.json write.
 
 **Interfaces:**
 - Consumes: `renameWithRetry` (`../workspace/atomic-rename.js`); `findChapterAudio`, `ChapterAudioFile` (`../workspace/chapter-audio-file.js`).
@@ -1262,7 +1313,7 @@ describe('restorePreviousAudio', () => {
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/audio/previous-audio.test.ts`
 Expected: FAIL with `Failed to load url ./previous-audio.js`.
 
-- [ ] **Step 3: Create `server/src/audio/previous-audio.ts`** (bodies moved verbatim from `chapter-audio.ts:233-237`, `:389-393` and `:420-439`)
+- [ ] **Step 3: Create `server/src/audio/previous-audio.ts`.** The bodies move verbatim from `chapter-audio.ts:233-237`, `:389-393` and `:420-439`.
 
 ```ts
 /* Plan 285 (#3400) — the A/B take audio steps, MOVED UNCHANGED from
@@ -1332,7 +1383,7 @@ export async function restorePreviousAudio(audioRoot: string, slug: string): Pro
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/audio/previous-audio.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Add the new old-route test.** In `server/src/routes/chapter-audio.test.ts`, place it inside `describe('POST /audio/previous/restore (reject)', …)`, directly after `it('409s when a generation is in flight for the book', …)`:
+- [ ] **Step 5: Add the new old-route test.** In `server/src/routes/chapter-audio.test.ts`, inside `describe('POST /audio/previous/restore (reject)', …)`, put it directly after `it('409s when a generation is in flight for the book', …)`:
 
 ```ts
       it('409s (not 404) for an INVALID chapter id while a generation is in flight — the busy check runs first', async () => {
@@ -1358,27 +1409,27 @@ Expected: PASS.
       });
 ```
 
-- [ ] **Step 6: Run the chapter-audio suite** (this test pins today's order before the refactor, so it already passes)
+- [ ] **Step 6: Run the chapter-audio suite.** This test has no red-first step: it pins today's order before the refactor, and its mutation is in Step 9.
 
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/chapter-audio.test.ts`
 Expected: PASS.
 
 - [ ] **Step 7: Refactor `server/src/routes/chapter-audio.ts`**
 
-  1. Imports:
-     - Add `import { acceptPreviousAudio, restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';`.
-     - Remove `import { unlink } from 'node:fs/promises';` and `import { renameWithRetry } from '../workspace/atomic-rename.js';`.
-     - Remove `type ChapterAudioFile` from the `chapter-audio-file.js` import only if nothing else references it; typecheck will tell you.
-     - Keep `existsSync` and `join`.
-  2. Delete the local `findPreviousChapterAudio` together with its doc comment (`:232-237`). The GET call sites at `:215` and `:329` now resolve to the import.
-  3. DELETE route: replace lines `:387-393` (from `const root = audioDir(located.bookDir);` through `res.status(204).end();`; leave the following `},` and `);`) with:
+  1. Update the imports:
+     - add `import { acceptPreviousAudio, restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';`;
+     - remove `import { unlink } from 'node:fs/promises';` (`:34`) and `import { renameWithRetry } from '../workspace/atomic-rename.js';` (`:38`);
+     - remove `type ChapterAudioFile` from `:40` only if it becomes unreferenced (typecheck tells you);
+     - keep `existsSync` and `join`.
+  2. Delete the local `findPreviousChapterAudio` and its doc comment (`:232-237`).
+  3. In the DELETE route, replace `:387-393` with the block below and leave the closing `},` and `);` in place:
      ```ts
          const root = audioDir(located.bookDir);
          const outcome = await acceptPreviousAudio(root, chapter.slug);
          if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
          res.status(204).end();
      ```
-  4. Restore route: replace lines `:416-439` (from `const root = audioDir(located.bookDir);` through `res.status(204).end();`; leave the `isGenerationActive` block at `:403-409` and the closing `},` / `);` exactly where they are) with:
+  4. In the restore route, replace `:416-439` with the block below. Leave the `isGenerationActive` block at `:403-409` and the closing `},` and `);` in place:
      ```ts
          const root = audioDir(located.bookDir);
          let outcome: 'restored' | 'none';
@@ -1394,11 +1445,14 @@ Expected: PASS.
 - [ ] **Step 8: Run both suites and typecheck**
 
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/chapter-audio.test.ts src/audio/previous-audio.test.ts`
-Expected: PASS, with the existing tests unchanged.
+Expected: PASS.
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
 Expected: exit 0.
 
-- [ ] **Step 9: Mutation check.** In the restore route of `chapter-audio.ts`, move the `if (isGenerationActive(req.params.bookId)) { … }` block so it sits after the `if (!chapter) return res.status(404)…` line. Run `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/chapter-audio.test.ts`. Expected red: `409s (not 404) for an INVALID chapter id…`, with `expected 404 to be 409`. Restore the block and confirm green.
+- [ ] **Step 9: Mutation check.** In the restore route, move the `if (isGenerationActive(req.params.bookId)) { … }` block to after the `if (!chapter) return res.status(404)…` line, then run `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/chapter-audio.test.ts`.
+  - Expected red: `409s (not 404) for an INVALID chapter id…`, with `expected 404 to be 409`.
+
+  Restore the block, confirm green, and confirm the diff-stat check.
 
 - [ ] **Step 10: Commit and push**
 
@@ -1416,7 +1470,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 - Create: `server/src/routes/revision-ops.ts`, `server/src/routes/revision-ops.test.ts`
 - Modify: `server/src/app.ts:64` (import) and `:312` (mount); `CLAUDE.md:629-632` (the `requestFailureMessage` count)
 
-**Dark-state note:** these routes have no client caller in PR 1, so the client remains the only writer of `pending`.
+**Dark-state note:** these routes have no client caller in PR 1.
 
 **Interfaces:**
 - Consumes:
@@ -1426,7 +1480,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   - `requestFailureMessage` (`../workspace/file-lock.js`);
   - `findChapterAudio` (`../workspace/chapter-audio-file.js`).
 - Produces: `export const revisionOpsRouter: Router`, mounted at `/api/books`.
-  - Every coded failure returns the body `{ error: <code>, message: string, state?: RevisionsState }`, with these codes:
+  - Every coded failure returns `{ error: <code>, message: string, state?: RevisionsState }`. The codes:
 
     | Code | Status |
     | --- | --- |
@@ -1437,7 +1491,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
     | `no_previous_audio` | 409 |
     | `live_audio_missing` | 409 |
     | `revision_gone` | 409 |
-    | `restore_failed` | 500 (no `state`) |
+    | `restore_failed` | 500, with no `state` |
 
   - Any other 500 returns `{ error: requestFailureMessage(e, …) }`.
 
@@ -1955,34 +2009,24 @@ revisionOpsRouter.post('/:bookId/drift/:driftId/dismiss', async (req: Request, r
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/revision-ops.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Mount the router** in `server/src/app.ts`. After line 64 (`import { revisionsRouter, revisionsBulkRouter } from './routes/revisions.js';`) add:
+- [ ] **Step 5: Mount the router** in `server/src/app.ts`.
+
+After line 64 (`import { revisionsRouter, revisionsBulkRouter } from './routes/revisions.js';`), add:
 
 ```ts
 import { revisionOpsRouter } from './routes/revision-ops.js';
 ```
 
-After line 312 (`app.use('/api', revisionsBulkRouter); …`) add:
+After line 312 (`app.use('/api', revisionsBulkRouter); …`), add:
 
 ```ts
 app.use('/api/books', revisionOpsRouter); // plan 285 — server-owned accept / reject / dismiss (no client caller until PR 2)
 ```
 
-- [ ] **Step 6: Update the CLAUDE.md count.** First verify it:
+- [ ] **Step 6: Update the CLAUDE.md count.** Verify the count first.
 
 Run: `git -C C:/Claude/Projects/wt-3400-revisions-server-ops grep -n "requestFailureMessage(" -- "server/src/**/*.ts" ":!*.test.ts"`
-Expected: 18 lines, which is the definition in `file-lock.ts` plus **17** call sites:
-
-| File | Sites |
-| --- | --- |
-| book-state | 4 |
-| cast-design | 2 |
-| qwen-voice | 1 |
-| revision-ops | 3 |
-| script-review | 1 |
-| single-design | 1 |
-| voice-library | 3 |
-| voice-style | 1 |
-| voices | 1 |
+Expected: 18 lines, which is the definition plus **17** call sites. That is 14 on the new base (book-state ×4, cast-design ×2, qwen-voice, script-review, single-design, voice-library ×3, voice-style, voices) plus revision-ops ×3.
 
 In `CLAUDE.md`, replace
 ```
@@ -2005,10 +2049,12 @@ with
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
 Expected: exit 0.
 
-- [ ] **Step 8: Mutation checks** (report each red; restore after each)
+- [ ] **Step 8: Mutation checks.** Report each red, restore after each, and confirm the diff-stat check.
 
-  1. In `revision-ops.ts`, delete the whole `if (!findChapterAudio(…) && findPreviousChapterAudio(…)) { … }` block. Run `…server run test -- src/routes/revision-ops.test.ts`. Expected red: `409 live_audio_missing when live is gone but .previous exists` (`expected 200 to be 409`) and `restore throws → 500 restore_failed; accept then refuses…`.
-  2. In the accept catch, replace `requestFailureMessage(e, (e as Error).message || 'Failed to accept revision.')` with `(e as Error).message`. Run the same file. Expected red: `a lock timeout answers the curated 500…` on accept, because the body contains `SECRET-WORKSPACE`.
+  1. Delete the `if (!findChapterAudio(…) && findPreviousChapterAudio(…)) { … }` block. Run `…server run test -- src/routes/revision-ops.test.ts`.
+     - Expected red: `409 live_audio_missing when live is gone but .previous exists` (`expected 200 to be 409`) and `restore throws → 500 restore_failed; accept then refuses…`.
+  2. In the accept catch, replace `requestFailureMessage(e, (e as Error).message || 'Failed to accept revision.')` with `(e as Error).message`. Run the same file.
+     - Expected red: the accept `a lock timeout answers the curated 500…`, because the body contains `SECRET-WORKSPACE`.
 
 - [ ] **Step 9: Commit and push**
 
@@ -2020,32 +2066,50 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ---
 
-### Task 5 (3b): Poll reshape (`revisions.ts`) and qa-report guard
+### Task 5 (3b): Poll reshape (`revisions.ts`), curated poll and qa-report 500s
 
 **Files:**
-- Modify `server/src/routes/revisions.ts`:
-  - `:1-14` header;
-  - `:18-19` imports;
-  - `:34-43` delete `RevisionsPersisted`;
-  - `:112-216` `getRevisionsForBook` / `computeRevisionsForBook`;
-  - `:251-254` bulk map.
-- Modify: `server/src/routes/revisions.test.ts:167-183` and the `persisted pending echo` describe (`:537-583`); `server/src/routes/qa-report.test.ts` (new test)
+- Modify `server/src/routes/revisions.ts` (re-anchored):
+  - the header at `:1-14`;
+  - the imports at `:18-19`;
+  - delete `RevisionsPersisted` at `:34-43`;
+  - `getRevisionsForBook`/`computeRevisionsForBook` at `:112-234`;
+  - the single-route catch at `:242-245`;
+  - the bulk map and catch at `:269-278`.
+- Modify: `server/src/routes/qa-report.ts:44-47` (the GET catch).
+- Modify: `server/src/routes/revisions.test.ts`:
+  - imports at `:17`;
+  - `:168-185`;
+  - the `persisted pending echo` describe at `:539-586`.
+- Modify: `server/src/routes/qa-report.test.ts`:
+  - the `scan.js` mock at `:16-27`;
+  - new tests.
+- Modify: `CLAUDE.md` (the count, now 20).
 
-**Dark-state note:** the old client's `applyPoll` and `applyBackgroundPoll` read only `drift` (`revisions-slice.ts:318-331`), so the new fields are ignored. A poll never writes.
+**Dark-state note:** the old client's `applyPoll` and `applyBackgroundPoll` read only `drift` (`revisions-slice.ts:318-331`). A poll never writes.
 
 **Interfaces:**
-- Consumes (from Task 1, `../workspace/revisions-store.js`): `readRevisions`, `toRevisionsState`, `RevisionsState`, `StoredRevision`.
+- Consumes (Task 1, `../workspace/revisions-store.js`): `readRevisions`, `toRevisionsState`, `RevisionsState`, `StoredRevision`. Also `requestFailureMessage` (`../workspace/file-lock.js`).
 - Produces:
   ```ts
   export type RevisionsPoll = RevisionsState & { drift: DriftEvent[] };
   export async function computeRevisionsForBook(bookId: string, bookDir: string, state: BookStateJson): Promise<RevisionsPoll>;
   export async function getRevisionsForBook(bookId: string): Promise<RevisionsPoll | null>;
   ```
-  The bulk route returns exactly `{ pending, drift }` for each book.
+  - The bulk route returns exactly `{ pending, drift }` per book.
 
-- [ ] **Step 1: Write the failing poll tests in `server/src/routes/revisions.test.ts`**
+- [ ] **Step 1: Write the failing tests**
 
-  1. After the `CharacterSnapshot` interface, add:
+  1. In `server/src/routes/revisions.test.ts`, change the vitest import to `import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';`. Then add this top-level mock after the imports:
+     ```ts
+     /* Plan 285 — passthrough spy on the store read so a test can inject a lock
+        timeout and pin the curated 500. */
+     vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
+       const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+       return { ...real, readRevisions: vi.fn(real.readRevisions) };
+     });
+     ```
+  2. After `interface CharacterSnapshot { … }`, add:
      ```ts
      /* Plan 285 — the poll now answers RevisionsState + drift. */
      const emptyPoll = () => ({
@@ -2059,8 +2123,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
        drift: [],
      });
      ```
-  2. In `returns empty pending + drift when there is no cast yet` and `returns empty drift when no segments files exist`, replace `expect(res.body).toEqual({ pending: [], drift: [] });` with `expect(res.body).toEqual(emptyPoll());`.
-  3. Replace the whole `describe('GET /api/books/:bookId/revisions — persisted pending echo (#3376 part 1)', …)` block (`:537-583`) with:
+  3. At `:172` and `:184`, replace `expect(res.body).toEqual({ pending: [], drift: [] });` with `expect(res.body).toEqual(emptyPoll());`.
+  4. Replace the whole `describe('GET /api/books/:bookId/revisions — persisted pending echo (#3376 part 1)', …)` block (`:539-586`) with:
      ```ts
      describe('GET /api/books/:bookId/revisions — pending read through the store (plan 285)', () => {
        const revisionsPath = () => join(bookDir, '.audiobook', 'revisions.json');
@@ -2074,8 +2138,10 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
          origin: 'server',
        };
        /* A legacy entry on a chapter with no slug in state.json — normalisation
-          drops it (no .previous can exist); the pre-285 code echoed it verbatim. */
+          drops it (no .previous can exist). */
        const staleLegacy = { id: 'rev-stale', chapterId: 2, characterId: 'x', segments: [] };
+       const matchingCast = () =>
+         seed({ snapshots: { eliza: { voiceId: 'v1' } }, cast: [{ id: 'eliza', voiceId: 'v1' }] });
 
        it('returns pending even when the cast is EMPTY (D8)', async () => {
          writeFileSync(revisionsPath(), JSON.stringify({ schema: 1, fileId: 'f-1', rev: 2, pending: [serverEntry] }));
@@ -2097,7 +2163,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
        });
 
        it('falls back to [] when persisted pending is not an array', async () => {
-         seed({ snapshots: { eliza: { voiceId: 'v1' } }, cast: [{ id: 'eliza', voiceId: 'v1' }] });
+         matchingCast();
          writeFileSync(revisionsPath(), JSON.stringify({ pending: 'garbage' }));
          const res = await request(app).get(`/api/books/${bookId}/revisions`);
          expect(res.status).toBe(200);
@@ -2106,13 +2172,14 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
        });
 
        it('a corrupt revisions.json answers 500, as on main', async () => {
-         seed({ snapshots: { eliza: { voiceId: 'v1' } }, cast: [{ id: 'eliza', voiceId: 'v1' }] });
+         matchingCast();
          writeFileSync(revisionsPath(), '{"pending": [');
          const res = await request(app).get(`/api/books/${bookId}/revisions`);
          expect(res.status).toBe(500);
        });
 
        it('bulk GET /api/revisions answers exactly { pending, drift } per book, pending normalised', async () => {
+         matchingCast();
          writeFileSync(
            revisionsPath(),
            JSON.stringify({ schema: 1, fileId: 'f-1', rev: 2, pending: [serverEntry, staleLegacy] }),
@@ -2121,10 +2188,39 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
          expect(res.status).toBe(200);
          expect(res.body.byBookId[bookId]).toEqual({ pending: [serverEntry], drift: [] });
        });
+
+       it('a lock timeout under either poll answers the curated 500 (no lock-key path)', async () => {
+         const store = await import('../workspace/revisions-store.js');
+         const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+         const err = () => new LockAcquisitionTimeoutError('revisions:C:/SECRET-WORKSPACE/book', 10_000);
+         vi.mocked(store.readRevisions).mockRejectedValueOnce(err());
+         const single = await request(app).get(`/api/books/${bookId}/revisions`);
+         expect(single.status).toBe(500);
+         expect(single.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+         vi.mocked(store.readRevisions).mockRejectedValueOnce(err());
+         const bulk = await request(app).get(`/api/revisions?bookIds=${bookId}`);
+         expect(bulk.status).toBe(500);
+         expect(bulk.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+       });
      });
      ```
-  4. In `server/src/routes/qa-report.test.ts`, inside `describe('GET /api/books/:bookId/qa-report', …)`, add the test below. Import `rmSync` from `node:fs` if it is not already imported. The book's `state.chapters` is `[]` and it has no cast. The assertion is that `configDrift` is built from `drift`, not `pending`:
+  5. In `server/src/routes/qa-report.test.ts`, extend the existing `scan.js` mock's `findBookByBookId` (`:16-27`) with a second trigger, just before `return actual.findBookByBookId(bookId);`:
      ```ts
+           if (bookId === 'LOCK_TRIGGER') {
+             const { LockAcquisitionTimeoutError } = await import('../workspace/file-lock.js');
+             throw new LockAcquisitionTimeoutError('revisions:C:/SECRET-WORKSPACE/book', 10_000);
+           }
+     ```
+     Then, inside `describe('GET /api/books/:bookId/qa-report', …)`, add the tests below. Add `rmSync` to the `node:fs` import (`:6`) if it is missing.
+     ```ts
+       it('plan 285 — a lock timeout answers the curated 500 (no lock-key path)', async () => {
+         const { LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+         const res = await request(app).get('/api/books/LOCK_TRIGGER/qa-report');
+         expect(res.status).toBe(500);
+         expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+         expect(res.text).not.toContain('SECRET-WORKSPACE');
+       });
+
        it('plan 285 — configDrift is built from drift only; a pending revision never reaches it', async () => {
          const p = join(bookDir, '.audiobook', 'revisions.json');
          writeFileSync(
@@ -2145,22 +2241,23 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
        });
      ```
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/revisions.test.ts src/routes/qa-report.test.ts`
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/revisions.test.ts src/routes/qa-report.test.ts`
 
-Expected: FAIL in `revisions.test.ts` on these tests:
-- the two `emptyPoll()` equalities;
-- `returns pending even when the cast is EMPTY (D8)`;
-- `surfaces a legacy entry only while its .previous.mp3 exists` (the old code echoes it with no `.previous`);
-- `bulk GET /api/revisions answers exactly { pending, drift }…` (the old code echoes `staleLegacy`).
+  Expected FAIL. Each test below fails for the stated reason:
+  - **The two `emptyPoll()` equalities.** Main has no `bookId`, `fileId` or `rev` fields.
+  - **`returns pending even when the cast is EMPTY (D8)`.** With no cast, main returns `pending: []` early (`revisions.ts:132-135`).
+  - **`surfaces a legacy entry only while its .previous.mp3 exists`.** Main echoes the legacy entry even with no `.previous`.
+  - **`bulk GET … pending normalised`.** The cast is seeded, so main reaches its verbatim echo and returns `staleLegacy` too.
+  - **Both lock-timeout tests.** Main returns the raw message containing `SECRET-WORKSPACE`. Also, main's `computeRevisionsForBook` does not call `readRevisions`, so the single/bulk poll test may instead see a 200.
 
-These pass both before and after the change:
-- `a corrupt revisions.json answers 500` (main already reads the file whenever a cast exists);
-- `falls back to []…`;
-- the qa-report test. It gets a real mutation in Step 4.
+  These pass both before and after the change (regression guards, each with a mutation in Step 4):
+  - `a corrupt revisions.json answers 500` (main already reads the file once a cast exists);
+  - `falls back to []…`;
+  - the qa-report `configDrift` test.
 
-- [ ] **Step 2: Reshape `computeRevisionsForBook`** in `server/src/routes/revisions.ts`
+- [ ] **Step 2: Reshape `server/src/routes/revisions.ts`**
 
-  1. Replace the header comment (lines 1-14) with:
+  1. Replace the header comment (`:1-14`) with:
      ```ts
      /* GET /api/books/:bookId/revisions
         Reads each chapter's `<slug>.segments.json` and diffs the captured
@@ -2177,15 +2274,13 @@ These pass both before and after the change:
         returns `pending` even when the cast is empty (D8). The drift detector
         never creates pending — the user still chooses. */
      ```
-  2. Imports: change `import { castJsonPath, revisionsJsonPath } from '../workspace/paths.js';` to `import { castJsonPath } from '../workspace/paths.js';`, and add `import { readRevisions, toRevisionsState, type RevisionsState, type StoredRevision } from '../workspace/revisions-store.js';`.
+  2. Update the imports:
+     - change `import { castJsonPath, revisionsJsonPath } from '../workspace/paths.js';` to `import { castJsonPath } from '../workspace/paths.js';`;
+     - add `import { readRevisions, toRevisionsState, type RevisionsState, type StoredRevision } from '../workspace/revisions-store.js';`;
+     - add `import { requestFailureMessage } from '../workspace/file-lock.js';`.
   3. Delete `interface RevisionsPersisted { … }`.
-  4. Above `getRevisionsForBook`, add:
-     ```ts
-     /** Plan 285 — the single-book poll's shape: the store's RevisionsState plus live drift. */
-     export type RevisionsPoll = RevisionsState & { drift: DriftEvent[] };
-     ```
-  5. Change `getRevisionsForBook`'s return type to `Promise<RevisionsPoll | null>`.
-  6. Replace `computeRevisionsForBook` from its signature through the `const pending = …` line with the code below. Keep the two `#2040` comment blocks above `loadCastIdHistory`/`buildCastResolver` verbatim.
+  4. Above `getRevisionsForBook`, add `/** Plan 285 — the single-book poll's shape: the store's RevisionsState plus live drift. */ export type RevisionsPoll = RevisionsState & { drift: DriftEvent[] };`. Change `getRevisionsForBook`'s return type to `Promise<RevisionsPoll | null>`.
+  5. Replace the part of `computeRevisionsForBook` that runs from its signature down to the `return { pending: [], drift: [] };` block (`:125-136`) with:
      ```ts
      export async function computeRevisionsForBook(
        bookId: string,
@@ -2200,73 +2295,116 @@ These pass both before and after the change:
          // No cast confirmed yet — no drift to compute, but pending still surfaces (D8).
          return { ...base, drift: [] };
        }
-       const castIdHistory = await loadCastIdHistory(bookDir);
-       const castResolver = buildCastResolver(cast, castIdHistory);
+     ```
+     Then replace the four lines from `const persisted = await readJson<RevisionsPersisted>(…)` through `const pending = Array.isArray(…) …;`, including the `#3376 part 1` comment between them (`:148-153`), with:
+     ```ts
        const dismissed = new Set(file.dismissed);
      ```
-  7. Replace the final `return { pending, drift: filtered };` with `return { ...base, drift: filtered };`.
-  8. In the bulk route, replace the `byBookId` declaration and loop with:
+  6. Replace the final `return { pending, drift: filtered };` (`:234`) with `return { ...base, drift: filtered };`.
+  7. In the single route's catch (`:244`), replace `res.status(500).json({ error: (e as Error).message || 'Failed to compute revisions.' });` with:
+     ```ts
+         /* Plan 285 — curated: a store failure may carry a lock-key path. */
+         res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to compute revisions.') });
+     ```
+  8. In the bulk route, replace the `byBookId` declaration and loop (`:269-273`) with:
      ```ts
          const byBookId: Record<string, { pending: StoredRevision[]; drift: DriftEvent[] }> = {};
          for (const [id, result] of entries) {
            if (result) byBookId[id] = { pending: result.pending, drift: result.drift };
          }
      ```
+     Then replace its catch body (`:277`) with:
+     ```ts
+         res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to compute bulk revisions.') });
+     ```
+  9. In `server/src/routes/qa-report.ts`:
+     - add `import { requestFailureMessage } from '../workspace/file-lock.js';`;
+     - replace the GET catch body (`:46`) with `res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to build QA report.') });`;
+     - leave the resume-scoring catch at `:72` untouched.
 
-- [ ] **Step 3: Run suites and typecheck**
+- [ ] **Step 3: Update the CLAUDE.md count to the final number.**
+
+  Run: `git -C C:/Claude/Projects/wt-3400-revisions-server-ops grep -n "requestFailureMessage(" -- "server/src/**/*.ts" ":!*.test.ts"`
+  Expected: 21 lines, which is the definition plus **20** call sites. That is Task 4's 17 plus `revisions` ×2 and `qa-report` ×1.
+
+  In `CLAUDE.md`, replace the text Task 4 wrote:
+  ```
+    enumerates all seventeen sites (`book-state` ×4, `voice-library` ×3,
+    `revision-ops` ×3, `cast-design` ×2 (both arms of its defensive outer),
+    `voices`, `qwen-voice`, `voice-style`, `single-design`, `script-review`),
+  ```
+  with
+  ```
+    enumerates all twenty sites (`book-state` ×4, `voice-library` ×3,
+    `revision-ops` ×3, `cast-design` ×2 (both arms of its defensive outer),
+    `revisions` ×2 (the single-book and bulk polls), `qa-report`, `voices`,
+    `qwen-voice`, `voice-style`, `single-design`, `script-review`),
+  ```
+
+- [ ] **Step 4: Run the suites and typecheck**
 
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/revisions.test.ts src/routes/qa-report.test.ts src/routes/revision-ops.test.ts`
 Expected: PASS.
+
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
 Expected: exit 0.
 
-- [ ] **Step 4: Mutation checks** (report each red; restore after each)
+- [ ] **Step 5: Mutation checks.** Report each red, restore after each, and confirm the diff-stat check.
 
-  1. In `revisions.ts`, change the empty-cast branch to `return { ...base, pending: [], drift: [] };`. Run `…server run test -- src/routes/revisions.test.ts`. Expected red: `returns pending even when the cast is EMPTY (D8)`.
-  2. In the bulk route, change `byBookId[id] = { pending: result.pending, drift: result.drift };` to `byBookId[id] = result;`. Run the same file. Expected red: the bulk test, because `toEqual` sees the extra `bookId`/`fileId`/`rev`/… keys.
-  3. In `server/src/routes/qa-report.ts:33`, change `const drift = revisions.drift;` to `const drift = revisions.pending as unknown as typeof revisions.drift;`. Run `…server run test -- src/routes/qa-report.test.ts`. Expected red: `plan 285 — configDrift is built from drift only…`, because `events` contains the pending entry and `counts.severe` is 1.
+  1. Change the empty-cast branch to `return { ...base, pending: [], drift: [] };`. Run `…server run test -- src/routes/revisions.test.ts`.
+     - Expected red: `returns pending even when the cast is EMPTY (D8)`.
+  2. Change the bulk `byBookId[id] = { pending: result.pending, drift: result.drift };` to `byBookId[id] = result;`. Run the same file.
+     - Expected red: the bulk test. `toEqual` sees the extra `bookId`/`fileId`/`rev`/… keys.
+  3. Change `const file = await readRevisions(bookDir, state.chapters);` to `const file = await readRevisions(bookDir, state.chapters).catch(() => emptyRevisionsFile());`, importing `emptyRevisionsFile`. Run the same file.
+     - Expected red: `a corrupt revisions.json answers 500, as on main`, because it returns 200.
+  4. In `qa-report.ts:33`, change `const drift = revisions.drift;` to `const drift = revisions.pending as unknown as typeof revisions.drift;`. Run `…server run test -- src/routes/qa-report.test.ts`.
+     - Expected red: `configDrift is built from drift only…`, with `counts.severe` at 1.
+  5. In `qa-report.ts`'s GET catch, revert to `(e as Error).message || 'Failed to build QA report.'`. Run the same file.
+     - Expected red: `a lock timeout answers the curated 500`.
 
-- [ ] **Step 5: Commit and push**
+- [ ] **Step 6: Commit and push**
 
 ```bash
-git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/revisions.ts server/src/routes/revisions.test.ts server/src/routes/qa-report.test.ts
-git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server): revisions polls read through the store; pending survives an empty cast (#3400)"
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/revisions.ts server/src/routes/revisions.test.ts server/src/routes/qa-report.ts server/src/routes/qa-report.test.ts CLAUDE.md
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server,docs): revisions polls read through the store; curate poll and qa-report 500s (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ```
 
 ---
 
-### Task 6 (4): OpenAPI for the PR-1 surface + generated types
+### Task 6 (4): OpenAPI for the PR-1 surface and generated types
 
 **Files:**
-- Modify `openapi.yaml`:
-  - generation request body (`:1772-1786`);
-  - splice inline schema (`:1850-1858`);
-  - qa-repair inline schema (`:1934-1954`);
-  - a new block after the `/api/books/{bookId}/revisions:` path (`:2817-2829`);
-  - bulk description (`:2833-2838`);
-  - `GenerationTick` (`:5691`);
-  - `QueueEntry` (`~:5956`) and `QueueEnqueueEntry` (`~:6043`);
-  - `RevisionsResponse` / `BulkRevisionsResponse` (`:6763-6793`);
-  - `Revision` (`:6840`);
-  - `BookStateResponse.revisions` (`:8004-8020`).
-- Regenerate `src/lib/api-types.ts`.
-- Modify: `src/lib/api.ts`, at `SpliceTick` (`:646-672`) and `QaRepairTick` (`:689-707`); `src/lib/types.ts:79-80`.
-- Create: `src/lib/api-types.revisions-contract.test.ts`
+- Modify `openapi.yaml`, re-anchored on the new base:
+  - the generation request body: the `force:` property at `:1789-1791`, with responses below it;
+  - the splice inline schema: `hasPreviousAudio` at `:1858`;
+  - the qa-repair inline schema: `hasPreviousAudio` at `:1954`;
+  - a new block after the `/api/books/{bookId}/revisions:` path, which ends at `:2831`;
+  - the bulk description at `:2837-2841`;
+  - `GenerationTick` at `:5773`, with `audioQa` at `:5906`;
+  - `QueueEntry` at `:5978`, with `fallbackConfirmed` at `:6038`;
+  - `QueueEnqueueEntry` at `:6096`, with `fallbackConfirmed` at `:6125`;
+  - `RevisionsResponse` at `:6845` and `BulkRevisionsResponse` at `:6862`;
+  - `Revision` at `:6922`, with `hasPreviousAudio` at `:6942`;
+  - `BookStateResponse.revisions` at `:8088`.
+- Regenerate: `src/lib/api-types.ts`.
+- Modify: `src/lib/api.ts`, at `SpliceTick` (`:647`, `splice_complete` arm at `:657`) and `QaRepairTick` (`:689`, `qa_repair_complete` arm at `:701`).
+- Modify: `src/lib/types.ts:80`.
+- Create: `src/lib/api-types.revisions-contract.test.ts`.
 
-**Dark-state note:** this task changes types only. No runtime code reads the new fields in PR 1.
+**Dark-state note:** this task changes types only.
 
 **Interfaces:**
 - Consumes: the server shapes from Tasks 1–5. `RevisionsState` must match the server interface field for field.
 - Produces:
-  - new schemas: `components['schemas']['RevisionsState']`, `['RevisionOpError']`, `['ReviewRequest']`;
-  - `export type ReviewRequest = components['schemas']['ReviewRequest']` in `src/lib/types.ts`;
-  - new optional fields:
+  - **New schemas:** `components['schemas']['RevisionsState']`, `['RevisionOpError']`, `['ReviewRequest']`.
+  - **New client type:** `export type ReviewRequest = components['schemas']['ReviewRequest']` in `src/lib/types.ts`.
+  - **New optional fields:**
     - `GenerationTick.reviewChapter` and `reviewRecorded`;
     - `QueueEntry.review` and `QueueEnqueueEntry.review`;
     - `Revision.origin`;
     - `RevisionsResponse.bookId`, `fileId`, `rev`, `dismissed` and `acceptedSelections`;
-    - `reviewRecorded` on `SpliceTick`'s `splice_complete` arm and on `QaRepairTick`'s `qa_repair_complete` arm.
+    - `reviewRecorded` on the `splice_complete` and `qa_repair_complete` ticks.
 
 - [ ] **Step 1: Write the failing contract test** `src/lib/api-types.revisions-contract.test.ts`
 
@@ -2347,11 +2485,11 @@ describe('openapi: plan 285 PR 1', () => {
 - [ ] **Step 2: Run typecheck to verify it fails**
 
 Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`
-Expected: FAIL in `src/lib/api-types.revisions-contract.test.ts`. The errors include `Property 'RevisionsState' does not exist`, `Module '"./types"' has no exported member 'ReviewRequest'` and `Property 'reviewRecorded' does not exist`.
+Expected: FAIL. The errors include `Property 'RevisionsState' does not exist`, `has no exported member 'ReviewRequest'` and `Property 'reviewRecorded' does not exist`.
 
-- [ ] **Step 3: Edit `openapi.yaml`**
+- [ ] **Step 3: Edit `openapi.yaml`.** Find each anchor by its quoted text.
 
-  (a) In the generation request body, after the `force:` property (`:1784-1786`), add:
+  (a) Generation request body. After the `force:` property and its `description:` (`:1789-1791`), add:
   ```yaml
                 review:
                   allOf:
@@ -2364,7 +2502,7 @@ Expected: FAIL in `src/lib/api-types.revisions-contract.test.ts`. The errors inc
                     `chapter_complete` (never a replayed done chapter). Not sent
                     by the client until PR 2.
   ```
-  Then, under `responses:` for this path and next to `'200'`, add:
+  Add a `'400'` response next to this path's `'200'`:
   ```yaml
         '400':
           description: '`review` is malformed (`invalid_review`) or does not name exactly one chapter (`review_requires_single_chapter`).'
@@ -2377,14 +2515,14 @@ Expected: FAIL in `src/lib/api-types.revisions-contract.test.ts`. The errors inc
                   message: { type: string }
   ```
 
-  (b) In the splice inline schema (after `hasPreviousAudio: { type: boolean }`, `:1856`) and the qa-repair inline schema (after `hasPreviousAudio: { type: boolean }`, `:1952`), add:
+  (b) Splice and QA-repair inline schemas. After the `hasPreviousAudio: { type: boolean }` lines at `:1858` (splice) and `:1954` (qa-repair), add:
   ```yaml
                   reviewRecorded:
                     type: boolean
                     description: Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live).
   ```
 
-  (c) After the `/api/books/{bookId}/revisions:` path block (ending `:2829`), insert the following, two-space-indented like its siblings:
+  (c) New paths. After the `/api/books/{bookId}/revisions:` path block, which ends just before `/api/revisions:` at `:2833`, insert the following with two-space indentation like its siblings:
   ```yaml
   /api/books/{bookId}/revisions/{revisionId}/accept:
     post:
@@ -2500,9 +2638,9 @@ Expected: FAIL in `src/lib/api-types.revisions-contract.test.ts`. The errors inc
 
   ```
 
-  (d) Append to the bulk route description (`:2833-2838`): `Plan 285 — each value carries exactly \`pending\` (read through the server store, normalised) and \`drift\`.`
+  (d) Bulk route description (`:2837-2841`). Append the sentence `Plan 285 — each value carries exactly \`pending\` (read through the server store, normalised) and \`drift\`.`
 
-  (e) In `GenerationTick`, after `audioQa`, add:
+  (e) `GenerationTick`. After its `audioQa:` property (`:5906`), add:
   ```yaml
         reviewChapter:
           type: boolean
@@ -2517,7 +2655,7 @@ Expected: FAIL in `src/lib/api-types.revisions-contract.test.ts`. The errors inc
             is still live).
   ```
 
-  (f) In `QueueEntry` and `QueueEnqueueEntry`, after each `fallbackConfirmed:` property block, add:
+  (f) `QueueEntry` and `QueueEnqueueEntry`. After each `fallbackConfirmed:` property block (`:6038`, `:6125`), add:
   ```yaml
         review:
           allOf:
@@ -2525,7 +2663,7 @@ Expected: FAIL in `src/lib/api-types.revisions-contract.test.ts`. The errors inc
           description: Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2.
   ```
 
-  (g) In `RevisionsResponse`, after `timeline`, add:
+  (g) `RevisionsResponse` (`:6845`). After `timeline`, add:
   ```yaml
         bookId: { type: string }
         fileId:
@@ -2552,7 +2690,7 @@ Expected: FAIL in `src/lib/api-types.revisions-contract.test.ts`. The errors inc
         additionally returns the whole RevisionsState.
   ```
 
-  (h) In `Revision`, after `hasPreviousAudio`, add:
+  (h) `Revision`. After its `hasPreviousAudio:` property block (`:6942`), add:
   ```yaml
         origin:
           type: string
@@ -2560,7 +2698,7 @@ Expected: FAIL in `src/lib/api-types.revisions-contract.test.ts`. The errors inc
           description: Plan 285 — present on entries the server recorded; absent on legacy client-written ones.
   ```
 
-  (i) After `Revision`, add three component schemas:
+  (i) New component schemas. After `Revision`, add three:
   ```yaml
     RevisionsState:
       type: object
@@ -2617,7 +2755,7 @@ Expected: FAIL in `src/lib/api-types.revisions-contract.test.ts`. The errors inc
         triggeredBy: { type: string }
   ```
 
-  (j) In `BookStateResponse.revisions`, after `acceptedSelections`, add:
+  (j) `BookStateResponse.revisions` (`:8088`). After `acceptedSelections`, add:
   ```yaml
             timeline:
               type: object
@@ -2631,40 +2769,34 @@ Expected: FAIL in `src/lib/api-types.revisions-contract.test.ts`. The errors inc
             rev: { type: integer }
   ```
 
-- [ ] **Step 4: Regenerate the types**
-
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run openapi:types`
-Expected: exit 0.
-
-Then run `git -C C:/Claude/Projects/wt-3400-revisions-server-ops diff --stat src/lib/api-types.ts`. The diff should contain only additions and the edited description strings. If unrelated regions were reformatted, stop and report.
+- [ ] **Step 4: Regenerate the types.** Run `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run openapi:types` and expect exit 0. Then run `git -C C:/Claude/Projects/wt-3400-revisions-server-ops diff --stat src/lib/api-types.ts`. The diff should contain only additions and the edited descriptions. If unrelated regions were reformatted, stop and report it.
 
 - [ ] **Step 5: Hand-written types**
-
-  1. In `src/lib/types.ts`, after line 80 (`export type BulkRevisionsResponse = …`), add:
+  1. `src/lib/types.ts`: after line 80 (`export type BulkRevisionsResponse = …`), add:
      ```ts
      /** Plan 285 — the A/B review intent a queue entry / generation request carries. */
      export type ReviewRequest = components['schemas']['ReviewRequest'];
      ```
-  2. In `src/lib/api.ts`, in `SpliceTick`'s `splice_complete` arm, add after `hasPreviousAudio: boolean;`:
+  2. `src/lib/api.ts`: in `SpliceTick`'s `splice_complete` arm, add this after `hasPreviousAudio: boolean;`:
      ```ts
            /** Plan 285 — present only when finalize recorded (or failed to record) A/B review state. */
            reviewRecorded?: boolean;
      ```
-  3. In `src/lib/api.ts`, in `QaRepairTick`'s `qa_repair_complete` arm (`:700-707`), add the same `reviewRecorded?: boolean;` member and comment after `durationSec?: number;`. That arm has no `hasPreviousAudio`.
+  3. `src/lib/api.ts`: in `QaRepairTick`'s `qa_repair_complete` arm, add the same member and comment after `durationSec?: number;`. That arm has no `hasPreviousAudio`.
 
-- [ ] **Step 6: Typecheck and run the contract test**
+- [ ] **Step 6: Typecheck and contract test**
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`
-Expected: exit 0. A clean typecheck also proves that PR 1's partial mocks still compile.
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`
+  Expected: exit 0.
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- src/lib/api-types.revisions-contract.test.ts`
-Expected: PASS.
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- src/lib/api-types.revisions-contract.test.ts`
+  Expected: PASS.
 
 - [ ] **Step 7: Mutation check.**
   1. Delete the `reviewRecorded:` property you added to `GenerationTick` in `openapi.yaml`.
   2. Run `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run openapi:types`, then `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`.
   3. Expected red: a TypeScript error in `api-types.revisions-contract.test.ts` on the `GenerationTick['reviewRecorded']` assertion.
-  4. Restore the property, regenerate the types, and confirm green.
+  4. Restore the property, regenerate, confirm green, and confirm the diff-stat check.
 
 - [ ] **Step 8: Commit and push**
 
@@ -2679,20 +2811,22 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ### Task 7 (5a): Finalize `review` tri-state
 
 **Files:**
-- Modify `server/src/audio/finalize-chapter-write.ts`:
-  - imports (`:14-46`);
-  - `FinalizeChapterAudioInput` (`:77-109`);
-  - `FinalizeChapterAudioResult` (`:111-122`);
-  - keep the preserve result at `:359`;
-  - add the store call after the `state.json` write (`:399`);
-  - the return (`:401-407`).
-- Modify: `CLAUDE.md:603-609` (the deliberate-swallow list)
-- Test: `server/src/audio/finalize-chapter-write.test.ts`
+- Modify `server/src/audio/finalize-chapter-write.ts`. It was re-anchored after #3362 rewrote this file:
+  - imports at `:14-50`;
+  - `FinalizeChapterAudioInput`: its last member is `reembeddedRows?: EmbeddingRow[];` at `:158`, and the interface closes at `:159`;
+  - `FinalizeChapterAudioResult` at `:161-172`, whose last member is `audioEngines: AudioEngineBreakdown;` at `:171`;
+  - `await preserveExistingAsPrevious(audioRoot, chapter.slug);` at `:704`;
+  - `await rename(tmpAudio, audioPath);` at `:706`;
+  - `const prev = await readJson<BookStateJson>(statePath);` at `:716`;
+  - `writeStateJsonAtomic` at `:739`;
+  - the return at `:742-748`, with the function closing at `:749`.
+- Modify: `CLAUDE.md:603-609` (the deliberate-swallow list).
+- Test: `server/src/audio/finalize-chapter-write.test.ts`. On the new base it is 764 lines. `baseInput()` (`:93-114`) already passes `castIdHistory` and `resynthesizedIndices: 'all'`, and the fixture's chapter `duration` is `'0:00'` (`:81`).
 
-**Dark-state note:** no caller passes `review`, so in PR 1 finalize never touches revisions.json.
+**Dark-state note:** no caller passes `review`.
 
 **Interfaces:**
-- Consumes (from Task 1, `../workspace/revisions-store.js`): `recordPending`, `dropPendingForChapter`, `ChapterRef`; plus `formatDuration`, which is already imported.
+- Consumes (Task 1, `../workspace/revisions-store.js`): `recordPending`, `dropPendingForChapter`, `ChapterRef`. `formatDuration` is already imported at `:21`.
 - Produces:
   ```ts
   // FinalizeChapterAudioInput
@@ -2701,7 +2835,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   reviewRecorded?: boolean; // absent when review is undefined; true on a successful record/drop; false on a store failure
   ```
 
-- [ ] **Step 1: Write the failing tests.** Add `import { formatDuration } from './format-duration.js';` to `server/src/audio/finalize-chapter-write.test.ts`, then append:
+- [ ] **Step 1: Write the failing tests.** Add `import { formatDuration } from './format-duration.js';` to the test file's imports, then append this at the end of the file:
 
 ```ts
 describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
@@ -2732,7 +2866,7 @@ describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
     writePriorTake();
     const result = await finalizeChapterAudioWrite(baseInput());
     expect(existsSync(revisionsPath())).toBe(false);
-    expect(result).not.toHaveProperty('reviewRecorded');
+    expect('reviewRecorded' in result).toBe(false);
   });
 
   it('object + preserved: upserts one server entry for the chapter', async () => {
@@ -2788,7 +2922,7 @@ describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
     });
     const { finalizeChapterAudioWrite: finalizeMocked } = await import('./finalize-chapter-write.js');
     await finalizeMocked({ ...baseInput(), review: REVIEW });
-    // fixture duration is '0:00'; the stamped one is formatDuration(1.0) === '00:01'
+    // The fixture duration is '0:00'; the stamped one is formatDuration(1.0) === '00:01'.
     expect(seen).toEqual({ duration: '00:01', audioExists: true });
   });
 
@@ -2816,13 +2950,13 @@ describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/audio/finalize-chapter-write.test.ts`
-Expected: FAIL. `object + preserved` fails with `expected undefined to be true`, and the other review cases fail too. The `undefined` case passes.
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/audio/finalize-chapter-write.test.ts`
+  Expected: FAIL. `object + preserved` fails with `expected undefined to be true`, and the other review cases fail too. The `undefined` case passes; its mutation is in Step 5.
 
 - [ ] **Step 3: Implement in `server/src/audio/finalize-chapter-write.ts`**
 
   1. Add the import `import { recordPending, dropPendingForChapter, type ChapterRef } from '../workspace/revisions-store.js';`.
-  2. In `FinalizeChapterAudioInput`, after `embeddings?: EmbeddingRow[];`, add:
+  2. In `FinalizeChapterAudioInput`, after `reembeddedRows?: EmbeddingRow[];` (`:158`) and before the closing `}`, add:
      ```ts
        /** Plan 285 (#3400) — the A/B review intent for this render.
            `undefined` (PR 1: every caller) — leave revisions.json alone.
@@ -2832,14 +2966,14 @@ Expected: FAIL. `object + preserved` fails with `expected undefined to be true`,
            render) drop any entry. Best-effort: never fails the render. */
        review?: { characterId: string; triggeredBy: string } | null;
      ```
-  3. In `FinalizeChapterAudioResult`, after `audioEngines`, add:
+  3. In `FinalizeChapterAudioResult`, after `audioEngines: AudioEngineBreakdown;` (`:171`), add:
      ```ts
        /** Plan 285 — absent when `review` was undefined; true when the record/drop
            landed; false when it failed (logged in full; the new take is live). */
        reviewRecorded?: boolean;
      ```
-  4. At `:359`, change `await preserveExistingAsPrevious(audioRoot, chapter.slug);` to `const preserve = await preserveExistingAsPrevious(audioRoot, chapter.slug);`.
-  5. Replace the final `return { … };` (`:401-407`) and close the function with:
+  4. At `:704`, change `await preserveExistingAsPrevious(audioRoot, chapter.slug);` to `const preserve = await preserveExistingAsPrevious(audioRoot, chapter.slug);`.
+  5. Replace the final `return { … };` (`:742-748`) and the function's closing `}` (`:749`) with:
      ```ts
        /* Plan 285 — AFTER the last disk write (audio rename, peaks, state.json):
           a throw earlier in finalize therefore never leaves an entry for a
@@ -2896,9 +3030,10 @@ Expected: FAIL. `object + preserved` fails with `expected undefined to be true`,
          );
          return false;
        }
+     }
      ```
-     The file's existing final `}` now closes `applyReview`. Make sure exactly one closing brace follows the `catch`. Typecheck confirms it.
-  6. In `CLAUDE.md`, replace
+     Check that the file ends with exactly one closing `}`, the one that closes `applyReview`. Typecheck confirms this.
+  6. In `CLAUDE.md` (`:603-609`), replace
      ```
        `cast.json` and `state.json` never written at all. FOUR handlers swallow it
        deliberately: `reconcileRejectEdgesOnDisk`
@@ -2924,22 +3059,22 @@ Expected: FAIL. `object + preserved` fails with `expected undefined to be true`,
        different shape and is
      ```
 
-- [ ] **Step 4: Run the suite and typecheck**
+- [ ] **Step 4: Run and typecheck**
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/audio/finalize-chapter-write.test.ts`
-Expected: PASS.
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/audio/finalize-chapter-write.test.ts src/audio/finalize-chapter-write-refinalize.test.ts`
+  Expected: PASS. The refinalize file is #3362's sibling suite and must stay green.
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
-Expected: exit 0.
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
+  Expected: exit 0.
 
-- [ ] **Step 5: Mutation checks** (report each red; restore after each)
-
-  1. Move the line `const reviewRecorded = await applyReview(input, preserve.preserved, prev);` up to directly after `const prev = await readJson<BookStateJson>(statePath);` (`:375`), which is before the `writeStateJsonAtomic` at `:398`. The `return` keeps using the variable.
-     - Run the Step 4 test.
-     - Expected red: `runs the store call AFTER the audio rename and the state.json write`. The output is `expected { duration: '0:00', audioExists: true } to deeply equal { duration: '00:01', audioExists: true }`, because the fixture duration is `'0:00'` and `formatDuration(1.0)` is `'00:01'`.
-  2. In `applyReview`, change `if (input.review !== null && preserved)` to `if (input.review !== null)`.
-     - Run the Step 4 test.
-     - Expected red: `object + first render (nothing preserved)…`. The pending list has 1 entry instead of being `[]`.
+- [ ] **Step 5: Mutation checks.** Report each red, restore after each, and confirm the diff-stat check.
+  1. Move the line `const reviewRecorded = await applyReview(input, preserve.preserved, prev);` up to directly after `const prev = await readJson<BookStateJson>(statePath);` (`:716`), which places it before the `writeStateJsonAtomic` at `:739`. The `return` keeps using the variable. Run Step 4's first command.
+     - Expected red: `runs the store call AFTER the audio rename and the state.json write`, reported as `expected { duration: '0:00', audioExists: true } to deeply equal { duration: '00:01', audioExists: true }`.
+     - Why: the fixture's `'0:00'` has not been re-stamped yet, while `formatDuration(1.0)` is `'00:01'`. The audio rename at `:706` has already happened, so `audioExists` is true either way.
+  2. In `applyReview`, change `if (input.review !== null && preserved)` to `if (input.review !== null)`. Run the same command.
+     - Expected red: `object + first render (nothing preserved)…`, because the pending list has 1 entry instead of `[]`.
+  3. In `applyReview`, delete `if (input.review === undefined) return undefined;`. Run the same command.
+     - Expected red: `undefined: leaves revisions.json alone…`, because `'reviewRecorded' in result` is true.
 
 - [ ] **Step 6: Commit and push**
 
@@ -2951,31 +3086,30 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ---
 
-### Task 8 (5b): Thread `reviewRecorded` onto the three completion events, and assert that no caller passes `review`
+### Task 8 (5b): Thread `reviewRecorded` onto the three completion events and assert that no caller passes `review`
 
 **Files:**
-- Modify: `server/src/routes/chapter-splice.ts:513-521`, `server/src/routes/chapter-qa-repair.ts:802-813`, `server/src/routes/generation.ts:1857-1861` (the destructure) and `:2030-2054` (the live broadcast).
-- Test: `server/src/routes/chapter-splice.test.ts`, `server/src/routes/chapter-qa-repair.test.ts`, `server/src/routes/generation.test.ts`. The generation suite is a **slow-pool** file.
+- Modify `server/src/routes/chapter-splice.ts`: the `splice_complete` send at `:558-566`, where `hasPreviousAudio: true,` is `:565`.
+- Modify `server/src/routes/chapter-qa-repair.ts`: the `dryRun:false` `qa_repair_complete` send at `:866-876`, where `hasPreviousAudio: true,` is `:875`. Do NOT touch the dry-run send at `:283`.
+- Modify `server/src/routes/generation.ts`:
+  - the finalize destructure at `:1857-1861`;
+  - the live `chapter_complete` broadcast at `:2041-2065`, where `audioQa,` is `:2064`;
+  - leave the replay loop at `:1174-1194` alone.
+- Tests:
+  - `chapter-splice.test.ts` and `chapter-qa-repair.test.ts`. **Both already have a pass-through `vi.mock('../audio/finalize-chapter-write.js')` (`chapter-splice.test.ts:136-139`, `chapter-qa-repair.test.ts:73-76`), so reuse those spies and add no new mock.**
+  - `generation.test.ts`. This one has **no** finalize mock yet, so add one. It is a **slow-pool** file.
 
-**Dark-state note:** the tests assert that each of the three callers passes no `review`, which keeps the client as the only writer of `pending`.
+**Dark-state note:** the tests assert that all three callers pass no `review`.
 
 **Interfaces:**
-- Consumes (from Task 7): `FinalizeChapterAudioResult.reviewRecorded?: boolean`; `finalizeChapterAudioWrite`.
-- Produces: `splice_complete`, `qa_repair_complete` (with `dryRun:false`) and the live `chapter_complete` each carry `reviewRecorded` only when the finalize result has it.
+- Consumes (Task 7): `FinalizeChapterAudioResult.reviewRecorded?: boolean` and `finalizeChapterAudioWrite`.
+- Produces: `splice_complete`, `qa_repair_complete` (dryRun:false) and the live `chapter_complete` carry `reviewRecorded` only when the finalize result has it.
+
+**About the "no `reviewRecorded`" tests below.** They check the raw SSE `data:` line text. `JSON.stringify` already drops a property whose value is `undefined`, so an unconditional `reviewRecorded: result.reviewRecorded` spread would put identical bytes on the wire as the conditional one. That makes it wire-identical, not a defect, and no test can or should tell them apart. What these tests do guard against is a default that invents a value, such as `?? false`. Each mutation is written to exercise exactly that.
 
 - [ ] **Step 1: Write the failing caller tests**
 
-  (a) `server/src/routes/chapter-splice.test.ts`: add this top-level mock next to the other `vi.mock` calls:
-  ```ts
-  /* Plan 285 — passthrough spy so a test can (1) assert the splice caller
-     passes NO `review` in PR 1 and (2) force `reviewRecorded:false` to prove it
-     reaches splice_complete. */
-  vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
-    const real = await importOriginal<typeof import('../audio/finalize-chapter-write.js')>();
-    return { ...real, finalizeChapterAudioWrite: vi.fn(real.finalizeChapterAudioWrite) };
-  });
-  ```
-  Then add these tests inside `describe('POST /:bookId/chapters/:chapterId/splice (remix)', …)`:
+  (a) In `server/src/routes/chapter-splice.test.ts`, inside `describe('POST /:bookId/chapters/:chapterId/splice (remix)', …)`, after the existing `threads an EMPTY resynthesizedIndices…` test, add the tests below. They use the file's existing spy; do not add a new `vi.mock`.
   ```ts
     it('plan 285 — passes no `review` to finalize (PR 1 dark) and threads reviewRecorded onto splice_complete', async () => {
       const fin = await import('../audio/finalize-chapter-write.js');
@@ -2991,23 +3125,23 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
         .send({ mode: 'remix', characterId: 'castor', gainDb: 3 });
 
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.calls[0][0]).not.toHaveProperty('review');
+      expect('review' in spy.mock.calls[0][0]).toBe(false);
       const done = parseSse(res.text).find((e) => e.type === 'splice_complete');
       expect(done, `expected splice_complete, got ${res.text}`).toBeTruthy();
       expect(done!.reviewRecorded).toBe(false);
     });
 
-    it('plan 285 — splice_complete carries no reviewRecorded when finalize returns none', async () => {
+    it('plan 285 — the splice_complete line carries no reviewRecorded when finalize returns none', async () => {
       const res = await request(app)
         .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
         .send({ mode: 'remix', characterId: 'castor', gainDb: 3 });
-      const done = parseSse(res.text).find((e) => e.type === 'splice_complete');
-      expect(done).toBeTruthy();
-      expect(done).not.toHaveProperty('reviewRecorded');
+      const line = res.text.split('\n').find((l) => l.startsWith('data: ') && l.includes('"splice_complete"'));
+      expect(line, res.text).toBeTruthy();
+      expect(line).not.toContain('reviewRecorded');
     });
   ```
 
-  (b) `server/src/routes/chapter-qa-repair.test.ts`: add the same top-level `vi.mock('../audio/finalize-chapter-write.js', …)` block. Then add this test inside `describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persistence)', …)`, after `writes the accepted take verdict…`:
+  (b) In `server/src/routes/chapter-qa-repair.test.ts`, inside `describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persistence)', …)`, after `threads the spliced take's embedding rows…`, add the test below. Again use the existing spy and add no new `vi.mock`.
   ```ts
     it('plan 285 — passes no `review` to finalize (PR 1 dark) and threads reviewRecorded onto qa_repair_complete', async () => {
       synthesiseChapterMock.mockReset();
@@ -3026,14 +3160,24 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
         .send({ dryRun: false, modelKey: 'kokoro-v1' });
 
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.calls[0][0]).not.toHaveProperty('review');
+      expect('review' in spy.mock.calls[0][0]).toBe(false);
       const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
       expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
       expect(done!.reviewRecorded).toBe(false);
     });
   ```
 
-  (c) `server/src/routes/generation.test.ts`: add the same top-level `vi.mock('../audio/finalize-chapter-write.js', …)` block next to the existing `vi.mock` calls. Then append this at the end of the file. Task 9 adds more tests to this describe.
+  (c) In `server/src/routes/generation.test.ts`, add the top-level pass-through mock next to the existing `vi.mock` calls (`:35-120`):
+  ```ts
+  /* Plan 285 — passthrough spy so a test can (1) assert generation passes NO
+     `review` to finalize in PR 1 and (2) force `reviewRecorded:false` to prove
+     it reaches chapter_complete. Every other test still runs the real write. */
+  vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
+    const real = await importOriginal<typeof import('../audio/finalize-chapter-write.js')>();
+    return { ...real, finalizeChapterAudioWrite: vi.fn(real.finalizeChapterAudioWrite) };
+  });
+  ```
+  Then append this at the end of the file. Task 10 adds more tests to the same describe.
   ```ts
   describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
     afterEach(async () => {
@@ -3041,6 +3185,12 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
       const audioRoot = join(bookDir, 'audio');
       if (fs.existsSync(audioRoot)) fs.rmSync(audioRoot, { recursive: true, force: true });
     });
+
+    /** The raw SSE frame text for chapter N's live chapter_complete. */
+    const completeLine = (text: string, chapterId: number) =>
+      text
+        .split('\n')
+        .find((l) => l.startsWith('data: ') && l.includes(`"type":"chapter_complete","chapterId":${chapterId},`));
 
     it('passes no `review` to finalize and threads reviewRecorded onto the live chapter_complete', async () => {
       const fin = await import('../audio/finalize-chapter-write.js');
@@ -3057,58 +3207,64 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
       expect(res.status).toBe(200);
 
       expect(spy).toHaveBeenCalledTimes(1);
-      expect(spy.mock.calls[0][0]).not.toHaveProperty('review');
+      expect('review' in spy.mock.calls[0][0]).toBe(false);
       const done = parseTicks(res.text).find((t) => t.type === 'chapter_complete' && t.chapterId === 1);
       expect(done, `expected chapter_complete ch1, got ${res.text}`).toBeTruthy();
       expect(done!.reviewRecorded).toBe(false);
     });
 
-    it('chapter_complete carries no reviewRecorded when finalize returns none', async () => {
+    it('the chapter_complete line carries no reviewRecorded when finalize returns none', async () => {
       const res = await request(app)
         .post(`/api/books/${bookId}/generation`)
         .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
-      const done = parseTicks(res.text).find((t) => t.type === 'chapter_complete' && t.chapterId === 1);
-      expect(done).toBeTruthy();
-      expect(done).not.toHaveProperty('reviewRecorded');
+      const line = completeLine(res.text, 1);
+      expect(line, res.text).toBeTruthy();
+      expect(line).not.toContain('reviewRecorded');
     });
   });
   ```
 
-Run:
-```
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/chapter-splice.test.ts src/routes/chapter-qa-repair.test.ts
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- src/routes/generation.test.ts
-```
-Expected: FAIL on the three `threads reviewRecorded…` tests, each with `expected undefined to be false`. All other tests pass, including the pre-existing ones under the passthrough mock. If the slow run prints "No test files found", the wrong script was used.
+  Run:
+  ```
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/chapter-splice.test.ts src/routes/chapter-qa-repair.test.ts -t "plan 285"
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- src/routes/generation.test.ts -t "plan 285"
+  ```
+  - Expected FAIL: the three `threads reviewRecorded…` tests, each with `expected undefined to be false`.
+  - Expected PASS: the "no reviewRecorded" tests, which are regression guards with a mutation in Step 4.
+  - If the slow run prints "No test files found", the wrong script was used.
 
 - [ ] **Step 2: Thread `reviewRecorded`**
-
-  1. In `chapter-splice.ts`, in the `splice_complete` send, add after `hasPreviousAudio: true,`:
+  1. In `chapter-splice.ts`, inside the `splice_complete` send, add this after `hasPreviousAudio: true,` (`:565`):
      ```ts
              /* Plan 285 — present only when finalize was asked to record review state. */
              ...(result.reviewRecorded === undefined ? {} : { reviewRecorded: result.reviewRecorded }),
      ```
-  2. In `chapter-qa-repair.ts`, add the same spread to the `dryRun: false` `qa_repair_complete` send, after `hasPreviousAudio: true,`. Do **not** touch the dry-run send at `:268`.
+  2. In `chapter-qa-repair.ts`, add the same spread after `hasPreviousAudio: true,` (`:875`) in the `dryRun: false` `qa_repair_complete` send.
   3. In `generation.ts`:
      - Change the destructure at `:1857-1861` to `const { audioQa, audioModelKey: renderedModelKey, audioEngines, reviewRecorded } = await finalizeChapterAudioWrite({`.
-     - In the live `chapter_complete` broadcast (`:2031`), after `audioQa,`, add:
+     - In the live `chapter_complete` broadcast, add this after `audioQa,` (`:2064`):
        ```ts
                /* Plan 285 — present only when finalize was asked to record review state. */
                ...(reviewRecorded === undefined ? {} : { reviewRecorded }),
        ```
-     - Do not touch the replay loop at `:1176-1194`.
 
-- [ ] **Step 3: Run the suites and typecheck**
+- [ ] **Step 3: Run the suites and typecheck.** These run the whole of each file, because the new top-level generation mock touches every test in it. Run each command once:
+  ```
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/chapter-splice.test.ts src/routes/chapter-qa-repair.test.ts
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- src/routes/generation.test.ts
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck
+  ```
+  Expected: all PASS / exit 0.
 
-Run both Step 1 commands. Expected: PASS.
-
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
-Expected: exit 0.
-
-- [ ] **Step 4: Mutation checks** (report each red; restore after each)
-
-  1. In `chapter-splice.ts`, delete the `reviewRecorded` spread. Run `…server run test -- src/routes/chapter-splice.test.ts`. Expected red: `…threads reviewRecorded onto splice_complete`, with `expected undefined to be false`.
-  2. In `chapter-splice.ts`, add `review: null,` to the `finalizeChapterAudioWrite({…})` argument. Run the same file. Expected red: `…passes no \`review\` to finalize (PR 1 dark)…`, with `expected {…} not to have property "review"`.
+- [ ] **Step 4: Mutation checks.** Use the `-t "plan 285"` filtered runs from Step 1. Report each red, restore after each, and confirm the diff-stat check.
+  1. In `chapter-splice.ts`, delete the `reviewRecorded` spread.
+     - Expected red: splice `…threads reviewRecorded onto splice_complete`, with `expected undefined to be false`.
+  2. In `chapter-splice.ts`, add `review: null,` to the `finalizeChapterAudioWrite({…})` argument.
+     - Expected red: splice `…passes no \`review\` to finalize (PR 1 dark)…`, with `expected true to be false`.
+  3. In `chapter-splice.ts`, replace the spread with `reviewRecorded: result.reviewRecorded ?? false,`.
+     - Expected red: `the splice_complete line carries no reviewRecorded…`.
+  4. In `generation.ts`, replace the spread with `reviewRecorded: reviewRecorded ?? false,`. Run the slow `-t "plan 285"` command.
+     - Expected red: `the chapter_complete line carries no reviewRecorded…`.
 
 - [ ] **Step 5: Commit and push**
 
@@ -3120,36 +3276,23 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ---
 
-### Task 9 (6a): Server `review` plumbing (queue + generation request)
+### Task 9 (6a): Server `review` validator, queue and queue-io (fast pool only)
 
 **Files:**
 - Create: `server/src/routes/review-request.ts`, `server/src/routes/review-request.test.ts`
-- Modify: `server/src/routes/queue.ts`:
-  - `EnqueueRequestEntry` (`:77-84`);
-  - the whitelist (`:105-117`).
-- Modify: `server/src/workspace/queue-io.ts`:
-  - `QueueEntry` (`:36-89`);
-  - `EnqueueInput` (`:97-117`);
-  - `enqueue()` (`:122-139`).
-- Modify: `server/src/routes/generation.ts`:
-  - imports;
-  - `RunningJob` (`:364-433`);
-  - the fake-job literal (`:576-590`);
-  - `GenerationRequestBody` (`:699-714`);
-  - the handler head (`:716-725`);
-  - the job literal (`:1282-1295`);
-  - the live `chapter_complete` broadcast.
-- Test:
-  - `server/src/routes/queue.test.ts`;
-  - `server/src/workspace/queue-io.test.ts`;
-  - `server/src/routes/generation.test.ts` (**slow pool**).
+- Modify `server/src/routes/queue.ts` (re-anchored):
+  - `EnqueueRequestEntry` at `:75-84`;
+  - the whitelist, where `inputs.push({` is at `:105` and the `fallbackConfirmed` spread is at `:116`.
+- Modify `server/src/workspace/queue-io.ts` (re-anchored):
+  - `QueueEntry` at `:39-85`, where `parkedAt?: string;` is at `:84`;
+  - `EnqueueInput` at `:93-111`, where `fallbackConfirmed?: boolean;` is at `:110`;
+  - `enqueue()`, where the `fallbackConfirmed` spread is at `:138`.
+- Test: `server/src/routes/queue.test.ts`, `server/src/workspace/queue-io.test.ts`
 
-**Dark-state note:** generation stamps `reviewChapter`, but finalize still gets no `review` (asserted below). No client sets `review` in PR 1.
+**Dark-state note:** no client sets `review` in PR 1.
 
 **Interfaces:**
-- Consumes:
-  - Task 8's finalize spy and the `describe('plan 285 — finalize review plumbing (PR 1 dark)')` block in `generation.test.ts`;
-  - `markInProgress` (`queue-io.ts`).
+- Consumes: `markInProgress` (`queue-io.ts`).
 - Produces:
   ```ts
   // server/src/routes/review-request.ts
@@ -3157,7 +3300,6 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   export const INVALID_REVIEW: 'invalid';
   export function parseReviewRequest(raw: unknown): ReviewRequest | undefined | typeof INVALID_REVIEW;
   // queue-io.ts: QueueEntry.review?, EnqueueInput.review? — { characterId: string; triggeredBy: string }
-  // generation.ts: RunningJob.review: ReviewRequest | null
   ```
 
 - [ ] **Step 1: Write the failing tests**
@@ -3221,7 +3363,105 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
       expect(ok.body.entries.find((e: { id: string }) => e.id === 'r3')).not.toHaveProperty('review');
     });
   ```
-  (d) `server/src/routes/generation.test.ts`, inside Task 8's `describe('plan 285 — finalize review plumbing (PR 1 dark)', …)`:
+
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/review-request.test.ts src/workspace/queue-io.test.ts src/routes/queue.test.ts`
+  Expected: FAIL. `review-request.js` cannot load, `review` is undefined on the queue entries, and the malformed enqueue returns 200.
+
+- [ ] **Step 2: Implement**
+  1. Create `server/src/routes/review-request.ts`:
+     ```ts
+     /* Plan 285 (#3400) — the `review` intent a queue entry or generation request
+        may carry: { characterId, triggeredBy }. Shared by routes/queue.ts (the
+        enqueue whitelist) and routes/generation.ts (the request body) so both
+        reject the same malformed shapes. Lives under routes/ so generation.ts
+        gains no new import from audio/ or workspace/. Not set by any client in PR 1. */
+
+     export interface ReviewRequest {
+       characterId: string;
+       triggeredBy: string;
+     }
+
+     export const INVALID_REVIEW = 'invalid' as const;
+
+     /** undefined/null → absent. A plain object with a non-empty string
+         characterId and a string triggeredBy → that pair (extra fields dropped).
+         Anything else → INVALID_REVIEW. */
+     export function parseReviewRequest(raw: unknown): ReviewRequest | undefined | typeof INVALID_REVIEW {
+       if (raw === undefined || raw === null) return undefined;
+       if (typeof raw !== 'object' || Array.isArray(raw)) return INVALID_REVIEW;
+       const r = raw as Record<string, unknown>;
+       if (typeof r.characterId !== 'string' || r.characterId.length === 0) return INVALID_REVIEW;
+       if (typeof r.triggeredBy !== 'string') return INVALID_REVIEW;
+       return { characterId: r.characterId, triggeredBy: r.triggeredBy };
+     }
+     ```
+  2. In `queue-io.ts`, add this field to `QueueEntry` (after `parkedAt?: string;`) and to `EnqueueInput` (after `fallbackConfirmed?: boolean;`):
+     ```ts
+       /* Plan 285 — the A/B review intent, carried from enqueue to the generation
+          request. Mirrored in openapi.yaml's QueueEntry. Not set by the client until PR 2. */
+       review?: { characterId: string; triggeredBy: string };
+     ```
+     Then, in `enqueue()`, add `...(input.review ? { review: input.review } : {}),` after the `fallbackConfirmed` spread.
+  3. In `queue.ts`:
+     - Add `import { parseReviewRequest, INVALID_REVIEW } from './review-request.js';`.
+     - Add `review?: unknown;` to `EnqueueRequestEntry`.
+     - Inside the `for (const r of raw)` loop, add this before `inputs.push(`:
+       ```ts
+           /* Plan 285 — a malformed review 400s the batch (unlike modelKey, which is
+              silently dropped): dropping it would turn a review render into a plain
+              one, which PR 2 treats as "drop the chapter's pending entry". */
+           const review = parseReviewRequest(r.review);
+           if (review === INVALID_REVIEW) {
+             return res.status(400).json({ error: `entry "${r.id}": review must be { characterId, triggeredBy }` });
+           }
+       ```
+     - Add `...(review ? { review } : {}),` after the `fallbackConfirmed` spread in the pushed object.
+
+- [ ] **Step 3: Run the suites and typecheck**
+
+  Re-run the Step 1 command. Expected: PASS.
+
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
+  Expected: exit 0.
+
+- [ ] **Step 4: Mutation checks.** Report each red, restore after each, and confirm the diff-stat check.
+  1. In `queue-io.ts`, delete `...(input.review ? { review: input.review } : {}),`. Run the Step 1 command.
+     - Expected red: both review round-trip tests, with `expected undefined to deeply equal {…}`.
+  2. In `queue.ts`, delete the `INVALID_REVIEW` 400 block. Run the same command.
+     - Expected red: `400 on a malformed review…`, with `expected 200 to be 400`.
+
+- [ ] **Step 5: Commit and push**
+
+```bash
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/review-request.ts server/src/routes/review-request.test.ts server/src/routes/queue.ts server/src/routes/queue.test.ts server/src/workspace/queue-io.ts server/src/workspace/queue-io.test.ts
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server): validate review and carry it on the persisted queue entry (dark) (#3400)"
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
+```
+
+---
+
+### Task 10 (6b): Generation request `review` — a 400 before SSE, and `reviewChapter` only on the rendered chapter (slow pool)
+
+**Files:**
+- Modify `server/src/routes/generation.ts` (re-anchored):
+  - imports (`:22-103`);
+  - `RunningJob` (`:364`), where `fallbackConfirmed: boolean;` is at `:385`;
+  - the fake-job literal (`:576`);
+  - `GenerationRequestBody` (`:699`), where `fallbackConfirmed?: unknown;` is at `:713`;
+  - the handler head (`:718-720`);
+  - the job literal (`:1282`);
+  - the live `chapter_complete` broadcast (`:2041-2065`).
+- Test: `server/src/routes/generation.test.ts`, using the **slow pool** and `-t "plan 285"`.
+
+**Dark-state note:** generation stamps `reviewChapter`, but finalize still gets no `review`. The test below asserts that.
+
+**Interfaces:**
+- Consumes:
+  - from Task 9: `parseReviewRequest`, `INVALID_REVIEW`, `ReviewRequest` (`./review-request.js`);
+  - from Task 8: the finalize spy and the `plan 285 — finalize review plumbing (PR 1 dark)` describe block, with its `completeLine` helper.
+- Produces: `RunningJob.review: ReviewRequest | null`. It also adds two JSON 400 bodies, `{error:'invalid_review'}` and `{error:'review_requires_single_chapter'}`.
+
+- [ ] **Step 1: Write the failing tests.** Add these inside Task 8's `describe('plan 285 — finalize review plumbing (PR 1 dark)', …)` in `generation.test.ts`:
   ```ts
     const REVIEW = { characterId: 'narrator', triggeredBy: 'Narrator voice change' };
 
@@ -3258,159 +3498,96 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
       expect(ch2, `expected replayed chapter_complete ch2, got ${res.text}`).toBeTruthy();
       expect(ch1!.reviewChapter).toBe(true);
       expect(ch2).not.toHaveProperty('reviewChapter');
-      expect(spy.mock.calls[0][0]).not.toHaveProperty('review');
+      expect('review' in spy.mock.calls[0][0]).toBe(false);
     });
 
-    it('no reviewChapter without review', async () => {
+    it('the chapter_complete line carries no reviewChapter without review', async () => {
       const res = await request(app)
         .post(`/api/books/${bookId}/generation`)
         .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
-      const ch1 = parseTicks(res.text).find((t) => t.type === 'chapter_complete' && t.chapterId === 1);
-      expect(ch1).toBeTruthy();
-      expect(ch1).not.toHaveProperty('reviewChapter');
+      const line = completeLine(res.text, 1);
+      expect(line, res.text).toBeTruthy();
+      expect(line).not.toContain('reviewChapter');
     });
   ```
 
-Run:
-```
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/review-request.test.ts src/workspace/queue-io.test.ts src/routes/queue.test.ts
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- src/routes/generation.test.ts -t "plan 285"
-```
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- src/routes/generation.test.ts -t "plan 285"`
+  - Expected FAIL: the 400 test (`expected 200 to be 400`) and `ch1.reviewChapter` undefined.
+  - Expected PASS: `no reviewChapter without review`. It is a regression guard, and its mutation is in Step 4.
 
-Expected: FAIL.
-- `review-request.js` cannot load.
-- `review` is undefined on the queue entries.
-- The generation 400 test reports `expected 200 to be 400`.
-- `ch1.reviewChapter` is undefined.
+- [ ] **Step 2: Implement in `generation.ts`**
+  - Add the import `import { parseReviewRequest, INVALID_REVIEW, type ReviewRequest } from './review-request.js';`.
+  - In `RunningJob`, add this after `fallbackConfirmed: boolean;` (`:385`):
+    ```ts
+      /** Plan 285 — the request's A/B review intent (null when absent). Stamps
+          `reviewChapter: true` on THIS job's live chapter_complete. Not yet passed
+          to finalize (PR 2). */
+      review: ReviewRequest | null;
+    ```
+  - Add `review: null,` after `fallbackConfirmed` in the fake-job literal (`:576`), and `review,` after `fallbackConfirmed` in the real job literal (`:1282`).
+  - In `GenerationRequestBody`, add `/** Plan 285 — see ReviewRequest. */ review?: unknown;` after `fallbackConfirmed?: unknown;` (`:713`).
+  - In the handler head, add the following directly after `const body = (req.body ?? {}) as GenerationRequestBody;` (`:718`) and **above** `res.setHeader('Content-Type', 'text/event-stream');` (`:720`):
+    ```ts
+      /* Plan 285 — a review render must name exactly one chapter. Rejected with a
+         JSON 400 BEFORE the SSE headers flush; the client already turns a non-OK
+         response into chapter_failed + idle (api.ts realStreamGeneration). */
+      const parsedReview = parseReviewRequest(body.review);
+      if (parsedReview === INVALID_REVIEW) {
+        return res
+          .status(400)
+          .json({ error: 'invalid_review', message: 'review must be { characterId, triggeredBy }.' });
+      }
+      if (parsedReview !== undefined) {
+        const ids = Array.isArray(body.chapterIds) ? body.chapterIds : [];
+        if (ids.length !== 1 || typeof ids[0] !== 'number' || !Number.isInteger(ids[0])) {
+          return res.status(400).json({
+            error: 'review_requires_single_chapter',
+            message: 'A review render must name exactly one chapter.',
+          });
+        }
+      }
+      const review: ReviewRequest | null = parsedReview ?? null;
+    ```
+  - In the live `chapter_complete` broadcast, add this next to Task 8's `reviewRecorded` spread:
+    ```ts
+            /* Plan 285 — only the chapter actually rendered with `review`; the
+               replay loop above never carries it. */
+            ...(job.review !== null && job.chapterId === chapter.id ? { reviewChapter: true } : {}),
+    ```
 
-- [ ] **Step 2: Implement**
+- [ ] **Step 3: Run and typecheck**
 
-  1. Create `server/src/routes/review-request.ts`:
-     ```ts
-     /* Plan 285 (#3400) — the `review` intent a queue entry or generation request
-        may carry: { characterId, triggeredBy }. Shared by routes/queue.ts (the
-        enqueue whitelist) and routes/generation.ts (the request body) so both
-        reject the same malformed shapes. Lives under routes/ so generation.ts
-        gains no new import from audio/ or workspace/. Not set by any client in PR 1. */
+  Re-run the Step 1 command. Expected: PASS.
 
-     export interface ReviewRequest {
-       characterId: string;
-       triggeredBy: string;
-     }
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
+  Expected: exit 0.
 
-     export const INVALID_REVIEW = 'invalid' as const;
-
-     /** undefined/null → absent. A plain object with a non-empty string
-         characterId and a string triggeredBy → that pair (extra fields dropped).
-         Anything else → INVALID_REVIEW. */
-     export function parseReviewRequest(raw: unknown): ReviewRequest | undefined | typeof INVALID_REVIEW {
-       if (raw === undefined || raw === null) return undefined;
-       if (typeof raw !== 'object' || Array.isArray(raw)) return INVALID_REVIEW;
-       const r = raw as Record<string, unknown>;
-       if (typeof r.characterId !== 'string' || r.characterId.length === 0) return INVALID_REVIEW;
-       if (typeof r.triggeredBy !== 'string') return INVALID_REVIEW;
-       return { characterId: r.characterId, triggeredBy: r.triggeredBy };
-     }
-     ```
-  2. `queue-io.ts`:
-     - Add this field to `QueueEntry` (after `parkedAt?`) and to `EnqueueInput` (after `fallbackConfirmed?`):
-       ```ts
-         /* Plan 285 — the A/B review intent, carried from enqueue to the generation
-            request. Mirrored in openapi.yaml's QueueEntry. Not set by the client until PR 2. */
-         review?: { characterId: string; triggeredBy: string };
-       ```
-     - In `enqueue()`'s `fresh.push({…})`, add `...(input.review ? { review: input.review } : {}),` after the `fallbackConfirmed` spread.
-  3. `queue.ts`:
-     - Add `import { parseReviewRequest, INVALID_REVIEW } from './review-request.js';`.
-     - Add `review?: unknown;` to `EnqueueRequestEntry`.
-     - Inside the `for (const r of raw)` loop, before `inputs.push(`, add:
-       ```ts
-           /* Plan 285 — a malformed review 400s the batch (unlike modelKey, which is
-              silently dropped): dropping it would turn a review render into a plain
-              one, which PR 2 treats as "drop the chapter's pending entry". */
-           const review = parseReviewRequest(r.review);
-           if (review === INVALID_REVIEW) {
-             return res.status(400).json({ error: `entry "${r.id}": review must be { characterId, triggeredBy }` });
-           }
-       ```
-     - Add `...(review ? { review } : {}),` after the `fallbackConfirmed` spread in the pushed object.
-  4. `generation.ts`:
-     - Add the import: `import { parseReviewRequest, INVALID_REVIEW, type ReviewRequest } from './review-request.js';`
-     - `RunningJob`: after `fallbackConfirmed: boolean;`, add:
-       ```ts
-         /** Plan 285 — the request's A/B review intent (null when absent). Stamps
-             `reviewChapter: true` on THIS job's live chapter_complete. Not yet passed
-             to finalize (PR 2). */
-         review: ReviewRequest | null;
-       ```
-     - In the fake-job literal at `:576`, add `review: null,` after `fallbackConfirmed`. In the real job literal at `:1282`, add `review,` after `fallbackConfirmed`.
-     - `GenerationRequestBody`: add `review?: unknown;` with the comment `/** Plan 285 — see ReviewRequest. */`.
-     - Handler head: directly after `const body = (req.body ?? {}) as GenerationRequestBody;` and **above** `res.setHeader('Content-Type', 'text/event-stream');`, add:
-       ```ts
-         /* Plan 285 — a review render must name exactly one chapter. Rejected with a
-            JSON 400 BEFORE the SSE headers flush; the client already turns a non-OK
-            response into chapter_failed + idle (api.ts realStreamGeneration). */
-         const parsedReview = parseReviewRequest(body.review);
-         if (parsedReview === INVALID_REVIEW) {
-           return res
-             .status(400)
-             .json({ error: 'invalid_review', message: 'review must be { characterId, triggeredBy }.' });
-         }
-         if (parsedReview !== undefined) {
-           const ids = Array.isArray(body.chapterIds) ? body.chapterIds : [];
-           if (ids.length !== 1 || typeof ids[0] !== 'number' || !Number.isInteger(ids[0])) {
-             return res.status(400).json({
-               error: 'review_requires_single_chapter',
-               message: 'A review render must name exactly one chapter.',
-             });
-           }
-         }
-         const review: ReviewRequest | null = parsedReview ?? null;
-       ```
-     - In the live `chapter_complete` broadcast, next to Task 8's `reviewRecorded` spread, add:
-       ```ts
-               /* Plan 285 — only the chapter actually rendered with `review`; the
-                  replay loop above never carries it. */
-               ...(job.review !== null && job.chapterId === chapter.id ? { reviewChapter: true } : {}),
-       ```
-
-- [ ] **Step 3: Run the suites and typecheck**
-
-Run both Step 1 commands. Expected: PASS.
-
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
-Expected: exit 0.
-
-- [ ] **Step 4: Mutation checks** (report each red; restore after each)
-
-  1. In `generation.ts`, inside the replay loop's `send({ type: 'chapter_complete', … })` (`:1179-1191`), add `...(review ? { reviewChapter: true } : {}),`.
-     - Run `…server run test:slow -- src/routes/generation.test.ts -t "plan 285"`.
-     - Expected red: `reviewChapter:true only on the chapter rendered with review — never a replay…`, with `expected {…} not to have property "reviewChapter"`.
-  2. In `generation.ts`, delete the `review_requires_single_chapter` `if` block.
-     - Run the same command.
+- [ ] **Step 4: Mutation checks.** Use the filtered slow run from Step 1. Report each red, restore after each, and confirm the diff-stat check.
+  1. Inside the replay loop's `send({ type: 'chapter_complete', … })` (`:1179-1191`), add `...(review ? { reviewChapter: true } : {}),`.
+     - Expected red: `reviewChapter:true only on the chapter rendered with review — never a replay…`.
+  2. Delete the `review_requires_single_chapter` `if` block.
      - Expected red: `400 before any SSE header…`, with `expected 200 to be 400`.
-  3. In `queue-io.ts`, delete `...(input.review ? { review: input.review } : {}),`.
-     - Run `…server run test -- src/routes/queue.test.ts src/workspace/queue-io.test.ts`.
-     - Expected red: both review round-trip tests, with `expected undefined to deeply equal {…}`.
+  3. Change the broadcast spread to `reviewChapter: job.review !== null && job.chapterId === chapter.id,`.
+     - Expected red: `the chapter_complete line carries no reviewChapter without review`. The line now contains `"reviewChapter":false`.
 
 - [ ] **Step 5: Commit and push**
 
 ```bash
-git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/review-request.ts server/src/routes/review-request.test.ts server/src/routes/queue.ts server/src/routes/queue.test.ts server/src/workspace/queue-io.ts server/src/workspace/queue-io.test.ts server/src/routes/generation.ts server/src/routes/generation.test.ts
-git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server): carry review through the queue into the generation request (dark) (#3400)"
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/generation.ts server/src/routes/generation.test.ts
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server): accept review on the generation request; stamp reviewChapter (dark) (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ```
 
 ---
 
-### Task 10 (6b): Client `review` plumbing
+### Task 11 (6c): Client `review` plumbing
 
 **Files:**
-- Modify:
-  - `src/store/queue-thunks.ts:41-57` (`EnqueueInput`);
-  - `src/lib/api.ts:599-644` (`StreamArgs`) and `:5865-5904` (`realStreamGeneration`);
-  - `src/store/generation-stream-runner.ts:46-61` (`StreamOpenOpts`) and `:315-321`;
-  - `src/store/queue-dispatcher-middleware.ts:266-280`.
+- Modify (re-anchored):
+  - `src/store/queue-thunks.ts`: `EnqueueInput`, with `fallbackConfirmed?: boolean;` at `:56`;
+  - `src/lib/api.ts`: `StreamArgs` at `:599-645`, where `fallbackConfirmed?: boolean;` is `:644`; and `realStreamGeneration` at `:5894`, with its args at `:5900` and the body spread at `:5931`;
+  - `src/store/generation-stream-runner.ts`: `StreamOpenOpts`, with `fallbackConfirmed?: boolean;` at `:60`; and the `api.streamGeneration` call spread at `:321`;
+  - `src/store/queue-dispatcher-middleware.ts`: the `runner.open` opts spread at `:278`.
 - Tests:
   - new `src/lib/api-stream-review.test.ts`;
   - `src/store/queue-dispatcher-middleware.test.ts`;
@@ -3420,9 +3597,9 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 **Interfaces:**
 - Consumes:
-  - From Task 6: `ReviewRequest` (`src/lib/types.ts`), and the regenerated `QueueEntry.review?: ReviewRequest` (`src/store/queue-slice.ts` derives `QueueEntry` from the generated types).
-  - From Task 9: the server accepts `review` in the generation POST body.
-- Produces: `EnqueueInput.review?: ReviewRequest`, `StreamOpenOpts.review?: ReviewRequest`, `StreamArgs.review?: ReviewRequest`. `realStreamGeneration` sends `review` in the POST body when it is set.
+  - from Task 6: `ReviewRequest` (`src/lib/types.ts`) and the regenerated `QueueEntry.review` (`src/store/queue-slice.ts` derives `QueueEntry` from the generated types);
+  - from Tasks 9–10: the server accepts `review` on enqueue and in the generation POST body.
+- Produces: `EnqueueInput.review?`, `StreamOpenOpts.review?` and `StreamArgs.review?`, all typed `ReviewRequest`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -3522,54 +3699,51 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   });
   ```
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- src/lib/api-stream-review.test.ts src/store/queue-dispatcher-middleware.test.ts src/mocks/mock-queue.test.ts`
-
-Expected:
-- FAIL: the POST body has no `review`.
-- FAIL: the dispatcher's `byBook('book-A')?.review` is undefined.
-- PASS: `mock-queue.test.ts`. The mock already spreads `...inp`, so this test has no red-first step; its mutation is in Step 4.
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- src/lib/api-stream-review.test.ts src/store/queue-dispatcher-middleware.test.ts src/mocks/mock-queue.test.ts`
+  - Expected FAIL: the POST body has no `review`, and the dispatcher's `byBook('book-A')?.review` is undefined.
+  - Expected PASS: `mock-queue.test.ts`. It is a regression guard, and its mutation is in Step 4.
 
 - [ ] **Step 2: Implement**
-
   1. `src/store/queue-thunks.ts`:
      - Change the type import to `import type { TtsModelKey, ReviewRequest } from '../lib/types';`.
-     - Add this field to `EnqueueInput`, after `fallbackConfirmed?`:
+     - In `EnqueueInput`, add this after `fallbackConfirmed?: boolean;`:
        ```ts
          /** Plan 285 — the A/B review intent; rides the persisted entry into the
              generation request. Nothing sets it until PR 2. */
          review?: ReviewRequest;
        ```
   2. `src/lib/api.ts`:
-     - Add `ReviewRequest` to the file's existing type import from `./types`.
-     - Add `review?: ReviewRequest;` to `StreamArgs`, after `fallbackConfirmed?`, with the comment `/** Plan 285 — single-chapter A/B review intent; forwarded in the POST body. */`.
-     - In `realStreamGeneration`, add `review,` to the destructured args after `fallbackConfirmed,`.
-     - In the `JSON.stringify({…})` body, add `...(review ? { review } : {}),` after the `fallbackConfirmed` spread.
+     - Add `ReviewRequest` to the existing type import from `./types` (`:63`).
+     - In `StreamArgs`, add `review?: ReviewRequest;` after `fallbackConfirmed?: boolean;` (`:644`), with the comment `/** Plan 285 — single-chapter A/B review intent; forwarded in the POST body. */`.
+     - In `realStreamGeneration`, add `review,` to the destructured args after `fallbackConfirmed,` (`:5900`).
+     - Add `...(review ? { review } : {}),` after the `fallbackConfirmed` body spread (`:5931`).
   3. `src/store/generation-stream-runner.ts`:
      - Add `import type { ReviewRequest } from '../lib/types';`.
-     - Add this field to `StreamOpenOpts`, after `fallbackConfirmed?`:
+     - In `StreamOpenOpts`, add this after `fallbackConfirmed?: boolean;` (`:60`):
        ```ts
          /** Plan 285 — the entry's A/B review intent, forwarded to the server. */
          review?: ReviewRequest;
        ```
-     - In the `api.streamGeneration({…})` call, add `...(opts.review ? { review: opts.review } : {}),` after the `fallbackConfirmed` spread.
-  4. `src/store/queue-dispatcher-middleware.ts`: in the `runner.open(…)` opts object, add this after the `fallbackConfirmed` spread:
+     - Add `...(opts.review ? { review: opts.review } : {}),` after the `fallbackConfirmed` spread at `:321`.
+  4. `src/store/queue-dispatcher-middleware.ts`: after the `fallbackConfirmed` spread at `:278`, add:
      ```ts
                /* Plan 285 — carry the entry's A/B review intent to the server. */
                ...(e.review ? { review: e.review } : {}),
      ```
 
-- [ ] **Step 3: Run the client tests and typecheck**
+- [ ] **Step 3: Run the tests and typecheck**
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- src/lib/api-stream-review.test.ts src/store/queue-dispatcher-middleware.test.ts src/mocks/mock-queue.test.ts src/lib/api-stream-fallback-confirmed.test.ts`
-Expected: PASS.
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- src/lib/api-stream-review.test.ts src/store/queue-dispatcher-middleware.test.ts src/mocks/mock-queue.test.ts src/lib/api-stream-fallback-confirmed.test.ts`
+  Expected: PASS.
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`
-Expected: exit 0.
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`
+  Expected: exit 0.
 
-- [ ] **Step 4: Mutation checks** (report each red; restore after each)
-
-  1. In `queue-dispatcher-middleware.ts`, delete the `review` spread. Run `…run test -- src/store/queue-dispatcher-middleware.test.ts`. Expected red: `plan 285 — threads an entry review into the stream open…`.
-  2. In `src/mocks/mock-queue.ts`, in the `/enqueue` branch, change `...inp,` to `id: inp.id, bookId: inp.bookId, chapterId: inp.chapterId, scope: inp.scope,`. This simulates a whitelist that forgets `review`. Run `…run test -- src/mocks/mock-queue.test.ts`. Expected red: `keeps review on the enqueued entry`, with `expected undefined to deeply equal {…}`.
+- [ ] **Step 4: Mutation checks.** Report each red, restore after each, and confirm the diff-stat check.
+  1. In `queue-dispatcher-middleware.ts`, delete the `review` spread. Run `…run test -- src/store/queue-dispatcher-middleware.test.ts`.
+     - Expected red: `plan 285 — threads an entry review into the stream open…`.
+  2. In `src/mocks/mock-queue.ts`'s `/enqueue` branch, change `...inp,` to `id: inp.id, bookId: inp.bookId, chapterId: inp.chapterId, scope: inp.scope,`. Run `…run test -- src/mocks/mock-queue.test.ts`.
+     - Expected red: `keeps review on the enqueued entry`.
 
 - [ ] **Step 5: Commit and push**
 
@@ -3581,25 +3755,29 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ---
 
-### Task 11 (7): Reparse/replace reset through the store + lock-order docs + INDEX
+### Task 12 (7): Reparse/replace preflight and reset through the store, plus lock-order docs and INDEX
 
 **Files:**
-- Modify: `server/src/routes/book-state.ts`:
+- Modify `server/src/routes/book-state.ts`. Re-anchored line numbers:
   - imports;
-  - the `applyReparse` Promise.all arm (`:1199-1203`);
-  - the sibling-arm comment (`:1141-1150`).
-- Modify: `server/src/routes/book-state.reparse.test.ts:964-986` (the corrupt-cast test) and add a new test.
-- Modify: `server/src/routes/book-state.replace-manuscript.test.ts` (new test).
-- Modify: `server/src/workspace/cast-lock.ts:19-24` (rule 4), `CLAUDE.md:582-584` (rule 4), and `docs/features/INDEX.md` (`### G. Generation`).
+  - the reparse route at `:1283`, where `const { bookDir, state } = located;` is at `:1287`;
+  - the replace route at `:1360`, where `const { bookDir, state } = located;` is at `:1369`;
+  - the `applyReparse` Promise.all at `:1132-1205`, where the revisions arm is at `:1201-1203`;
+  - the sibling-arm comment at `:1144-1150`.
+- Modify `server/src/routes/book-state.reparse.test.ts`: the corrupt-cast test at `:964-987`, plus new tests. Note that this file already passes `vi.mock('../workspace/state-io.js')` through (`:45-48`). It is harmless here.
+- Modify `server/src/routes/book-state.replace-manuscript.test.ts`: new tests.
+- Modify `server/src/workspace/cast-lock.ts:18-24` (rule 4), `CLAUDE.md:582-584` (rule 4) and `docs/features/INDEX.md` (`### G. Generation`).
 
-**Dark-state note:** a reset leaves `pending: []`, which is exactly what today's `rm` produced as far as any client can tell. An empty file reads the same as a missing one.
+**Dark-state note:** a reset leaves `pending: []`, exactly what today's `rm` produced as far as any client can tell. The preflight only *refuses* a newer-schema file, which an old client could never have written.
 
 **Interfaces:**
-- Consumes (from Task 1): `resetRevisions(bookDir): Promise<RevisionsFile>`. It replaces a corrupt file and refuses a newer-schema one.
+- Consumes (from Task 1):
+  - `assertRevisionsResettable(bookDir): Promise<void>`;
+  - `resetRevisions(bookDir): Promise<RevisionsFile>`.
 
 - [ ] **Step 1: Write the failing tests**
 
-  (a) In `book-state.reparse.test.ts`, replace the corrupt-cast test (`:964-986`) with the version below. Add `readFileSync` to the `node:fs` import if it is missing.
+  (a) In `book-state.reparse.test.ts`, replace the corrupt-cast test (`:964-987`) with:
   ```ts
     it('completes the reparse, deletes cast.json and RESETS revisions.json when cast.json is corrupt', async () => {
       const castPath = join(corruptBookDir, '.audiobook', 'cast.json');
@@ -3625,7 +3803,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
       expect(reset.fileId).toMatch(/^\d{15}-[0-9a-f]{8}$/);
     });
   ```
-  (b) In `book-state.reparse.test.ts`, add this test inside `describe('reparse handler — preserves manuscript-edits.json', …)`:
+  (b) In `book-state.reparse.test.ts`, add these inside `describe('reparse handler — preserves manuscript-edits.json', …)` (`:134`):
   ```ts
     it('plan 285 — resets revisions.json to a NEW fileId and never deletes it', async () => {
       const revisionsPath = join(bookDir, '.audiobook', 'revisions.json');
@@ -3652,26 +3830,83 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
       expect(after.fileId).not.toBe(OLD);
       expect(after.fileId).toMatch(/^\d{15}-[0-9a-f]{8}$/);
     });
+
+    it('plan 285 — refuses a NEWER-schema revisions.json BEFORE deleting anything', async () => {
+      const revisionsPath = join(bookDir, '.audiobook', 'revisions.json');
+      const castPath = join(bookDir, '.audiobook', 'cast.json');
+      const statePath = join(bookDir, '.audiobook', 'state.json');
+      const audioFile = join(bookDir, 'audio', '01-chapter-one.mp3');
+      mkdirSync(join(bookDir, 'audio'), { recursive: true });
+      writeFileSync(audioFile, 'LIVE');
+      writeFileSync(castPath, JSON.stringify({ characters: [{ id: 'eliza', name: 'Eliza' }] }));
+      writeFileSync(revisionsPath, JSON.stringify({ schema: 2, pending: [] }));
+      const stateBefore = readFileSync(statePath, 'utf8');
+
+      const res = await request(app).post(`/api/books/${bookId}/reparse`);
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/schema=2/);
+      expect(existsSync(castPath)).toBe(true);
+      expect(readFileSync(audioFile, 'utf8')).toBe('LIVE');
+      expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
+      expect(JSON.parse(readFileSync(revisionsPath, 'utf8'))).toEqual({ schema: 2, pending: [] });
+      rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
+    });
   ```
-  (c) In `book-state.replace-manuscript.test.ts`, inside `describe('replace-manuscript handler', …)`, add the same test as (b), with these differences:
-  - Name: `plan 285 — replace resets revisions.json to a NEW fileId and never deletes it`.
-  - Request:
-    ```ts
-        const res = await request(app)
-          .post(`/api/books/${bookId}/replace-manuscript`)
-          .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
-    ```
-  - Use `const revisionsPath = join(bookDir, '.audiobook', 'revisions.json');`.
-  - Seed the entry with `characterId: 'wren'`.
-  - Import `readFileSync` if it is missing.
+  (c) In `book-state.replace-manuscript.test.ts`, add these inside `describe('replace-manuscript handler', …)` (`:91`). The file already imports `readFileSync`, `existsSync` and `mkdirSync`.
+  ```ts
+    it('plan 285 — replace resets revisions.json to a NEW fileId and never deletes it', async () => {
+      const revisionsPath = join(bookDir, '.audiobook', 'revisions.json');
+      const OLD = '000000000000001-aaaaaaaa';
+      writeFileSync(
+        revisionsPath,
+        JSON.stringify({
+          schema: 1,
+          fileId: OLD,
+          rev: 7,
+          pending: [
+            { id: 'revision:1:1', chapterId: 1, characterId: 'wren', playable: true, hasPreviousAudio: true, segments: [], origin: 'server' },
+          ],
+        }),
+      );
+      const res = await request(app)
+        .post(`/api/books/${bookId}/replace-manuscript`)
+        .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
+      expect(res.status).toBe(200);
+      expect(existsSync(revisionsPath)).toBe(true);
+      const after = JSON.parse(readFileSync(revisionsPath, 'utf8'));
+      expect(after).toMatchObject({ schema: 1, rev: 0, pending: [] });
+      expect(after.fileId).not.toBe(OLD);
+    });
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/book-state.reparse.test.ts src/routes/book-state.replace-manuscript.test.ts`
-Expected: FAIL. The three new or changed tests fail with `ENOENT … revisions.json` or `expected false to be true`, because the file was deleted.
+    it('plan 285 — replace refuses a NEWER-schema revisions.json BEFORE touching the manuscript or cast', async () => {
+      const revisionsPath = join(bookDir, '.audiobook', 'revisions.json');
+      writeFileSync(revisionsPath, JSON.stringify({ schema: 2, pending: [] }));
+      const res = await request(app)
+        .post(`/api/books/${bookId}/replace-manuscript`)
+        .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/schema=2/);
+      expect(readFileSync(join(bookDir, 'manuscript.md'), 'utf8')).toBe(ORIGINAL_BODY);
+      expect(existsSync(join(bookDir, '.audiobook', 'cast.json'))).toBe(true);
+    });
+  ```
 
-- [ ] **Step 2: Implement the reset** in `server/src/routes/book-state.ts`
+  Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/book-state.reparse.test.ts src/routes/book-state.replace-manuscript.test.ts`
+  Expected FAIL:
+  - The reset tests fail with `ENOENT … revisions.json` or `expected false to be true`, because the file is deleted.
+  - The refusal tests fail with `expected 200 to be 500`, because main deletes everything and succeeds.
 
-  1. Add the import: `import { resetRevisions } from '../workspace/revisions-store.js';`
-  2. Replace the revisions arm
+- [ ] **Step 2: Implement in `server/src/routes/book-state.ts`**
+  1. Add the import `import { assertRevisionsResettable, resetRevisions } from '../workspace/revisions-store.js';`.
+  2. In the reparse route, directly after `const { bookDir, state } = located;` (`:1287`), add:
+     ```ts
+         /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
+            deleted or rewritten (applyReparse's state write + Promise.all). */
+         await assertRevisionsResettable(bookDir);
+     ```
+  3. In the replace route, add the same three lines directly after `const { bookDir, state } = located;` (`:1369`). They must come before `parseManuscript`, the manuscript `writeFile` and the old-file `unlink`.
+  4. Replace the revisions arm (`:1201-1203`)
      ```ts
          existsSync(revisionsJsonPath(bookDir))
            ? rm(revisionsJsonPath(bookDir), { force: true })
@@ -3682,11 +3917,12 @@ Expected: FAIL. The three new or changed tests fail with `ENOENT … revisions.j
          /* Plan 285 — RESET (new fileId, rev 0) through the store under its own
             leaf lock, never delete: a deleted file would read back fileId:null,
             which the PR 2 client cache treats as "older than any id". A corrupt
-            file is replaced (as the rm did); a newer-schema one is refused. This
-            arm sits BESIDE the withCastLock arm, never inside it. */
+            file is replaced (as the rm did); a newer-schema one was already
+            refused by the route's preflight. This arm sits BESIDE the
+            withCastLock arm, never inside it. */
          resetRevisions(bookDir),
      ```
-  3. In the comment block above `withCastLock(bookDir, async () => {`, replace the sentence
+  5. In the comment above `withCastLock(bookDir, async () => {` (`:1144-1150`), replace
      ```
             in-lock reality — of the three sibling arms below, only the revisions
             and audio arms keep an existsSync guard (they gate an already-
@@ -3704,27 +3940,27 @@ Expected: FAIL. The three new or changed tests fail with `ENOENT … revisions.j
             never nested in it; clearAnalysisCache's rm is unguarded too, same as
             this arm's.
      ```
-  4. Keep the `revisionsJsonPath` and `existsSync` imports. Both are still used, at `:285`, `:790` and in the audio arm.
+  6. Keep the `revisionsJsonPath` and `existsSync` imports. They are still used at `:285`, at `:790` and in the audio arm.
 
-- [ ] **Step 3: Run the suites and typecheck.** `book-state.test.ts` runs in the slow pool.
+  The routes' existing catches already curate the error with `requestFailureMessage`. `UnsupportedSchemaError`'s message contains no path, so it passes through verbatim.
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/book-state.reparse.test.ts src/routes/book-state.replace-manuscript.test.ts src/routes/book-state.hydrate.test.ts`
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- src/routes/book-state.test.ts`
-Expected: PASS for both.
-
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`
-Expected: exit 0.
+- [ ] **Step 3: Run the suites and typecheck.** `book-state.test.ts` is in the slow pool.
+  ```
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/book-state.reparse.test.ts src/routes/book-state.replace-manuscript.test.ts src/routes/book-state.hydrate.test.ts
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- src/routes/book-state.test.ts
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck
+  ```
+  Expected: all PASS / exit 0.
 
 - [ ] **Step 4: Lock-order docs and INDEX**
-
-  1. `server/src/workspace/cast-lock.ts`: directly after rule 4's last line (` *      timeout.`, line 24), insert:
+  1. In `server/src/workspace/cast-lock.ts`, directly after rule 4's last line (` *      timeout.`, `:24`), insert the lines below. The key is spelled `<abs bookDir>`, never as template-literal syntax.
      ```ts
       *      The per-book REVISIONS lock (`revisions:<abs bookDir>`,
       *      revisions-store.ts, plan 285) is a LEAF outside this order: its holder
       *      writes only revisions.json and acquires no other lock, so it can never
       *      be one half of a cycle. Never take any lock while holding it.
      ```
-  2. `CLAUDE.md`: replace
+  2. In `CLAUDE.md` (`:583-584`), replace
      ```
        order is **`design` → `library-voice` → `cast`** — never acquire an earlier
        class while holding a later one, or two requests deadlock. Since #2260 that
@@ -3737,79 +3973,84 @@ Expected: exit 0.
        outside that order: nothing but revisions.json is written under it and no
        other lock is taken while it is held. Since #2260 that
      ```
-  3. `docs/features/INDEX.md`: add this entry at the end of the `### G. Generation` list:
+  3. In `docs/features/INDEX.md`, add this at the end of the `### G. Generation` list:
      ```
-     - [285 — revisions.json becomes server-owned (PR 1, server, dark)](285-revisions-server-ops.md) — `active`. A locked `workspace/revisions-store.ts` becomes the only reader/writer of revisions.json (`fileId`/`rev`, the schema-migrate seam, read-time normalisation, reparse/replace reset instead of delete); accept/reject/dismiss become one server route each, running today's audio step (moved to `audio/previous-audio.ts`) before the JSON write; finalize gains a tri-state `review` and `review` rides the queue entry into the generation request — all dark until PR 2 cuts the client over. Fixes D1/D8 server-side; #3397/#3400 close with PR 2. Spec: `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md`.
+     - [285 — revisions.json becomes server-owned (PR 1, server, dark)](285-revisions-server-ops.md) — `active`. A locked `workspace/revisions-store.ts` becomes the only reader/writer of revisions.json (`fileId`/`rev`, the schema-migrate seam, read-time normalisation, reparse/replace reset instead of delete behind a newer-schema preflight); accept/reject/dismiss become one server route each, running today's audio step (moved to `audio/previous-audio.ts`) before the JSON write; finalize gains a tri-state `review` and `review` rides the queue entry into the generation request — all dark until PR 2 cuts the client over. Fixes D1/D8 server-side; #3397/#3400 close with PR 2. Spec: `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md`.
      ```
 
-- [ ] **Step 5: Release notes: explicitly none.** PR 1 is dark and ships nothing user-visible, so leave `docs/release-notes-next.md` and `RELEASE_NOTES.md` untouched. The verify task states this in the PR body.
+- [ ] **Step 5: Release notes: explicitly none.** PR 1 is dark and has no shippable delta, so leave `docs/release-notes-next.md` and `RELEASE_NOTES.md` untouched. The verify task states this in the PR body.
 
-- [ ] **Step 6: Mutation check.**
-  1. In `book-state.ts`, put the original `existsSync(revisionsJsonPath(bookDir)) ? rm(…) : Promise.resolve(),` arm back in place of `resetRevisions(bookDir),`.
-  2. Run `…server run test -- src/routes/book-state.reparse.test.ts`.
-  3. Expected red: `plan 285 — resets revisions.json to a NEW fileId and never deletes it`, with `expected false to be true`.
-  4. Restore the reset arm and confirm green.
+- [ ] **Step 6: Mutation checks.** Run `…server run test -- src/routes/book-state.reparse.test.ts`. Report each red, restore after each, and confirm the diff-stat check.
+  1. Put the original `existsSync(revisionsJsonPath(bookDir)) ? rm(…) : Promise.resolve(),` arm back in place of `resetRevisions(bookDir),`.
+     - Expected red: `plan 285 — resets revisions.json to a NEW fileId…`, with `expected false to be true`.
+  2. Delete the reparse route's `await assertRevisionsResettable(bookDir);`.
+     - Expected red: `plan 285 — refuses a NEWER-schema revisions.json BEFORE deleting anything`. `resetRevisions` still refuses inside the `Promise.all`, so the status is still 500. The test goes red because `cast.json` and the audio have already been deleted (`expected false to be true`).
 
 - [ ] **Step 7: Commit and push**
 
 ```bash
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/book-state.ts server/src/routes/book-state.reparse.test.ts server/src/routes/book-state.replace-manuscript.test.ts server/src/workspace/cast-lock.ts CLAUDE.md docs/features/INDEX.md
-git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "fix(server,docs): reset revisions.json through the store on reparse/replace (#3400)"
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "fix(server,docs): reset revisions.json through the store on reparse/replace, with a preflight (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ```
 
 ---
 
-### Task 12: Verification and PR (the verify child)
+### Task 13: Verification and PR (the verify child)
 
-**Files:** none modified. If any step fails, report it and stop. Do not fix anything inline; a fix child is dispatched instead. **Do not merge.**
+**Files:** none modified. If any step fails, report it and stop. Do not fix anything inline: the coordinator dispatches a fix child. **Do not merge.**
 
-- [ ] **Step 1: Confirm the tree is idle and clean**
-  1. Run `git -C C:/Claude/Projects/wt-3400-revisions-server-ops status --porcelain`. Expected: empty.
-  2. Run `git -C C:/Claude/Projects/wt-3400-revisions-server-ops log --oneline origin/fix/server-3400-revisions-server-ops -1`. Expected: it matches local `HEAD`, meaning everything is pushed.
-  3. Run `git -C C:/Claude/Projects/Audiobook-Generator status --porcelain`. Expected: no entry that this run produced.
+- [ ] **Step 1: Confirm the tree is idle and clean, and refresh the base**
+  1. Run `git -C <wt> status --porcelain`. Expected: empty.
+  2. Run `git -C <wt> fetch origin`.
+  3. Run `git -C <wt> rev-parse HEAD origin/fix/server-3400-revisions-server-ops`. Expected: identical, meaning everything is pushed.
+  4. Run `git -C C:/Claude/Projects/Audiobook-Generator status --porcelain`. Expected: no entry produced by this run.
+  5. From here on, every diff below uses `git -C <wt> diff origin/main...HEAD`, never local `main`.
 
-- [ ] **Step 2: Full batteries.** Run each command in the foreground, one at a time.
+- [ ] **Step 2: Full batteries.** Run each command in the foreground, one at a time:
+  ```
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run lint
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test:server
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test:server-slow
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run check:cycles
+  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run build
+  ```
+  - Expected: every command exits 0.
+  - `test:server-slow` covers `generation.test.ts` and `book-state.test.ts`.
+  - `check:cycles` needs network access for `npx madge@8.0.0`.
+  - For any failure, first check whether it also fails on `origin/main`, following CLAUDE.md. Report the result either way.
 
-```
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run lint
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test:server
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test:server-slow
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run check:cycles
-npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run build
-```
-Expected: every command exits 0. `test:server-slow` covers `generation.test.ts` and `book-state.test.ts`. `check:cycles` needs network access for `npx madge@8.0.0`. For any failure, triage it against `main` first, following CLAUDE.md, and report it either way.
+- [ ] **Step 3: PR-1 acceptance checklist.** Tick each item and give its evidence.
+  - [ ] **Only `revisions-store.ts` writes revisions.json.** Run `git -C <wt> grep -n "revisionsJsonPath" -- server/src ':!*.test.ts'`. The only writers should be `revisions-store.ts` and the still-accepted PR-1 `PUT /state` revisions case (`book-state.ts:789-790`). `GET /state` (`book-state.ts:285`) still reads raw.
+  - [ ] **The lock key is built in code in exactly one place.** Run `` git -C <wt> grep -nE 'revisions:\$\{' -- 'server/src/**/*.ts' ':!*.test.ts' ``. Expect exactly one line: `revisionsLockKey`'s `return` in `revisions-store.ts`. The store header and `cast-lock.ts` comments spell the key as `"revisions:" + …` and `revisions:<abs bookDir>`, so neither matches. Then run `git -C <wt> grep -n "revisionsLockKey(" -- server/src ':!*.test.ts'`. Every call site should be inside `revisions-store.ts`.
+  - [ ] **The revisions lock is a leaf.** Inside `revisions-store.ts`, no other lock call appears within a locked callback, and every `writeJsonAtomic` targets `revisionsJsonPath`.
+  - [ ] **Schema seam.** The store imports `migrateSeamDoc` and `stampSeamSchema`. The newer-schema, corrupt-file and preflight tests are green.
+  - [ ] **Preflight.** `book-state.ts` calls `assertRevisionsResettable` in both routes before any deletion or write, and both refuse-before-delete tests are green.
+  - [ ] **The old routes keep today's codes and order.** `chapter-audio.test.ts` is green with its tests unchanged, plus the new 409.
+  - [ ] **Every finalize caller passes no `review`.** The three spy tests are green.
+  - [ ] **No new cross-layer import into generation.** Run `git -C <wt> diff origin/main...HEAD -- server/src/routes/generation.ts | grep "^+import"`. It should show only `./review-request.js`.
+  - [ ] **`previous-audio.ts` does not import generation.** `git -C <wt> grep -n "generation" -- server/src/audio/previous-audio.ts` should return nothing.
+  - [ ] **OpenAPI additions are optional.** Every field added to an existing OpenAPI schema is optional, and the contract test is green under typecheck.
+  - [ ] **CLAUDE.md is consistent.** It says "twenty" `requestFailureMessage` sites, and `git -C <wt> grep -n "requestFailureMessage(" -- "server/src/**/*.ts" ":!*.test.ts"` shows 20 call sites plus the definition. It says "FIVE handlers" and names `applyReview`. Rule 4 names the revisions leaf lock.
+  - [ ] **No restructure pending drop.** `git -C <wt> diff origin/main...HEAD -- server/src/routes/chapters-restructure.ts` is empty.
+  - [ ] **No sidecar changes.** `git -C <wt> diff --stat origin/main...HEAD -- server/tts-sidecar` is empty.
+  - [ ] **INDEX has the 285 entry, and no release-notes files changed.**
 
-- [ ] **Step 3: PR-1 acceptance checklist.** Tick each item with its evidence.
-  - [ ] Only `revisions-store.ts` writes revisions.json. Run `git -C <wt> grep -n "revisionsJsonPath" -- server/src ':!*.test.ts'`. Writes should appear only in `revisions-store.ts` and in the still-accepted PR-1 `PUT /state` revisions case (`book-state.ts:789-790`). `GET /state` (`book-state.ts:285`) still reads the file raw.
-  - [ ] The lock key is built in one place. ``git -C <wt> grep -n '`revisions:' -- server/src ':!*.test.ts'`` should match only `revisionsLockKey` in `revisions-store.ts`. `git -C <wt> grep -n "revisionsLockKey(" -- server/src ':!*.test.ts'` should show call sites only inside `revisions-store.ts`.
-  - [ ] The revisions lock is a leaf. Inside `revisions-store.ts`, no other lock call appears within a locked callback, and every `writeJsonAtomic` targets `revisionsJsonPath`.
-  - [ ] Schema seam: `revisions-store.ts` imports `migrateSeamDoc` and `stampSeamSchema`, and the newer-schema and corrupt-file refusal tests are green.
-  - [ ] The old routes keep today's codes and order: `chapter-audio.test.ts` is green, with its existing tests unchanged plus the new 409.
-  - [ ] Every finalize caller passes no `review` (the three spy tests are green).
-  - [ ] `routes/generation.ts` gained no `audio/` or `workspace/` import. `git -C <wt> diff main -- server/src/routes/generation.ts | grep "^+import"` should show only `./review-request.js`.
-  - [ ] `audio/previous-audio.ts` does not import generation. `git grep -n "generation" -- server/src/audio/previous-audio.ts` should return nothing.
-  - [ ] Every field added to an existing OpenAPI schema is optional (the contract test is green under typecheck).
-  - [ ] CLAUDE.md says "seventeen" requestFailureMessage sites, and `git grep -n "requestFailureMessage(" -- "server/src/**/*.ts" ":!*.test.ts"` shows 17 call sites plus the definition. CLAUDE.md says "FIVE handlers" and names `applyReview`.
-  - [ ] No new pending drop in restructure: `git -C <wt> diff main -- server/src/routes/chapters-restructure.ts` is empty.
-  - [ ] No sidecar changes: `git -C <wt> diff --stat main -- server/tts-sidecar` is empty.
-  - [ ] INDEX has the 285 entry, and no release-notes files changed.
+- [ ] **Step 4: Re-run the four highest-value mutations.** For each one, paste the red line, restore, and re-run green. Afterwards, `git -C <wt> status --porcelain` must be empty.
+  1. **Task 1 #1: lock key without `resolve`.** This is the locking invariant everything rests on. Run `…server run test -- src/workspace/revisions-store.test.ts`.
+  2. **Task 4 #1: no `live_audio_missing` pre-check.** This is the only path that could delete the last copy of a take. Run `…server run test -- src/routes/revision-ops.test.ts`.
+  3. **Task 8 #2: `review: null` at the splice caller.** This guards the PR-1 dark invariant. Run `…server run test -- src/routes/chapter-splice.test.ts -t "plan 285"`.
+  4. **Task 12 #2: delete the reparse preflight.** This guards the one irreversible PR-1 behaviour: deleting a book's cast and audio. Run `…server run test -- src/routes/book-state.reparse.test.ts`.
 
-- [ ] **Step 4: Re-run the four highest-value mutations.** For each one, make the change, run the test, paste the red line, restore, and confirm green. Afterwards, `git -C <wt> status --porcelain` must be empty and `git diff --exit-code` must exit 0.
-  1. **Task 1 #1: lock key without `resolve`.** This is the locking invariant everything else rests on. Run `…server run test -- src/workspace/revisions-store.test.ts`.
-  2. **Task 4 #1: no `live_audio_missing` pre-check.** This guards the only path that could delete the last copy of a take. Run `…server run test -- src/routes/revision-ops.test.ts`.
-  3. **Task 8 #2: `review: null` at the splice caller.** This tests the PR-1 dark invariant. Run `…server run test -- src/routes/chapter-splice.test.ts`.
-  4. **Task 11: `rm` instead of reset.** This guards the only PR-1 change an old client can observe. Run `…server run test -- src/routes/book-state.reparse.test.ts`.
-
-- [ ] **Step 5: Open the PR (only when every step above passes).**
-  1. Validate the title. Write `feat(server): server-owned revisions.json per-operation writes (dark)` to a scratch file, then run `node C:/Claude/Projects/wt-3400-revisions-server-ops/scripts/validate-commit-msg.mjs <that file>`. Expected: exit 0.
+- [ ] **Step 5: Open the PR, only when every step above passes**
+  1. Write `feat(server): server-owned revisions.json per-operation writes (dark)` to a scratch file and run `node C:/Claude/Projects/wt-3400-revisions-server-ops/scripts/validate-commit-msg.mjs <that file>`. Expected: exit 0.
   2. Write the body to a scratch file, following `.github/pull_request_template.md`:
      ```markdown
      ## Summary
 
-     PR 1 of 2 for server-owned revisions.json (plan `docs/features/285-revisions-server-ops.md`, spec `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md` rev 9). Adds the locked revisions store, server-owned accept/reject/dismiss routes, the extracted A/B audio steps, the finalize `review` seam and the `review` queue/request plumbing — all **dark**: no caller passes `review`, no client calls the new routes, and the client remains the only writer of `pending`. Reparse/replace now reset revisions.json through the store instead of deleting it.
+     PR 1 of 2 for server-owned revisions.json (plan `docs/features/285-revisions-server-ops.md`, spec `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md` rev 9). Adds the locked revisions store (schema-migrate seam, `fileId`/`rev`), server-owned accept/reject/dismiss routes, the extracted A/B audio steps, the finalize `review` seam and the `review` queue/request plumbing — all **dark**: no caller passes `review`, no client calls the new routes, and the client remains the only writer of `pending`. Reparse/replace now reset revisions.json through the store instead of deleting it, and refuse a newer-schema file before deleting anything.
 
      Refs #3400
      Refs #3397
@@ -3819,19 +4060,19 @@ Expected: every command exits 0. `test:server-slow` covers `generation.test.ts` 
      ## Test plan
 
      - [ ] cloud `verify.yml` (required status check) — green
-     - [x] typecheck, lint, test, test:server, test:server-slow, check:cycles, build — green locally (Task 12)
+     - [x] typecheck, lint, test, test:server, test:server-slow, check:cycles, build — green locally (Task 13)
      - [x] Mutation re-runs (each observed red, then restored green):
-       - lock key without `resolve` → <paste the observed red line>
-       - no `live_audio_missing` pre-check → <paste the observed red line>
-       - `review: null` at the splice caller → <paste the observed red line>
-       - `rm` instead of reset on reparse → <paste the observed red line>
+       - lock key without `resolve` → <observed red line>
+       - no `live_audio_missing` pre-check → <observed red line>
+       - `review: null` at the splice caller → <observed red line>
+       - reparse preflight removed → <observed red line>
      - [ ] `pr-review-gate` pass (run by the coordinator after this PR opens)
      ```
-     Replace each `<paste …>` with the actual output from Step 4 before creating the PR. The body must not contain any placeholder.
+     Before creating the PR, replace each `<observed red line>` with the actual output from Step 4. No placeholder may remain.
   3. Run `gh pr create --repo dudarenok-maker/Castwright --base main --head fix/server-3400-revisions-server-ops --title "feat(server): server-owned revisions.json per-operation writes (dark)" --body-file <body file>`.
   4. Do not merge. The mandatory `pr-review-gate` pass runs after the PR opens, and the coordinator handles it.
 
-- [ ] **Step 6: Report** the PR URL, every checklist result, each mutation's observed red line, and any battery failure along with its main-vs-branch triage.
+- [ ] **Step 6: Report** the PR URL, each checklist result, each mutation's observed red line, and any battery failure with its triage against `origin/main`.
 
 ---
 
@@ -3840,59 +4081,74 @@ Expected: every command exits 0. `test:server-slow` covers `generation.test.ts` 
 ### Spec coverage
 
 | Spec section | Task |
-| --- | --- |
+|---|---|
 | §1 store, normalisation, `fileId`/`rev` | Task 1 |
-| §1 two-phase ops | Task 2 |
-| §1 reset | Task 11 |
+| §1 two-phase operations | Task 2 |
+| §1 reset and preflight | Tasks 1 and 12 |
 | §2 audio extraction | Task 3 |
 | §2 routes, errors and curation | Task 4 |
 | §2 polls and D8 | Task 5 |
 | §2 OpenAPI | Task 6 |
 | §3 finalize tri-state | Task 7 |
 | §3 SSE threading | Task 8 |
-| §3 server `review` | Task 9 |
-| §3 client `review` | Task 10 |
-| Delivery: CLAUDE.md lines, INDEX entry, explicit "no release notes" | Tasks 4, 7 and 11 |
+| §3 server `review` | Tasks 9 and 10 |
+| §3 client `review` | Task 11 |
+| Delivery (the CLAUDE.md lines, INDEX, the explicit no-release-notes) | Tasks 4, 5, 7 and 12 |
 
-PR-2 items (restore-unrecorded, the 400/410 switches, the restructure drop, caller values, and the whole of §4) are deliberately left out.
+PR-2 items are deliberately absent: restore-unrecorded, the 400/410 switches, the restructure drop, caller values, and all of §4.
 
-### Gaps the spec left open, and how this plan resolves them (coordinator-confirmed)
+### Gaps the spec left open, and their resolutions (coordinator-confirmed)
 
-1. **Corrupt file.** A parse failure **throws**, as it does on main. The poll returns a 500 (`revisions.ts:148`), and every write refuses, so nothing ever overwrites the corrupt original. The only exception is `resetRevisions` (reparse/replace), which replaces a corrupt file just as the old `rm` did.
-2. **Newer schema.** Reads go through `schema-migrate.ts`'s `migrateSeamDoc`, and writes are stamped with `stampSeamSchema`. A newer-schema file throws `UnsupportedSchemaError`, a curated message that contains no path. Reads, writes and reset all refuse it; it is never downgraded.
-3. **Missing `playable`.** A legacy entry with no `playable` flag is treated as playable, so it is kept only if `.previous.mp3` exists.
-4. **No-op writes.** A drop with nothing to drop, or a repeat dismiss, neither writes nor bumps `rev`. The first store write to a legacy file mints `fileId` and sets `rev: 1`.
-5. **Error body shape.** Coded failures return `{error: code, message, state?}`. `restore_failed` carries no state. A non-coded 500 keeps the repo convention `{error: requestFailureMessage(...)}`.
-6. **`reviewRecorded` semantics.** The field is absent when `review` is undefined, true when the record or drop lands, and false on failure. The failure is a deliberate fifth swallow site, and CLAUDE.md's list is updated in Task 7.
+1. **Corrupt file.** A parse failure **throws**, as on main. The poll and qa-report return 500, and every store write refuses, so the store never overwrites the corrupt original. The one exception is `resetRevisions` (reparse/replace), which replaces a corrupt file as the old `rm` did. In PR 1, the client's raw `PUT /state` still writes the file by design (Invariant 7).
+2. **Newer schema.**
+   - The store reads through `migrateSeamDoc` and stamps writes with `stampSeamSchema`.
+   - A newer-schema file throws the curated, path-free `UnsupportedSchemaError` on every read, write and reset, and is never downgraded.
+   - Reparse and replace run `assertRevisionsResettable` **before** they delete or write anything. Replace's preflight also comes before its manuscript write and unlink.
+3. **Missing `playable`.** A legacy entry without the flag is treated as playable, so it is kept only if `.previous.mp3` exists.
+4. **No-op writes.** A drop with nothing to drop, or a repeated dismiss, neither writes nor bumps `rev`. The first store write to a legacy file mints `fileId` and sets `rev: 1`.
+5. **Error-body shape.** Coded errors return `{error: code, message, state?}`. `restore_failed` carries no state. A non-coded 500 returns `{error: requestFailureMessage(...)}`, and **every new or reshaped 500 is curated**: revision-ops ×3, revisions ×2 and qa-report. CLAUDE.md's count is updated to the counted final number, 20.
+6. **`reviewRecorded` semantics.**
+   - It is absent when `review` is undefined, true when the record or drop lands, and false on failure.
+   - The failure is a deliberate fifth swallow site, added to CLAUDE.md's list in Task 7.
+   - The "carries no `reviewRecorded`/`reviewChapter`" tests assert the raw SSE line text. `JSON.stringify` drops `undefined`, so an unconditional `x: undefined` spread is wire-identical and not a defect. The mutations target a value-inventing default (`?? false`) instead.
 7. **Malformed `review`.**
-   - Enqueue and generation both return 400 `invalid_review`.
-   - A `null` review in the body counts as absent.
-   - Generation also returns 400 `review_requires_single_chapter` unless exactly one integer chapter id is named.
-   - **Deliberate difference from `modelKey`:** the queue silently drops an unknown `modelKey` (`queue.ts:111`) but returns 400 for a malformed `review`. Dropping `review` would quietly turn a review render into a plain one, which in PR 2 means "drop the chapter's pending entry".
-8. **Server-recorded entry fields.**
+   - Enqueue and generation both return 400 `invalid_review`, and a `null` review counts as absent.
+   - Generation also returns 400 `review_requires_single_chapter` unless the request names exactly one integer chapter id.
+   - **Deliberate difference from `modelKey`:** the queue silently drops an unknown `modelKey` (`queue.ts:114`) but rejects a malformed `review` with 400. Dropping a review would quietly turn a review render into a plain one, which PR 2 treats as "drop the chapter's pending entry".
+8. **Entry fields.**
    - Fixed values: `segments: []`, `confidence: 1`, `triggeredAgo: 'just now'`.
-   - `oldDuration` comes from the `state.json` chapter duration before the write, or `''` if absent.
+   - `oldDuration` is the chapter's `state.json` duration from before the write, or `''`.
    - `newDuration` is `formatDuration(durationSec)`.
-   - An accept with no selection stores `{}` in `acceptedSelections`.
-9. **QaRepairTick.** It also gets `reviewRecorded`, because the server sends it on both completion events. The spec names only `SpliceTick`.
+   - An accept with no selection stores `{}`.
+9. **QaRepairTick.** It gets `reviewRecorded` too, because the server sends the field on both completion events. The spec names only `SpliceTick`.
 10. **File placement.**
-    - The new routes go in a new `routes/revision-ops.ts`, not in `revisions.ts`, which stays the drift detector.
+    - The new routes go in `routes/revision-ops.ts`; `revisions.ts` stays the drift detector.
     - The `review` validator goes in `routes/review-request.ts`, so `generation.ts` gains no `audio/` or `workspace/` import.
-    - The server's `queue-io` and finalize use the structural type `{ characterId; triggeredBy }` to avoid cross-layer imports.
-11. **Server vs client claim.** The claim itself happens on the client. The server round-trip test therefore covers enqueue → GET → `POST /:id/start`, and the client half (dispatcher → runner → POST body) is covered by Task 10's tests.
-12. **Required vs optional.** "Every new field is optional" applies to fields added to existing schemas. `RevisionsState` and `RevisionOpError` are new schemas that only the new routes produce, and no PR-1 mock produces them, so `RevisionsState` is fully required.
-13. **Source of the `live_audio_missing` state.** The 409 body's `state` comes from a fresh lock-free `readRevisions` taken after the pre-check, not from step 1's snapshot. `chapter_busy` and `no_previous_audio` use step 1's `begin.file`, which is current to that step and made no write.
+    - The server's `queue-io` and finalize use the structural `{ characterId; triggeredBy }` type to avoid cross-layer imports.
+11. **Server vs client claim.** The claim itself runs on the client. The server round-trip test covers enqueue → GET → `POST /:id/start`. Task 11 covers the client half: dispatcher → runner → POST body.
+12. **Required vs optional on new schemas.** "Every new field optional" applies to fields added to existing schemas. `RevisionsState` and `RevisionOpError` are new schemas that only the new routes produce, and no PR-1 mock produces them, so `RevisionsState` is fully required.
+13. **The `live_audio_missing` state source.** The 409's `state` comes from a fresh lock-free `readRevisions` taken after the pre-check. `chapter_busy` and `no_previous_audio` use step 1's `begin.file`, which is current to that step and made no write.
 
-### Observable side effects of the decisions above
+### Tests with no red-first step
 
-- qa-report now reads revisions.json even for a book with no cast. On main it returned early in that case and never read the file. A corrupt or newer-schema revisions.json therefore makes qa-report return 500 for an uncast book. For a cast book, main already returned 500 here.
-- Two tests pass both before and after their change:
-  - `mock-queue.test.ts`, because the mock already spreads the entry;
-  - the poll's corrupt-file 500 test, which matches main's behaviour for a cast book.
+Each of these passes before its change. Each one has a mutation, or is labelled a regression guard where no realistic mutation exists:
 
-  Each still carries a real mutation (Task 10 #2) or is labelled in its step as a regression guard. Every other new test has a red-first step.
+| Test | Task | Mutation, or why there is none |
+|---|---|---|
+| chapter-audio `409s (not 404) for an INVALID chapter id…` | 3 | Move the busy check after the parse |
+| finalize `undefined: leaves revisions.json alone…` | 7 | Delete the `review === undefined` early return |
+| splice `the splice_complete line carries no reviewRecorded…` | 8 | `?? false` default |
+| generation `the chapter_complete line carries no reviewRecorded…` | 8 | `?? false` default |
+| generation `the chapter_complete line carries no reviewChapter without review` | 10 | Unconditional boolean `reviewChapter` |
+| poll `a corrupt revisions.json answers 500, as on main` | 5 | `.catch(() => emptyRevisionsFile())` on the read |
+| poll `falls back to [] when persisted pending is not an array` | 5 | No realistic mutation exists. Even a non-array string iterates to non-objects that are all dropped. It is a **regression guard** inherited from #3376. |
+| qa-report `configDrift is built from drift only…` | 5 | Read `pending` instead of `drift` |
+| `mock-queue.test.ts` | 11 | Replace the entry spread with an explicit field list |
+
+Every other new test has a red-first step.
 
 ### Type consistency
 
-- `ChapterRef`, `StoredRevision` and `RevisionsState` come from Tasks 1–2 and are used in Tasks 4, 5, 7 and 11.
-- On the server, `ReviewRequest` lives in `routes/review-request.ts`. On the client, it is in `src/lib/types.ts`.
+- `ChapterRef`, `StoredRevision` and `RevisionsState` come from Tasks 1–2 and are used in Tasks 4, 5, 7 and 12.
+- `ReviewRequest` is defined twice: server-side in `routes/review-request.ts` and client-side in `src/lib/types.ts`.
+- `completeLine` comes from Task 8 and is reused in Task 10.
