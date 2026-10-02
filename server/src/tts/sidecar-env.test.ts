@@ -6,7 +6,10 @@
    is the one exception, still derived from modelKey (no Advanced Settings
    toggle stands in for it). */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 vi.mock('../workspace/user-settings.js', () => ({ readConfigOverrides: vi.fn(() => ({})) }));
 /* #1890 — QWEN_VOICES_DIR/XTTS_VOICES_DIR must be sourced from paths.ts's
    `qwenVoicesDir()`/`xttsVoicesDir()` helpers, not a local literal `join()`
@@ -146,8 +149,11 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
 describe('buildSidecarEnv injects the accelerator profile + Kokoro ORT providers (AMD phase 2)', () => {
   const base = {
     modelKey: 'qwen3-tts-0.6b' as const,
-    repoRoot: process.cwd(), // no venv stamp under this path → profile from env/default
+    repoRoot: mkdtempSync(join(tmpdir(), 'sidecar-env-')), // fresh empty dir: guaranteed no venv stamp → profile from env/default
   };
+  afterAll(() => {
+    rmSync(base.repoRoot, { recursive: true, force: true });
+  });
   afterEach(() => {
     delete process.env.ACCELERATOR;
   });
