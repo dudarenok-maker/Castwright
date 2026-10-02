@@ -11,7 +11,8 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { CharacterOutput, SentenceOutput, Stage1Output } from '../handoff/schemas.js';
 import { extractInlineEmotion } from '../handoff/emotion-from-tags.js';
-import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { readJson, enqueuePathOp } from '../workspace/state-io.js';
+import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 
 /* fs-25 — absorb any legacy inline audio-tag in a freshly-analysed sentence
@@ -139,16 +140,26 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
   };
 }
 
+/* #3427 — saves and clears for one manuscript run through the shared per-path
+   op chain (`enqueuePathOp`, workspace/state-io.ts), so they land in call
+   order. */
 export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCache): Promise<void> {
-  await writeJsonAtomic(cachePath(manuscriptId), {
+  const path = cachePath(manuscriptId);
+  /* Built at call time; `writeJsonAtomicOrdered` then deep-snapshots it, so the
+     bytes written are fixed at call time however long the chain delays them. */
+  const payload = {
     ...cache,
     chapters: seedEmotionsFromTags(cache.chapters ?? {}),
     updatedAt: new Date().toISOString(),
-  });
+  };
+  await writeJsonAtomicOrdered(path, payload);
 }
 
 /* Discard any partial progress for a manuscript so the next analysis runs
    from scratch. Idempotent — no-op if the cache file doesn't exist. */
 export async function clearAnalysisCache(manuscriptId: string): Promise<void> {
-  await rm(cachePath(manuscriptId), { force: true });
+  /* Joins the same per-path chain as saves (#3427): lands after every save
+     called before it, and a later save lands after it. */
+  const path = cachePath(manuscriptId);
+  await enqueuePathOp(path, () => rm(path, { force: true }));
 }

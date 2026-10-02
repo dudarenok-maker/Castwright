@@ -79,6 +79,14 @@ export interface SynthOutput {
       substitution flag. Requiring the key (its value still permits
       `undefined`) forces every caller to make that choice explicitly. */
   voiceSubstitutedFrom: ChapterSegment['voiceSubstitutedFrom'];
+  /** #3362 — the per-segment fallback stamps of THIS take
+      (`ChapterSegment['renderedFallbackEngine']` / `['renderedFallbackCharacterId']`).
+      Same contract as `voiceSubstitutedFrom` above, including REQUIRED (#2034):
+      a re-record always has a definite "did this take fall back" answer, so
+      `undefined` means "no, clear the stale stamp from the segment's prior
+      render", never "not wired through". */
+  renderedFallbackEngine: ChapterSegment['renderedFallbackEngine'];
+  renderedFallbackCharacterId: ChapterSegment['renderedFallbackCharacterId'];
 }
 
 export interface BuildSynthReplacementsOpts {
@@ -135,6 +143,12 @@ export async function buildSynthReplacements(
       // key must always be set (even to `undefined`) so a clean take clears
       // any stale substitution flag the segment's prior render carried.
       voiceSubstitutedFrom: out.voiceSubstitutedFrom,
+      // #3362 — UNCONDITIONAL for the same reason: a clean take must clear a
+      // stale Kokoro-fallback stamp (else renderedSegmentVoices, the
+      // render-integrity anchors and the Fallback pill keep reading the OLD
+      // take), and a fallback take must stamp its own.
+      renderedFallbackEngine: out.renderedFallbackEngine,
+      renderedFallbackCharacterId: out.renderedFallbackCharacterId,
     };
     replacements.push({
       startSegmentIndex: i,

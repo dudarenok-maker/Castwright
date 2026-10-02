@@ -109,7 +109,9 @@ import {
   slug,
   stateJsonPath,
 } from '../workspace/paths.js';
-import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
+import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
+import { rollManuscriptEdits } from '../workspace/edits-roll.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import {
@@ -4064,7 +4066,10 @@ export async function runMainAnalyzerJob(
              reports a guaranteed false conflict on every fresh run. */
           castBase?.markDeleted();
         });
-        await rm(manuscriptEditsJsonPath(recordRef.bookDir), { force: true });
+        {
+          const editsPath = manuscriptEditsJsonPath(recordRef.bookDir);
+          await enqueuePathOp(editsPath, () => rm(editsPath, { force: true }));
+        }
         /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
            meaningless; drop the merge journal + dedup suggestions too. */
         await clearCastMerges(recordRef.bookDir);
@@ -5766,28 +5771,31 @@ export async function runMainAnalyzerJob(
       const chDurationForCache = Date.now() - startedAt;
       stage2Durations[ch.id] = chDurationForCache;
       cache.stage2Durations = stage2Durations;
-      /* Cache + edits writes are atomic-rename and JS is single-threaded, so
-         concurrent saves serialise naturally. Worst case is two near-
-         simultaneous writes overlap and the second wins — both contain the
-         same set + the freshly-completed chapter, so the merge is safe. */
+      /* Atomic-rename alone does NOT order overlapping writes to one path, and
+         the pool runs chapters concurrently. `saveAnalysisCache` and the
+         manuscript-edits roll below both go through the per-path op chain
+         (#3427), so each file's writes land in call order and the last call
+         wins. */
       await saveAnalysisCache(manuscriptId, cache);
       if (recordRef.bookDir) {
         try {
-          /* Rebuild the running narrative from the chapter map so order is
-             always correct regardless of which chapter completes first. */
-          const running: SentenceOutput[] = [];
-          for (const order of recordRef.chapterHints) {
-            const arr = sentencesByChapter.get(order.id);
-            if (arr) running.push(...arr);
-          }
           /* #2196 — rolling manuscript-edits is guarded in mode:'drop': a
              stale (moved/gone) dir is NOT recreated by writeJsonAtomic here.
              Interim rolls simply skip on an unresolvable path; the terminal
-             persist block is the single halt gate (C4). */
-          await withVerifiedBookDir(
+             persist block is the single halt gate (C4).
+             The snapshot is built inside `rollManuscriptEdits`, in the same
+             synchronous step that joins the write queue (#3427). */
+          await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
-            async (bookDir) => {
-              await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: running });
+            () => {
+              /* Rebuild the running narrative from the chapter map so order is
+                 always correct regardless of which chapter completes first. */
+              const running: SentenceOutput[] = [];
+              for (const order of recordRef.chapterHints) {
+                const arr = sentencesByChapter.get(order.id);
+                if (arr) running.push(...arr);
+              }
+              return running;
             },
           );
         } catch (persistErr) {
@@ -6230,7 +6238,7 @@ export async function runMainAnalyzerJob(
          re-keyed onto `writeDir` (R3 — no ordering bet). */
       const writeDir = await resolveVerifiedBookDirForRun(job);
       try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(writeDir), {
+        await writeJsonAtomicOrdered(manuscriptEditsJsonPath(writeDir), {
           sentences: reconciled.sentences,
         });
         /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:
@@ -7787,18 +7795,18 @@ export async function runSubsetAnalyzerJob(
          very end). Mirrors the main route's per-chapter persist. */
       if (record.bookDir) {
         try {
-          const running: SentenceOutput[] = [];
-          for (const order of record.chapterHints) {
-            if (order.excluded) continue;
-            const arr = cachedChapters[order.id];
-            if (arr) running.push(...arr);
-          }
           /* #2196 — subset rolling manuscript-edits: guard in mode:'drop'
              (no stale-dir recreation); the terminal persist halt-gates. */
-          await withVerifiedBookDir(
+          await rollManuscriptEdits(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
-            async (bookDir) => {
-              await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: running });
+            () => {
+              const running: SentenceOutput[] = [];
+              for (const order of record.chapterHints) {
+                if (order.excluded) continue;
+                const arr = cachedChapters[order.id];
+                if (arr) running.push(...arr);
+              }
+              return running;
             },
           );
         } catch (persistErr) {
@@ -8066,7 +8074,7 @@ export async function runSubsetAnalyzerJob(
          this run's top-level catch -> endJob halted (C1/C3). */
       const writeDir = await resolveVerifiedBookDirForRun(job);
       try {
-        await writeJsonAtomic(manuscriptEditsJsonPath(writeDir), {
+        await writeJsonAtomicOrdered(manuscriptEditsJsonPath(writeDir), {
           sentences: subsetReconciled.sentences,
         });
         /* srv-1 — record this fold pass's lineage (see writeFoldJournal). Non-fatal:

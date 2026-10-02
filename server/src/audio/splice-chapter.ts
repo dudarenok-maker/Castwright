@@ -52,7 +52,11 @@ export interface SegmentReplacement {
       once `freshVerdict` is set at all — even when explicitly `undefined`,
       which means "this take did not substitute" and must CLEAR any stale
       substitution flag the segment carried from before the repair, not
-      preserve it. */
+      preserve it.
+
+      #3362 — same unconditional contract for `renderedFallbackEngine` and
+      `renderedFallbackCharacterId`: the take's own fallback stamps replace the
+      prior render's, `undefined` clearing them. */
   freshVerdict?: Pick<
     ChapterSegment,
     | 'qa'
@@ -64,6 +68,8 @@ export interface SegmentReplacement {
     | 'voiceName'
     | 'baseVoiceName'
     | 'voiceSubstitutedFrom'
+    | 'renderedFallbackEngine'
+    | 'renderedFallbackCharacterId'
   >;
 }
 

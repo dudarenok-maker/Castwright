@@ -219,8 +219,29 @@ last, alone, since it deliberately crashes the sidecar twice.
 
 13. Run [`cast-id-drift-onbox-acceptance.md`](cast-id-drift-onbox-acceptance.md)
     §3 (re-render chapter 19 — `the-torment` recovery, `characterSnapshots`
-    check, by-ear distinct-voice listen).
+    check, by-ear distinct-voice listen). The canonical-key expectation holds
+    for this FULL re-render; a partial re-record or splice carries untouched
+    legacy lines' raw/retired keys forward.
     - Result:
+13a. Run the **#3362 checks 1–4** (run sheet
+    [§11](cast-id-drift-onbox-acceptance.md), register A22 "#3362 checks
+    1–5"; check 5 is automated-only): (1) canonical snapshot keys on a full
+    re-render (a `the_torment` entry present plus `resolvedCharacterId` stamps —
+    absent on `main`), (2) per-line voice drift —
+    assign a different voice from a **My voices** entry (Cast profile drawer →
+    "Or use a voice from My voices"; needs one such entry — a redesign or the
+    book-card Assign pill changes nothing), re-record a non-last line, then the
+    LAST line plus some others: Revisions must still flag until every line is
+    redone (chapter rendered by this build only; pre-stamp legacy/mixed
+    chapters can clear early — not a regression), (3) Fix audio on a chapter
+    rendered with both raw spellings: every stamped line gets the new
+    `voiceName` in `segments.json`, (4) per-line re-record after a cast merge,
+    **in the same session before any reload**, keeps its rows in
+    `<slug>.embeddings.json` and, after scoring is triggered (Resume scoring if
+    offered, else finish another chapter's render), gets verdict rows under the
+    survivor. Turn on "Render-integrity QA (voice match)" (`qa.speaker.enabled`)
+    for 4.
+    - Result (1–4, one line each):
 14. Run §4 (re-render chapter 16 — `lightning-dave` recovery **and**
     `pool-player-2` negative control in the same chapter).
     - Result:
@@ -242,9 +263,10 @@ last, alone, since it deliberately crashes the sidecar twice.
 
 26. Run §8.7 — re-render *Заказ Коалфолла* chapter 2 (the `mayrin`/`coalfall`
     orphaned chapter) and confirm the fresh `segments.json` gains
-    `characterSnapshots` entries for `mayrin`/`coalfall` naming their own
-    live voices, not the narrator. **Listen** to confirm audibly — this is
-    the criterion, not just the JSON.
+    `characterSnapshots` entries keyed by the canonical cast ids
+    `mairin`/`coalfall-dragon` (what `mayrin`/`coalfall` retire to) naming
+    their own live voices, not the narrator. **Listen** to confirm
+    audibly — this is the criterion, not just the JSON.
     - Result:
 
 ### A32 (discharged 2026-09-25, removed from the register) · Named-entity decode reaches the TTS engine on a real EPUB ([#2310](https://github.com/dudarenok-maker/Castwright/issues/2310), PR #2316)
