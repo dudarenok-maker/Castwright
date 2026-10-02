@@ -11,7 +11,7 @@
    renders "No voice designed yet" for a character whose designed voice is on
    disk. */
 
-import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
@@ -27,7 +27,7 @@ import { voicesSlice } from '../store/voices-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
-import { persistenceMiddleware } from '../store/persistence-middleware';
+import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
 import { settingsSlice } from '../store/settings-slice';
 import type { Character } from '../lib/types';
 
@@ -99,10 +99,6 @@ beforeEach(() => {
   putBookStateMock.mockClear();
 });
 
-afterEach(() => {
-  vi.useRealTimers();
-});
-
 describe('ConfirmRoute — re-reads merged cast.json on entry', () => {
   it('replaces a voiceless slice roster with the merged designed voices from disk', async () => {
     // Slice arrives voiceless (the post-analysis SSE roster).
@@ -154,10 +150,11 @@ describe('ConfirmRoute — re-reads merged cast.json on entry', () => {
       expect(coalfall?.overrideTtsVoices?.qwen?.name).toBe('qwen-coalfall');
     });
 
-    // Advance past the persistence middleware's 500ms debounce. If the route
-    // had dispatched setCharacters (in PERSIST_RULES) instead of
-    // hydrateCharacters, a putBookState for the cast slice would have fired.
-    await new Promise((r) => setTimeout(r, 600));
+    // Send any queued write now rather than sleeping out the debounce. If the
+    // route had dispatched setCharacters (in PERSIST_RULES) instead of
+    // hydrateCharacters, a putBookState for the cast slice would be queued
+    // and this flush would fire it.
+    await store.dispatch(flushBookPersistence(BOOK_ID) as never);
 
     expect(putBookStateMock).not.toHaveBeenCalled();
   });

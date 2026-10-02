@@ -25,13 +25,12 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { tourSlice } from '../store/tour-slice';
-import { persistenceMiddleware } from '../store/persistence-middleware';
+import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
 import { router as appRouter } from './index';
 import {
   AnalysingRoute,
   BooksRoute,
   ChangelogRoute,
-  ConfirmRoute,
   ReadyRoute,
   SetupRoute,
 } from './index';
@@ -575,8 +574,8 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
 
     await waitFor(() => expect(store.getState().cast.characters).toHaveLength(0));
     expect((store.getState().ui.stage as { bookId?: string }).bookId).toBe('b2');
-    /* Outlast the 500 ms persist debounce. */
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    /* Send b2's queued write now rather than sleeping out the debounce. */
+    await store.dispatch(flushBookPersistence('b2') as never);
     expect(putBookStateMock).not.toHaveBeenCalled();
   });
 
@@ -909,31 +908,6 @@ describe('BooksRoute — edit book metadata from the card menu', () => {
     );
     /* Library refetch must NOT have fired on the failure path. */
     expect(getLibraryMock).not.toHaveBeenCalled();
-  });
-});
-
-describe('ConfirmRoute — authoritative cast re-read is a hydrate, not an edit (#3376)', () => {
-  it('re-reading cast.json on confirm entry schedules no cast PUT echoing it back', async () => {
-    const store = makeStore({ persist: true });
-    getBookStateMock.mockResolvedValue({
-      cast: { characters: [{ id: 'nora', name: 'Nora', voiceState: 'generated' }] },
-    });
-    render(
-      <Provider store={store}>
-        <MemoryRouter initialEntries={['/books/b1/confirm']}>
-          <Suspense fallback={<div data-testid="suspense-loading" />}>
-            <Routes>
-              <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
-            </Routes>
-          </Suspense>
-        </MemoryRouter>
-      </Provider>,
-    );
-    await waitFor(() => expect(store.getState().cast.characters.map((c: Character) => c.id)).toEqual(['nora']));
-    expect((store.getState().ui.stage as { bookId?: string }).bookId).toBe('b1');
-    /* Outlast the 500 ms persist debounce. */
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    expect(putBookStateMock).not.toHaveBeenCalled();
   });
 });
 
