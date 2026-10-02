@@ -1379,8 +1379,10 @@ describe('main-route resume: which failed chapters re-enter cast detection (#343
     expect(after.failedChapterIds).toContain(1);
   }, 60_000);
 
-  it('PA: a no-stage1 subset Retry of an attribution-flagged chapter keeps its record and drops its collapsed sentences; the main resume then re-attributes it and only then clears the record', async () => {
-    const seed = await seedBook('pa-retry', [1, 2]);
+  /** A no-stage1 subset Retry of an attribution-flagged chapter (owner decision 2026-10-02,
+      "resolve on drop"), then the main resume the view's auto-resume would POST. */
+  async function runRetryThenResume(label: string, mainStage2: Analyzer['runStage2Chapter']) {
+    const seed = await seedBook(label, [1, 2]);
     const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
     const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
     const { runMainAnalyzerJob, runSubsetAnalyzerJob } = await import('./analysis.js');
@@ -1395,23 +1397,23 @@ describe('main-route resume: which failed chapters re-enter cast detection (#343
     } as never);
     const record = getManuscript(seed.manuscriptId)!;
     const phase1 = buildSelection(stubAnalyzer({ runStage2Chapter: async (_m, id) => stage2For(id) }), MODEL);
+    const g = globalThis as Record<string, unknown>;
     try {
       const subsetJob = { ...seed.job, controller: new AbortController(), subscribers: new Set(), kind: 'subset' as const } as unknown as AnalysisJob;
       const subsetEvents = captureEvents(subsetJob);
-      await runSubsetAnalyzerJob(
-        subsetJob,
-        record,
-        seed.phase0Selection,
-        phase1,
-        record.chapterHints.filter((c) => c.id === 1),
-        false,
-      );
+      await runSubsetAnalyzerJob(subsetJob, record, seed.phase0Selection, phase1, record.chapterHints.filter((c) => c.id === 1), false);
       const mid = await loadAnalysisCache(seed.manuscriptId);
-      expect(subsetEvents.some((e) => e.kind === 'chapter-resolved')).toBe(false);
-      expect(mid.failedChapterIds).toEqual([1]);
-      expect(mid.chapters?.[1]).toBeUndefined();
 
-      (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection = phase1;
+      const stage2Calls: number[] = [];
+      g.__overflow_spend_test_phase1_selection = buildSelection(
+        stubAnalyzer({
+          runStage2Chapter: async (m, id, ...rest) => {
+            stage2Calls.push(id);
+            return mainStage2(m, id, ...rest);
+          },
+        }),
+        MODEL,
+      );
       const mainJob = { ...seed.job, controller: new AbortController(), subscribers: new Set(), kind: 'main' as const } as unknown as AnalysisJob;
       const mainEvents = captureEvents(mainJob);
       await runMainAnalyzerJob(mainJob, getManuscript(seed.manuscriptId)! as never, seed.phase0Selection, {
@@ -1420,13 +1422,32 @@ describe('main-route resume: which failed chapters re-enter cast detection (#343
         requestedModel: undefined,
       });
       const after = await loadAnalysisCache(seed.manuscriptId);
-      expect(mainEvents.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
-      expect(after.failedChapterIds ?? []).toEqual([]);
-      expect(after.chapters?.[1]?.[0]?.characterId).toBe('nova');
+      return { subsetEvents, mid, mainEvents, stage2Calls, after };
     } finally {
       removeManuscript(seed.manuscriptId);
       await clearAnalysisCache(seed.manuscriptId);
     }
+  }
+
+  it('PA: a no-stage1 subset Retry of an attribution-flagged chapter drops its collapsed sentences and RESOLVES it; the main resume then re-attributes it', async () => {
+    const r = await runRetryThenResume('pa-retry', async (_m, id) => stage2For(id));
+    expect(r.subsetEvents.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+    expect(r.mid.failedChapterIds ?? []).toEqual([]);
+    expect(r.mid.chapters?.[1]).toBeUndefined();
+    /* The uncached chapter cannot escape the main run's Phase 1. */
+    expect(r.stage2Calls).toContain(1);
+    expect(r.after.chapters?.[1]?.[0]?.characterId).toBe('nova');
+    expect(r.after.failedChapterIds ?? []).toEqual([]);
+  }, 60_000);
+
+  it('PA collapse: if the re-attribution after the resolve collapses again, the main run re-flags the chapter', async () => {
+    const r = await runRetryThenResume('pa-retry-recollapse', async (_m, id) =>
+      id === 1 ? { sentences: [] } : stage2For(id),
+    );
+    expect(r.mid.failedChapterIds ?? []).toEqual([]);
+    expect(r.stage2Calls).toContain(1);
+    expect(r.mainEvents.some((e) => e.kind === 'chapter-failed' && e.chapterId === 1)).toBe(true);
+    expect(r.after.failedChapterIds).toEqual([1]);
   }, 60_000);
 
   it('a save that throws in the Phase-0a failure catch keeps the original error and still sends chapter-failed', async () => {

@@ -1969,6 +1969,87 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(store.getState().notifications.toasts.filter((t) => t.fixes?.length)).toHaveLength(0);
     });
 
+    /* #3435 (owner decision 2026-10-02, "resolve on drop") — the subset route's
+       no-stage1 exit: the main run ended cast_incomplete (auto-resume armed), the
+       Retry dropped the chapter's collapsed sentences, sent chapter-resolved and
+       ended with no result. Goes THROUGH the trigger: the row clears AND the main
+       run is re-POSTed, which is the only thing that re-attributes the chapter.
+       (A kept row would disarm this effect: it waits for every row to clear.) */
+    /* The real trigger: a MAIN run that itself ended cast_incomplete (the
+       view's castIncomplete state is set by that catch alone — a rehydrated
+       halted snapshot does not arm the auto-resume), then a Retry of the failed
+       row. capturedOpts is cleared so a later defined value means the main run
+       was re-POSTed. */
+    async function mainEndedCastIncompleteThenRetry() {
+      getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      analyseManuscriptRejection = new AnalysisError(
+        'Phase 0a covers 1 of 2 chapters — run main analysis to detect the rest before stage1 can finalise.',
+        'cast_incomplete',
+      );
+      const { analysisStreamMiddleware } = await import('../store/analysis-stream-middleware');
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          account: accountSlice.reducer,
+          bookMeta: bookMetaSlice.reducer,
+          analysis: analysisSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        middleware: (g) => g().concat(analysisStreamMiddleware),
+      });
+      render(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m1"
+            bookId="b1"
+            title="t"
+            wordCount={2440}
+            onComplete={() => {}}
+          />
+        </Provider>,
+      );
+      const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+      const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+      await act(async () => {
+        fireEvent.click(startBtn);
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+      analyseManuscriptRejection = undefined;
+      capturedOpts = undefined;
+      await act(async () => {
+        fireEvent.click(retryBtn);
+      });
+      expect(capturedSubsetCall!.chapterIds).toEqual([44]);
+      return { AnalysisError, opts: capturedSubsetCall!.opts! };
+    }
+
+    it('the no-stage1 subset exit (chapter-resolved, then no result) drops the row and re-POSTs the main run', async () => {
+      const { AnalysisError, opts } = await mainEndedCastIncompleteThenRetry();
+      expect(capturedOpts).toBeUndefined();
+      await act(async () => {
+        opts.onChapterResolved!({ chapterId: 44 });
+      });
+      await act(async () => {
+        rejectSubset?.(new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result'));
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+      expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+    });
+
+    it('control: the same exit WITHOUT chapter-resolved keeps the row and never re-POSTs the main run', async () => {
+      const { AnalysisError } = await mainEndedCastIncompleteThenRetry();
+      await act(async () => {
+        rejectSubset?.(new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result'));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 100));
+      });
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+      expect(capturedOpts).toBeUndefined();
+    });
+
     /* #3435 — the Phase-1 gate's silent skip (another chapter still cast-failed)
        sends no events at all; the row was never resolved, so it must stay. */
     it('a Retry that ends without a result and with no chapter-resolved keeps the row', async () => {

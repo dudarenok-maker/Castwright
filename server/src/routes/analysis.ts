@@ -7374,20 +7374,22 @@ export async function runSubsetAnalyzerJob(
             }),
           () => null,
         );
-        /* #3435 — a failed chapter's record is cleared — and chapter-resolved
-           sent — only once its Phase 1 completes. On a finished book
-           (stage1Existed) Phase 1 runs below. With no stage1 there is no Phase 1
-           in this run, so an attribution-flagged chapter (cached sentences,
-           needsReattribution) keeps its record and loses its cached sentences:
-           the full resume this run hands off to re-attributes it and clears the
-           record there (owner decision, 2026-10-02). A cast-only failure (no
-           cached sentences) has nothing to re-attribute and clears here.
-           "Has a cast" is not a safe stand-in for "flagged for its
-           attribution": a collapse-flagged chapter whose Retry failed in Phase 0
-           has an empty cast AND collapsed sentences still cached, so clearing
-           early lost the flag on every exit before Phase 1 (Pause,
-           stage1_shrink_refused, a coverage-gate skip). */
-        const deferToPhase1 = stage1Existed || needsReattribution;
+        /* #3435 — on a finished book (stage1Existed) a failed chapter's record
+           is cleared — and chapter-resolved sent — only once its Phase 1
+           completes, below. "Has a cast" is not a safe stand-in for "flagged
+           for its attribution": a collapse-flagged chapter whose Retry failed
+           in Phase 0 has an empty cast AND collapsed sentences still cached, so
+           clearing early lost the flag on every exit before Phase 1 (Pause,
+           stage1_shrink_refused, a coverage-gate skip). With no stage1 there is
+           no Phase 1 in this run: an attribution-flagged chapter (cached
+           sentences, needsReattribution) loses its cached sentences here, and
+           its record is cleared and chapter-resolved sent right away (owner
+           decision, 2026-10-02: "resolve on drop"). The now-uncached chapter
+           cannot escape the main run's Phase 1, whose coverage check re-flags a
+           repeat collapse. Keeping the row instead disarmed the view's
+           auto-resume (it waits for every row to clear), so that Phase 1 never
+           started. */
+        const deferToPhase1 = stage1Existed;
         if (!stage1Existed && needsReattribution) {
           delete cachedChapters[ch.id];
           cache.chapters = cachedChapters;
