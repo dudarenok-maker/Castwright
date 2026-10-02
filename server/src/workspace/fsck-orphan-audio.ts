@@ -7,7 +7,7 @@
  *
  * Three recovery cases this fsck handles, run once on server startup:
  *
- *   (1) `<slug>.previous.mp3` exists, `<slug>.mp3` does NOT.
+ *   (1) `<slug>.previous.mp3` exists, no live `<slug>.{mp3,m4a,ogg}` does.
  *       — Interpretation: the rename succeeded but the new render never
  *         landed (regen aborted / crashed before writing the new audio).
  *         Recovery: promote the preserved take back to live so the user
@@ -31,6 +31,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { renameWithRetry } from './atomic-rename.js';
+import { findChapterAudio } from './chapter-audio-file.js';
 import { BOOKS_ROOT, audioDir, bookDirByDisplay } from './paths.js';
 
 const PREV_MP3_RE = /^(.+)\.previous\.mp3$/i;
@@ -81,7 +82,9 @@ export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudi
      promoted alongside. */
   for (const slug of prevMp3Slugs) {
     const livePath = join(audioRoot, `${slug}.mp3`);
-    if (existsSync(livePath)) continue; // case 3 — leave the pair alone
+    /* Any supported extension counts as live (#3457): an m4a/ogg book's
+       live take is never `<slug>.mp3`. */
+    if (findChapterAudio(audioRoot, slug)) continue; // case 3 — leave the pair alone
     try {
       await renameWithRetry(join(audioRoot, `${slug}.previous.mp3`), livePath);
       if (prevSegmentsSlugs.has(slug)) {
