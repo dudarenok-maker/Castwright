@@ -32,7 +32,7 @@ supersedes-client-guards-from: "#3376 / PR #3395 (merged 9f379fb6)"
 
 ### Not fixed here: the chapter-take lifecycle (one new design issue)
 
-Four spec passes showed that making the **audio files** of an A/B pair safe means owning the whole lifecycle of a chapter's takes. That lifecycle has many unfenced writers and readers: finalize, restructure (split/merge/rename/refresh-titles), export, companion sync, and the boot fsck. That needs its own design. This deliverable leaves every audio-file behaviour **exactly as it is today** and files one design issue, **"Chapter take lifecycle: ownership of live and `.previous` audio"**. Its input is the four passes' findings, including:
+Four spec passes showed that making the **audio files** of an A/B pair safe means owning the whole lifecycle of a chapter's takes. That lifecycle has many unfenced writers and readers: finalize, restructure (split/merge/rename/refresh-titles), export, companion sync, and the boot fsck. That needs its own design. This deliverable leaves every audio-file behaviour **exactly as it is today** and files one design issue, **#3456 "Chapter take lifecycle: ownership of live and `.previous` audio"**. Its input is the four passes' findings, including:
 
 - reject deletes the live take before restoring, and a failed restore followed by Approve leaves no audio (`chapter-audio.ts:420-438`);
 - a failed segments rename is swallowed;
@@ -470,5 +470,5 @@ Every behavioural item has a paired test, mutation-checked: revert the fix and o
 - **Before PR 1 starts:**
   - file the take-lifecycle design issue, carrying the passes' findings and this spec's named residuals;
   - file the fsck fix's issue and dispatch the fix.
-- **PR 2 depends on the fsck fix being merged** (the stub-Approve case above). Its issue number is recorded here, and as a "Depends on" line in PR 2's tracking issue, when it is filed.
+- **PR 2 depends on the fsck fix (#3457) being merged** (the stub-Approve case above).
 - **Expected size:** PR 1 about 6 children plus verify, PR 2 about 7 plus verify.
