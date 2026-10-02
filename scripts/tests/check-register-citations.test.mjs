@@ -14,7 +14,8 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { makeScratchRepo } from '../lib/scratch-repo.mjs';
 import {
   parseRegisterRows,
@@ -54,8 +55,12 @@ const SANDBOX_SCRIPTS = [
   'scripts/tests/build-register-live-view.test.mjs',
 ];
 
-function makeSandbox() {
-  const { root, dispose } = makeScratchRepo(REAL_REPO, { trackedDirs: ['docs/testing'], files: SANDBOX_SCRIPTS });
+function makeSandbox(parentDir) {
+  const { root, dispose } = makeScratchRepo(REAL_REPO, {
+    trackedDirs: ['docs/testing'],
+    files: SANDBOX_SCRIPTS,
+    parentDir,
+  });
   return {
     root,
     cli: join(root, 'scripts', 'check-register-citations.mjs'),
@@ -63,6 +68,24 @@ function makeSandbox() {
     dispose,
   };
 }
+
+// #3413 regression: CI's Windows runner has an 8.3 short tmpdir
+// (`C:\Users\RUNNER~1\...`). The CLI turned its own file: URL into a path with
+// a raw `.pathname`, which keeps the `%7E` escape, so every sandbox run died
+// with ENOENT on a directory that did not exist. A `~` and a space in the
+// scratch parent dir reproduce that on any OS.
+test('CLI: a sandbox under a tmpdir with `~` and a space still runs the unmutated baseline clean', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'RUNNER~1 sp-'));
+  const sandbox = makeSandbox(parent);
+  try {
+    const result = runCli([], sandbox.cli);
+    assert.equal(result.status, 0, `baseline CLI must exit 0 from the odd-path sandbox:\n${result.stdout}\n${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /ENOENT/);
+  } finally {
+    sandbox.dispose();
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
 
 // A minimal but structurally real register: two groups, a run-sheet
 // cross-reference on one row, and a "Blocked" section whose heading reuses a

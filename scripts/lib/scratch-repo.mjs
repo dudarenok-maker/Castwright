@@ -16,8 +16,9 @@ import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { scrubGitEnv } from '../git-env.mjs';
 
-export function makeScratchRepo(realRepo, { trackedDirs = [], files = [] } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'scratch-repo-'));
+// `parentDir` — where the scratch dir is created (default: the OS tmpdir).
+export function makeScratchRepo(realRepo, { trackedDirs = [], files = [], parentDir = tmpdir() } = {}) {
+  const root = mkdtempSync(join(parentDir, 'scratch-repo-'));
   try {
     // An empty pathspec list would make `git ls-files` list the WHOLE repo.
     const tracked = trackedDirs.length
