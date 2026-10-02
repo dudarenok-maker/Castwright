@@ -25,7 +25,11 @@ const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(()
   detectOllamaDeviceMock: vi.fn(async (): Promise<'cuda' | 'cpu' | 'unknown'> => 'cuda'),
   setLastKnownAnalyzerDeviceMock: vi.fn(),
 }));
-vi.mock('./ollama-health.js', () => ({ detectOllamaDevice: detectOllamaDeviceMock }));
+vi.mock('./ollama-health.js', () => ({
+  detectOllamaDevice: detectOllamaDeviceMock,
+  /* endJob calls this for engine:'local' jobs; stub it so it can never make a real HTTP unload. */
+  unloadResidentOllama: vi.fn(async () => {}),
+}));
 vi.mock('../gpu/analyzer-device-state.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../gpu/analyzer-device-state.js')>()),
   setLastKnownAnalyzerDevice: setLastKnownAnalyzerDeviceMock,

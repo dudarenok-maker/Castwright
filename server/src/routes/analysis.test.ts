@@ -8922,6 +8922,10 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
     let server: import('node:http').Server | undefined;
     let port = 0;
     let syntheticEndedAt = 0;
+    /* The settle checks below only run when the try block succeeded — a failure
+       there must surface as itself, not be replaced by a "must have settled"
+       from a run that never started. */
+    let tryCompleted = false;
     try {
       const job = {
         controller: new AbortController(),
@@ -9002,6 +9006,7 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       expect(payload.priorOutcome.code).toBe('cast_incomplete');
       expect(payload.priorOutcome.message).toBe('route-test synthetic failure');
       expect(typeof payload.priorOutcome.endedAt).toBe('number');
+      tryCompleted = true;
     } finally {
       /* The rejoin-miss frame is followed by a REAL analysis run (the route
          starts one after a miss), and destroying the socket does not stop it.
@@ -9049,9 +9054,11 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       const undiciCalls = g3004.__analysis_test_undici_calls;
       delete g3004.__analysis_test_phase0_selection;
       delete g3004.__analysis_test_undici_calls;
-      expect(phase0Calls, 'the run must have reached the stub Phase-0 analyzer, not a real one').toBe(1);
-      expect(undiciCalls, 'the #3004 test must not touch the network').toBe(0);
-      expect(stillRunning, 'the analysis run the rejoin POST started must have settled').toBe(false);
+      if (tryCompleted) {
+        expect(phase0Calls, 'the run must have reached the stub Phase-0 analyzer, not a real one').toBe(1);
+        expect(undiciCalls, 'the #3004 test must not touch the network').toBe(0);
+        expect(stillRunning, 'the analysis run the rejoin POST started must have settled').toBe(false);
+      }
     }
   }, 30_000);
 });

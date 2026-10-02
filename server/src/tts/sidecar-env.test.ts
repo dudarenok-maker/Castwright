@@ -6,7 +6,7 @@
    is the one exception, still derived from modelKey (no Advanced Settings
    toggle stands in for it). */
 
-import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -147,12 +147,20 @@ describe('buildSidecarEnv injects resolved restart-sidecar knobs', () => {
 });
 
 describe('buildSidecarEnv injects the accelerator profile + Kokoro ORT providers (AMD phase 2)', () => {
-  const base = {
-    modelKey: 'qwen3-tts-0.6b' as const,
-    repoRoot: mkdtempSync(join(tmpdir(), 'sidecar-env-')), // fresh empty dir: guaranteed no venv stamp → profile from env/default
-  };
+  const base = { modelKey: 'qwen3-tts-0.6b' as const, repoRoot: '' };
+  let prevVenvDir: string | undefined;
+  /* Created in beforeAll (not at collection) so a filtered-out describe leaves
+     no temp dir behind. SIDECAR_VENV_DIR is consulted before repoRoot
+     (diagnostics/venv.ts), so it must be unset for "no venv stamp" to hold. */
+  beforeAll(() => {
+    base.repoRoot = mkdtempSync(join(tmpdir(), 'sidecar-env-')); // fresh empty dir: guaranteed no venv stamp → profile from env/default
+    prevVenvDir = process.env.SIDECAR_VENV_DIR;
+    delete process.env.SIDECAR_VENV_DIR;
+  });
   afterAll(() => {
     rmSync(base.repoRoot, { recursive: true, force: true });
+    if (prevVenvDir === undefined) delete process.env.SIDECAR_VENV_DIR;
+    else process.env.SIDECAR_VENV_DIR = prevVenvDir;
   });
   afterEach(() => {
     delete process.env.ACCELERATOR;
