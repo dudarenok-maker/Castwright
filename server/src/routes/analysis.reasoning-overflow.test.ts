@@ -1312,7 +1312,7 @@ describe('main-route resume: which failed chapters re-enter cast detection (#343
 
   /** A book with NO stage1: chapter 1 attribution-flagged (has its cast, cached
       collapsed sentences), chapter 2 cast-failed (empty-array failure marker). */
-  async function runResume(label: string) {
+  async function runResume(label: string, stage2: Analyzer['runStage2Chapter'] = async (_m, id) => stage2For(id)) {
     const seed = await seedBook(label, [1, 2]);
     const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
     const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
@@ -1339,7 +1339,7 @@ describe('main-route resume: which failed chapters re-enter cast detection (#343
       'phase0-model',
     );
     (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection = buildSelection(
-      stubAnalyzer({ runStage2Chapter: async (_m, id) => stage2For(id) }),
+      stubAnalyzer({ runStage2Chapter: stage2 }),
       MODEL,
     );
     const events = captureEvents(seed.job);
@@ -1357,12 +1357,76 @@ describe('main-route resume: which failed chapters re-enter cast detection (#343
     }
   }
 
-  it('PE: an attribution-flagged chapter with a cast is not re-queued into cast detection and not cleared by the resume; the cast-failed one is', async () => {
-    const { castCalls, events, after } = await runResume('pe-resume');
+  it('PE: with no stage1, an attribution-flagged chapter with a cast is not re-queued into cast detection but IS re-attributed; its record clears once that Phase 1 succeeds (owner decision, #3435)', async () => {
+    const stage2Calls: number[] = [];
+    const { castCalls, events, after } = await runResume('pe-resume', async (_m, id) => {
+      stage2Calls.push(id);
+      return stage2For(id);
+    });
     expect(castCalls).toEqual([2]);
-    expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([2]);
-    expect(after.failedChapterIds).toEqual([1]);
-    expect(after.failedChapterErrors?.['1']?.code).toBe('attribution-collapse');
+    expect(stage2Calls.sort()).toEqual([1, 2]);
+    expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId).sort()).toEqual([1, 2]);
+    expect(after.failedChapterIds ?? []).toEqual([]);
+    expect(after.chapters?.[1]?.[0]?.characterId).toBe('nova');
+  }, 60_000);
+
+  it('PE negative: if the re-attribution fails for the flagged chapter its record is kept and chapter-resolved is not sent for it', async () => {
+    const { events, after } = await runResume('pe-resume-fail', async (_m, id) => {
+      if (id === 1) throw new Error('Phase 1 fails for chapter 1');
+      return stage2For(id);
+    });
+    expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).not.toContain(1);
+    expect(after.failedChapterIds).toContain(1);
+  }, 60_000);
+
+  it('PA: a no-stage1 subset Retry of an attribution-flagged chapter keeps its record and drops its collapsed sentences; the main resume then re-attributes it and only then clears the record', async () => {
+    const seed = await seedBook('pa-retry', [1, 2]);
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runMainAnalyzerJob, runSubsetAnalyzerJob } = await import('./analysis.js');
+    await saveAnalysisCache(seed.manuscriptId, {
+      chapters: {
+        1: [{ id: 101, chapterId: 1, characterId: 'narrator', confidence: 0.9, text: BODIES[1] }],
+        2: [{ id: 201, chapterId: 2, characterId: 'nova', confidence: 0.9, text: BODIES[2] }],
+      } as never,
+      chapterCast: { 1: [novaCharacter()], 2: [novaCharacter()] },
+      failedChapterIds: [1],
+      failedChapterErrors: { '1': { code: 'attribution-collapse', message: 'seeded', remediation: 'seeded' } },
+    } as never);
+    const record = getManuscript(seed.manuscriptId)!;
+    const phase1 = buildSelection(stubAnalyzer({ runStage2Chapter: async (_m, id) => stage2For(id) }), MODEL);
+    try {
+      const subsetJob = { ...seed.job, controller: new AbortController(), subscribers: new Set(), kind: 'subset' as const } as unknown as AnalysisJob;
+      const subsetEvents = captureEvents(subsetJob);
+      await runSubsetAnalyzerJob(
+        subsetJob,
+        record,
+        seed.phase0Selection,
+        phase1,
+        record.chapterHints.filter((c) => c.id === 1),
+        false,
+      );
+      const mid = await loadAnalysisCache(seed.manuscriptId);
+      expect(subsetEvents.some((e) => e.kind === 'chapter-resolved')).toBe(false);
+      expect(mid.failedChapterIds).toEqual([1]);
+      expect(mid.chapters?.[1]).toBeUndefined();
+
+      (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection = phase1;
+      const mainJob = { ...seed.job, controller: new AbortController(), subscribers: new Set(), kind: 'main' as const } as unknown as AnalysisJob;
+      const mainEvents = captureEvents(mainJob);
+      await runMainAnalyzerJob(mainJob, getManuscript(seed.manuscriptId)! as never, seed.phase0Selection, {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      expect(mainEvents.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+      expect(after.failedChapterIds ?? []).toEqual([]);
+      expect(after.chapters?.[1]?.[0]?.characterId).toBe('nova');
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
   }, 60_000);
 
   it('a save that throws in the Phase-0a failure catch keeps the original error and still sends chapter-failed', async () => {

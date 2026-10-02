@@ -4079,6 +4079,23 @@ export async function runMainAnalyzerJob(
     }
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
     const cachedChapters = cache.chapters ?? {};
+    /* #3435 (owner decision) — with no stage1 on disk, a failed chapter that
+       still has cached sentences was flagged for its attribution (e.g.
+       `attribution-collapse`): replaying those sentences as "cached" would keep
+       the collapsed take AND, if the record cleared, hide it. Drop them so
+       Phase 1 re-attributes the chapter, and keep its record until that Phase 1
+       completes (Phase 0a's clear skips these ids; Phase 1 clears on success).
+       With a stage1 on disk the book is finished and a flagged chapter goes
+       through the per-chapter Retry instead, so this does not apply. */
+    const reattributeIds = new Set<number>();
+    if (!cache.stage1) {
+      for (const id of cache.failedChapterIds ?? []) {
+        if (cachedChapters[id]?.length) {
+          reattributeIds.add(id);
+          delete cachedChapters[id];
+        }
+      }
+    }
     const cachedChapterCount = Object.keys(cachedChapters).length;
 
     /* ── Phase 0: detecting characters.
@@ -4778,7 +4795,7 @@ export async function runMainAnalyzerJob(
            server has already resolved; the user then clicks "Retry" on a
            ghost row, which kicks off a duplicate subset run and (pre-fix)
            raced with this very loop's writes. */
-        if (clearFailedChapterId(cache, ch.id)) {
+        if (!reattributeIds.has(ch.id) && clearFailedChapterId(cache, ch.id)) {
           send({ kind: 'chapter-resolved', chapterId: ch.id });
         }
         const chDuration = Date.now() - startedChAt;
@@ -5731,6 +5748,11 @@ export async function runMainAnalyzerJob(
             }; source has ${sourceHalves} dash-opening speech lines.`,
         );
       }
+      /* #3435 — Phase 1 completed for this chapter: a record kept for a
+         re-attribution (reattributeIds) goes now, ahead of the coverage re-flag
+         below so a still-collapsed chapter reads resolved-then-failed, as in the
+         subset route. */
+      if (clearFailedChapterId(cache, ch.id)) send({ kind: 'chapter-resolved', chapterId: ch.id });
       if (!coverageVerdict.ok) {
         console.warn(
           `[analysis] chapter ${ch.id} stage2 coverage SUSPECT after retries: ${coverageVerdict.issues.join(' ')}`,
@@ -7264,6 +7286,10 @@ export async function runSubsetAnalyzerJob(
 
     for (let idx = 0; idx < toRun.length; idx++) {
       const ch = toRun[idx];
+      /* #3435 — captured BEFORE Phase 0 touches the record: a failed chapter
+         with cached sentences was flagged for its attribution. */
+      const needsReattribution =
+        (cache.failedChapterIds ?? []).includes(ch.id) && (cachedChapters[ch.id]?.length ?? 0) > 0;
       log(0, `Chapter ${ch.id} — ${ch.title}: detecting cast…`);
       /* Per-chapter try/catch mirrors the full route at analysis.ts:887 —
          one failed chapter in a batch retry shouldn't abort the rest of
@@ -7342,19 +7368,24 @@ export async function runSubsetAnalyzerJob(
             }),
           () => null,
         );
-        /* #3435 — on a finished book (stage1Existed: Phase 1 runs below) a failed
-           chapter's record is cleared — and chapter-resolved sent — only once
-           Phase 1 completes for it. "Has a cast" is not a safe stand-in for
-           "flagged for its attribution": a collapse-flagged chapter whose Retry
-           failed in Phase 0 has an empty cast AND collapsed sentences still
-           cached, so clearing here lost the flag on every exit before Phase 1
-           (Pause, stage1_shrink_refused, a coverage-gate skip). A cast-phase
-           failure Phase 0 fixes now has a cast, so it does not block its own
-           Phase 1. When no Phase 1 follows in this run (!stage1Existed) there
-           is nothing to defer to and the record clears here (for an
-           attribution flag that is NOT known-correct: the global Phase 1 that
-           follows replays cached chapters — an owner decision is pending). */
-        const deferToPhase1 = stage1Existed;
+        /* #3435 — a failed chapter's record is cleared — and chapter-resolved
+           sent — only once its Phase 1 completes. On a finished book
+           (stage1Existed) Phase 1 runs below. With no stage1 there is no Phase 1
+           in this run, so an attribution-flagged chapter (cached sentences,
+           needsReattribution) keeps its record and loses its cached sentences:
+           the full resume this run hands off to re-attributes it and clears the
+           record there (owner decision, 2026-10-02). A cast-only failure (no
+           cached sentences) has nothing to re-attribute and clears here.
+           "Has a cast" is not a safe stand-in for "flagged for its
+           attribution": a collapse-flagged chapter whose Retry failed in Phase 0
+           has an empty cast AND collapsed sentences still cached, so clearing
+           early lost the flag on every exit before Phase 1 (Pause,
+           stage1_shrink_refused, a coverage-gate skip). */
+        const deferToPhase1 = stage1Existed || needsReattribution;
+        if (!stage1Existed && needsReattribution) {
+          delete cachedChapters[ch.id];
+          cache.chapters = cachedChapters;
+        }
         chapterCast[ch.id] = result.characters;
         cache.chapterCast = chapterCast;
         const wasFailed = deferToPhase1 ? false : clearFailedChapterId(cache, ch.id);
