@@ -47,7 +47,7 @@ describe('buildSynthReplacements', () => {
       chapterSampleRate: 24_000,
       synth: async (s) => {
         calls.push(s);
-        return { pcm: pcmOfSamples(240), sampleRate: 24_000, voiceSubstitutedFrom: undefined };
+        return { pcm: pcmOfSamples(240), sampleRate: 24_000, voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined };
       },
     });
     expect(reps.map((r) => [r.startSegmentIndex, r.endSegmentIndex])).toEqual([
@@ -68,7 +68,7 @@ describe('buildSynthReplacements', () => {
       chapterSampleRate: 24_000,
       synth: async (s) => {
         seen.push(s.sentenceIds);
-        return { pcm: pcmOfSamples(10), sampleRate: 24_000, voiceSubstitutedFrom: undefined };
+        return { pcm: pcmOfSamples(10), sampleRate: 24_000, voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined };
       },
     });
     expect(seen).toEqual([[4, 5]]);
@@ -86,14 +86,14 @@ describe('buildSynthReplacements', () => {
         pcm: pcmOfSamples(100),
         sampleRate: 24_000,
         voiceName: 'kokoro-some-voice',
-        voiceSubstitutedFrom: undefined,
+        voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
       }),
     });
     // #1888 — voiceSubstitutedFrom is now unconditionally present (undefined
     // here, since this synth output didn't report one).
     expect(reps[0].freshVerdict).toStrictEqual({
       voiceName: 'kokoro-some-voice',
-      voiceSubstitutedFrom: undefined,
+      voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
     });
   });
 
@@ -102,7 +102,7 @@ describe('buildSynthReplacements', () => {
       segments,
       targetIndices: [0],
       chapterSampleRate: 24_000,
-      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceSubstitutedFrom: undefined }),
+      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined }),
     });
     expect('voiceName' in reps[0].freshVerdict!).toBe(false);
   });
@@ -112,7 +112,7 @@ describe('buildSynthReplacements', () => {
       segments,
       targetIndices: [0],
       chapterSampleRate: 24_000,
-      synth: async () => ({ pcm: pcmOfSamples(1000), sampleRate: 48_000, voiceSubstitutedFrom: undefined }),
+      synth: async () => ({ pcm: pcmOfSamples(1000), sampleRate: 48_000, voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined }),
     });
     // 1000 samples @48k downsampled to 24k → ~500 samples = ~1000 bytes.
     const bytes = reps[0].pcm.length;
@@ -126,7 +126,7 @@ describe('buildSynthReplacements', () => {
       segments,
       targetIndices: [0],
       chapterSampleRate: 24_000,
-      synth: async () => ({ pcm, sampleRate: 24_000, voiceSubstitutedFrom: undefined }),
+      synth: async () => ({ pcm, sampleRate: 24_000, voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined }),
     });
     expect(reps[0].pcm.length).toBe(pcm.length);
   });
@@ -142,7 +142,7 @@ describe('buildSynthReplacements', () => {
         qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
         suspect: undefined,
         signalQaRan: true,
-        voiceSubstitutedFrom: undefined,
+        voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
       }),
     });
     // toStrictEqual (not toEqual) so a key present-but-undefined is
@@ -153,7 +153,7 @@ describe('buildSynthReplacements', () => {
       qaRetries: undefined,
       // #1888 — unconditionally present (undefined; this synth output
       // reported no substitution).
-      voiceSubstitutedFrom: undefined,
+      voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
     });
     // The asr/asrSuspect/asrRetries keys are OMITTED entirely (asrRan wasn't
     // set) — not merely `undefined`-valued.
@@ -175,7 +175,7 @@ describe('buildSynthReplacements', () => {
         asrRan: true,
         asr: { verdict: 'clean', reasons: [] } as unknown as ChapterSegment['asr'],
         asrSuspect: undefined,
-        voiceSubstitutedFrom: undefined,
+        voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
       }),
     });
     expect('asr' in reps[0].freshVerdict!).toBe(true);
@@ -198,12 +198,12 @@ describe('buildSynthReplacements', () => {
         pcm: pcmOfSamples(100),
         sampleRate: 24_000,
         // signalQaRan omitted (falsy) — the caller's gate never ran.
-        voiceSubstitutedFrom: undefined,
+        voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
       }),
     });
     // #1888 — voiceSubstitutedFrom is unconditionally present regardless of
     // the QA gates' on/off state.
-    expect(reps[0].freshVerdict).toStrictEqual({ voiceSubstitutedFrom: undefined });
+    expect(reps[0].freshVerdict).toStrictEqual({ voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined });
     expect('qa' in reps[0].freshVerdict!).toBe(false);
     expect('suspect' in reps[0].freshVerdict!).toBe(false);
     expect('qaRetries' in reps[0].freshVerdict!).toBe(false);
@@ -220,7 +220,7 @@ describe('buildSynthReplacements', () => {
         signalQaRan: true,
         qa: { status: 'ok', reasons: [], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
         // asrRan omitted (falsy) — ASR never ran for this call.
-        voiceSubstitutedFrom: undefined,
+        voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
       }),
     });
     expect('asr' in reps[0].freshVerdict!).toBe(false);
@@ -249,7 +249,7 @@ describe('buildSynthReplacements', () => {
         asrRan: true,
         asr: { verdict: 'drift', reasons: [] } as unknown as ChapterSegment['asr'],
         suspect: true, // ASR's quarantined-calibration-bleed check fired.
-        voiceSubstitutedFrom: undefined,
+        voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
       }),
     });
     expect(reps[0].freshVerdict?.suspect).toBe(true);
@@ -271,7 +271,7 @@ describe('buildSynthReplacements', () => {
         qa: { status: 'suspect', reasons: ['clipping'], rms: 0.1, longestSilenceSec: 0, durationSec: 1, expectedSec: 1 },
         suspect: true,
         // asrRan omitted (false) — ASR never ran for this call.
-        voiceSubstitutedFrom: undefined,
+        voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
       }),
     });
     expect(reps[0].freshVerdict?.suspect).toBe(true);
@@ -289,11 +289,11 @@ describe('buildSynthReplacements', () => {
         sampleRate: 24_000,
         suspect: true, // stray/meaningless — neither gate ran, must be ignored.
         // signalQaRan and asrRan both omitted (false).
-        voiceSubstitutedFrom: undefined,
+        voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
       }),
     });
     // #1888 — voiceSubstitutedFrom is unconditionally present regardless.
-    expect(reps[0].freshVerdict).toStrictEqual({ voiceSubstitutedFrom: undefined });
+    expect(reps[0].freshVerdict).toStrictEqual({ voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined });
     expect('suspect' in reps[0].freshVerdict!).toBe(false);
   });
 
@@ -309,13 +309,13 @@ describe('buildSynthReplacements', () => {
         sampleRate: 24_000,
         voiceName: 'qwen-wren__angry',
         baseVoiceName: 'qwen-wren',
-        voiceSubstitutedFrom: undefined,
+        voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
       }),
     });
     expect(reps[0].freshVerdict).toStrictEqual({
       voiceName: 'qwen-wren__angry',
       baseVoiceName: 'qwen-wren',
-      voiceSubstitutedFrom: undefined,
+      voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined,
     });
   });
 
@@ -324,7 +324,7 @@ describe('buildSynthReplacements', () => {
       segments,
       targetIndices: [0],
       chapterSampleRate: 24_000,
-      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceName: 'kokoro-x', voiceSubstitutedFrom: undefined }),
+      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceName: 'kokoro-x', voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined }),
     });
     expect('baseVoiceName' in reps[0].freshVerdict!).toBe(false);
   });
@@ -346,9 +346,34 @@ describe('buildSynthReplacements', () => {
         pcm: pcmOfSamples(100),
         sampleRate: 24_000,
         voiceSubstitutedFrom: 'Requested Voice',
+        renderedFallbackEngine: undefined,
+        renderedFallbackCharacterId: undefined,
       }),
     });
     expect(reps[0].freshVerdict?.voiceSubstitutedFrom).toBe('Requested Voice');
+  });
+
+  it('carries the take\'s renderedFallbackEngine/CharacterId onto freshVerdict, and always sets both keys even when absent (#3362)', async () => {
+    const run = (extra: { renderedFallbackEngine?: ChapterSegment['renderedFallbackEngine']; renderedFallbackCharacterId?: string }) =>
+      buildSynthReplacements({
+        segments,
+        targetIndices: [0],
+        chapterSampleRate: 24_000,
+        synth: async () => ({
+          pcm: pcmOfSamples(100),
+          sampleRate: 24_000,
+          voiceSubstitutedFrom: undefined,
+          renderedFallbackEngine: extra.renderedFallbackEngine,
+          renderedFallbackCharacterId: extra.renderedFallbackCharacterId,
+        }),
+      });
+    const fb = (await run({ renderedFallbackEngine: 'kokoro', renderedFallbackCharacterId: 'narrator' }))[0].freshVerdict!;
+    expect(fb.renderedFallbackEngine).toBe('kokoro');
+    expect(fb.renderedFallbackCharacterId).toBe('narrator');
+    const clean = (await run({}))[0].freshVerdict!;
+    expect('renderedFallbackEngine' in clean).toBe(true);
+    expect('renderedFallbackCharacterId' in clean).toBe(true);
+    expect(clean.renderedFallbackEngine).toBeUndefined();
   });
 
   it('includes voiceSubstitutedFrom as an explicit undefined key (not omitted) when the take reports no substitution — must not let the merge preserve a stale prior value (#1888)', async () => {
@@ -360,7 +385,7 @@ describe('buildSynthReplacements', () => {
       // (value still permits undefined), so this literal must supply it
       // explicitly; the assertions below still prove buildSynthReplacements
       // itself always sets the key on freshVerdict regardless.
-      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceSubstitutedFrom: undefined }),
+      synth: async () => ({ pcm: pcmOfSamples(100), sampleRate: 24_000, voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined }),
     });
     // toStrictEqual (not toEqual) so a key present-but-undefined is
     // distinguished from an omitted key — the whole point of this fix.
@@ -379,10 +404,25 @@ describe('SynthOutput#voiceSubstitutedFrom (#2034 — required, not optional)', 
      `npm run typecheck` goes red. Mutation-verified by reverting the `:71`
      production line and re-running `npm run typecheck` (see PR description /
      commit message for the pasted red output). */
+  // One assertion PER required field, each literal supplying every OTHER
+  // required field and omitting only the one under test — so each directive
+  // goes unused (TS2578) iff THAT field alone turns optional (#3362 pass 12).
   it('a SynthOutput literal that omits voiceSubstitutedFrom fails typecheck', () => {
     // @ts-expect-error — voiceSubstitutedFrom is a required key (value still
     // permits `undefined`); omitting the key entirely must not compile (#2034).
-    const bad: SynthOutput = { pcm: Buffer.alloc(0), sampleRate: 24_000 };
+    const bad: SynthOutput = { pcm: Buffer.alloc(0), sampleRate: 24_000, renderedFallbackEngine: undefined, renderedFallbackCharacterId: undefined };
+    expect(bad).toBeTruthy();
+  });
+
+  it('a SynthOutput literal that omits renderedFallbackEngine fails typecheck', () => {
+    // @ts-expect-error — renderedFallbackEngine is a required key (#3362).
+    const bad: SynthOutput = { pcm: Buffer.alloc(0), sampleRate: 24_000, voiceSubstitutedFrom: undefined, renderedFallbackCharacterId: undefined };
+    expect(bad).toBeTruthy();
+  });
+
+  it('a SynthOutput literal that omits renderedFallbackCharacterId fails typecheck', () => {
+    // @ts-expect-error — renderedFallbackCharacterId is a required key (#3362).
+    const bad: SynthOutput = { pcm: Buffer.alloc(0), sampleRate: 24_000, voiceSubstitutedFrom: undefined, renderedFallbackEngine: undefined };
     expect(bad).toBeTruthy();
   });
 });

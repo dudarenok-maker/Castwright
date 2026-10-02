@@ -11,6 +11,7 @@ import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { AnalysingView } from './analysing';
+import { WIKI_BASE } from '../lib/wiki-links';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
 import type {
   AnalyseResponse,
@@ -1645,6 +1646,255 @@ describe('AnalysingView — failed-chapter retry', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
   });
+
+  /* #3084 PR #3412 pass 2 — a reasoning overflow on the per-chapter Retry
+     (subset route) is a FAILURE. The subset route ends with only an `error`
+     frame (no chapter-failed), so the generic catch used to read it as the
+     benign "ended without a result" case: row dropped, nothing dispatched,
+     and .finally resumed the main run. Real slices + the real middleware, so
+     the HALTED hook's toast and the run-level "How to fix" block are both
+     observable. */
+  describe('#3084 — Retry that fails with a real analyzer error', () => {
+    const FIXES = [
+      {
+        label: 'Raise Gemini max output tokens (or set it back to Auto)',
+        settingKey: 'analyzer.gemini.maxOutputTokens',
+      },
+      { label: 'Switch to a different analyzer model' },
+    ];
+
+    /* Retry clicked while the main run is streaming: the view aborts the main
+       run and runs the subset alone (PAUSE-AND-RETRY). Real slices + middleware
+       so the HALTED hook's toast is observable; capturedOpts is cleared so a
+       later defined value means the main run was re-POSTed. */
+    async function pausedMainRetry() {
+      getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+      const { analysisStreamMiddleware } = await import('../store/analysis-stream-middleware');
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          account: accountSlice.reducer,
+          bookMeta: bookMetaSlice.reducer,
+          analysis: analysisSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        middleware: (g) => g().concat(analysisStreamMiddleware),
+      });
+      render(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m1"
+            bookId="b1"
+            title="t"
+            wordCount={2440}
+            onComplete={() => {}}
+          />
+        </Provider>,
+      );
+      const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+      await act(async () => {
+        fireEvent.click(startBtn);
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+      const mainSignal = capturedOpts!.signal!;
+      await act(async () => {
+        capturedOpts!.onPhase!({ phaseId: 0, progress: 0.4 });
+      });
+      const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+      capturedOpts = undefined;
+      await act(async () => {
+        fireEvent.click(retryBtn);
+      });
+      expect(mainSignal.aborted).toBe(true);
+      expect(capturedSubsetCall!.chapterIds).toEqual([44]);
+      return { store };
+    }
+
+    async function startRetry() {
+      getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      const { analysisStreamMiddleware } = await import('../store/analysis-stream-middleware');
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          account: accountSlice.reducer,
+          bookMeta: bookMetaSlice.reducer,
+          analysis: analysisSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        middleware: (g) => g().concat(analysisStreamMiddleware),
+      });
+      /* Real-app shape: the Layout's cold-boot scan already rehydrated this
+         book's halted cast_incomplete snapshot, so the view never starts a
+         main run on its own and the auto-resume effect is armed. */
+      store.dispatch(
+        analysisActions.setActiveStream({
+          bookId: 'b1',
+          manuscriptId: 'm1',
+          phaseId: 0,
+          phaseLabel: 'x',
+          phaseProgress: 0,
+          remainingMs: null,
+          lastTickAt: 1,
+          state: 'halted',
+          haltCode: 'cast_incomplete',
+          haltReason: 'paused',
+        } as never),
+      );
+      render(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m1"
+            bookId="b1"
+            title="t"
+            wordCount={2440}
+            onComplete={() => {}}
+          />
+        </Provider>,
+      );
+      const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+      expect(capturedOpts).toBeUndefined();
+      await act(async () => {
+        fireEvent.click(retryBtn);
+      });
+      const viewReject = rejectSubset!;
+      /* The view's first subset tick lets the middleware attach as a second
+         subscriber on the same subset route. */
+      await act(async () => {
+        capturedSubsetCall!.opts!.onPhase!({ phaseId: 1, progress: 0.1 } as never);
+      });
+      const mwReject = rejectSubset!;
+      expect(mwReject).not.toBe(viewReject);
+      return { store, AnalysisError, viewReject, mwReject };
+    }
+
+    for (const viewFirst of [true, false]) {
+      it(`overflow on Retry keeps the row, surfaces fixes once, and does not resume the main run (${viewFirst ? 'view' : 'middleware'} frame first)`, async () => {
+        const { store, AnalysisError, viewReject, mwReject } = await startRetry();
+        const err = () =>
+          new AnalysisError(
+            'The analyzer model spent its whole output budget reasoning (chapter "Chapter Forty-Two").',
+            'analyzer-reasoning-overflow',
+            undefined,
+            undefined,
+            undefined,
+            'Apply one of the fixes below, then resume.',
+            FIXES as never,
+          );
+        if (viewFirst) {
+          await act(async () => viewReject(err()));
+          await act(async () => mwReject(err()));
+        } else {
+          await act(async () => mwReject(err()));
+          await act(async () => viewReject(err()));
+        }
+        await act(async () => {
+          await new Promise((r) => setTimeout(r, 20));
+        });
+
+        expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+        const toasts = store.getState().notifications.toasts;
+        expect(toasts.filter((t) => t.fixes?.length)).toHaveLength(1);
+        expect(screen.getAllByText(/How to fix/i).length).toBeGreaterThan(0);
+        expect(store.getState().analysis.activeStream?.state).toBe('halted');
+      });
+    }
+
+    /* The loop above starts from a halted snapshot with NO main run, so a
+       leaked `.finally` there only clears the snapshot (asserted above). This
+       one starts from a RUNNING main run that the Retry pauses, so a leaked
+       `.finally` would re-POST the main run — a second analyseManuscript call
+       (capturedOpts defined). */
+    it('overflow on a Retry that paused a running main run does NOT re-POST the main run', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await pausedMainRetry();
+      await act(async () => {
+        rejectSubset?.(
+          new AnalysisError(
+            'The analyzer model spent its whole output budget reasoning.',
+            'analyzer-reasoning-overflow',
+            undefined,
+            undefined,
+            undefined,
+            'Apply one of the fixes below, then resume.',
+            FIXES as never,
+          ),
+        );
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(capturedOpts).toBeUndefined();
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+    });
+
+    /* cast_incomplete is the subset route's DESIGNED pause-and-retry frame: the
+       retried chapter SUCCEEDED (chapter-resolved first), no other chapter
+       failed, but Phase 0a coverage is incomplete. Row dropped, main re-POSTed,
+       snapshot running — NOT halted. */
+    it('cast_incomplete after a successful Retry drops the row, re-POSTs the main run, and does not halt', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      const { store } = await pausedMainRetry();
+      await act(async () => {
+        capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
+      });
+      await act(async () => {
+        rejectSubset?.(
+          new AnalysisError(
+            'Phase 0a covers 5 of 20 chapters — run main analysis to detect the rest before stage1 can finalise.',
+            'cast_incomplete',
+          ),
+        );
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+      expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+      expect(store.getState().analysis.activeStream?.state).not.toBe('halted');
+    });
+
+    /* stage1_shrink_refused on a Retry: the main run is re-POSTed and its own
+       guard raises the Accept banner, exactly as on main. */
+    it('stage1_shrink_refused on a Retry reaches the Accept-smaller-roster banner via the resumed main run', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await pausedMainRetry();
+      await act(async () => {
+        capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
+      });
+      /* The resumed main run is what raises the banner on main. */
+      analyseManuscriptRejection = new AnalysisError(
+        'Cast finalisation would drop from 9 to 4 characters.',
+        'stage1_shrink_refused',
+        undefined,
+        9,
+        4,
+      );
+      await act(async () => {
+        rejectSubset?.(
+          new AnalysisError(
+            'Cast finalisation would drop from 9 to 4 characters. Confirm via allowStage1Shrink.',
+            'stage1_shrink_refused',
+            undefined,
+            9,
+            4,
+          ),
+        );
+      });
+      expect(await screen.findByTestId('stage1-shrink-refused-banner')).toBeInTheDocument();
+      expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+    });
+
+    it('control: a Retry that ends without a result still drops the row and raises nothing', async () => {
+      const { store, AnalysisError, viewReject } = await startRetry();
+      await act(async () =>
+        viewReject(new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result')),
+      );
+      await waitFor(() => {
+        expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+      });
+      expect(store.getState().notifications.toasts.filter((t) => t.fixes?.length)).toHaveLength(0);
+    });
+  });
 });
 
 /* Mid-run recovery surface. With incremental cast.json writes landing on
@@ -2848,3 +3098,132 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
     expect(screen.getByText(/Check that Ollama is running…/)).toBeInTheDocument();
   });
 });
+
+/* #3084 F7 — the run-level "How to fix" block. Two things this pins:
+   (1) the three-way rule FailureFixList owns — a `settingKey` entry deep-links
+       into Advanced Settings, a published `wikiPage` entry is a wiki link, an
+       unrecognised `wikiPage` and a label-only entry are plain text; and
+   (2) the survival path — a halted run whose fixes live on the slice snapshot
+       (`haltFixes`) rather than on a live `error` object still renders them.
+   The per-chapter "What to do:" block is deliberately NOT covered here: the
+   plan excludes it, and a chapter failure never carries `fixes`.
+   Mutations these cases pin (plan Step 5): flipping the inline block's guard in
+   `analysing.tsx` to `false` reddens the first case (`findByText('How to fix:')`
+   never resolves); deleting `snap.haltFixes = action.payload.fixes` from
+   `setHalted` reddens the second. */
+const RUN_FIXES = [
+  {
+    label: 'Lower Gemini max input tokens per request',
+    settingKey: 'analyzer.gemini.maxInputTokensPerRequest',
+  },
+  { label: 'Switch to a different analyzer model' },
+  {
+    label: 'Read: When a model thinks past its output limit',
+    wikiPage: 'Analysis-and-the-Analyzer',
+  },
+  { label: 'Read: a page this build does not publish', wikiPage: 'Not-A-Real-Page' },
+];
+
+describe('AnalysingView — run-level "How to fix" block (#3084 F7)', () => {
+  it('renders the list from the terminal error, linking the settings that fix it', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError(
+      'Gemini stopped after 65536 output tokens without finishing.',
+      'analyzer-reasoning-overflow',
+      undefined,
+      undefined,
+      undefined,
+      'Then resume — finished chapters are kept.',
+      RUN_FIXES,
+    );
+    await renderViewWaitingForAnalysis();
+
+    expect(await screen.findByText('How to fix:')).toBeInTheDocument();
+
+    /* A `settingKey` entry is the F7 deep link — the same URL the persistent
+       toast offers, built by fixHref through the router's `?focus=` param. */
+    const knobHref = screen
+      .getByRole('link', { name: /Lower Gemini max input tokens per request/ })
+      .getAttribute('href');
+    expect(knobHref).toBe('#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest');
+
+    /* A published `wikiPage` entry is an outbound wiki link — the exact URL
+       wikiUrl builds, from the same WIKI_BASE this build publishes under. */
+    const wikiHref = screen
+      .getByRole('link', { name: /Read: When a model thinks past its output limit/ })
+      .getAttribute('href');
+    expect(wikiHref).toBe(`${WIKI_BASE}/Analysis-and-the-Analyzer`);
+
+    /* An unrecognised `wikiPage` must be plain text, never a broken link. */
+    expect(screen.queryByRole('link', { name: /a page this build does not publish/ })).toBeNull();
+    expect(screen.getByText('Read: a page this build does not publish')).toBeInTheDocument();
+
+    /* A label-only fix ("switch model") is plain text — no href to invent. */
+    expect(screen.queryByRole('link', { name: /Switch to a different analyzer model/ })).toBeNull();
+  });
+
+  it('renders haltFixes for a halted run with no live error', async () => {
+    /* The rejoin/navigate-away case: the view remounted after the failure, so
+       its own `error` state is empty and only the slice snapshot carries the
+       list — which is exactly what the middleware's setHalted wrote. */
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        account: accountSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        notifications: notificationsSlice.reducer,
+      },
+      preloadedState: {
+        analysis: {
+          activeStream: {
+            bookId: 'book-1',
+            manuscriptId: 'm1',
+            bookTitle: 'the Coalfall Commission',
+            engine: 'gemini' as const,
+            phaseId: 1,
+            phaseLabel: 'Parsing & attribution',
+            phaseProgress: 0.32,
+            remainingMs: 45_000,
+            lastTickAt: Date.now() - 2_000,
+            state: 'halted' as const,
+            haltCode: 'analyzer-reasoning-overflow',
+            haltReason: 'Gemini stopped after 65536 output tokens without finishing.',
+            haltFixes: RUN_FIXES,
+          },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+
+    expect(await screen.findByText('How to fix:')).toBeInTheDocument();
+    expect(
+      screen
+        .getByRole('link', { name: /Lower Gemini max input tokens per request/ })
+        .getAttribute('href'),
+    ).toBe('#/advanced?focus=analyzer.gemini.maxInputTokensPerRequest');
+  });
+
+  /* The behaviour this list must not disturb: a terminal error that names
+     nothing actionable renders the banner it always did — no empty "How to
+     fix:" heading, no placeholder list. */
+  it('renders no "How to fix" list when the error carries no fixes (unchanged behaviour)', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError('boom', 'attribution_drift');
+    await renderViewWaitingForAnalysis();
+
+    expect(await screen.findByText('Analysis failed')).toBeInTheDocument();
+    expect(screen.queryByText('How to fix:')).toBeNull();
+  });
+});
+

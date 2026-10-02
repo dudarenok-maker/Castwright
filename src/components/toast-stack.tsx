@@ -16,6 +16,7 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { IconClose, IconWarning, IconCheck } from '../lib/icons';
 import { notificationsActions, selectToasts, type Toast } from '../store/notifications-slice';
 import { VoiceNudgeToast } from './voice-nudge-toast';
+import { ReasoningOverflowToast } from './reasoning-overflow-toast';
 import { retryReviewScript } from '../store/script-review-thunk';
 
 const AUTO_DISMISS_MS = 6000;
@@ -30,7 +31,17 @@ export function ToastStack() {
       className="fixed bottom-20 right-6 z-60 flex flex-col gap-2"
     >
       {toasts.map((t) =>
-        t.nudge ? <VoiceNudgeToast key={t.id} toast={t} /> : <ToastItem key={t.id} toast={t} />,
+        /* #3084 F7 — a `fixes` toast is the persistent reasoning-overflow
+           notification; it is checked BEFORE `nudge` because it is the more
+           specific shape (no toast carries both today, but this ordering keeps
+           that from becoming a silent loss if one ever does). */
+        t.fixes?.length ? (
+          <ReasoningOverflowToast key={t.id} toast={t} />
+        ) : t.nudge ? (
+          <VoiceNudgeToast key={t.id} toast={t} />
+        ) : (
+          <ToastItem key={t.id} toast={t} />
+        ),
       )}
     </div>
   );

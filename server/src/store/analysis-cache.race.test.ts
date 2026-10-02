@@ -8,6 +8,12 @@
    path, one would rename it away, and the other's `renameWithRetry` would
    throw ENOENT on a now-missing temp file.
 
+   Since #3427 `saveAnalysisCache` queues same-manuscript saves on a per-path
+   chain (`enqueuePathOp`), so two same-tick saves no longer overlap: this
+   test now covers two back-to-back writes, each with its own temp path.
+   Overlap itself is still pinned directly against `writeJsonAtomic` in
+   state-io.test.ts.
+
    Why a no-throw assertion is too weak: a broken impl that reuses one temp
    filename also resolves both promises and leaves a loadable file (last-
    write-wins). The real invariant is that two concurrent writes use DISTINCT

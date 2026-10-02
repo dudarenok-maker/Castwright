@@ -6,9 +6,9 @@ import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-con
 import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { OllamaTransport, ANALYZER_DISPATCHER, classifyConnectError } from './transports/ollama-transport.js';
-import { resolveOllamaTemperature } from './ollama-settings.js';
+import { resolveNumPredict, resolveOllamaTemperature } from './ollama-settings.js';
 import { TransportAnalyzer } from './runner/transport-analyzer.js';
-import { StageRunner, identitySchemaAdapter, type EngineRequestSettings } from './runner/stage-runner.js';
+import { StageRunner, identitySchemaAdapter } from './runner/stage-runner.js';
 import { OLLAMA_RETRY_POLICY } from './runner/retry-policy.js';
 export { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
 export { ANALYZER_DISPATCHER, classifyConnectError } from './transports/ollama-transport.js';
@@ -43,17 +43,16 @@ interface OllamaOptions {
    DESIGN_ABSOLUTE_MAX_MS in tts/design-voice-core.ts. */
 export const PERSONA_ABSOLUTE_MAX_MS = 600_000;
 
-/* W1: structured output is always 'schema' (Ollama `format`, today's default);
-   wave 3 resolves it from analyzer.ollama.structuredOutput. */
-const OLLAMA_W1_SETTINGS: EngineRequestSettings = { structuredOutput: 'schema', maxOutputTokens: undefined };
-
 export class OllamaAnalyzer extends TransportAnalyzer {
   constructor(opts: OllamaOptions) {
     super(
       new StageRunner({
         transport: new OllamaTransport({ url: opts.url, model: opts.model, dispatcher: opts.dispatcher }),
         policy: OLLAMA_RETRY_POLICY,
-        settings: () => OLLAMA_W1_SETTINGS,
+        /* Structured output stays 'schema' (wave 3 resolves it from
+           analyzer.ollama.structuredOutput); the output cap is num_predict,
+           resolved per request. */
+        settings: () => ({ structuredOutput: 'schema', maxOutputTokens: resolveNumPredict() }),
         adaptSchema: identitySchemaAdapter,
       }),
     );

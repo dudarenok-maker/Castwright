@@ -66,6 +66,15 @@ vi.mock('../tts/model-keys.js', async (importOriginal) => {
   return { ...real, canonicalModelKeyForEngine: vi.fn(real.canonicalModelKeyForEngine) };
 });
 
+/* #3362 pass-6 (🟡1) — spy-wrap the real export so a test can assert what
+   THIS ROUTE actually threads through as `resynthesizedIndices`, mirroring
+   chapter-splice.test.ts's own spy. Wraps, doesn't replace — every other
+   test in this file still exercises the real finalizeChapterAudioWrite. */
+vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../audio/finalize-chapter-write.js')>();
+  return { ...real, finalizeChapterAudioWrite: vi.fn(real.finalizeChapterAudioWrite) };
+});
+
 /* Only exercised by the "acoustic-only rejection" describe block below (which
    turns on qa.speaker.autoRepair via SEG_SPK_AUTO_REPAIR for its own tests) —
    returns a vector orthogonal to that block's centroid fixture, so its
@@ -368,6 +377,66 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(segFile.segments[1].qaRetries).toBeGreaterThan(0);
   });
 
+  /* #3362 pass-6 (🟡1) — the repair loop targets segment 1 only (castor's
+     silent line); segment 0 (amy) is never flagged. finalize must receive
+     EXACTLY [1] as resynthesizedIndices — not every segment, not none.
+     Mutation M3 (dropping the wiring) stayed green before this test
+     existed. This fixture has no divergent candidate, so it does NOT
+     discriminate M4 (passing every candidate index, including the diverged
+     ones this repair left untouched) — the divergent-attribution test in
+     the C2 describe block below pins that one. */
+  it('threads EXACTLY the repaired segment index to finalize, never the untouched ones (🟡1)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — accepted on attempt 1
+      sampleRate: SR,
+    }));
+
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    finalizeSpy.mockClear();
+
+    const { bookId: id } = await scaffoldVerdictBook('Wiring Story');
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+
+    expect(finalizeSpy).toHaveBeenCalledTimes(1);
+    const call = finalizeSpy.mock.calls[0][0];
+    expect(Array.from(call.resynthesizedIndices as Iterable<number>)).toEqual([1]);
+  });
+
+  /* #3362 pass-7 🟠H — the spliced take's embedding rows (synthesiseChapter's
+     own embed pass) reach finalize as `reembeddedRows`, so the stale-row drop
+     doesn't strand the character without a centroid. */
+  it('threads the spliced take\'s embedding rows to finalize as reembeddedRows (🟠H)', async () => {
+    const row = { characterId: 'castor', sentenceIds: [2], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) };
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+      embeddings: [row],
+    }));
+
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    finalizeSpy.mockClear();
+
+    const { bookId: id } = await scaffoldVerdictBook('Reembed Story');
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+    expect(parseSse(res.text).find((e) => e.type === 'qa_repair_complete'), res.text).toBeTruthy();
+
+    expect(finalizeSpy).toHaveBeenCalledTimes(1);
+    expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([row]);
+  });
+
   it('a failed repair (never becomes acceptable) still marks the segment suspect:true, not undefined', async () => {
     synthesiseChapterMock.mockReset();
     synthesiseChapterMock.mockImplementation(async () => ({
@@ -460,6 +529,69 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
 
     const segFile = readSegmentsJson('Cleared Substitution Story', chapterSlug);
     expect(segFile.segments[1].voiceSubstitutedFrom).toBeUndefined();
+  });
+
+  /* #3362 pass 11 🟠A — same unconditional-overwrite rule as
+     voiceSubstitutedFrom, for the per-segment fallback stamps. */
+  it('a clean accepted take clears a stale renderedFallbackEngine/CharacterId (#3362)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+      segments: [{ groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 0, endSec: 0.5 }],
+    }));
+
+    const { bookId: id, chapterSlug } = await scaffoldVerdictBook('Cleared Fallback Story');
+    const segPath = join(
+      audioDirFn(join(workspaceRoot, 'books', 'Verdict Author', 'Standalones', 'Cleared Fallback Story')),
+      `${chapterSlug}.segments.json`,
+    );
+    const segFileBefore = JSON.parse(readFileSync(segPath, 'utf8'));
+    segFileBefore.segments[1].renderedFallbackEngine = 'kokoro';
+    segFileBefore.segments[1].renderedFallbackCharacterId = 'narrator';
+    writeFileSync(segPath, JSON.stringify(segFileBefore));
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+    const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+
+    const seg = readSegmentsJson('Cleared Fallback Story', chapterSlug).segments[1] as Record<string, unknown>;
+    expect('renderedFallbackEngine' in seg).toBe(false);
+    expect('renderedFallbackCharacterId' in seg).toBe(false);
+  });
+
+  it('a fallback accepted take stamps its renderedFallbackEngine/CharacterId onto a clean segment (#3362)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000),
+      sampleRate: SR,
+      segments: [
+        {
+          groupIndex: 1,
+          characterId: 'castor',
+          sentenceIds: [2],
+          startSec: 0,
+          endSec: 0.5,
+          renderedFallbackEngine: 'kokoro',
+          renderedFallbackCharacterId: 'narrator',
+        },
+      ],
+    }));
+
+    const { bookId: id, chapterSlug } = await scaffoldVerdictBook('Stamped Fallback Story');
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+    const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+
+    const seg = readSegmentsJson('Stamped Fallback Story', chapterSlug).segments[1] as Record<string, unknown>;
+    expect(seg.renderedFallbackEngine).toBe('kokoro');
+    expect(seg.renderedFallbackCharacterId).toBe('narrator');
   });
 
   it('#1839 finding 3 — resolveForEngine("qwen") delegates to the shared canonicalModelKeyForEngine mapper, not a local hardcoded copy', async () => {
@@ -1316,6 +1448,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (C2, #1972 attributi
     audioDirFn = paths.audioDir;
     encodePcmToAudio = mp3.encodePcmToAudio;
     synthesiseChapterMock = vi.mocked(synth.synthesiseChapter);
+    vi.mocked((await import('../audio/finalize-chapter-write.js')).finalizeChapterAudioWrite).mockClear();
   });
 
   /** amy (healthy) + castor (dead-silent — flagged by the signal scan).
@@ -1405,6 +1538,16 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (C2, #1972 attributi
     const events = parseSse(res.text);
     const done = events.find((e) => e.type === 'qa_repair_complete');
     expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+
+    /* #3362 pass-7 🟡1 (M4) — the diverged segment (index 1) is a flagged
+       candidate but is deliberately NOT re-synthesised, so finalize must be
+       told nothing was: `safeTargetIndices` ([]), never `targetIndices` ([1]).
+       Passing the latter would re-stamp the untouched diverged line fresh and
+       drop its embedding row. The scaffold above has no divergent-free
+       candidate, so this is the one fixture where the two arrays differ. */
+    const finalizeSpy = vi.mocked((await import('../audio/finalize-chapter-write.js')).finalizeChapterAudioWrite);
+    expect(finalizeSpy).toHaveBeenCalledTimes(1);
+    expect(Array.from(finalizeSpy.mock.calls[0][0].resynthesizedIndices as Iterable<number>)).toEqual([]);
 
     // The regression this closes: pre-fix, the diverged segment would have
     // been re-recorded — rendering 'amy's line — into castor's voice slot.

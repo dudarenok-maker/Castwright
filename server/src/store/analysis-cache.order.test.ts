@@ -1,0 +1,118 @@
+/* Regression test (#3427): overlapping saveAnalysisCache calls for one
+   manuscript must land on disk in CALL order. The underlying writeJsonAtomic
+   does not order same-path writes (and its EPERM retry jitters), so the
+   earlier-called write could land last and clobber a newer snapshot.
+
+   Deterministic: the real write is stubbed so the FIRST call completes after
+   the later ones would — without per-manuscript serialisation the stale
+   snapshot lands last. */
+
+import { existsSync } from 'node:fs';
+import { describe, it, expect, afterEach, vi } from 'vitest';
+
+const landed: Array<{ path: string; stage1: unknown }> = [];
+/* Event log of stub entries and landings, in real order: 'enter:<tag>' when the
+   stub starts a write, 'land:<tag>' once it has landed. */
+const events: string[] = [];
+let callNo = 0;
+
+vi.mock('../workspace/state-io.js', async () => {
+  const actual = await vi.importActual<typeof import('../workspace/state-io.js')>(
+    '../workspace/state-io.js',
+  );
+  return {
+    ...actual,
+    writeJsonAtomic: async (path: string, data: { stage1?: unknown }): Promise<void> => {
+      const n = callNo++;
+      events.push(`enter:${String(data.stage1)}`);
+      /* Earlier-called writes take longer, so an unserialised implementation
+         lands them last. */
+      await new Promise((r) => setTimeout(r, n === 0 ? 40 : n === 1 ? 20 : 1));
+      if (n === 3 && (data as { fail?: boolean }).fail) throw new Error('boom');
+      await actual.writeJsonAtomic(path, data);
+      landed.push({ path, stage1: data.stage1 });
+      events.push(`land:${String(data.stage1)}`);
+    },
+  };
+});
+
+const { saveAnalysisCache, clearAnalysisCache, cachePath, loadAnalysisCache } = await import(
+  './analysis-cache.js'
+);
+
+afterEach(async () => {
+  for (const id of ['order-a', 'order-b', 'order-c', 'order-d', 'order-e', 'order-f', 'order-g']) {
+    await clearAnalysisCache(id);
+  }
+  landed.length = 0;
+  events.length = 0;
+  callNo = 0;
+});
+
+const snap = (tag: string) =>
+  ({ chapters: {}, stage1: tag }) as unknown as Parameters<typeof saveAnalysisCache>[1];
+
+describe('saveAnalysisCache call ordering (#3427)', () => {
+  it('overlapping saves for one manuscript land in call order (last call wins)', async () => {
+    await Promise.all([
+      saveAnalysisCache('order-a', snap('first')),
+      saveAnalysisCache('order-a', snap('second')),
+      saveAnalysisCache('order-a', snap('third')),
+    ]);
+    expect(landed.map((l) => l.stage1)).toEqual(['first', 'second', 'third']);
+  });
+
+  it('a failed save does not wedge the chain for later saves', async () => {
+    const p0 = saveAnalysisCache('order-b', snap('a'));
+    const p1 = saveAnalysisCache('order-b', snap('b'));
+    const p2 = saveAnalysisCache('order-b', snap('c'));
+    const bad = saveAnalysisCache('order-b', { ...snap('d'), fail: true } as never);
+    const badErr = bad.then(
+      () => null,
+      (e: Error) => e,
+    );
+    const after = saveAnalysisCache('order-b', snap('e'));
+    await Promise.all([p0, p1, p2]);
+    expect((await badErr)?.message).toBe('boom');
+    await after;
+    expect(landed.map((l) => l.stage1)).toEqual(['a', 'b', 'c', 'e']);
+  });
+
+  it('different manuscripts are not serialised against each other', async () => {
+    const slow = saveAnalysisCache('order-c', snap('slow')); // 40ms stub
+    const fast = saveAnalysisCache('order-d', snap('fast')); // 20ms stub
+    await Promise.all([slow, fast]);
+    /* No wall-clock margin: the property is that `fast` was not made to wait
+       for `slow` — its write ENTERED the stub before `slow` landed. */
+    expect(events.indexOf('enter:fast')).toBeGreaterThanOrEqual(0);
+    expect(events.indexOf('enter:fast')).toBeLessThan(events.indexOf('land:slow'));
+  });
+
+  it('a nested member mutated after a queued save is called does not leak into that write', async () => {
+    const errors: Record<string, { code: string }> = { '1': { code: 'early' } };
+    const cache = { chapters: {}, stage1: 'x', failedChapterErrors: errors } as unknown as Parameters<
+      typeof saveAnalysisCache
+    >[1];
+    const first = saveAnalysisCache('order-g', snap('blocker')); // call 0: 40ms stub
+    const second = saveAnalysisCache('order-g', cache); // queued behind it
+    errors['7'] = { code: 'late' }; // in-place mutation after the call
+    await Promise.all([first, second]);
+    const onDisk = await loadAnalysisCache('order-g');
+    expect(onDisk.failedChapterErrors).toEqual({ '1': { code: 'early' } });
+  });
+
+  it('a clear lands after every save called before it (no resurrection)', async () => {
+    const slowSave = saveAnalysisCache('order-e', snap('stale')); // call 0: 40ms stub
+    const clear = clearAnalysisCache('order-e');
+    await Promise.all([slowSave, clear]);
+    expect(existsSync(cachePath('order-e'))).toBe(false);
+  });
+
+  it('a save called after a clear lands after the clear', async () => {
+    const before = saveAnalysisCache('order-f', snap('old'));
+    const clear = clearAnalysisCache('order-f');
+    const after = saveAnalysisCache('order-f', snap('new'));
+    await Promise.all([before, clear, after]);
+    expect((await loadAnalysisCache('order-f')).stage1).toBe('new');
+  });
+});

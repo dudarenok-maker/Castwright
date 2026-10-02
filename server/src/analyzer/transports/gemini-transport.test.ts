@@ -32,6 +32,7 @@ beforeEach(async () => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   if (ORIGINAL_IDLE === undefined) delete process.env.GEMINI_STREAM_IDLE_MS;
   else process.env.GEMINI_STREAM_IDLE_MS = ORIGINAL_IDLE;
 });
@@ -39,7 +40,7 @@ afterEach(() => {
 describe('GeminiTransport (#3084 wave 1)', () => {
   it('builds today\'s request: model turn mapping, verbatim system, json mime type, no thinkingConfig', async () => {
     generateContentStream.mockImplementation(async () => stream([{ text: '{}' }]));
-    const { GeminiTransport, resolveMaxOutputTokens } = await import('./gemini-transport.js');
+    const { GeminiTransport } = await import('./gemini-transport.js');
     const t = new GeminiTransport({ apiKey: 'k', model: 'gemma-gt-shape' });
     await t.send(
       req({
@@ -61,7 +62,7 @@ describe('GeminiTransport (#3084 wave 1)', () => {
     expect(args.config.systemInstruction).toBe('');
     expect(args.config.responseMimeType).toBe('application/json');
     expect(args.config.temperature).toBe(0.2);
-    expect(args.config.maxOutputTokens).toBe(resolveMaxOutputTokens());
+    expect(args.config.maxOutputTokens).toBe(8192); // no req.maxOutputTokens → GEMINI_FALLBACK_MAX_OUTPUT_TOKENS
     expect(args.config.abortSignal).toBeInstanceOf(AbortSignal);
     expect('thinkingConfig' in args.config).toBe(false);
     expect('responseJsonSchema' in args.config).toBe(false);
@@ -210,5 +211,46 @@ describe('GeminiTransport (#3084 wave 1)', () => {
     });
     /* withTransportRetry classifies 400 as no-retry — exactly one wire call. */
     expect(generateContentStream).toHaveBeenCalledTimes(1);
+  });
+
+  it('prepare(): a models.list() that never settles releases the request after 10 s, leaving Auto at the 8192 fallback (#3084 P26)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { GeminiTransport } = await import('./gemini-transport.js');
+    const { _resetGeminiCatalogForTest } = await import('../catalog/gemini-catalog.js');
+    const { resolveGeminiMaxOutputTokens } = await import('../capacity.js');
+    _resetGeminiCatalogForTest();
+    const list = vi.fn(() => new Promise<never>(() => {}));
+    const t = new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client: { models: { generateContentStream, list } } as never });
+    let released = false;
+    void t.prepare().then(() => {
+      released = true;
+    });
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(released).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(released).toBe(true);
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(resolveGeminiMaxOutputTokens('gemini-3.6-flash')).toBe(8192);
+  });
+
+  it('prepare(signal): aborting (pause) releases the wait at once, and the SDK request carries the 10 s timeout and an abort signal (#3084 P26)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    const { GeminiTransport } = await import('./gemini-transport.js');
+    const { _resetGeminiCatalogForTest } = await import('../catalog/gemini-catalog.js');
+    _resetGeminiCatalogForTest();
+    const list = vi.fn(() => new Promise<never>(() => {}));
+    const t = new GeminiTransport({ apiKey: 'k', model: 'gemini-3.6-flash', client: { models: { generateContentStream, list } } as never });
+    const controller = new AbortController();
+    let released = false;
+    void t.prepare(controller.signal).then(() => {
+      released = true;
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(released).toBe(false);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(released).toBe(true);
+    expect(list).toHaveBeenCalledWith({ config: { httpOptions: { timeout: 10_000 }, abortSignal: expect.any(AbortSignal) } });
   });
 });

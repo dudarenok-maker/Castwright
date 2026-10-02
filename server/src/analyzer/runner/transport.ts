@@ -24,7 +24,7 @@ export interface TransportRequest {
   messages: ChatMessage[];
   structuredOutput: StructuredOutputRequest;
   temperature: number;
-  /** undefined = the transport's pre-wave-2 default (Ollama resolveNumPredict, Gemini resolveMaxOutputTokens). */
+  /** undefined = the transport's pre-wave-2 default (Ollama resolveNumPredict, Gemini GEMINI_FALLBACK_MAX_OUTPUT_TOKENS). */
   maxOutputTokens?: number;
   estimatedInputTokens: number;
   signal?: AbortSignal;
@@ -59,4 +59,9 @@ export interface ChatTransport {
   readonly kind: TransportKind;
   readonly model: string;
   send(req: TransportRequest): Promise<TransportResult>;
+  /** Optional async warm-up the runner awaits before reading EngineRequestSettings
+      on every request — keeps settings resolution synchronous (e.g. the Gemini
+      model catalog behind Auto max output tokens). Must never reject, must be
+      bounded, and must return promptly when `signal` aborts (P26). */
+  prepare?(signal?: AbortSignal): Promise<void>;
 }

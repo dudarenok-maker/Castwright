@@ -8822,7 +8822,7 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
        connection the moment the target event lands avoids waiting for (or
        triggering) the full real analyzer run the rejoin would otherwise kick
        off next, which needs a real engine and is out of scope here. */
-    const { endJob, __testRegisterJobForTest, analysisRouter } = await import('./analysis.js');
+    const { endJob, __testRegisterJobForTest, analysisRouter, isAnalysisJobRunning } = await import('./analysis.js');
     const { putManuscript, removeManuscript } = await import('../store/manuscripts.js');
     const { mkdtempSync, rmSync, mkdirSync, writeFileSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
@@ -8952,10 +8952,21 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       expect(payload.priorOutcome.message).toBe('route-test synthetic failure');
       expect(typeof payload.priorOutcome.endedAt).toBe('number');
     } finally {
+      /* The rejoin-miss frame is followed by a REAL analysis run (the route
+         starts one after a miss), and destroying the socket does not stop it.
+         Left running it logs after this file ends and vitest raises
+         "Closing rpc while onUserConsoleLog was pending" at worker teardown
+         (PR #3430 CI). Wait for it to settle before tearing the fixture down. */
+      const settleDeadline = Date.now() + 15_000;
+      while (isAnalysisJobRunning(manuscriptId) && Date.now() < settleDeadline) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      const stillRunning = isAnalysisJobRunning(manuscriptId);
       removeManuscript(manuscriptId);
       rmSync(workspaceRoot, { recursive: true, force: true });
       if (prevWorkspaceDir === undefined) delete process.env.WORKSPACE_DIR;
       else process.env.WORKSPACE_DIR = prevWorkspaceDir;
+      expect(stillRunning, 'the analysis run the rejoin POST started must have settled').toBe(false);
     }
   }, 30_000);
 });

@@ -22,7 +22,7 @@ import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { pickVoiceForEngine } from '../tts/voice-mapping.js';
 import { toVoiceLike, buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import type { TtsEngine } from '../tts/index.js';
-import { loadSegmentsFiles, type CharacterSnapshot } from '../audio/segments-io.js';
+import { loadSegmentsFiles, renderedSegmentVoices, type CharacterSnapshot } from '../audio/segments-io.js';
 import { buildCastResolver } from '../store/cast-resolve.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
 
@@ -192,13 +192,32 @@ export async function computeRevisionsForBook(
          change that keeps voiceId constant — the rebaseline / per-character
          picker case), falling back to voiceId for pre-108 snapshots that have
          no resolvedVoiceName. */
-      if (snapshot.resolvedVoiceName) {
+      /* #3362 — derive voice drift PER LINE from the segments' own voice
+         stamps when they carry any: the snapshot holds ONE voice per
+         character (last-wins), so after a voice change plus a re-record of
+         only some lines it names the NEW voice while the rest of the chapter
+         is still in the old one, and would read as up to date. A line stamped
+         with a different voice than the character's current one makes the
+         chapter drifted; the card then shows that stale voice. Legacy
+         chapters with no stamped lines fall through to the snapshot — and a
+         MIXED pre-#1992 chapter (voiceless lines plus re-recorded stamped
+         ones) sees only the stamped voice, so drift can clear early. */
+      const renderedVoices = renderedSegmentVoices(seg.segments, characterId);
+      if (renderedVoices.length > 0 || snapshot.resolvedVoiceName) {
         const currentName = pickVoiceForEngine(
           currentEngine,
           toVoiceLike(current),
           buildHintFromCast(current),
         );
-        pushHardDrift(drift, ctx, 'voice', 'Voice', snapshot.resolvedVoiceName, currentName);
+        const staleVoice = renderedVoices.find((v) => v !== currentName);
+        pushHardDrift(
+          drift,
+          staleVoice ? { ...ctx, snapshot: { ...snapshot, resolvedVoiceName: staleVoice } } : ctx,
+          'voice',
+          'Voice',
+          renderedVoices.length > 0 ? (staleVoice ?? currentName) : snapshot.resolvedVoiceName,
+          currentName,
+        );
       } else {
         pushHardDrift(drift, ctx, 'voice', 'Voice', snapshot.voiceId, current.voiceId);
       }

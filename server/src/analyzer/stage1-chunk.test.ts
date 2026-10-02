@@ -17,7 +17,7 @@ import {
   STAGE1_CLOUD_RESERVED_TOKENS,
   type Stage1ChunkRunOptions,
 } from './stage1-chunk.js';
-import { AnalyzerTruncatedError } from './errors.js';
+import { AnalyzerTruncatedError, AnalyzerReasoningOverflowError } from './errors.js';
 import { buildSystemInstruction, loadSkill, estimateInputTokens } from './gemini.js';
 import { cloudBodyCharBudget } from './token-budget.js';
 import { buildStage1ChapterInbox } from '../routes/analysis.js';
@@ -121,6 +121,17 @@ describe('runStage1ChapterChunked', () => {
     await expect(
       runStage1ChapterChunked({ body: 'x', charBudget: 9000, callForBody, mergeRosters }),
     ).rejects.toThrow('boom');
+  });
+
+  it('does NOT split on AnalyzerReasoningOverflowError — splitting cannot shrink reasoning (#3084)', async () => {
+    const err = new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100);
+    const callForBody = vi.fn(async (_subBody: string): Promise<{ characters: CharacterOutput[] }> => {
+      throw err;
+    });
+    await expect(
+      runStage1ChapterChunked({ body: bodyOfParas(6, 200), charBudget: 9000, callForBody, mergeRosters }),
+    ).rejects.toBe(err);
+    expect(callForBody).toHaveBeenCalledTimes(1);
   });
 });
 

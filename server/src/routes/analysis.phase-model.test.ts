@@ -11,13 +11,13 @@
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
-import { runMainAnalyzerJob, type AnalysisJob } from './analysis.js';
+import { buildNonStoryClassifier, noteReasoningOverflow, runMainAnalyzerJob, runSubsetAnalyzerJob, type AnalysisJob } from './analysis.js';
 import { clearAnalysisCache } from '../store/analysis-cache.js';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
 import type { Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { ChapterHint } from '../store/manuscripts.js';
 import { putManuscript, removeManuscript } from '../store/manuscripts.js';
-import { GeminiContentBlockedError } from '../analyzer/errors.js';
+import { AnalysisAbortedError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../analyzer/errors.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
 import { FallbackAnalyzer } from '../analyzer/index.js';
 import { USER_SETTINGS_PATH } from '../workspace/user-settings.js';
@@ -478,4 +478,264 @@ describe('POST /:id/analysis honours a per-run phase1Model (#3141 step 4)', () =
       process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
     }
   }, 60_000);
+});
+
+/* ── Suite: a reasoning overflow ends the run (#3084 P20) ─────────────── */
+
+describe('a reasoning overflow ends the analysis run (#3084 P20)', () => {
+  const MODEL = 'gemini-3.6-flash';
+  const overflow = () => new AnalyzerReasoningOverflowError('gemini', MODEL, 8100);
+
+  function overflowingPhase0Analyzer(): Analyzer {
+    return {
+      ...buildSpyPhase0Analyzer(),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        /* Same engine settings, same overflow on every chapter — must reach the
+           terminal handler, not a per-chapter chapter-failed. */
+        throw overflow();
+      },
+    };
+  }
+
+  function terminalError(events: CapturedEvent[]) {
+    return events.find((e) => e.kind === 'error') as (CapturedEvent & { code?: string; message?: string }) | undefined;
+  }
+
+  it('stage 1 (Phase 0 cast detection, main route) → terminal analyzer-reasoning-overflow, not a per-chapter grind', async () => {
+    const manuscriptId = `test-overflow-stage1-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const job = buildStubJob(manuscriptId);
+    const events = attachEventCapture(job);
+
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      const recordRef = getManuscript(manuscriptId);
+      if (!recordRef) throw new Error('stub manuscript not found');
+
+      await runMainAnalyzerJob(job, recordRef as never, buildSelection(overflowingPhase0Analyzer(), MODEL), {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+
+      const errorEvent = terminalError(events);
+      expect(errorEvent?.code).toBe('analyzer-reasoning-overflow');
+      /* The plan's own copies of these two cases (2026-09-11-…-w2.md
+         P3765/P3807) assert the message names 'Gemini max output tokens', but
+         the plan's userMessage copy (P4969) does not, and its taxonomy tests
+         are explicit that the setting name lives in the remediation, not the
+         userMessage (P3661 `expect(r.userMessage).not.toContain(…)`, P3663
+         `expect(r.remediation).toContain(…)`). Assert the branch-only prose
+         instead ("reasoning on <chapter>"): the static signature-row copy in
+         failure-remediations.ts also says "spent its whole output budget
+         reasoning" (without "on"), so only this phrase proves the classifier
+         matched AnalyzerReasoningOverflowError rather than falling through to
+         the signature row (mutation row 10). */
+      expect(errorEvent?.message).toContain('spent its whole output budget reasoning on');
+      expect(job.reasoningOverflowed).toBe(true); // P20: the first rethrow marks the job
+      expect(job.controller.signal.aborted).toBe(false); // P20: new spend stops; the job is not aborted
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+    }
+  }, 60_000);
+
+  it('stage 2 (Phase 1 attribution) → terminal analyzer-reasoning-overflow', async () => {
+    const manuscriptId = `test-overflow-stage2-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    setPhase1Selection(
+      buildSelection(
+        {
+          ...buildSpyPhase1Analyzer(),
+          async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+            throw overflow();
+          },
+        },
+        MODEL,
+      ),
+    );
+    const job = buildStubJob(manuscriptId);
+    const events = attachEventCapture(job);
+
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      const recordRef = getManuscript(manuscriptId);
+      if (!recordRef) throw new Error('stub manuscript not found');
+
+      await runMainAnalyzerJob(job, recordRef as never, buildSelection(buildSpyPhase0Analyzer(), 'gemma-phase0-test-model'), {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+
+      const errorEvent = terminalError(events);
+      expect(errorEvent?.code).toBe('analyzer-reasoning-overflow');
+      /* Same deviation, same reason as the stage-1 case above. */
+      expect(errorEvent?.message).toContain('spent its whole output budget reasoning on');
+      expect(job.reasoningOverflowed).toBe(true); // P20: the first rethrow marks the job
+      expect(job.controller.signal.aborted).toBe(false); // P20: new spend stops; the job is not aborted
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+    }
+  }, 60_000);
+
+  it('stage 1 on the subset (Retry) route → terminal analyzer-reasoning-overflow', async () => {
+    const manuscriptId = `test-overflow-subset-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    /* No cached stage 1, so the subset route runs Phase 0 (cast detection)
+       through its own per-chapter catch (routes/analysis.ts:7194-7205). */
+    await clearAnalysisCache(manuscriptId);
+    const job = { ...buildStubJob(manuscriptId), kind: 'subset', subsetChapterIds: [1, 2] } as unknown as AnalysisJob;
+    const events = attachEventCapture(job);
+
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      const recordRef = getManuscript(manuscriptId);
+      if (!recordRef) throw new Error('stub manuscript not found');
+
+      await runSubsetAnalyzerJob(
+        job,
+        recordRef as never,
+        buildSelection(overflowingPhase0Analyzer(), MODEL),
+        buildSelection(buildSpyPhase1Analyzer(), 'gemini-phase1-test-model'),
+        recordRef.chapterHints,
+        false,
+      );
+
+      expect(terminalError(events)?.code).toBe('analyzer-reasoning-overflow');
+      expect(job.reasoningOverflowed).toBe(true); // P20: the subset Phase-0 catch marks the job
+      expect(job.controller.signal.aborted).toBe(false);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  }, 60_000);
+});
+
+/* ── Suite: "stop new spend" helpers (#3084 P20) ─────────────────────── */
+
+describe('noteReasoningOverflow (#3084 P20)', () => {
+  it('marks the job and empties the book escalation budget for a reasoning overflow only', () => {
+    const job = buildStubJob('m-note-overflow');
+    const budget = { remainingWindows: 600 };
+    expect(noteReasoningOverflow(job, budget, new Error('503'))).toBe(false);
+    expect(job.reasoningOverflowed).toBeUndefined();
+    expect(budget.remainingWindows).toBe(600);
+    expect(noteReasoningOverflow(job, budget, new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100))).toBe(true);
+    expect(job.reasoningOverflowed).toBe(true);
+    expect(budget.remainingWindows).toBe(0);
+  });
+
+  it('records the chapter it was told about (#3084 F7)', () => {
+    const job = buildStubJob('m-note-overflow-chapter');
+    const budget = { remainingWindows: 600 };
+    noteReasoningOverflow(
+      job,
+      budget,
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
+      { id: 4, title: 'The Long Night' },
+    );
+    expect(job.reasoningOverflowChapter).toEqual({ id: 4, title: 'The Long Night' });
+  });
+
+  it('keeps the FIRST overflow chapter, like reasoningOverflowError, even when a later call names a different one', () => {
+    const job = buildStubJob('m-note-overflow-first-wins');
+    const budget = { remainingWindows: 600 };
+    noteReasoningOverflow(
+      job,
+      budget,
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
+      { id: 4, title: 'The Long Night' },
+    );
+    noteReasoningOverflow(
+      job,
+      budget,
+      new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 4200),
+      { id: 5, title: 'The Fen' },
+    );
+    expect(job.reasoningOverflowChapter).toEqual({ id: 4, title: 'The Long Night' });
+  });
+
+  it('leaves reasoningOverflowChapter undefined when no chapter is passed', () => {
+    const job = buildStubJob('m-note-overflow-no-chapter');
+    const budget = { remainingWindows: 600 };
+    noteReasoningOverflow(job, budget, new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', undefined));
+    expect(job.reasoningOverflowChapter).toBeUndefined();
+  });
+});
+
+describe('buildNonStoryClassifier — no non-story call after a reasoning overflow (#3084 P20)', () => {
+  const chapter = (id: number) => ({ id, title: `Chapter ${id}`, body: 'An essay on the author.' });
+  type NonStoryFn = NonNullable<Analyzer['runNonStoryClassification']>;
+  const build = (job: AnalysisJob, budget: { remainingWindows: number }, run: ReturnType<typeof vi.fn>) =>
+    buildNonStoryClassifier({
+      job,
+      structureBudget: budget,
+      analyzer: { ...buildSpyPhase1Analyzer(), runNonStoryClassification: run as unknown as NonStoryFn },
+      manuscriptId: job.manuscriptId,
+      bookTitle: null,
+      bookLanguage: 'en',
+    })!;
+
+  it('a classification call that overflows marks the job, reads as story, and no later chapter is classified', async () => {
+    const run = vi.fn(async () => {
+      throw new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100);
+    });
+    const job = buildStubJob('m-nonstory-overflow');
+    const budget = { remainingWindows: 600 };
+    const classify = build(job, budget, run);
+    await expect(classify(chapter(1))).resolves.toBe(false);
+    await expect(classify(chapter(2))).resolves.toBe(false);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(job.reasoningOverflowed).toBe(true);
+    expect(budget.remainingWindows).toBe(0);
+    // #3084 F7 — the classifier knows which chapter it was calling for (chapter 1's run).
+    expect(job.reasoningOverflowChapter).toEqual({ id: 1, title: 'Chapter 1' });
+  });
+
+  it('a job already marked by an overflow elsewhere makes no classification call', async () => {
+    const run = vi.fn(async () => ({ nonStory: true }));
+    const job: AnalysisJob = { ...buildStubJob('m-nonstory-marked'), reasoningOverflowed: true };
+    await expect(build(job, { remainingWindows: 0 }, run)(chapter(1))).resolves.toBe(false);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('with no overflow it classifies each chapter, and any other failure still reads as story (unchanged behaviour)', async () => {
+    const run = vi.fn().mockResolvedValueOnce({ nonStory: true }).mockRejectedValueOnce(new Error('503'));
+    const job = buildStubJob('m-nonstory-plain');
+    const classify = build(job, { remainingWindows: 600 }, run);
+    await expect(classify(chapter(1))).resolves.toBe(true);
+    await expect(classify(chapter(2))).resolves.toBe(false);
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(job.reasoningOverflowed).toBeUndefined();
+  });
+
+  it('an abort still propagates', async () => {
+    const run = vi.fn(async () => {
+      throw new AnalysisAbortedError('paused');
+    });
+    await expect(build(buildStubJob('m-nonstory-abort'), { remainingWindows: 600 }, run)(chapter(1))).rejects.toBeInstanceOf(
+      AnalysisAbortedError,
+    );
+  });
+
+  it('is undefined for an analyzer with no non-story classification', () => {
+    expect(
+      buildNonStoryClassifier({
+        job: buildStubJob('m-nonstory-none'),
+        structureBudget: { remainingWindows: 600 },
+        analyzer: buildSpyPhase1Analyzer(),
+        manuscriptId: 'm-nonstory-none',
+        bookTitle: null,
+        bookLanguage: 'en',
+      }),
+    ).toBeUndefined();
+  });
 });

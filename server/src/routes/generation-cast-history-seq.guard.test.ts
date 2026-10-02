@@ -123,8 +123,15 @@ export function extractRouteHandlerBody(src: string, routeLiteral: string): stri
 /** The text strictly between a call's outer parens (`callName(...)`),
  *  depth-aware over `()[]{}` so a nested call/object/array can't fool it.
  *  Mirrors `cast-history-threading.guard.test.ts`'s `historyArgIsLiteral`
- *  depth walk. Returns `null` if `callName(` isn't found at all. */
-export function callArgsText(src: string, callName: string): string | null {
+ *  depth walk. Returns `null` if `callName(` isn't found at all.
+ *
+ *  `src` drives the match/depth-walk (pass the `blankOutOpaque`'d body, so a
+ *  comment or string can't fool the scan). The optional `rawSrc` — same
+ *  length/positions as `src`, e.g. the un-blanked source the caller blanked
+ *  to build `src` — is sliced instead when present, for a caller that needs
+ *  the real characters back (a string literal's own quotes, which
+ *  `blankOutOpaque` replaces with spaces). */
+export function callArgsText(src: string, callName: string, rawSrc?: string): string | null {
   const at = src.indexOf(`${callName}(`);
   if (at < 0) return null;
   let i = at + callName.length + 1;
@@ -138,15 +145,21 @@ export function callArgsText(src: string, callName: string): string | null {
       if (depth === 0) break;
     }
   }
-  return src.slice(start, i);
+  return (rawSrc ?? src).slice(start, i);
 }
 
 /** The raw expression text bound to `key:` inside an object-literal argument
  *  (as returned by `callArgsText`) — from just after the colon up to the
  *  next TOP-LEVEL comma (the property separator) or the object's own
  *  closing brace. Depth-aware for the same reason as `callArgsText`.
- *  Returns `null` if `key` isn't found. */
-export function propertyValueText(objText: string, key: string): string | null {
+ *  Returns `null` if `key` isn't found.
+ *
+ *  `objText` drives the match/depth-walk, same rationale as `callArgsText`.
+ *  The optional `rawObjText` — the un-blanked counterpart of `objText`, same
+ *  length/positions — is sliced instead when present, so a value that is
+ *  itself a string literal (whose quotes `blankOutOpaque` erases) comes back
+ *  intact rather than as blanked-out whitespace. */
+export function propertyValueText(objText: string, key: string, rawObjText?: string): string | null {
   const m = new RegExp(`\\b${key}\\s*:`).exec(objText);
   if (!m) return null;
   let i = m.index + m[0].length;
@@ -160,7 +173,7 @@ export function propertyValueText(objText: string, key: string): string | null {
       depth -= 1;
     } else if (c === ',' && depth === 0) break;
   }
-  return objText.slice(start, i).trim();
+  return (rawObjText ?? objText).slice(start, i).trim();
 }
 
 describe('guard 6 — the full-render castHistorySeq stamp reads the loaded history, never a re-read (#2128)', () => {
@@ -242,5 +255,61 @@ describe('guard 6 — the full-render castHistorySeq stamp reads the loaded hist
     `;
     const body = blankOutOpaque(extractRouteHandlerBody(commented, ROUTE));
     expect(body.match(/loadCastIdHistory\(/g)?.length ?? 0).toBe(1);
+  });
+});
+
+/* #3362 pass-6 (🟡1) — the full-render handler is the ONLY caller for which
+   `resynthesizedIndices: 'all'` is correct (every segment this render wrote
+   was, by construction, actually re-synthesised — see
+   `FinalizeChapterAudioInput.resynthesizedIndices`'s own doc comment).
+   Nothing in generation.test.ts's heavy fixture pins WHAT this route
+   actually threads through, only that a full render behaves like one — a
+   dropped or mangled `resynthesizedIndices` property here is invisible to
+   that suite. Reuses this file's own text-scan helpers rather than pulling
+   in the whole generation dependency graph, mirroring guard 6's own
+   rationale above (see this file's header). */
+describe('guard 7 — the full-render resynthesizedIndices stamp is the literal \'all\' (#3362 pass-6, 🟡1)', () => {
+  const renderBodyRaw = extractRouteHandlerBody(SRC, ROUTE);
+  const renderBody = blankOutOpaque(renderBodyRaw);
+
+  it("stamps resynthesizedIndices as the literal 'all'", () => {
+    // The stamped value is itself a string literal — `blankOutOpaque` erases
+    // a string literal's own quoted contents (same as any other string in
+    // the file), so matching/depth-walking runs on the blanked body as
+    // usual, but the final value is read back from the un-blanked raw text
+    // at the same offsets, via `callArgsText`/`propertyValueText`'s optional
+    // raw-source parameter (see their doc comments).
+    const args = callArgsText(renderBody, 'finalizeChapterAudioWrite');
+    const rawArgs = callArgsText(renderBody, 'finalizeChapterAudioWrite', renderBodyRaw);
+    expect(args, 'finalizeChapterAudioWrite call not found in the render body').not.toBeNull();
+    const value = propertyValueText(args!, 'resynthesizedIndices', rawArgs!);
+    expect(value, 'resynthesizedIndices property not found on the finalizeChapterAudioWrite call').not.toBeNull();
+    expect(value).toBe("'all'");
+  });
+
+  it('actually detects a dropped/mangled resynthesizedIndices property', () => {
+    const violating = `
+      generationRouter.post('/:bookId/generation', async (req, res) => {
+        const { audioQa } = await finalizeChapterAudioWrite({
+          bookId,
+        });
+      });
+    `;
+    const body = blankOutOpaque(extractRouteHandlerBody(violating, ROUTE));
+    const args = callArgsText(body, 'finalizeChapterAudioWrite');
+    const value = propertyValueText(args!, 'resynthesizedIndices');
+    expect(value).toBeNull();
+
+    const mangled = `
+      generationRouter.post('/:bookId/generation', async (req, res) => {
+        const { audioQa } = await finalizeChapterAudioWrite({
+          resynthesizedIndices: targetIndices,
+        });
+      });
+    `;
+    const mangledBody = blankOutOpaque(extractRouteHandlerBody(mangled, ROUTE));
+    const mangledArgs = callArgsText(mangledBody, 'finalizeChapterAudioWrite');
+    const mangledValue = propertyValueText(mangledArgs!, 'resynthesizedIndices');
+    expect(mangledValue).not.toBe("'all'");
   });
 });

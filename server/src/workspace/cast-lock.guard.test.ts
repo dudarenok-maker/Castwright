@@ -7,7 +7,8 @@
 
    WHAT IT CHECKS: walks every `.ts` file under `server/src` (recursively,
    excluding `*.test.ts`) that mentions `castJsonPath`, and for each
-   `writeJsonAtomic(castJsonPath(` / `rm(castJsonPath(` occurrence, asserts it
+   `writeJsonAtomic(castJsonPath(` (or `writeJsonAtomicOrdered(castJsonPath(`) /
+   `rm(castJsonPath(` occurrence, asserts it
    sits inside a `withCastLock(...)` / `withCastLocks(...)` call. Only those
    two are accepted — `withLibraryVoiceLock` guards a DIFFERENT map key
    (`library-voice:<uuid>`), so a cast write enclosed by it and nothing else
@@ -46,7 +47,7 @@
         it existed for is now on the pinned allowlist below instead, with an
         honest "can't prove it, human-verified" `why`.
      3. Each `writeJsonAtomic(castJsonPath(` / `rm(castJsonPath(` occurrence
-        is a match of `/\bwriteJsonAtomic\(\s*castJsonPath\(/` /
+        is a match of `/\bwriteJsonAtomic(?:Ordered)?\(\s*castJsonPath\(/` /
         `/\brm\(\s*castJsonPath\(/` (whitespace-tolerant between the two
         opening parens — see "Prettier-wrap" in the false-negatives list
         below for why the earlier exact-adjacency version was itself a hole)
@@ -521,7 +522,7 @@ function lineOf(content: string, index: number): number {
 // printWidth:100 wraps a long argument onto its own line, which would
 // otherwise silently drop a real occurrence out of coverage (see file
 // header, false negatives).
-const WRITE_RE = /\bwriteJsonAtomic\(\s*castJsonPath\(/g;
+const WRITE_RE = /\bwriteJsonAtomic(?:Ordered)?\(\s*castJsonPath\(/g;
 const RM_RE = /\brm\(\s*castJsonPath\(/g;
 
 interface ScanResult {
@@ -727,5 +728,14 @@ describe('cast.json write lock — static guard (#1981 Task 12)', () => {
     expect(result?.writes, `fabricated lock range: ${JSON.stringify(result)}`).toBe(1);
     expect(result?.details.join('\n')).toContain('line 7');
     expect(collectLockRanges(src, computeOpaqueRanges(src))).toEqual([]);
+  });
+
+  /* #3427: the ordered spelling of the same write must be seen too. */
+  it('an unlocked writeJsonAtomicOrdered(castJsonPath(...)) is reported like a bare writeJsonAtomic', () => {
+    const src = 'await writeJsonAtomicOrdered(castJsonPath(dir), cast);';
+
+    const result = scanFile(src);
+    expect(result?.writes, JSON.stringify(result)).toBe(1);
+    expect(result?.details.join('\n')).toContain('line 1');
   });
 });

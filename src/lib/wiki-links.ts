@@ -27,6 +27,44 @@ export type WikiPage =
   | 'LAN-HTTPS-Troubleshooting'
   | 'Admin';
 
+/* #3084 F7 — the runtime membership set behind `isWikiPage`. Spelled out as a
+   `satisfies Record<WikiPage, true>` map (the convention CATEGORY_WIKI /
+   ADMIN_WIKI / WIZARD_STEP_WIKI below already use) rather than
+   `Object.values`-of-the-union: the union is type-only, so there is no runtime
+   object to enumerate. The `satisfies` is what keeps this honest — adding a
+   literal to `WikiPage` without adding it here is a compile error, so the
+   guard can never silently fall behind the union. */
+const WIKI_PAGES = {
+  'Getting-Started': true,
+  'Installing-Castwright': true,
+  'Account-and-Settings': true,
+  Troubleshooting: true,
+  'Voice-Engines': true,
+  'Analysis-and-the-Analyzer': true,
+  'Getting-a-Gemini-API-Key': true,
+  'Multi-language-Support': true,
+  'Generating-Audio': true,
+  'Reviewing-Cast-and-Assigning-Voices': true,
+  'Advanced-Settings': true,
+  Exporting: true,
+  'Model-Manager': true,
+  'Mobile-Tablet-and-Companion-App': true,
+  'LAN-HTTPS-Troubleshooting': true,
+  Admin: true,
+} satisfies Record<WikiPage, true>;
+
+const WIKI_PAGE_SET = new Set<string>(Object.keys(WIKI_PAGES));
+
+/* #3084 F7 — narrows the server-supplied `wikiPage` (a plain `string` on
+   `AnalysisFailureFix`, deliberately untyped on the wire) to a page this
+   client actually publishes, so a renderer can call `wikiUrl(page)` without a
+   cast. An unrecognised name fails the check and the caller renders the fix's
+   `label` as plain text instead of a broken link — a newer server naming a
+   page this build does not ship degrades to text, it does not emit a 404. */
+export function isWikiPage(value: string): value is WikiPage {
+  return WIKI_PAGE_SET.has(value);
+}
+
 export function wikiUrl(page: WikiPage): string {
   return `${WIKI_BASE}/${page}`;
 }

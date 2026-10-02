@@ -131,6 +131,32 @@ export async function writeJsonAtomic(
   }
 }
 
+/* #3427 — per-path op chain. `writeJsonAtomic` does not order same-path
+   writes (and its EPERM retry jitters), so two overlapping writes to one file
+   could land out of call order and let an older snapshot clobber a newer one.
+   Each op awaits the previous op for the same path before running. A plain
+   in-process chain rather than `withKeyLock`: that helper's 10s acquisition
+   timeout would turn a slow disk into a thrown write. The tail is stored as a
+   never-rejecting promise so a failed op cannot wedge the chain; the caller
+   still gets the real rejection from its own op. */
+const pathTails = new Map<string, Promise<void>>();
+
+/** Run `op` after every earlier-called op for the same path has settled. */
+export async function enqueuePathOp(path: string, op: () => Promise<void>): Promise<void> {
+  const prev = pathTails.get(path) ?? Promise.resolve();
+  const run = prev.then(op);
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  pathTails.set(path, tail);
+  try {
+    await run;
+  } finally {
+    if (pathTails.get(path) === tail) pathTails.delete(path);
+  }
+}
+
 /** Shift the backup chain up by one slot before a new write lands.
  *  `path.bak.{keep-1}` → `path.bak.{keep}` first (drops what was in
  *  `bak.{keep}`), then `bak.{keep-2}` → `bak.{keep-1}`, …, finally

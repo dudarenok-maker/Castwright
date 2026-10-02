@@ -13,6 +13,7 @@ import {
   collectRenderedQwenVoiceNames,
   collectRenderedSpeakerMaps,
   collectRenderedTextHashesByChapter,
+  renderedSegmentVoices,
   textHashForStale,
 } from './segments-io.js';
 import type { CastIdHistory } from '../store/cast-id-history.js';
@@ -108,6 +109,85 @@ describe('collectRenderedFallbackEngines (fe-16)', () => {
     await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
       new Set(['qwen-marlow']),
     );
+  });
+});
+
+describe('collectRenderedQwenVoiceNames per-line voices (#3362)', () => {
+  function writeChapter(snapshots: Record<string, object>, segments?: Array<Record<string, unknown>>) {
+    writeFileSync(
+      join(bookDir, 'audio', '01-one.segments.json'),
+      JSON.stringify({ chapterId: 1, characterSnapshots: snapshots, segments }),
+    );
+  }
+  const qwenSnap = { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-new' };
+
+  it('keeps BOTH voices of a mixed-voice chapter (partial re-record after a voice change)', async () => {
+    /* The snapshot is last-wins: it names only the NEW voice while the lines
+       that were not re-recorded are still in the OLD one. */
+    writeChapter({ wren: qwenSnap }, [
+      { characterId: 'wren', resolvedCharacterId: 'wren', voiceName: 'qwen-old' },
+      { characterId: 'wren', resolvedCharacterId: 'wren', voiceName: 'qwen-new' },
+    ]);
+    await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
+      new Set(['qwen-old', 'qwen-new']),
+    );
+  });
+
+  it('falls back to the snapshot voice when no line carries a stamp (legacy chapter)', async () => {
+    writeChapter({ wren: qwenSnap }, [{ characterId: 'wren', sentenceIds: [1] }]);
+    await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
+      new Set(['qwen-new']),
+    );
+  });
+
+  it('ignores Kokoro-fallback lines and lines of other characters', async () => {
+    /* Marlow's snapshot is Qwen too but carries no stamped line of its own
+       under wren's key; wren's result must not absorb marlow's voice. */
+    writeChapter({ wren: qwenSnap, marlow: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-marlow' } }, [
+      { characterId: 'wren', voiceName: 'af_fallback', renderedFallbackEngine: 'kokoro' },
+      { characterId: 'wren', voiceName: 'qwen-new' },
+    ]);
+    await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(
+      new Set(['qwen-new', 'qwen-marlow']),
+    );
+  });
+
+  it('keeps a Qwen voice still on stamped lines after the character switched to Kokoro (#3362 pass 11)', async () => {
+    /* Qwen -> Kokoro switch, then ONE of three lines re-recorded: the snapshot
+       is last-wins ({kokoro, af_bella}) but two lines are still in qwen-wrenA.
+       The old snapshot-engine gate dropped them, so the Qwen card read
+       "Designed" with two thirds of the chapter audible in that voice. */
+    writeChapter({ wren: { voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' } }, [
+      { characterId: 'wren', resolvedCharacterId: 'wren', voiceName: 'qwen-wrenA' },
+      { characterId: 'wren', resolvedCharacterId: 'wren', voiceName: 'qwen-wrenA' },
+      { characterId: 'wren', resolvedCharacterId: 'wren', voiceName: 'af_bella' },
+    ]);
+    const names = await collectRenderedQwenVoiceNames(bookDir, chapters);
+    expect(names.has('qwen-wrenA')).toBe(true);
+  });
+
+  it('does not use a non-Qwen snapshot voice on the legacy fallback', async () => {
+    writeChapter({ wren: { voiceEngine: 'kokoro', resolvedVoiceName: 'af_bella' } }, [
+      { characterId: 'wren', sentenceIds: [1] },
+    ]);
+    await expect(collectRenderedQwenVoiceNames(bookDir, chapters)).resolves.toEqual(new Set());
+  });
+});
+
+describe('renderedSegmentVoices voice-name preference (#1972)', () => {
+  it('prefers baseVoiceName (pre-emotion-variant) over voiceName', () => {
+    expect(
+      renderedSegmentVoices(
+        [{ characterId: 'wren', voiceName: 'qwen-wren__angry', baseVoiceName: 'qwen-wren' }],
+        'wren',
+      ),
+    ).toEqual(['qwen-wren']);
+  });
+
+  it('falls back to voiceName when baseVoiceName is absent', () => {
+    expect(
+      renderedSegmentVoices([{ characterId: 'wren', voiceName: 'qwen-wren' }], 'wren'),
+    ).toEqual(['qwen-wren']);
   });
 });
 

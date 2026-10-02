@@ -23,7 +23,14 @@
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
-import { AnalyzerTruncatedError } from '../analyzer/errors.js';
+import {
+  AnalyzerReasoningOverflowError,
+  AnalyzerTimeoutError,
+  AnalyzerTruncatedError,
+  type TransportKind,
+} from '../analyzer/errors.js';
+import { getCachedGeminiModelInfo } from '../analyzer/catalog/gemini-catalog.js';
+import { configValue } from '../config/resolver.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 
 export type FailureCode =
@@ -33,6 +40,8 @@ export type FailureCode =
   | 'analyzer-rate-limit'
   | 'analyzer-daily-quota'
   | 'analyzer-truncated'
+  | 'analyzer-reasoning-overflow'
+  | 'analyzer-timeout'
   | 'analyzer-unreachable'
   | 'analyzer-content-blocked'
   | 'attribution-incomplete'
@@ -105,6 +114,20 @@ export const FAILURE_SIGNATURES: FailureSignature[] = [
     fatal: false,
     source: 'analysis',
     matchName: 'AnalyzerTruncatedError',
+    match: () => false,
+  },
+  {
+    code: 'analyzer-reasoning-overflow',
+    fatal: true,
+    source: 'analysis',
+    matchName: 'AnalyzerReasoningOverflowError',
+    match: () => false,
+  },
+  {
+    code: 'analyzer-timeout',
+    fatal: true,
+    source: 'analysis',
+    matchName: 'AnalyzerTimeoutError',
     match: () => false,
   },
   {
@@ -402,6 +425,10 @@ export interface AnalysisFailure {
   userMessage: string;
   remediation: string;
   detail?: string;
+  /* #3084 F7 — structured "how to fix" entries, present only where the
+     classifier can name something actionable (today: analyzer-reasoning-
+     overflow). Optional, so every existing producer/consumer is unaffected. */
+  fixes?: AnalysisFailureFix[];
 }
 
 /* Build the detail blob shown in the UI's collapsible. Prefer the
@@ -482,6 +509,123 @@ function withCopy(code: FailureCode, userMessage: string, detail?: string): Anal
   return { code, userMessage, remediation: FAILURE_REMEDIATIONS[code].remediation, detail };
 }
 
+/* ── #3084 F7 — structured "how to fix" entries (wave 2b) ───────────────────
+
+   A per-instance, machine-readable companion to the static per-code
+   `remediation` prose: the prose says WHAT to do in a sentence, a fix is one
+   row the UI can turn into a real affordance (a deep link into the settings
+   row that changes the outcome, a wiki link, or a plain-text instruction).
+
+   Exactly one of `settingKey` / `wikiPage` / neither is set on a given entry:
+   a `wikiPage` names a whole PAGE (`wiki-links.ts`'s "no anchors" rule), so it
+   cannot point at the section a specific fix is about — the wiki link is
+   therefore its OWN entry, never a field tacked onto a setting-changing one.
+   `endpointField` (wave 3) and `reasoningSetting` (wave 5) are declared now so
+   those waves write into this same shape; nothing in 2b sets them. */
+export interface AnalysisFailureFix {
+  label: string;
+  settingKey?: string;
+  endpointField?: { endpointId: string; field: string }; // 3b+
+  /** A page NAME, e.g. 'Analysis-and-the-Analyzer' — never an #anchor. */
+  wikiPage?: string;
+  reasoningSetting?: { engine: 'gemini' | 'ollama'; model: string }; // 5a
+}
+
+/** #3084 F7 — the fixes for a reasoning overflow, per transport. The ctx is the
+    SAME shape `AnalyzerReasoningOverflowError.transport`/`.model` already carry,
+    so the classify branch below passes them without a cast. `endpointId` is
+    declared now and unused in 2b (3b starts passing it); `reasoningLevel` is
+    5a's addition to this same ctx type, not this task's.
+
+    Two local arrays, concatenated on return: `fixes` (actionable) and `reads`
+    (`Read: …` wiki-link entries). That split — rather than ordering each
+    branch's own pushes — is what keeps every wiki entry after every actionable
+    one as 3b/5a/5b append their own entries, with no re-sort anywhere. */
+export function reasoningOverflowFixes(ctx: {
+  /** 'openai' returns [] until 3b. */
+  transport: TransportKind;
+  model: string;
+  /** Unused in 2b; 3b starts passing it. */
+  endpointId?: string;
+}): AnalysisFailureFix[] {
+  const fixes: AnalysisFailureFix[] = []; // actionable — settingKey or label-only
+  const reads: AnalysisFailureFix[] = []; // wiki-link entries only ("Read: …")
+
+  if (ctx.transport === 'gemini') {
+    /* Output-only: Gemini's input and output limits are separate, so lowering
+       the request body (maxInputTokensPerRequest / outputHeavyChunkChars) never
+       buys output room — the user copy says "splitting never helps", and these
+       fixes must not contradict it.
+
+       Conditional: only a NON-ZERO configured output cap that sits BELOW the
+       model's known limit can be raised — at Auto (0) there is nothing to
+       raise, and with an unknown limit (no cached catalog entry) there is no
+       evidence the cap is the binding constraint. Either way the entry is
+       omitted entirely rather than offered as a guess. */
+    const configuredOutputCap = configValue<number>('analyzer.gemini.maxOutputTokens');
+    const knownOutputLimit = getCachedGeminiModelInfo(ctx.model)?.outputTokenLimit;
+    if (configuredOutputCap !== 0 && knownOutputLimit !== undefined && configuredOutputCap < knownOutputLimit) {
+      fixes.push({
+        label: 'Raise Gemini max output tokens (or set it back to Auto)',
+        settingKey: 'analyzer.gemini.maxOutputTokens',
+      });
+    }
+    /* F13 — label-only: no settingKey (and no wikiPage), so the renderer shows
+       plain text rather than a link to a setting that cannot fix this. */
+    fixes.push({ label: 'Switch to a different analyzer model' });
+    reads.push({
+      label: 'Read: When a model thinks past its output limit',
+      wikiPage: 'Analysis-and-the-Analyzer',
+    });
+  } else if (ctx.transport === 'ollama') {
+    /* num_ctx is the binding limit only while num_predict is unlimited (-1, the
+       default). A positive num_predict bounds the reply first — raising num_ctx
+       would change nothing — so name it first and drop the "binding" claim. */
+    const numPredictPinned = configValue<number>('analyzer.ollama.numPredict') > 0;
+    if (numPredictPinned) {
+      fixes.push({
+        label: 'Raise Ollama num_predict (or set it back to -1, unlimited)',
+        settingKey: 'analyzer.ollama.numPredict',
+      });
+    }
+    fixes.push(
+      {
+        label: numPredictPinned ? 'Raise Ollama num_ctx' : 'Raise Ollama num_ctx (the binding limit)',
+        settingKey: 'analyzer.ollama.numCtx',
+      },
+      { label: 'Lower the stage-1 local input fraction', settingKey: 'analyzer.stage1.localInputFraction' },
+      { label: 'Lower the stage-2 local input fraction', settingKey: 'analyzer.stage2.localInputFraction' },
+      { label: 'Switch to a different analyzer model' },
+    );
+    reads.push({
+      label: 'Read: When a model thinks past its output limit',
+      wikiPage: 'Analysis-and-the-Analyzer',
+    });
+  } else {
+    /* 'openai' — 3b (Task 3b.1b) adds the endpoint branch, ending with the
+       endpoints page's own wiki-link entry (F3), not this one. */
+    return [];
+  }
+
+  /* The thinking window (analyzer.gemini.thinkingIdleTimeoutMs) never appears
+     in either branch: it bounds silence, not output room, so it cannot fix an
+     overflow (F7). */
+  return [...fixes, ...reads];
+}
+
+/** #3084 pass-3 — the actionable half of `reasoningOverflowFixes` as one
+    sentence of advice, for copy that cannot render structured fixes (the
+    non-story warning is a plain string). Built FROM the fixes list — never a
+    second hand-written copy — so it cannot name an entry the list omits (the
+    Gemini output cap at Auto, num_predict at its default). "Read:" wiki-link
+    entries are dropped; returns '' when there is nothing actionable. */
+export function reasoningOverflowAdvice(ctx: Parameters<typeof reasoningOverflowFixes>[0]): string {
+  return reasoningOverflowFixes(ctx)
+    .filter((f) => !f.wikiPage)
+    .map((f) => f.label)
+    .join('; ');
+}
+
 /** Run-level analysis classifier — the unified replacement for analysis.ts's
     describeError(). Typed-error checks and the Google-envelope/status parsing
     are PORTED VERBATIM (same precedence, same message construction: model
@@ -489,7 +633,11 @@ function withCopy(code: FailureCode, userMessage: string, detail?: string): Anal
     vocabulary changes to FailureCode and a remediation is attached. Plain
     unmatched errors additionally fall through to the analysis signature scan
     (so ECONNREFUSED etc. classify here too). */
-export function classifyAnalysisFailure(err: unknown, modelLabel: string): AnalysisFailure {
+export function classifyAnalysisFailure(
+  err: unknown,
+  modelLabel: string,
+  ctx?: { chapter?: { id: number; title?: string } },
+): AnalysisFailure {
   /* #2260 FINAL ROUND (B2) — FIRST, ahead of every other branch, because a
      lock-acquisition timeout is the one class here whose own message must never
      reach a client: it embeds the lock key, which for every key space this can
@@ -530,6 +678,46 @@ export function classifyAnalysisFailure(err: unknown, modelLabel: string): Analy
       `engine=${err.engine} reason=${err.reason} bytes=${err.receivedBytes}${
         err.outputTokens ? ` tokens=${err.outputTokens}` : ''
       }`,
+    );
+  }
+  if (err instanceof AnalyzerReasoningOverflowError) {
+    const chapter = ctx?.chapter;
+    const chapterLabel = chapter ? (chapter.title ? `chapter "${chapter.title}"` : `chapter ${chapter.id}`) : 'a chapter';
+    /* #3084 F7 — userMessage is the what-happened headline only: naming the
+       chapter, model and engine. It carries no "raise X" advice and no
+       "then retry" — that imperative lives in remediation instead (below),
+       which is per-code, not per-instance, so it cannot itself name the
+       chapter; naming happens here. */
+    return {
+      ...withCopy(
+        'analyzer-reasoning-overflow',
+        `${modelLabel} spent its whole output budget reasoning on ${chapterLabel} and returned no answer, so the analysis stopped.`,
+        `transport=${err.transport} model=${err.model}${chapter ? ` chapterId=${chapter.id}` : ''}${err.reasoningTokens ? ` reasoningTokens=${err.reasoningTokens}` : ''}`,
+      ),
+      /* #3084 F7 — the structured fixes for this exact instance. `err` already
+         carries both ctx fields with the ctx's own types, so this is called
+         with no cast. */
+      fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model }),
+    };
+  }
+  if (err instanceof AnalyzerTimeoutError) {
+    const detail = `transport=${err.transport} model=${err.model} reason=${err.reason} elapsedMs=${err.elapsedMs}`;
+    if (err.reason === 'thinking-idle') {
+      /* #3084 P5 — silence before any answer text, past the thinking window. */
+      return withCopy(
+        'analyzer-timeout',
+        `${modelLabel} sent no answer text and stayed silent longer than its thinking window, so the request was stopped after ${Math.round(err.elapsedMs / 1000)} s. Raise 'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most 290000 ms), or pick a faster model, then retry.`,
+        detail,
+      );
+    }
+    const setting =
+      err.transport === 'gemini'
+        ? "'Gemini request ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS)"
+        : "this endpoint's request ceiling";
+    return withCopy(
+      'analyzer-timeout',
+      `${modelLabel} did not finish within ${Math.round(err.elapsedMs / 1000)} s (the request ceiling). Raise ${setting}, or pick a faster model, then retry.`,
+      detail,
     );
   }
   if (err instanceof DailyQuotaExhaustedError) {

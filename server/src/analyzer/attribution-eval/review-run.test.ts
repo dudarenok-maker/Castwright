@@ -23,7 +23,7 @@ import {
   OUTPUT_HEAVY_CLOUD_RESERVED_TOKENS,
 } from '../chapter-chunker.js';
 import { buildReviewSentencesInput } from '../../routes/script-review.js';
-import { AnalyzerTruncatedError } from '../errors.js';
+import { AnalyzerReasoningOverflowError, AnalyzerTruncatedError } from '../errors.js';
 import { DailyQuotaExhaustedError } from '../rate-limit.js';
 import type { Analyzer, StageCall } from '../index.js';
 import type { SentenceOutput, ScriptReviewOp, ScriptReviewOutput } from '../../handoff/schemas.js';
@@ -242,6 +242,29 @@ describe('runReviewOverChapter — route-parity chunk loop', () => {
         call,
       }),
     ).rejects.toBeInstanceOf(DailyQuotaExhaustedError);
+  });
+
+  it('(f) rethrows a reasoning overflow instead of dropping the chunk and calling the model again (#3084 P20)', async () => {
+    let calls = 0;
+    const stub = {
+      async runScriptReviewChapter(): Promise<ScriptReviewOutput> {
+        calls += 1;
+        throw new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100);
+      },
+    } as unknown as Analyzer;
+
+    await expect(
+      runReviewOverChapter({
+        analyzer: stub,
+        capacity: resolveCapacity({ engine: 'gemini', model: 'gemma-4-31b-it' }),
+        manuscriptId: MANUSCRIPT_ID,
+        chapterId: CHAPTER_ID,
+        sentences,
+        roster,
+        call,
+      }),
+    ).rejects.toBeInstanceOf(AnalyzerReasoningOverflowError);
+    expect(calls).toBe(1);
   });
 });
 

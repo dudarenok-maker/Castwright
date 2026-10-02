@@ -2,10 +2,12 @@
    that generation.ts writes after a successful render.
 
    Two consumers read these back:
-     - the drift detector (`routes/revisions.ts`) compares each snapshot
-       against the live cast.json, and
+     - the drift detector (`routes/revisions.ts`) compares the voices the
+       per-line stamps record against the live cast.json (the snapshot only
+       when no line under a key carries a stamp), and
      - the voice library aggregator (`routes/voices.ts`) stamps a bespoke
-       Qwen voice as `generated` once it appears in a rendered snapshot.
+       Qwen voice as `generated` once a rendered line carries it (the
+       snapshot's voice only as the legacy fallback).
 
    The on-disk shape is the strict `ChapterSegmentsFile` written by
    generation.ts; here we model the loose READ view (every field optional)
@@ -77,6 +79,16 @@ export interface SegmentsFile {
     characterId?: string;
     sentenceIds?: number[];
     renderedFallbackEngine?: string | null;
+    /** #3362 pass-4 fix, refined by pass-5 — the canonical id this segment
+        was last resolved under, stamped by finalize-chapter-write.ts only
+        when it names a real key in the write's own `characterSnapshots`. A
+        re-finalize that did not re-synthesise this segment carries the
+        stamp forward unchanged rather than re-deriving it. See
+        `ChapterSegment.resolvedCharacterId` (synthesise-chapter.ts) for the
+        full rationale. Absent on legacy segments — callers fall back to the
+        raw `characterId`, exact-matched against this chapter's own snapshot
+        keys, never against history. */
+    resolvedCharacterId?: string;
     /** #2023 Piece 1 — the cast character id that ACTUALLY spoke this segment
         when `characterId` above is an orphaned id (no cast entry at all) and
         the render's orphaned-characterId safety net substituted the narrator
@@ -198,10 +210,38 @@ export async function loadSegmentsFiles(
   return out;
 }
 
-/* Collect the set of bespoke-Qwen voice NAMES (designed voiceIds) that have
-   actually rendered audio in a book — the union of every rendered snapshot
-   whose `voiceEngine === 'qwen'`. Used by the voices aggregator to split
-   "Designed" from "Generated" for Qwen voices. */
+/* The distinct voices (pre-emotion-variant `baseVoiceName`, else `voiceName`)
+   the segments stamped under one snapshot key were actually rendered in.
+   A segment joins a key by its stamped `resolvedCharacterId`, else its raw
+   `characterId` — exact match only, never through the resolver, matching every
+   other reader of that stamp. Kokoro-fallback lines are skipped: their voice
+   is the fallback engine's, not a voice choice, and the snapshot path already
+   owns that case. Empty when no line carries a stamp (legacy chapter). */
+export function renderedSegmentVoices(
+  segments: NonNullable<SegmentsFile['segments']> | undefined,
+  snapshotKey: string,
+): string[] {
+  const voices = new Set<string>();
+  for (const s of segments ?? []) {
+    if ((s.resolvedCharacterId ?? s.characterId) !== snapshotKey) continue;
+    if (s.renderedFallbackEngine) continue;
+    const v = s.baseVoiceName ?? s.voiceName;
+    if (v) voices.add(v);
+  }
+  return [...voices];
+}
+
+/* Collect the set of voice NAMES that have actually rendered audio in a book —
+   every voice the lines under a snapshot key were stamped with, whatever the
+   snapshot's engine, or (legacy chapter: no line under the key carries a
+   stamp) the snapshot's own `resolvedVoiceName` when its `voiceEngine` is
+   'qwen'. The snapshot holds ONE voice and ONE engine per character
+   (last-wins), so after a voice or engine change plus a partial re-record it
+   names only the new one and the old Qwen voice — still rendered in the
+   untouched lines — would be missed (#3362). No engine filter on stamped lines:
+   the consumer only ever asks `.has('qwen-<uuid>')`, which a non-Qwen name can
+   never equal. Used by the voices aggregator to split "Designed" from
+   "Generated" for Qwen voices. */
 export async function collectRenderedQwenVoiceNames(
   bookDir: string,
   chapters: Array<{ id: number; slug: string }>,
@@ -209,8 +249,11 @@ export async function collectRenderedQwenVoiceNames(
   const names = new Set<string>();
   const segs = await loadSegmentsFiles(bookDir, chapters);
   for (const seg of segs) {
-    for (const snap of Object.values(seg.characterSnapshots ?? {})) {
-      if (snap.voiceEngine === 'qwen' && snap.resolvedVoiceName) {
+    for (const [key, snap] of Object.entries(seg.characterSnapshots ?? {})) {
+      const lineVoices = renderedSegmentVoices(seg.segments, key);
+      if (lineVoices.length > 0) {
+        for (const v of lineVoices) names.add(v);
+      } else if (snap.voiceEngine === 'qwen' && snap.resolvedVoiceName) {
         names.add(snap.resolvedVoiceName);
       }
     }

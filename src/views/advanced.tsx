@@ -7,7 +7,7 @@
    server's group registry; each section holds OverrideRow cells or, for
    isPrompt knobs, a PromptRow. */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { MixedHeading } from '../components/primitives';
 import { SettingsAccordion, SettingsSection } from '../components/settings/settings-accordion';
 import { OverrideRow, beginConfigAction, describeConfigSaveError } from '../components/settings/override-row';
@@ -252,6 +252,44 @@ export function AdvancedView() {
     null,
   );
   const [gpuSplit, setGpuSplit] = useState<AnalyzerGpuSplitResponse | null>(null);
+
+  /* #3084 F7 — a run-error's "How to fix" entries deep-link to
+     `#/advanced?focus=<knob key>`; AdvancedRoute hydrates that key into
+     `ui.stage.focusKey`. The key is untrusted (it arrives straight from a
+     URL, and waves 3/5 will widen the same param), so it is validated against
+     the descriptors this view actually renders — an unknown key scrolls
+     nowhere and highlights nothing rather than throwing or highlighting a
+     random row. Mirrors help.tsx's `?code=` handling: a target ref plus a
+     once-per-focus guard, so later re-renders (a config save, toggling an
+     accordion section) don't yank the viewport back to the row. */
+  const focusKey = useAppSelector(
+    (s) => (s.ui.stage as { focusKey?: string }).focusKey ?? undefined,
+  );
+  const focusedRowRef = useRef<HTMLDivElement | null>(null);
+  const scrolledForRef = useRef<string | undefined>(undefined);
+  /* The highlight is transient (~2 s), the scroll is not — same shape as
+     help.tsx's `?code=` highlight timer. */
+  const [focusHighlight, setFocusHighlight] = useState(false);
+  const focusGroupId = descriptors.find((d) => d.key === focusKey)?.group;
+
+  useEffect(() => {
+    if (!focusKey) return;
+    /* Once per focus key — see the guard rationale above. */
+    if (scrolledForRef.current === focusKey) return;
+    /* Optional-chained: jsdom has no scrollIntoView. Null whenever the row's
+       group is still collapsed — the `descriptors` dep below re-runs this once
+       the row mounts, and `defaultOpen` on that group (at the render site)
+       makes sure it actually does. */
+    if (!focusedRowRef.current) return;
+    focusedRowRef.current.scrollIntoView?.({ block: 'center' });
+    scrolledForRef.current = focusKey;
+    setFocusHighlight(true);
+    const timer = setTimeout(() => setFocusHighlight(false), 2000);
+    return () => clearTimeout(timer);
+    /* `descriptors` is a dependency on purpose: on the first render (before
+       fetchConfig resolves) there are no rows, so the target does not exist
+       yet; this re-runs when they arrive. */
+  }, [focusKey, descriptors]);
 
   useEffect(() => {
     dispatch(fetchConfig());
@@ -508,6 +546,11 @@ export function AdvancedView() {
                   key={group.id}
                   group={group}
                   overriddenCount={overriddenCount}
+                  /* #3084 F7 — the focused row may sit in a section that is
+                     collapsed by default (e.g. a high-risk one). Force it open
+                     when it holds the focus target, otherwise the ref stays
+                     null and the deep link would scroll nowhere. */
+                  defaultOpen={group.id === focusGroupId || undefined}
                   onResetSection={() => {
                     // #2209 — same toast rationale as "Reset all": a
                     // section reset spans every knob in the group, so
@@ -549,6 +592,8 @@ export function AdvancedView() {
                         // via OverrideRow the same way onChange's does.
                         onRevert={() => dispatch(resetKnob(d.key)).unwrap()}
                         gpuDevices={gpuDevices}
+                        focused={focusHighlight && d.key === focusKey}
+                        rowRef={d.key === focusKey ? focusedRowRef : undefined}
                       />
                     );
                   })}
