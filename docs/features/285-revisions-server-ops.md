@@ -168,8 +168,34 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
     - This is **required for `src/routes/generation.test.ts` and `src/routes/book-state.test.ts`**. Both are listed in `SLOW_FILES_TO_EXCLUDE` (`server/vitest.config.ts:35-58`), so the fast pool silently prints "No test files found" for them.
     - Add a `-t` filter wherever the step allows, so each child runs as few slow tests as possible.
   - Frontend: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- <path under repo root>`
-  - Typecheck (frontend + server): `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`
-  - **No task child runs a full battery** (`npm run test`, `test:server`, `test:server-slow`, `test:all`, `verify`, `build`, or the whole-tree `npm run lint`). `test:server` alone takes about 18 minutes, longer than any lane's per-command limit. Each task runs its own targeted test files. The full batteries run in cloud `verify.yml` on the PR, the required, authoritative gate (CLAUDE.md "Commit gate").
+  - Server-only typecheck: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck`. Takes about 23 s on this box.
+  - Frontend + server typecheck: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`. Takes about 50 s on this box. Used only on the `claude` lane (Tasks 6, 11 and 13).
+
+### Lanes and long commands
+
+- **Lanes.**
+  - Tasks 6, 11 and 13 run on the **`claude` lane** (Claude Code). It runs commands in the foreground, with the Bash tool's `timeout: 600000` (10 minutes).
+  - Every other task is an **auto-cloud** child on a Cline lane. A Cline lane **kills any single command at 30 s**.
+  - The coordinator sets each task's lane, and each task's header repeats it.
+- **On a Cline lane, long commands run detached and are polled.** Never hold one in the foreground. Any single command that may exceed about 20 s is launched detached, with stdout and stderr going to a log file in your scratch dir. You then poll the log until it finishes. This applies to:
+  - server typecheck (about 23 s);
+  - every `test:slow` run;
+  - the ffmpeg-backed suites (`finalize-chapter-write`, `chapter-splice`, `chapter-qa-repair`, `generation`).
+
+  Git-Bash recipe. Each line is one short command. The trailing `echo` puts the exit code in the log:
+  ```bash
+  # launch (returns immediately)
+  nohup bash -c 'npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run typecheck; echo EXIT:$?' > <scratch>/t<N>-typecheck.log 2>&1 &
+  # poll: repeat this short command until it prints the EXIT line (no sleep loop inside one command)
+  grep -m1 '^EXIT:' <scratch>/t<N>-typecheck.log || tail -n 3 <scratch>/t<N>-typecheck.log
+  ```
+  - Wrap a vitest run the same way: `nohup bash -c '<test command>; echo EXIT:$?' > <log> 2>&1 &`. Once `EXIT:` appears, read vitest's summary with `grep -E 'Test Files|Tests  ' <log>`.
+  - `EXIT:0` is green; anything else is red. Paste the summary lines, or tsc's errors, into your report.
+  - A command that reliably finishes in under about 20 s may stay in the foreground. A fast-pool unit file such as `revisions-store.test.ts` is an example.
+- **No task child runs a full battery.** That rules out `npm run test`, `test:server`, `test:server-slow`, `test:all`, `verify`, `build`, and the whole-tree `npm run lint`.
+  - These batteries exceed a Cline lane's 30 s per-command limit, and the whole set exceeds one heartbeat. In CI run 36068522339, the fast server suite alone took 176 s on Linux and 245 s on Windows.
+  - Cloud `verify.yml` on the PR is the required, authoritative gate anyway (CLAUDE.md "Commit gate").
+  - Each task runs only its own targeted test files.
 
 ### The dark state
 
@@ -228,6 +254,8 @@ Every task ends with a **mutation check**:
 ---
 
 ### Task 1 (1a): Store core
+
+**Lane: auto-cloud (Cline).** Any command that may exceed ~20 s runs detached and is polled (Global Constraints → "Lanes and long commands").
 
 **Files:**
 - Create: `server/src/workspace/revisions-store.ts`
@@ -969,6 +997,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push -u origin fix/server
 
 ### Task 2 (1b): Two-phase accept / reject ops in the store
 
+**Lane: auto-cloud (Cline).** Any command that may exceed ~20 s runs detached and is polled (Global Constraints → "Lanes and long commands").
+
 **Files:**
 - Modify: `server/src/workspace/revisions-store.ts` (append)
 - Test: `server/src/workspace/revisions-store.test.ts` (append, and extend the import list)
@@ -1243,6 +1273,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ---
 
 ### Task 3 (2): Extract the A/B audio steps into `audio/previous-audio.ts`
+
+**Lane: auto-cloud (Cline).** Any command that may exceed ~20 s runs detached and is polled (Global Constraints → "Lanes and long commands").
 
 **Files:**
 - Create: `server/src/audio/previous-audio.ts`, `server/src/audio/previous-audio.test.ts`
@@ -1525,6 +1557,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ---
 
 ### Task 4 (3a): Accept / reject / dismiss routes
+
+**Lane: auto-cloud (Cline).** Any command that may exceed ~20 s runs detached and is polled (Global Constraints → "Lanes and long commands").
 
 **Files:**
 - Create: `server/src/routes/revision-ops.ts`, `server/src/routes/revision-ops.test.ts`
@@ -2156,6 +2190,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 5 (3b): Poll reshape (`revisions.ts`), curated poll and qa-report 500s
 
+**Lane: auto-cloud (Cline).** Any command that may exceed ~20 s runs detached and is polled (Global Constraints → "Lanes and long commands").
+
 **Files:**
 - Modify `server/src/routes/revisions.ts` (re-anchored):
   - the header at `:1-14`;
@@ -2509,6 +2545,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ---
 
 ### Task 6 (4): OpenAPI for the PR-1 surface and generated types
+
+**Lane: `claude`** (Claude Code). This task's frontend+server `npm run typecheck` takes about 50 s, and `openapi:types` regenerates the whole `api-types.ts`. Run each in the foreground with the Bash tool's `timeout: 600000`.
 
 **Files:**
 - Modify `openapi.yaml`, re-anchored on the new base:
@@ -2946,6 +2984,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 7 (5a): Finalize `review` tri-state
 
+**Lane: auto-cloud (Cline).** Any command that may exceed ~20 s runs detached and is polled (Global Constraints → "Lanes and long commands").
+
 **Files:**
 - Modify `server/src/audio/finalize-chapter-write.ts`. It was re-anchored after #3362 rewrote this file:
   - imports at `:14-50`;
@@ -3224,6 +3264,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 8 (5b): Thread `reviewRecorded` onto the three completion events and assert that no caller passes `review`
 
+**Lane: auto-cloud (Cline).** Any command that may exceed ~20 s runs detached and is polled (Global Constraints → "Lanes and long commands").
+
 **Files:**
 - Modify `server/src/routes/chapter-splice.ts`: the `splice_complete` send at `:558-566`, where `hasPreviousAudio: true,` is `:565`.
 - Modify `server/src/routes/chapter-qa-repair.ts`: the `dryRun:false` `qa_repair_complete` send at `:866-876`, where `hasPreviousAudio: true,` is `:875`. Do NOT touch the dry-run send at `:283`.
@@ -3414,6 +3456,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 9 (6a): Server `review` validator, queue and queue-io (fast pool only)
 
+**Lane: auto-cloud (Cline).** Any command that may exceed ~20 s runs detached and is polled (Global Constraints → "Lanes and long commands").
+
 **Files:**
 - Create: `server/src/routes/review-request.ts`, `server/src/routes/review-request.test.ts`
 - Modify `server/src/routes/queue.ts` (re-anchored):
@@ -3578,6 +3622,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 10 (6b): Generation request `review` — a 400 before SSE, and `reviewChapter` only on the rendered chapter (slow pool)
 
+**Lane: auto-cloud (Cline).** Any command that may exceed ~20 s runs detached and is polled (Global Constraints → "Lanes and long commands").
+
 **Files:**
 - Modify `server/src/routes/generation.ts` (re-anchored):
   - imports (`:22-103`);
@@ -3717,6 +3763,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ---
 
 ### Task 11 (6c): Client `review` plumbing
+
+**Lane: `claude`** (Claude Code). This task's frontend+server `npm run typecheck` takes about 50 s. Run it, and the frontend test runs, in the foreground with the Bash tool's `timeout: 600000`.
 
 **Files:**
 - Modify (re-anchored):
@@ -3895,6 +3943,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 12 (7): Reparse/replace preflight and reset through the store, plus lock-order docs and INDEX
 
+**Lane: auto-cloud (Cline).** Any command that may exceed ~20 s runs detached and is polled (Global Constraints → "Lanes and long commands").
+
 **Files:**
 - Modify `server/src/routes/book-state.ts`. Re-anchored line numbers:
   - imports;
@@ -3907,9 +3957,9 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 - Modify `server/src/workspace/cast-lock.ts:18-24` (rule 4), `CLAUDE.md:582-584` (rule 4) and `docs/features/INDEX.md` (`### G. Generation`).
 - Modify `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md`, at two places this task makes false:
   - `:369`. Its "only PR 1 changes an old client could observe" sentence names two changes; it must match this plan's Reversibility list.
-  - `:468`. "PR 1's are none" must match the technical release-notes entry.
+  - `:468`. "PR 1's are none" must match the two release-notes entries this task adds: the technical one and the user-facing one.
 - Modify `docs/release-notes-next.md` (one technical, operator-facing entry).
-- Do NOT add a `RELEASE_NOTES.md` line. There is no user-visible change in normal use: every changed path needs a corrupt, hand-edited or newer-server revisions.json.
+- Modify `RELEASE_NOTES.md`: add one short user-facing line at the top of the in-progress `# Castwright 1.15.0` list.
 
 **Dark-state note:** a reset leaves `pending: []`, exactly what today's `rm` produced as far as any client can tell. The preflight only *refuses* a newer-schema file, which an old client could never have written.
 
@@ -4138,13 +4188,17 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
      ```
   2. In the same spec's Delivery list, replace line 468, `  - release notes. PR 1's are none: dark, with no shippable delta. Say so explicitly in the PR.`, with:
      ```
-       - release notes. PR 1 carries one technical, operator-facing entry in `docs/release-notes-next.md` (the reparse/replace newer-schema refusal, the poll/qa-report 500 changes, the unused routes) and **no** `RELEASE_NOTES.md` user line: nothing changes for a user in normal use — every changed path needs a corrupt, hand-edited or newer-server revisions.json. Say so explicitly in the PR.
+       - release notes. PR 1 carries one technical, operator-facing entry in `docs/release-notes-next.md` (reparse/replace refuse a newer-schema revisions.json before touching anything, and otherwise reset it rather than delete it; the polls and QA report answer 500 where they used to answer 200 — an unparseable file in a book with no confirmed cast, a newer-schema file, or a non-object top level — and one such book fails the whole bulk poll; three unused revisions routes) plus one user-facing `RELEASE_NOTES.md` line (the newer-version refusal). Say so in the PR.
      ```
   3. In `docs/release-notes-next.md`, append this bullet at the end of the `## 🔌 Sync & server infrastructure` section. It is technical and operator-facing.
      ```
-     - **Re-parse and replace-manuscript now refuse a `revisions.json` written by a newer server — before touching anything — instead of deleting it** (#3400). revisions.json now goes through the per-file schema seam (`schema-migrate.ts`) and a new server-side owner (`workspace/revisions-store.ts`, a per-book leaf lock with a `fileId`/`rev` stamp); a reparse/replace whose book carries a newer-schema file answers 500 with the "upgrade the server" message and leaves cast, audio, state and manuscript untouched, and otherwise *resets* the file (new `fileId`, empty) rather than removing it. The Revisions polls and the QA report now also answer 500 for a revisions.json that is unparseable, of a newer schema, or valid JSON whose top level is not an object (`null`, `[]`, a string or a number) — including for a book with no confirmed cast, where they previously answered 200 without reading it — and one such book fails the whole bulk revisions poll. The 500 carries the raw parse error or the "upgrade the server" message (neither contains a path); only a lock-acquisition timeout gets the curated contention message. Three new server routes (`POST …/revisions/{id}/accept`, `…/reject`, `POST …/drift/{id}/dismiss`) land unused — the app keeps writing revisions the old way until the client cutover (plan 285 PR 2).
+     - **Re-parse and replace-manuscript now refuse a `revisions.json` written by a newer server — before touching anything — instead of deleting it** (#3400). revisions.json now goes through the per-file schema seam (`schema-migrate.ts`) and a new server-side owner (`workspace/revisions-store.ts`, a per-book leaf lock with a `fileId`/`rev` stamp); a reparse/replace whose book carries a newer-schema file answers 500 with the "upgrade the server" message and leaves cast, audio, state and manuscript untouched, and otherwise *resets* the file (new `fileId`, empty) rather than removing it. The Revisions polls and the QA report now answer 500 in three cases where they previously answered 200: an unparseable revisions.json in a book with **no** confirmed cast (main never read the file there; a book with a cast already answered 500), a newer-schema file (cast or not), and valid JSON whose top level is not an object (`null`, `[]`, a string or a number; cast or not). One such book fails the whole bulk revisions poll. The 500 carries the raw parse error or the "upgrade the server" message (neither contains a path); only a lock-acquisition timeout gets the curated contention message. Three new server routes (`POST …/revisions/{id}/accept`, `…/reject`, `POST …/drift/{id}/dismiss`) land unused — the app keeps writing revisions the old way until the client cutover (plan 285 PR 2).
      ```
-  4. Do not add a `RELEASE_NOTES.md` line. **Reason:** nothing changes for a user in normal use. Every changed path needs a revisions.json that is corrupt, hand-edited, or written by a newer server, and the new routes have no caller. Task 13 states this in the PR body.
+  4. In `RELEASE_NOTES.md`, add this line as the first bullet under `# Castwright 1.15.0`. It matches its neighbours' voice: a bold plain-English lead, then one or two sentences.
+     ```
+     - **Reparsing or replacing a book whose review history was saved by a newer version of Castwright is now refused before anything is touched.** Castwright used to carry on and discard that history along with the old cast and audio; now it stops and asks you to update Castwright first, and the book is left exactly as it was.
+     ```
+     Task 13 lists both notes in the PR body.
 
 - [ ] **Step 6: Mutation checks.** Run `…server run test -- src/routes/book-state.reparse.test.ts`. Report each red, restore after each, and confirm the diff-stat check.
   1. Put the original `existsSync(revisionsJsonPath(bookDir)) ? rm(…) : Promise.resolve(),` arm back in place of `resetRevisions(bookDir),`.
@@ -4157,7 +4211,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 - [ ] **Step 7: Commit and push**
 
 ```bash
-git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/book-state.ts server/src/routes/book-state.reparse.test.ts server/src/routes/book-state.replace-manuscript.test.ts server/src/workspace/cast-lock.ts CLAUDE.md docs/features/INDEX.md docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md docs/release-notes-next.md
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/book-state.ts server/src/routes/book-state.reparse.test.ts server/src/routes/book-state.replace-manuscript.test.ts server/src/workspace/cast-lock.ts CLAUDE.md docs/features/INDEX.md docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md docs/release-notes-next.md RELEASE_NOTES.md
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "fix(server,docs): reset revisions.json through the store on reparse/replace (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ```
@@ -4166,9 +4220,16 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 13: Verify, then open the PR (the final verify child)
 
-**Files:** none modified. **Do not merge.**
+**Lane: `claude`** (Claude Code). Run every command in this task in the foreground with the Bash tool's `timeout: 600000`. On this box, typecheck takes about 50 s and `check:cycles` about 15 s; the lint script is lane-safe too.
 
-**This task does not run the full batteries, and no task child does.** On this tree `test:server` alone takes about 18 minutes, which is longer than any lane's per-command limit. **The full batteries run in cloud `verify.yml` on the PR, the required, authoritative gate** (CLAUDE.md "Commit gate"). This task runs only commands that fit inside a lane, opens the PR, and records in the PR body that the batteries are pending CI. The coordinator waits for green CI before running `pr-review-gate` and merging.
+**Files:** none tracked are modified. The lint helper is written into your scratch dir. **Do not merge.**
+
+**This task does not run the full batteries, and no task child does.** The reason is in Global Constraints → "Lanes and long commands". **The full batteries run in cloud `verify.yml` on the PR, which is the required, authoritative gate** (CLAUDE.md "Commit gate"). This task:
+- runs the lane-sized checks;
+- runs the replace refuse-before-delete test and the four mutation re-runs (single test files);
+- opens the PR, whose body records the batteries as pending CI.
+
+The coordinator then waits for a green `verify.yml` before running `pr-review-gate` and merging.
 
 If any step fails, report it and stop. Do not fix anything inline. The coordinator dispatches a fix child.
 
@@ -4176,87 +4237,141 @@ If any step fails, report it and stop. Do not fix anything inline. The coordinat
   1. Run `git -C <wt> status --porcelain`. Expected: empty.
   2. Run `git -C <wt> fetch origin`.
   3. Run `git -C <wt> rev-parse HEAD origin/fix/server-3400-revisions-server-ops`. Expected: the two hashes are identical, so everything is pushed.
-  4. Run `git -C C:/Claude/Projects/Audiobook-Generator status --porcelain`. Expected: no entry produced by this run.
+  4. Run `git -C C:/Claude/Projects/Audiobook-Generator status --porcelain`. Expected: no entry that this run produced.
   5. Run `git -C <wt> diff --stat origin/main...HEAD`. Expected: exactly the spec, this plan, and the files named in Tasks 1–12's commit steps. Nothing else.
   6. From here on, every diff uses `git -C <wt> diff origin/main...HEAD`, never local `main`.
 
-- [ ] **Step 2: The lane-sized checks.** Run each in the foreground.
-  ```
-  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck
-  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run check:cycles
-  ```
-  Then lint only the changed TypeScript files. Use one `eslint` process with the repo's flat config. Do not use `npm run lint`: it is `eslint .`, which lints the whole tree.
-  ```
-  git -C C:/Claude/Projects/wt-3400-revisions-server-ops diff --name-only --diff-filter=ACMR origin/main...HEAD -- '*.ts' '*.tsx' > <scratchpad>/changed-ts.txt
-  sed 's|^|C:/Claude/Projects/wt-3400-revisions-server-ops/|' <scratchpad>/changed-ts.txt | xargs node C:/Claude/Projects/wt-3400-revisions-server-ops/node_modules/eslint/bin/eslint.js --config C:/Claude/Projects/wt-3400-revisions-server-ops/eslint.config.mjs --max-warnings 0
-  ```
-  - Expected: all three exit 0.
-  - `check:cycles` needs network access for `npx madge@8.0.0`.
-  - If any of these fails, check whether it also fails on `origin/main`, per CLAUDE.md. Report the result either way.
+- [ ] **Step 2: The lane-sized checks.** Run all three in the foreground, each with `timeout: 600000`.
+  1. `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck` (about 50 s).
+  2. `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run check:cycles` (about 15 s). It needs network access for `npx madge@8.0.0`.
+  3. **Lint exactly the changed files, and fail if nothing was linted.**
+     - Don't use `npm run lint`: it is `eslint .`, which lints the whole tree.
+     - Don't pass the files to the CLI from another cwd. Every file then reports "outside of base path".
+     - Don't pass `src/lib/api-types.ts` explicitly either. The config ignores it (`eslint.config.mjs:51`), and an explicitly named ignored file produces a warning, which `--max-warnings 0` turns into exit 1.
 
-- [ ] **Step 3: PR-1 acceptance checklist.** Tick each item and give its evidence. Items marked **(CI)** cannot be confirmed in a lane. Write "confirmed by verify.yml" against them, and the coordinator ticks them when CI is green.
+     The helper below does the job. It sets the **worktree as its cwd** with `process.chdir`, so no `cd X &&` chain is needed. It then drives the worktree's own ESLint through its Node API:
+     - `warnIgnored: false`, which is `--no-warn-ignored`, mirroring `scripts/hooks/pre-commit-lint.mjs`;
+     - files the config ignores are dropped up front with `isPathIgnored`;
+     - it reads the JSON results;
+     - it asserts that the number of results equals the files passed minus those the config ignores.
+
+     **A zero-file "green" exits 2 (FAIL).** Write it to `<scratch>/lint-changed.mjs`:
+     ```js
+     // Plan 285 Task 13 — lint exactly the files a diff range changed, from the
+     // worktree as cwd, and FAIL if nothing was actually linted.
+     // Usage: node lint-changed.mjs <worktree> [<git diff range>]   (default range: origin/main...HEAD)
+     import { createRequire } from 'node:module';
+     import { execFileSync } from 'node:child_process';
+     import { existsSync } from 'node:fs';
+     import { join } from 'node:path';
+
+     const wt = process.argv[2];
+     const range = process.argv[3] ?? 'origin/main...HEAD';
+     if (!wt) { console.error('usage: node lint-changed.mjs <worktree> [range]'); process.exit(2); }
+     process.chdir(wt); // ESLint's flat config resolves file paths against cwd ("outside of base path" otherwise)
+
+     const require = createRequire(join(wt, 'package.json'));
+     const { ESLint } = require('eslint'); // the worktree's own eslint, same as pre-commit-lint.mjs
+
+     const changed = execFileSync('git', ['diff', '--name-only', '--diff-filter=ACMR', range], { encoding: 'utf8' })
+       .split('\n').map((s) => s.trim()).filter(Boolean);
+     const lintable = changed.filter((f) => /\.(ts|tsx|mts|cts|js|mjs|cjs|jsx)$/.test(f) && existsSync(f));
+
+     // Same flags as scripts/hooks/pre-commit-lint.mjs (`--no-warn-ignored`), via the API.
+     const eslint = new ESLint({ cwd: wt, warnIgnored: false });
+     const ignored = [];
+     const kept = [];
+     for (const f of lintable) (await eslint.isPathIgnored(f) ? ignored : kept).push(f);
+
+     const results = kept.length ? await eslint.lintFiles(kept) : [];
+     const errors = results.reduce((n, r) => n + r.errorCount, 0);
+     const warnings = results.reduce((n, r) => n + r.warningCount, 0);
+     console.log(JSON.stringify({ range, changed: changed.length, lintable: lintable.length, ignored, expected: kept.length, linted: results.length, errors, warnings }));
+
+     if (kept.length === 0) { console.error('FAIL: zero files linted — a green with nothing linted is not a pass'); process.exit(2); }
+     if (results.length !== kept.length) { console.error(`FAIL: linted ${results.length} of ${kept.length} expected files`); process.exit(2); }
+     if (errors > 0 || warnings > 0) {
+       console.log((await eslint.loadFormatter('stylish')).format(results));
+       console.error(`FAIL: ${errors} error(s), ${warnings} warning(s) (max-warnings 0)`);
+       process.exit(1);
+     }
+     console.log(`PASS: linted ${results.length} file(s), 0 errors, 0 warnings`);
+     ```
+     Run it with `node <scratch>/lint-changed.mjs C:/Claude/Projects/wt-3400-revisions-server-ops`.
+
+     Expected: a JSON summary line whose `ignored` contains `src/lib/api-types.ts` and whose `linted` equals `expected`, which must be at least 1. That is followed by `PASS: linted N file(s), 0 errors, 0 warnings`, and the command exits 0.
+
+     The plan author dry-ran this exact script against HEAD 0b24a402:
+     - With the default range on the not-yet-implemented branch (docs-only diff), it printed `{"range":"origin/main...HEAD","changed":2,"lintable":0,"ignored":[],"expected":0,"linted":0,"errors":0,"warnings":0}` and `FAIL: zero files linted …`, exiting 2.
+     - With range `d87ffb01^..d87ffb01`, a main commit that touches `src/lib/api-types.ts`, it printed `{"range":"d87ffb01^..d87ffb01","changed":32,"lintable":31,"ignored":["src/lib/api-types.ts"],"expected":30,"linted":30,"errors":0,"warnings":0}` and `PASS: linted 30 file(s), 0 errors, 0 warnings` in about 3.5 s, exiting 0.
+
+  If any of the three fails, check whether it also fails on `origin/main`, per CLAUDE.md, and report the result either way.
+
+- [ ] **Step 3: The replace refuse-before-delete test, run here.** `book-state.replace-manuscript.test.ts` is in the **fast** pool (it is not in `SLOW_FILES_TO_EXCLUDE`, `server/vitest.config.ts:35-58`). Run it with `timeout: 600000`:
+  `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/book-state.replace-manuscript.test.ts -t "plan 285"`
+  Expected: both `plan 285 — replace …` tests pass.
+
+- [ ] **Step 4: PR-1 acceptance checklist.** Tick each item and give its evidence. Items marked **(CI)** cannot be confirmed in a lane: write "confirmed by verify.yml" against them, and the coordinator ticks them once CI is green.
   - [ ] **Only `revisions-store.ts` writes revisions.json.**
     - Run `git -C <wt> grep -n "revisionsJsonPath" -- server/src ':!*.test.ts'`.
-    - The writers should be only `revisions-store.ts` and the still-accepted PR-1 `PUT /state` revisions case in `book-state.ts`, which you can find by `case 'revisions':` / `await writeJsonAtomic(revisionsJsonPath(bookDir), body.patch);`.
+    - The writers should be `revisions-store.ts` and the still-accepted PR-1 `PUT /state` revisions case in `book-state.ts`, and nothing else. Find that case by `case 'revisions':` / `await writeJsonAtomic(revisionsJsonPath(bookDir), body.patch);`.
     - `GET /state` (`}>(revisionsJsonPath(bookDir));`) still reads the file raw.
   - [ ] **The lock key is built in code in exactly one place.**
     - Run `` git -C <wt> grep -nE 'revisions:\$\{' -- 'server/src/**/*.ts' ':!*.test.ts' ``. Expect exactly one line: the `return` in `revisionsLockKey` in `revisions-store.ts`.
-    - Comments do not match this pattern: the store header spells the key `"revisions:" + …` and `cast-lock.ts` spells it `revisions:<abs bookDir>`.
+    - Comments must not match. The store header spells the key `"revisions:" + …` and `cast-lock.ts` spells it `revisions:<abs bookDir>`.
     - Then run `git -C <wt> grep -n "revisionsLockKey(" -- server/src ':!*.test.ts'`. Every call site should be inside `revisions-store.ts`.
   - [ ] **The revisions lock is a leaf.** Inside `revisions-store.ts`, no other lock call appears within a locked callback, and every `writeJsonAtomic` targets `revisionsJsonPath`.
   - [ ] **Schema seam.**
     - The store imports `migrateSeamDoc` and `stampSeamSchema`.
     - The `schema-migrate.ts` comments name the store as the writer that stamps.
-    - **(CI)** The newer-schema, corrupt-file, non-object-top-level and preflight tests are green.
+    - **(CI)** The newer-schema, corrupt-file, non-object-top-level and preflight store tests are green.
   - [ ] **Preflight.**
     - `book-state.ts` calls `assertRevisionsResettable` in both routes before any deletion or write.
-    - Both refuse-before-delete tests are green, via the mutation in Step 4.
-  - [ ] **The old routes keep today's codes and order.** **(CI)** `chapter-audio.test.ts` is green, with its existing tests unchanged plus the new 409.
+    - The **reparse** refuse-before-delete test is green; Step 5's mutation 4 pins it.
+    - The **replace** refuse-before-delete test is green; Step 3 runs it.
+  - [ ] **The old routes keep today's codes and order.**
+    - The existing tests are unchanged. `git -C <wt> diff origin/main...HEAD -- server/src/routes/chapter-audio.test.ts` shows **only added lines**, which are the one new 409 test: no `-` lines other than the `---` file header.
+    - **(CI)** The whole `chapter-audio.test.ts` file is green.
   - [ ] **Every finalize caller passes no `review`.**
-    - The splice spy test is green via the Step 4 mutation.
+    - The splice spy test is green; Step 5's mutation 3 pins it.
     - **(CI)** The QA-repair and generation spy tests are green.
-  - [ ] **No new cross-layer import into generation.** `git -C <wt> diff origin/main...HEAD -- server/src/routes/generation.ts | grep "^+import"` should show only `./review-request.js`.
-  - [ ] **`previous-audio.ts` does not import generation.** `git -C <wt> grep -n "generation" -- server/src/audio/previous-audio.ts` should return nothing.
-  - [ ] **OpenAPI.** Every field added to an existing schema is optional, and the contract test passes, as Step 2's typecheck enforces.
+  - [ ] **No new cross-layer import into generation.** `git -C <wt> diff origin/main...HEAD -- server/src/routes/generation.ts | grep "^+import"` shows only `./review-request.js`.
+  - [ ] **`previous-audio.ts` does not import generation.** `git -C <wt> grep -n "generation" -- server/src/audio/previous-audio.ts` returns nothing.
+  - [ ] **OpenAPI.** Every field added to an existing schema is optional, and the contract test passes. Step 2's typecheck enforces this.
   - [ ] **CLAUDE.md.**
     - It says "twenty" `requestFailureMessage` sites, and `git -C <wt> grep -n "requestFailureMessage(" -- "server/src/**/*.ts" ":!*.test.ts"` shows 20 call sites plus the definition.
     - It says "FIVE handlers" and names `applyReview`.
     - Rule 4 names the revisions leaf lock.
-  - [ ] **The stale-comment fixes are present:**
-    - `schema-migrate.ts` (both comments);
-    - `revisions-slice.ts` (`applyPoll`);
-    - the `revisions.test.ts` header;
-    - spec `:369` (the observable-changes list);
-    - spec `:468` (release notes).
+  - [ ] **The stale-comment fixes are present.**
+    - `schema-migrate.ts`: both comments.
+    - `revisions-slice.ts`: `applyPoll`.
+    - The `revisions.test.ts` header.
+    - Spec `:369`: the observable-changes list.
+    - Spec `:468`: release notes.
   - [ ] **No restructure pending drop.** `git -C <wt> diff origin/main...HEAD -- server/src/routes/chapters-restructure.ts` is empty.
   - [ ] **No sidecar changes.** `git -C <wt> diff --stat origin/main...HEAD -- server/tts-sidecar` is empty.
   - [ ] **INDEX and release notes.**
     - INDEX has the 285 entry.
     - `docs/release-notes-next.md` has the single technical #3400 entry.
-    - `git -C <wt> diff --stat origin/main...HEAD -- RELEASE_NOTES.md` is empty.
+    - `RELEASE_NOTES.md` has the single user-facing line at the top of the in-progress section.
   - [ ] **(CI) Every battery is green:** typecheck, lint, test, test:server, test:server-slow, check:cycles and build. Write "confirmed by verify.yml".
 
-- [ ] **Step 4: Re-run the four highest-value mutations.** Each is a single-file test run. For each one:
-  1. Make the mutation.
-  2. Run the test and paste the red line.
-  3. Restore the code and re-run to confirm green.
-
-  Afterwards, `git -C <wt> status --porcelain` must be empty.
+- [ ] **Step 5: Re-run the four highest-value mutations.** Each is a single-file test run; use `timeout: 600000`. For each one, make the mutation, paste the red line, restore the code, and re-run to confirm green. Afterwards, `git -C <wt> status --porcelain` must be empty.
   1. **Task 1 #1: lock key without `resolve`.** This is the locking invariant everything rests on. Run `…server run test -- src/workspace/revisions-store.test.ts`.
   2. **Task 4 #1: no `live_audio_missing` pre-check.** This is the only path that could delete the last copy of a take. Run `…server run test -- src/routes/revision-ops.test.ts`.
   3. **Task 8 #2: `review: null` at the splice caller.** This breaks the PR-1 dark invariant. Run `…server run test -- src/routes/chapter-splice.test.ts -t "plan 285"`.
   4. **Task 12 #2: delete the reparse preflight.** This is the one irreversible PR-1 behaviour. The guaranteed red is the `state.json` equality check. Run `…server run test -- src/routes/book-state.reparse.test.ts`.
 
-- [ ] **Step 5: Verdict.**
+- [ ] **Step 6: Verdict.**
   - **PASS** only if all of these hold:
     - Step 1's checks hold.
-    - Step 2 is green.
+    - Steps 2 and 3 are green.
     - Every non-CI checklist item is ticked.
     - Every mutation went red and was restored to green.
-  - Otherwise **FAIL**: state the reason and stop without opening a PR.
+  - Otherwise **FAIL**: give the reason and stop without opening a PR.
 
-- [ ] **Step 6: Open the PR (PASS only)**
-  1. Check the title. Write `feat(server): server-owned revisions.json per-operation writes (dark)` to a scratch file and run `node C:/Claude/Projects/wt-3400-revisions-server-ops/scripts/validate-commit-msg.mjs <that file>`. Expected: exit 0.
+- [ ] **Step 7: Open the PR (PASS only).**
+  1. Write `feat(server): server-owned revisions.json per-operation writes (dark)` to a scratch file and run `node C:/Claude/Projects/wt-3400-revisions-server-ops/scripts/validate-commit-msg.mjs <that file>`. Expected: exit 0.
   2. Write the body to a scratch file, following `.github/pull_request_template.md`:
      ```markdown
      ## Summary
@@ -4266,12 +4381,15 @@ If any step fails, report it and stop. Do not fix anything inline. The coordinat
      Refs #3400
      Refs #3397
 
-     Release notes: one technical, operator-facing entry in `docs/release-notes-next.md` — reparse/replace refuse a newer-schema revisions.json before touching anything (and otherwise reset it rather than delete it); the Revisions polls and the QA report now answer 500 for an unparseable, newer-schema or non-object revisions.json, including for a book with no confirmed cast, and one such book fails the whole bulk poll; three new revisions routes land unused. No `RELEASE_NOTES.md` user line: nothing changes for a user in normal use — every changed path needs a corrupt, hand-edited or newer-server revisions.json, and the new routes have no caller. PR 2 carries the user-facing notes.
+     Release notes:
+     - **`docs/release-notes-next.md`** (technical, operator-facing): reparse/replace refuse a newer-schema revisions.json before touching anything, and otherwise reset it (new `fileId`, empty) rather than delete it; the Revisions polls and the QA report now answer 500 where they previously answered 200 — an unparseable revisions.json in a book with **no** confirmed cast (a book with a cast already answered 500), a newer-schema file, and valid JSON whose top level is not an object, cast or not — and one such book fails the whole bulk poll; three new revisions routes land unused.
+     - **`RELEASE_NOTES.md`** (user-facing): one line — reparsing a book whose review history was saved by a newer Castwright is now refused before anything is touched.
 
      ## Test plan
 
      - [ ] cloud `verify.yml` (required status check) — **pending**: the full batteries (typecheck, lint, test, test:server, test:server-slow, check:cycles, build) run there; they exceed a lane's per-command limit and were not run locally
-     - [x] typecheck, check:cycles, and eslint on the changed files — green locally (Task 13)
+     - [x] typecheck, check:cycles, and eslint on the changed files (with a linted-file-count assertion) — green locally (Task 13)
+     - [x] replace refuse-before-delete test — green locally (Task 13)
      - [x] Mutation re-runs (each observed red, then restored green):
        - lock key without `resolve` → <observed red line>
        - no `live_audio_missing` pre-check → <observed red line>
@@ -4279,14 +4397,15 @@ If any step fails, report it and stop. Do not fix anything inline. The coordinat
        - reparse preflight removed → <observed red line>
      - [ ] `pr-review-gate` pass (run by the coordinator once `verify.yml` is green)
      ```
-     Before you create the PR, replace each `<observed red line>` with the actual output from Step 4. No placeholder may remain.
+     Replace each `<observed red line>` with the actual output from Step 5 before creating the PR. No placeholder may remain.
   3. Run `gh pr create --repo dudarenok-maker/Castwright --base main --head fix/server-3400-revisions-server-ops --title "feat(server): server-owned revisions.json per-operation writes (dark)" --body-file <body file>`.
-  4. Do not merge. The coordinator waits for green `verify.yml`, then runs the mandatory `pr-review-gate` pass, then merges.
+  4. Do not merge. The coordinator waits for a green `verify.yml`, then runs the mandatory `pr-review-gate` pass, then merges.
 
-- [ ] **Step 7: Report**
+- [ ] **Step 8: Report.** Include:
   - the verdict and the PR URL;
-  - Step 2's results;
-  - each checklist result with its evidence, marking which items are left to CI;
+  - Step 2's three results, including the lint summary JSON line;
+  - Step 3's result;
+  - each checklist result with its evidence, noting which items are left to CI;
   - each mutation's observed red line.
 
 ---
@@ -4308,7 +4427,7 @@ If any step fails, report it and stop. Do not fix anything inline. The coordinat
 | §3 SSE threading | Task 8 |
 | §3 server `review` | Tasks 9 and 10 |
 | §3 client `review` | Task 11 |
-| Delivery (the CLAUDE.md lines, INDEX, the technical release-notes entry with no user line) | Tasks 4, 5, 7 and 12 |
+| Delivery (the CLAUDE.md lines, INDEX, the technical release-notes entry and the one user-facing RELEASE_NOTES.md line) | Tasks 4, 5, 7 and 12 |
 | Verification and the PR | Task 13: lane-sized checks, the checklist, the mutations, the verdict and the PR. The full batteries run in cloud `verify.yml`. |
 | Stale comments the work makes false (chore rule) | `schema-migrate.ts` in Task 1; `revisions-slice.ts` and the `revisions.test.ts` header in Task 5; spec `:369` and `:468` in Task 12 |
 
