@@ -1281,3 +1281,64 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
     expect(r.chapters[1][0].characterId).toBe(COLLAPSED_ID);
   }, 60_000);
 });
+
+describe('main-route resume: which failed chapters re-enter cast detection (#3435)', () => {
+  beforeAll(async () => {
+    await import('./analysis.js');
+  }, 120_000);
+
+  /** A book with NO stage1: chapter 1 attribution-flagged (has its cast, cached
+      collapsed sentences), chapter 2 cast-failed (empty-array failure marker). */
+  async function runResume(label: string) {
+    const seed = await seedBook(label, [1, 2]);
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runMainAnalyzerJob } = await import('./analysis.js');
+    await saveAnalysisCache(seed.manuscriptId, {
+      chapters: {
+        1: [{ id: 101, chapterId: 1, characterId: 'narrator', confidence: 0.9, text: BODIES[1] }],
+      } as never,
+      chapterCast: { 1: [novaCharacter()], 2: [] },
+      failedChapterIds: [1, 2],
+      failedChapterErrors: {
+        '1': { code: 'attribution-collapse', message: 'seeded', remediation: 'seeded' },
+        '2': { code: 'analyzer-timeout', message: 'seeded', remediation: 'seeded' },
+      },
+    } as never);
+    const castCalls: number[] = [];
+    const phase0 = buildSelection(
+      stubAnalyzer({
+        async runStage1Chapter(_m, chapterId): Promise<Stage1ChapterOutput> {
+          castCalls.push(chapterId);
+          return { characters: [novaCharacter()] };
+        },
+      }),
+      'phase0-model',
+    );
+    (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection = buildSelection(
+      stubAnalyzer({ runStage2Chapter: async (_m, id) => stage2For(id) }),
+      MODEL,
+    );
+    const events = captureEvents(seed.job);
+    try {
+      await runMainAnalyzerJob(seed.job, getManuscript(seed.manuscriptId)! as never, phase0, {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      return { castCalls, events, after };
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  it('PE: an attribution-flagged chapter with a cast is not re-queued into cast detection and not cleared by the resume; the cast-failed one is', async () => {
+    const { castCalls, events, after } = await runResume('pe-resume');
+    expect(castCalls).toEqual([2]);
+    expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([2]);
+    expect(after.failedChapterIds).toEqual([1]);
+    expect(after.failedChapterErrors?.['1']?.code).toBe('attribution-collapse');
+  }, 60_000);
+});

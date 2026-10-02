@@ -4445,7 +4445,12 @@ export async function runMainAnalyzerJob(
       for (let i = 0; i < totalCastChapters; i++) {
         const ch = recordRef.chapterHints[i];
         if (ch.excluded) continue;
-        if (!chapterCast[ch.id] || failedSet.has(ch.id)) castTaskIndices.push(i);
+        /* Only a CAST-failed chapter (the empty-array marker) re-enters Phase 0a:
+           a failed id that still has a cast was flagged for its attribution
+           (#3435), which re-detecting its cast neither fixes nor should clear. */
+        if (!chapterCast[ch.id] || (failedSet.has(ch.id) && !chapterCast[ch.id].length)) {
+          castTaskIndices.push(i);
+        }
       }
       const castConcurrency = analyzerPoolWidth();
       if (castTaskIndices.length > 0) {
