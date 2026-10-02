@@ -46,7 +46,7 @@ import type { Stage2CoverageVerdict } from '../analyzer/stage2-coverage.js';
 import type { CharacterOutput, SentenceOutput, Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { EngineReport } from '../analyzer/dialogue-structure/types.js';
 import type { BookStateJson } from '../workspace/scan.js';
-import { GeminiContentBlockedError } from '../analyzer/errors.js';
+import { GeminiContentBlockedError, AnalysisAbortedError } from '../analyzer/errors.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
 import { normaliseNameKey } from '../util/safe-id.js';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
@@ -76,6 +76,20 @@ vi.mock('../gpu/analyzer-device-state.js', () => ({
   getLastKnownAnalyzerDevice: () => 'unknown',
 }));
 
+/* Counts every undici request (the Ollama transport's fetch) so a test can
+   assert it never reached the network. Pass-through otherwise. */
+vi.mock('undici', async () => {
+  const actual = await vi.importActual<typeof import('undici')>('undici');
+  return {
+    ...actual,
+    fetch: ((...args: Parameters<typeof actual.fetch>) => {
+      const g = globalThis as Record<string, number>;
+      g.__analysis_test_undici_calls = (g.__analysis_test_undici_calls ?? 0) + 1;
+      return actual.fetch(...args);
+    }) as typeof actual.fetch,
+  };
+});
+
 /* Controls the Phase-1 analyzer selection `runMainAnalyzerJob` resolves —
    mirrors the pattern in analysis.phase-model.test.ts / analysis-pipelining.test.ts. */
 vi.mock('../analyzer/select-analyzer.js', async () => {
@@ -88,6 +102,11 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
       const g = globalThis as Record<string, unknown>;
       if (opts.phase === 'phase1' && g.__analyzer_device_test_phase1_selection) {
         return g.__analyzer_device_test_phase1_selection;
+      }
+      /* Phase 0 hook for the #3004 rejoin test: a real run must never reach a
+         live analyzer (a local Ollama request pins the model in VRAM). */
+      if (opts.phase === 'phase0' && g.__analysis_test_phase0_selection) {
+        return g.__analysis_test_phase0_selection;
       }
       return actual.selectAnalyzerForPhase(
         opts as Parameters<typeof actual.selectAnalyzerForPhase>[0],
@@ -8876,6 +8895,30 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       bookDir,
     });
 
+    /* The rejoin-miss frame is followed by a REAL run (the route starts one
+       after a miss). Give its Phase-0 analyzer a stub that only settles when
+       the job's abort signal fires, so the run never touches a live analyzer
+       on any machine and the pause below is REQUIRED for the run to end. */
+    const g3004 = globalThis as Record<string, unknown>;
+    let phase0Calls = 0;
+    g3004.__analysis_test_undici_calls = 0;
+    g3004.__analysis_test_phase0_selection = {
+      engine: 'gemini',
+      model: 'stub-3004',
+      fallbackModel: null,
+      analyzer: {
+        runStage1: () => Promise.reject(new Error('not used')),
+        runStage1Chapter: (_id: string, _ch: number, _prompt: string, call: StageCall) => {
+          phase0Calls++;
+          return new Promise<Stage1ChapterOutput>((_resolve, reject) => {
+            const abort = () => reject(new AnalysisAbortedError('stub phase-0 aborted'));
+            if (call.signal?.aborted) abort();
+            else call.signal?.addEventListener('abort', abort, { once: true });
+          });
+        },
+      },
+    } as unknown as AnalyzerSelection;
+
     let server: import('node:http').Server | undefined;
     let port = 0;
     let syntheticEndedAt = 0;
@@ -8971,6 +9014,11 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
          isAnalysisJobRunning alone is true->false the instant the controller
          aborts, before the run has actually unwound. */
       if (server) {
+        /* Let the run reach the stub before pausing, so the pause is what ends it. */
+        const reachDeadline = Date.now() + 2_000;
+        while (phase0Calls === 0 && Date.now() < reachDeadline) {
+          await new Promise((r) => setTimeout(r, 10));
+        }
         await new Promise<void>((resolvePause) => {
           const preq = http.request(
             { host: '127.0.0.1', port, path: `/api/manuscripts/${manuscriptId}/analysis/pause`, method: 'POST' },
@@ -8998,6 +9046,11 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       rmSync(workspaceRoot, { recursive: true, force: true });
       if (prevWorkspaceDir === undefined) delete process.env.WORKSPACE_DIR;
       else process.env.WORKSPACE_DIR = prevWorkspaceDir;
+      const undiciCalls = g3004.__analysis_test_undici_calls;
+      delete g3004.__analysis_test_phase0_selection;
+      delete g3004.__analysis_test_undici_calls;
+      expect(phase0Calls, 'the run must have reached the stub Phase-0 analyzer, not a real one').toBe(1);
+      expect(undiciCalls, 'the #3004 test must not touch the network').toBe(0);
       expect(stillRunning, 'the analysis run the rejoin POST started must have settled').toBe(false);
     }
   }, 30_000);
