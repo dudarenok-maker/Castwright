@@ -230,6 +230,10 @@ A server test round-trips `review` through enqueue and claim into the request.
 - Add `acceptRevision`, `rejectRevision` and `dismissDrift`, each real and mock. The mocks apply the store's rules to `MOCK_BOOK_STATES` (`api.ts:917`).
 - The mock fixture's seeded entry gets `origin:'server'`.
 - `mockPollRevisions` reads `MOCK_BOOK_STATES` (D7).
+- **The background bulk poll gets a catch** (D9, a pre-existing defect found while planning PR 1).
+  - **The defect:** `layout.tsx` ~1153-1158 calls `api.pollRevisionsBulk(…).then(…)` with **no catch**. One book whose revisions.json makes the bulk route 500 is therefore a silent unhandled rejection that stalls the background drift badges of **every other** book.
+  - **Status today:** main already does this for an unparseable file in a cast book. PR 1 adds one newly reachable trigger, a cast book whose file has a non-object top level. (A book with no confirmed cast never enters the bulk request, `layout.tsx:1137-1146`.)
+  - **The fix:** catch each poll, and log or toast once (deduped).
 - `mockStreamSplice` records pending as finalize does, takes `bookId`, and takes a test-controllable delay.
 - **`mockStreamGeneration`** (`api.ts:1625`) records pending for a `review` request exactly as finalize does. For a first render it records nothing. It also emits `reviewChapter:true` on that chapter's `chapter_complete`.
 - Mock book state gains `previousChapterIds: number[]`, mirroring `.previous` on disk.
@@ -375,7 +379,10 @@ The new routes and the store exist but nothing calls them. The only PR 1 changes
 - the restructure drop is wired;
 - `GET /state` is normalised;
 - `PUT slice:'revisions'` returns **400 `revisions_server_owned`**;
-- the two old routes return **410 `moved`**, never 404: the old client's `acceptChapterRevision` treats 404 as success (`api.ts:10218-10221`).
+- the two old routes return **410 `moved`**, never 404: the old client's `acceptChapterRevision` treats 404 as success (`api.ts:10218-10221`);
+- **the bulk route `GET /api/revisions` isolates per-book failures** (D9).
+  - A book whose computation throws is skipped, and its id goes into an `errors` map (`{ byBookId, errors: { [bookId]: string } }`; curated through `requestFailureMessage`, OpenAPI updated). One bad file therefore no longer blanks every other book.
+  - It lands with the client catch above. PR 1 keeps today's whole-response 500 so that it changes nothing observable beyond its stated list.
 
 On rollout, an old tab's revisions PUT gets a 400 that is only `console.error`-logged (revisions has no `TOAST_ON_PERSIST_FAILURE` handler, `persistence-middleware.ts:416-417`). Its accept/reject get a 410, which toasts. Disk is unchanged either way. Files on disk are normalised on read. Historically lost entries are not recreated.
 
@@ -441,9 +448,11 @@ Every behavioural item has a paired test, mutation-checked: revert the fix and o
 - the preview stub survives polls and refetches, Approve on it makes no revisions call, and Reject on it calls `restore-unrecorded`;
 - a vanishing `server` entry under an open preview clears `previewRegen`;
 - mock generation records pending for `review` and emits `reviewChapter`.
+- a failing bulk poll is caught: no unhandled rejection, and at most one log or toast. The other books' drift is still applied from a partial `byBookId` (D9).
 
 **Server switches:**
 - each caller's `review` value;
+- the bulk route isolates a throwing book: the others are still returned, and the bad one appears in `errors` with a curated message (D9);
 - the restructure drop for id-changed, split/merge and rename, best-effort, with no message leak;
 - the 400 and 410;
 - `GET /state` normalised.

@@ -24,9 +24,9 @@ owner: null
 
 ## Benefit / Rationale
 
-- **User:** PR 1 is dark for the revisions flow itself. The only user-noticeable changes are a corner-case safeguard and one side effect, both in the `RELEASE_NOTES.md` line Task 12 adds:
-  - Reparse and replace now refuse a review-history file written by a newer Castwright, before touching the book. No user can reach this until a later version writes `schema: 2`.
-  - A damaged review-history file now stops the background drift badges of the *other* books from refreshing.
+- **User:** PR 1 is dark for the revisions flow itself.
+  - **The `RELEASE_NOTES.md` line** Task 12 adds covers only a forward-looking safeguard. Reparse and replace refuse a review-history file written by a newer Castwright, before touching the book. No user can reach this until a later version writes `schema: 2`.
+  - **One corner-case side effect** is documented in the technical notes and in Reversibility 3, not in the user line. The bulk poll only ever asks for non-active books that are past analysis (`layout.tsx:1137-1146` filters out `not_analysed`, `analysing`, `cast_pending`, `voices_pending`, `unreadable` and `orphaned`), so a book with no confirmed cast never enters it. Its `.then` has no `catch` (`layout.tsx` ~1153-1158), so one failing book is a silent unhandled rejection that stalls every *other* book's background drift badges. Main already does this for an unparseable file in a cast book, and the newer-schema case cannot be reached until a later version writes `schema: 2`. That leaves one newly reachable trigger in PR 1: a cast book whose revisions.json is valid JSON with a non-object top level (`null`, `[]`, a string or a number).
 
   PR 2 builds on it to fix #3397, where a Fix-audio prompt gets stuck or lost when the user leaves the book. It also fixes #3400, where stale client state erases revisions.json.
 - **Technical:** revisions.json gets a single owner with a per-book lock. It also gets a `fileId`/`rev` version stamp, the existing `schema-migrate.ts` seam, and read-time normalisation. Accept and reject each become one server request, and the JSON is written only after the audio step succeeds (D1). `pending` is returned even when the cast is empty (D8).
@@ -60,7 +60,7 @@ owner: null
      - **Newer-schema file, cast or not:** new. Main parsed it like any JSON and answered 200. PR 1 refuses it through `migrateSeamDoc`.
      - **Valid JSON whose top level is not a plain object** (`null`, `[]`, a string or a number), **cast or not:** new, and accepted. Main parsed it and answered 200, because its `Array.isArray` guards read every field as empty. PR 1 treats it as corrupt and answers 500, so a later store write can never overwrite it as if it were missing.
      - **Error text:** a parse failure or a non-object top level surfaces the raw `SyntaxError` message. That is `requestFailureMessage`'s verbatim fallback, which curates only a lock-acquisition timeout. A newer schema surfaces `UnsupportedSchemaError`'s own message. Neither contains a path.
-     - **Blast radius:** the bulk `GET /api/revisions` maps every requested book through one `Promise.all`. A single such book therefore fails the **whole** bulk response with a 500, and every other book's drift goes with it. Main already has that blast radius for an unparseable file in a cast book. PR 1 extends it to the new cases above. The visible effect: the client's bulk poll (`layout.tsx` ~1153-1158) has no `catch`, so the other books' background drift badges silently stop refreshing until the file is fixed.
+     - **Blast radius:** the bulk `GET /api/revisions` maps every requested book through one `Promise.all`. A single such book therefore fails the **whole** bulk response with a 500, and every other book's drift goes with it. Main already has that blast radius for an unparseable file in a cast book. PR 1 extends it to the new cases above. **Visible effect:** The bulk poll only ever asks for non-active books that are past analysis (`layout.tsx:1137-1146` filters out `not_analysed`, `analysing`, `cast_pending`, `voices_pending`, `unreadable` and `orphaned`), so a book with no confirmed cast never enters it. Its `.then` has no `catch` (`layout.tsx` ~1153-1158), so one failing book is a silent unhandled rejection that stalls every *other* book's background drift badges. Main already does this for an unparseable file in a cast book, and the newer-schema case cannot be reached until a later version writes `schema: 2`. That leaves one newly reachable trigger in PR 1: a cast book whose revisions.json is valid JSON with a non-object top level (`null`, `[]`, a string or a number).
   4. **The poll carries extra fields, and `pending` now arrives with an empty cast (D8).** The old client's `applyPoll` and `applyBackgroundPoll` read only `drift`, so it never sees these.
   5. **Three new routes are mounted and reachable:** accept, reject and dismiss. No client calls them.
 
@@ -166,7 +166,7 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
 
 - **`<wt>` means `C:/Claude/Projects/wt-3400-revisions-server-ops` throughout.** Work only there. Never touch `C:/Claude/Projects/Audiobook-Generator`.
 - **The quoted code is authoritative; line numbers are advisory.** Every `file:line` here was measured on the base before any task ran, and an earlier task's edit shifts later lines in the same file. Where a later task's line moved, it says so ("after Task N's edit, near `<quoted text>`"). If a number and the quoted text ever disagree, find the quoted text.
-- The command forms below are the `$Cmd` you hand to the detach recipe (see "Lanes and long commands"). In Tasks 1–12, never run them in the foreground. Never chain them off `cd`: Task 13's Bash permission hook blocks `cd X &&`, and a Cline lane has no `&&`.
+- The command forms below are the `$Cmd` you hand to the detach recipe (see "Lanes and long commands"). In Tasks 1–12, never run them in the foreground. **Every line of a "Run:" block is its own recipe launch, with one `$Cmd` each.** Never chain commands off `cd`: Task 13's Bash permission hook blocks `cd X &&`, and the recipe does not need it.
   - Server, fast pool: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- <path under server/>`
   - Server, slow pool: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- <path> [-t "<name filter>"]`
     - This is **required for `src/routes/generation.test.ts` and `src/routes/book-state.test.ts`**. Both are listed in `SLOW_FILES_TO_EXCLUDE` (`server/vitest.config.ts:35-58`), so the fast pool silently prints "No test files found" for them.
@@ -180,7 +180,7 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
 - **Lanes.**
   - **Tasks 1–12 are auto-cloud children.** Auto-cloud resolves along the `AutoCloud` chain in `C:\Claude\open-engine\config\lanes.psd1`: `cline-glm` → `cline-free` → `cline-qwen-cloud` → `cline` → **`claude`**. A child usually lands on a Cline lane, but the chain can fall back to `claude`. The recipe below works on every lane in that chain.
   - A Cline lane runs every command through PowerShell, via the `oe-run` shim. The shim uses `pwsh` 7 if present and Windows PowerShell 5.1 otherwise (`C:\Claude\open-engine\runner\prompt.md:35-58,91-94`, `.clinerules/cline.md:60`).
-    - There is **no** `bash`, `nohup`, `grep`, `tail`, `head` or `&&`.
+    - There is **no** `bash`, `nohup`, `grep`, `tail` or `head`. `&&` is unavailable under 5.1, and the recipe does not need it.
     - A Cline lane **kills any single command at 30 s**.
   - **Task 13 (verify) runs on the `claude` lane** (Claude Code). It runs its commands in the foreground with `timeout: 600000`; see that task.
   - The coordinator sets each task's lane, and each task's header repeats it.
@@ -208,8 +208,8 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
 
     ```powershell
     # $Name: a short label for THIS run, e.g. 't4-revision-ops' or 't7-finalize-mutation2'.
-    # $Cmd : the exact command, in cmd.exe syntax (it runs under cmd /c). Prefix
-    #        'set LOW_CONCURRENCY=1&& ' (no space before &&) when re-checking a red.
+    # $Cmd : the exact command, in cmd.exe syntax (it runs under cmd /c). For a -t
+    #        run, append --reporter=verbose so the matched test titles are printed.
     $Name = 't4-revision-ops'
     $Cmd  = 'npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/revision-ops.test.ts'
     $T = Join-Path $env:TEMP ('cw-' + $Name + '-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
@@ -233,9 +233,12 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
     In the real `.ps1` file, every line starts at **column 0**. That includes the here-string's body lines and its closing `'@`. The indentation above is markdown only; strip it.
   - **Why the command goes through `cmd.txt`:** it keeps any quotes in `$Cmd`, such as `-t "plan 285"`, out of `Start-Process`'s argument quoting.
   - **Never reuse a fixed dir or log name.** The GUID suffix is load-bearing. Two lanes, or two attempts, that share a log each read the other's `EXIT=`.
-  - **Poll.** Repeat this short command with `$T` set to the dir the launch printed. It checks **the process first, then the sentinel**:
+  - **Poll.** Repeat this short command with `$T` set to the dir the launch printed. It checks **the process first, then the sentinel**.
+    - **Poll at most once every 60 s, and use no tight loops.** The block opens with its own wait. Use `-Seconds 120` for finalize and `test:slow` runs.
+    - This follows `C:\Claude\open-engine\runner\prompt.md:119-145`: make "FEWER, LONGER waits", and never open a fresh short loop identical to the last one.
 
     ```powershell
+    Start-Sleep -Seconds 60   # 120 for finalize and test:slow runs
     $T     = '<the dir the launch printed>'
     $id    = Get-Content "$T\run.pid"
     $alive = [bool](Get-Process -Id $id -ErrorAction SilentlyContinue)
@@ -250,20 +253,40 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
     ```
 
   - **Reading the result**, using PowerShell only:
-    - `EXIT=0` is green. Any other `EXIT=` is red.
+    - **Green means all of the following**, and nothing less:
+      - `EXIT=0`;
+      - the vitest summary shows `Tests  N passed` with N ≥ 1;
+      - no `failed` anywhere in the summary;
+      - for a `-t` run, every expected test title appears in the log. Run it with `--reporter=verbose` and check with `Select-String -Path "$T\run.log" -SimpleMatch '<title text>'`.
+      - A `-t` filter that matches nothing (every test skipped, `Tests  N skipped` with no `passed`) is a **FAIL**: fix the filter, don't record it.
+      - For tsc, green is `EXIT=0` with no `error TS` line.
+      - Wherever this plan says "confirm green", "Expected: PASS" or "restore … and re-run green", this rule applies.
+    - Any other `EXIT=` is red.
     - **vitest:** the summary is the `Test Files …` and `Tests …` lines the `Select-String` above prints, for example `Test Files  1 passed (1)` and `Tests  5 passed | 1 skipped (6)`. For a failing assertion, read the block around it: `Select-String -Path "$T\run.log" -Pattern 'FAIL|AssertionError|expected' -Context 0,6`.
     - **tsc / typecheck:** the result is `EXIT=` plus any `error TS…` lines. `EXIT=0` with no `error TS` line is clean.
     - The child redirects with `*>&1`, so a green run's tail can still show `NativeCommandError` noise from stderr chatter. Trust `EXIT=`, not the look of the text.
     - **While the process is alive, an `EXIT=` you can see belongs to an earlier attempt.** Keep polling.
     - Paste the summary lines, or the `error TS` lines, into your report.
 
-- **A contention red is not the intended red.** Before you record any red as red-first or mutation evidence:
-  1. Re-run **that one file alone** once, with `$Cmd` prefixed by `set LOW_CONCURRENCY=1&& `.
-  2. Check that the failure is **the stated assertion**. These never count as the intended red:
-     - a `beforeAll`/`beforeEach` "Hook timed out in 30000ms";
-     - a worker crash ("Worker exited unexpectedly", `0xC0000409`);
-     - a failure in any test other than the named one.
-  3. If the isolated re-run is green, or red for a different reason, say so and do not claim the evidence.
+- **The contention rule** covers **any unexpected red**, including a step that is expected to be green.
+  - **Contention signatures** in the log are:
+    - `Hook timed out in`;
+    - `Worker exited unexpectedly`;
+    - exit code `3221226505` (decimal, as `EXIT=3221226505`), which is `0xC0000409`.
+  - **If you see a contention signature:**
+    1. Wait 60 s and re-run once, through a fresh launch.
+    2. If it is still a contention signature, wait 2 minutes and retry. Do no more than **3 runs in total**.
+    3. If it still fails, post `AGENT NEEDS INPUT` with the log tails from every run.
+    - **Never change code to make a contention red go away.**
+  - **A red that is the stated assertion** (red-first or mutation evidence) is accepted on its **first** run. No re-run is required.
+  - **A red that is neither** (a different assertion, or a different test) is a real failure. Report it; it is not the evidence the step asked for.
+  - (`LOW_CONCURRENCY=1` is not a remedy. `server/vitest.config.ts:65-67` only changes `maxWorkers`, which is already 1 for a single file.)
+
+- **Retry is off for every red-first and mutation run.** Both vitest configs set `retry: 1` (`server/vitest.config.ts`, root `vitest.config.ts:137`). A test that consumes one-shot state, such as Task 4's `mockImplementationOnce` interleave or any module-level mutable state, can fail its first attempt and pass the retry. Vitest then reports green. That is the ops-46 hazard named in the config's own comment.
+  - Every run whose purpose is to **observe a red** (a red-first step, or a mutation check) appends `--retry=0` to its `$Cmd`.
+  - Example: `npm --prefix <wt>/server run test -- src/routes/revision-ops.test.ts -t "revision_gone" --reporter=verbose --retry=0`.
+  - Ordinary green runs keep the configured retry.
+  - A mutation check is valid only if run with `--retry=0`. A mutation that goes green without `--retry=0` proves nothing.
 
 - **No task child runs a full battery.** That rules out `npm run test`, `test:server`, `test:server-slow`, `test:all`, `verify`, `build` and the whole-tree `npm run lint`.
   - These batteries exceed a Cline lane's 30 s per-command limit, and the whole set exceeds one heartbeat. In CI run 36068522339, the fast server suite alone took 176 s on Linux and 245 s on Windows.
@@ -306,9 +329,11 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
 
 Every task ends with a **mutation check**:
 1. Make the named change.
-2. Run the named test through the detach recipe, and paste the **observed** red output into the report. Apply "A contention red is not the intended red" first: re-run that file alone with `set LOW_CONCURRENCY=1&& `, and confirm the red is the stated assertion.
+2. Run the named test through the detach recipe, and paste the **observed** red output into the report.
+   - A red that is the stated assertion is accepted on its first run.
+   - Any other red goes through the contention rule (Global Constraints).
 3. Restore the change.
-4. Re-run and confirm green.
+4. Re-run and confirm green under the Green rule.
 5. Run `git -C <wt> diff --stat` and confirm it lists **only the task's own intended files**. The mutated file must show no residue beyond the task's own edits.
 
 ## Review Focus
@@ -328,7 +353,7 @@ Every task ends with a **mutation check**:
 
 ### Task 1 (1a): Store core
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Create: `server/src/workspace/revisions-store.ts`
@@ -1060,7 +1085,7 @@ Expected: exit 0.
 
 - [ ] **Step 7: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/workspace/revisions-store.ts server/src/workspace/revisions-store.test.ts server/src/workspace/schema-migrate.ts
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server): add revisions.json store core with a per-book leaf lock (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push -u origin fix/server-3400-revisions-server-ops
@@ -1070,7 +1095,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push -u origin fix/server
 
 ### Task 2 (1b): Two-phase accept / reject ops in the store
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Modify: `server/src/workspace/revisions-store.ts` (append)
@@ -1337,7 +1362,7 @@ Expected: exit 0.
 
 - [ ] **Step 6: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/workspace/revisions-store.ts server/src/workspace/revisions-store.test.ts
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server): add two-phase accept/reject ops to the revisions store (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -1347,7 +1372,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 3 (2): Extract the A/B audio steps into `audio/previous-audio.ts`
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Create: `server/src/audio/previous-audio.ts`, `server/src/audio/previous-audio.test.ts`
@@ -1621,7 +1646,7 @@ Expected: exit 0.
 
 - [ ] **Step 10: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/audio/previous-audio.ts server/src/audio/previous-audio.test.ts server/src/routes/chapter-audio.ts server/src/routes/chapter-audio.test.ts
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "refactor(server): extract previous-take audio steps into audio/previous-audio.ts (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -1631,7 +1656,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 4 (3a): Accept / reject / dismiss routes
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Create: `server/src/routes/revision-ops.ts`, `server/src/routes/revision-ops.test.ts`
@@ -2253,7 +2278,7 @@ Expected: exit 0.
 
 - [ ] **Step 9: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/revision-ops.ts server/src/routes/revision-ops.test.ts server/src/app.ts CLAUDE.md
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server,docs): add revision accept/reject/dismiss routes (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -2263,7 +2288,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 5 (3b): Poll reshape (`revisions.ts`), curated poll and qa-report 500s
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Modify `server/src/routes/revisions.ts` (re-anchored):
@@ -2609,7 +2634,7 @@ Expected: exit 0.
 
 - [ ] **Step 6: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/revisions.ts server/src/routes/revisions.test.ts server/src/routes/qa-report.ts server/src/routes/qa-report.test.ts src/store/revisions-slice.ts CLAUDE.md
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server,frontend,docs): polls read revisions through the store; curate their 500s (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -2619,7 +2644,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 6 (4): OpenAPI for the PR-1 surface and generated types
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Modify `openapi.yaml`, re-anchored on the new base:
@@ -3047,7 +3072,7 @@ Expected: FAIL. The errors include `Property 'RevisionsState' does not exist`, `
 
 - [ ] **Step 8: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add openapi.yaml src/lib/api-types.ts src/lib/api.ts src/lib/types.ts src/lib/api-types.revisions-contract.test.ts
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(openapi,frontend): describe server-owned revisions routes and review fields (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -3057,7 +3082,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 7 (5a): Finalize `review` tri-state
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Modify `server/src/audio/finalize-chapter-write.ts`. It was re-anchored after #3362 rewrote this file:
@@ -3327,7 +3352,7 @@ describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
 
 - [ ] **Step 6: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/audio/finalize-chapter-write.ts server/src/audio/finalize-chapter-write.test.ts CLAUDE.md
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server,docs): add the finalize review tri-state, keyed on preserve (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -3337,7 +3362,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 8 (5b): Thread `reviewRecorded` onto the three completion events and assert that no caller passes `review`
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Modify `server/src/routes/chapter-splice.ts`: the `splice_complete` send at `:558-566`, where `hasPreviousAudio: true,` is `:565`.
@@ -3475,11 +3500,9 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   });
   ```
 
-  Run:
-  ```
-  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/chapter-splice.test.ts src/routes/chapter-qa-repair.test.ts -t "plan 285"
-  npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- src/routes/generation.test.ts -t "plan 285"
-  ```
+  Run these as **two separate recipe launches**, one `$Cmd` each:
+  - Launch 1: `$Cmd = 'npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/routes/chapter-splice.test.ts src/routes/chapter-qa-repair.test.ts -t "plan 285" --reporter=verbose'`
+  - Launch 2: `$Cmd = 'npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- src/routes/generation.test.ts -t "plan 285" --reporter=verbose'`. Poll this one with `Start-Sleep -Seconds 120`.
   - Expected FAIL: the three `threads reviewRecorded…` tests, each with `expected undefined to be false`.
   - Expected PASS: the "no reviewRecorded" tests, which are regression guards with a mutation in Step 4.
   - If the slow run prints "No test files found", the wrong script was used.
@@ -3519,7 +3542,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 - [ ] **Step 5: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/chapter-splice.ts server/src/routes/chapter-splice.test.ts server/src/routes/chapter-qa-repair.ts server/src/routes/chapter-qa-repair.test.ts server/src/routes/generation.ts server/src/routes/generation.test.ts
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server): thread reviewRecorded onto splice/QA-repair/generation completion events (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -3529,7 +3552,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 9 (6a): Server `review` validator, queue and queue-io (fast pool only)
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Create: `server/src/routes/review-request.ts`, `server/src/routes/review-request.test.ts`
@@ -3685,7 +3708,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 - [ ] **Step 5: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/review-request.ts server/src/routes/review-request.test.ts server/src/routes/queue.ts server/src/routes/queue.test.ts server/src/workspace/queue-io.ts server/src/workspace/queue-io.test.ts
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server): validate review and carry it on the persisted queue entry (dark) (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -3695,7 +3718,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 10 (6b): Generation request `review` — a 400 before SSE, and `reviewChapter` only on the rendered chapter (slow pool)
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Modify `server/src/routes/generation.ts` (re-anchored):
@@ -3827,7 +3850,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 - [ ] **Step 5: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/generation.ts server/src/routes/generation.test.ts
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server): accept review on the generation request; stamp reviewChapter (dark) (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -3837,7 +3860,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 11 (6c): Client `review` plumbing
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Modify (re-anchored):
@@ -4006,7 +4029,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 - [ ] **Step 5: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add src/store/queue-thunks.ts src/lib/api.ts src/store/generation-stream-runner.ts src/store/queue-dispatcher-middleware.ts src/lib/api-stream-review.test.ts src/store/queue-dispatcher-middleware.test.ts src/mocks/mock-queue.test.ts
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(frontend): carry review from the queue entry into the generation POST (dark) (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -4016,7 +4039,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 ### Task 12 (7): Reparse/replace preflight and reset through the store, plus lock-order docs and INDEX
 
-**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the LOW_CONCURRENCY rule before recording any red.
+**Lane: auto-cloud (Cline): detach every test/typecheck.** Every `vitest`, `test:slow`, `typecheck`, `openapi:types` and `check:cycles` command in this task goes through the Global Constraints detach recipe and is polled. Only `git`, `gh`, reads and edits run in the foreground. Apply the Green rule and the contention rule (Global Constraints) to every result.
 
 **Files:**
 - Modify `server/src/routes/book-state.ts`. Re-anchored line numbers:
@@ -4029,8 +4052,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 - Modify `server/src/routes/book-state.replace-manuscript.test.ts`: new tests.
 - Modify `server/src/workspace/cast-lock.ts:18-24` (rule 4), `CLAUDE.md:582-584` (rule 4) and `docs/features/INDEX.md` (`### G. Generation`).
 - Modify `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md`, at two places this task makes false:
-  - `:369`. Its "only PR 1 changes an old client could observe" sentence names two changes; it must match this plan's Reversibility list.
-  - `:468`. "PR 1's are none" must match the two release-notes entries this task adds: the technical one and the user-facing one.
+  - `:373`. Its "only PR 1 changes an old client could observe" sentence names two changes; it must match this plan's Reversibility list.
+  - `:477`. "PR 1's are none" must match the two release-notes entries this task adds: the technical one and the user-facing one.
 - Modify `docs/release-notes-next.md` (one technical, operator-facing entry).
 - Modify `RELEASE_NOTES.md`: add one short user-facing line at the top of the in-progress `# Castwright 1.15.0` list.
 
@@ -4250,7 +4273,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
      ```
 
 - [ ] **Step 5: Spec sentences and release notes**
-  1. In `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md`, find the paragraph that begins `The new routes and the store exist but nothing calls them. The only PR 1 changes an old client could observe are …` (line 369). Replace it with:
+  1. In `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md`, find the paragraph that begins `The new routes and the store exist but nothing calls them. The only PR 1 changes an old client could observe are …` (line 373). Replace it with:
      ```
      The new routes and the store exist but nothing calls them. The PR 1 changes an old client could observe (the plan's Reversibility list, `docs/features/285-revisions-server-ops.md`):
      - reparse/replace **reset** the file under the lock instead of deleting it — observably the same: the old client's hydrate spreads the payload (`layout.tsx:915`) and an empty file reads like a missing one;
@@ -4259,17 +4282,17 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
      - D8 (pending with an empty cast) and the poll's extra fields, which the old `applyPoll`/`applyBackgroundPoll` ignore (`revisions-slice.ts:318-331`);
      - three new, uncalled routes (accept, reject, dismiss).
      ```
-  2. In the same spec's Delivery list, replace line 468, `  - release notes. PR 1's are none: dark, with no shippable delta. Say so explicitly in the PR.`, with:
+  2. In the same spec's Delivery list, replace line 477, `  - release notes. PR 1's are none: dark, with no shippable delta. Say so explicitly in the PR.`, with:
      ```
-       - release notes. PR 1 carries one technical, operator-facing entry in `docs/release-notes-next.md` (reparse/replace refuse a newer-schema revisions.json before touching anything, and otherwise reset it rather than delete it; the polls and QA report answer 500 where they used to answer 200 — an unparseable file in a book with no confirmed cast, a newer-schema file, or a non-object top level — and one such book fails the whole bulk poll; three unused revisions routes) plus one user-facing `RELEASE_NOTES.md` line: the newer-version refusal, which no user can reach until a later version writes `schema: 2`, and the visible side effect that a damaged file stops the other books' background drift badges from refreshing. Say so in the PR.
+       - release notes. PR 1 carries one technical, operator-facing entry in `docs/release-notes-next.md` (reparse/replace refuse a newer-schema revisions.json before touching anything, and otherwise reset it rather than delete it; the polls and QA report answer 500 where they used to answer 200 — an unparseable file in a book with no confirmed cast, a newer-schema file, or a non-object top level — and one such book fails the whole bulk poll; three unused revisions routes) plus one user-facing `RELEASE_NOTES.md` line carrying only the forward-looking newer-version refusal (no user can reach it until a later version writes `schema: 2`). The bulk-poll side effect is technical-only: main already stalls the bulk poll on an unparseable file in a cast book; a book with no confirmed cast never enters the bulk request (`layout.tsx:1137-1146`); so the only newly reachable trigger is a cast book whose file has a non-object top level. Say so in the PR.
      ```
   3. In `docs/release-notes-next.md`, append this bullet at the end of the `## 🔌 Sync & server infrastructure` section. It is technical and operator-facing.
      ```
-     - **Re-parse and replace-manuscript now refuse a `revisions.json` written by a newer server — before touching anything — instead of deleting it** (#3400). revisions.json now goes through the per-file schema seam (`schema-migrate.ts`) and a new server-side owner (`workspace/revisions-store.ts`, a per-book leaf lock with a `fileId`/`rev` stamp); a reparse/replace whose book carries a newer-schema file answers 500 with the "upgrade the server" message and leaves cast, audio, state and manuscript untouched, and otherwise *resets* the file (new `fileId`, empty) rather than removing it. The Revisions polls and the QA report now answer 500 in three cases where they previously answered 200: an unparseable revisions.json in a book with **no** confirmed cast (main never read the file there; a book with a cast already answered 500), a newer-schema file (cast or not), and valid JSON whose top level is not an object (`null`, `[]`, a string or a number; cast or not). One such book fails the whole bulk revisions poll. The client (`layout.tsx` ~1153-1158) calls `api.pollRevisionsBulk(…).then(…)` with no `catch`, so the failure is a silent unhandled rejection: **background drift badges for every other non-active book stop refreshing until the file is fixed**. The active book polls separately and is unaffected. The 500 carries the raw parse error or the "upgrade the server" message (neither contains a path); only a lock-acquisition timeout gets the curated contention message. Three new server routes (`POST …/revisions/{id}/accept`, `…/reject`, `POST …/drift/{id}/dismiss`) land unused — the app keeps writing revisions the old way until the client cutover (plan 285 PR 2).
+     - **Re-parse and replace-manuscript now refuse a `revisions.json` written by a newer server — before touching anything — instead of deleting it** (#3400). revisions.json now goes through the per-file schema seam (`schema-migrate.ts`) and a new server-side owner (`workspace/revisions-store.ts`, a per-book leaf lock with a `fileId`/`rev` stamp); a reparse/replace whose book carries a newer-schema file answers 500 with the "upgrade the server" message and leaves cast, audio, state and manuscript untouched, and otherwise *resets* the file (new `fileId`, empty) rather than removing it. The Revisions polls and the QA report now answer 500 in three cases where they previously answered 200: an unparseable revisions.json in a book with **no** confirmed cast (main never read the file there; a book with a cast already answered 500), a newer-schema file (cast or not), and valid JSON whose top level is not an object (`null`, `[]`, a string or a number; cast or not). One such book fails the whole bulk revisions poll, which stalls every other book's background drift badges until the file is fixed. The active book polls separately and is unaffected. The bulk poll only ever asks for non-active books that are past analysis (`layout.tsx:1137-1146` filters out `not_analysed`, `analysing`, `cast_pending`, `voices_pending`, `unreadable` and `orphaned`), so a book with no confirmed cast never enters it. Its `.then` has no `catch` (`layout.tsx` ~1153-1158), so one failing book is a silent unhandled rejection that stalls every *other* book's background drift badges. Main already does this for an unparseable file in a cast book, and the newer-schema case cannot be reached until a later version writes `schema: 2`. That leaves one newly reachable trigger in PR 1: a cast book whose revisions.json is valid JSON with a non-object top level (`null`, `[]`, a string or a number). A client catch and per-book isolation in the bulk route are owed in PR 2. The 500 carries the raw parse error or the "upgrade the server" message (neither contains a path); only a lock-acquisition timeout gets the curated contention message. Three new server routes (`POST …/revisions/{id}/accept`, `…/reject`, `POST …/drift/{id}/dismiss`) land unused — the app keeps writing revisions the old way until the client cutover (plan 285 PR 2).
      ```
   4. In `RELEASE_NOTES.md`, add this line as the first bullet under `# Castwright 1.15.0`. It matches its neighbours' voice: a bold plain-English lead, then one or two sentences.
      ```
-     - **Castwright now guards a book's review history more strictly.** From now on, if a book's review history was ever saved by a newer version of Castwright, reparsing or replacing that book's manuscript is refused before anything is touched — you're asked to update Castwright first, and the book is left exactly as it was (until now Castwright would have discarded that history along with the old cast and audio). One side effect you may notice: if a book's review-history file is damaged, the drift badges for your *other* books stop refreshing in the background until that file is repaired or the book is re-parsed.
+     - **Reparsing or replacing a book is now refused, before anything is touched, if its review history was saved by a newer version of Castwright.** This is a safeguard for the future: rather than discarding that history along with the old cast and audio, Castwright asks you to update it first and leaves the book exactly as it was.
      ```
      Task 13 lists both notes in the PR body.
 
@@ -4283,7 +4306,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 - [ ] **Step 7: Commit and push**
 
-```bash
+```powershell
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/book-state.ts server/src/routes/book-state.reparse.test.ts server/src/routes/book-state.replace-manuscript.test.ts server/src/workspace/cast-lock.ts CLAUDE.md docs/features/INDEX.md docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md docs/release-notes-next.md RELEASE_NOTES.md
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "fix(server,docs): reset revisions.json through the store on reparse/replace (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
@@ -4419,8 +4442,8 @@ If any step fails, report it and stop. Do not fix anything inline. The coordinat
     - `schema-migrate.ts`: both comments.
     - `revisions-slice.ts`: `applyPoll`.
     - The `revisions.test.ts` header.
-    - Spec `:369`: the observable-changes list.
-    - Spec `:468`: release notes.
+    - Spec `:373`: the observable-changes list.
+    - Spec `:477`: release notes.
   - [ ] **No restructure pending drop.** `git -C <wt> diff origin/main...HEAD -- server/src/routes/chapters-restructure.ts` is empty.
   - [ ] **No sidecar changes.** `git -C <wt> diff --stat origin/main...HEAD -- server/tts-sidecar` is empty.
   - [ ] **INDEX and release notes.**
@@ -4431,10 +4454,12 @@ If any step fails, report it and stop. Do not fix anything inline. The coordinat
 
 - [ ] **Step 5: Re-run the four highest-value mutations.** Each is a single-file test run; use `timeout: 600000`. For each one:
   1. Make the mutation.
-  2. Run the test. If it goes red, re-run that file alone with `LOW_CONCURRENCY=1` set (in Git Bash, `LOW_CONCURRENCY=1 npm --prefix … run test -- <file>`), and check that the failure is the stated assertion.
-     - A "Hook timed out in 30000ms" or a worker crash (`0xC0000409`) is contention, not the intended red. Re-run rather than record it.
+  2. Run the test.
+     - If the red is the stated assertion, accept it on the first run.
+     - If the red shows a contention signature (`Hook timed out in`, `Worker exited unexpectedly`, exit `3221226505` / `0xC0000409`), wait 60 s and re-run. If it is still contention, wait 2 minutes and retry, at most 3 runs in total. Then report `AGENT NEEDS INPUT` with the log tails.
+     - Never change code to clear a contention red.
   3. Paste the red line.
-  4. Restore the code and re-run to confirm green.
+  4. Restore the code and re-run. It must be green under the Green rule: exit 0, `Tests  N passed` with N ≥ 1, and no `failed`. For the `-t` run (mutation 3), use `--reporter=verbose` and confirm the `plan 285` titles appear.
 
   Afterwards, `git -C <wt> status --porcelain` must be empty.
   1. **Task 1 #1: lock key without `resolve`.** This is the locking invariant everything rests on. Run `…server run test -- src/workspace/revisions-store.test.ts`.
@@ -4462,8 +4487,8 @@ If any step fails, report it and stop. Do not fix anything inline. The coordinat
      Refs #3397
 
      Release notes:
-     - **`docs/release-notes-next.md`** (technical, operator-facing): reparse/replace refuse a newer-schema revisions.json before touching anything, and otherwise reset it (new `fileId`, empty) rather than delete it; the Revisions polls and the QA report now answer 500 where they previously answered 200 — an unparseable revisions.json in a book with **no** confirmed cast (a book with a cast already answered 500), a newer-schema file, and valid JSON whose top level is not an object, cast or not — and one such book fails the whole bulk poll, so background drift badges for the other books stop refreshing until the file is fixed (the client ignores the failed poll silently); three new revisions routes land unused.
-     - **`RELEASE_NOTES.md`** (user-facing): one line — reparsing or replacing a book whose review history was saved by a newer Castwright is refused before anything is touched (forward-looking: no user can reach it until a later version writes `schema: 2`), and the side effect a user can see today: one damaged review-history file stops the background drift badges of the other books from refreshing.
+     - **`docs/release-notes-next.md`** (technical, operator-facing): reparse/replace refuse a newer-schema revisions.json before touching anything, and otherwise reset it (new `fileId`, empty) rather than delete it; the Revisions polls and the QA report now answer 500 where they previously answered 200 — an unparseable revisions.json in a book with **no** confirmed cast (a book with a cast already answered 500), a newer-schema file, and valid JSON whose top level is not an object, cast or not — and one such book fails the whole bulk poll, silently stalling the other books' background drift badges (the client has no `catch`). Main already does that for an unparseable file in a cast book, and books with no confirmed cast never enter the bulk request (`layout.tsx:1137-1146`), so the only newly reachable trigger is a cast book whose file has a non-object top level. A client catch and per-book bulk isolation are owed in PR 2. Three new revisions routes land unused.
+     - **`RELEASE_NOTES.md`** (user-facing): one line, forward-looking only — reparsing or replacing a book whose review history was saved by a newer Castwright is refused before anything is touched (no user can reach it until a later version writes `schema: 2`).
 
      ## Test plan
 
@@ -4509,7 +4534,7 @@ If any step fails, report it and stop. Do not fix anything inline. The coordinat
 | §3 client `review` | Task 11 |
 | Delivery (the CLAUDE.md lines, INDEX, the technical release-notes entry and the one user-facing RELEASE_NOTES.md line) | Tasks 4, 5, 7 and 12 |
 | Verification and the PR | Task 13: lane-sized checks, the checklist, the mutations, the verdict and the PR. The full batteries run in cloud `verify.yml`. |
-| Stale comments the work makes false (chore rule) | `schema-migrate.ts` in Task 1; `revisions-slice.ts` and the `revisions.test.ts` header in Task 5; spec `:369` and `:468` in Task 12 |
+| Stale comments the work makes false (chore rule) | `schema-migrate.ts` in Task 1; `revisions-slice.ts` and the `revisions.test.ts` header in Task 5; spec `:373` and `:477` in Task 12 |
 
 PR-2 items are deliberately absent: restore-unrecorded, the 400/410 switches, the restructure drop, caller values, and all of §4.
 
@@ -4572,6 +4597,8 @@ The launch and poll blocks were dry-run exactly as written, from scratch files o
 - Under pwsh, the first poll was already `alive=False done=True`.
 - Under 5.1, the first poll printed `alive=True done=False` / `still running -- keep polling, and IGNORE any EXIT= you can see`.
 - The final poll in both: `alive=False done=True`, `EXIT=3`, `git version 2.54.0.windows.1`, `EXIT=3`.
+
+(Historical note: the `set LOW_CONCURRENCY=1&& ` prefix below was part of an earlier draft of the rule. It is inert for a single file and is no longer used. The runs still prove that quoting and the env prefix survive `cmd.txt`.)
 
 **Command `set LOW_CONCURRENCY=1&& node -e "console.log('Test Files  1 passed (1)'); console.log('LOW=' + process.env.LOW_CONCURRENCY)"`** — both shells gave:
 - `alive=False done=True`, `Test Files  1 passed (1)`, `EXIT=0`, `LOW=1`.
