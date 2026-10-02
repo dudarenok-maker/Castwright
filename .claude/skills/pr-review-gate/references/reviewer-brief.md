@@ -122,6 +122,17 @@ recite:
     (`$PSVersionTable.PSEdition -eq 'Desktop' -or $IsWindows`). Checkable:
     for every new test, name the CI leg that executes it and whether anything
     in it is unavailable there.
+16. **An ordering fix whose snapshot and queue position are taken in different
+    ticks** — a per-path write queue is added so "last writer wins" matches
+    call order, but the value is snapshotted before an `await` (a book-dir
+    verification, a lock) and the queue slot is claimed after it. Two callers
+    whose awaits resolve out of order enqueue in the wrong order, so the
+    OLDER snapshot is written last; the queue serialises the writes and still
+    loses data. Every test with a uniform delay is green (PR #3430 passes 1-2,
+    interim edits rolls in `routes/analysis.ts`). Checkable: for each queued
+    write, is the value read in the same synchronous step as the enqueue (no
+    `await` between), and does a test make the FIRST caller's await slower
+    than the second's with distinct snapshots?
 
 ### Keeping the catalogue current
 
