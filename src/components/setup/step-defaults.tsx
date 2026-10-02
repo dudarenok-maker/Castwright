@@ -94,10 +94,19 @@ export function StepDefaults({ readiness: _readiness }: Props) {
     setAnalysisModel(next);
     // Auto-derive the engine from the shared id grammar — matches
     // engineForModelId in model-id.ts (the server's inferEngineFromModelId).
-    // This is what routes generation. An endpoint id → 'openai', a Gemini
-    // id → 'gemini', otherwise 'local'.
+    // This is what routes generation. #3084 PR 3a — nothing can select an
+    // endpoint id yet (this picker only offers curated + local Ollama tags),
+    // and `analysisEngine` is a persisted field that still refuses 'openai'
+    // (PR 3d flips it), so only 'local'/'gemini' are ever sent; an endpoint
+    // id (unreachable here today) omits analysisEngine rather than send a
+    // value the save would be refused for.
     const engine = engineForModelId(next);
-    void dispatch(saveAccountSettings({ defaultAnalysisModel: next, analysisEngine: engine }));
+    void dispatch(
+      saveAccountSettings({
+        defaultAnalysisModel: next,
+        ...(engine === 'local' || engine === 'gemini' ? { analysisEngine: engine } : {}),
+      }),
+    );
   };
 
   const handleThemeChange = (next: ThemePreference) => {

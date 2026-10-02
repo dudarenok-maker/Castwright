@@ -173,4 +173,23 @@ describe('StepDefaults', () => {
       );
     });
   });
+
+  /* #3084 PR 3a — the picker can't render an endpoint option yet (3c/3d add
+     that), but the handler must not forward 'openai' into a persisted field
+     that still refuses it: it omits analysisEngine for one, rather than
+     sending a value the save would be refused for. */
+  it('an endpoint id (simulated — unreachable from this picker today) omits analysisEngine entirely', async () => {
+    renderStep({
+      defaultAnalysisModel: 'gemma-4-31b-it',
+      localAnalyzerModels: [{ name: 'openai:lab::qwen3:30b' }],
+    });
+    const select = screen.getByLabelText(/analysis model/i) as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: 'openai:lab::qwen3:30b' } });
+    await waitFor(() => {
+      expect(putUserSettingsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ defaultAnalysisModel: 'openai:lab::qwen3:30b' }),
+      );
+    });
+    expect(putUserSettingsMock.mock.calls[0][0]).not.toHaveProperty('analysisEngine');
+  });
 });

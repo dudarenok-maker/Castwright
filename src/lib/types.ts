@@ -135,17 +135,19 @@ export type TtsEngine = NonNullable<BaseVoice['engine']>;
    are available to the slice + Account view even before `openapi:types`
    regenerates `api-types.ts`. Mirrors the server's userSettingsSchema. */
 export type BackupCadence = 'daily' | 'weekly';
-export type UserSettings = Omit<components['schemas']['UserSettings'], 'analysisEngine'> & {
-  analysisEngine: AnalysisEngine;
+/* #3084 PR 3a — `analysisEngine` stays on the OpenAPI-generated narrow enum
+   (`'local' | 'gemini'`) here deliberately: it is a persisted/validated field,
+   and nothing can select an endpoint before PR 3d (see the plan's "Which
+   engine-literal sites widen in 3a" table). Widening it to the internal
+   3-value `AnalysisEngine` would let an `'openai'` value flow into a save
+   call with no compile-time check — exactly the gap PR 3d is supposed to
+   close deliberately, not by accident. */
+export type UserSettings = components['schemas']['UserSettings'] & {
   backupEnabled?: boolean;
   backupCadence?: BackupCadence;
   backupRetention?: number;
 };
-export type UserSettingsPatch = Omit<
-  components['schemas']['UserSettingsPatch'],
-  'analysisEngine'
-> & {
-  analysisEngine?: AnalysisEngine;
+export type UserSettingsPatch = components['schemas']['UserSettingsPatch'] & {
   backupEnabled?: boolean;
   backupCadence?: BackupCadence;
   backupRetention?: number;

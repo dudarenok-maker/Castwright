@@ -16,7 +16,6 @@ import {
   type SectionNavItem,
 } from './settings/settings-accordion';
 import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
-import type { AnalysisEngine } from '../lib/model-id';
 import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
 import type { ConfigGroup, TtsModelKey, UserSettingsPatch } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -134,7 +133,9 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
   const effectiveTtsModelKey = account.resolvedTtsModelKey ?? account.defaultTtsModelKey;
   const [defaultTtsModelKey, setDefaultTtsModelKey] = useState<TtsModelKey>(effectiveTtsModelKey);
   const [sidecarUrl, setSidecarUrl] = useState(account.sidecarUrl);
-  const [analysisEngine, setAnalysisEngine] = useState<AnalysisEngine>(account.analysisEngine);
+  /* #3084 PR 3a — bound to the narrow persisted enum (plan row 49, unchanged
+     in 3a): this form's picker only ever offers 'local'/'gemini'. */
+  const [analysisEngine, setAnalysisEngine] = useState<'local' | 'gemini'>(account.analysisEngine);
   const [allowCloudFallback, setAllowCloudFallback] = useState<boolean>(
     account.allowCloudFallback ?? true,
   );

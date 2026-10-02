@@ -33,11 +33,12 @@ export function getResolvedOllamaUrl(): string {
     #3084 P23 (review pass 3, A3): main's own step-1 check ("has a colon")
     also accepts an `openai:<endpointId>::<model>` id, which contains a
     colon too — so does an env/override value at step 2. Both tiers are
-    guarded here with the shared grammar (analyzer/model-id.ts): an
-    endpoint id is never an Ollama tag, so it is treated as absent at
-    whichever tier it appears, falling through to the tier below it (never
-    a raw env read — resolveKnob/getKnob only, so direct-env-reader-guard
-    stays satisfied). */
+    guarded here with the shared grammar (analyzer/model-id.ts): an endpoint
+    id at step 1 falls through to step 2; an endpoint id resolved AT step 2
+    (env or the saved override — resolveKnob's own chain, not a separate
+    tier here) falls back to the registry default directly, since step 2 is
+    this function's last tier (never a raw env read — resolveKnob/getKnob
+    only, so direct-env-reader-guard stays satisfied). */
 export function getResolvedOllamaModel(): string {
   const fromSettings = getCachedDefaultAnalysisModelIfSet();
   if (fromSettings && fromSettings.includes(':') && inferEngineFromModelId(fromSettings) !== 'openai') {
