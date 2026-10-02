@@ -1453,6 +1453,7 @@ describe('book-state router — #3440 canonicalises drift-spelled attribution id
   const expectCanonicalised = (body: {
     cast?: { characters?: Array<{ id: string; lines?: number }> };
     chapterCharacters?: Record<string, string[]>;
+    characterIdAliases?: Record<string, string>;
   }) => {
     const chars = body.cast!.characters!;
     const byId = Object.fromEntries(chars.map((c) => [c.id, c.lines]));
@@ -1471,6 +1472,13 @@ describe('book-state router — #3440 canonicalises drift-spelled attribution id
     /* An id no cast row resolves keeps its raw spelling and stays
        visible. */
     expect(ch72).toContain('spectre-9x');
+    /* #3440 step 2 — the response ships the raw→canonical alias map so the
+       client can join raw ids against the canonical chapter rows without
+       re-implementing the resolver. Only the drifted id appears: `the-torment`
+       (raw) → `the_torment` (canonical). The non-drifted id (`the_torment`,
+       spelled the same in both manuscript and cast) and the unresolvable id
+       (`spectre-9x`, no cast row) are both ABSENT. */
+    expect(body.characterIdAliases).toEqual({ 'the-torment': 'the_torment' });
   };
 
   it('manuscript-edits.json branch: drift spellings count onto the cast row', async () => {

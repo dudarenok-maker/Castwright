@@ -336,8 +336,21 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       (cast?.characters ?? []) as Array<{ id: string }>,
       orphanedCharacterFallbackHistoryFile,
     );
-    const canon = (rawId: string): string =>
-      attributionCastResolver.resolve(rawId)?.character.id ?? rawId;
+    /* #3440 step 2 — collect the raw→canonical mapping the response ships so
+       the client can join raw attribution ids (SSE progress ticks, manuscript
+       sentences, voice-prepare events) against the now-canonical chapter rows
+       without re-implementing the resolver in the browser. Only ids whose
+       canonical form DIFFERS from their raw spelling are recorded: a raw id
+       that already equals its cast id needs no entry, and an unresolvable id
+       (canon returns it raw) is absent too. */
+    const characterIdAliases: Record<string, string> = {};
+    const canon = (rawId: string): string => {
+      const canonical = attributionCastResolver.resolve(rawId)?.character.id ?? rawId;
+      if (canonical !== rawId) {
+        characterIdAliases[rawId] = canonical;
+      }
+      return canonical;
+    };
 
     /* Fallback for books whose stage 2 ran on older code (or hasn't fully
        finished yet): pull the per-chapter sentences from the analysis cache
@@ -668,6 +681,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       revisions: revs,
       completedSlugs,
       chapterCharacters,
+      characterIdAliases,
       chapterLufs,
       renderedFallbackByCharacter,
       orphanedCharacterFallbacks,
