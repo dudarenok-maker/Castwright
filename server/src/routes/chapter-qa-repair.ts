@@ -35,7 +35,14 @@ import {
 } from '../tts/index.js';
 import { decodeAudioToPcm } from '../tts/mp3.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
-import { synthesiseChapter, type CastCharacter, type ChapterSegment } from '../tts/synthesise-chapter.js';
+import {
+  synthesiseChapter,
+  toVoiceLike,
+  buildHintFromCast,
+  type CastCharacter,
+  type ChapterSegment,
+} from '../tts/synthesise-chapter.js';
+import { pickVoiceForEngine } from '../tts/voice-mapping.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict } from '../tts/segment-qa.js';
 import {
   verifySegmentTranscript,
@@ -416,25 +423,43 @@ chapterQaRepairRouter.post(
          yet (scoredBook hasn't run) — the acoustic gate then applies no cosine
          constraint (safe: a centroid-less character can't have a fixable verdict). */
       const readCentroidsMap: Record<string, CharacterCentroid> | null = await readCentroids(bookDir).catch(() => null);
-      /* F4 (#1969 sibling): this route is a SECOND consumer of the persisted
-         `audition` centroids alongside aggregate.ts's gate. An 'audition' row is
-         usable to score a re-render ONLY when it recorded the voice identity the
-         character now resolves to — the per-character snapshot's resolvedVoiceName
-         + modelKey (falling back to the chapter/segFile-level modelKey). A stale
-         row — the character was since reassigned to a different voice/model — must
-         not gate or score this repair, so drop it ONCE here: after this filter a
-         filtered-out character behaves exactly like "no centroid" at every
-         downstream `centroids?.[charId]` site. in-book rows are always kept
-         (rebuilt fresh every pass, self-healing); models we cannot derive a voice
-         for are conservative — treated as unusable. */
+      /* #3449 — this route is a SECOND consumer of the persisted `audition`
+         centroids alongside aggregate.ts's gate. An 'audition' row is usable to
+         score a re-render ONLY when it recorded the voice identity the character
+         NOW resolves to. Derive that CURRENT voice from the cast the SAME way
+         `synthesiseChapter` routes a character —
+         pickVoiceForEngine(resolveCharacterEngine(c, engine), toVoiceLike(c),
+         buildHintFromCast(c)) — NOT from the previous render's snapshot. The
+         snapshot's `resolvedVoiceName` is deliberately the voice ACTUALLY SENT on
+         the last render (#1972 — not re-derived from the cast), so after a voice
+         reassignment with no re-render in between it still names the OLD voice and
+         would wrongly keep a centroid that no longer matches the voice this repair
+         is about to re-render under (#3449). A character with no current cast entry
+         (retired/renamed between scoring and this repair) has no current voice →
+         auditionCentroidUsableForCurrent returns false (conservative drop), exactly
+         like the snapshot-absent case before. The model key is left on the
+         snapshot/segFile fallback (unchanged): a same-engine reassignment leaves it
+         valid, and an engine change is already caught by the voice-name mismatch
+         above. After this filter a filtered-out character behaves exactly like "no
+         centroid" at every downstream `centroids?.[charId]` site. in-book rows are
+         always kept (rebuilt fresh every pass, self-healing). */
+      const castById = new Map(cast.characters.map((c) => [c.id, c] as const));
       const centroids: Record<string, CharacterCentroid> | null =
         readCentroidsMap &&
         Object.fromEntries(
           Object.entries(readCentroidsMap).filter(([charId, row]) => {
+            const current = castById.get(charId);
+            const currentVoiceName = current
+              ? pickVoiceForEngine(
+                  resolveCharacterEngine(current, engine),
+                  toVoiceLike(current),
+                  buildHintFromCast(current),
+                )
+              : undefined;
             const snap = segFile.characterSnapshots?.[charId];
             return auditionCentroidUsableForCurrent(
               row,
-              snap?.resolvedVoiceName,
+              currentVoiceName,
               snap?.modelKey ?? segFile.modelKey,
             );
           }),

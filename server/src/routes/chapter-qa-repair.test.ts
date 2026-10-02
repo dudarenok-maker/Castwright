@@ -1128,6 +1128,158 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
     expect(synthesiseChapterMock).not.toHaveBeenCalled();
   });
 
+  /* #3449 regression: the F4 fixture above uses a BARE cast (no voice fields) and a
+     FRESH snapshot (resolvedVoiceName='castor-alden-B'), so the pre-#3449 code already
+     drops the stale 'castor-alden-A' audition row (snapshot B ≠ audition A). But the
+     actual #3449 bug is the OPPOSITE shape: the cast WAS reassigned to 'castor-alden-B'
+     (overrideTtsVoices) yet the snapshot is STALE — it still names the PREVIOUS voice
+     'castor-alden-A' because no re-render happened after the reassignment. The audition
+     centroid was recorded under that same old voice 'castor-alden-A'. The pre-#3449
+     filter compared audition vs snap.resolvedVoiceName → A == A → KEPT → the re-render
+     is scored against a centroid for a voice the character no longer uses. The #3449
+     fix derives the current voice from the CAST via pickVoiceForEngine → 'castor-alden-B'
+     ≠ audition 'castor-alden-A' → DROPPED → behaves as "no centroid" → the
+     acoustic-only candidate is skipped. */
+  async function scaffoldReassignedCastStaleSnapshotBook(
+    bookTitle: string,
+  ): Promise<{ bookId: string; chapterSlug: string }> {
+    const id = makeBookId(AUTHOR2, SERIES2, bookTitle);
+    const bookDir = join(workspaceRoot, 'books', AUTHOR2, SERIES2, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author: AUTHOR2,
+        series: SERIES2,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'en',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    // The cast HAS been reassigned: castor now resolves to 'castor-alden-B' via its
+    // kokoro override (pickVoiceForEngine reads overrideTtsVoices[engine].name).
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          {
+            id: 'castor',
+            name: 'Castor',
+            gender: 'female',
+            attributes: [],
+            overrideTtsVoices: { kokoro: { name: 'castor-alden-B' } },
+          },
+        ],
+      }),
+    );
+
+    const amy = tone(1.0, 12000);
+    const castorHealthy = tone(1.0, 12000); // healthy — signal scan won't flag it
+    const chapterPcm = Buffer.concat([amy, castorHealthy]);
+    const mp3Bytes = await encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        ],
+        /* STALE snapshot — from the PREVIOUS render, before the reassignment. It still
+           names the old voice 'castor-alden-A' (no re-render happened after the cast's
+           overrideTtsVoices was changed to 'castor-alden-B'). This is the pre-#3449 bug
+           trigger: snap.resolvedVoiceName ('castor-alden-A') MATCHES the audition
+           centroid's voice, so the old filter wrongly kept it. */
+        characterSnapshots: {
+          castor: { voiceEngine: 'kokoro', resolvedVoiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+        },
+      }),
+    );
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.render-integrity.json`),
+      JSON.stringify([
+        {
+          characterId: 'castor',
+          sentenceIds: [2],
+          verdict: 'voice-mismatch',
+          cosine: 0.3,
+          severity: 'severe',
+          fixable: true,
+          expectedEngine: 'kokoro',
+          renderedEngine: 'kokoro',
+          referenceKind: 'in-book',
+          windowed: false,
+          segmentIndex: 1,
+        },
+      ]),
+    );
+    writeFileSync(
+      join(thisAudioRoot, 'render-integrity.centroids.json'),
+      JSON.stringify({
+        castor: {
+          characterId: 'castor',
+          centroid: unitVec(0),
+          cleanMean: 0.9,
+          pSevere: 0.45,
+          pBand: 0.6,
+          referenceKind: 'audition',
+          // The audition centroid was recorded under the OLD voice 'castor-alden-A'.
+          auditionVoice: { voiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+        },
+      }),
+    );
+
+    return { bookId: id, chapterSlug: SLUG };
+  }
+
+  it('#3449 — drops a stale audition centroid when the cast was reassigned but the snapshot is stale (no re-render)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — would be accepted if reached
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldReassignedCastStaleSnapshotBook('Reassigned Cast Story');
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    // The cast resolves castor to 'castor-alden-B' (current), but the audition
+    // centroid recorded 'castor-alden-A' (old). The stale snapshot also says
+    // 'castor-alden-A', so the PRE-#3449 filter (snap.resolvedVoiceName) would
+    // MATCH and KEEP the centroid → re-render scored against it. The #3449 fix
+    // derives the current voice from the cast → mismatch → dropped → "no centroid"
+    // → the acoustic-only candidate is skipped before the synth callback.
+    expect((done!.stillSuspect as number[]).includes(1)).toBe(true);
+    expect((done!.repaired as number[]).includes(1)).toBe(false);
+    expect(synthesiseChapterMock).not.toHaveBeenCalled();
+  });
+
 });
 
 /* fs-38 Wave 3c (fix wave, Task 6) — mirrors generation.ts/chapter-splice.ts's
