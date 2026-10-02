@@ -29,3 +29,11 @@ export function endpointModelId(endpointId: string, model: string): string {
   if (model.length === 0) throw new Error('An endpoint model id needs a non-empty model name.');
   return `openai:${endpointId}::${model}`;
 }
+
+/** Human name for an analyzer engine tag (status popover, run chips). An
+    absent tag reads "Ollama", as the popover always has. */
+export function analyzerEngineName(engine: AnalysisEngine | undefined): string {
+  if (engine === 'gemini') return 'Gemini';
+  if (engine === 'openai') return 'Endpoint';
+  return 'Ollama';
+}

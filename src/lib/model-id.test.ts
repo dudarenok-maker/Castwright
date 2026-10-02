@@ -40,3 +40,14 @@ describe('model-id grammar — frontend (shared case table with the server)', ()
     expect(() => endpointModelId('Lab', 'm')).toThrow(/Invalid endpoint id/);
   });
 });
+
+import { analyzerEngineName } from './model-id';
+
+describe('analyzerEngineName', () => {
+  it('names each engine, defaulting an unknown tag to Ollama as the popover always has', () => {
+    expect(analyzerEngineName('gemini')).toBe('Gemini');
+    expect(analyzerEngineName('openai')).toBe('Endpoint');
+    expect(analyzerEngineName('local')).toBe('Ollama');
+    expect(analyzerEngineName(undefined)).toBe('Ollama');
+  });
+});

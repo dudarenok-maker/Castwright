@@ -67,6 +67,7 @@ import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
+import type { AnalysisEngine } from './model-id';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -3101,7 +3102,7 @@ export interface SubstagePhaseEvent {
   totalChapters?: number;
   estRemainingMs?: number;
   model?: string;
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   activityState?: 'loading' | 'waiting' | 'streaming';
   fallbackReason?: string;
 }
@@ -3115,7 +3116,7 @@ export function parseSubstagePhaseEvent(p: Record<string, unknown>): SubstagePha
     totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
     estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
     model: typeof p.model === 'string' ? p.model : undefined,
-    engine: p.engine === 'local' || p.engine === 'gemini' ? p.engine : undefined,
+    engine: p.engine === 'local' || p.engine === 'gemini' || p.engine === 'openai' ? p.engine : undefined,
     activityState:
       p.activityState === 'loading' || p.activityState === 'waiting' || p.activityState === 'streaming'
         ? p.activityState

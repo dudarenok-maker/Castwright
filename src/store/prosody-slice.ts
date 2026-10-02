@@ -16,6 +16,7 @@ import {
   type SetActiveSubstagePayload,
   type UpdateSubstageProgressPayload,
 } from './analysis-substage-reducers';
+import type { AnalysisEngine } from '../lib/model-id';
 
 export interface SubstageEntry {
   /** 0..100 integer percent. */
@@ -32,7 +33,7 @@ export interface SubstageEntry {
   /** Resolved model id (e.g. `qwen3.5:9b` or `gemma-4-31b-it`). */
   model?: string;
   /** Effective active backend (flips to 'gemini' on a mid-pass fallback). */
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   /** Coarse phase of the pass. 'loading'/'waiting' are server-stamped on
       phase events; 'streaming' is a client upgrade off a live heartbeat. */
   activityState?: 'loading' | 'waiting' | 'streaming';

@@ -1,4 +1,5 @@
 import type { components } from './api-types';
+import type { AnalysisEngine } from './model-id';
 
 export type Character = components['schemas']['Character'] & {
   matchFactors?: components['schemas']['MatchFactor'][];
@@ -134,12 +135,17 @@ export type TtsEngine = NonNullable<BaseVoice['engine']>;
    are available to the slice + Account view even before `openapi:types`
    regenerates `api-types.ts`. Mirrors the server's userSettingsSchema. */
 export type BackupCadence = 'daily' | 'weekly';
-export type UserSettings = components['schemas']['UserSettings'] & {
+export type UserSettings = Omit<components['schemas']['UserSettings'], 'analysisEngine'> & {
+  analysisEngine: AnalysisEngine;
   backupEnabled?: boolean;
   backupCadence?: BackupCadence;
   backupRetention?: number;
 };
-export type UserSettingsPatch = components['schemas']['UserSettingsPatch'] & {
+export type UserSettingsPatch = Omit<
+  components['schemas']['UserSettingsPatch'],
+  'analysisEngine'
+> & {
+  analysisEngine?: AnalysisEngine;
   backupEnabled?: boolean;
   backupCadence?: BackupCadence;
   backupRetention?: number;
@@ -576,7 +582,7 @@ export interface ActiveAnalysisSummary {
   phaseLabel: string;
   phaseProgress: number;
   state: 'paused' | 'halted';
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   kind?: 'main' | 'subset';
   subsetChapterIds?: number[];
   haltCode?: string;
@@ -604,7 +610,7 @@ export interface AnalysisStateResponse {
       (`src/hooks/use-reverse-local-analyzer-guard.tsx`) sees the
       right engine on a cold-boot rehydrated pill. Undefined for
       pre-E1 snapshots — guard defaults to "do not prompt". */
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   /** Discriminator for the in-flight job's shape (plan 32 D1).
       `'main'` = full-book sticky run; `'subset'` = per-chapter retry
       via POST /:id/analysis/chapters. Optional — pre-D1 snapshots

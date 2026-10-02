@@ -13,6 +13,7 @@ import { useAppDispatch } from '../store';
 import { startLinearTour, startScreenTour } from '../store/tour-slice';
 import { screenForStage } from '../lib/tour-steps';
 import { type DesignPhase } from '../lib/design-phase';
+import type { AnalysisEngine } from '../lib/model-id';
 import type { SetupReadiness } from '../lib/api';
 
 export type GenerationPillState = 'running' | 'stalled' | 'halted';
@@ -231,7 +232,7 @@ export interface StatusDetail {
     totalChapters?: number;
     estRemainingMs?: number;
     model?: string;
-    engine?: 'local' | 'gemini';
+    engine?: AnalysisEngine;
     activityState?: 'loading' | 'waiting' | 'streaming';
     activitySince?: number;
     fallbackActive?: boolean;

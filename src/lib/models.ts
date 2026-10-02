@@ -10,11 +10,14 @@
    The Model Manager's "Defaults for new books → Analysis model" picker also
    reads this list. */
 
+import { engineForModelId, type AnalysisEngine } from './model-id';
+export { engineForModelId, type AnalysisEngine };
+
 export interface ModelOption {
   id: string;
   label: string;
   hint?: string;
-  engine: 'local' | 'gemini';
+  engine: AnalysisEngine;
 }
 
 export const MODEL_OPTIONS: ModelOption[] = [
@@ -102,14 +105,6 @@ import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
    slice, mock, and per-book pick fallback all follow. */
 export const DEFAULT_MODEL = FRONTEND_ACCOUNT_DEFAULTS.defaultAnalysisModel;
 
-/** Engine classification from the id shape — Ollama tags contain ':',
-    Gemini ids never do. Matches the server's inferEngineFromModelId. Use this
-    everywhere instead of looking the id up in MODEL_OPTIONS, so a dynamically-
-    pulled (uncurated) local tag is still correctly classified. */
-export function engineForModelId(id: string): 'local' | 'gemini' {
-  return id.includes(':') ? 'local' : 'gemini';
-}
-
 /** The local subset of a run's effective model ids — the ones that actually hit
     Ollama. The analysing view warms / checks residency on THESE, never on the
     server's configured default (`/health.modelResident` keys off the default,
@@ -177,7 +172,7 @@ export function buildLocalModelOptions(
     group still renders first as the curated static catalog (the pre-selected
     model — a local id — is driven by the saved default, not group order). */
 export function buildModelOptionGroups(localOptions: ModelOption[]): Array<{
-  engine: 'local' | 'gemini';
+  engine: AnalysisEngine;
   label: string;
   models: ModelOption[];
 }> {

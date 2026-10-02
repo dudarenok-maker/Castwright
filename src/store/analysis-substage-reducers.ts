@@ -10,6 +10,7 @@
    matching this codebase's "RTK immer" convention. */
 
 import type { SubstageEntry } from './prosody-slice';
+import type { AnalysisEngine } from '../lib/model-id';
 
 export interface SetActiveSubstagePayload {
   bookId: string;
@@ -28,7 +29,7 @@ export interface UpdateSubstageProgressPayload {
   totalChapters?: number;
   estRemainingMs?: number;
   model?: string;
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   activityState?: 'loading' | 'waiting' | 'streaming';
   fallbackActive?: boolean;
   /** Client timestamp used to stamp activitySince when activityState changes. */

@@ -92,8 +92,10 @@ export function StepDefaults({ readiness: _readiness }: Props) {
 
   const handleAnalysisModelChange = (next: string) => {
     setAnalysisModel(next);
-    // Auto-derive the engine from the id shape (":"→local, else gemini) — matches
-    // getResolvedOllamaModel's heuristic. This is what routes generation.
+    // Auto-derive the engine from the shared id grammar — matches
+    // engineForModelId in model-id.ts (the server's inferEngineFromModelId).
+    // This is what routes generation. An endpoint id → 'openai', a Gemini
+    // id → 'gemini', otherwise 'local'.
     const engine = engineForModelId(next);
     void dispatch(saveAccountSettings({ defaultAnalysisModel: next, analysisEngine: engine }));
   };
