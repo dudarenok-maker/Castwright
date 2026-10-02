@@ -54,7 +54,8 @@ const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(()
   setLastKnownAnalyzerDeviceMock: vi.fn(),
 }));
 vi.mock('./ollama-health.js', () => ({ detectOllamaDevice: detectOllamaDeviceMock }));
-vi.mock('../gpu/analyzer-device-state.js', () => ({
+vi.mock('../gpu/analyzer-device-state.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../gpu/analyzer-device-state.js')>()),
   setLastKnownAnalyzerDevice: setLastKnownAnalyzerDeviceMock,
 }));
 vi.mock('../analyzer/select-analyzer.js', async () => {
