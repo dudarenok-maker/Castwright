@@ -44,6 +44,10 @@ export function getResolvedOllamaModel(): string {
     return fromSettings;
   }
   const knob = getKnob('analyzer.ollama.model');
+  /* Guard the possibly-undefined return from getKnob() (rework #3464 Fix 2).
+     This knob is a registered default and should always resolve; matching the
+     pattern in select-analyzer.ts, an explicit check is the defensive guard. */
+  if (!knob) throw new Error('unknown config key analyzer.ollama.model');
   const resolved = String(resolveKnob(knob).effective);
   if (inferEngineFromModelId(resolved) === 'openai') return String(knob.default);
   return resolved;

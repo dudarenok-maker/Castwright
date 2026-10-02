@@ -19,7 +19,8 @@ import { configValue } from '../config/resolver.js';
 import { getCachedGeminiModelInfo } from './catalog/gemini-catalog.js';
 import { resolveLimits } from './rate-limit.js';
 import { resolveMaxInputTokensPerRequest } from './token-budget.js';
-import type { AnalysisEngine } from './model-id.js';
+import { parseEndpointModelId, type AnalysisEngine } from './model-id.js';
+import { AnalyzerEndpointMissingError } from './errors.js';
 
 export interface EngineCapacity {
   family: 'context' | 'requestCap';
@@ -39,6 +40,17 @@ export const TODAY_LOCAL_CAPACITY = (
 ): EngineCapacity => ({ family: 'context', contextTokens: numCtx, maxOutputTokens: null });
 
 export function resolveCapacity(sel: { engine: AnalysisEngine; model: string }): EngineCapacity {
+  if (sel.engine === 'openai') {
+    /* #3084 P23 (rework #3464) — endpoint ids have a grammar but no analyzer
+       until PR 3d, so they have no EngineCapacity either. The selection layer
+       (selectAnalyzer in index.ts) throws AnalyzerEndpointMissingError first,
+       so this branch is unreachable at runtime — but the type was widened to
+       AnalysisEngine in 3bfebeba without the matching runtime guard, so an
+       'openai' selection silently fell into the Gemini branch. This guard
+       matches the refusal pattern established in index.ts (PR 3a). */
+    const parsed = parseEndpointModelId(sel.model);
+    throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? sel.model, 'run-pick');
+  }
   if (sel.engine === 'local') return TODAY_LOCAL_CAPACITY();
   const cap = resolveMaxInputTokensPerRequest();
   const listed = getCachedGeminiModelInfo(sel.model);

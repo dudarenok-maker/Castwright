@@ -14,6 +14,6 @@ describe('mock PUT user settings — endpoint model ids (#3084 P23)', () => {
 
   it('still saves an Ollama tag named openai:latest', async () => {
     const res = await api.putUserSettings({ configOverrides: { 'analyzer.phase1.model': 'openai:latest' } } as never);
-    expect((res.configOverrides as Record<string, unknown>)?.['analyzer.phase1.model']).toBe('openai:latest');
+    expect(((res as Record<string, unknown>).configOverrides as Record<string, unknown>)?.['analyzer.phase1.model']).toBe('openai:latest');
   });
 });
