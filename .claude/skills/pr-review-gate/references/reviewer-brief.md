@@ -133,6 +133,31 @@ recite:
     write, is the value read in the same synchronous step as the enqueue (no
     `await` between), and does a test make the FIRST caller's await slower
     than the second's with distinct snapshots?
+17. **A clear on one phase's success path that does not check which phase
+    the record came from** — a failure record is cleared when a later phase
+    completes for the chapter (here: Phase 1 clears any `failedChapterIds`
+    entry). Harmless while the phases run in sequence, because a chapter
+    reaching Phase 1 has necessarily passed Phase 0; wrong once they overlap.
+    In pipelined mode Phase 1 dispatches off a watermark (the highest Phase-0
+    index completed, not a contiguous prefix), so a chapter whose own Phase 0a
+    failed is still attributed, and its Phase-1 success erased the cast-phase
+    record the resume needed to re-cast it (PR #3439 pass 3,
+    `routes/analysis.ts`). Checkable: for every clear, name every phase that
+    can have written the record, and ask whether this phase's success is
+    evidence that THAT phase's failure is fixed — and whether a test
+    interleaves the two phases for one chapter rather than running them in
+    order.
+18. **A hand-off tested by calling the receiver directly** — the producer
+    is meant to cause a later step (a subset Retry that "hands off to the
+    main resume"), and the test invokes that later step itself, so it cannot
+    see that the product's real trigger never fires. Here the trigger was the
+    view's auto-resume, which waits for every failed row to clear; the Retry
+    kept its row, so the main run was never re-POSTed, while the test that
+    called `runMainAnalyzerJob` itself passed (PR #3439 pass 3,
+    `src/views/analysing.tsx`). Checkable: for every "X then Y resumes"
+    claim, find what actually starts Y in the product, and ask whether a test
+    reaches Y through that trigger (the view harness with the real slice and
+    middleware) or only by calling it.
 
 ### Keeping the catalogue current
 

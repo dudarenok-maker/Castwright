@@ -5909,6 +5909,25 @@ export async function runMainAnalyzerJob(
               id: recordRef.chapterHints[i].id,
               title: recordRef.chapterHints[i].title,
             });
+            /* #3435 — mirror the subset Phase-1 catch: record the chapter's
+               failure (save, chapter-failed) BEFORE the rethrow, so a failed
+               re-attribution does not leave a stale record (an
+               `attribution-collapse` flag on a chapter whose sentences were
+               just dropped) and the view hears about it. An abort is the user
+               pausing, not a failure of the chapter. */
+            if (!(e instanceof AnalysisAbortedError)) {
+              const failedId = recordRef.chapterHints[i].id;
+              const classified = classifyAnalysisFailure(e, phase1AnalyzerLabel);
+              recordFailedChapter(cache, failedId, classified);
+              await saveCacheInFailureCatch(manuscriptId, cache, failedId);
+              send({
+                kind: 'chapter-failed',
+                chapterId: failedId,
+                message: classified.userMessage,
+                code: classified.code,
+                remediation: classified.remediation,
+              });
+            }
             throw e;
           }
         }

@@ -1305,6 +1305,53 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
   }, 60_000);
 });
 
+describe('the subset route: an UNCACHED cast-failed chapter on a finished book (#3435)', () => {
+  beforeAll(async () => {
+    await import('./analysis.js');
+  }, 120_000);
+
+  /* Every runCase chapter has cached sentences, so a cast-failed chapter there is
+     also "needs re-attribution", which once hid whether Phase 0's deferral (a
+     finished book's clear waits for Phase 1) stands on its own. Here chapter 1
+     has NO cached sentences at all: a Retry whose Phase 1 is paused must keep
+     its record, because Phase 1 never ran for it. */
+  it('keeps the record when the Retry is paused in Phase 1 (stage1 on disk, no cached sentences)', async () => {
+    const { AnalysisAbortedError } = await import('../analyzer/errors.js');
+    const seed = await seedBook('uncached-pause', [1, 2], { fullCache: true });
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runSubsetAnalyzerJob } = await import('./analysis.js');
+    const cache = await loadAnalysisCache(seed.manuscriptId);
+    cache.chapterCast = { 1: [], 2: [novaCharacter()] };
+    cache.chapters = {
+      2: [{ id: 201, chapterId: 2, characterId: 'nova', confidence: 0.9, text: BODIES[2] }],
+    } as never;
+    cache.failedChapterIds = [1];
+    cache.failedChapterErrors = { '1': { code: 'analyzer-timeout', message: 'seeded', remediation: 'seeded' } };
+    await saveAnalysisCache(seed.manuscriptId, cache);
+    const record = getManuscript(seed.manuscriptId)!;
+    const job = { ...seed.job, controller: new AbortController(), subscribers: new Set(), kind: 'subset' as const } as unknown as AnalysisJob;
+    const events = captureEvents(job);
+    try {
+      await runSubsetAnalyzerJob(
+        job,
+        record,
+        seed.phase0Selection,
+        buildSelection(stubAnalyzer({ runStage2Chapter: () => Promise.reject(new AnalysisAbortedError('paused')) }), MODEL),
+        record.chapterHints.filter((c) => c.id === 1),
+        false,
+      );
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['aborted']);
+      expect(events.some((e) => e.kind === 'chapter-resolved')).toBe(false);
+      expect(after.failedChapterIds).toEqual([1]);
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }, 60_000);
+});
+
 describe('main-route resume: which failed chapters re-enter cast detection (#3435)', () => {
   beforeAll(async () => {
     await import('./analysis.js');
@@ -1448,6 +1495,118 @@ describe('main-route resume: which failed chapters re-enter cast detection (#343
     expect(r.stage2Calls).toContain(1);
     expect(r.mainEvents.some((e) => e.kind === 'chapter-failed' && e.chapterId === 1)).toBe(true);
     expect(r.after.failedChapterIds).toEqual([1]);
+  }, 60_000);
+
+  /** Seeds an arbitrary cache and runs one non-fresh main run against it. */
+  async function runMainOn(
+    label: string,
+    seedCache: Record<string, unknown>,
+    stage2: Analyzer['runStage2Chapter'],
+  ) {
+    const seed = await seedBook(label, [1, 2]);
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runMainAnalyzerJob } = await import('./analysis.js');
+    await saveAnalysisCache(seed.manuscriptId, seedCache as never);
+    const castCalls: number[] = [];
+    const stage2Calls: number[] = [];
+    const phase0 = buildSelection(
+      stubAnalyzer({
+        async runStage1Chapter(_m, chapterId): Promise<Stage1ChapterOutput> {
+          castCalls.push(chapterId);
+          return { characters: [novaCharacter()] };
+        },
+      }),
+      'phase0-model',
+    );
+    (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection = buildSelection(
+      stubAnalyzer({
+        runStage2Chapter: async (m, id, ...rest) => {
+          stage2Calls.push(id);
+          return stage2(m, id, ...rest);
+        },
+      }),
+      MODEL,
+    );
+    const events = captureEvents(seed.job);
+    try {
+      await runMainAnalyzerJob(seed.job, getManuscript(seed.manuscriptId)! as never, phase0, {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      return { castCalls, stage2Calls, events, after };
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  const COLLAPSED = [{ id: 101, chapterId: 1, characterId: 'narrator', confidence: 0.9, text: BODIES[1] }];
+  const NOVA_2 = [{ id: 201, chapterId: 2, characterId: 'nova', confidence: 0.9, text: BODIES[2] }];
+
+  it('PD-main: a collapse-flagged chapter whose cast ALSO failed is re-cast, and Phase 0a does not clear its record before its Phase 1 runs', async () => {
+    const { castCalls, stage2Calls, events, after } = await runMainOn(
+      'pd-main',
+      {
+        chapters: { 1: COLLAPSED, 2: NOVA_2 },
+        chapterCast: { 1: [], 2: [novaCharacter()] },
+        failedChapterIds: [1],
+        failedChapterErrors: { '1': { code: 'analyzer-timeout', message: 'seeded', remediation: 'seeded' } },
+      },
+      async (_m, id) => {
+        if (id === 1) throw new Error('Phase 1 fails for chapter 1');
+        return stage2For(id);
+      },
+    );
+    /* Control: the chapter really was re-cast (Phase 0a succeeded) and attributed (and failed). */
+    expect(castCalls).toEqual([1]);
+    expect(stage2Calls).toContain(1);
+    expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).not.toContain(1);
+    expect(after.failedChapterIds).toContain(1);
+  }, 60_000);
+
+  it('P-gamma: a main-route Phase-1 failure on a re-attributed chapter is recorded (chapter-failed) and replaces the stale collapse record', async () => {
+    const { events, after } = await runMainOn(
+      'p-gamma',
+      {
+        chapters: { 1: COLLAPSED, 2: NOVA_2 },
+        chapterCast: { 1: [novaCharacter()], 2: [novaCharacter()] },
+        failedChapterIds: [1],
+        failedChapterErrors: { '1': { code: 'attribution-collapse', message: 'seeded', remediation: 'seeded' } },
+      },
+      async (_m, id) => {
+        if (id === 1) throw new Error('Phase 1 fails for chapter 1');
+        return stage2For(id);
+      },
+    );
+    const failed = events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+    expect(failed).toBeDefined();
+    expect(failed!.code).not.toBe('attribution-collapse');
+    expect(after.failedChapterIds).toEqual([1]);
+    expect(after.failedChapterErrors?.['1']?.code).toBe(failed!.code);
+    expect(after.chapters?.[1]).toBeUndefined();
+  }, 60_000);
+
+  it('a FINISHED book (stage1 on disk): a main run replays a flagged chapter cached sentences instead of re-attributing it', async () => {
+    const { stage2Calls, after } = await runMainOn(
+      'finished-replay',
+      {
+        chapters: { 1: COLLAPSED, 2: NOVA_2 },
+        chapterCast: { 1: [novaCharacter()], 2: [novaCharacter()] },
+        stage1: {
+          characters: [novaCharacter()],
+          chapters: [1, 2].map((id) => ({ id, title: CHAPTER_TITLES[id] })),
+        },
+        failedChapterIds: [1],
+        failedChapterErrors: { '1': { code: 'attribution-collapse', message: 'seeded', remediation: 'seeded' } },
+      },
+      async (_m, id) => stage2For(id),
+    );
+    expect(stage2Calls).not.toContain(1);
+    expect(after.chapters?.[1]?.[0]?.characterId).toBe('narrator');
+    expect(after.failedChapterIds).toEqual([1]);
   }, 60_000);
 
   it('a save that throws in the Phase-0a failure catch keeps the original error and still sends chapter-failed', async () => {
