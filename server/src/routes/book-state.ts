@@ -53,6 +53,11 @@ import { clearAnalysisCache, loadAnalysisCache, type ChapterErrorRecord } from '
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.js';
+/* #3440 step 1 — the canonical attribution-id join used by the drift detector
+   and the orphan collector; book-state's GET now routes its per-sentence
+   characterId bucketing through it too. (No direct cast-id-history or
+   character-id utility import: those are reached through this module.) */
+import { buildCastResolver } from '../store/cast-resolve.js';
 import { isAnalysisBusy } from '../tts/design-lock.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
 import { normaliseBookLanguage } from '../tts/language.js';
@@ -285,6 +290,55 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     }>(revisionsJsonPath(bookDir));
     const changeLog = await readJson<{ events?: unknown[] }>(changeLogJsonPath(bookDir));
 
+    /* #2040 Wave 3 review round 1 IMPORTANT — loaded as its OWN statement
+       with its own `.catch`, not inline in an argument list.
+       An expression sitting in argument position is evaluated before the
+       call it's an argument OF even happens, so a throw there would bypass
+       that call's trailing `.catch(() => ({}))` entirely and escape to the
+       route's outer try/catch as a whole-request 500 — it would have been
+       inert only because `loadCastIdHistory` itself is documented to never
+       throw, and this collector must not depend on that other module's
+       invariant to stay graceful.
+
+       #2040 Task 17 fix round 2 review — a SINGLE load, not two. This used
+       to be two independent `loadCastIdHistory(bookDir)` calls (one
+       `.then`ing `.supersededBy`, one `.then`ing `.rejected`), which can
+       observe two different file states if a write lands between them (the
+       exact split-object footgun fix round 1 closed for `buildCastResolver`
+       itself, re-opened here one level up). #2092/#2089 task 3 — the
+       collector now takes this WHOLE loaded object directly rather than
+       `supersededBy`/`rejected` threaded as separate params, closing the
+       same footgun one level further: there is no longer a way to load this
+       once and still forget to pass one of its fields through.
+
+       #3440 step 1 — hoisted from further down the handler to sit ABOVE the
+       chapterCharacters / lineCountById derivation (now the FIRST consumer,
+       through the resolver below) while the orphaned-character collector
+       far below keeps reusing this same object: this file is still read
+       exactly ONCE per GET request. */
+    const orphanedCharacterFallbackHistoryFile: CastIdHistory = await loadCastIdHistory(
+      bookDir,
+    ).catch(() => ({ schema: 1 as const, supersededBy: {} }));
+
+    /* #3440 step 1 — canonicalise the RAW manuscript attribution ids through
+       the same `buildCastResolver` the drift detector and the orphaned-
+       character collector use (CLAUDE.md: cast.json is the identity of
+       record — every join on a manuscript characterId goes through it; the
+       drift detector and the orphan collector already do, the attribution
+       bucketing below did not). The symptom: sentences attributed
+       `the-torment` while cast.json holds the row `the_torment` (the #2040
+       RC2 minting drift normaliseIdKey exists for) formed their own bucket,
+       so the cast row rendered 0 lines and the Fix-audio modal could not
+       find the character's chapters. Unresolvable ids are KEPT RAW — a
+       sentence attributed to an id with no cast row must never vanish from
+       chapterCharacters / lineCountById. */
+    const attributionCastResolver = buildCastResolver(
+      (cast?.characters ?? []) as Array<{ id: string }>,
+      orphanedCharacterFallbackHistoryFile,
+    );
+    const canon = (rawId: string): string =>
+      attributionCastResolver.resolve(rawId)?.character.id ?? rawId;
+
     /* Fallback for books whose stage 2 ran on older code (or hasn't fully
        finished yet): pull the per-chapter sentences from the analysis cache
        so the manuscript view shows real text instead of mock fixtures.
@@ -367,8 +421,12 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
             bucket = new Set();
             bucketByChapter.set(sent.chapterId, bucket);
           }
-          bucket.add(sent.characterId);
-          lineCountById.set(sent.characterId, (lineCountById.get(sent.characterId) ?? 0) + 1);
+          /* #3440 step 1 — bucket under the CANONICAL cast id (raw spelling
+             kept when nothing resolves) so drift-spelled attributions count
+             onto the cast row instead of a phantom zero-lined entry. */
+          const speakerId = canon(sent.characterId);
+          bucket.add(speakerId);
+          lineCountById.set(speakerId, (lineCountById.get(speakerId) ?? 0) + 1);
         }
         for (const [id, ids] of bucketByChapter) chapterCharacters[id] = [...ids];
       } else {
@@ -377,8 +435,10 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
           if (Number.isNaN(id)) continue;
           const ids = new Set<string>();
           for (const sent of sentences) {
-            ids.add(sent.characterId);
-            lineCountById.set(sent.characterId, (lineCountById.get(sent.characterId) ?? 0) + 1);
+            /* #3440 step 1 — same canonicalisation as the edits branch. */
+            const speakerId = canon(sent.characterId);
+            ids.add(speakerId);
+            lineCountById.set(speakerId, (lineCountById.get(speakerId) ?? 0) + 1);
           }
           chapterCharacters[id] = [...ids];
         }
@@ -518,29 +578,10 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       state.chapters,
     ).catch(() => ({}));
 
-    /* #2040 Wave 3 review round 1 IMPORTANT — loaded as its OWN statement
-       with its own `.catch`, not inline in the call below's argument list.
-       An expression sitting in argument position is evaluated before the
-       call it's an argument OF even happens, so a throw there would bypass
-       that call's trailing `.catch(() => ({}))` entirely and escape to the
-       route's outer try/catch as a whole-request 500 — it would have been
-       inert only because `loadCastIdHistory` itself is documented to never
-       throw, and this collector must not depend on that other module's
-       invariant to stay graceful.
-
-       #2040 Task 17 fix round 2 review — a SINGLE load, not two. This used
-       to be two independent `loadCastIdHistory(bookDir)` calls (one
-       `.then`ing `.supersededBy`, one `.then`ing `.rejected`), which can
-       observe two different file states if a write lands between them (the
-       exact split-object footgun fix round 1 closed for `buildCastResolver`
-       itself, re-opened here one level up). #2092/#2089 task 3 — the
-       collector now takes this WHOLE loaded object directly rather than
-       `supersededBy`/`rejected` threaded as separate params, closing the
-       same footgun one level further: there is no longer a way to load this
-       once and still forget to pass one of its fields through. */
-    const orphanedCharacterFallbackHistoryFile: CastIdHistory = await loadCastIdHistory(
-      bookDir,
-    ).catch(() => ({ schema: 1 as const, supersededBy: {} }));
+    /* #3440 step 1 — the cast-id history file is loaded ONCE near the top of
+       this handler (single load preserved from #2040 Wave 3) and the same
+       object feeds BOTH the attribution canonicaliser and the collector call
+       below. Do NOT re-load it here. */
 
     /* #2023 Piece 1, widened #2040 Wave 3 (task 16) — per-orphaned-characterId
        render-time substitution, aggregated the same way as
