@@ -1058,20 +1058,14 @@ export function AnalysingView({
           setConn('idle');
           return;
         }
-        /* The subset route ends without a `result` event when other
-           chapters still need retry (Phase 1 gate). api.ts throws
-           "no result" in that case — not a real failure, drop the
-           row if this chapter itself succeeded. */
-        /* #3435 — a Pause or a stage1_shrink_refused during the Retry ends it
-           before the chapter's Phase 1 finished. The server keeps the chapter's
-           failure record and sends chapter-resolved only once it completes, so a
-           chapter whose row is still here was NOT resolved: keep it (a resolved
-           one was already dropped by onChapterResolved above). */
-        const retryUnfinished =
-          err instanceof AnalysisError && (err.code === 'aborted' || err.code === 'stage1_shrink_refused');
-        if (!retryReFailed && !retryUnfinished) {
-          setFailedChapters((prev) => prev.filter((f) => f.chapterId !== chapterId));
-        } else if (retryReFailed) {
+        /* #3435 — never drop the row here. The server keeps a chapter's failure
+           record and sends chapter-resolved only once its Phase 1 completes, so
+           every early end (Pause, stage1_shrink_refused, the Phase-1 gate's
+           silent skip that api.ts reports as "no result", cast_incomplete or a
+           whole-book Phase-0 error before Phase 1) leaves a row that was NOT
+           resolved. A resolved chapter's row was already dropped by
+           onChapterResolved above. */
+        if (retryReFailed) {
           console.warn('[analysing] retry failed:', err);
         }
         setConn('idle');

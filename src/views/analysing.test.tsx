@@ -1760,6 +1760,7 @@ describe('AnalysingView — failed-chapter retry', () => {
         fireEvent.click(retryBtn);
       });
       const viewReject = rejectSubset!;
+      const viewOpts = capturedSubsetCall!.opts!;
       /* The view's first subset tick lets the middleware attach as a second
          subscriber on the same subset route. */
       await act(async () => {
@@ -1767,7 +1768,7 @@ describe('AnalysingView — failed-chapter retry', () => {
       });
       const mwReject = rejectSubset!;
       expect(mwReject).not.toBe(viewReject);
-      return { store, AnalysisError, viewReject, mwReject };
+      return { store, AnalysisError, viewReject, mwReject, viewOpts };
     }
 
     for (const viewFirst of [true, false]) {
@@ -1954,8 +1955,11 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
     });
 
-    it('control: a Retry that ends without a result still drops the row and raises nothing', async () => {
-      const { store, AnalysisError, viewReject } = await startRetry();
+    it('control: a Retry that resolved the chapter then ends without a result drops the row and raises nothing', async () => {
+      const { store, AnalysisError, viewReject, viewOpts } = await startRetry();
+      await act(async () => {
+        viewOpts.onChapterResolved!({ chapterId: 44 });
+      });
       await act(async () =>
         viewReject(new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result')),
       );
@@ -1963,6 +1967,19 @@ describe('AnalysingView — failed-chapter retry', () => {
         expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
       });
       expect(store.getState().notifications.toasts.filter((t) => t.fixes?.length)).toHaveLength(0);
+    });
+
+    /* #3435 — the Phase-1 gate's silent skip (another chapter still cast-failed)
+       sends no events at all; the row was never resolved, so it must stay. */
+    it('a Retry that ends without a result and with no chapter-resolved keeps the row', async () => {
+      const { AnalysisError, viewReject } = await startRetry();
+      await act(async () =>
+        viewReject(new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result')),
+      );
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
     });
   });
 });
