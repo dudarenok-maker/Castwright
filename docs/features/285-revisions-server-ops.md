@@ -50,8 +50,13 @@ owner: null
 - **Reversibility:** revert the PR. The complete list of PR-1 behaviour an old client can observe:
   1. **Reparse and replace reset revisions.json instead of deleting it.** The old client hydrates an empty file the same way as a missing one.
   2. **Reparse and replace refuse a newer-schema revisions.json before anything is deleted.** They return a 500 with the curated `UnsupportedSchemaError` message, and the book is left untouched. On main they deleted the file.
-  3. **The poll and qa-report answer 500 for a corrupt or newer-schema revisions.json.** For a book with a cast, the corrupt case is unchanged from main. For a book with no cast, main returned early without reading the file, so this is new.
+  3. **The single-book poll, the bulk poll and qa-report now answer 500 for a corrupt or newer-schema revisions.json.** Exactly what changed against main:
+     - **Corrupt file, book with a cast:** unchanged. Main's `readJson` already throws in `computeRevisionsForBook`, so main already returns 500 on all three.
+     - **Corrupt file, book with no cast:** new. Main returned early (`revisions.ts:132-135`) without reading the file and answered 200.
+     - **Newer-schema file, cast or not:** new. Main parsed it like any JSON and answered 200. PR 1 refuses it through `migrateSeamDoc`.
+     - **Blast radius:** the bulk `GET /api/revisions` maps every requested book through one `Promise.all`. A single such book therefore fails the **whole** bulk response with a 500, and every other book's drift goes with it. Main already has that blast radius for a corrupt file in a cast book. PR 1 extends it to the two new cases above.
   4. **The poll carries extra fields, and `pending` now arrives with an empty cast (D8).** The old client's `applyPoll` and `applyBackgroundPoll` read only `drift`, so it never sees these.
+  5. **Three new routes are mounted and reachable:** accept, reject and dismiss. No client calls them.
 
 ## Invariants to preserve
 
@@ -62,7 +67,7 @@ owner: null
 2. The lock key is `revisions:${path.resolve(bookDir)}`. It is built only by `revisionsLockKey` in `server/src/workspace/revisions-store.ts`.
 3. While that lock is held, only revisions.json is written and no other lock is acquired. The only other filesystem access is the read-only `.previous.mp3` existence probe used by normalisation.
 4. Reads (`readRevisions`) take no lock and never write.
-5. The old routes keep today's status codes and order. In `DELETE …/audio/previous` and `POST …/audio/previous/restore`, the `isGenerationActive` 409 comes **before** the chapter-id parse.
+5. The old routes keep today's status codes and order. `POST …/audio/previous/restore` keeps its `isGenerationActive` 409 **before** the chapter-id parse. `DELETE …/audio/previous` has no busy check today and gains none.
 6. `audio/previous-audio.ts` does not import `routes/generation.ts`. `routes/generation.ts` gains no new import from `audio/` or `workspace/`.
 7. `PUT /state` with `slice:'revisions'` is still accepted, and `GET /state` still returns revisions.json **raw**.
 8. No store error text reaches an SSE body. Finalize reports a store failure only as `reviewRecorded: false`. Every new or reshaped 500 goes through `requestFailureMessage`.
@@ -154,6 +159,7 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
 ### Paths and how to run tests
 
 - **`<wt>` means `C:/Claude/Projects/wt-3400-revisions-server-ops` throughout.** Work only there. Never touch `C:/Claude/Projects/Audiobook-Generator`.
+- **The quoted code is authoritative; line numbers are advisory.** Every `file:line` here was measured on the base before any task ran, and an earlier task's edit shifts later lines in the same file. Where a later task's line moved, it says so ("after Task N's edit, near `<quoted text>`"). If a number and the quoted text ever disagree, find the quoted text.
 - Never chain commands off `cd` (the Bash permission hook blocks it). Use these forms:
   - Server, fast pool: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- <path under server/>`
   - Server, slow pool: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test:slow -- <path> [-t "<name filter>"]`
@@ -161,7 +167,7 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
     - Add a `-t` filter wherever the step allows, so each child runs as few slow tests as possible.
   - Frontend: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- <path under repo root>`
   - Typecheck (frontend + server): `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run typecheck`
-  - Full batteries run only in the verify task.
+  - Full batteries run only in Task 13; the mutation re-runs and the PR are Task 14.
 
 ### The dark state
 
@@ -224,6 +230,7 @@ Every task ends with a **mutation check**:
 **Files:**
 - Create: `server/src/workspace/revisions-store.ts`
 - Test: `server/src/workspace/revisions-store.test.ts`
+- Modify (comments only): `server/src/workspace/schema-migrate.ts`, at the fs-1 scope note (`:21-26`) and the `stampSeamSchema` docstring (`:99-100`). This task makes the store the first writer that stamps, so both comments become false.
 
 **Dark-state note:** this task creates the module, and nothing in production calls it yet.
 
@@ -424,6 +431,17 @@ describe('refusals — the store never overwrites the original bytes', () => {
     expect(readFileSync(revisionsJsonPath(bookDir), 'utf8')).toBe(before);
   });
 
+  it('a top level that is not a plain object (array or literal null) THROWS as corrupt — it is never read as missing', async () => {
+    for (const body of ['[]', 'null', '"text"']) {
+      writeFileSync(revisionsJsonPath(bookDir), body);
+      await expect(readRevisions(bookDir, CHAPTERS)).rejects.toThrow(SyntaxError);
+      await expect(recordPending(bookDir, CHAPTERS, serverEntry(1))).rejects.toThrow(SyntaxError);
+      expect(readFileSync(revisionsJsonPath(bookDir), 'utf8')).toBe(body);
+      // corrupt ⇒ resettable: reset replaces it, as the old rm did
+      await expect(assertRevisionsResettable(bookDir)).resolves.toBeUndefined();
+    }
+  });
+
   it('the resettable preflight passes for a missing, a v1 and a corrupt file', async () => {
     await expect(assertRevisionsResettable(bookDir)).resolves.toBeUndefined();
     seedRaw({ schema: 1, pending: [] });
@@ -601,6 +619,7 @@ The header comment deliberately spells the key as `revisions:<absolute bookDir>`
    The client remains the only writer of `pending`. */
 
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import { audioDir, revisionsJsonPath } from './paths.js';
@@ -784,12 +803,18 @@ export function parseSelection(
   return { ok: true, value: out };
 }
 
-/** null for a missing file. THROWS for a corrupt file (SyntaxError, as on
-    main), a newer schema (UnsupportedSchemaError) or a non-object top level,
-    and on any read error — so no write can follow and overwrite the original. */
+/** null ONLY for a missing file (checked with existsSync — readJson alone
+    returns null for both a missing file and a file containing literal `null`).
+    THROWS for: unparseable JSON (SyntaxError, as on main); a top level that is
+    not a plain object — an array, literal `null`, a string or a number
+    (SyntaxError: corrupt, never "missing"); a newer schema
+    (UnsupportedSchemaError); and any read error (EISDIR, EBUSY…). So no write
+    can follow a bad read and overwrite the original. */
 async function loadRaw(bookDir: string): Promise<Record<string, unknown> | null> {
-  const raw = await readJson<unknown>(revisionsJsonPath(bookDir));
-  if (raw === null) return null;
+  const path = revisionsJsonPath(bookDir);
+  if (!existsSync(path)) return null;
+  const raw = await readJson<unknown>(path);
+  if (!isObj(raw)) throw new SyntaxError('revisions.json: expected a JSON object at the top level');
   return migrateSeamDoc(REVISIONS_SEAM, raw).doc;
 }
 
@@ -875,10 +900,41 @@ export async function dismissDriftId(
 }
 ```
 
-- [ ] **Step 4: Run the test**
+- [ ] **Step 3b: Correct the two `schema-migrate.ts` comments this task makes false.** These are comment-only edits.
 
-Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/workspace/revisions-store.test.ts`
-Expected: PASS.
+  1. In the fs-1 scope note, replace
+     ```
+        unstamped file still migrates correctly. When the first real schema bump
+        lands, that change adds the writer-side stamp alongside its transform (where
+        it's actually load-bearing and testable against a real migration). */
+     ```
+     with
+     ```
+        unstamped file still migrates correctly. When the first real schema bump
+        lands, that change adds the writer-side stamp alongside its transform (where
+        it's actually load-bearing and testable against a real migration).
+
+        One exception (plan 285): revisions.json is owned by
+        workspace/revisions-store.ts, which reads through migrateSeamDoc (refusing
+        a newer schema) and stamps every write with stampSeamSchema. Every other
+        file here is still written unstamped. */
+     ```
+  2. Replace the `stampSeamSchema` docstring
+     ```
+     /** Stamp the current schema on a doc before writing. The writer-side seam —
+         wired in by the first real schema bump (see scope note above). */
+     ```
+     with
+     ```
+     /** Stamp the current schema on a doc before writing. The writer-side seam.
+         Today only workspace/revisions-store.ts calls it (plan 285); every other
+         writer is wired in by the first real schema bump (see scope note above). */
+     ```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- src/workspace/revisions-store.test.ts src/workspace/schema-migrate.test.ts`
+Expected: PASS. The `schema-migrate` suite is untouched apart from the comments, and should stay green.
 
 - [ ] **Step 5: Typecheck**
 
@@ -892,15 +948,17 @@ Expected: exit 0.
      - Probably also red: `concurrent writes through two spellings lose no update`.
   2. In `normaliseRevisions`, delete `if (!previousExists(e.chapterId)) continue;`. Run Step 4.
      - Expected red: `drops drift, playable:false legacy entries…` and `treats a legacy entry with no playable flag…`.
-  3. In `loadRaw`, change the first line to `const raw = await readJson<unknown>(revisionsJsonPath(bookDir)).catch(() => null);`. Run Step 4.
-     - Expected red: `a corrupt (unparseable) file THROWS…` and `a non-parse read failure propagates too`.
+  3. In `loadRaw`, change `const raw = await readJson<unknown>(path);` to `const raw = await readJson<unknown>(path).catch(() => ({}));`. Run Step 4.
+     - Expected red: `a corrupt (unparseable) file THROWS…` and `a non-parse read failure propagates too`. Both now resolve as an empty file.
   4. In `assertRevisionsResettable`, delete the line `if (err instanceof UnsupportedSchemaError) throw err;`. Run Step 4.
      - Expected red: `a file from a NEWER schema refuses reads, writes, the resettable preflight and reset…`, because the preflight resolves.
+  5. In `loadRaw`, replace `if (!isObj(raw)) throw new SyntaxError(…);` with `if (!isObj(raw)) return null;`. Run Step 4.
+     - Expected red: `a top level that is not a plain object … THROWS as corrupt`, because the read resolves as a missing file.
 
 - [ ] **Step 7: Commit and push**
 
 ```bash
-git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/workspace/revisions-store.ts server/src/workspace/revisions-store.test.ts
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/workspace/revisions-store.ts server/src/workspace/revisions-store.test.ts server/src/workspace/schema-migrate.ts
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server): add revisions.json store core with a per-book leaf lock (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push -u origin fix/server-3400-revisions-server-ops
 ```
@@ -1713,6 +1771,32 @@ describe('POST …/revisions/:revisionId/accept', () => {
     expect(disk().pending).toEqual([]);
   });
 
+  it('409 revision_gone when the entry was replaced between step 1 and step 3; nothing is written into its place', async () => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    seed([entry(1, 'r1')]);
+    const store = await import('../workspace/revisions-store.js');
+    const real = await vi.importActual<typeof import('../workspace/revisions-store.js')>(
+      '../workspace/revisions-store.js',
+    );
+    /* Interleave at the store: step 1 runs for real, then a newer render's
+       upsert lands before the route's step 3. */
+    vi.mocked(store.beginRevisionOp).mockImplementationOnce(async (dir, chapters, op, id) => {
+      const begun = await real.beginRevisionOp(dir, chapters, op, id);
+      await real.recordPending(dir, chapters, {
+        ...entry(1, 'r-newer'),
+        origin: 'server',
+      } as Parameters<typeof real.recordPending>[2]);
+      return begun;
+    });
+    const res = await accept('r1');
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('revision_gone');
+    expect(res.body.state.pending.map((p: { id: string }) => p.id)).toEqual(['r-newer']);
+    expect(res.body.state.timeline).toEqual({});
+    expect(disk().timeline).toEqual({});
+  });
+
   it('a lock timeout answers the curated 500 — no lock-key path in the body', async () => {
     const store = await import('../workspace/revisions-store.js');
     const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
@@ -2055,6 +2139,8 @@ Expected: exit 0.
      - Expected red: `409 live_audio_missing when live is gone but .previous exists` (`expected 200 to be 409`) and `restore throws → 500 restore_failed; accept then refuses…`.
   2. In the accept catch, replace `requestFailureMessage(e, (e as Error).message || 'Failed to accept revision.')` with `(e as Error).message`. Run the same file.
      - Expected red: the accept `a lock timeout answers the curated 500…`, because the body contains `SECRET-WORKSPACE`.
+  3. In the accept route, replace the `if (commit.kind === 'gone') { return res.status(409)… }` block with `if (commit.kind === 'gone') return res.json(toRevisionsState(bookId, commit.file));`. Run the same file.
+     - Expected red: `409 revision_gone when the entry was replaced between step 1 and step 3…`, with `expected 200 to be 409`.
 
 - [ ] **Step 9: Commit and push**
 
@@ -2075,15 +2161,18 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   - delete `RevisionsPersisted` at `:34-43`;
   - `getRevisionsForBook`/`computeRevisionsForBook` at `:112-234`;
   - the single-route catch at `:242-245`;
-  - the bulk map and catch at `:269-278`.
+  - the bulk map at `:270-273` and its catch at `:276-278`.
 - Modify: `server/src/routes/qa-report.ts:44-47` (the GET catch).
 - Modify: `server/src/routes/revisions.test.ts`:
+  - the header comment at `:10-12`;
   - imports at `:17`;
+  - the `beforeAll` dynamic imports at `:68-71`;
   - `:168-185`;
   - the `persisted pending echo` describe at `:539-586`.
 - Modify: `server/src/routes/qa-report.test.ts`:
   - the `scan.js` mock at `:16-27`;
   - new tests.
+- Modify (comment only, no code change): `src/store/revisions-slice.ts:308-311`. This task makes its claim that the poll carries no `dismissed`/`acceptedSelections` false.
 - Modify: `CLAUDE.md` (the count, now 20).
 
 **Dark-state note:** the old client's `applyPoll` and `applyBackgroundPoll` read only `drift` (`revisions-slice.ts:318-331`). A poll never writes.
@@ -2100,6 +2189,36 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 - [ ] **Step 1: Write the failing tests**
 
+  0. In `server/src/routes/revisions.test.ts`, convert the `beforeAll` dynamic imports (`:68-71`) from `Promise.all` to sequential awaits **before** adding the async `vi.mock` below. This is the #2083 sweep's rule: a `Promise.all` of dynamic imports races an async `vi.mock` factory. See `book-state.reparse.test.ts:68-71` for the same conversion. Replace
+     ```ts
+       const [{ revisionsRouter, revisionsBulkRouter }, { makeBookId }] = await Promise.all([
+         import('./revisions.js'),
+         import('../workspace/paths.js'),
+       ]);
+     ```
+     with
+     ```ts
+       /* Sequential, not `Promise.all` — this file carries a hoisted async-factory
+          `vi.mock` (revisions-store.js, plan 285), which a `Promise.all` of dynamic
+          imports races (#2083). */
+       const { revisionsRouter, revisionsBulkRouter } = await import('./revisions.js');
+       const { makeBookId } = await import('../workspace/paths.js');
+     ```
+     Also replace the header bullet (`:10-12`)
+     ```
+        - Persisted pending echo (#3376 part 1): revisions.json#pending is
+          surfaced verbatim by both the single-book route and the bulk
+          GET /api/revisions; a non-array value falls back to [].
+     ```
+     with
+     ```
+        - Pending read through the store (plan 285): revisions.json#pending is
+          normalised by workspace/revisions-store.ts (stale legacy entries
+          dropped) and surfaced by both the single-book route (whole
+          RevisionsState + drift, even with an empty cast) and the bulk
+          GET /api/revisions ({ pending, drift }); a non-array value falls back
+          to []; a corrupt file 500s; every 500 is curated.
+     ```
   1. In `server/src/routes/revisions.test.ts`, change the vitest import to `import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';`. Then add this top-level mock after the imports:
      ```ts
      /* Plan 285 — passthrough spy on the store read so a test can inject a lock
@@ -2280,7 +2399,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
      - add `import { requestFailureMessage } from '../workspace/file-lock.js';`.
   3. Delete `interface RevisionsPersisted { … }`.
   4. Above `getRevisionsForBook`, add `/** Plan 285 — the single-book poll's shape: the store's RevisionsState plus live drift. */ export type RevisionsPoll = RevisionsState & { drift: DriftEvent[] };`. Change `getRevisionsForBook`'s return type to `Promise<RevisionsPoll | null>`.
-  5. Replace the part of `computeRevisionsForBook` that runs from its signature down to the `return { pending: [], drift: [] };` block (`:125-136`) with:
+  5. Replace the part of `computeRevisionsForBook` that runs from its signature down to the `return { pending: [], drift: [] };` block (`:125-135`, which ends with the `if` block's closing brace) with:
      ```ts
      export async function computeRevisionsForBook(
        bookId: string,
@@ -2296,7 +2415,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
          return { ...base, drift: [] };
        }
      ```
-     Then replace the four lines from `const persisted = await readJson<RevisionsPersisted>(…)` through `const pending = Array.isArray(…) …;`, including the `#3376 part 1` comment between them (`:148-153`), with:
+     Then replace the six lines from `const persisted = await readJson<RevisionsPersisted>(…)` through `const pending = Array.isArray(…) …;`, including the `#3376 part 1` comment between them (`:148-153`), with:
      ```ts
        const dismissed = new Set(file.dismissed);
      ```
@@ -2306,7 +2425,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
          /* Plan 285 — curated: a store failure may carry a lock-key path. */
          res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to compute revisions.') });
      ```
-  8. In the bulk route, replace the `byBookId` declaration and loop (`:269-273`) with:
+  8. In the bulk route, replace the `byBookId` declaration and loop (`:270-273`) with:
      ```ts
          const byBookId: Record<string, { pending: StoredRevision[]; drift: DriftEvent[] }> = {};
          for (const [id, result] of entries) {
@@ -2321,6 +2440,21 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
      - add `import { requestFailureMessage } from '../workspace/file-lock.js';`;
      - replace the GET catch body (`:46`) with `res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to build QA report.') });`;
      - leave the resume-scoring catch at `:72` untouched.
+  10. In `src/store/revisions-slice.ts`, edit the `applyPoll` comment (`:308-311`) and nothing else. After this task the comment is false, because the single-book poll now carries both fields. Replace
+      ```
+             was taken (#3376 round 2). Also DON'T touch dismissed or
+             acceptedSelections — the server response (RevisionsResponse)
+             doesn't include either, and overwriting with empty would lose state
+             until the next disk hydrate.
+      ```
+      with
+      ```
+             was taken (#3376 round 2). Also DON'T touch dismissed or
+             acceptedSelections. Since plan 285 the single-book poll does carry
+             both (the bulk poll still doesn't), but until PR 2's cutover this
+             slice still owns them: adopting the poll's copy would revert a
+             local dismiss/accept still inside its persistence debounce.
+      ```
 
 - [ ] **Step 3: Update the CLAUDE.md count to the final number.**
 
@@ -2365,8 +2499,8 @@ Expected: exit 0.
 - [ ] **Step 6: Commit and push**
 
 ```bash
-git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/revisions.ts server/src/routes/revisions.test.ts server/src/routes/qa-report.ts server/src/routes/qa-report.test.ts CLAUDE.md
-git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server,docs): revisions polls read through the store; curate poll and qa-report 500s (#3400)"
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/revisions.ts server/src/routes/revisions.test.ts server/src/routes/qa-report.ts server/src/routes/qa-report.test.ts src/store/revisions-slice.ts CLAUDE.md
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "feat(server,frontend,docs): polls read revisions through the store; curate their 500s (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ```
 
@@ -2640,7 +2774,7 @@ Expected: FAIL. The errors include `Property 'RevisionsState' does not exist`, `
 
   (d) Bulk route description (`:2837-2841`). Append the sentence `Plan 285 — each value carries exactly \`pending\` (read through the server store, normalised) and \`drift\`.`
 
-  (e) `GenerationTick`. After its `audioQa:` property (`:5906`), add:
+  (e) `GenerationTick`. Insert after the **whole** `audioQa:` property block (`:5906-5911`: the `audioQa:` key, its `allOf`/`$ref`, and its three-line `description` ending "…without a state.json reload."), so the new keys land just before `errorReason: { type: string, nullable: true }`. Do not insert directly after the `audioQa:` key line. Add:
   ```yaml
         reviewChapter:
           type: boolean
@@ -3450,7 +3584,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   - `GenerationRequestBody` (`:699`), where `fallbackConfirmed?: unknown;` is at `:713`;
   - the handler head (`:718-720`);
   - the job literal (`:1282`);
-  - the live `chapter_complete` broadcast (`:2041-2065`).
+  - the live `chapter_complete` broadcast. It was at `:2041-2065` on the base; Task 8 moved it, so after Task 8's edit find it by `audioModelKey: renderedModelKey,` … `audioQa,` (the live broadcast, not the replay `send`), followed by Task 8's `...(reviewRecorded === undefined ? {} : { reviewRecorded }),`. The replay loop (base `:1174-1194`) is unshifted by Task 8, but this task's own head and `RunningJob` additions push it down, so find it by `for (const ch of state.chapters) {` followed by `send({` / `type: 'chapter_complete',`.
 - Test: `server/src/routes/generation.test.ts`, using the **slow pool** and `-t "plan 285"`.
 
 **Dark-state note:** generation stamps `reviewChapter`, but finalize still gets no `review`. The test below asserts that.
@@ -3563,7 +3697,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   Expected: exit 0.
 
 - [ ] **Step 4: Mutation checks.** Use the filtered slow run from Step 1. Report each red, restore after each, and confirm the diff-stat check.
-  1. Inside the replay loop's `send({ type: 'chapter_complete', … })` (`:1179-1191`), add `...(review ? { reviewChapter: true } : {}),`.
+  1. Inside the replay loop's `send({ type: 'chapter_complete', … })` (base `:1179-1191`; after this task's edits find it by quoted text, as described in Files), add `...(review ? { reviewChapter: true } : {}),`.
      - Expected red: `reviewChapter:true only on the chapter rendered with review — never a replay…`.
   2. Delete the `review_requires_single_chapter` `if` block.
      - Expected red: `400 before any SSE header…`, with `expected 200 to be 400`.
@@ -3585,7 +3719,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 **Files:**
 - Modify (re-anchored):
   - `src/store/queue-thunks.ts`: `EnqueueInput`, with `fallbackConfirmed?: boolean;` at `:56`;
-  - `src/lib/api.ts`: `StreamArgs` at `:599-645`, where `fallbackConfirmed?: boolean;` is `:644`; and `realStreamGeneration` at `:5894`, with its args at `:5900` and the body spread at `:5931`;
+  - `src/lib/api.ts`: `StreamArgs` at `:599-645`, where `fallbackConfirmed?: boolean;` is `:644`; and `realStreamGeneration` (base `:5894`, args `:5900`, body spread `:5931`; Task 6 added 4 lines above it, so after Task 6's edit look near `:5898` / `:5904` / `:5935` and match `function realStreamGeneration({`, `  fallbackConfirmed,` and `...(fallbackConfirmed ? { fallbackConfirmed: true } : {}),`);
   - `src/store/generation-stream-runner.ts`: `StreamOpenOpts`, with `fallbackConfirmed?: boolean;` at `:60`; and the `api.streamGeneration` call spread at `:321`;
   - `src/store/queue-dispatcher-middleware.ts`: the `runner.open` opts spread at `:278`.
 - Tests:
@@ -3701,7 +3835,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
   Run: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops run test -- src/lib/api-stream-review.test.ts src/store/queue-dispatcher-middleware.test.ts src/mocks/mock-queue.test.ts`
   - Expected FAIL: the POST body has no `review`, and the dispatcher's `byBook('book-A')?.review` is undefined.
-  - Expected PASS: `mock-queue.test.ts`. It is a regression guard, and its mutation is in Step 4.
+  - Expected PASS: `mock-queue.test.ts` and `api-stream-review › omits review when not set`. Both are regression guards; their mutations are in Step 4.
 
 - [ ] **Step 2: Implement**
   1. `src/store/queue-thunks.ts`:
@@ -3715,8 +3849,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   2. `src/lib/api.ts`:
      - Add `ReviewRequest` to the existing type import from `./types` (`:63`).
      - In `StreamArgs`, add `review?: ReviewRequest;` after `fallbackConfirmed?: boolean;` (`:644`), with the comment `/** Plan 285 — single-chapter A/B review intent; forwarded in the POST body. */`.
-     - In `realStreamGeneration`, add `review,` to the destructured args after `fallbackConfirmed,` (`:5900`).
-     - Add `...(review ? { review } : {}),` after the `fallbackConfirmed` body spread (`:5931`).
+     - In `realStreamGeneration`, add `review,` to the destructured args after `fallbackConfirmed,` (after Task 6's edit, near `:5904`).
+     - Add `...(review ? { review } : {}),` after the `fallbackConfirmed` body spread (after Task 6's edit, near `:5935`).
   3. `src/store/generation-stream-runner.ts`:
      - Add `import type { ReviewRequest } from '../lib/types';`.
      - In `StreamOpenOpts`, add this after `fallbackConfirmed?: boolean;` (`:60`):
@@ -3744,6 +3878,8 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
      - Expected red: `plan 285 — threads an entry review into the stream open…`.
   2. In `src/mocks/mock-queue.ts`'s `/enqueue` branch, change `...inp,` to `id: inp.id, bookId: inp.bookId, chapterId: inp.chapterId, scope: inp.scope,`. Run `…run test -- src/mocks/mock-queue.test.ts`.
      - Expected red: `keeps review on the enqueued entry`.
+  3. In `realStreamGeneration`'s body, change `...(review ? { review } : {}),` to `review: review ?? null,`. Run `…run test -- src/lib/api-stream-review.test.ts`.
+     - Expected red: `omits review when not set`, because the body now carries `"review":null`. The server would read `null` as absent, so the wire meaning would survive. The test still pins the key's absence, since every other optional field in this body follows that convention.
 
 - [ ] **Step 5: Commit and push**
 
@@ -3764,9 +3900,11 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   - the replace route at `:1360`, where `const { bookDir, state } = located;` is at `:1369`;
   - the `applyReparse` Promise.all at `:1132-1205`, where the revisions arm is at `:1201-1203`;
   - the sibling-arm comment at `:1144-1150`.
-- Modify `server/src/routes/book-state.reparse.test.ts`: the corrupt-cast test at `:964-987`, plus new tests. Note that this file already passes `vi.mock('../workspace/state-io.js')` through (`:45-48`). It is harmless here.
+- Modify `server/src/routes/book-state.reparse.test.ts`: the corrupt-cast test at `:964-986`, plus new tests. Note that this file already passes `vi.mock('../workspace/state-io.js')` through (`:45-48`). It is harmless here.
 - Modify `server/src/routes/book-state.replace-manuscript.test.ts`: new tests.
 - Modify `server/src/workspace/cast-lock.ts:18-24` (rule 4), `CLAUDE.md:582-584` (rule 4) and `docs/features/INDEX.md` (`### G. Generation`).
+- Modify `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md:369`. Its "only PR 1 changes an old client could observe" sentence names two changes, and this task makes it false. It must match this plan's Reversibility list.
+- Modify `docs/release-notes-next.md` (one technical, operator-facing entry). Do NOT add a `RELEASE_NOTES.md` line: there is no user-visible change.
 
 **Dark-state note:** a reset leaves `pending: []`, exactly what today's `rm` produced as far as any client can tell. The preflight only *refuses* a newer-schema file, which an old client could never have written.
 
@@ -3777,7 +3915,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
 - [ ] **Step 1: Write the failing tests**
 
-  (a) In `book-state.reparse.test.ts`, replace the corrupt-cast test (`:964-987`) with:
+  (a) In `book-state.reparse.test.ts`, replace the corrupt-cast test (`:964-986`) with:
   ```ts
     it('completes the reparse, deletes cast.json and RESETS revisions.json when cast.json is corrupt', async () => {
       const castPath = join(corruptBookDir, '.audiobook', 'cast.json');
@@ -3846,9 +3984,14 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 
       expect(res.status).toBe(500);
       expect(res.body.error).toMatch(/schema=2/);
+      /* FIRST, deliberately: applyReparse writes state.json synchronously in
+         sequence (before its Promise.all), so this is the one check that is
+         deterministically red when the preflight is missing. The cast/audio
+         deletions run as Promise.all siblings and may still be in flight when
+         the 500 returns. */
+      expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
       expect(existsSync(castPath)).toBe(true);
       expect(readFileSync(audioFile, 'utf8')).toBe('LIVE');
-      expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
       expect(JSON.parse(readFileSync(revisionsPath, 'utf8'))).toEqual({ schema: 2, pending: [] });
       rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
     });
@@ -3978,34 +4121,50 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
      - [285 — revisions.json becomes server-owned (PR 1, server, dark)](285-revisions-server-ops.md) — `active`. A locked `workspace/revisions-store.ts` becomes the only reader/writer of revisions.json (`fileId`/`rev`, the schema-migrate seam, read-time normalisation, reparse/replace reset instead of delete behind a newer-schema preflight); accept/reject/dismiss become one server route each, running today's audio step (moved to `audio/previous-audio.ts`) before the JSON write; finalize gains a tri-state `review` and `review` rides the queue entry into the generation request — all dark until PR 2 cuts the client over. Fixes D1/D8 server-side; #3397/#3400 close with PR 2. Spec: `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md`.
      ```
 
-- [ ] **Step 5: Release notes: explicitly none.** PR 1 is dark and has no shippable delta, so leave `docs/release-notes-next.md` and `RELEASE_NOTES.md` untouched. The verify task states this in the PR body.
+- [ ] **Step 5: Spec sentence and release notes**
+  1. In `docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md`, replace the paragraph that begins `The new routes and the store exist but nothing calls them. The only PR 1 changes an old client could observe are …` (line 369) with:
+     ```
+     The new routes and the store exist but nothing calls them. The PR 1 changes an old client could observe (the plan's Reversibility list, `docs/features/285-revisions-server-ops.md`):
+     - reparse/replace **reset** the file under the lock instead of deleting it — observably the same: the old client's hydrate spreads the payload (`layout.tsx:915`) and an empty file reads like a missing one;
+     - reparse/replace **refuse** a newer-schema revisions.json with a 500 **before** deleting or writing anything (main deleted it);
+     - the single-book poll, the bulk poll and qa-report answer 500 for a corrupt revisions.json even when the book has no cast (main returned early and answered 200), and for a newer-schema one cast or not (main answered 200); because the bulk route maps every book through one `Promise.all`, one such book fails the whole bulk response — the blast radius main already has for a corrupt file in a cast book;
+     - D8 (pending with an empty cast) and the poll's extra fields, which the old `applyPoll`/`applyBackgroundPoll` ignore (`revisions-slice.ts:318-331`);
+     - three new, uncalled routes (accept, reject, dismiss).
+     ```
+  2. In `docs/release-notes-next.md`, append this bullet at the end of the `## 🔌 Sync & server infrastructure` section. It is technical and operator-facing.
+     ```
+     - **Re-parse and replace-manuscript now refuse a `revisions.json` written by a newer server — before touching anything — instead of deleting it** (#3400). revisions.json now goes through the per-file schema seam (`schema-migrate.ts`) and a new server-side owner (`workspace/revisions-store.ts`, a per-book leaf lock with a `fileId`/`rev` stamp); a reparse/replace whose book carries a newer-schema file answers 500 with the "upgrade the server" message and leaves cast, audio, state and manuscript untouched, and otherwise *resets* the file (new `fileId`, empty) rather than removing it. The Revisions polls and the QA report now also 500 (curated message) on a corrupt or newer-schema revisions.json even for a book with no confirmed cast, and one such book fails the whole bulk revisions poll. Three new server routes (`POST …/revisions/{id}/accept`, `…/reject`, `POST …/drift/{id}/dismiss`) land unused — the app keeps writing revisions the old way until the client cutover (plan 285 PR 2).
+     ```
+     Add no `RELEASE_NOTES.md` line: nothing in it is user-visible. Task 14 states this in the PR body.
 
 - [ ] **Step 6: Mutation checks.** Run `…server run test -- src/routes/book-state.reparse.test.ts`. Report each red, restore after each, and confirm the diff-stat check.
   1. Put the original `existsSync(revisionsJsonPath(bookDir)) ? rm(…) : Promise.resolve(),` arm back in place of `resetRevisions(bookDir),`.
      - Expected red: `plan 285 — resets revisions.json to a NEW fileId…`, with `expected false to be true`.
   2. Delete the reparse route's `await assertRevisionsResettable(bookDir);`.
-     - Expected red: `plan 285 — refuses a NEWER-schema revisions.json BEFORE deleting anything`. `resetRevisions` still refuses inside the `Promise.all`, so the status is still 500. The test goes red because `cast.json` and the audio have already been deleted (`expected false to be true`).
+     - Expected red: `plan 285 — refuses a NEWER-schema revisions.json BEFORE deleting anything`. `resetRevisions` still refuses inside the `Promise.all`, so the status is still 500.
+     - The guaranteed red is the **`state.json` equality** (`expected '<rewritten state>' to be '<stateBefore>'`). `applyReparse` rewrites state.json at `await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, …` (base `~:1128`) in sequence, before the `Promise.all`.
+     - The `cast.json` and audio checks may or may not also be red, depending on whether those sibling deletions finished before the 500. Do not rely on them.
 
 - [ ] **Step 7: Commit and push**
 
 ```bash
-git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/book-state.ts server/src/routes/book-state.reparse.test.ts server/src/routes/book-state.replace-manuscript.test.ts server/src/workspace/cast-lock.ts CLAUDE.md docs/features/INDEX.md
+git -C C:/Claude/Projects/wt-3400-revisions-server-ops add server/src/routes/book-state.ts server/src/routes/book-state.reparse.test.ts server/src/routes/book-state.replace-manuscript.test.ts server/src/workspace/cast-lock.ts CLAUDE.md docs/features/INDEX.md docs/superpowers/specs/2026-10-01-revisions-server-ops-design.md docs/release-notes-next.md
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops commit -m "fix(server,docs): reset revisions.json through the store on reparse/replace, with a preflight (#3400)"
 git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 ```
 
 ---
 
-### Task 13: Verification and PR (the verify child)
+### Task 13: Full batteries and the acceptance checklist (a task child)
 
-**Files:** none modified. If any step fails, report it and stop. Do not fix anything inline: the coordinator dispatches a fix child. **Do not merge.**
+**Files:** none modified. This child **reports and does not fix**. If anything fails, report it with its triage; the coordinator dispatches a fix child.
 
 - [ ] **Step 1: Confirm the tree is idle and clean, and refresh the base**
   1. Run `git -C <wt> status --porcelain`. Expected: empty.
   2. Run `git -C <wt> fetch origin`.
   3. Run `git -C <wt> rev-parse HEAD origin/fix/server-3400-revisions-server-ops`. Expected: identical, meaning everything is pushed.
   4. Run `git -C C:/Claude/Projects/Audiobook-Generator status --porcelain`. Expected: no entry produced by this run.
-  5. From here on, every diff below uses `git -C <wt> diff origin/main...HEAD`, never local `main`.
+  5. From here on, every diff uses `git -C <wt> diff origin/main...HEAD`, never local `main`.
 
 - [ ] **Step 2: Full batteries.** Run each command in the foreground, one at a time:
   ```
@@ -4020,31 +4179,70 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
   - Expected: every command exits 0.
   - `test:server-slow` covers `generation.test.ts` and `book-state.test.ts`.
   - `check:cycles` needs network access for `npx madge@8.0.0`.
-  - For any failure, first check whether it also fails on `origin/main`, following CLAUDE.md. Report the result either way.
+  - If anything fails, check first whether it also fails on `origin/main`, per CLAUDE.md, and report the result either way.
 
 - [ ] **Step 3: PR-1 acceptance checklist.** Tick each item and give its evidence.
-  - [ ] **Only `revisions-store.ts` writes revisions.json.** Run `git -C <wt> grep -n "revisionsJsonPath" -- server/src ':!*.test.ts'`. The only writers should be `revisions-store.ts` and the still-accepted PR-1 `PUT /state` revisions case (`book-state.ts:789-790`). `GET /state` (`book-state.ts:285`) still reads raw.
-  - [ ] **The lock key is built in code in exactly one place.** Run `` git -C <wt> grep -nE 'revisions:\$\{' -- 'server/src/**/*.ts' ':!*.test.ts' ``. Expect exactly one line: `revisionsLockKey`'s `return` in `revisions-store.ts`. The store header and `cast-lock.ts` comments spell the key as `"revisions:" + …` and `revisions:<abs bookDir>`, so neither matches. Then run `git -C <wt> grep -n "revisionsLockKey(" -- server/src ':!*.test.ts'`. Every call site should be inside `revisions-store.ts`.
+  - [ ] **Only `revisions-store.ts` writes revisions.json.**
+    - Run `git -C <wt> grep -n "revisionsJsonPath" -- server/src ':!*.test.ts'`.
+    - The only writers should be `revisions-store.ts` and the still-accepted PR-1 `PUT /state` revisions case in `book-state.ts`.
+    - Find that case by `case 'revisions':` / `await writeJsonAtomic(revisionsJsonPath(bookDir), body.patch);`. It was at base `:789-790`, and is about `:790-791` after Task 12's added import.
+    - `GET /state` (`}>(revisionsJsonPath(bookDir));`, base `:285`, about `:286` after Task 12) still reads raw.
+  - [ ] **The lock key is built in code in exactly one place.**
+    - Run `` git -C <wt> grep -nE 'revisions:\$\{' -- 'server/src/**/*.ts' ':!*.test.ts' ``. Expect exactly one line: `revisionsLockKey`'s `return` in `revisions-store.ts`.
+    - The store header and the `cast-lock.ts` comments spell the key `"revisions:" + …` and `revisions:<abs bookDir>`, so neither matches.
+    - Run `git -C <wt> grep -n "revisionsLockKey(" -- server/src ':!*.test.ts'`. Every call site should be inside `revisions-store.ts`.
   - [ ] **The revisions lock is a leaf.** Inside `revisions-store.ts`, no other lock call appears within a locked callback, and every `writeJsonAtomic` targets `revisionsJsonPath`.
-  - [ ] **Schema seam.** The store imports `migrateSeamDoc` and `stampSeamSchema`. The newer-schema, corrupt-file and preflight tests are green.
+  - [ ] **Schema seam.**
+    - The store imports `migrateSeamDoc` and `stampSeamSchema`.
+    - The newer-schema, corrupt-file, non-object-top-level and preflight tests are green.
+    - The `schema-migrate.ts` comments name the store as the stamping writer.
   - [ ] **Preflight.** `book-state.ts` calls `assertRevisionsResettable` in both routes before any deletion or write, and both refuse-before-delete tests are green.
-  - [ ] **The old routes keep today's codes and order.** `chapter-audio.test.ts` is green with its tests unchanged, plus the new 409.
+  - [ ] **The old routes keep today's codes and order.** `chapter-audio.test.ts` is green with its existing tests unchanged, plus the new 409.
   - [ ] **Every finalize caller passes no `review`.** The three spy tests are green.
   - [ ] **No new cross-layer import into generation.** Run `git -C <wt> diff origin/main...HEAD -- server/src/routes/generation.ts | grep "^+import"`. It should show only `./review-request.js`.
   - [ ] **`previous-audio.ts` does not import generation.** `git -C <wt> grep -n "generation" -- server/src/audio/previous-audio.ts` should return nothing.
-  - [ ] **OpenAPI additions are optional.** Every field added to an existing OpenAPI schema is optional, and the contract test is green under typecheck.
-  - [ ] **CLAUDE.md is consistent.** It says "twenty" `requestFailureMessage` sites, and `git -C <wt> grep -n "requestFailureMessage(" -- "server/src/**/*.ts" ":!*.test.ts"` shows 20 call sites plus the definition. It says "FIVE handlers" and names `applyReview`. Rule 4 names the revisions leaf lock.
+  - [ ] **OpenAPI.** Every field added to an existing schema is optional, and the contract test is green under typecheck.
+  - [ ] **CLAUDE.md.**
+    - It says "twenty" `requestFailureMessage` sites, and `git -C <wt> grep -n "requestFailureMessage(" -- "server/src/**/*.ts" ":!*.test.ts"` shows 20 call sites plus the definition.
+    - It says "FIVE handlers" and names `applyReview`.
+    - Rule 4 names the revisions leaf lock.
+  - [ ] **Stale-comment fixes are present** in each of these:
+    - `schema-migrate.ts` (both comments);
+    - `revisions-slice.ts` (`applyPoll`);
+    - the `revisions.test.ts` header;
+    - spec `:369` (the observable-changes list).
   - [ ] **No restructure pending drop.** `git -C <wt> diff origin/main...HEAD -- server/src/routes/chapters-restructure.ts` is empty.
   - [ ] **No sidecar changes.** `git -C <wt> diff --stat origin/main...HEAD -- server/tts-sidecar` is empty.
-  - [ ] **INDEX has the 285 entry, and no release-notes files changed.**
+  - [ ] **INDEX and release notes.**
+    - INDEX has the 285 entry.
+    - `docs/release-notes-next.md` has the single technical #3400 entry.
+    - `git -C <wt> diff --stat origin/main...HEAD -- RELEASE_NOTES.md` is empty.
 
-- [ ] **Step 4: Re-run the four highest-value mutations.** For each one, paste the red line, restore, and re-run green. Afterwards, `git -C <wt> status --porcelain` must be empty.
+- [ ] **Step 4: Report** each battery result, and each checklist result with its evidence. For any failure, include its `origin/main` triage. Change nothing.
+
+---
+
+### Task 14: Verify, then open the PR (the final verify child)
+
+**Files:** none modified. **Do not merge.** Start only after Task 13 reports every battery green and every checklist item ticked. If it reported a failure, stop and say so.
+
+- [ ] **Step 1: Re-check the branch against `origin/main`**
+  1. Run `git -C <wt> fetch origin`.
+  2. `git -C <wt> status --porcelain` should be empty.
+  3. `git -C <wt> rev-parse HEAD origin/fix/server-3400-revisions-server-ops` should print two identical hashes.
+  4. Run `git -C <wt> diff --stat origin/main...HEAD`. The file list should be exactly the spec, this plan, and the files named in Tasks 1–12's commit steps. Nothing else.
+
+- [ ] **Step 2: Re-run the four highest-value mutations.** For each one, paste the red line, restore the code, and re-run to confirm green. Afterwards, `git -C <wt> status --porcelain` must be empty.
   1. **Task 1 #1: lock key without `resolve`.** This is the locking invariant everything rests on. Run `…server run test -- src/workspace/revisions-store.test.ts`.
   2. **Task 4 #1: no `live_audio_missing` pre-check.** This is the only path that could delete the last copy of a take. Run `…server run test -- src/routes/revision-ops.test.ts`.
-  3. **Task 8 #2: `review: null` at the splice caller.** This guards the PR-1 dark invariant. Run `…server run test -- src/routes/chapter-splice.test.ts -t "plan 285"`.
-  4. **Task 12 #2: delete the reparse preflight.** This guards the one irreversible PR-1 behaviour: deleting a book's cast and audio. Run `…server run test -- src/routes/book-state.reparse.test.ts`.
+  3. **Task 8 #2: `review: null` at the splice caller.** This breaks the PR-1 dark invariant. Run `…server run test -- src/routes/chapter-splice.test.ts -t "plan 285"`.
+  4. **Task 12 #2: delete the reparse preflight.** This is the one irreversible PR-1 behaviour. The guaranteed red is the `state.json` equality. Run `…server run test -- src/routes/book-state.reparse.test.ts`.
 
-- [ ] **Step 5: Open the PR, only when every step above passes**
+- [ ] **Step 3: Verdict.**
+  - **PASS** only if every mutation went red and was restored to green, and Step 1's checks hold.
+  - Otherwise **FAIL**: state the reason and stop without opening a PR.
+
+- [ ] **Step 4: Open the PR (PASS only)**
   1. Write `feat(server): server-owned revisions.json per-operation writes (dark)` to a scratch file and run `node C:/Claude/Projects/wt-3400-revisions-server-ops/scripts/validate-commit-msg.mjs <that file>`. Expected: exit 0.
   2. Write the body to a scratch file, following `.github/pull_request_template.md`:
      ```markdown
@@ -4055,7 +4253,7 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
      Refs #3400
      Refs #3397
 
-     Release notes: none (dark — no shippable delta; PR 2 carries them).
+     Release notes: one technical, operator-facing entry in `docs/release-notes-next.md` (reparse/replace refuse a newer-schema revisions.json before touching anything; the new, unused revisions routes). No `RELEASE_NOTES.md` user line — nothing user-visible; PR 2 carries those.
 
      ## Test plan
 
@@ -4068,11 +4266,11 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
        - reparse preflight removed → <observed red line>
      - [ ] `pr-review-gate` pass (run by the coordinator after this PR opens)
      ```
-     Before creating the PR, replace each `<observed red line>` with the actual output from Step 4. No placeholder may remain.
+     Before creating the PR, replace each `<observed red line>` with the actual output from Step 2. No placeholder may remain.
   3. Run `gh pr create --repo dudarenok-maker/Castwright --base main --head fix/server-3400-revisions-server-ops --title "feat(server): server-owned revisions.json per-operation writes (dark)" --body-file <body file>`.
-  4. Do not merge. The mandatory `pr-review-gate` pass runs after the PR opens, and the coordinator handles it.
+  4. Do not merge. The mandatory `pr-review-gate` pass runs after the PR opens; the coordinator handles it.
 
-- [ ] **Step 6: Report** the PR URL, each checklist result, each mutation's observed red line, and any battery failure with its triage against `origin/main`.
+- [ ] **Step 5: Report** the verdict, the PR URL, and each mutation's observed red line.
 
 ---
 
@@ -4093,13 +4291,15 @@ git -C C:/Claude/Projects/wt-3400-revisions-server-ops push
 | §3 SSE threading | Task 8 |
 | §3 server `review` | Tasks 9 and 10 |
 | §3 client `review` | Task 11 |
-| Delivery (the CLAUDE.md lines, INDEX, the explicit no-release-notes) | Tasks 4, 5, 7 and 12 |
+| Delivery (the CLAUDE.md lines, INDEX, the technical release-notes entry with no user line) | Tasks 4, 5, 7 and 12 |
+| Verification and the PR | Tasks 13 (batteries + checklist) and 14 (mutations, verdict, PR) |
+| Stale comments the work makes false (chore rule) | `schema-migrate.ts` in Task 1; `revisions-slice.ts` and the `revisions.test.ts` header in Task 5; spec `:369` in Task 12 |
 
 PR-2 items are deliberately absent: restore-unrecorded, the 400/410 switches, the restructure drop, caller values, and all of §4.
 
 ### Gaps the spec left open, and their resolutions (coordinator-confirmed)
 
-1. **Corrupt file.** A parse failure **throws**, as on main. The poll and qa-report return 500, and every store write refuses, so the store never overwrites the corrupt original. The one exception is `resetRevisions` (reparse/replace), which replaces a corrupt file as the old `rm` did. In PR 1, the client's raw `PUT /state` still writes the file by design (Invariant 7).
+1. **Corrupt file.** A parse failure **throws**, as on main. A top level that is not a plain object also throws as corrupt, never as "missing": an array, literal `null`, a string or a number. The store checks `existsSync` first, because `readJson` returns `null` both for a missing file and for one that contains literal `null`. The polls and qa-report return 500, and every store write refuses, so the store never overwrites the corrupt original. Reversibility item 3 gives the exact difference from main, including the whole-bulk-poll blast radius. The one exception is `resetRevisions` (reparse/replace), which replaces a corrupt file as the old `rm` did. In PR 1, the client's raw `PUT /state` still writes the file by design (Invariant 7).
 2. **Newer schema.**
    - The store reads through `migrateSeamDoc` and stamps writes with `stampSeamSchema`.
    - A newer-schema file throws the curated, path-free `UnsupportedSchemaError` on every read, write and reset, and is never downgraded.
@@ -4144,6 +4344,7 @@ Each of these passes before its change. Each one has a mutation, or is labelled 
 | poll `falls back to [] when persisted pending is not an array` | 5 | No realistic mutation exists. Even a non-array string iterates to non-objects that are all dropped. It is a **regression guard** inherited from #3376. |
 | qa-report `configDrift is built from drift only…` | 5 | Read `pending` instead of `drift` |
 | `mock-queue.test.ts` | 11 | Replace the entry spread with an explicit field list |
+| `api-stream-review › omits review when not set` | 11 | Always send `review: review ?? null` |
 
 Every other new test has a red-first step.
 
