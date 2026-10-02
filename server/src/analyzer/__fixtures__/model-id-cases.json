@@ -1,0 +1,20 @@
+[
+  { "id": "qwen3.5:4b", "engine": "local" },
+  { "id": "gemma-4-E4B-it-GGUF:UD-Q4_K_XL", "engine": "local" },
+  { "id": "hf.co/unsloth/Qwen3-GGUF:Q4_K_M", "engine": "local" },
+  { "id": "openai:latest", "engine": "local" },
+  { "id": "openai:Lab::qwen3", "engine": "local" },
+  { "id": "openai:lab_1::qwen3", "engine": "local" },
+  { "id": "openai:::qwen3", "engine": "local" },
+  { "id": "openai:lab:qwen3", "engine": "local" },
+  { "id": "gemini-3.6-flash", "engine": "gemini" },
+  { "id": "gemma-4-31b-it", "engine": "gemini" },
+  { "id": "openai", "engine": "gemini" },
+  { "id": "llama2", "engine": "gemini" },
+  { "id": "openai:lab::qwen3:30b", "engine": "openai", "endpointId": "lab", "model": "qwen3:30b" },
+  { "id": "openai:lab::qwen3-30b", "engine": "openai", "endpointId": "lab", "model": "qwen3-30b" },
+  { "id": "openai:my-box-2::org/model-name", "engine": "openai", "endpointId": "my-box-2", "model": "org/model-name" },
+  { "id": "openai:a::b::c", "engine": "openai", "endpointId": "a", "model": "b::c" },
+  { "id": "openai:lab::", "engine": "openai", "endpointId": "lab", "model": "" },
+  { "id": "openai:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa::m", "engine": "openai", "endpointId": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "model": "m" }
+]
