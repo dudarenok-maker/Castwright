@@ -296,17 +296,32 @@ async function seedRunnableBook(): Promise<{
   };
 }
 
-/* Exactly what book-state.ts:846-858 does: move the folder (with the same
-   OneDrive/cloud-sync-friendly retry — a raw sync rename was observed
-   flaking with EPERM here under full-suite load, exactly the class of
-   transient failure renameWithRetry exists to absorb), then point the
-   in-memory record at the new path. */
-async function renameLikeBookState(manuscriptId: string, oldDir: string, newDir: string) {
+/* Exactly what the rename handler in book-state.ts does (the
+   `renameWithRetry` + `if (rec) { rec.bookDir = newDir; putManuscript(rec) }`
+   block): move the folder (with the same OneDrive/cloud-sync-friendly retry —
+   a raw sync rename was observed flaking with EPERM here under full-suite
+   load, exactly the class of transient failure renameWithRetry exists to
+   absorb), then point the in-memory record at the new path IF there is one.
+   The `if (rec)` is load-bearing (#3459): the book-dir guard's slow path
+   (workspace/book-dir-guard.ts) removes the record and awaits a re-hydrate,
+   and a rename landing in that window sees no record — production tolerates
+   that (the re-hydrate then finds the moved folder), so the helper must too.
+   `afterRename` runs synchronously between the move and the record lookup,
+   i.e. exactly where that window lands. */
+async function renameLikeBookState(
+  manuscriptId: string,
+  oldDir: string,
+  newDir: string,
+  afterRename?: () => void,
+) {
   const { getManuscript, putManuscript } = await import('../store/manuscripts.js');
   await renameWithRetry(oldDir, newDir);
-  const rec = getManuscript(manuscriptId)!;
-  rec.bookDir = newDir;
-  putManuscript(rec);
+  afterRename?.();
+  const rec = getManuscript(manuscriptId);
+  if (rec) {
+    rec.bookDir = newDir;
+    putManuscript(rec);
+  }
 }
 
 describe('#2165 — a rename that reaches a live analysis run does not resurrect the old directory', () => {
@@ -706,6 +721,35 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
         await expect(assertWriteTargetStable(seed.job, writeDir)).rejects.toBeInstanceOf(
           BookDirUnresolvedError,
         );
+      } finally {
+        removeManuscript(seed.manuscriptId);
+      }
+    },
+    30_000,
+  );
+
+  it(
+    "#3459 a rename landing in the book-dir guard's remove→re-hydrate window finds no record, and the guard re-hydrates to the new path",
+    async () => {
+      const seed = await seedRunnableBook();
+      const { tryResolveVerifiedBookDir } = await import('../workspace/book-dir-guard.js');
+      const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+
+      try {
+        let guard: ReturnType<typeof tryResolveVerifiedBookDir> | undefined;
+        /* oldDir is gone by the time the hook runs, so the guard takes its slow
+           path: it removes the record synchronously, then awaits the re-hydrate
+           — the rename helper's record lookup lands in between. */
+        await renameLikeBookState(seed.manuscriptId, seed.oldDir, seed.newDir, () => {
+          guard = tryResolveVerifiedBookDir({
+            manuscriptId: seed.manuscriptId,
+            candidateBookDir: seed.oldDir,
+          });
+          expect(getManuscript(seed.manuscriptId)).toBeUndefined();
+        });
+
+        expect(await guard).toBe(seed.newDir);
+        expect(getManuscript(seed.manuscriptId)?.bookDir).toBe(seed.newDir);
       } finally {
         removeManuscript(seed.manuscriptId);
       }
