@@ -305,6 +305,7 @@ async function runPipeline(target: number): Promise<Artifacts> {
       bookId,
       bookDir,
       chapter: { id: 1, slug: SLUG, title: 'Chapter 1' },
+      castIdHistory: { schema: 1, supersededBy: {} },
       pcm: synth.pcm,
       sampleRate: synth.sampleRate,
       durationSec: synth.durationSec,
@@ -313,6 +314,7 @@ async function runPipeline(target: number): Promise<Artifacts> {
       defaultEngine: 'kokoro',
       modelKey: 'kokoro-v1',
       audioFormat: 'mp3',
+      resynthesizedIndices: 'all',
     });
 
     const mp3Path = join(audioRoot, `${SLUG}.mp3`);

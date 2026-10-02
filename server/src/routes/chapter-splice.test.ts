@@ -63,6 +63,8 @@ const TITLE_LED_MANUSCRIPT_ID = 'm_title_led';
    to a DIFFERENT character than segments.json (the on-disk fixture below)
    records for it, reproducing the attribution-source disagreement. */
 const DIVERGENT_MANUSCRIPT_ID = 'm_divergent';
+/* #3362 🟠B — one cast character spelled two ways across a chapter's segments. */
+const MIXED_SPELLING_MANUSCRIPT_ID = 'm_mixed_spelling';
 vi.mock('../store/analysis-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
   return {
@@ -70,6 +72,16 @@ vi.mock('../store/analysis-cache.js', async (importOriginal) => {
     loadAnalysisCache: vi.fn(async (manuscriptId: string) => {
       if (manuscriptId === TITLE_LED_MANUSCRIPT_ID) {
         return { chapters: { 1: [{ id: 1, characterId: 'amy', text: 'The first body line.' }] } };
+      }
+      if (manuscriptId === MIXED_SPELLING_MANUSCRIPT_ID) {
+        return {
+          chapters: {
+            1: [1, 2, 3, 4].map((id) => ({ id, characterId: 'the_torment', text: `Torment line ${id}.` }))
+              .concat([{ id: 5, characterId: 'the-torment', text: 'Torment line 5.' }])
+              .concat([{ id: 6, characterId: 'amy', text: 'Amy line.' }])
+              .concat([{ id: 7, characterId: 'the-torment', text: 'Legacy line.' }]),
+          },
+        };
       }
       if (manuscriptId === DIVERGENT_MANUSCRIPT_ID) {
         // segments.json (below) says sentence 5 belongs to 'castor'; the
@@ -113,6 +125,17 @@ vi.mock('./generation.js', async (importOriginal) => {
 vi.mock('../tts/model-keys.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../tts/model-keys.js')>();
   return { ...real, canonicalModelKeyForEngine: vi.fn(real.canonicalModelKeyForEngine) };
+});
+
+/* #3362 pass-6 (🟡1) — spy-wrap the real export (same pattern as the other
+   spies above) so a test can assert what THIS ROUTE actually threads through
+   as `resynthesizedIndices`, instead of only inferring it from finalize's
+   own downstream behaviour. Every prior test in this file calls the real
+   finalizeChapterAudioWrite through this spy unchanged — it wraps, it
+   doesn't replace. */
+vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../audio/finalize-chapter-write.js')>();
+  return { ...real, finalizeChapterAudioWrite: vi.fn(real.finalizeChapterAudioWrite) };
 });
 
 beforeAll(async () => {
@@ -230,6 +253,29 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
 
     // Duration unchanged by a pure gain (within a frame of MP3 slack).
     expect(Math.abs(after.length - before.length) / (SR * 2)).toBeLessThan(0.1);
+  });
+
+  /* #3362 pass-6 (🟡1) — a remix never calls synthesiseChapter (it's a gain
+     change, not a re-synthesis), so it must thread an EMPTY
+     resynthesizedIndices to finalizeChapterAudioWrite, freezing identity for
+     every segment in the chapter. Nothing in this file previously asserted
+     what the route actually passes — mutation M2 (dropping the wiring
+     entirely: tsc now rejects the omission, but at runtime an absent field
+     reads as "nothing re-synthesised", the opposite of 'all') stayed green. */
+  it('threads an EMPTY resynthesizedIndices to finalize — nothing was actually re-synthesised (🟡1)', async () => {
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    finalizeSpy.mockClear();
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
+      .send({ mode: 'remix', characterId: 'castor', gainDb: 8 });
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'splice_complete'), `expected splice_complete, got ${res.text}`).toBe(true);
+
+    expect(finalizeSpy).toHaveBeenCalledTimes(1);
+    const call = finalizeSpy.mock.calls[0][0];
+    expect(Array.from(call.resynthesizedIndices as Iterable<number>)).toEqual([]);
   });
 
   it('rejects a remix for a character with no segments', async () => {
@@ -367,6 +413,118 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
     expect(segFile.segments[1].endSec - segFile.segments[1].startSec).toBeCloseTo(0.3, 5);
   });
 
+  /* #3362 pass-6 (🟡1) — a rerecord's resynthesizedIndices must be EXACTLY
+     the on-disk indices this call re-synthesised (`targetIndices`, fs-10's
+     own index mapping) — never omitted, never every segment. Mutation M2
+     (dropping the wiring) is a compile error now, and at runtime an absent
+     field reads as "nothing re-synthesised"; it stayed green before this
+     test existed. */
+  it('threads EXACTLY the resynthesized index (index 1, the mapped body line) to finalize (🟡1)', async () => {
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    finalizeSpy.mockClear();
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+    const events = parseSse(res.text);
+    expect(events.some((e) => e.type === 'splice_complete'), `expected splice_complete, got ${res.text}`).toBe(true);
+
+    expect(finalizeSpy).toHaveBeenCalledTimes(1);
+    const call = finalizeSpy.mock.calls[0][0];
+    expect(Array.from(call.resynthesizedIndices as Iterable<number>)).toEqual([1]);
+  });
+
+  /* #3362 pass-7 🟠H — the take's embedding row (synthesiseChapter's own
+     `embeddings`, the same pass a full render uses) must reach finalize as
+     `reembeddedRows`, or the stale-row drop leaves the re-recorded character
+     with no centroid. A take with no embedding (gate off / embed failed) just
+     contributes nothing — the splice still completes. */
+  it('threads the re-recorded take\'s embedding rows to finalize as reembeddedRows (🟠H); none when the embed pass produced none', async () => {
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    const row = { characterId: 'amy', sentenceIds: [1], vec: Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]) };
+
+    finalizeSpy.mockClear();
+    synthMock.mockImplementationOnce(async () => ({
+      pcm: tone(0.3, 9000),
+      sampleRate: SR,
+      segments: [],
+      durationSec: 0.3,
+      rerecordMs: 0,
+      transcribeMs: 0,
+      embedMs: 0,
+      embeddings: [row],
+    }));
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+    expect(parseSse(res.text).some((e) => e.type === 'splice_complete'), `got ${res.text}`).toBe(true);
+    expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([row]);
+
+    finalizeSpy.mockClear();
+    const res2 = await request(app)
+      .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+    expect(parseSse(res2.text).some((e) => e.type === 'splice_complete'), `got ${res2.text}`).toBe(true);
+    expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([]);
+  });
+
+  /* #3362 pass-9 🟠I — every fixture above gives the segment the SAME id the
+     analysis cache carries, which is why the bug hid. After a cast merge the
+     cache (and so the synth's fresh embedding row) carries the merge TARGET
+     ('amy') while the segment keeps its render-time raw id ('amyold'): the row
+     must still replace the dropped one, under the segment's own id. */
+  it('a re-record after a cast merge keeps the take\'s fresh embedding row (keyed by the analysis id, stored under the segment\'s raw id) (🟠I)', async () => {
+    const { readEmbeddings, writeEmbeddings, EMBEDDINGS_VERSION } = await import('../audio/render-integrity/embeddings-io.js');
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    const bookDir = join(titleLedAudioRoot, '..');
+    const segPath = join(titleLedAudioRoot, `${SLUG}.segments.json`);
+    const embPath = join(titleLedAudioRoot, `${SLUG}.embeddings.json`);
+    const histPath = join(bookDir, '.audiobook', 'cast-id-history.json');
+    const originalSegs = readFileSync(segPath, 'utf8');
+    try {
+      const file = JSON.parse(originalSegs) as { segments: Array<{ characterId: string; resolvedCharacterId?: string; sentenceIds: number[] }> };
+      file.segments[1].characterId = 'amyold';
+      // The route's ownership check matches on the stamped canonical id; set it
+      // here rather than inheriting it from an earlier test's splice write.
+      file.segments[1].resolvedCharacterId = 'amy';
+      writeFileSync(segPath, JSON.stringify(file));
+      writeFileSync(histPath, JSON.stringify({ schema: 1, supersededBy: { amyold: 'amy' } }));
+      await writeEmbeddings(
+        embPath,
+        [{ characterId: 'amyold', sentenceIds: [1], vec: Float32Array.from([0, 1, 0, 0, 0, 0, 0, 0]) }],
+        EMBEDDINGS_VERSION,
+      );
+      const fresh = Float32Array.from([1, 0, 0, 0, 0, 0, 0, 0]);
+      synthMock.mockImplementationOnce(async () => ({
+        pcm: tone(0.3, 9000),
+        sampleRate: SR,
+        segments: [],
+        durationSec: 0.3,
+        rerecordMs: 0,
+        transcribeMs: 0,
+        embedMs: 0,
+        embeddings: [{ characterId: 'amy', sentenceIds: [1], vec: fresh }],
+      }));
+      const res = await request(app)
+        .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+        .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+      expect(parseSse(res.text).some((e) => e.type === 'splice_complete'), `got ${res.text}`).toBe(true);
+      const after = await readEmbeddings(embPath);
+      expect(after!.rows.length).toBe(1);
+      expect(after!.rows[0].characterId).toBe('amyold');
+      expect(Array.from(after!.rows[0].vec)).toEqual(Array.from(fresh));
+    } finally {
+      writeFileSync(segPath, originalSegs);
+      rmSync(histPath, { force: true });
+      rmSync(embPath, { force: true });
+    }
+  });
+
   /* #1888 — synthesiseChapter (the repair's own synth call) DOES compute
      voiceSubstitutedFrom correctly per segment; this pins that the value
      actually survives onto the persisted segment through the splice route's
@@ -424,6 +582,109 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-10 title-le
       segments: Array<{ voiceSubstitutedFrom?: string }>;
     };
     expect(segFile.segments[1].voiceSubstitutedFrom).toBeUndefined();
+  });
+
+  /* #3362 pass 11 🟠A — a re-record's take always has a definite answer for
+     "did THIS take fall back", exactly like voiceSubstitutedFrom, so
+     renderedFallbackEngine/renderedFallbackCharacterId must be overwritten
+     unconditionally: a clean take clears a stale Kokoro stamp, a fallback take
+     stamps the fresh one onto a previously clean segment. */
+  it('a clean re-record clears a stale renderedFallbackEngine/CharacterId, so the line counts as a Qwen line again (#3362)', async () => {
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    const { renderedSegmentVoices } = await import('../audio/segments-io.js');
+    const segPath = join(titleLedAudioRoot, `${SLUG}.segments.json`);
+    const originalSegs = readFileSync(segPath, 'utf8');
+    try {
+      const before = JSON.parse(originalSegs);
+      before.segments[1].renderedFallbackEngine = 'kokoro';
+      before.segments[1].renderedFallbackCharacterId = 'narrator';
+      /* #3362 pass-13 🟡B — the Cast pill reads the per-character SNAPSHOT
+         (collectRenderedFallbackEngines), not the segment: seed the snapshot's
+         stamp too so the route-level result pins it clearing. */
+      before.characterSnapshots = {
+        ...before.characterSnapshots,
+        amy: { ...before.characterSnapshots?.amy, renderedFallbackEngine: 'kokoro' },
+      };
+      writeFileSync(segPath, JSON.stringify(before));
+      const { collectRenderedFallbackEngines } = await import('../audio/segments-io.js');
+      const chaptersForPill = [{ id: 1, slug: SLUG }];
+      const titleLedBookDir = join(titleLedAudioRoot, '..');
+      expect(await collectRenderedFallbackEngines(titleLedBookDir, chaptersForPill)).toEqual({ amy: 'kokoro' });
+      const pillAfter = () => collectRenderedFallbackEngines(titleLedBookDir, chaptersForPill);
+
+      synthMock.mockImplementationOnce(async () => ({
+        pcm: tone(0.3, 9000),
+        sampleRate: SR,
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 0.3, voiceName: 'qwen-amy' },
+        ],
+        durationSec: 0.3,
+        rerecordMs: 0,
+        transcribeMs: 0,
+        embedMs: 0,
+      }));
+      const res = await request(app)
+        .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+        .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+      expect(parseSse(res.text).some((e) => e.type === 'splice_complete'), `got ${res.text}`).toBe(true);
+
+      const segFile = JSON.parse(readFileSync(segPath, 'utf8')) as {
+        segments: Array<{ characterId: string; voiceName?: string; renderedFallbackEngine?: string; renderedFallbackCharacterId?: string }>;
+      };
+      expect(segFile.segments[1].voiceName).toBe('qwen-amy');
+      expect('renderedFallbackEngine' in segFile.segments[1]).toBe(false);
+      expect('renderedFallbackCharacterId' in segFile.segments[1]).toBe(false);
+      const snaps = (JSON.parse(readFileSync(segPath, 'utf8')) as { characterSnapshots?: Record<string, { renderedFallbackEngine?: string }> })
+        .characterSnapshots;
+      expect(snaps?.amy?.renderedFallbackEngine).toBeUndefined();
+      expect(await pillAfter()).toEqual({});
+      // Downstream: the per-line voice drift / Voices split no longer skips it.
+      expect(renderedSegmentVoices(segFile.segments as never, segFile.segments[1].characterId)).toContain('qwen-amy');
+    } finally {
+      writeFileSync(segPath, originalSegs);
+    }
+  });
+
+  it('a fallback re-record stamps the new take\'s renderedFallbackEngine/CharacterId onto a clean segment (#3362)', async () => {
+    const synthMod = await import('../tts/synthesise-chapter.js');
+    const synthMock = vi.mocked(synthMod.synthesiseChapter);
+    const segPath = join(titleLedAudioRoot, `${SLUG}.segments.json`);
+    const originalSegs = readFileSync(segPath, 'utf8');
+    try {
+      synthMock.mockImplementationOnce(async () => ({
+        pcm: tone(0.3, 9000),
+        sampleRate: SR,
+        segments: [
+          {
+            groupIndex: 0,
+            characterId: 'amy',
+            sentenceIds: [1],
+            startSec: 0,
+            endSec: 0.3,
+            voiceName: 'af_bella',
+            renderedFallbackEngine: 'kokoro',
+            renderedFallbackCharacterId: 'narrator',
+          },
+        ],
+        durationSec: 0.3,
+        rerecordMs: 0,
+        transcribeMs: 0,
+        embedMs: 0,
+      }));
+      const res = await request(app)
+        .post(`/api/books/${encodeURIComponent(titleLedBookId)}/chapters/1/splice`)
+        .send({ mode: 'rerecord', characterId: 'amy', modelKey: 'kokoro-v1', segmentIndices: [1] });
+      expect(parseSse(res.text).some((e) => e.type === 'splice_complete'), `got ${res.text}`).toBe(true);
+
+      const segFile = JSON.parse(readFileSync(segPath, 'utf8')) as {
+        segments: Array<{ renderedFallbackEngine?: string; renderedFallbackCharacterId?: string }>;
+      };
+      expect(segFile.segments[1].renderedFallbackEngine).toBe('kokoro');
+      expect(segFile.segments[1].renderedFallbackCharacterId).toBe('narrator');
+    } finally {
+      writeFileSync(segPath, originalSegs);
+    }
   });
 
   it('rejects targeting the title beat (index 0) directly with the title-only error', async () => {
@@ -629,6 +890,119 @@ describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — fs-38 Wave 3c 
    the WHOLE splice the moment any targeted segment's segFile characterId
    disagrees with the current analysis's characterId for the same
    sentenceIds, instead of rendering anything. */
+describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — #3362 🟠B target selection by resolved cast id', () => {
+  let mixedBookId: string;
+
+  beforeAll(async () => {
+    const [{ makeBookId: makeId }, mp3] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../tts/mp3.js'),
+    ]);
+    const author = 'Mixed Spelling Author';
+    const series = 'Standalones';
+    const title = 'Mixed Spelling Story';
+    mixedBookId = makeId(author, series, title);
+    const bookDir = join(workspaceRoot, 'books', author, series, title);
+    const mixedAudioRoot = join(bookDir, 'audio');
+    mkdirSync(mixedAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: mixedBookId,
+        manuscriptId: MIXED_SPELLING_MANUSCRIPT_ID,
+        title,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'en',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:04' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'the_torment', name: 'The Torment', gender: 'female', attributes: [] },
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+        ],
+      }),
+    );
+    const mp3Bytes = await mp3.encodePcmToAudio(
+      Buffer.concat(Array.from({ length: 7 }, () => tone(0.5, 9000))),
+      SR,
+      { format: 'mp3', quality: 2 },
+    );
+    writeFileSync(join(mixedAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    const seg = (i: number, characterId: string, resolvedCharacterId?: string) => ({
+      groupIndex: i,
+      characterId,
+      ...(resolvedCharacterId ? { resolvedCharacterId } : {}),
+      sentenceIds: [i + 1],
+      startSec: i * 0.5,
+      endSec: (i + 1) * 0.5,
+    });
+    writeFileSync(
+      join(mixedAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: mixedBookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 3.5,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          seg(0, 'the_torment', 'the_torment'),
+          seg(1, 'the_torment', 'the_torment'),
+          seg(2, 'the_torment', 'the_torment'),
+          seg(3, 'the_torment', 'the_torment'),
+          // Same cast character, other spelling, stamped to the cast id; LAST of its lines.
+          seg(4, 'the-torment', 'the_torment'),
+          seg(5, 'amy', 'amy'),
+          // Legacy line: other spelling, NO stamp — deliberately not resolved.
+          seg(6, 'the-torment'),
+        ],
+      }),
+    );
+  });
+
+  async function rerecord(body: Record<string, unknown>): Promise<number[] | null> {
+    const finalizeMod = await import('../audio/finalize-chapter-write.js');
+    const finalizeSpy = vi.mocked(finalizeMod.finalizeChapterAudioWrite);
+    finalizeSpy.mockClear();
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(mixedBookId)}/chapters/1/splice`)
+      .send({ mode: 'rerecord', modelKey: 'kokoro-v1', ...body });
+    const events = parseSse(res.text);
+    if (!events.some((e) => e.type === 'splice_complete')) return null;
+    return Array.from(finalizeSpy.mock.calls[0][0].resynthesizedIndices as Iterable<number>);
+  }
+
+  it('a cast-id request selects every line stamped to that cast character, whatever its raw spelling; never another character or an unstamped legacy spelling', async () => {
+    expect(await rerecord({ characterId: 'the_torment' })).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it('a raw-id request (Listen per-line marker) still selects its own line', async () => {
+    expect(await rerecord({ characterId: 'the-torment', segmentIndices: [4] })).toEqual([4]);
+  });
+
+  it('a raw-id request selects lines with that raw id (stamped or not), not lines merely stamped to a different raw spelling', async () => {
+    expect(await rerecord({ characterId: 'the-torment' })).toEqual([4, 6]);
+  });
+
+  it("refuses segmentIndices naming a different character's line", async () => {
+    expect(await rerecord({ characterId: 'the_torment', segmentIndices: [5] })).toBeNull();
+  });
+});
+
 describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — #1972 attribution-source divergence', () => {
   let divergentBookId: string;
   let divergentAudioRoot: string;

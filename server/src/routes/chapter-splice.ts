@@ -61,6 +61,7 @@ import {
   finalizeChapterAudioWrite,
   type ChapterSegmentsFile,
 } from '../audio/finalize-chapter-write.js';
+import type { EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
 import { abortInFlightChapterJob } from './generation.js';
 import { registerSplice } from './chapter-job-coordination.js';
 import { configValue } from '../config/resolver.js';
@@ -166,8 +167,18 @@ chapterSpliceRouter.post(
       return fail('Chapter segments metadata is missing or unreadable — re-render the chapter.');
     }
 
+    /* #3362 🟠B — which segments belong to the requested character. The
+       "Fix audio" button sends the CAST id, while the Listen per-line marker
+       sends a line's RAW `characterId`; one cast character can be spelled two
+       ways in one chapter (`the_torment` / `the-torment`). A segment is the
+       character's when EITHER its render-time stamp (`resolvedCharacterId`,
+       falling back to the raw id when unstamped) OR its raw `characterId`
+       equals the request. STAMPED ONLY (owner decision): an unstamped legacy
+       spelling is never resolved here, so no resolver join. */
     let targetIndices = segFile.segments
-      .map((s, i) => (s.characterId === characterId ? i : -1))
+      .map((s, i) =>
+        (s.resolvedCharacterId ?? s.characterId) === characterId || s.characterId === characterId ? i : -1,
+      )
       .filter((i) => i >= 0);
     if (!targetIndices.length) {
       return fail(`Character "${characterId}" has no segments in this chapter.`);
@@ -306,6 +317,23 @@ chapterSpliceRouter.post(
       // model/engine; rerecord adopts the requested one.
       let finalizeModelKey: TtsModelKey = segFile.modelKey as TtsModelKey;
       let defaultEngine: TtsEngine = engineForModelKey(finalizeModelKey);
+      /* #3362 pass-5 fix (🟠E, owner design (i)) — the exact segment indices
+         THIS splice re-synthesised, threaded to finalizeChapterAudioWrite as
+         `resynthesizedIndices` so it freezes identity for every OTHER
+         segment in the chapter instead of re-deriving it from the current
+         cast/history. `remix` (gain) never calls synthesiseChapter — it's a
+         volume change, not a re-synthesis — so its own targeted segments are
+         frozen too, same as every untouched line; only `rerecord`'s
+         `targetIndices` (exactly what feeds `buildSynthReplacements` below)
+         counts as resynthesized. */
+      let resynthesizedIndices: number[] = [];
+      /* #3362 pass-7 🟠H — the embedding rows synthesiseChapter's own embed
+         pass (`qa.speaker.enabled`) produced for each re-recorded take,
+         handed to finalize so it can replace the stale rows it drops for
+         `resynthesizedIndices` instead of leaving the character with no
+         centroid. Empty when the gate is off or an embed failed (that line
+         is then just unembedded). */
+      const reembeddedRows: EmbeddingRow[] = [];
 
       if (mode === 'remix') {
         replacements = [];
@@ -317,6 +345,7 @@ chapterSpliceRouter.post(
           replacements.push({ startSegmentIndex: run.start, endSegmentIndex: run.end, pcm: gained });
         }
       } else {
+        resynthesizedIndices = targetIndices;
         const modelKey = reqModelKey!;
         const engine = engineForModelKey(modelKey);
         const provider = selectTtsProvider(modelKey);
@@ -426,6 +455,7 @@ chapterSpliceRouter.post(
                   }
                 : {}),
             });
+            if (r.embeddings) reembeddedRows.push(...r.embeddings);
             const s = r.segments[0];
             return {
               pcm: r.pcm,
@@ -447,6 +477,10 @@ chapterSpliceRouter.post(
               // computes this per-segment; threading it through here is what
               // lets the diagnostic survive a re-record instead of going stale.
               voiceSubstitutedFrom: s?.voiceSubstitutedFrom,
+              // #3362 — the take's own fallback stamps, so a re-record
+              // replaces (or clears) the prior render's instead of keeping it.
+              renderedFallbackEngine: s?.renderedFallbackEngine,
+              renderedFallbackCharacterId: s?.renderedFallbackCharacterId,
               /* fs-51 follow-up — the signal-QA gate only actually evaluates a
                  verdict when `maxSegmentRerecords > 0` (synthesiseChapter's own
                  gate); ASR only runs when `asrOn`. Without these flags,
@@ -498,10 +532,21 @@ chapterSpliceRouter.post(
         durationSec: spliced.durationSec,
         segments: spliced.segments,
         cast: cast.characters,
+        /* #3362 finding 3 — the same `castIdHistory` loaded above (this
+           render's own resolver input), not a fresh re-read — see
+           FinalizeChapterAudioInput.castIdHistory's doc comment. */
+        castIdHistory,
         defaultEngine,
         modelKey: finalizeModelKey,
         audioFormat: bookStateAudioFormat(state as BookStateJson),
         expectedSec,
+        /* #3362 pass-5 fix (🟠E) — see the declaration above: empty for
+           `remix` (a gain change, never a re-synthesis), `targetIndices`
+           for `rerecord`. `spliced.segments` preserves `segFile.segments`'s
+           order/length 1:1 (spliceChapterSegments never drops or reorders a
+           segment), so these indices still line up. */
+        resynthesizedIndices,
+        reembeddedRows,
         /* #2128 — carried forward verbatim, never refreshed. This path
            re-synthesises SOME sentences against the current resolver, correctly,
            but leaves every other segment byte-identical; refreshing the stamp
