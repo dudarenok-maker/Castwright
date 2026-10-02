@@ -7326,16 +7326,19 @@ export async function runSubsetAnalyzerJob(
             }),
           () => null,
         );
-        /* #3435 — a chapter that already HAD a cast and is flagged failed was
-           flagged for its attribution (Phase 1), not its cast. Phase 0 re-running
-           its cast does not resolve that, so on a finished book (stage1Existed:
-           Phase 1 runs below) its record is cleared — and chapter-resolved sent —
-           only once Phase 1 completes for it. Clearing here lost the record on
-           every exit before then (Pause, stage1_shrink_refused, a coverage-gate
-           skip). A cast-phase failure (no cast on file) is fixed by this very
-           step, and when no Phase 1 follows in this run (!stage1Existed) there is
-           nothing to defer to, so both still clear here. */
-        const deferToPhase1 = stage1Existed && !!chapterCast[ch.id]?.length;
+        /* #3435 — on a finished book (stage1Existed: Phase 1 runs below) a failed
+           chapter's record is cleared — and chapter-resolved sent — only once
+           Phase 1 completes for it. "Has a cast" is not a safe stand-in for
+           "flagged for its attribution": a collapse-flagged chapter whose Retry
+           failed in Phase 0 has an empty cast AND collapsed sentences still
+           cached, so clearing here lost the flag on every exit before Phase 1
+           (Pause, stage1_shrink_refused, a coverage-gate skip). A cast-phase
+           failure Phase 0 fixes now has a cast, so it does not block its own
+           Phase 1. When no Phase 1 follows in this run (!stage1Existed) there
+           is nothing to defer to and the record clears here (for an
+           attribution flag that is NOT known-correct: the global Phase 1 that
+           follows replays cached chapters — an owner decision is pending). */
+        const deferToPhase1 = stage1Existed;
         chapterCast[ch.id] = result.characters;
         cache.chapterCast = chapterCast;
         const wasFailed = deferToPhase1 ? false : clearFailedChapterId(cache, ch.id);

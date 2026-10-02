@@ -1242,13 +1242,42 @@ describe('the subset route: failure records vs the Phase-1 gate and an unfinishe
     expect(events.filter((e) => e.kind === 'error' && /ENOSPC/.test(String(e.message)))).toEqual([]);
   }, 60_000);
 
-  it('a cast-phase failure (no cast on file) is still cleared and announced when Phase 0 fixes it, even with stage1 on disk', async () => {
+  it('a cast-phase failure fixed by Phase 0 is NOT cleared or announced when its Phase 1 then fails (stage1 on disk)', async () => {
     const r = await runCase(
       'p1-castfix',
       { 1: 'analyzer-timeout' },
       [{ toRun: [1], runStage2Chapter: () => Promise.reject(new Error('Phase 1 fails after Phase 0 fixed the cast')) }],
       { emptyCast: [1] },
     );
+    expect(r.steps[0].events.some((e) => e.kind === 'chapter-resolved')).toBe(false);
+    expect(r.failedChapterIds).toEqual([1]);
+  }, 60_000);
+
+  it('a cast-phase failure fixed by Phase 0 is cleared and announced once its Phase 1 succeeds', async () => {
+    const r = await runCase(
+      'p1-castfix-clean',
+      { 1: 'analyzer-timeout' },
+      [{ toRun: [1], runStage2Chapter: async (_m, id) => stage2For(id) }],
+      { emptyCast: [1] },
+    );
     expect(r.steps[0].events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+    expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(true);
+    expect(r.failedChapterIds).toEqual([]);
+    expect(r.chapters[1][0].characterId).toBe('nova');
+  }, 60_000);
+
+  it('PD: a collapse-flagged chapter whose cast failed (empty cast, collapsed sentences) keeps its record when a Retry is paused in Phase 1', async () => {
+    const { AnalysisAbortedError } = await import('../analyzer/errors.js');
+    const r = await runCase(
+      'pd-abort',
+      { 1: 'analyzer-timeout' },
+      [{ toRun: [1], runStage2Chapter: () => Promise.reject(new AnalysisAbortedError('paused')) }],
+      { emptyCast: [1] },
+    );
+    const { events } = r.steps[0];
+    expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['aborted']);
+    expect(events.some((e) => e.kind === 'chapter-resolved')).toBe(false);
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.chapters[1][0].characterId).toBe(COLLAPSED_ID);
   }, 60_000);
 });
