@@ -96,24 +96,27 @@ export function selectAnalyzerForPhase(opts: PerPhaseAnalyzerOptions): AnalyzerS
   if (resolved.source === 'env' && resolvedModel.length > 0) {
     /* Delegate the engine inference + Fallback wrapping to the existing
        `selectAnalyzer` — passing the model id is enough; it routes via
-       `inferEngineFromModelId` (':' → local, otherwise → Gemini). */
-    return selectAnalyzer({ model: resolvedModel });
+       `inferEngineFromModelId` (./model-id.ts: endpoint shape → openai,
+       ':' → local, otherwise → Gemini). `modelSource` names where each
+       tier's model id came from, for `AnalyzerEndpointMissingError`
+       (#3084 P23). */
+    return selectAnalyzer({ model: resolvedModel, modelSource: 'env' });
   }
 
   /* Priority 2 — per-run phase pick from the analysis request itself. */
   if (opts.phaseModel) {
-    return selectAnalyzer({ model: opts.phaseModel });
+    return selectAnalyzer({ model: opts.phaseModel, modelSource: 'run-pick' });
   }
 
   /* Priority 3 — per-request override. UI dropdown for one specific run. */
   if (opts.model) {
-    return selectAnalyzer({ model: opts.model });
+    return selectAnalyzer({ model: opts.model, modelSource: 'run-pick' });
   }
 
   /* Priority 4 — saved Advanced Settings override; empty falls through
      to the hardcoded default. */
   if (resolved.source === 'override' && resolvedModel.length > 0) {
-    return selectAnalyzer({ model: resolvedModel });
+    return selectAnalyzer({ model: resolvedModel, modelSource: 'settings' });
   }
 
   /* Priority 5 — hardcoded default. Falls through to today's

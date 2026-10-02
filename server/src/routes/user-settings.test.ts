@@ -523,4 +523,12 @@ describe('user-settings router', () => {
     });
   });
 
+  it('refuses analysisEngine "openai" until endpoints are selectable (#3084 PR 3a)', async () => {
+    const res = await request(app).put('/api/user/settings').send({ analysisEngine: 'openai' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid user settings.');
+    const after = await request(app).get('/api/user/settings');
+    expect(after.body.analysisEngine).toBe('local');
+  });
+
 });

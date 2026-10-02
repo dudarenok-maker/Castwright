@@ -19,6 +19,7 @@ import { configValue } from '../config/resolver.js';
 import { getCachedGeminiModelInfo } from './catalog/gemini-catalog.js';
 import { resolveLimits } from './rate-limit.js';
 import { resolveMaxInputTokensPerRequest } from './token-budget.js';
+import type { AnalysisEngine } from './model-id.js';
 
 export interface EngineCapacity {
   family: 'context' | 'requestCap';
@@ -37,7 +38,7 @@ export const TODAY_LOCAL_CAPACITY = (
   numCtx: number = configValue<number>('analyzer.ollama.numCtx'),
 ): EngineCapacity => ({ family: 'context', contextTokens: numCtx, maxOutputTokens: null });
 
-export function resolveCapacity(sel: { engine: 'local' | 'gemini'; model: string }): EngineCapacity {
+export function resolveCapacity(sel: { engine: AnalysisEngine; model: string }): EngineCapacity {
   if (sel.engine === 'local') return TODAY_LOCAL_CAPACITY();
   const cap = resolveMaxInputTokensPerRequest();
   const listed = getCachedGeminiModelInfo(sel.model);

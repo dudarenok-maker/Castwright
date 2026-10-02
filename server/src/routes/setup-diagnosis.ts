@@ -8,6 +8,7 @@
 import { findPython312 } from '../tts/python-discovery.js';
 import type { BlockerDiagnosis, BlockerCause } from './setup-readiness.js';
 import type { PackageFault } from '../tts/models-status.js';
+import type { AnalysisEngine } from '../analyzer/model-id.js';
 
 const PYTHON_PROBE_TTL_MS = 10_000;
 let pythonProbeCache: { found: boolean; expiresAt: number } | null = null;
@@ -306,7 +307,7 @@ export function anyAnalyzerModelPulled(pulledTags: string[], curated: string[]):
 }
 
 export interface AnalyzerDiagnosisInput {
-  engine: 'local' | 'gemini';
+  engine: AnalysisEngine;
   ollamaReachable: boolean;
   ollamaError: string | null;
   /** Resolved analyzer model pulled — today's gate signal (model-specific). */

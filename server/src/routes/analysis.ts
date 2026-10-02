@@ -31,6 +31,7 @@ import { AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../an
 import { detectOllamaDevice, unloadResidentOllama } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
+import { parseEndpointModelId, type AnalysisEngine } from '../analyzer/model-id.js';
 import {
   stripThirdPartyFrontMatter,
   type ThirdPartyGuardChapter,
@@ -552,10 +553,15 @@ function humanModel(modelId: string | undefined): string {
 }
 
 /** Engine-aware label so SSE chunks read "Ollama (qwen3.5:9b)" for the
-    local analyzer and "Gemma 4 31B" for Gemini. The MODEL_LABELS lookup
-    only covers Gemini ids, so the local branch surfaces the raw tag —
-    which is fine, Ollama tags are already human-readable. */
-function engineLabel(engine: 'local' | 'gemini', modelId: string): string {
+    local analyzer, "Gemma 4 31B" for Gemini, and "Endpoint lab (qwen3:30b)"
+    for an OpenAI-compatible endpoint (#3084; PR 3d swaps the endpoint id for
+    its saved name). The MODEL_LABELS lookup only covers Gemini ids, so the
+    local branch surfaces the raw tag — Ollama tags are already readable. */
+export function engineLabel(engine: AnalysisEngine, modelId: string): string {
+  if (engine === 'openai') {
+    const parsed = parseEndpointModelId(modelId);
+    return parsed ? `Endpoint ${parsed.endpointId} (${parsed.model})` : `Endpoint (${modelId})`;
+  }
   return engine === 'local' ? `Ollama (${modelId})` : humanModel(modelId);
 }
 
@@ -1209,7 +1215,7 @@ export function localFallbackMsPerChar(device: 'cuda' | 'cpu' | 'unknown'): numb
   return device === 'cpu' ? LOCAL_FALLBACK_MS_PER_CHAR_CPU : LOCAL_FALLBACK_MS_PER_CHAR_CUDA;
 }
 export function engineFallbackMsPerChar(
-  engine: 'gemini' | 'local',
+  engine: AnalysisEngine,
   device: 'cuda' | 'cpu' | 'unknown',
 ): number {
   return engine === 'local' ? localFallbackMsPerChar(device) : GEMINI_FALLBACK_MS_PER_CHAR;
@@ -2723,7 +2729,7 @@ export interface AnalysisJob {
       guard (`src/hooks/use-reverse-local-analyzer-guard.tsx`) — the
       guard checks `engine === 'local'` to decide whether to prompt
       before a TTS-start. */
-  engine: 'local' | 'gemini';
+  engine: AnalysisEngine;
   replay: AnalysisJobReplayState;
   /** ms-since-epoch of the last `analysis-state.json` write. Used to
       throttle phase-tick writes to ~once every 5s so we don't hammer

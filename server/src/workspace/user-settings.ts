@@ -22,6 +22,7 @@ import {
   LEGACY_USER_SETTINGS_PATH,
 } from './user-settings-path.js';
 import type { CloneEngine } from '../tts/clone-engines.js';
+import type { AnalysisEngine } from '../analyzer/model-id.js';
 
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that
@@ -1004,9 +1005,11 @@ export function getResolvedTtsModelKey(): UserSettings['defaultTtsModelKey'] {
     leaking to the `ANALYZER` env var. This deliberately RETIRES `ANALYZER` as
     an engine selector (a stray `ANALYZER=gemini` in an old `.env` is now inert
     for engine choice — the engine is UI/user-settings-driven). `GEMINI_API_KEY`
-    is unaffected (still used for TTS + opt-out cloud fallback). The coercion is
-    defensive only: the cached value is always a parsed `local|gemini` enum. */
-export function getResolvedAnalysisEngine(): 'local' | 'gemini' {
+    is unaffected (still used for TTS + opt-out cloud fallback).
+    #3084 PR 3a: the return type is the full AnalysisEngine, but the stored
+    enum (ANALYSIS_ENGINE_VALUES) still holds only local|gemini, so the body
+    cannot yield 'openai' until PR 3d widens that enum. */
+export function getResolvedAnalysisEngine(): AnalysisEngine {
   return getCachedUserSettings().analysisEngine === 'gemini' ? 'gemini' : 'local';
 }
 
