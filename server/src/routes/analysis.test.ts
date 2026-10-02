@@ -71,6 +71,9 @@ const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock, unloadResidentOl
 vi.mock('./ollama-health.js', () => ({ detectOllamaDevice: detectOllamaDeviceMock, unloadResidentOllama: unloadResidentOllamaMock }));
 vi.mock('../gpu/analyzer-device-state.js', () => ({
   setLastKnownAnalyzerDevice: setLastKnownAnalyzerDeviceMock,
+  /* ollama-transport.ts reads this on every chat() call; the #3004 rejoin test
+     lets a real run reach it, so a missing export throws mid-run. */
+  getLastKnownAnalyzerDevice: () => 'unknown',
 }));
 
 /* Controls the Phase-1 analyzer selection `runMainAnalyzerJob` resolves —
