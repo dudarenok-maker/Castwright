@@ -57,6 +57,7 @@ function renderModal(
         scoringProgress: {},
         renderedSpeakersByChapter: {},
         renderedTextByChapter: {},
+        characterIdAliases: {},
       },
     },
   });

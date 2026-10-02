@@ -881,6 +881,10 @@ export function Layout() {
                 completedSlugs: res.completedSlugs ?? [],
                 characters: res.cast?.characters ?? [],
                 chapterCharacters: res.chapterCharacters,
+                /* #3440 — raw→canonical attribution-id aliases from the same
+                   book-state reconciliation; the slice maps raw SSE tick ids
+                   through them so drifted characters keep their live row. */
+                characterIdAliases: res.characterIdAliases,
                 /* Plan 77 — book-state response now carries per-chapter
                    EBU R128 sidecar payloads. Older servers omit it; the
                    slice tolerates an undefined map by leaving each row's

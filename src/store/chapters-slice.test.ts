@@ -33,6 +33,7 @@ const baseState = (chapters: Chapter[]): ChaptersState => ({
   renderedSpeakersByChapter: {},
   renderedTextByChapter: {},
   scoringProgress: {},
+  characterIdAliases: {},
 });
 
 const tick = (t: Partial<GenerationTick> & { type: GenerationTick['type'] }): GenerationTick =>
@@ -1109,6 +1110,115 @@ describe('chaptersSlice — hydrateFromBookState', () => {
     );
     expect(next.chapters[0].state).toBe('queued');
     expect(next.chapters[1].state).toBe('queued');
+  });
+});
+
+/* #3440 step 3 — book-state hands the slice `characterIdAliases` (raw
+   attribution id → canonical cast id, drifted ids only). SSE ticks still
+   carry the RAW id; `keyFor` maps it onto whichever key the chapter row
+   actually uses, so a drifted character's live highlight and voice-prepare
+   caption keep matching a canonical-keyed row while raw-keyed rows
+   (hydrateFromAnalysis) keep working unchanged. */
+describe('chaptersSlice — characterIdAliases raw→canonical tick mapping (#3440)', () => {
+  const cast = [
+    { id: 'the_torment', name: 'The Torment', role: 'main', color: 'magenta', lines: 0, scenes: 0 },
+    { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator', lines: 0, scenes: 0 },
+  ] as never;
+
+  const chapters = [{ id: 17, title: 'Chapter 17', slug: '17-chapter-seventeen' }];
+
+  const bookState = (bookId: string, aliases?: Record<string, string>) =>
+    chaptersActions.hydrateFromBookState({
+      bookId,
+      chapters,
+      completedSlugs: [],
+      characters: cast,
+      chapterCharacters: { 17: ['the_torment', 'narrator'] },
+      ...(aliases ? { characterIdAliases: aliases } : {}),
+    });
+
+  const driftAliases = { 'the-torment': 'the_torment' };
+
+  it('progress tick with the raw id promotes the canonical key, demotes the prior speaker, creates no raw key', () => {
+    let state = chaptersSlice.reducer(baseState([]), bookState('book-A', driftAliases));
+    state = chaptersSlice.reducer(
+      state,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'progress', chapterId: 17, characterId: 'narrator' }),
+      ),
+    );
+    expect(state.chapters[0].characters.narrator).toBe('in_progress');
+    /* The server sends the raw attribution id on the tick
+       (server/src/routes/generation.ts:1678). */
+    state = chaptersSlice.reducer(
+      state,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'progress', chapterId: 17, characterId: 'the-torment' }),
+      ),
+    );
+    expect(state.chapters[0].characters.the_torment).toBe('in_progress');
+    expect(state.chapters[0].characters.narrator).toBe('queued');
+    expect('the-torment' in state.chapters[0].characters).toBe(false);
+  });
+
+  it('chapter_preparing_voice stores the canonical id for a drifted raw id', () => {
+    const hydrated = chaptersSlice.reducer(baseState([]), bookState('book-A', driftAliases));
+    const next = chaptersSlice.reducer(
+      hydrated,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'chapter_preparing_voice', chapterId: 17, characterId: 'the-torment' }),
+      ),
+    );
+    expect(next.chapters[0].preparingVoiceCharacterId).toBe('the_torment');
+  });
+
+  it('raw-keyed row seeded by hydrateFromAnalysis still highlights the raw id', () => {
+    /* hydrateFromAnalysis rebuilds rows from RAW sentence ids and clears the
+       alias map, so keyFor must fall through to the raw id. */
+    let state = chaptersSlice.reducer(baseState([]), bookState('book-A', driftAliases));
+    state = chaptersSlice.reducer(
+      state,
+      chaptersActions.hydrateFromAnalysis({
+        bookId: 'book-A',
+        manuscriptId: 'm',
+        title: 'Bonus',
+        phaseTimings: [],
+        characters: [] as never,
+        chapters: [
+          {
+            id: 17,
+            title: 'Chapter 17',
+            duration: '00:00',
+            state: 'in_progress',
+            progress: 0.1,
+            characters: {},
+          },
+        ],
+        sentences: [
+          { id: 1, chapterId: 17, characterId: 'the-torment', text: 'a' },
+          { id: 2, chapterId: 17, characterId: 'narrator', text: 'b' },
+        ] as never,
+        libraryMatches: [],
+      }),
+    );
+    expect(state.characterIdAliases).toEqual({});
+    expect(state.chapters[0].characters).toEqual({ 'the-torment': 'queued', narrator: 'queued' });
+    const next = chaptersSlice.reducer(
+      state,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'progress', chapterId: 17, characterId: 'the-torment' }),
+      ),
+    );
+    expect(next.chapters[0].characters['the-torment']).toBe('in_progress');
+    expect('the_torment' in next.chapters[0].characters).toBe(false);
+  });
+
+  it('switching books clears the alias map (hydrate without the field → empty)', () => {
+    const bookA = chaptersSlice.reducer(baseState([]), bookState('book-A', driftAliases));
+    expect(bookA.characterIdAliases).toEqual(driftAliases);
+    const bookB = chaptersSlice.reducer(bookA, bookState('book-B'));
+    expect(bookB.characterIdAliases).toEqual({});
+    expect(bookB.currentBookId).toBe('book-B');
   });
 });
 
