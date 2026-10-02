@@ -24,7 +24,12 @@
    them is out of scope for the v1 plumbing. Because absence-means-v1, an
    unstamped file still migrates correctly. When the first real schema bump
    lands, that change adds the writer-side stamp alongside its transform (where
-   it's actually load-bearing and testable against a real migration). */
+   it's actually load-bearing and testable against a real migration).
+
+   One exception (plan 285): revisions.json is owned by
+   workspace/revisions-store.ts, which reads through migrateSeamDoc (refusing
+   a newer schema) and stamps every write with stampSeamSchema. Every other
+   file here is still written unstamped. */
 
 export type SchemaSeamKind = 'book' | 'workspace';
 
@@ -96,8 +101,9 @@ export function migrateSeamDoc(seam: SchemaSeam, raw: unknown): MigrateOutcome {
   );
 }
 
-/** Stamp the current schema on a doc before writing. The writer-side seam —
-    wired in by the first real schema bump (see scope note above). */
+/** Stamp the current schema on a doc before writing. The writer-side seam.
+    Today only workspace/revisions-store.ts calls it (plan 285); every other
+    writer is wired in by the first real schema bump (see scope note above). */
 export function stampSeamSchema(seam: SchemaSeam, doc: Record<string, unknown>): Record<string, unknown> {
   return { ...doc, schema: seam.current };
 }
