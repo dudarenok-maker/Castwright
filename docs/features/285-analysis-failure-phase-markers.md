@@ -423,7 +423,7 @@ Frontend (`src/views/analysing.test.tsx`, `src/store/analysis-stream-middleware.
 | O2 control: `on a book that has not reached Confirm, the same Retry still ends resume_required` | same | — |
 | Hint snapshot: a mid-run Exclude is ignored by S14 | same | live hints read |
 | Main run on a confirmed book keeps designed voice fields (invariant 6) | `analysis.test.ts` | — (control) |
-| `GET book-state: stage1Ready, resumeRequired, unattributedChapterIds` (no stage1 / pending / complete / reached Confirm → resumeRequired false) | `book-state.test.ts` (**slow**) | fields absent |
+| `GET book-state: stage1Ready, resumeRequired, unattributedChapterIds` (no stage1 / pending / complete / reached Confirm → resumeRequired false). Amended (PR #3505 gate pass 1): past Confirm, a chapter whose sentences are in manuscript-edits.json (pending included) is omitted unless it has a failure record | `book-state.test.ts` (**slow**) | fields absent |
 
 Frontend:
 
@@ -533,6 +533,8 @@ The per-task mutation checks are the mutant battery; there is no out-of-repo mut
 4. **(real) An unfinished book asks to resume.** In sequential mode (so stage1 is written before attribution), halt a main run part-way through attribution. Retry a failed row. (In pipelined mode a halt during Phase 0 leaves no stage1, and the attribution rows instead read "Attributed when you resume the analysis." with no Retry — check that too.) The phase card shows "… still need attribution — resume the analysis to finish the book", no red toast. Reload: the line and "Resume analysis" are still there. Resume; the run finishes and routes to Confirm.
 5. **(real) A done book stays done.** On a generated book, Re-analyse one chapter and stop the analyzer mid-run. The library still shows the book as generated; the Generate view row shows the failure with Re-analyse. Start the analyzer and click it: the chapter re-analyses and saves, even if another chapter is still unfinished.
 6. **(real) Start fresh un-confirms.** On a confirmed book, Start fresh: the library shows "Analysing" until the run finishes and you confirm again.
+7. **(real) Past-Confirm edits rule.** On a confirmed book with a sample or handoff-less chapter (no cache take, sentences present in manuscript-edits.json), the Generate view shows no unfinished row for it; a chapter with a failure record still does.
+8. **(real) Retry result routing.** A Retry that returns a `result` on a castConfirmed book stays on the Analysing view (no jump to Confirm); the same Retry on an unconfirmed book routes to Confirm like a main result.
 
 ### On-box acceptance owed
 
@@ -565,6 +567,8 @@ Deviations and rulings made during the build (recorded in the run ledger as "Rul
 - **T5 regression fixed in passing (b4486856):** a stale `vi.mock` of `analysis-cache.js` in `analysis.stage2-estimate-label` lacked `hasCurrentTake`; it now passes the real module through via `importOriginal`.
 - **D1 copy placement:** the refused main-start message started under the Start button (T3); T4 moved it onto the needs-action line, as the spec wants.
 - **A15 ("each task green on its own") did not hold at two task tips:** the T2 tip (527c4d8f) failed `analysis.rename-midrun` and the H1 guard, and the T5 tip (e800d319) failed `analysis.stage2-estimate-label`. Both were fixed in later commits (T3, and b4486856 respectively); the branch tip is green.
+- **Past-Confirm edits rule (e2dc611b; documented after PR #3505 gate pass 1).** For a book that has reached Confirm, `unattributedChapterIds` omits any active chapter whose sentences are present in manuscript-edits.json (edits are what generation renders from; it rebuilds the cache from them on every Generate request), including a pending (P) chapter. A chapter with a failure record keeps its gap regardless. Before Confirm the list is unchanged. Owner-reversible. Owner question: should a pending (P) take on a book past Confirm show as unfinished? Today it does not (S0 sample takes are curated; an M8c pending take on a confirmed book is reachable only by deep-linking to the Analysing view).
+- **Retry `result` routing.** A Retry `result` on a castConfirmed book stays on the Analysing view (does not route to Confirm); on an unconfirmed book it routes to Confirm like a main result (PR #3505 gate pass 1).
 
 ## Ship notes
 

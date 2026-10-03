@@ -344,10 +344,12 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       stage1Ready = !!cache.stage1;
       resumeRequired = !reachedConfirm(state, cache) && stage1Ready && !analysisCompleteFor(cache, activeIds);
       unattributed = unattributedChapterIds(cache, activeIds);
-      /* Spec A10 — past Confirm, manuscript-edits.json is authoritative
-         downstream, so a chapter whose sentences it carries is attributed even
-         when the cache has no take for it (a sample / handoff-less book). A
-         chapter in failedChapterErrors keeps its gap. */
+      /* Spec §3.4 book-state row, amended by PR #3505 gate pass 1 — past
+         Confirm, manuscript-edits.json is authoritative downstream (generation
+         rebuilds the cache from it), so a chapter whose sentences it carries
+         is attributed even when the cache has no take for it (a sample /
+         handoff-less book) or only a pending one. A chapter in
+         failedChapterErrors keeps its gap. */
       if (reachedConfirm(state, cache) && Array.isArray(edits?.sentences)) {
         const editedChapters = new Set<number>();
         for (const s of edits.sentences as Array<{ chapterId?: unknown }>) {

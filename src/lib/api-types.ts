@@ -6058,6 +6058,12 @@ export interface components {
                  * @description #3435 — the non-excluded chapters with no current take (no
                  *     attribution, or one made against a stale roster). On a book
                  *     past Confirm these show as Generate-view rows with Re-analyse.
+                 *     For a book that has reached Confirm the list omits any active
+                 *     chapter whose sentences are present in manuscript-edits.json
+                 *     (edits are what generation renders from), including a chapter
+                 *     whose take is still pending; a chapter with a failure record
+                 *     keeps its gap regardless. Before Confirm the list is every
+                 *     non-excluded chapter without a current take per the cache.
                  */
                 unattributedChapterIds?: number[];
             };

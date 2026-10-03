@@ -2746,7 +2746,7 @@ describe('book-state router — analysis completeness fields (plan 285 T6)', () 
        'decision F' block. */
   });
 
-  describe('edits count as attributed on a confirmed book (spec A10)', () => {
+  describe('edits count as attributed on a confirmed book (spec §3.4, PR #3505 gate pass 1)', () => {
     const editsPath = () => join(bookDir, '.audiobook', 'manuscript-edits.json');
     let originalEdits: string | null;
     beforeEach(() => {

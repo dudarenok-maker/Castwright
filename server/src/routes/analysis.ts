@@ -8597,8 +8597,11 @@ export async function runSubsetAnalyzerJob(
     /* Stitch the full sentence list across all cached chapters (old + new),
        in narrative order. Excluded chapters contribute nothing, and neither
        does a pending take (#3435 M8d: never stitched — O2 lets the gate pass
-       on a book past Confirm while another chapter is still in P; it stays
-       listed as unattributed). The targets left P in the loop above. */
+       on a book past Confirm while another chapter is still in P). Whether
+       that chapter then reads as unattributed in book-state depends on
+       manuscript-edits.json: past Confirm it is omitted when the edits carry
+       its sentences, otherwise it stays listed. The targets left P in the
+       loop above. */
     const allSentences: SentenceOutput[] = [];
     const pendingIds = new Set(cache.pendingAttributionChapterIds ?? []);
     for (const h of hints) {
