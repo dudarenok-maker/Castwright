@@ -42,7 +42,7 @@ owner: null
   - Keys are never returned by GET, as with the Gemini key.
   - No endpoint is selectable before its sizing, GPU coordination and concurrency exist.
 - **Migration:**
-  - The `analysisEngine` enum gains `openai`.
+  - The internal `AnalysisEngine` type (`'local' | 'gemini' | 'openai'`) and the shared id grammar (`openai:<endpointId>::<model>`, implemented once per side in `server/src/analyzer/model-id.ts` / `src/lib/model-id.ts`) landed in PR 3a. Every site that turns a selection id into an Ollama call already runs that grammar. The persisted/validated `analysisEngine` enum — `ANALYSIS_ENGINE_VALUES`, the `PERSONA_GEN_ENGINE` enum, and the OpenAPI `analysisEngine` enums — still refuses `openai` and gains it only in PR 3d, once an endpoint is actually selectable.
   - `analyzer.gemini.maxOutputTokens` gains `0` = Auto as its default; an explicit value keeps its meaning.
   - The six `rate.*.gemma*` knobs move into `analyzerRateLimitsByModel`.
   - `analyzer.personaGeneration.engine` accepts endpoint model ids.

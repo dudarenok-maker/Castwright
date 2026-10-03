@@ -12,8 +12,10 @@
    vi.mock('../config/resolver.js', ...) replacing the module resolver.ts
    would have needed to register through). */
 
-import { configValue } from './resolver.js';
+import { configValue, resolveKnob } from './resolver.js';
+import { getKnob } from './registry.js';
 import { getCachedDefaultAnalysisModelIfSet } from '../workspace/user-settings.js';
+import { inferEngineFromModelId } from '../analyzer/model-id.js';
 
 /** Resolved through the config resolver (#3141 step 1): OLLAMA_URL env →
     saved Advanced Settings override (`analyzer.ollama.url`) → registry
@@ -23,17 +25,31 @@ export function getResolvedOllamaUrl(): string {
   return raw.replace(/\/+$/, '');
 }
 
-/** Ollama model tag passed to /api/chat. Resolution chain:
-      1. cached `defaultAnalysisModel` if it has Ollama tag shape (':')
-      2. config resolver (#3141 step 1): OLLAMA_MODEL env → saved Advanced
-         Settings override (`analyzer.ollama.model`) → registry default
-         (DEFAULT_USER_SETTINGS.defaultAnalysisModel, `qwen3.5:4b`, which has a colon)
+/** Ollama model tag passed to /api/chat. Resolution chain (80be2f1d):
+      1. cached `defaultAnalysisModel`, if it has Ollama tag shape (':')
+      2. config resolver: OLLAMA_MODEL env → saved Advanced Settings
+         override (`analyzer.ollama.model`) → registry default
     The per-request `model` override (see selectAnalyzer) trumps both.
-    Only a `:`-tagged saved model is honoured for step 1 — a Gemini id
-    saved as defaultAnalysisModel (engine=gemini) must not be handed to
-    Ollama, so it falls through to step 2. */
+    #3084 P23 (review pass 3, A3): main's own step-1 check ("has a colon")
+    also accepts an `openai:<endpointId>::<model>` id, which contains a
+    colon too — so does an env/override value at step 2. Both tiers are
+    guarded here with the shared grammar (analyzer/model-id.ts): an endpoint
+    id at step 1 falls through to step 2; an endpoint id resolved AT step 2
+    (env or the saved override — resolveKnob's own chain, not a separate
+    tier here) falls back to the registry default directly, since step 2 is
+    this function's last tier (never a raw env read — resolveKnob/getKnob
+    only, so direct-env-reader-guard stays satisfied). */
 export function getResolvedOllamaModel(): string {
   const fromSettings = getCachedDefaultAnalysisModelIfSet();
-  if (fromSettings && fromSettings.includes(':')) return fromSettings;
-  return configValue<string>('analyzer.ollama.model');
+  if (fromSettings && fromSettings.includes(':') && inferEngineFromModelId(fromSettings) !== 'openai') {
+    return fromSettings;
+  }
+  const knob = getKnob('analyzer.ollama.model');
+  /* Guard the possibly-undefined return from getKnob() (rework #3464 Fix 2).
+     This knob is a registered default and should always resolve; matching the
+     pattern in select-analyzer.ts, an explicit check is the defensive guard. */
+  if (!knob) throw new Error('unknown config key analyzer.ollama.model');
+  const resolved = String(resolveKnob(knob).effective);
+  if (inferEngineFromModelId(resolved) === 'openai') return String(knob.default);
+  return resolved;
 }

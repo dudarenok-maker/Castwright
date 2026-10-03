@@ -67,6 +67,7 @@ import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
+import { engineForModelId, type AnalysisEngine } from './model-id';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -3101,7 +3102,7 @@ export interface SubstagePhaseEvent {
   totalChapters?: number;
   estRemainingMs?: number;
   model?: string;
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   activityState?: 'loading' | 'waiting' | 'streaming';
   fallbackReason?: string;
 }
@@ -3115,7 +3116,7 @@ export function parseSubstagePhaseEvent(p: Record<string, unknown>): SubstagePha
     totalChapters: typeof p.totalChapters === 'number' ? p.totalChapters : undefined,
     estRemainingMs: typeof p.estRemainingMs === 'number' ? p.estRemainingMs : undefined,
     model: typeof p.model === 'string' ? p.model : undefined,
-    engine: p.engine === 'local' || p.engine === 'gemini' ? p.engine : undefined,
+    engine: p.engine === 'local' || p.engine === 'gemini' || p.engine === 'openai' ? p.engine : undefined,
     activityState:
       p.activityState === 'loading' || p.activityState === 'waiting' || p.activityState === 'streaming'
         ? p.activityState
@@ -7426,6 +7427,37 @@ const RETIRED_ANALYZER_FIELDS = [
 
 async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
   await wait(50);
+  /* #3084 P23 — mirrors the server's refusal of an endpoint model id in a saved
+     selection (server/src/workspace/user-settings.ts endpointModelIdRefusals),
+     with realPutUserSettings' error text. PR 3d deletes this block. Only
+     defaultAnalysisModel — A5 removed the two phase fields from the schema
+     entirely, so the mock (like the server) never sees them here at all. */
+  if (typeof patch.defaultAnalysisModel === 'string' && engineForModelId(patch.defaultAnalysisModel.trim()) === 'openai') {
+    throw new Error(
+      `User settings save failed (400): ${JSON.stringify({
+        error: 'Invalid user settings.',
+        issues: [{ path: ['defaultAnalysisModel'], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' }],
+      })}`,
+    );
+  }
+  /* #3084 P23 — mirrors the server's refusal of an endpoint id in the three
+     ENDPOINT_ID_REFUSED_KNOBS (server/src/workspace/user-settings.ts
+     endpointModelIdRefusals), which runs BEFORE writeUserSettings. */
+  const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model'] as const;
+  const incomingOverrides = (patch as Record<string, unknown>).configOverrides as Record<string, unknown> | undefined;
+  if (incomingOverrides && typeof incomingOverrides === 'object') {
+    for (const knob of ENDPOINT_ID_REFUSED_KNOBS) {
+      const value = incomingOverrides[knob];
+      if (typeof value === 'string' && engineForModelId(value.trim()) === 'openai') {
+        throw new Error(
+          `User settings save failed (400): ${JSON.stringify({
+            error: 'Invalid user settings.',
+            issues: [{ path: ['configOverrides', knob], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' }],
+          })}`,
+        );
+      }
+    }
+  }
   const offending = RETIRED_ANALYZER_FIELDS.filter(
     (field) => field in (patch as Record<string, unknown>),
   );
@@ -7465,6 +7497,16 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
       }).filter(([, v]) => v !== undefined),
     ),
   );
+  /* #3084 P23 — mirror the server's configOverrides persistence. writeUserSettings
+     merges only the TOP-LEVEL keys the caller sent (see its own comment); a sent
+     `configOverrides` key REPLACES the whole stored map wholesale, it does not
+     deep-merge into the existing one. The frontend UserSettings type doesn't
+     surface configOverrides (it's server-only, behind the retired resolver
+     fields), so the mock persists it via a type assertion. */
+  const patchRecord = patch as Record<string, unknown>;
+  if (patchRecord.configOverrides && typeof patchRecord.configOverrides === 'object') {
+    (MOCK_USER_SETTINGS as Record<string, unknown>).configOverrides = patchRecord.configOverrides;
+  }
   return { ...MOCK_USER_SETTINGS };
 }
 

@@ -1,4 +1,5 @@
 import type { components } from './api-types';
+import type { AnalysisEngine } from './model-id';
 
 export type Character = components['schemas']['Character'] & {
   matchFactors?: components['schemas']['MatchFactor'][];
@@ -134,6 +135,13 @@ export type TtsEngine = NonNullable<BaseVoice['engine']>;
    are available to the slice + Account view even before `openapi:types`
    regenerates `api-types.ts`. Mirrors the server's userSettingsSchema. */
 export type BackupCadence = 'daily' | 'weekly';
+/* #3084 PR 3a — `analysisEngine` stays on the OpenAPI-generated narrow enum
+   (`'local' | 'gemini'`) here deliberately: it is a persisted/validated field,
+   and nothing can select an endpoint before PR 3d (see the plan's "Which
+   engine-literal sites widen in 3a" table). Widening it to the internal
+   3-value `AnalysisEngine` would let an `'openai'` value flow into a save
+   call with no compile-time check — exactly the gap PR 3d is supposed to
+   close deliberately, not by accident. */
 export type UserSettings = components['schemas']['UserSettings'] & {
   backupEnabled?: boolean;
   backupCadence?: BackupCadence;
@@ -576,7 +584,7 @@ export interface ActiveAnalysisSummary {
   phaseLabel: string;
   phaseProgress: number;
   state: 'paused' | 'halted';
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   kind?: 'main' | 'subset';
   subsetChapterIds?: number[];
   haltCode?: string;
@@ -604,7 +612,7 @@ export interface AnalysisStateResponse {
       (`src/hooks/use-reverse-local-analyzer-guard.tsx`) sees the
       right engine on a cold-boot rehydrated pill. Undefined for
       pre-E1 snapshots — guard defaults to "do not prompt". */
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   /** Discriminator for the in-flight job's shape (plan 32 D1).
       `'main'` = full-book sticky run; `'subset'` = per-chapter retry
       via POST /:id/analysis/chapters. Optional — pre-D1 snapshots

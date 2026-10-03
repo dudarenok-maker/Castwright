@@ -1,6 +1,7 @@
 import { createSelector } from '@reduxjs/toolkit';
 import type { RootState } from './index';
 import type { SubstageEntry } from './prosody-slice';
+import type { AnalysisEngine } from '../lib/model-id';
 
 export const selectProsodyRunningForBook = (state: RootState, bookId: string): boolean =>
   !!state.prosody?.activeStreams && bookId in state.prosody.activeStreams;
@@ -40,7 +41,7 @@ export const selectAnalysisSubstage = createSelector(
     totalChapters?: number;
     estRemainingMs?: number;
     model?: string;
-    engine?: 'local' | 'gemini';
+    engine?: AnalysisEngine;
     activityState?: 'loading' | 'waiting' | 'streaming';
     activitySince?: number;
     fallbackActive?: boolean;

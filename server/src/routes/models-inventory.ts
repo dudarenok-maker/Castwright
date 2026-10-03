@@ -51,6 +51,7 @@ import {
   type EngineTier,
 } from '../tts/engine-health.js';
 import { classifyPackageFault } from '../tts/models-status.js';
+import type { AnalysisEngine } from '../analyzer/model-id.js';
 
 export const modelsInventoryRouter = Router();
 
@@ -116,7 +117,7 @@ export interface InventoryDeps {
   sidecar: SidecarHealthResult;
   ollama: OllamaSnapshot;
   resolvedTtsEngine: TtsEngine;
-  analysisEngine: 'local' | 'gemini';
+  analysisEngine: AnalysisEngine;
   resolvedOllamaModel: string;
 }
 
