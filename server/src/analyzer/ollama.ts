@@ -6,6 +6,9 @@ import { acquireAnalyzerSlot, describeAnalyzerConcurrency } from './analyzer-con
 import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { OllamaTransport, ANALYZER_DISPATCHER, classifyConnectError } from './transports/ollama-transport.js';
+import { redactKnownSecrets } from './redact.js';
+/* #3084 A9 — through the leaf gate. */
+import { loadKnownAnalyzerSecrets } from './known-secrets-gate.js';
 import { resolveNumPredict, resolveOllamaTemperature } from './ollama-settings.js';
 import { TransportAnalyzer } from './runner/transport-analyzer.js';
 import { StageRunner } from './runner/stage-runner.js';
@@ -154,8 +157,13 @@ export async function generatePersonaViaOllama(
       throw classifyConnectError(err, url);
     }
     if (!response.ok) {
+      /* #3084 P22, A8 — redacted where the error is built, BEFORE truncating, so a secret
+         the slice would cut in half cannot survive. With no secret the text is
+         byte-identical. Wave 4 moves this body into OllamaTransport.sendFreeText and
+         keeps these lines. */
       const text = await response.text().catch(() => '');
-      throw new Error(`Ollama ${url} returned ${response.status} ${response.statusText}: ${text.slice(0, 500)}`);
+      const excerpt = redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500);
+      throw new Error(`Ollama ${url} returned ${response.status} ${response.statusText}: ${excerpt}`);
     }
     const json = (await response.json().catch(() => ({}))) as { message?: { content?: string } };
     return json.message?.content ?? '';
