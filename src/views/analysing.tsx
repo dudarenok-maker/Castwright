@@ -258,7 +258,7 @@ export function AnalysingView({
   /* Tracks whether the current retry attempt was refused before it
      started a job — subset_in_progress (#3202: another subset job is live)
      or main_analysis_running (#3435: the main run is live or still
-     finishing). Used in the finally block to leave the restored snapshot
+     stopping). Used in the finally block to leave the restored snapshot
      alone. */
   const subsetInProgressRef = useRef(false);
   /* Same shape for a Retry that ended with a real analyzer error (#3084):
@@ -785,7 +785,7 @@ export function AnalysingView({
         if ((e as Error)?.name === 'AbortError') return;
         /* #3435 (A7) — the server refused this start: a chapter retry is
            running (`subset_analysis_running`), or the previous run is still
-           finishing (`main_analysis_running`, draining). No job started, so
+           stopping (`main_analysis_running`, winding down). No job started, so
            this is neither a halt nor a failure: restore the pre-POST snapshot,
            go idle, and show the server's message. */
         if (
@@ -999,7 +999,7 @@ export function AnalysingView({
      own snapshot of the disk-backed analysis cache and write back
      independently, so the second finisher clobbered the first's progress.
      The server refuses a subset POST while a main run is live or still
-     finishing (409 `main_analysis_running`), and Retry is disabled with
+     stopping (409 `main_analysis_running`), and Retry is disabled with
      "Pause the analysis first" while this view knows a main run is live. The
      earlier client-side pause-and-retry is withdrawn: it could not wait for
      the paused run to settle. */

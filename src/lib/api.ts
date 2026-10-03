@@ -5706,7 +5706,7 @@ async function realRunAnalysisForChapters(
      terminal branch and paint a designed no-result exit as a dead run. */
   if (!res.ok) {
     /* #3435 — refused while the book has a main analysis run, live or still
-       finishing; the server's message goes on the row. */
+       stopping; the server's message goes on the row. */
     const body = await res.text().catch(() => '');
     const refusal = analysisRefusalFromBody(res.status, body, ['main_analysis_running']);
     if (refusal) throw refusal;
