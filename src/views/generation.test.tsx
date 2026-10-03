@@ -3140,6 +3140,12 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       return { promise, resolve, reject };
     }
     const flush = () => act(() => new Promise((r) => setTimeout(r, 0)));
+    /* A ready stage carries currentChapterId, which the mounted view scrolls
+       to on a later animation frame; jsdom has no scrollIntoView. Left in
+       place after the test, since that frame can fire after it ends. */
+    beforeEach(() => {
+      Element.prototype.scrollIntoView = vi.fn();
+    });
     /* Book B opened (its Generate view), hydrated with its own rows: chapter 1
        carries a gap, chapter 3 is included or excluded per test. */
     function openBookB(store: ReturnType<typeof makeIncludeStore>, ch3IsExcluded: boolean) {
@@ -3158,6 +3164,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       );
       store.dispatch(chaptersSlice.actions.setCurrentBookId('b2'));
       store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: "B's own gap." }));
+      store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 3, message: "B's own gap." }));
       store.dispatch(castSlice.actions.setCharacters([hero]));
       store.dispatch(analysisActions.setActiveStream(bSnapshot));
     }
@@ -3235,29 +3242,57 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       const before = bookView(store);
       await act(async () => include.resolve({ id: 3, title: 'Chapter 3', slug: '03', excluded: false }));
       await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      const opts = runAnalysisForChaptersSpy.mock.calls[0][2] as SubsetOpts;
+      act(() => opts.onCastUpdate?.({ characters: [villain] }));
       await act(async () => run.resolve(subsetResponse));
       await flush();
       expect(bookView(store)).toEqual(before);
     });
 
-    it('an Include that fails after book B opened still rolls back on the server, and leaves B untouched', async () => {
+    it.each([
+      ['a failure', new AnalysisError('The analyzer timed out.', 'analyzer-timeout'), true],
+      ['a refusal', new AnalysisError('The analysis is still stopping.', 'main_analysis_running'), true],
+      ['a resume_required stop', new AnalysisError('Resume the analysis to finish.', 'resume_required'), false],
+    ])('%s of an Include after book B opened leaves B untouched (a rollback still runs on the server)', async (_label, err, rollsBack) => {
       const store = makeIncludeStore();
       const run = deferred<typeof subsetResponse>();
       runAnalysisForChaptersSpy.mockReturnValueOnce(run.promise);
       const view = renderInclude(store);
       fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
       await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      const opts = runAnalysisForChaptersSpy.mock.calls[0][2] as SubsetOpts;
+      act(() => opts.onPhase?.({ phaseId: 1, progress: 0.5 }));
       view.unmount();
       /* B's chapter 3 is included: a leaked rollback would exclude it. */
       openBookB(store, false);
       const before = bookView(store);
-      await act(async () => run.reject(new AnalysisError('The analyzer timed out.', 'analyzer-timeout')));
+      await act(async () => run.reject(err));
       await flush();
-      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+      if (rollsBack) expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+      else expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, false);
       expect(bookView(store)).toEqual(before);
     });
 
-    it('Cancel on A\'s Include from the same view instance after it switched to book B leaves B untouched', async () => {
+    it('an Exclude that settles after book B opened leaves B untouched', async () => {
+      const store = makeIncludeStore();
+      const exclude = deferred<unknown>();
+      setChapterExcludedSpy.mockReturnValueOnce(exclude.promise);
+      const view = renderInclude(store);
+      fireEvent.click(screen.getAllByTitle('Skip this chapter — no audio will be generated for it.')[0]);
+      await waitFor(() => expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 1, true));
+      view.unmount();
+      /* B's chapter 1 is included: a leaked exclude would flip it. */
+      openBookB(store, false);
+      const before = bookView(store);
+      await act(async () => exclude.resolve({ id: 1, title: 'Chapter 1', slug: '01', excluded: true }));
+      await flush();
+      expect(bookView(store)).toEqual(before);
+    });
+
+    it.each([
+      ['Include', 'include'],
+      ['Re-analyse', 'reanalyse'],
+    ])('Cancel on A\'s %s from the same view instance after it switched to book B leaves B untouched', async (_label, flow) => {
       const store = makeIncludeStore();
       runAnalysisForChaptersSpy.mockImplementationOnce(
         (_m: string, _ids: number[], o: { signal: AbortSignal }) =>
@@ -3268,7 +3303,12 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
           }),
       );
       const view = renderInclude(store);
-      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      if (flow === 'include') {
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      } else {
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      }
       await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
       openBookB(store, false);
       const before = bookView(store);
@@ -3291,7 +3331,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       );
       fireEvent.click(await screen.findByRole('button', { name: /Cancel/i }));
       await flush();
-      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+      if (flow === 'include') expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
       expect(bookView(store)).toEqual(before);
     });
 
