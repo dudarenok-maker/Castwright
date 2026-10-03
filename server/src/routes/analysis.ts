@@ -4421,51 +4421,54 @@ export async function runMainAnalyzerJob(
          the legacy non-workspace path have no bookDir; the guard
          keeps it cheap). */
       if (recordRef.bookDir) {
-        /* #1981 Task 11 — the delete must be serialised against the other 34
-           cast.json writers the same way they're serialised against each
-           other: a writer that acquires the lock AFTER this delete would
-           otherwise recreate cast.json from its own stale read, resurrecting
-           the roster this delete exists to remove (design §4 rule 1 — this
-           is the innermost, one-level lock around the whole read-through-
-           delete span; the delete itself has no read of its own to pull
-           inside it). #2015/#2155 update: the five merge-base writes and
-           readPriorCastForMerge are no longer out of scope here — they are
-           locked too, and the carryover's delete now rides this same hold. */
-        const freshBookDir = recordRef.bookDir;
-        await withCastLock(freshBookDir, async () => {
-          await rm(castJsonPath(freshBookDir), { force: true });
-          /* Start fresh intentionally discards reuse continuity — drop the
-             reparse carryover too so it can't resurrect links (srv-13).
-             #2155: inside the SAME hold as cast.json's delete, so a concurrent
-             analysis can no longer observe the intermediate state where the
-             carryover is written but cast.json is not yet gone. */
-          await rm(castReuseCarryoverJsonPath(freshBookDir), { force: true });
-          /* #2015 §3a rule 2 — the capture above deliberately happened BEFORE
-             this delete (so the rows survive it), which means the captured
-             hash describes a file we are now removing. Without this reset the
-             first write site re-reads an absent file against a live hash and
-             reports a guaranteed false conflict on every fresh run. */
-          castBase?.markDeleted();
-        });
-        {
-          const editsPath = manuscriptEditsJsonPath(recordRef.bookDir);
-          await enqueuePathOp(editsPath, () => rm(editsPath, { force: true }));
-        }
-        /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
-           meaningless; drop the merge journal + dedup suggestions too. */
-        await clearCastMerges(recordRef.bookDir);
-        await clearSuggestions(recordRef.bookDir);
-        /* #3435 O1 — Start fresh un-confirms the book, as Re-parse does
-           (`applyReparse`, book-state.ts): the cast is gone, so a book still
-           marked confirmed would read "done" with nothing behind it. It reads
-           "Analysing" until this run persists and the user confirms again.
-           #2196 — through the identity-verified LIVE book dir in mode:'drop':
-           a stale path (moved book, or one now holding another book) is
-           never written. */
+        /* #3435 — every file below is touched only through the identity-verified
+           LIVE book dir (mode:'drop', #2196), never `recordRef.bookDir` directly:
+           a renamed book whose old path now holds another book (or nothing)
+           must lose none of its files to this fresh run. */
         await withVerifiedBookDir(
           { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
-          async (bookDir) => {
-            const freshStatePath = stateJsonPath(bookDir);
+          async (freshBookDir) => {
+            /* #1981 Task 11 — the delete must be serialised against the other 34
+               cast.json writers the same way they're serialised against each
+               other: a writer that acquires the lock AFTER this delete would
+               otherwise recreate cast.json from its own stale read, resurrecting
+               the roster this delete exists to remove (design §4 rule 1 — this
+               is the innermost, one-level lock around the whole read-through-
+               delete span; the delete itself has no read of its own to pull
+               inside it). #2015/#2155 update: the five merge-base writes and
+               readPriorCastForMerge are no longer out of scope here — they are
+               locked too, and the carryover's delete now rides this same hold. */
+            await withCastLock(freshBookDir, async () => {
+              await rm(castJsonPath(freshBookDir), { force: true });
+              /* Start fresh intentionally discards reuse continuity — drop the
+                 reparse carryover too so it can't resurrect links (srv-13).
+                 #2155: inside the SAME hold as cast.json's delete, so a concurrent
+                 analysis can no longer observe the intermediate state where the
+                 carryover is written but cast.json is not yet gone. */
+              await rm(castReuseCarryoverJsonPath(freshBookDir), { force: true });
+              /* #2015 §3a rule 2 — the capture above deliberately happened BEFORE
+                 this delete (so the rows survive it), which means the captured
+                 hash describes a file we are now removing. Without this reset the
+                 first write site re-reads an absent file against a live hash and
+                 reports a guaranteed false conflict on every fresh run. */
+              castBase?.markDeleted();
+            });
+            {
+              const editsPath = manuscriptEditsJsonPath(freshBookDir);
+              await enqueuePathOp(editsPath, () => rm(editsPath, { force: true }));
+            }
+            /* srv-1 — fresh run regenerates ids from scratch, so old lineage is
+               meaningless; drop the merge journal + dedup suggestions too. */
+            await clearCastMerges(freshBookDir);
+            await clearSuggestions(freshBookDir);
+            /* #3435 O1 — Start fresh un-confirms the book, as Re-parse does
+               (`applyReparse`, book-state.ts): the cast is gone, so a book still
+               marked confirmed would read "done" with nothing behind it. It reads
+               "Analysing" until this run persists and the user confirms again.
+               #2196 — through the identity-verified LIVE book dir in mode:'drop':
+               a stale path (moved book, or one now holding another book) is
+               never written. */
+            const freshStatePath = stateJsonPath(freshBookDir);
             const freshState = await readJson<BookStateJson>(freshStatePath);
             if (freshState?.castConfirmed) {
               await writeStateJsonAtomic(freshStatePath, {

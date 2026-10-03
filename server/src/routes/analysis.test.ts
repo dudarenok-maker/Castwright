@@ -64,7 +64,13 @@ import {
   reachedConfirm,
 } from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
-import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
+import {
+  castJsonPath,
+  manuscriptEditsJsonPath,
+  castMergesJsonPath,
+  castMergeSuggestionsJsonPath,
+  castReuseCarryoverJsonPath,
+} from '../workspace/paths.js';
 import { loadCastIdHistory, retireCharacterId, castIdHistoryPath } from '../store/cast-id-history.js';
 import { loadSuggestions } from '../store/cast-merge-suggestions.js';
 
@@ -9912,6 +9918,24 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
     writeFileSync(statePath, JSON.stringify(other));
     await run(book, { fresh: true });
     expect(JSON.parse(readFileSync(statePath, 'utf8')).castConfirmed).toBe(true);
+  }, 60_000);
+
+  it("Start fresh's file deletes go through the verified book dir: a stale path now holding another book keeps its files", async () => {
+    const chapters: BookChapter[] = [{ id: 1, body: WORDED[1] }];
+    const book = makeBook('fresh-deletes-stale', chapters, { castConfirmed: true });
+    const statePath = join(book.bookDir, '.audiobook', 'state.json');
+    const other = { ...JSON.parse(readFileSync(statePath, 'utf8')), manuscriptId: 'some-other-book' };
+    writeFileSync(statePath, JSON.stringify(other));
+    const owned = [
+      castJsonPath(book.bookDir),
+      castReuseCarryoverJsonPath(book.bookDir),
+      manuscriptEditsJsonPath(book.bookDir),
+      castMergesJsonPath(book.bookDir),
+      castMergeSuggestionsJsonPath(book.bookDir),
+    ];
+    for (const p of owned) writeFileSync(p, '{}');
+    await run(book, { fresh: true });
+    for (const p of owned) expect(existsSync(p), p).toBe(true);
   }, 60_000);
 
   describe('subset route (S9/S10, word-free)', () => {
