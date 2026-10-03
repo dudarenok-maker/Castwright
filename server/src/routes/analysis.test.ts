@@ -4830,6 +4830,130 @@ describe('runSubsetAnalyzerJob — re-reports a coverage failure instead of sile
   );
 });
 
+describe('runMainAnalyzerJob — chapter-failed frames carry phase (plan 285 T1)', () => {
+  const BODY = 'This is a perfectly ordinary paragraph of narration with no dialogue at all.';
+  const roster = (): CharacterOutput[] => [
+    { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
+  ];
+  const unused = () => Promise.reject(new Error('not used'));
+
+  function analyzer(over: Partial<Analyzer>): Analyzer {
+    return {
+      runStage1: unused,
+      runStage1Chapter: async (): Promise<Stage1ChapterOutput> => ({ characters: roster() }),
+      runStage2Chapter: async (): Promise<Stage2ChapterOutput> => ({ sentences: [] }),
+      runEmotionChapter: unused,
+      runScriptReviewChapter: unused,
+      runStage3Chapter: unused,
+      runAttributionEscalation: unused,
+      ...over,
+    };
+  }
+
+  async function runMain(over: Partial<Analyzer>): Promise<AnalysisJob> {
+    const manuscriptId = `test-main-frame-phase-${Date.now()}-${Math.random()}`;
+    const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-main-frame-phase-test-'));
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'b_main_frame_phase_test',
+        manuscriptId,
+        title: 'Main Frame Phase Test Book',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: [{ id: 1, title: 'Chapter One', slug: '01-chapter-one' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: 'Main Frame Phase Test Book',
+      wordCount: 20,
+      byteSize: 200,
+      uploadedAt: new Date().toISOString(),
+      sourceText: BODY,
+      chapterHints: [{ id: 1, title: 'Chapter One', body: BODY }],
+      bookDir,
+    });
+    const selection: AnalyzerSelection = {
+      analyzer: analyzer(over),
+      engine: 'gemini',
+      model: 'm',
+      fallbackModel: null,
+    };
+    (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection = selection;
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set(),
+      manuscriptId,
+      kind: 'main',
+      bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+    try {
+      const recordRef = getManuscript(manuscriptId);
+      if (!recordRef) throw new Error('stub manuscript not found');
+      /* A cast-failure run may end in a terminal error (no roster); the frames
+         were already sent, which is all this test reads. */
+      await runMainAnalyzerJob(job, recordRef as never, selection, {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      }).catch(() => undefined);
+      return job;
+    } finally {
+      delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      rmSync(bookDir, { recursive: true, force: true });
+      if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+      else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+    }
+  }
+
+  it(
+    'main route: a Phase-0 failure sends chapter-failed with phase cast',
+    async () => {
+      const job = await runMain({
+        runStage1Chapter: () => Promise.reject(new Error('cast detection down')),
+      });
+      expect(job.replay.failedByChapterId.has(1), 'no chapter-failed frame was sent').toBe(true);
+      expect(job.replay.failedByChapterId.get(1)?.phase).toBe('cast');
+    },
+    60_000,
+  );
+
+  it(
+    'main route: a coverage re-flag sends chapter-failed with phase attribution',
+    async () => {
+      const job = await runMain({});
+      expect(job.replay.failedByChapterId.get(1)?.code).toBe('attribution-incomplete');
+      expect(job.replay.failedByChapterId.get(1)?.phase).toBe('attribution');
+    },
+    60_000,
+  );
+});
+
 describe('runMainAnalyzerJob — cast id history end-to-end guard (#2040 Task 8)', () => {
   /* This is the test that would have caught all three rounds of "green but
      inert": a unit test on a pure function proves it RETURNS a retirement
