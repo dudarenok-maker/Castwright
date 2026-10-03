@@ -609,11 +609,14 @@ describe('chapter-audio router', () => {
         /* Wait until the DELETE has queued behind the parked restore (withKeyLock
            registers its place synchronously on call) — no sleep. */
         const { withKeyLock } = await import('../workspace/file-lock.js');
-        await vi.waitFor(() => {
-          const opCalls = vi.mocked(withKeyLock).mock.calls.filter(([k]) => String(k).startsWith('revision-op:'));
-          expect(opCalls.length).toBeGreaterThanOrEqual(2);
-        });
-        release();
+        try {
+          await vi.waitFor(() => {
+            const opCalls = vi.mocked(withKeyLock).mock.calls.filter(([k]) => String(k).startsWith('revision-op:'));
+            expect(opCalls.length).toBeGreaterThanOrEqual(2);
+          });
+        } finally {
+          release();
+        }
         const [rest, acc] = await Promise.all([restoring, accepting]);
         expect(rest.status).toBe(204);
         expect(acc.status).toBe(404);

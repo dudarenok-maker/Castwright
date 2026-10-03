@@ -389,6 +389,16 @@ describe('beginRevisionOp / commitRevisionOp', () => {
     expect(late.file.timeline['1'].map((t) => t.eventKind)).toEqual(['rejected']);
   });
 
+  it('commits a server entry that a LATER legacy entry for the same chapter shadows in the stored view (no .previous.mp3)', async () => {
+    seedRaw({
+      pending: [serverEntry(1, 'r-srv'), { id: 'legacy-late', chapterId: 1, characterId: 'c', playable: true, segments: [] }],
+    });
+    expect((await beginRevisionOp(bookDir, CHAPTERS, 'accept', 'r-srv')).kind).toBe('proceed');
+    const commit = await commitRevisionOp(bookDir, CHAPTERS, 'accept', 'r-srv', { '0': 'A' });
+    expect(commit.kind).toBe('committed');
+    expect(commit.file.timeline['1'].map((t) => [t.id, t.eventKind])).toEqual([['r-srv', 'accepted']]);
+  });
+
   it('a reset while an op waits for its final write: gone, and nothing is written into the reset file', async () => {
     await recordPending(bookDir, CHAPTERS, serverEntry(1, 'r1'));
     await beginRevisionOp(bookDir, CHAPTERS, 'accept', 'r1');

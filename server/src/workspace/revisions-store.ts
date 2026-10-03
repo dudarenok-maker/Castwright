@@ -381,7 +381,12 @@ export async function commitRevisionOp(
 ): Promise<CommitResult> {
   return withKeyLock(revisionsLockKey(bookDir), async () => {
     const { file, stored } = await loadWithStored(bookDir, chapters);
-    const entry = isDangerousKey(revisionId) ? undefined : stored.pending.find((p) => p.id === revisionId);
+    /* Either view: `stored` finds a legacy entry whose `.previous.mp3` the op
+       consumed; `file` finds a server entry that a later legacy entry for the
+       same chapter shadows in `stored` (begin saw it through `file`). */
+    const entry = isDangerousKey(revisionId)
+      ? undefined
+      : (stored.pending.find((p) => p.id === revisionId) ?? file.pending.find((p) => p.id === revisionId));
     if (!entry) {
       return hasOutcome(file, op, revisionId) ? { kind: 'already-done', file } : { kind: 'gone', file };
     }

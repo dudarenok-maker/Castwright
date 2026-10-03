@@ -444,8 +444,11 @@ describe('accept / reject on one chapter are serialised (#3400)', () => {
     const rejecting = reject('r1').then((r) => r);
     await gate.hit;
     const accepting = accept('r1').then((r) => r);
-    await secondOpQueued();
-    gate.release();
+    try {
+      await secondOpQueued();
+    } finally {
+      gate.release();
+    }
     const [rej, acc] = await Promise.all([rejecting, accepting]);
     expect(rej.status).toBe(200);
     expect(acc.status).toBe(404);
@@ -463,8 +466,11 @@ describe('accept / reject on one chapter are serialised (#3400)', () => {
     const accepting = accept('r1').then((r) => r);
     await gate.hit;
     const rejecting = reject('r1').then((r) => r);
-    await secondOpQueued();
-    gate.release();
+    try {
+      await secondOpQueued();
+    } finally {
+      gate.release();
+    }
     const [acc, rej] = await Promise.all([accepting, rejecting]);
     expect(acc.status).toBe(200);
     expect(rej.status).toBe(404);
@@ -481,8 +487,11 @@ describe('accept / reject on one chapter are serialised (#3400)', () => {
     const first = reject('r1').then((r) => r);
     await gate.hit;
     const second = reject('r1').then((r) => r);
-    await secondOpQueued();
-    gate.release();
+    try {
+      await secondOpQueued();
+    } finally {
+      gate.release();
+    }
     const [a, b] = await Promise.all([first, second]);
     expect([a.status, b.status]).toEqual([200, 200]);
     expect(readFileSync(live(), 'utf8')).toBe('PREV');

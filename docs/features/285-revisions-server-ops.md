@@ -166,11 +166,12 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
 
 ### Per-chapter serialisation of accept/reject (PR #3504 review, pass 1)
 
-- Accept and reject run steps 1–3 inside `withKeyLock(revisionOpLockKey(bookDir, chapterId))` (`revision-op:<resolved bookDir>:<chapterId>`, `workspace/revisions-store.ts`); the revisions lock is taken inside it for steps 1 and 3 only. **Lock order: `revision-op` → `revisions`, never the reverse.** The legacy `DELETE …/audio/previous` and `POST …/audio/previous/restore` take the same key around `acceptPreviousAudio` / `restorePreviousAudio` (the busy 409 and the chapter-id parse still run first, unchanged). Any `LockAcquisitionTimeoutError` from it leaves through `requestFailureMessage` (revision-ops) or the explicit `LOCK_CONTENTION_REQUEST_ERROR` (legacy DELETE); the legacy restore's existing catch already answers its own fixed 500. Tests: opposing-pair, double-reject and cross-chapter cases in `revision-ops.test.ts`, one legacy race in `chapter-audio.test.ts`.
+- Accept and reject run steps 1–3 inside `withKeyLock(revisionOpLockKey(bookDir, chapterId))` (`revision-op:<resolved bookDir>:<chapterId>`, `workspace/revisions-store.ts`); the revisions lock is taken inside it for steps 1 and 3 only. **Lock order: `revision-op` → `revisions`, never the reverse.** The legacy `DELETE …/audio/previous` and `POST …/audio/previous/restore` take the same key around `acceptPreviousAudio` / `restorePreviousAudio` (the busy 409 and the chapter-id parse still run first, unchanged). Any `LockAcquisitionTimeoutError` from it leaves through `requestFailureMessage` (revision-ops) or the explicit `LOCK_CONTENTION_REQUEST_ERROR` (legacy DELETE); the legacy restore's catch answers `LOCK_CONTENTION_REQUEST_ERROR` on a lock timeout (since `744d7bf6`; it was its own fixed 500 before) and its fixed 500 for any other failure. Tests: opposing-pair, double-reject and cross-chapter cases in `revision-ops.test.ts`, one legacy race in `chapter-audio.test.ts`.
 
 ### Paths and how to run tests
 
 - **`<wt>` means `C:/Claude/Projects/wt-3400-revisions-server-ops` throughout.** Work only there. Never touch `C:/Claude/Projects/Audiobook-Generator`.
+- **Superseded by later commits — the shipped code wins over the quoted code in these sections.** Task 3 Step 6 (legacy `DELETE`/`restore` handlers) and Task 4 Step 3 (`revision-ops.ts`) quote the pre-serialisation routes: `c2d4bbb7` added the per-chapter `revision-op:<bookDir>:<chapterId>` key (`serialisedPerChapter` in `revision-ops.ts`, and the same key around the legacy audio steps), `7d39752e` made `commitRevisionOp` look its entry up in `stored` so a legacy entry commits, and `744d7bf6` added the legacy timeout branches (`LOCK_CONTENTION_REQUEST_ERROR` on both legacy routes). The quoted `load`/`commitRevisionOp` in Task 2 are current as of the pass-3 cleanup. Read the shipped route files for the rest.
 - **The quoted code is authoritative; line numbers are advisory.** Every `file:line` here was measured on the base before any task ran, and an earlier task's edit shifts later lines in the same file. Where a later task's line moved, it says so ("after Task N's edit, near `<quoted text>`"). If a number and the quoted text ever disagree, find the quoted text.
 - The command forms below are the `$Cmd` you hand to the detach recipe (see "Lanes and long commands"). In Tasks 1–12, never run them in the foreground. **Every line of a "Run:" block is its own recipe launch, with one `$Cmd` each.** Never chain commands off `cd`: Task 13's Bash permission hook blocks `cd X &&`, and the recipe does not need it.
   - Server, fast pool: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- <path under server/>`
@@ -953,13 +954,28 @@ async function loadRaw(bookDir: string): Promise<Record<string, unknown> | null>
 }
 
 async function load(bookDir: string, chapters: readonly ChapterRef[]): Promise<RevisionsFile> {
+  return (await loadWithStored(bookDir, chapters)).file;
+}
+
+/** `file` is the normalised view (legacy entries kept only while `.previous.mp3`
+    exists). `stored` is the same normalisation WITHOUT that `.previous` filter —
+    the entries as stored. commitRevisionOp looks its own entry up there: the
+    op's audio step has by then consumed `.previous`, which would otherwise make
+    a legacy entry (every pending entry in production today) look gone. */
+async function loadWithStored(
+  bookDir: string,
+  chapters: readonly ChapterRef[],
+): Promise<{ file: RevisionsFile; stored: RevisionsFile }> {
   const slugById = new Map(chapters.map((c) => [c.id, c.slug] as const));
   const root = audioDir(bookDir);
   const raw = await loadRaw(bookDir);
-  return normaliseRevisions(raw, (chapterId) => {
-    const slug = slugById.get(chapterId);
-    return slug !== undefined && previousAudioExists(root, slug);
-  });
+  return {
+    file: normaliseRevisions(raw, (chapterId) => {
+      const slug = slugById.get(chapterId);
+      return slug !== undefined && previousAudioExists(root, slug);
+    }),
+    stored: normaliseRevisions(raw, () => true),
+  };
 }
 
 async function writeStamped(bookDir: string, file: RevisionsFile): Promise<void> {
@@ -1326,8 +1342,13 @@ export async function commitRevisionOp(
   selection?: Selection,
 ): Promise<CommitResult> {
   return withKeyLock(revisionsLockKey(bookDir), async () => {
-    const file = await load(bookDir, chapters);
-    const entry = isDangerousKey(revisionId) ? undefined : file.pending.find((p) => p.id === revisionId);
+    const { file, stored } = await loadWithStored(bookDir, chapters);
+    /* Either view: `stored` finds a legacy entry whose `.previous.mp3` the op
+       consumed; `file` finds a server entry that a later legacy entry for the
+       same chapter shadows in `stored` (begin saw it through `file`). */
+    const entry = isDangerousKey(revisionId)
+      ? undefined
+      : (stored.pending.find((p) => p.id === revisionId) ?? file.pending.find((p) => p.id === revisionId));
     if (!entry) {
       return hasOutcome(file, op, revisionId) ? { kind: 'already-done', file } : { kind: 'gone', file };
     }
