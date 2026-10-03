@@ -945,3 +945,30 @@ export function classifyAnalysisFailure(
   }
   return withCopy('unknown', raw || 'Analysis failed.');
 }
+
+/** #3084 P23 — the SSE error event for ANY error selection throws, coded through
+    classifyAnalysisFailure: AnalyzerEndpointMissingError → analyzer-endpoint-missing,
+    AnalyzerKeyOriginError → auth, anything else → its classified code. Never null, so
+    no selection call site ends a stream uncoded or rethrows after the SSE headers.
+    Per class of error, not per site: a class a later PR adds is coded here without
+    touching the six call sites. */
+export function analyzerSelectionErrorEvent(
+  err: unknown,
+): { kind: 'error'; code: FailureCode; message: string; remediation: string; detail?: string } {
+  const failure = classifyAnalysisFailure(err, 'Analyzer');
+  /* Selection's own missing-key Error (analyzer/index.ts) matches the `auth` signature, whose
+     copy does not name what is missing; keep that as the detail the UI's collapsible shows.
+     Every other detail comes from the classification itself. */
+  const raw = err instanceof Error ? err.message : String(err);
+  const detail =
+    failure.detail ?? (failure.code === 'auth' && GEMINI_KEY_REQUIRED.test(raw) ? 'Gemini API key required' : undefined);
+  return {
+    kind: 'error',
+    code: failure.code,
+    message: failure.userMessage,
+    remediation: failure.remediation,
+    ...(detail ? { detail } : {}),
+  };
+}
+
+const GEMINI_KEY_REQUIRED = /GEMINI_API_KEY is required/;

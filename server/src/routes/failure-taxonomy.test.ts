@@ -9,7 +9,7 @@
 
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { ApiError } from '@google/genai';
-import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure } from './failure-taxonomy.js';
+import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure, analyzerSelectionErrorEvent } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import {
@@ -977,6 +977,43 @@ describe('classifyAnalysisFailure — unreachable and endpoint final errors (#30
     const r = classifyAnalysisFailure(new Error('weird failure mentioning AIzaSy-taxonomy-secret-1'), 'Some model');
     expect(r.code).toBe('unknown');
     expect(r.userMessage).toBe('weird failure mentioning [redacted]');
+  });
+});
+
+describe('analyzerSelectionErrorEvent (#3084 P23)', () => {
+  it.each([
+    [
+      'AnalyzerEndpointMissingError',
+      new AnalyzerEndpointMissingError('gone', 'env'),
+      'analyzer-endpoint-missing',
+      'Analyzer endpoint "gone" (from ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL) is not configured. Add it in Settings or pick another model.',
+    ],
+    [
+      'AnalyzerKeyOriginError',
+      new AnalyzerKeyOriginError('lab', 'Lab box'),
+      'auth',
+      'The API key saved for Lab box was entered for a different host, so it was not sent — re-enter the key for Lab box.',
+    ],
+    ['a plain Error', new Error('misconfigured engine: missing GEMINI_API_KEY'), 'unknown', 'misconfigured engine: missing GEMINI_API_KEY'],
+  ] as const)('codes %s through classifyAnalysisFailure and never returns null', (_name, err, code, message) => {
+    const failure = classifyAnalysisFailure(err, 'Analyzer');
+    expect(failure.code).toBe(code);
+    expect(analyzerSelectionErrorEvent(err)).toEqual({
+      kind: 'error',
+      code,
+      message,
+      remediation: failure.remediation,
+      ...(failure.detail ? { detail: failure.detail } : {}),
+    });
+  });
+
+  it("selection's own missing-Gemini-key error classifies as auth and keeps what is missing as its detail (declared outcome change: phase 0 / subset sent it uncoded)", () => {
+    const err = new Error(
+      'GEMINI_API_KEY is required when analyzer engine is Gemini. Set it from Account → Server configuration → Gemini API key, or in server/.env for CI / power users.',
+    );
+    /* The `auth` signature's copy is generic ("check the Gemini API key"), so without the
+       detail the event no longer says WHICH of the two auth cases this is. */
+    expect(analyzerSelectionErrorEvent(err)).toMatchObject({ kind: 'error', code: 'auth', detail: 'Gemini API key required' });
   });
 });
 

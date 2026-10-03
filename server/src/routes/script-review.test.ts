@@ -450,7 +450,12 @@ describe('POST /api/books/:bookId/script-review', () => {
     const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
     expect(res.status).toBe(200);
     const events = parseSse(res.text);
-    expect(events.some((e) => e.kind === 'error' && e.code === 'internal_error')).toBe(true);
+    /* #3084 P23 — a selection error carries its classified code, no longer internal_error. */
+    expect(events.find((e) => e.kind === 'error')).toMatchObject({
+      kind: 'error',
+      code: 'unknown',
+      message: 'misconfigured engine: missing GEMINI_API_KEY',
+    });
     expect(runReview).not.toHaveBeenCalled();
   });
 
@@ -482,7 +487,7 @@ describe('POST /api/books/:bookId/script-review', () => {
       const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
       expect(res.status).toBe(200);
       const events = parseSse(res.text);
-      const err = events.find((e) => e.kind === 'error' && e.code === 'internal_error') as
+      const err = events.find((e) => e.kind === 'error' && e.code === 'lock-contention') as
         | { message?: string }
         | undefined;
       expect(err).toBeDefined();
@@ -2200,6 +2205,42 @@ describe('POST /api/books/:bookId/script-review — unset book language (Task 6 
     const events = parseSse(res.text);
     expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
     expect(events.find((e) => e.kind === 'result')).toBeTruthy();
+  });
+
+  it('a throw after selection (the warm step rejecting) still reaches the launch catch as internal_error (#3084 P23 keeps it)', async () => {
+    writeBook(SENTENCES);
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({
+      analyzer: {
+        runStage1: () => Promise.reject(new Error('not used')),
+        runStage1Chapter: () => Promise.reject(new Error('not used')),
+        runStage2Chapter: () => Promise.reject(new Error('not used')),
+        runEmotionChapter: () => Promise.reject(new Error('not used')),
+        runScriptReviewChapter: () => Promise.reject(new Error('not used')),
+        runStage3Chapter: () => Promise.reject(new Error('not used')),
+        runAttributionEscalation: () => Promise.resolve(null),
+      } as Analyzer,
+      engine: 'local',
+      model: 'qwen3.5:9b',
+      fallbackModel: null,
+    }));
+    warmOllamaModelMock.mockRejectedValueOnce(new Error('warm step exploded'));
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1 });
+    expect(res.status).toBe(200);
+    expect(parseSse(res.text).some((e) => e.kind === 'error' && e.code === 'internal_error')).toBe(true);
+    expect(runReview).not.toHaveBeenCalled();
+  });
+
+  it('an endpoint id this build cannot run reports analyzer-endpoint-missing, not internal_error (#3084 P23)', async () => {
+    writeBook(SENTENCES);
+    const { AnalyzerEndpointMissingError } = await import('../analyzer/errors.js');
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => {
+      throw new AnalyzerEndpointMissingError('gone', 'run-pick');
+    });
+    const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ chapterId: 1, model: 'openai:gone::m' });
+    expect(res.status).toBe(200);
+    const error = parseSse(res.text).find((e) => e.kind === 'error');
+    expect(error).toMatchObject({ kind: 'error', code: 'analyzer-endpoint-missing' });
+    expect(runReview).not.toHaveBeenCalled();
   });
 });
 
