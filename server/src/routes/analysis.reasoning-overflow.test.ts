@@ -1122,6 +1122,9 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     );
     expect(castCalls).toEqual([2]);
     expect([...stage2Calls].sort()).toEqual([1, 2]);
+    /* Chapter 1 is not replayed: its pending take puts it in the Phase-1 pool's
+       task list (not only in the post-join M8d pass). */
+    expect(events.some((e) => e.kind === 'log' && /^Running 2 chapters /.test(String(e.message)))).toBe(true);
     expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId as number).sort()).toEqual([1, 2]);
     expect(after.failedChapterIds ?? []).toEqual([]);
     expect(after.chapters?.[1]?.[0]?.characterId).toBe('nova');
