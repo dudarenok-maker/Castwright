@@ -917,6 +917,7 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     failedChapterIds?: number[];
     failedChapterErrors?: Record<string, unknown>;
     chapterCast?: Record<number, unknown[]>;
+    chapters?: Record<number, unknown>;
   }
   interface MainOpts {
     chapterIds?: number[];
@@ -926,7 +927,7 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     phase1Model?: string;
     phase1?: Partial<Analyzer>;
     phase0?: Partial<Analyzer>;
-    saveHook?: (c: SaveSnapshot) => void | Promise<void>;
+    saveHook?: (c: SaveSnapshot, job: AnalysisJob) => void | Promise<void>;
   }
 
   /** Seeds an arbitrary cache and runs one main run against it. `failedSaves`
@@ -948,7 +949,7 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     const g = globalThis as Record<string, unknown>;
     g.__overflow_spend_test_save_hook = async (c: SaveSnapshot) => {
       if (c.failedChapterIds?.length) failedSaves.push([...c.failedChapterIds]);
-      await opts.saveHook?.(c);
+      await opts.saveHook?.(c, seed.job);
     };
     const phase0 = buildSelection(
       stubAnalyzer({
@@ -985,7 +986,7 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
       });
       await new Promise((r) => setTimeout(r, 100));
       const after = await loadAnalysisCache(seed.manuscriptId);
-      return { castCalls, stage2Calls, events, after, failedSaves, job: seed.job };
+      return { castCalls, stage2Calls, events, after, failedSaves, job: seed.job, bookDir: seed.bookDir };
     } finally {
       process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
       restoreEnv('ANALYZER_PHASE1_MIN_LAG_CHAPTERS', originalMinLag);
@@ -1093,6 +1094,27 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     expect(r.events.filter((e) => e.kind === 'chapter-failed')).toEqual([]);
     expect(r.failedSaves).toEqual([]);
     expect(r.after.failedChapterIds ?? []).toEqual([]);
+  }, 60_000);
+
+  it('Pause between chapters ends aborted, no persist', async () => {
+    const { readFileSync: read } = await import('node:fs');
+    let stateBefore = '';
+    const r = await runMainOn('pause-gap', BOTH_CAST, async (_m, id) => stage2For(id), {
+      width: '1',
+      /* The Pause lands in the dispatch gap: the first save that carries chapter 1's take
+         runs after its model call returned and before chapter 2's dispatch, so nothing is
+         in flight. */
+      saveHook: (c, job) => {
+        if (c.chapters?.[1] && !job.controller.signal.aborted) {
+          stateBefore = read(join(job.bookDir!, '.audiobook', 'state.json'), 'utf8');
+          job.controller.abort();
+        }
+      },
+    });
+    expect(r.stage2Calls).toEqual([1]);
+    expect(r.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['aborted']);
+    expect(r.events.some((e) => e.kind === 'result')).toBe(false);
+    expect(read(join(r.bookDir, '.audiobook', 'state.json'), 'utf8')).toBe(stateBefore);
   }, 60_000);
 
   it('MG: with split phase models, a Phase-1 failure row AND its terminal error name the Phase-1 model, not the Phase-0 one', async () => {

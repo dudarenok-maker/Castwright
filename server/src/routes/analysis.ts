@@ -5483,8 +5483,11 @@ export async function runMainAnalyzerJob(
          awaitPhase1Dispatch when the job is marked. The pool catch below sets
          `aborted` and rethrows. */
       throwIfReasoningOverflowed(job);
-      /* A Pause, or another worker's failure, while this one was parked. */
-      if (abortController.signal.aborted || isPoolAborted()) return 'skip';
+      /* A Pause while this worker was parked or between chapters: end the run as
+         aborted rather than let the pool resolve with chapters missing. */
+      if (abortController.signal.aborted) throw new AnalysisAbortedError('Analysis aborted before dispatching the chapter.');
+      /* Another worker's failure while this one was parked. */
+      if (isPoolAborted()) return 'skip';
       const dispatchWaitMs = Date.now() - dispatchWaitStart;
       if (dispatchWaitMs > 250) {
         /* Surface the back-pressure wait so the user can tell Gemini
