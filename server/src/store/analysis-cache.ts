@@ -146,7 +146,50 @@ export interface AnalysisCache {
       classified code + copy so the analysing view shows a real message +
       remediation after reload instead of the generic fallback. */
   failedChapterErrors?: Record<string, ChapterErrorRecord>;
+  /** Plan 285 spec 2.2 — P: chapters whose take predates the final roster and
+      is known to be bad (a failed chapter's take at a stage1-less load, or a
+      take made against the rolling roster while the chapter's cast record
+      stood). A pending take is kept, never deleted, until it is replaced.
+      Absent means empty. */
+  pendingAttributionChapterIds?: number[];
+  /** Plan 285 spec 2.2 — false means a take was written after the last
+      authoritative persist (state.json). Absent (legacy caches) means
+      persisted. */
+  takesPersisted?: boolean;
+  /** Plan 285 decision F — set by the first authoritative persist and never
+      cleared except with the cache: the book has reached Confirm. */
+  confirmReached?: true;
   updatedAt?: string;
+}
+
+/** Plan 285 spec 2.2 — the one per-chapter "done" predicate: the chapter has a
+    take (an own key, including `[]`, decision B) that is not pending. */
+export function hasCurrentTake(cache: AnalysisCache, chapterId: number): boolean {
+  return (
+    Object.hasOwn(cache.chapters, chapterId) &&
+    !(cache.pendingAttributionChapterIds ?? []).includes(chapterId)
+  );
+}
+
+/** Plan 285 spec 2.2 — book-level completeness over `chapterIds` (the
+    non-excluded chapters): the roster is final, every chapter has a current
+    take, and no take was written after the last authoritative persist. */
+export function analysisCompleteFor(cache: AnalysisCache, chapterIds: readonly number[]): boolean {
+  return (
+    chapterIds.length === 0 ||
+    (!!cache.stage1 &&
+      chapterIds.every((id) => hasCurrentTake(cache, id)) &&
+      cache.takesPersisted !== false)
+  );
+}
+
+/** Plan 285 decision F — the book has reached Confirm: its cast was confirmed,
+    or an authoritative persist has run since the cache was last cleared. */
+export function reachedConfirm(
+  state: { castConfirmed?: boolean } | null | undefined,
+  cache: AnalysisCache,
+): boolean {
+  return state?.castConfirmed === true || cache.confirmReached === true;
 }
 
 export function cachePath(manuscriptId: string): string {
@@ -175,6 +218,9 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
     stage2DurationsEngine: cache.stage2DurationsEngine ?? undefined,
     failedChapterIds: cache.failedChapterIds ?? undefined,
     failedChapterErrors: cache.failedChapterErrors ?? undefined,
+    pendingAttributionChapterIds: cache.pendingAttributionChapterIds ?? undefined,
+    takesPersisted: cache.takesPersisted ?? undefined,
+    confirmReached: cache.confirmReached ?? undefined,
     updatedAt: cache.updatedAt,
   };
   normaliseFailureRecords(loaded);

@@ -89,7 +89,7 @@ describe('rebuildCacheFromEdits', () => {
     expect(cache.chapters[1]).toHaveLength(1);
   });
 
-  it('clears the cache when manuscript-edits.json has zero sentences', async () => {
+  it('replace mode clears the cache when manuscript-edits.json has zero sentences', async () => {
     /* Seed a cache, then rebuild from an empty edits file — there is
        nothing to populate from, so dropping the cache is the right
        answer rather than serving stale chapters. */
@@ -98,18 +98,18 @@ describe('rebuildCacheFromEdits', () => {
     });
     writeFileSync(editsPath, JSON.stringify({ sentences: [] }));
 
-    await rebuildCacheFromEdits(manuscriptId, editsPath);
+    await rebuildCacheFromEdits(manuscriptId, editsPath, { mode: 'replace' });
     const cache = await loadAnalysisCache(manuscriptId);
     expect(cache.chapters).toEqual({});
   });
 
-  it('clears the cache when manuscript-edits.json is missing', async () => {
+  it('replace mode clears the cache when manuscript-edits.json is missing', async () => {
     await saveAnalysisCache(manuscriptId, {
       chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'narr', text: 'stale' }] },
     });
     /* editsPath never written — readJson returns null and the helper
        treats that as an empty sentence list. */
-    await rebuildCacheFromEdits(manuscriptId, editsPath);
+    await rebuildCacheFromEdits(manuscriptId, editsPath, { mode: 'replace' });
     const cache = await loadAnalysisCache(manuscriptId);
     expect(cache.chapters).toEqual({});
   });
@@ -131,5 +131,85 @@ describe('rebuildCacheFromEdits', () => {
     const second = await loadAnalysisCache(manuscriptId);
 
     expect(second.chapters).toEqual(first.chapters);
+  });
+});
+
+describe('rebuildCacheFromEdits — overlay (plan 285 spec 2.2)', () => {
+  const s = (id: number, chapterId: number, text: string) => ({ id, chapterId, characterId: 'narr', text });
+  const stage1 = {
+    characters: [{ id: 'narr', name: 'Narrator', role: 'narrator' as const, color: '#fff' }],
+    chapters: [{ id: 1, title: 'One' }],
+  };
+
+  it('keeps a [] key and an excluded chapter; a carried chapter replaces wholesale; an absent non-excluded non-empty chapter is removed; P, records and takesPersisted untouched', async () => {
+    await saveAnalysisCache(manuscriptId, {
+      stage1,
+      chapters: {
+        1: [s(1, 1, 'keep'), s(2, 1, 'tombstoned')],
+        2: [],
+        3: [s(1, 3, 'excluded take')],
+        4: [s(1, 4, 'emptied by the user')],
+      },
+      pendingAttributionChapterIds: [1],
+      failedChapterIds: [2],
+      failedChapterErrors: { '2': { code: 'attribution-incomplete', message: 'm', remediation: 'r', phase: 'attribution' } },
+      takesPersisted: false,
+      confirmReached: true,
+    });
+    /* The user deleted sentence 2 of chapter 1 (tombstoned, so the edits omit it)
+       and every sentence of chapter 4. */
+    writeFileSync(editsPath, JSON.stringify({ sentences: [s(1, 1, 'keep')] }));
+
+    await rebuildCacheFromEdits(manuscriptId, editsPath, { excludedChapterIds: [3] });
+    const cache = await loadAnalysisCache(manuscriptId);
+
+    expect(cache.chapters[1].map((x) => x.text)).toEqual(['keep']);
+    expect(Object.hasOwn(cache.chapters, 2)).toBe(true);
+    expect(cache.chapters[2]).toEqual([]);
+    expect(cache.chapters[3].map((x) => x.text)).toEqual(['excluded take']);
+    expect(Object.hasOwn(cache.chapters, 4)).toBe(false);
+    expect(cache.pendingAttributionChapterIds).toEqual([1]);
+    expect(cache.failedChapterIds).toEqual([2]);
+    expect(cache.failedChapterErrors?.['2']?.phase).toBe('attribution');
+    expect(cache.takesPersisted).toBe(false);
+    expect(cache.confirmReached).toBe(true);
+  });
+
+  it('overlay rebuild with an edits file that has no sentences keeps stage1, P, records and both flags; replace mode still clears', async () => {
+    const seed = {
+      stage1,
+      chapters: { 1: [] as never[], 2: [s(1, 2, 'gone')] },
+      pendingAttributionChapterIds: [1],
+      failedChapterIds: [1],
+      failedChapterErrors: { '1': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'cast' as const } },
+      takesPersisted: false,
+      confirmReached: true as const,
+    };
+    await saveAnalysisCache(manuscriptId, seed);
+    writeFileSync(editsPath, JSON.stringify({ sentences: [] }));
+
+    await rebuildCacheFromEdits(manuscriptId, editsPath);
+    const overlaid = await loadAnalysisCache(manuscriptId);
+    expect(overlaid.stage1?.characters[0].id).toBe('narr');
+    expect(overlaid.chapters).toEqual({ 1: [] });
+    expect(overlaid.pendingAttributionChapterIds).toEqual([1]);
+    expect(overlaid.failedChapterIds).toEqual([1]);
+    expect(overlaid.failedChapterErrors?.['1']?.phase).toBe('cast');
+    expect(overlaid.takesPersisted).toBe(false);
+    expect(overlaid.confirmReached).toBe(true);
+
+    await saveAnalysisCache(manuscriptId, seed);
+    await rebuildCacheFromEdits(manuscriptId, editsPath, { mode: 'replace' });
+    const replaced = await loadAnalysisCache(manuscriptId);
+    expect(replaced.chapters).toEqual({});
+    expect(replaced.stage1).toBeUndefined();
+  });
+
+  it("replace mode drops a prior [] key (restructure renumbers ids)", async () => {
+    await saveAnalysisCache(manuscriptId, { chapters: { 1: [s(1, 1, 'a')], 2: [] } });
+    writeFileSync(editsPath, JSON.stringify({ sentences: [s(1, 1, 'a')] }));
+    await rebuildCacheFromEdits(manuscriptId, editsPath, { mode: 'replace' });
+    const cache = await loadAnalysisCache(manuscriptId);
+    expect(Object.keys(cache.chapters)).toEqual(['1']);
   });
 });

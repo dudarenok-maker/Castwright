@@ -1529,6 +1529,79 @@ describe('POST /api/books/:bookId/generation — plan 80 edits override cache', 
   });
 });
 
+/* ── Plan 285 — a `[]` take survives the rebuild, and generation names why a
+   chapter with no lines produced no audio (decision C). */
+describe('POST /api/books/:bookId/generation — [] takes (plan 285)', () => {
+  let editsPath: string;
+  let cacheModule: typeof import('../store/analysis-cache.js');
+  let fsModule: typeof import('node:fs');
+  const WORLD = [{ id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' }];
+
+  beforeAll(async () => {
+    cacheModule = await import('../store/analysis-cache.js');
+    fsModule = await import('node:fs');
+    const { manuscriptEditsJsonPath } = await import('../workspace/paths.js');
+    editsPath = manuscriptEditsJsonPath(bookDir);
+  });
+
+  afterEach(async () => {
+    if (fsModule.existsSync(editsPath)) fsModule.rmSync(editsPath);
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, {
+      chapters: {
+        1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }],
+        2: [{ id: 2, chapterId: 2, characterId: 'narrator', text: 'World.' }],
+      },
+    });
+    const audioRoot = join(bookDir, 'audio');
+    if (fsModule.existsSync(audioRoot))
+      fsModule.rmSync(audioRoot, { recursive: true, force: true });
+  });
+
+  async function chapterOneFailure(): Promise<string | undefined> {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true });
+    expect(res.status).toBe(200);
+    const failed = parseTicks(res.text).find((t) => t.type === 'chapter_failed' && t.chapterId === 1);
+    return failed?.errorReason as string | undefined;
+  }
+
+  it('a Generate POST keeps a [] key', async () => {
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, { chapters: { 1: [], 2: WORLD } });
+    /* The edits carry no row for chapter 1: it has no sentences. */
+    fsModule.writeFileSync(editsPath, JSON.stringify({ sentences: WORLD }));
+    await chapterOneFailure();
+    const after = await cacheModule.loadAnalysisCache(MANUSCRIPT_ID);
+    expect(Object.hasOwn(after.chapters, 1)).toBe(true);
+    expect(after.chapters[1]).toEqual([]);
+  });
+
+  it('a [] take with no record fails with "This chapter has no text to narrate — exclude it to finish the book."', async () => {
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, { chapters: { 1: [], 2: WORLD } });
+    expect(await chapterOneFailure()).toBe('This chapter has no text to narrate — exclude it to finish the book.');
+  });
+
+  it('a [] take with a record fails with "Speaker attribution found no lines in this chapter. Re-analyse it, or exclude it."', async () => {
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, {
+      chapters: { 1: [], 2: WORLD },
+      failedChapterIds: [1],
+      failedChapterErrors: {
+        '1': { code: 'attribution-incomplete', message: 'm', remediation: 'r', phase: 'attribution' },
+      },
+    });
+    expect(await chapterOneFailure()).toBe(
+      'Speaker attribution found no lines in this chapter. Re-analyse it, or exclude it.',
+    );
+  });
+
+  it('no key keeps the "analysis cache is incomplete" copy', async () => {
+    await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, { chapters: { 2: WORLD } });
+    expect(await chapterOneFailure()).toBe(
+      'No sentences available for this chapter — analysis cache is incomplete.',
+    );
+  });
+});
+
 /* ── Queue-sole concurrency — one POST = one chapter ──────────────────────
    The within-book worker pool (plan 87) was removed: the queue dispatcher
    fires a separate POST per chapter, and the server keys in-flight jobs by
