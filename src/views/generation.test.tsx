@@ -2370,7 +2370,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
      needs-action snapshot is left behind for a surface that has no way to act
      on it. */
   it('cast_incomplete on Include shows the server message on the row, rolls the include back and leaves no snapshot', async () => {
-    const message = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter 2). Retry below to continue.';
+    const message = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter 2). Retry to continue.';
     const store = makeIncludeStore();
     runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'cast_incomplete'));
     renderInclude(store);

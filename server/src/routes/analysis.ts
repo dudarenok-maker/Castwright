@@ -1385,6 +1385,17 @@ export function durationsForEngine(
   return {};
 }
 
+/* #3435 S5 — the subset gate's soft-stop copy. Shown on the Analysing view
+   (Retry panel beside it) AND the Generate view (none), so it carries no
+   "retry below"; the title list is capped so a many-chapter book can't
+   produce a paragraph. Exported for unit testing. */
+export function castIncompleteMessage(titles: string[]): string {
+  const MAX_TITLES = 3;
+  const shown = titles.slice(0, MAX_TITLES).join(', ');
+  const more = titles.length > MAX_TITLES ? ` and ${titles.length - MAX_TITLES} more` : '';
+  return `Phase 0 paused — ${titles.length} chapter${titles.length === 1 ? '' : 's'} still need cast detection (${shown}${more}). Retry to continue.`;
+}
+
 /* Remove `chapterId` from `cache.failedChapterIds` if present, mutating
    the cache in place. Returns whether the id was actually in the list —
    the caller uses that to decide whether to emit a `chapter-resolved`
@@ -7976,7 +7987,7 @@ export async function runSubsetAnalyzerJob(
       endJob(job, {
         kind: 'error',
         code: 'cast_incomplete',
-        message: `Phase 0 paused — ${remainingFailedCastIds.length} chapter${remainingFailedCastIds.length === 1 ? '' : 's'} still need cast detection (${stillNeedCast.join(', ')}). Retry below to continue.`,
+        message: castIncompleteMessage(stillNeedCast),
       });
       return;
     }

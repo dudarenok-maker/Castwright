@@ -1629,6 +1629,8 @@ describe('the subset route: failure records vs the Phase-1 gate, soft stops and 
     const errors = r.steps[0].events.filter((e) => e.kind === 'error');
     expect(errors.map((e) => e.code)).toEqual(['cast_incomplete']);
     expect(String(errors[0].message)).toContain('Chapter One');
+    expect(String(errors[0].message)).toMatch(/Retry to continue.$/);
+    expect(String(errors[0].message)).not.toMatch(/retry below/i);
     expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(false);
     expect(r.stage1).toBeUndefined();
     const snap = await haltedSnapshot(r.bookDir);
@@ -1649,6 +1651,40 @@ describe('the subset route: failure records vs the Phase-1 gate, soft stops and 
     expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(false);
     const snap = await haltedSnapshot(r.bookDir);
     expect(snap).toMatchObject({ state: 'halted', haltCode: classified.code });
+  }, 60_000);
+
+  it('S5, stage1 existed, blocking cast failure on a NON-target chapter: ends cast_incomplete naming it, target not attributed', async () => {
+    const calls: number[] = [];
+    const r = await runCase('s5-nontarget', { 2: 'analyzer-timeout' }, [
+      {
+        toRun: [1],
+        runStage2Chapter: async (_m, id) => {
+          calls.push(id);
+          return stage2For(id);
+        },
+      },
+    ]);
+    const errors = r.steps[0].events.filter((e) => e.kind === 'error');
+    expect(errors.map((e) => e.code)).toEqual(['cast_incomplete']);
+    expect(String(errors[0].message)).toContain('Chapter Two');
+    expect(String(errors[0].message)).not.toMatch(/retry below/i);
+    expect(calls).toEqual([]);
+    expect(r.chapters[1][0].characterId).toBe(COLLAPSED_ID);
+    expect(r.failedChapterErrors['2']).toMatchObject({ phase: 'cast' });
+    expect(r.failedChapterErrors['1']).toBeUndefined();
+    expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(false);
+  }, 60_000);
+
+  it('S4: with no stage1, a Phase-0 success never clears an ATTRIBUTION record and announces nothing for it', async () => {
+    const r = await runCase(
+      's4-attr-kept',
+      { 1: 'attribution-collapse' },
+      [{ toRun: [1], runStage2Chapter: async (_m, id) => stage2For(id) }],
+      { emptyCast: [1], noStage1: true },
+    );
+    expect(r.steps[0].events.some((e) => e.kind === 'chapter-resolved')).toBe(false);
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.failedChapterErrors['1']).toMatchObject({ phase: 'attribution' });
   }, 60_000);
 
   it("S6: incomplete coverage ends via endJob(error cast_incomplete) with today's message, and the halted snapshot lands", async () => {
@@ -1684,4 +1720,19 @@ describe('the subset route: failure records vs the Phase-1 gate, soft stops and 
     expect((terminal.fixes as unknown[]).length).toBeGreaterThan(0);
     expect(events.find((e) => e.kind === 'chapter-failed')).toMatchObject({ chapterId: 1, code: 'analyzer-reasoning-overflow' });
   }, 60_000);
+});
+
+describe('castIncompleteMessage (#3435 S5 copy)', () => {
+  it('lists up to three titles, location-neutral', async () => {
+    const { castIncompleteMessage } = await import('./analysis.js');
+    expect(castIncompleteMessage(['A', 'B', 'C'])).toBe(
+      'Phase 0 paused — 3 chapters still need cast detection (A, B, C). Retry to continue.',
+    );
+  });
+  it('caps a long list at three titles then "and N more"', async () => {
+    const { castIncompleteMessage } = await import('./analysis.js');
+    expect(castIncompleteMessage(['A', 'B', 'C', 'D', 'E', 'F'])).toBe(
+      'Phase 0 paused — 6 chapters still need cast detection (A, B, C and 3 more). Retry to continue.',
+    );
+  });
 });

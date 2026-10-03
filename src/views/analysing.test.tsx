@@ -2062,7 +2062,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     it('a Retry ending in a subset cast_incomplete keeps the halted snapshot; the needs-action line reads its haltReason', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       const { store } = await idleRetry();
-      const reason = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter Forty-Two). Retry below to continue.';
+      const reason = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter Forty-Two). Retry to continue.';
       await act(async () => {
         rejectSubset?.(new AnalysisError(reason, 'cast_incomplete'));
       });
