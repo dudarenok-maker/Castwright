@@ -210,12 +210,28 @@ recite:
     `completeRun`/`onComplete`; the main run's call sat behind an unmount
     guard (`cancelled`) but the Retry's chain did not, so a late Retry result
     hydrated whichever book was open and could persist one book's roster into
-    another's cast.json; fixed with a `mountedRef` / `ownsSnapshot()` guard on
-    `.then`, `.catch` and `.finally` (#3435, PR #3505 gate pass 2).
-    Checkable: when a completion/dispatch is moved or added onto an async
-    chain, find the guard the original call site had against unmount or
+    another's cast.json. Pass 2's fix covered only the `.then`/`.catch`/
+    `.finally` completion; pass 3 found the Retry's stream callbacks and the
+    Generate view's flows still unguarded, closed in 50dbb2cc (#3435, PR
+    #3505). Checkable: when a completion/dispatch is moved or added onto an
+    async chain, find the guard the original call site had against unmount or
     navigation and confirm the new site has it too, with a test that resolves
-    the chain after unmount.
+    the chain after unmount. A "fixed" claim covers only the call sites it
+    names: list every callback and flow that writes on the same chain, not
+    just the one that was reported.
+24. **A guard tied to component lifetime when the rule is about what the
+    screen shows** — `src/views/analysing.tsx`, PR #3505 gate pass 3: a
+    `mountedRef` guard on a Retry's completion both let too much through (the
+    unkeyed route element survived a book switch, so A's result routed B to
+    A's Confirm) and blocked too much (returning via the pill mounted a new
+    instance, so the old one skipped completion and left a stale screen);
+    fixed by reading `ui.stage` at resolution (`bookOnScreen()`), scoping
+    snapshot writes by manuscriptId, gating store writes with
+    `selectIsOpenBook()` (`src/store/open-book.ts`), and keying the
+    Generate/Analysing route elements by bookId. Checkable: for every async
+    guard, state the rule it enforces in terms of what the user sees; if the
+    guard is about component lifetime, find the route param change that keeps
+    the instance and the remount that starts a new one, and test both.
 
 ### Keeping the catalogue current
 
