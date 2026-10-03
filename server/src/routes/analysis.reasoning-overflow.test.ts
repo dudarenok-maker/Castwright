@@ -1293,3 +1293,395 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     expect(events.filter((e) => e.kind === 'error' && /ENOSPC/.test(String(e.message)))).toEqual([]);
   }, 60_000);
 });
+
+/* #3435 (plan 285 T4) — the subset route records a Phase-1 (attribution)
+   failure, its Phase-1 gate counts only CAST failures, a soft stop ends via
+   endJob (so the halted snapshot lands), and a cast failure fixed by Phase 0
+   waits for its Phase 1 before it clears. Ported by name from #3439
+   (9a063ea6), seeds adapted to `phase`. */
+describe('a Retry whose Phase 1 fails keeps its failure on record and reports it (#3435)', () => {
+  async function runRetry(
+    label: string,
+    runStage2Chapter: Analyzer['runStage2Chapter'],
+    seedFailed: boolean,
+  ): Promise<{ events: CapturedEvent[]; failedChapterIds: number[]; failedChapterErrors: Record<string, { code: string; phase?: string }> }> {
+    const seed = await seedBook(label, [1], { fullCache: true });
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runSubsetAnalyzerJob } = await import('./analysis.js');
+    if (seedFailed) {
+      const cache = await loadAnalysisCache(seed.manuscriptId);
+      /* An attribution-phase failure: the chapter already has its cast. */
+      cache.chapterCast = { 1: [novaCharacter()] };
+      cache.failedChapterIds = [1];
+      cache.failedChapterErrors = {
+        '1': { code: 'attribution-collapse', message: 'seeded', remediation: 'seeded', phase: 'attribution' },
+      };
+      await saveAnalysisCache(seed.manuscriptId, cache);
+    }
+    const record = getManuscript(seed.manuscriptId)!;
+    const subsetJob = { ...seed.job, kind: 'subset' as const };
+    const events = captureEvents(subsetJob, () => {});
+    try {
+      await runSubsetAnalyzerJob(
+        subsetJob,
+        record,
+        seed.phase0Selection,
+        buildSelection(stubAnalyzer({ runStage2Chapter }), MODEL),
+        record.chapterHints,
+        false,
+      );
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      return {
+        events,
+        failedChapterIds: after.failedChapterIds ?? [],
+        failedChapterErrors: (after.failedChapterErrors ?? {}) as Record<string, { code: string; phase?: string }>,
+      };
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  it('control: a clean Retry clears the record and sends chapter-resolved only', async () => {
+    const r = await runRetry('p1-clean', async (_m, id) => stage2For(id), true);
+    expect(r.events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+    expect(r.events.some((e) => e.kind === 'chapter-failed')).toBe(false);
+    expect(r.failedChapterIds).toEqual([]);
+  }, 30_000);
+
+  it('a Phase-1 timeout sends chapter-failed (no chapter-resolved), and the chapter stays in failedChapterIds', async () => {
+    const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
+    const { classifyAnalysisFailure } = await import('./failure-taxonomy.js');
+    const err = new AnalyzerTimeoutError('gemini', MODEL, 90_000, 'thinking-idle');
+    const r = await runRetry('p1-timeout', () => Promise.reject(err), true);
+    const kinds = r.events.map((e) => e.kind).filter((k) => ['chapter-resolved', 'chapter-failed', 'error'].includes(k));
+    expect(kinds).toEqual(['chapter-failed', 'error']);
+    const classified = classifyAnalysisFailure(err, 'gemini');
+    const failed = r.events.find((e) => e.kind === 'chapter-failed')!;
+    expect(failed).toMatchObject({ chapterId: 1, code: classified.code, phase: 'attribution', message: expect.stringContaining('thinking window') });
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.failedChapterErrors['1'].code).toBe(classified.code);
+    expect(r.failedChapterErrors['1'].phase).toBe('attribution');
+  }, 30_000);
+
+  it('a Phase-1 unreachable analyzer is recorded and reported the same way', async () => {
+    const { AnalyzerUnreachableError } = await import('../analyzer/errors.js');
+    const { classifyAnalysisFailure } = await import('./failure-taxonomy.js');
+    const err = new AnalyzerUnreachableError('connection refused', 'ollama');
+    const r = await runRetry('p1-unreachable', () => Promise.reject(err), true);
+    const classified = classifyAnalysisFailure(err, 'ollama');
+    expect(r.events.find((e) => e.kind === 'chapter-failed')).toMatchObject({ chapterId: 1, code: classified.code });
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.failedChapterErrors['1'].code).toBe(classified.code);
+  }, 30_000);
+
+  it('a Phase-1 reasoning overflow still ends the run with its code AND now survives a reload', async () => {
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    const r = await runRetry(
+      'p1-overflow',
+      () => Promise.reject(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100)),
+      true,
+    );
+    expect(r.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.failedChapterErrors['1'].code).toBe('analyzer-reasoning-overflow');
+  }, 30_000);
+});
+
+describe('the subset route: failure records vs the Phase-1 gate, soft stops and cast fixes (#3435)', () => {
+  /** Chapter 1's cached sentences are "collapsed" (narrator); a re-attribution
+      writes nova, so a changed characterId proves the chapter was re-attributed. */
+  const COLLAPSED_ID = 'narrator';
+  const recFor = (code: string) => ({
+    code,
+    message: 'seeded',
+    remediation: 'seeded',
+    phase: code.startsWith('attribution-') ? ('attribution' as const) : ('cast' as const),
+  });
+
+  interface Step {
+    toRun: number[];
+    runStage2Chapter: Analyzer['runStage2Chapter'];
+    runStage1Chapter?: Analyzer['runStage1Chapter'];
+  }
+  interface StepResult {
+    events: CapturedEvent[];
+    job: AnalysisJob;
+  }
+  interface CaseResult {
+    steps: StepResult[];
+    bookDir: string;
+    failedChapterIds: number[];
+    failedChapterErrors: Record<string, { code: string; phase?: string }>;
+    chapters: Record<number, Array<{ characterId: string }>>;
+    stage1: unknown;
+  }
+
+  async function runCase(
+    label: string,
+    seedFailed: Record<number, string>,
+    steps: Step[],
+    opts: { emptyCast?: number[]; noCast?: number[]; excluded?: number[]; noStage1?: boolean } = {},
+  ): Promise<CaseResult> {
+    const seed = await seedBook(label, [1, 2], { fullCache: true });
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runSubsetAnalyzerJob } = await import('./analysis.js');
+    const cache = await loadAnalysisCache(seed.manuscriptId);
+    cache.chapterCast = { 1: [novaCharacter()], 2: [novaCharacter()] };
+    for (const id of opts.emptyCast ?? []) cache.chapterCast[id] = [];
+    for (const id of opts.noCast ?? []) delete cache.chapterCast[id];
+    if (opts.noStage1) delete cache.stage1;
+    cache.chapters = {
+      1: [{ id: 101, chapterId: 1, characterId: COLLAPSED_ID, confidence: 0.9, text: BODIES[1] }],
+      2: [{ id: 201, chapterId: 2, characterId: 'nova', confidence: 0.9, text: BODIES[2] }],
+    } as never;
+    const ids = Object.keys(seedFailed).map(Number);
+    if (ids.length) {
+      cache.failedChapterIds = ids;
+      cache.failedChapterErrors = Object.fromEntries(ids.map((id) => [String(id), recFor(seedFailed[id])]));
+    }
+    await saveAnalysisCache(seed.manuscriptId, cache);
+    const record = getManuscript(seed.manuscriptId)!;
+    for (const h of record.chapterHints) if (opts.excluded?.includes(h.id)) h.excluded = true;
+    const results: StepResult[] = [];
+    try {
+      for (const step of steps) {
+        const job = {
+          ...seed.job,
+          controller: new AbortController(),
+          subscribers: new Set(),
+          kind: 'subset' as const,
+        } as unknown as AnalysisJob;
+        const events = captureEvents(job, () => {});
+        await runSubsetAnalyzerJob(
+          job,
+          record,
+          step.runStage1Chapter
+            ? buildSelection(stubAnalyzer({ runStage1Chapter: step.runStage1Chapter }), 'phase0-model')
+            : seed.phase0Selection,
+          buildSelection(stubAnalyzer({ runStage2Chapter: step.runStage2Chapter }), MODEL),
+          record.chapterHints.filter((c) => step.toRun.includes(c.id)),
+          false,
+        );
+        results.push({ events, job });
+      }
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      return {
+        steps: results,
+        bookDir: seed.bookDir,
+        failedChapterIds: after.failedChapterIds ?? [],
+        failedChapterErrors: (after.failedChapterErrors ?? {}) as CaseResult['failedChapterErrors'],
+        chapters: (after.chapters ?? {}) as CaseResult['chapters'],
+        stage1: after.stage1,
+      };
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  /** The halted snapshot a soft stop's endJob persists (a detached write: poll). */
+  async function haltedSnapshot(bookDir: string): Promise<{ state: string; haltCode?: string; haltReason?: string } | null> {
+    const { readAnalysisState } = await import('../store/analysis-state.js');
+    for (let i = 0; i < 40; i++) {
+      const s = await readAnalysisState(bookDir);
+      if (s && s.state === 'halted') return s;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return null;
+  }
+
+  it('P3: a Phase-1 failure recorded on chapter 1 does not block a later clean Re-analyse of chapter 2', async () => {
+    const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
+    const ch2Calls: number[] = [];
+    const r = await runCase('p3-gate', {}, [
+      { toRun: [1], runStage2Chapter: () => Promise.reject(new AnalyzerTimeoutError('gemini', MODEL, 90_000, 'thinking-idle')) },
+      {
+        toRun: [2],
+        runStage2Chapter: async (_m, id) => {
+          ch2Calls.push(id);
+          return stage2For(id);
+        },
+      },
+    ]);
+    /* Chapter 1's record is the control: it survived, so the gate saw it. */
+    expect(r.failedChapterIds).toEqual([1]);
+    expect(r.failedChapterErrors['1'].phase).toBe('attribution');
+    expect(ch2Calls).toEqual([2]);
+    expect(r.steps[1].events.some((e) => e.kind === 'result')).toBe(true);
+  }, 60_000);
+
+  it('P2: with two attribution-flagged chapters, a Retry of chapter 1 attributes it and leaves chapter 2 flagged', async () => {
+    const calls: number[] = [];
+    const r = await runCase('p2-gate', { 1: 'attribution-collapse', 2: 'attribution-collapse' }, [
+      {
+        toRun: [1],
+        runStage2Chapter: async (_m, id) => {
+          calls.push(id);
+          return stage2For(id);
+        },
+      },
+    ]);
+    expect(calls).toEqual([1]);
+    expect(r.chapters[1][0].characterId).toBe('nova');
+    expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(true);
+    expect(r.failedChapterIds).toEqual([2]);
+  }, 60_000);
+
+  it('PB: an excluded chapter carrying a cast-phase record does not block a Re-analyse of another chapter', async () => {
+    const calls: number[] = [];
+    const r = await runCase(
+      'pb-excluded',
+      { 2: 'analyzer-timeout' },
+      [
+        {
+          toRun: [1],
+          runStage2Chapter: async (_m, id) => {
+            calls.push(id);
+            return stage2For(id);
+          },
+        },
+      ],
+      { emptyCast: [2], excluded: [2] },
+    );
+    expect(calls).toEqual([1]);
+    expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(true);
+    /* The excluded chapter's record is untouched. */
+    expect(r.failedChapterIds).toEqual([2]);
+  }, 60_000);
+
+  for (const [name, seedFailed] of [
+    ['Retry (the chapter carries an attribution record)', { 1: 'attribution-collapse' }],
+    ['Re-analyse (no record anywhere)', {}],
+  ] as const) {
+    it(`P-theta: a ${name} on a book with a narration-only chapter (empty cast, no record) reaches Phase 1`, async () => {
+      const calls: number[] = [];
+      const r = await runCase(
+        'ptheta-narration',
+        seedFailed,
+        [
+          {
+            toRun: [1],
+            runStage2Chapter: async (_m, id) => {
+              calls.push(id);
+              return stage2For(id);
+            },
+          },
+        ],
+        { emptyCast: [2] },
+      );
+      expect(calls).toEqual([1]);
+      expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(true);
+      expect(r.chapters[1][0].characterId).toBe('nova');
+    }, 60_000);
+  }
+
+  it('a cast-phase failure fixed by Phase 0 is NOT cleared or announced when its Phase 1 then fails (stage1 on disk)', async () => {
+    const r = await runCase(
+      'p1-castfix',
+      { 1: 'analyzer-timeout' },
+      [{ toRun: [1], runStage2Chapter: () => Promise.reject(new Error('Phase 1 fails after Phase 0 fixed the cast')) }],
+      { emptyCast: [1] },
+    );
+    expect(r.steps[0].events.some((e) => e.kind === 'chapter-resolved')).toBe(false);
+    expect(r.failedChapterIds).toEqual([1]);
+  }, 60_000);
+
+  it('a cast-phase failure fixed by Phase 0 is cleared and announced once its Phase 1 succeeds', async () => {
+    const r = await runCase(
+      'p1-castfix-clean',
+      { 1: 'analyzer-timeout' },
+      [{ toRun: [1], runStage2Chapter: async (_m, id) => stage2For(id) }],
+      { emptyCast: [1] },
+    );
+    expect(r.steps[0].events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+    expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(true);
+    expect(r.failedChapterIds).toEqual([]);
+    expect(r.chapters[1][0].characterId).toBe('nova');
+  }, 60_000);
+
+  it('S4: with no stage1, a Phase-0 success clears the cast record and announces it (no Phase 1 follows)', async () => {
+    const r = await runCase(
+      's4-nostage1',
+      { 1: 'analyzer-timeout' },
+      [{ toRun: [1], runStage2Chapter: async (_m, id) => stage2For(id) }],
+      { emptyCast: [1], noStage1: true },
+    );
+    expect(r.steps[0].events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+    expect(r.failedChapterIds).toEqual([]);
+  }, 60_000);
+
+  it('S5, stage1 absent: the gate exit ends cast_incomplete naming the chapters, and the halted snapshot lands', async () => {
+    const r = await runCase(
+      's5-absent',
+      {},
+      [
+        {
+          toRun: [1],
+          runStage1Chapter: () => Promise.reject(new Error('cast model exploded')),
+          runStage2Chapter: async (_m, id) => stage2For(id),
+        },
+      ],
+      { noStage1: true },
+    );
+    const errors = r.steps[0].events.filter((e) => e.kind === 'error');
+    expect(errors.map((e) => e.code)).toEqual(['cast_incomplete']);
+    expect(String(errors[0].message)).toContain('Chapter One');
+    expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(false);
+    expect(r.stage1).toBeUndefined();
+    const snap = await haltedSnapshot(r.bookDir);
+    expect(snap).toMatchObject({ state: 'halted', haltCode: 'cast_incomplete' });
+  }, 60_000);
+
+  it("S5, stage1 existed: the target's cast failed again - a terminal error with its classified code", async () => {
+    const { AnalyzerTimeoutError } = await import('../analyzer/errors.js');
+    const { classifyAnalysisFailure } = await import('./failure-taxonomy.js');
+    const err = new AnalyzerTimeoutError('gemini', MODEL, 90_000, 'thinking-idle');
+    const classified = classifyAnalysisFailure(err, 'phase0-model');
+    const r = await runCase('s5-existed', {}, [
+      { toRun: [1], runStage1Chapter: () => Promise.reject(err), runStage2Chapter: async (_m, id) => stage2For(id) },
+    ]);
+    const errors = r.steps[0].events.filter((e) => e.kind === 'error');
+    expect(errors.map((e) => e.code)).toEqual([classified.code]);
+    expect(r.failedChapterErrors['1']).toMatchObject({ code: classified.code, phase: 'cast' });
+    expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(false);
+    const snap = await haltedSnapshot(r.bookDir);
+    expect(snap).toMatchObject({ state: 'halted', haltCode: classified.code });
+  }, 60_000);
+
+  it("S6: incomplete coverage ends via endJob(error cast_incomplete) with today's message, and the halted snapshot lands", async () => {
+    const r = await runCase(
+      's6-coverage',
+      {},
+      [{ toRun: [1], runStage2Chapter: async (_m, id) => stage2For(id) }],
+      { noCast: [2] },
+    );
+    const errors = r.steps[0].events.filter((e) => e.kind === 'error');
+    expect(errors.map((e) => e.code)).toEqual(['cast_incomplete']);
+    expect(String(errors[0].message)).toMatch(/Phase 0a covers 1 of 2 chapters/);
+    expect(r.steps[0].events.some((e) => e.kind === 'result')).toBe(false);
+    const snap = await haltedSnapshot(r.bookDir);
+    expect(snap).toMatchObject({ state: 'halted', haltCode: 'cast_incomplete' });
+    expect(String(snap!.haltReason)).toMatch(/Phase 0a covers 1 of 2 chapters/);
+  }, 60_000);
+
+  it('a save that throws while recording a Phase-1 failure does not replace the real error or swallow chapter-failed', async () => {
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    (globalThis as Record<string, unknown>).__overflow_spend_test_save_hook = (c: {
+      failedChapterErrors?: Record<string, { code: string }>;
+    }) => {
+      if (c.failedChapterErrors?.['1']?.code === 'analyzer-reasoning-overflow') throw new Error('ENOSPC: disk full');
+    };
+    const r = await runCase('save-throws-p1', {}, [
+      { toRun: [1], runStage2Chapter: () => Promise.reject(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100)) },
+    ]);
+    const { events } = r.steps[0];
+    const terminal = events.find((e) => e.kind === 'error')!;
+    expect(terminal.code).toBe('analyzer-reasoning-overflow');
+    expect(String(terminal.message)).not.toMatch(/ENOSPC/);
+    expect((terminal.fixes as unknown[]).length).toBeGreaterThan(0);
+    expect(events.find((e) => e.kind === 'chapter-failed')).toMatchObject({ chapterId: 1, code: 'analyzer-reasoning-overflow' });
+  }, 60_000);
+});

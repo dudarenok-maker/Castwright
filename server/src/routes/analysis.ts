@@ -1446,6 +1446,37 @@ export function recordFailedChapter(
   return record;
 }
 
+/* #3435 (plan 285 spec 2.1) — the non-excluded chapters whose failure record is
+   a CAST failure. This, not `failedChapterIds`, is what the subset route's
+   Phase-1 gate counts: an attribution record does not stop another chapter's
+   Re-analyse, and an excluded chapter's record never does. Exported for unit
+   testing. */
+export function castFailedChapterIds(
+  cache: {
+    failedChapterIds?: number[];
+    failedChapterErrors?: Record<string, ChapterErrorRecord>;
+  },
+  chapterHints: Array<{ id: number; excluded?: boolean }>,
+): number[] {
+  const excluded = new Set(chapterHints.filter((h) => h.excluded).map((h) => h.id));
+  return (cache.failedChapterIds ?? []).filter(
+    (id) => !excluded.has(id) && cache.failedChapterErrors?.[String(id)]?.phase === 'cast',
+  );
+}
+
+/* #3435 (S3) — a chapter whose cast has just been fixed still has no good
+   take: its record becomes an attribution record until its Phase 1 completes.
+   Returns whether a cast record was promoted. Exported for unit testing. */
+export function promoteCastRecordToAttribution(
+  cache: { failedChapterErrors?: Record<string, ChapterErrorRecord> },
+  chapterId: number,
+): boolean {
+  const record = cache.failedChapterErrors?.[String(chapterId)];
+  if (record?.phase !== 'cast') return false;
+  record.phase = 'attribution';
+  return true;
+}
+
 /* #3435 — save the cache from INSIDE a per-chapter failure catch. That save can
    itself throw (ENOSPC, renameWithRetry exhausted); unguarded, its error replaces
    the one being handled (an overflow loses its code and fixes) and the
@@ -1467,7 +1498,8 @@ async function saveCacheInFailureCatch(
 }
 
 /* Phase 0a coverage check — every non-excluded chapter must have a
-   non-empty `chapterCast[id]` entry before stage1 can be finalised.
+   `chapterCast[id]` entry (and no cast-failure record) before stage1 can be
+   finalised.
 
    The subset-retry path used to gate stage1 writes on
    `failedChapterIds.length === 0` alone, which is the WRONG predicate when
@@ -1479,20 +1511,23 @@ async function saveCacheInFailureCatch(
    chapter happened to be a journal/registry-file POV that the model
    labelled as Narrator.
 
-   Empty arrays are the route's failure-marker convention (see catch path
-   at analysis.ts:2016) so they count as "absent" here too. Excluded
-   chapters are intentionally never run through Phase 0a so they don't
-   count toward coverage. Exported for unit testing. */
+   A chapter counts as missing when it has no `chapterCast` entry or is in
+   `castFailedIds`. An empty array is NOT a failure marker on its own (#3435):
+   `[]` is also a legal success for a narration-only chapter, so only a chapter
+   whose record is a cast failure (`castFailedChapterIds`) is uncovered.
+   Excluded chapters are intentionally never run through Phase 0a so they
+   don't count toward coverage. Exported for unit testing. */
 export function isPhase0aCoverageComplete(
   chapterCast: Record<number, CharacterOutput[]>,
   chapterHints: Array<{ id: number; excluded?: boolean }>,
+  castFailedIds: readonly number[],
 ): { complete: boolean; missingChapterIds: number[]; totalRequired: number } {
   const missingChapterIds: number[] = [];
   let totalRequired = 0;
   for (const ch of chapterHints) {
     if (ch.excluded) continue;
     totalRequired += 1;
-    if (!chapterCast[ch.id]?.length) missingChapterIds.push(ch.id);
+    if (!(ch.id in chapterCast) || castFailedIds.includes(ch.id)) missingChapterIds.push(ch.id);
   }
   return { complete: missingChapterIds.length === 0, missingChapterIds, totalRequired };
 }
@@ -5028,7 +5063,7 @@ export async function runMainAnalyzerJob(
            server has already resolved; the user then clicks "Retry" on a
            ghost row, which kicks off a duplicate subset run and (pre-fix)
            raced with this very loop's writes. */
-        if (clearFailedChapterId(cache, ch.id)) {
+        if (clearFailedChapterId(cache, ch.id, 'cast')) {
           send({ kind: 'chapter-resolved', chapterId: ch.id });
         }
         const chDuration = Date.now() - startedChAt;
@@ -7731,7 +7766,15 @@ export async function runSubsetAnalyzerJob(
         );
         chapterCast[ch.id] = result.characters;
         cache.chapterCast = chapterCast;
-        const wasFailed = clearFailedChapterId(cache, ch.id);
+        /* #3435 S3/S4 — Phase 0 fixes only the CAST. With stage1 on disk this
+           Retry goes on to attribute the chapter, so a cast record becomes an
+           attribution record and stays until its Phase 1 completes (a Phase 1
+           that then fails must not leave the chapter looking resolved). With no
+           stage1 there is no Phase 1 in this run: clear the cast record now and
+           announce it. An attribution record is never cleared here. */
+        let wasFailed = false;
+        if (stage1Existed) promoteCastRecordToAttribution(cache, ch.id);
+        else wasFailed = clearFailedChapterId(cache, ch.id, 'cast');
         await saveAnalysisCache(manuscriptId, cache);
         /* Emit chapter-resolved so the analysing view's Retry row clears
            in real time. The view used to rely on the next book-state
@@ -7832,15 +7875,20 @@ export async function runSubsetAnalyzerJob(
       characters,
       chapters: record.chapterHints.map((c) => ({ id: c.id, title: c.title })),
     };
-    const remainingFailedCastIds = cache.failedChapterIds ?? [];
+    /* #3435 — only CAST failures gate Phase 1 and the stage1 rewrite: an
+       attribution record (a chapter whose own Phase 1 failed or was flagged)
+       says nothing about the roster, and an excluded chapter's record is
+       never a reason to stop. */
+    const remainingFailedCastIds = castFailedChapterIds(cache, record.chapterHints);
     /* Coverage gate (in addition to the no-failed-chapters check) — stage1
-       is finalised only when EVERY non-excluded chapter has a non-empty
-       chapterCast entry. Without this guard a sparse cache (chapters 1–N
+       is finalised only when EVERY non-excluded chapter has a chapterCast
+       entry. Without this guard a sparse cache (chapters 1–N
        run, chapters N+1.. untouched) would let rebuildRoster() produce a
        partial roster that overwrites a richer existing stage1. See the
        comment on isPhase0aCoverageComplete for the regression that
        motivated this gate. */
-    const coverage = isPhase0aCoverageComplete(chapterCast, record.chapterHints);
+    const coverage = isPhase0aCoverageComplete(chapterCast, record.chapterHints, remainingFailedCastIds);
+    let coverageIncompleteMessage: string | undefined;
     /* Stage 1 shrink guard — see comment on stage1ShrinkRefused. The
        prior count is captured BEFORE the assignment so a no-op rewrite
        (same count) doesn't trip the gate; only meaningful shrinks do. */
@@ -7874,11 +7922,7 @@ export async function runSubsetAnalyzerJob(
         0,
         `Cast finalisation deferred — ${coverage.missingChapterIds.length} non-excluded chapter${coverage.missingChapterIds.length === 1 ? '' : 's'} still need Phase 0a detection (${covered}/${coverage.totalRequired} covered). Existing stage1 left intact; run the main analysis to fill the gaps.`,
       );
-      send({
-        kind: 'error',
-        code: 'cast_incomplete',
-        message: `Phase 0a covers ${covered} of ${coverage.totalRequired} chapters — run main analysis to detect the rest before stage1 can finalise.`,
-      });
+      coverageIncompleteMessage = `Phase 0a covers ${covered} of ${coverage.totalRequired} chapters — run main analysis to detect the rest before stage1 can finalise.`;
     }
     await saveAnalysisCache(manuscriptId, cache);
     // #2196 — subset dropped-quotes guarded in mode:'drop' (no stale recreation).
@@ -7906,14 +7950,39 @@ export async function runSubsetAnalyzerJob(
         0,
         `Cast retry done. ${remainingFailedCastIds.length} chapter${remainingFailedCastIds.length === 1 ? '' : 's'} still need retry before Phase 1 can run.`,
       );
-      /* No final event — clean end without a kind:'error' branch.
-         endJob skips the on-disk paused/halted write in this path,
-         which matches the "soft" semantics this exit had pre-D1. */
-      endJob(job);
+      /* #3435 S5 — a gate exit is an outcome the user must hear about, so it
+         ends through endJob with a final event (and the halted snapshot that
+         comes with it) instead of a silent end.
+         - A target's cast failed again with stage1 on disk: that is a real
+           failure of the Retry — report the record Phase 0 just wrote.
+         - Otherwise (stage1 absent, or a chapter outside this batch still
+           has no cast): a soft stop, `cast_incomplete`, naming the chapters. */
+      const failedTarget = stage1Existed
+        ? toRun.find((c) => remainingFailedCastIds.includes(c.id))
+        : undefined;
+      const failedTargetRecord = failedTarget && cache.failedChapterErrors?.[String(failedTarget.id)];
+      if (failedTargetRecord) {
+        endJob(job, {
+          kind: 'error',
+          code: failedTargetRecord.code,
+          message: failedTargetRecord.message,
+          remediation: failedTargetRecord.remediation,
+        });
+        return;
+      }
+      const stillNeedCast = remainingFailedCastIds.map(
+        (id) => record.chapterHints.find((h) => h.id === id)?.title ?? `chapter ${id}`,
+      );
+      endJob(job, {
+        kind: 'error',
+        code: 'cast_incomplete',
+        message: `Phase 0 paused — ${remainingFailedCastIds.length} chapter${remainingFailedCastIds.length === 1 ? '' : 's'} still need cast detection (${stillNeedCast.join(', ')}). Retry below to continue.`,
+      });
       return;
     }
     if (!coverage.complete) {
-      endJob(job);
+      /* #3435 S6 — same: a soft stop through endJob, today's message. */
+      endJob(job, { kind: 'error', code: 'cast_incomplete', message: coverageIncompleteMessage });
       return;
     }
     /* Retry-after-cast-incomplete flow: the main pipeline hasn't run
@@ -8057,8 +8126,27 @@ export async function runSubsetAnalyzerJob(
            un-marked throw always has. noteReasoningOverflow is a no-op (and
            the chapter is not recorded) for any other error. */
         noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }, 1);
-        /* #3435 — the terminal failure names the model that made this call. */
-        job.failingPhase ??= 1;
+        /* #3435 S11 — record the chapter's failure (guarded save, chapter-failed)
+           BEFORE the rethrow, so the Retry's row survives a reload and the view
+           hears about it; mirrors the main route's M10 recording. An abort is the
+           user pausing, not a failure of the chapter. The terminal failure names
+           the model that made this call. */
+        if (!(err instanceof AnalysisAbortedError)) {
+          job.failingPhase ??= 1;
+          const classified = classifyAnalysisFailure(err, phase1AnalyzerLabel, {
+            chapter: { id: ch.id, title: ch.title },
+          });
+          const attributionRecord = recordFailedChapter(cache, ch.id, classified, 'attribution');
+          await saveCacheInFailureCatch(manuscriptId, cache, ch.id);
+          send({
+            kind: 'chapter-failed',
+            chapterId: ch.id,
+            message: attributionRecord.message,
+            code: attributionRecord.code,
+            remediation: attributionRecord.remediation,
+            phase: attributionRecord.phase,
+          });
+        }
         throw err;
       }
       if (subsetChunkCount > 1) {
@@ -8131,6 +8219,12 @@ export async function runSubsetAnalyzerJob(
           remediation: subsetRecord.remediation,
           phase: subsetRecord.phase,
         });
+      } else if (clearFailedChapterId(cache, ch.id, 'attribution')) {
+        /* #3435 S9 — a clean Phase-1 completion resolves an attribution record
+           (a collapse flag, a Phase-1 throw an earlier run recorded, or a cast
+           record Phase 0 promoted above). A cast record is left for Phase 0 to
+           clear. */
+        send({ kind: 'chapter-resolved', chapterId: ch.id });
       }
       for (const s of chapterSentences) s.chapterId = ch.id;
       cachedChapters[ch.id] = chapterSentences;

@@ -15,6 +15,8 @@ import {
   buildInterimCast,
   clearFailedChapterId,
   recordFailedChapter,
+  castFailedChapterIds,
+  promoteCastRecordToAttribution,
   dropEvidencelessCast,
   isPhase0aCoverageComplete,
   reconcileSentenceCharacterIds,
@@ -1374,7 +1376,7 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
       2: [makeChar('wren'), makeChar('marlow')],
       3: [makeChar('narrator')],
     };
-    const result = isPhase0aCoverageComplete(chapterCast, [{ id: 1 }, { id: 2 }, { id: 3 }]);
+    const result = isPhase0aCoverageComplete(chapterCast, [{ id: 1 }, { id: 2 }, { id: 3 }], []);
     expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 3 });
   });
 
@@ -1390,22 +1392,37 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
       { id: 3 },
       { id: 4 },
       { id: 5 },
-    ]);
+    ], []);
     expect(result.complete).toBe(false);
     expect(result.missingChapterIds).toEqual([2, 4, 5]);
     expect(result.totalRequired).toBe(5);
   });
 
-  it('treats empty-array entries as missing (the route uses [] as the failure marker)', () => {
+  it('treats an empty-array entry as missing only when the chapter is in the cast-failed ids (#3435: [] marks a failure only with a cast record)', () => {
     const chapterCast: Record<number, CharacterOutput[]> = {
       1: [makeChar('narrator')],
       2: [], // failure marker
       3: [makeChar('narrator')],
     };
-    const result = isPhase0aCoverageComplete(chapterCast, [{ id: 1 }, { id: 2 }, { id: 3 }]);
+    const result = isPhase0aCoverageComplete(chapterCast, [{ id: 1 }, { id: 2 }, { id: 3 }], [2]);
     expect(result.complete).toBe(false);
     expect(result.missingChapterIds).toEqual([2]);
     expect(result.totalRequired).toBe(3);
+  });
+
+  it('an empty-array entry with no cast record is a narration-only chapter and counts as covered (P-theta)', () => {
+    const chapterCast: Record<number, CharacterOutput[]> = {
+      1: [makeChar('narrator')],
+      2: [],
+      3: [makeChar('narrator')],
+    };
+    const result = isPhase0aCoverageComplete(chapterCast, [{ id: 1 }, { id: 2 }, { id: 3 }], []);
+    expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 3 });
+  });
+
+  it('a chapter with no chapterCast key at all is still missing', () => {
+    const result = isPhase0aCoverageComplete({ 1: [makeChar('narrator')] }, [{ id: 1 }, { id: 2 }], []);
+    expect(result.missingChapterIds).toEqual([2]);
   });
 
   it('excluded chapters do not count toward coverage', () => {
@@ -1420,7 +1437,7 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
       { id: 1 },
       { id: 2, excluded: true },
       { id: 3 },
-    ]);
+    ], []);
     expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 2 });
   });
 
@@ -1429,13 +1446,44 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
     const result = isPhase0aCoverageComplete({}, [
       { id: 1, excluded: true },
       { id: 2, excluded: true },
-    ]);
+    ], []);
     expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 0 });
   });
 
   it('empty chapter hints returns complete (degenerate; caller is responsible for upstream validation)', () => {
-    const result = isPhase0aCoverageComplete({}, []);
+    const result = isPhase0aCoverageComplete({}, [], []);
     expect(result).toEqual({ complete: true, missingChapterIds: [], totalRequired: 0 });
+  });
+});
+
+/* #3435 (plan 285 spec 2.1) — the phase-aware readers of the failure record
+   that need no pending set. */
+describe('castFailedChapterIds / promoteCastRecordToAttribution', () => {
+  const rec = (phase: 'cast' | 'attribution') => ({ code: 'x', message: 'm', remediation: 'r', phase });
+
+  it('lists only non-excluded ids whose record is a cast failure', () => {
+    const cache = {
+      failedChapterIds: [1, 2, 3, 4],
+      failedChapterErrors: { '1': rec('cast'), '2': rec('attribution'), '3': rec('cast'), '4': rec('cast') },
+    };
+    const hints = [{ id: 1 }, { id: 2 }, { id: 3, excluded: true }, { id: 4 }];
+    expect(castFailedChapterIds(cache, hints)).toEqual([1, 4]);
+  });
+
+  it('an empty or absent failure list gives no ids', () => {
+    expect(castFailedChapterIds({}, [{ id: 1 }])).toEqual([]);
+  });
+
+  it('promotes a cast record to attribution and reports whether it did', () => {
+    const cache = {
+      failedChapterIds: [1, 2],
+      failedChapterErrors: { '1': rec('cast'), '2': rec('attribution') },
+    };
+    expect(promoteCastRecordToAttribution(cache, 1)).toBe(true);
+    expect(cache.failedChapterErrors['1'].phase).toBe('attribution');
+    expect(promoteCastRecordToAttribution(cache, 2)).toBe(false);
+    expect(promoteCastRecordToAttribution(cache, 9)).toBe(false);
+    expect(cache.failedChapterIds).toEqual([1, 2]);
   });
 });
 
