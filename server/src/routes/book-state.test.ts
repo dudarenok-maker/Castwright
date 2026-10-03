@@ -2634,3 +2634,23 @@ describe('book-state router — clonedElsewhereInSeries (#2006 Task 9)', () => {
     expect('clonedElsewhereInSeries' in onDisk.characters[0]).toBe(false);
   });
 });
+
+describe('book-state router — analysis.failedChapterErrors phase (plan 285 T1)', () => {
+  it('GET book-state returns phase on failedChapterErrors', async () => {
+    const { saveAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    /* Seeded UNTAGGED (a pre-285 cache): the load-time normaliser must tag it. */
+    await saveAnalysisCache('m_test', {
+      chapters: {},
+      chapterCast: { 1: [] },
+      failedChapterIds: [1],
+      failedChapterErrors: { '1': { code: 'analyzer-timeout', message: 'm', remediation: 'r' } },
+    });
+    try {
+      const res = await request(app).get(`/api/books/${bookId}/state`);
+      expect(res.status).toBe(200);
+      expect(res.body.analysis.failedChapterErrors['1'].phase).toBe('cast');
+    } finally {
+      await clearAnalysisCache('m_test');
+    }
+  });
+});

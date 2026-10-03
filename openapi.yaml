@@ -8213,11 +8213,18 @@ components:
                 message + remediation after a reload instead of a generic line.
               additionalProperties:
                 type: object
-                required: [code, message, remediation]
+                required: [code, message, remediation, phase]
                 properties:
                   code: { $ref: '#/components/schemas/FailureCode' }
                   message: { type: string }
                   remediation: { type: string }
+                  phase:
+                    type: string
+                    enum: [cast, attribution]
+                    description: |
+                      Which phase failed — Phase 0a cast detection or Phase 1
+                      attribution. Always present on the wire; the server tags
+                      pre-existing untagged records when it loads the cache.
 
     # --- Per-book QA report (fs-51) ---------------------------------
     BookQaReport:

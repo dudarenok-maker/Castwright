@@ -1096,17 +1096,53 @@ describe('failedChapterErrors records (spec A4)', () => {
       failedChapterIds?: number[];
       failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }>;
     } = {};
-    recordFailedChapter(cache, 7, {
-      code: 'analyzer-unreachable',
-      userMessage: 'msg',
-      remediation: 'fix',
-    });
+    recordFailedChapter(
+      cache,
+      7,
+      {
+        code: 'analyzer-unreachable',
+        userMessage: 'msg',
+        remediation: 'fix',
+      },
+      'cast',
+    );
     expect(cache.failedChapterIds).toEqual([7]);
     expect(cache.failedChapterErrors?.['7']).toEqual({
       code: 'analyzer-unreachable',
       message: 'msg',
       remediation: 'fix',
+      phase: 'cast',
     });
+  });
+  it('recordFailedChapter: attribution write onto a cast record is a no-op and returns the cast record', () => {
+    const cache: {
+      failedChapterIds?: number[];
+      failedChapterErrors?: Record<
+        string,
+        { code: string; message: string; remediation: string; phase?: 'cast' | 'attribution' }
+      >;
+    } = {};
+    recordFailedChapter(
+      cache,
+      7,
+      { code: 'analyzer-unreachable', userMessage: 'cast msg', remediation: 'cast fix' },
+      'cast',
+    );
+    const effective = recordFailedChapter(
+      cache,
+      7,
+      { code: 'attribution-incomplete', userMessage: 'attr msg', remediation: 'attr fix' },
+      'attribution',
+    );
+    const expected = {
+      code: 'analyzer-unreachable',
+      message: 'cast msg',
+      remediation: 'cast fix',
+      phase: 'cast',
+    };
+    expect(effective).toEqual(expected);
+    expect(cache.failedChapterErrors?.['7']).toEqual(expected);
+    expect(cache.failedChapterIds).toEqual([7]);
   });
   it('clearFailedChapterId clears the record alongside the id', () => {
     const cache = {
@@ -1133,6 +1169,7 @@ describe('chapter-failed replay map (spec A4 — reconnect carries code/remediat
       message: 'analyzer down',
       code: 'analyzer-unreachable',
       remediation: 'start ollama',
+      phase: 'cast',
     });
     expect(
       (job as { replay: { failedByChapterId: Map<number, unknown> } }).replay.failedByChapterId.get(
@@ -1144,6 +1181,7 @@ describe('chapter-failed replay map (spec A4 — reconnect carries code/remediat
       message: 'analyzer down',
       code: 'analyzer-unreachable',
       remediation: 'start ollama',
+      phase: 'cast',
     });
   });
   it('chapter-resolved drops the entry', () => {
@@ -4688,6 +4726,105 @@ describe('runSubsetAnalyzerJob — re-reports a coverage failure instead of sile
         if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
         else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
       }
+    },
+    60_000,
+  );
+
+  it(
+    'chapter-failed frames carry phase: cast for a Phase-0 failure, attribution for a coverage re-flag',
+    async () => {
+      async function runSubset(opts: {
+        phase0: Analyzer;
+        phase1: Analyzer;
+        seedStage1: boolean;
+      }): Promise<AnalysisJob> {
+        const manuscriptId = `test-subset-frame-phase-${Date.now()}-${Math.random()}`;
+        const bookDir = makeBookDir();
+        const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
+        process.env.STAGE2_COVERAGE_RETRIES = '0';
+        seedStateJson(bookDir, manuscriptId);
+        const chapterHints: ChapterHint[] = [{ id: 1, title: 'Chapter One', body: GOOD_CHAPTER_BODY }];
+        putManuscript({
+          manuscriptId,
+          format: 'plaintext',
+          title: 'Subset Coverage Reflag Test Book',
+          wordCount: 20,
+          byteSize: 200,
+          uploadedAt: new Date().toISOString(),
+          sourceText: GOOD_CHAPTER_BODY,
+          chapterHints,
+          bookDir,
+        });
+        await saveAnalysisCache(manuscriptId, {
+          chapters: {},
+          ...(opts.seedStage1
+            ? { stage1: { characters: stage1Roster(), chapters: [{ id: 1, title: 'Chapter One' }] } }
+            : {}),
+          failedChapterIds: [1],
+        });
+        const selection = buildSelection(opts.phase0, 'phase0-model');
+        const phase1Selection = buildSelection(opts.phase1, 'phase1-model');
+        const job: AnalysisJob = {
+          controller: new AbortController(),
+          subscribers: new Set(),
+          manuscriptId,
+          kind: 'subset',
+          subsetChapterIds: [1],
+          bookDir,
+          engine: selection.engine,
+          replay: {
+            logs: [],
+            lastPhase: null,
+            lastEta: null,
+            lastCastUpdate: null,
+            failedByChapterId: new Map(),
+            lastSeriesPrior: null,
+            warnings: new Map(),
+          },
+          lastDiskWriteAt: 0,
+        } as unknown as AnalysisJob;
+        try {
+          const recordRef = getManuscript(manuscriptId);
+          if (!recordRef) throw new Error('stub manuscript not found');
+          /* The cast-failure run may end in a terminal error (no roster); the
+             frames were already sent, which is all this test reads. */
+          await runSubsetAnalyzerJob(
+            job,
+            recordRef as never,
+            selection,
+            phase1Selection,
+            recordRef.chapterHints,
+            false,
+          ).catch(() => undefined);
+          return job;
+        } finally {
+          removeManuscript(manuscriptId);
+          await clearAnalysisCache(manuscriptId);
+          rmSync(bookDir, { recursive: true, force: true });
+          if (originalCoverageRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+          else process.env.STAGE2_COVERAGE_RETRIES = originalCoverageRetries;
+        }
+      }
+
+      const castFailing: Analyzer = {
+        ...buildPhase0Analyzer(),
+        runStage1Chapter: () => Promise.reject(new Error('cast detection down')),
+      };
+      const castJob = await runSubset({
+        phase0: castFailing,
+        phase1: buildPhase1AnalyzerThatStillFails(),
+        seedStage1: false,
+      });
+      expect(castJob.replay.failedByChapterId.has(1), 'no chapter-failed frame was sent').toBe(true);
+      expect(castJob.replay.failedByChapterId.get(1)?.phase).toBe('cast');
+
+      const attributionJob = await runSubset({
+        phase0: buildPhase0Analyzer(),
+        phase1: buildPhase1AnalyzerThatStillFails(),
+        seedStage1: true,
+      });
+      expect(attributionJob.replay.failedByChapterId.get(1)?.code).toBe('attribution-incomplete');
+      expect(attributionJob.replay.failedByChapterId.get(1)?.phase).toBe('attribution');
     },
     60_000,
   );

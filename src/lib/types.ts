@@ -521,7 +521,7 @@ export interface BookStateResponse {
       the set of chapters whose Phase 0a cast detection threw across the
       analyzer's built-in retry — server-side they live in the analysis
       cache. */
-  analysis?: { failedChapterIds: number[]; failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }> };
+  analysis?: { failedChapterIds: number[]; failedChapterErrors?: Record<string, { code: string; message: string; remediation: string; phase: 'cast' | 'attribution' }> };
 }
 
 /** Drop-reason enum mirrored from server/src/store/dropped-quotes.ts.

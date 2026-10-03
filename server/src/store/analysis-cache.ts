@@ -65,6 +65,45 @@ export interface ChapterErrorRecord {
   code: string;
   message: string;
   remediation: string;
+  /** Which phase failed: Phase 0a cast detection or Phase 1 attribution.
+      Optional on disk only for records written before plan 285;
+      `normaliseFailureRecords` tags those on load. */
+  phase?: 'cast' | 'attribution';
+}
+
+/* Plan 285 spec 2.1 — tag the untagged legacy failure records of a freshly
+   loaded cache, mutating it in place. Rules, first match wins:
+   1. already tagged: keep;
+   2. no stage1 and the cast is missing or `[]`: 'cast' (origin/main writes
+      coverage flags over any record, and pipelined Phase 1 can attribute a
+      chapter whose cast failed, so `{attribution-*, [], take, no stage1}`
+      exists on disk);
+   3. attribution-collapse / attribution-incomplete: 'attribution';
+   4. a non-empty cast: 'attribution' (cast failures write `[]`; covers the
+      2026-06-05..06-12 records that have no record object);
+   5. otherwise 'cast'.
+   An id with no record gets a synthesised 'unknown' one. */
+const MISSING_RECORD_MESSAGE = 'Analysis failed on a previous attempt. Retry to try again.';
+
+export function normaliseFailureRecords(cache: AnalysisCache): void {
+  const ids = cache.failedChapterIds;
+  if (!ids || ids.length === 0) return;
+  const records = (cache.failedChapterErrors ??= {});
+  for (const id of ids) {
+    const existing = records[String(id)];
+    if (existing?.phase) continue;
+    const castRows = cache.chapterCast?.[id];
+    const castEmpty = !castRows || castRows.length === 0;
+    let phase: 'cast' | 'attribution';
+    if (!cache.stage1 && castEmpty) phase = 'cast';
+    else if (existing?.code === 'attribution-collapse' || existing?.code === 'attribution-incomplete')
+      phase = 'attribution';
+    else if (!castEmpty) phase = 'attribution';
+    else phase = 'cast';
+    records[String(id)] = existing
+      ? { ...existing, phase }
+      : { code: 'unknown', message: MISSING_RECORD_MESSAGE, remediation: '', phase };
+  }
 }
 
 export interface AnalysisCache {
@@ -126,7 +165,7 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
   /* JSON parse turns the chapter-id keys into strings, but the route uses
      numeric ids. Coerce shape so callers can use cache.chapters[chapterId]
      directly. */
-  return {
+  const loaded: AnalysisCache = {
     chapterCast: cache.chapterCast ?? undefined,
     stage1: cache.stage1,
     chapters: cache.chapters ?? {},
@@ -138,6 +177,8 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
     failedChapterErrors: cache.failedChapterErrors ?? undefined,
     updatedAt: cache.updatedAt,
   };
+  normaliseFailureRecords(loaded);
+  return loaded;
 }
 
 /* #3427 — saves and clears for one manuscript run through the shared per-path

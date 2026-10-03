@@ -2826,7 +2826,10 @@ describe('AnalysingView — Wave 2 brand manifesto', () => {
 describe('AnalysingView — fs-19 classified failure remediation', () => {
   function makeBookStateWithErrors(
     failedIds: number[],
-    failedChapterErrors: Record<string, { code: string; message: string; remediation: string }>,
+    failedChapterErrors: Record<
+      string,
+      { code: string; message: string; remediation: string; phase: 'cast' | 'attribution' }
+    >,
   ): BookStateResponse {
     return {
       state: {
@@ -2910,6 +2913,7 @@ describe('AnalysingView — fs-19 classified failure remediation', () => {
             code: 'attribution-incomplete',
             message: 'Some lines may be unattributed…',
             remediation: 'Click Retry…',
+            phase: 'attribution',
           },
         }),
       );

@@ -237,6 +237,8 @@ export interface AnalyseOpts {
     message: string;
     code?: string;
     remediation?: string;
+    /** Which phase failed (plan 285). Absent only from a pre-285 server. */
+    phase?: 'cast' | 'attribution';
   }) => void;
   /** A previously-failed chapter just had its Phase 0a re-run succeed
       (either via the main route re-queueing failedChapterIds on resume,
@@ -2822,6 +2824,8 @@ interface AnalysisStreamEvent {
   message?: string;
   code?: string;
   remediation?: string;
+  /** `chapter-failed` — which phase failed (plan 285). */
+  phase?: 'cast' | 'attribution';
   /** #3084 F7 — terminal `error` frames on the analysis streams carry a
       structured "how to fix" list when the classifier can name something
       actionable (e.g. the settings that bound a reasoning overflow). Absent
@@ -3017,6 +3021,7 @@ async function realAnalyseManuscript(
           message: payload.message,
           code: payload.code,
           remediation: payload.remediation,
+          phase: payload.phase,
         });
       }
     } else if (payload.kind === 'chapter-resolved') {
@@ -5734,6 +5739,7 @@ async function realRunAnalysisForChapters(
           message: payload.message,
           code: payload.code,
           remediation: payload.remediation,
+          phase: payload.phase,
         });
       }
     } else if (payload.kind === 'chapter-resolved') {

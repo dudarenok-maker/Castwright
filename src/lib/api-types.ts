@@ -6025,6 +6025,13 @@ export interface components {
                         code: components["schemas"]["FailureCode"];
                         message: string;
                         remediation: string;
+                        /**
+                         * @description Which phase failed — Phase 0a cast detection or Phase 1
+                         *     attribution. Always present on the wire; the server tags
+                         *     pre-existing untagged records when it loads the cache.
+                         * @enum {string}
+                         */
+                        phase: "cast" | "attribution";
                     };
                 };
             };

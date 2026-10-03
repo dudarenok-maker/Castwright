@@ -1411,7 +1411,11 @@ export function clearFailedChapterId(
 
 /* fs-19 (analysis half) — promote a classified per-chapter failure to durable
    cache state: the id keeps driving the Retry list; the record carries the
-   structured code/message/remediation for the post-reload display. */
+   structured code/message/remediation for the post-reload display. Returns the
+   EFFECTIVE record — callers send `chapter-failed` with it. Cast dominates
+   (plan 285 spec 2.1): an attribution write onto a chapter whose record is
+   already `'cast'` is a no-op, so a chapter that never got its cast cannot be
+   relabelled as an attribution failure. */
 export function recordFailedChapter(
   cache: {
     failedChapterIds?: number[];
@@ -1419,16 +1423,22 @@ export function recordFailedChapter(
   },
   chapterId: number,
   classified: { code: string; userMessage: string; remediation: string },
-): void {
+  phase: 'cast' | 'attribution',
+): ChapterErrorRecord {
   const failedSet = new Set(cache.failedChapterIds ?? []);
   failedSet.add(chapterId);
   cache.failedChapterIds = Array.from(failedSet);
   if (!cache.failedChapterErrors) cache.failedChapterErrors = {};
-  cache.failedChapterErrors[String(chapterId)] = {
+  const existing = cache.failedChapterErrors[String(chapterId)];
+  if (phase === 'attribution' && existing?.phase === 'cast') return existing;
+  const record: ChapterErrorRecord = {
     code: classified.code,
     message: classified.userMessage,
     remediation: classified.remediation,
+    phase,
   };
+  cache.failedChapterErrors[String(chapterId)] = record;
+  return record;
 }
 
 /* Phase 0a coverage check — every non-excluded chapter must have a
@@ -2689,6 +2699,7 @@ export interface AnalysisJobReplayState {
       message: string;
       code?: string;
       remediation?: string;
+      phase?: 'cast' | 'attribution';
     }
   >;
   /** One-shot series-cast prior event emitted at Phase 0 entry. Cached
@@ -3052,7 +3063,13 @@ export function trackForReplay(job: AnalysisJob, payload: unknown): void {
       job.replay.lastCastUpdate = ev as AnalysisJobReplayState['lastCastUpdate'];
       break;
     case 'chapter-failed': {
-      const e = ev as { chapterId?: number; message?: string; code?: string; remediation?: string };
+      const e = ev as {
+        chapterId?: number;
+        message?: string;
+        code?: string;
+        remediation?: string;
+        phase?: 'cast' | 'attribution';
+      };
       if (typeof e.chapterId === 'number' && typeof e.message === 'string') {
         job.replay.failedByChapterId.set(e.chapterId, {
           kind: 'chapter-failed',
@@ -3060,6 +3077,7 @@ export function trackForReplay(job: AnalysisJob, payload: unknown): void {
           message: e.message,
           code: e.code,
           remediation: e.remediation,
+          phase: e.phase,
         });
       }
       break;
@@ -4717,14 +4735,15 @@ export async function runMainAnalyzerJob(
           chapterCast[ch.id] = [];
           cache.chapterCast = chapterCast;
           const classified = classifyAnalysisFailure(chErr, analyzerLabel);
-          recordFailedChapter(cache, ch.id, classified);
+          const castRecord = recordFailedChapter(cache, ch.id, classified, 'cast');
           await saveAnalysisCache(manuscriptId, cache);
           send({
             kind: 'chapter-failed',
             chapterId: ch.id,
-            message: classified.userMessage,
-            code: classified.code,
-            remediation: classified.remediation,
+            message: castRecord.message,
+            code: castRecord.code,
+            remediation: castRecord.remediation,
+            phase: castRecord.phase,
           });
           sendCastLiveTick();
           send({
@@ -5725,17 +5744,19 @@ export async function runMainAnalyzerJob(
               }); kept the best take and flagged the chapter for retry.`,
         );
         const copy = FAILURE_REMEDIATIONS[failureCode];
-        recordFailedChapter(cache, ch.id, {
-          code: failureCode,
-          userMessage: copy.userMessage,
-          remediation: copy.remediation,
-        });
+        const attributionRecord = recordFailedChapter(
+          cache,
+          ch.id,
+          { code: failureCode, userMessage: copy.userMessage, remediation: copy.remediation },
+          'attribution',
+        );
         send({
           kind: 'chapter-failed',
           chapterId: ch.id,
-          message: copy.userMessage,
-          code: failureCode,
-          remediation: copy.remediation,
+          message: attributionRecord.message,
+          code: attributionRecord.code,
+          remediation: attributionRecord.remediation,
+          phase: attributionRecord.phase,
         });
       }
       for (const s of stage2Sentences) s.chapterId = ch.id;
@@ -7376,15 +7397,16 @@ export async function runSubsetAnalyzerJob(
         chapterCast[ch.id] = [];
         cache.chapterCast = chapterCast;
         const classified = classifyAnalysisFailure(chErr, analyzerLabel);
-        recordFailedChapter(cache, ch.id, classified);
+        const castRecord = recordFailedChapter(cache, ch.id, classified, 'cast');
         await saveAnalysisCache(manuscriptId, cache);
         log(0, `❌ Chapter ${ch.id} cast FAILED — ${ch.title}: ${(chErr as Error).message}`);
         send({
           kind: 'chapter-failed',
           chapterId: ch.id,
-          message: classified.userMessage,
-          code: classified.code,
-          remediation: classified.remediation,
+          message: castRecord.message,
+          code: castRecord.code,
+          remediation: castRecord.remediation,
+          phase: castRecord.phase,
         });
         emitCastUpdate();
       }
@@ -7698,17 +7720,23 @@ export async function runSubsetAnalyzerJob(
               }); kept the best take and flagged the chapter for retry.`,
         );
         const subsetCopy = FAILURE_REMEDIATIONS[subsetFailureCode];
-        recordFailedChapter(cache, ch.id, {
-          code: subsetFailureCode,
-          userMessage: subsetCopy.userMessage,
-          remediation: subsetCopy.remediation,
-        });
+        const subsetRecord = recordFailedChapter(
+          cache,
+          ch.id,
+          {
+            code: subsetFailureCode,
+            userMessage: subsetCopy.userMessage,
+            remediation: subsetCopy.remediation,
+          },
+          'attribution',
+        );
         send({
           kind: 'chapter-failed',
           chapterId: ch.id,
-          message: subsetCopy.userMessage,
-          code: subsetFailureCode,
-          remediation: subsetCopy.remediation,
+          message: subsetRecord.message,
+          code: subsetRecord.code,
+          remediation: subsetRecord.remediation,
+          phase: subsetRecord.phase,
         });
       }
       for (const s of chapterSentences) s.chapterId = ch.id;

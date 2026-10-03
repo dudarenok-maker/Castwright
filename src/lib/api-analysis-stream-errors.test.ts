@@ -111,3 +111,40 @@ describe('realRunAnalysisForChapters — the same two codes on the subset route'
     expect((err as Error).message).toBe('Subset analysis failed (503).');
   });
 });
+
+describe('chapter-failed frames — phase reaches onChapterFailed (plan 285 T1)', () => {
+  /* Both readers copy the frame's fields into the callback argument one by
+     one, so a new field is dropped unless each parser names it. */
+  const FAILED_FRAME = JSON.stringify({
+    kind: 'chapter-failed',
+    chapterId: 4,
+    message: 'cast failed',
+    code: 'analyzer-timeout',
+    remediation: 'retry',
+    phase: 'cast',
+  });
+  const RESULT_FRAME = JSON.stringify({
+    kind: 'result',
+    response: { characters: [], chapters: [], sentences: [] },
+  });
+
+  it('main stream parser passes phase to onChapterFailed', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce(sseResponse([FAILED_FRAME, RESULT_FRAME]));
+    const seen: Array<{ chapterId: number; phase?: string }> = [];
+    await api.analyseManuscript('mns-1', { onChapterFailed: (e) => seen.push(e) }).catch(() => undefined);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].phase).toBe('cast');
+  });
+
+  it('subset stream parser passes phase to onChapterFailed', async () => {
+    const { api } = await import('./api');
+    fetchMock.mockResolvedValueOnce(sseResponse([FAILED_FRAME, RESULT_FRAME]));
+    const seen: Array<{ chapterId: number; phase?: string }> = [];
+    await api
+      .runAnalysisForChapters('mns-1', [4], { onChapterFailed: (e) => seen.push(e) })
+      .catch(() => undefined);
+    expect(seen).toHaveLength(1);
+    expect(seen[0].phase).toBe('cast');
+  });
+});
