@@ -2297,6 +2297,73 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
   });
 
+  /* #3435 decision A — the server refuses a subset run while a main analysis
+     run is live for the book, so the controls that start one are disabled
+     until it is paused. */
+  it('Re-analyse and Include are disabled with "Pause the analysis first" while main is live', async () => {
+    const store = makeIncludeStore();
+    const mainRunning: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 1,
+      phaseLabel: 'Parsing and attribution',
+      phaseProgress: 0.3,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'main',
+    };
+    store.dispatch(analysisActions.setActiveStream(mainRunning));
+    renderInclude(store);
+    expect(screen.getByTestId('chapter-row-1-reanalyse')).toBeDisabled();
+    expect(screen.getByRole('button', { name: /\+ Include in book/i })).toBeDisabled();
+    expect(screen.getAllByText('Pause the analysis first').length).toBeGreaterThan(0);
+    /* Paused → enabled again. */
+    act(() => {
+      store.dispatch(analysisActions.setPaused({ manuscriptId: 'm1' }));
+    });
+    expect(screen.getByTestId('chapter-row-1-reanalyse')).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: /\+ Include in book/i })).not.toBeDisabled();
+    expect(screen.queryByText('Pause the analysis first')).not.toBeInTheDocument();
+  });
+
+  it('a 409 on Include rolls the include back and shows the message on the row; on Re-analyse shows it on the row', async () => {
+    /* The paused main run is still finishing (the server's draining 409): the
+       refusal restores the prior snapshot, as subset_in_progress does, rather
+       than clearing it. */
+    const message = 'The analysis on this book is still finishing the chapters it had started. Try again in a moment.';
+    const pausedMain: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 1,
+      phaseLabel: 'Parsing and attribution',
+      phaseProgress: 0.3,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'paused',
+      kind: 'main',
+    };
+    /* Include. */
+    const store = makeIncludeStore();
+    store.dispatch(analysisActions.setActiveStream(pausedMain));
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'main_analysis_running'));
+    const { unmount } = renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    expect(await screen.findByText(`Re-analysis failed: ${message}`)).toBeInTheDocument();
+    expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+    expect(store.getState().analysis.activeStream).toEqual(pausedMain);
+    unmount();
+    /* Re-analyse. */
+    const store2 = makeIncludeStore();
+    store2.dispatch(analysisActions.setActiveStream(pausedMain));
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'main_analysis_running'));
+    renderInclude(store2);
+    fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+    fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+    expect(await screen.findByText(`Re-analysis failed: ${message}`)).toBeInTheDocument();
+    expect(store2.getState().analysis.activeStream).toEqual(pausedMain);
+  });
+
   /* #3084 pass-3 — a reasoning overflow from a subset run must leave exactly
      one persistent toast carrying the structured fixes, whichever subscriber
      (this view's own stream vs the middleware's) sees the terminal frame

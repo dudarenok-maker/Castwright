@@ -47,6 +47,7 @@ import { notificationsActions } from './notifications-slice';
 import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { emitLanguageGuard } from '../lib/language-guard-bus';
 import { deliverNonStoryOverflowWarning } from '../lib/analysis-warning-toast';
+import { shouldSurfaceColdBootAnalysisPill } from '../lib/analysis-pill-gate';
 
 interface AnalysisRootState {
   analysis: { activeStream: AnalysisStreamSnapshot | null };
@@ -96,6 +97,50 @@ export const analysisStreamMiddleware: Middleware = (store) => {
   let reopenFailureDampenCount = 0;
 
   const dispatch = store.dispatch as Dispatch;
+
+  /* #3435 decision A — a subscribe POST refused (`main_analysis_running` /
+     `subset_analysis_running`) says the local snapshot is stale: another run
+     owns the book. Re-read the server's snapshot and restore it in the layout's
+     cold-boot shape (layout.tsx), confirmed-book gate included, or clear it
+     when the server has none. Never setPaused: its hook fires /pause, which
+     would abort the live subset. */
+  const restoreFromServer = async (snap: AnalysisStreamSnapshot): Promise<void> => {
+    const bookId = snap.bookId;
+    try {
+      const server = bookId ? await api.getAnalysisState(bookId) : null;
+      if (!server) {
+        dispatch(analysisActions.clearActiveStream());
+        return;
+      }
+      if (server.state !== 'running') {
+        const book = bookId ? await api.getBookState(bookId) : null;
+        if (!shouldSurfaceColdBootAnalysisPill(book?.state.castConfirmed ?? false, server.state)) {
+          dispatch(analysisActions.clearActiveStream());
+          return;
+        }
+      }
+      dispatch(
+        analysisActions.setActiveStream({
+          bookId,
+          manuscriptId: server.manuscriptId,
+          bookTitle: snap.bookTitle,
+          engine: server.engine,
+          phaseId: server.phaseId,
+          phaseLabel: server.phaseLabel,
+          phaseProgress: server.phaseProgress,
+          remainingMs: null,
+          lastTickAt: server.lastTickAt,
+          state: server.state,
+          haltCode: server.haltCode,
+          haltReason: server.haltReason,
+          kind: server.kind,
+          subsetChapterIds: server.subsetChapterIds,
+        }),
+      );
+    } catch (err) {
+      console.warn('[analysis-state] refusal re-read failed:', (err as Error)?.message);
+    }
+  };
 
   const closeHandle = (): void => {
     if (!handle) return;
@@ -223,8 +268,9 @@ export const analysisStreamMiddleware: Middleware = (store) => {
         /* Every branch below that dispatches setPaused / setHalted closes
            this handle as a side effect: the PAUSE_TYPE / HALTED_TYPE hooks
            in the action handler at the bottom of this file call
-           closeHandle() when the slice flips. Only the branch that
-           dispatches NOTHING (stream_no_result) has to close explicitly. */
+           closeHandle() when the slice flips. Only the branches that
+           dispatch neither (stream_no_result, and the #3435 refusal codes)
+           have to close explicitly. */
         /* Task 9d (#2407) — streaming shape. An unset book language is not a
            generic stream failure: route it to the language-guard host instead of
            the error toast, and re-run this SAME openHandle call (which re-issues
@@ -278,6 +324,18 @@ export const analysisStreamMiddleware: Middleware = (store) => {
            rewrite `state` (#3198 pass 5). */
         if (e instanceof AnalysisError && e.code === ANALYSIS_STREAM_NO_RESULT) {
           closeHandle();
+          return;
+        }
+        /* #3435 decision A — the server refused this subscribe because another
+           run owns the book (a subset beside a would-be main start, or the
+           reverse). Not a failure of any run: close, then restore the snapshot
+           from the server, with no halt and no toast. */
+        if (
+          e instanceof AnalysisError &&
+          (e.code === 'main_analysis_running' || e.code === 'subset_analysis_running')
+        ) {
+          closeHandle();
+          void restoreFromServer(snap);
           return;
         }
         /* #3084 F7 — the persistent "reasoning overflow" notification is

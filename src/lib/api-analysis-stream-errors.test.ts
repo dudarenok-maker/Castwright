@@ -148,3 +148,79 @@ describe('chapter-failed frames — phase reaches onChapterFailed (plan 285 T1)'
     expect(seen[0].phase).toBe('cast');
   });
 });
+
+describe('#3435 refusal codes map to AnalysisError(message, code)', () => {
+  function refusedResponse(body: Record<string, unknown>): Response {
+    return {
+      ok: false,
+      status: 409,
+      statusText: 'Conflict',
+      body: null,
+      text: () => Promise.resolve(JSON.stringify(body)),
+    } as unknown as Response;
+  }
+  const MAIN_RUNNING = {
+    error: 'main_analysis_running',
+    draining: false,
+    message: 'The analysis is still running on this book. Pause it first, then try again.',
+  };
+  const SUBSET_RUNNING = {
+    error: 'subset_analysis_running',
+    message: 'A chapter retry is running on this book. Wait for it to finish, then resume the analysis.',
+  };
+  const MAIN_DRAINING = {
+    error: 'main_analysis_running',
+    draining: true,
+    message: 'The analysis on this book is still finishing the chapters it had started. Try again in a moment.',
+  };
+
+  it('realRunAnalysisForChapters maps a 409 main_analysis_running body to AnalysisError(message, code)', async () => {
+    const { api, AnalysisError } = await import('./api');
+    fetchMock.mockResolvedValueOnce(refusedResponse(MAIN_RUNNING));
+    const err = await api.runAnalysisForChapters('mns-1', [4], {}).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AnalysisError);
+    expect((err as InstanceType<typeof AnalysisError>).code).toBe('main_analysis_running');
+    expect((err as Error).message).toBe(MAIN_RUNNING.message);
+  });
+
+  it('realAnalyseManuscript maps 409 subset_analysis_running and main_analysis_running', async () => {
+    const { api, AnalysisError } = await import('./api');
+    for (const body of [SUBSET_RUNNING, MAIN_DRAINING]) {
+      fetchMock.mockResolvedValueOnce(refusedResponse(body));
+      const err = await api.analyseManuscript('mns-1', {}).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(AnalysisError);
+      expect((err as InstanceType<typeof AnalysisError>).code).toBe(body.error);
+      expect((err as Error).message).toBe(body.message);
+    }
+  });
+
+  it('the same codes as SSE error frames map to the same AnalysisError', async () => {
+    const { api, AnalysisError } = await import('./api');
+    const frame = (b: Record<string, unknown>) =>
+      JSON.stringify({ kind: 'error', code: b.error, message: b.message, draining: b.draining });
+    fetchMock.mockResolvedValueOnce(sseResponse([frame(MAIN_RUNNING)]));
+    const subsetErr = await api.runAnalysisForChapters('mns-1', [4], {}).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(subsetErr).toBeInstanceOf(AnalysisError);
+    expect((subsetErr as InstanceType<typeof AnalysisError>).code).toBe('main_analysis_running');
+    expect((subsetErr as Error).message).toBe(MAIN_RUNNING.message);
+    for (const body of [SUBSET_RUNNING, MAIN_DRAINING]) {
+      fetchMock.mockResolvedValueOnce(sseResponse([frame(body)]));
+      const err = await api.analyseManuscript('mns-1', {}).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect(err).toBeInstanceOf(AnalysisError);
+      expect((err as InstanceType<typeof AnalysisError>).code).toBe(body.error);
+      expect((err as Error).message).toBe(body.message);
+    }
+  });
+});

@@ -1351,16 +1351,11 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(screen.getAllByRole('button', { name: /retry chapter/i })).toHaveLength(2);
   });
 
-  it('clicking Retry while the main run is streaming aborts the main run, runs the subset alone, then resumes the main run on settle', async () => {
-    /* Regression for the "stage two does not pause" + "retry has no
-       persistence on reload" pair. Pre-fix the panel kept Retry
-       clickable while the main run was in flight; both SSEs raced
-       cache writes and one finisher's stale snapshot clobbered the
-       other's progress. New contract: Retry serialises against the
-       main run by pausing it for the duration of the subset call and
-       auto-resuming once the row settles. */
+  /* #3435 decision A — replaces the client pause-and-retry: the server now
+     refuses a subset run while a main run is live, so Retry is disabled until
+     the user pauses. */
+  it('Retry is disabled with "Pause the analysis first" while the main stream is live, and enabled once paused', async () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
-
     const store = configureStore({
       reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
@@ -1375,75 +1370,57 @@ describe('AnalysingView — failed-chapter retry', () => {
         />
       </Provider>,
     );
-
-    /* Start the analysis so the effect captures opts, then drive a
-       phase event so the view transitions to conn === 'streaming'. */
     const startBtn = await screen.findByRole('button', { name: /start analysis/i });
     await act(async () => {
       fireEvent.click(startBtn);
     });
     await waitFor(() => expect(capturedOpts).toBeDefined());
     const mainSignal = capturedOpts!.signal!;
-    expect(mainSignal.aborted).toBe(false);
     await act(async () => {
       capturedOpts!.onPhase!({ phaseId: 0, progress: 0.4 });
     });
-
-    /* Panel hydrated from book-state. Button is not disabled — the
-       new contract is that the click pauses the main run rather than
-       being blocked at the UI. */
     const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
-    expect(retryBtn).not.toBeDisabled();
-
-    /* Clicking Retry aborts the main run's signal before firing the
-       subset call. Without this the two SSEs race the disk-backed
-       analysis cache and the second finisher overwrites the first. */
-    capturedOpts = undefined;
+    expect(retryBtn).toBeDisabled();
+    expect(screen.getAllByText('Pause the analysis first').length).toBeGreaterThan(0);
+    /* A click does nothing: the main run is not aborted and no subset call fires. */
     await act(async () => {
       fireEvent.click(retryBtn);
     });
-    expect(mainSignal.aborted).toBe(true);
-    expect(capturedSubsetCall).toBeDefined();
-    expect(capturedSubsetCall!.chapterIds).toEqual([44]);
+    expect(mainSignal.aborted).toBe(false);
+    expect(capturedSubsetCall).toBeUndefined();
 
-    /* Resolve the subset call as if the server succeeded. */
     await act(async () => {
-      resolveSubset?.({
-        bookId: 'b1',
-        manuscriptId: 'm1',
-        title: '',
-        phaseTimings: [],
-        characters: [],
-        chapters: [],
-        sentences: [],
-        libraryMatches: [],
-      } as AnalyseResponse);
+      fireEvent.click(screen.getAllByRole('button', { name: /pause analysis/i })[0]);
     });
-
-    /* Main run resumes automatically — a fresh analyseManuscript fetch
-       lands with a NEW (non-aborted) AbortController. The user never
-       has to click Resume. */
-    await waitFor(() => expect(capturedOpts).toBeDefined());
-    expect(capturedOpts!.signal).not.toBe(mainSignal);
-    expect(capturedOpts!.signal!.aborted).toBe(false);
+    expect(screen.getByRole('button', { name: /retry chapter/i })).not.toBeDisabled();
+    expect(screen.queryByText('Pause the analysis first')).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /retry chapter/i }));
+    });
+    expect(capturedSubsetCall!.chapterIds).toEqual([44]);
   });
 
-  /* #3215 pass-2 review (C2) regression: a subset_in_progress rejection
-     must NOT re-arm the paused main run. Same pause-then-retry setup as the
-     test above, but the subset call is REJECTED with subset_in_progress
-     instead of resolved — another subset job is genuinely live for this
-     manuscript, and resuming main here is exactly the cache-write race the
-     PAUSE-AND-RETRY contract exists to prevent. Revert the
-     subsetInProgressRef guard around the re-arm in analysing.tsx and this
-     test reddens: a second analyseManuscript call lands with a fresh,
-     non-aborted signal (verified). */
-  it('#3215 C2 — a subset_in_progress rejection does not re-arm the paused main run', async () => {
-    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+  it('Retry is disabled while selectMainAnalysisLive is true for a snapshot another device produced', async () => {
+    /* The view's own stream is not running (the analyzer is unreachable, so it
+       never opens one); only the shared snapshot says a main run is live. */
+    getOllamaHealthSpy.mockResolvedValue({ status: 'unreachable', url: '(test)', error: 'down' });
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
-
     const store = configureStore({
       reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
     });
+    store.dispatch(
+      analysisActions.setActiveStream({
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        phaseId: 1,
+        phaseLabel: 'Parsing and attribution',
+        phaseProgress: 0.3,
+        remainingMs: null,
+        lastTickAt: Date.now(),
+        state: 'running',
+        kind: 'main',
+      }),
+    );
     render(
       <Provider store={store}>
         <AnalysingView
@@ -1455,25 +1432,48 @@ describe('AnalysingView — failed-chapter retry', () => {
         />
       </Provider>,
     );
-
-    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
-    await act(async () => {
-      fireEvent.click(startBtn);
-    });
-    await waitFor(() => expect(capturedOpts).toBeDefined());
-    const mainSignal = capturedOpts!.signal!;
-    await act(async () => {
-      capturedOpts!.onPhase!({ phaseId: 0, progress: 0.4 });
-    });
-
     const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
-    capturedOpts = undefined;
+    expect(capturedOpts).toBeUndefined();
+    expect(retryBtn).toBeDisabled();
+    expect(screen.getAllByText('Pause the analysis first').length).toBeGreaterThan(0);
+  });
+
+  /* #3435 — rewritten from "#3215 C2 — a subset_in_progress rejection does not
+     re-arm the paused main run" for a Retry with main NOT running: the
+     rejection restores the prior snapshot and never POSTs the main run. */
+  it('#3215 C2 — a subset_in_progress rejection restores the prior snapshot and does not POST the main run', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    const prior = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 0.5,
+      remainingMs: null,
+      lastTickAt: 1,
+      state: 'paused' as const,
+    };
+    store.dispatch(analysisActions.setActiveStream(prior));
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
     await act(async () => {
       fireEvent.click(retryBtn);
     });
-    expect(mainSignal.aborted).toBe(true);
     expect(capturedSubsetCall).toBeDefined();
-
     await act(async () => {
       rejectSubset?.(
         new AnalysisError(
@@ -1482,18 +1482,129 @@ describe('AnalysingView — failed-chapter retry', () => {
         ),
       );
     });
-
     await screen.findByText(
       /A different subset re-analysis is already in progress for this manuscript: Chapter Forty-Seven\./i,
     );
-
-    /* The regression: main must stay paused. No second analyseManuscript
-       call — capturedOpts (reset to undefined above) stays undefined. */
     expect(capturedOpts).toBeUndefined();
+    expect(store.getState().analysis.activeStream).toEqual(prior);
+  });
 
-    /* B3: verify the restored snapshot has state: 'paused' (not 'running'),
-       so layout.tsx's stall detection won't incorrectly mark the pill as stalled. */
-    expect(store.getState().analysis.activeStream?.state).toBe('paused');
+  it.each(['http', 'sse'])(
+    'a 409 main_analysis_running keeps the row, shows the server message on it and restores the prior snapshot (%s form)',
+    async () => {
+      /* Both forms reach the view as the same AnalysisError (api.ts maps the 409
+         body and the late-check SSE frame alike — pinned in
+         api-analysis-stream-errors.test.ts), so one rejection shape covers both;
+         the parametrisation pins that the view needs nothing per form. */
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+      const store = configureStore({
+        reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+      });
+      const prior = {
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        phaseId: 1,
+        phaseLabel: 'Parsing and attribution',
+        phaseProgress: 0.5,
+        remainingMs: null,
+        lastTickAt: 1,
+        state: 'paused' as const,
+        kind: 'main' as const,
+      };
+      store.dispatch(analysisActions.setActiveStream(prior));
+      render(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m1"
+            bookId="b1"
+            title="the Coalfall Commission"
+            wordCount={2440}
+            onComplete={() => {}}
+          />
+        </Provider>,
+      );
+      const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
+      await act(async () => {
+        fireEvent.click(retryBtn);
+      });
+      const message =
+        'The analysis on this book is still finishing the chapters it had started. Try again in a moment.';
+      await act(async () => {
+        rejectSubset?.(new AnalysisError(message, 'main_analysis_running'));
+      });
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+      expect(store.getState().analysis.activeStream).toEqual(prior);
+      expect(capturedOpts).toBeUndefined();
+    },
+  );
+
+  it("A7: a main POST refused with subset_analysis_running restores the pre-POST snapshot, so this device's Retry is not greyed out", async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    const message = 'A chapter retry is running on this book. Wait for it to finish, then resume the analysis.';
+    analyseManuscriptRejection = new AnalysisError(message, 'subset_analysis_running');
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    /* No snapshot existed before the POST: none is left behind. */
+    expect(store.getState().analysis.activeStream).toBeNull();
+    expect(screen.getByRole('button', { name: /retry chapter/i })).not.toBeDisabled();
+    expect(screen.queryByText('Pause the analysis first')).not.toBeInTheDocument();
+  });
+
+  it('C9: cold boot with a running SUBSET snapshot does not POST the main route', async () => {
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    store.dispatch(
+      analysisActions.setActiveStream({
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        phaseId: 1,
+        phaseLabel: 'Parsing and attribution',
+        phaseProgress: 0.3,
+        remainingMs: null,
+        lastTickAt: Date.now(),
+        state: 'running',
+        kind: 'subset',
+        subsetChapterIds: [49],
+      }),
+    );
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    await screen.findByRole('button', { name: /retry chapter/i });
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    expect(capturedOpts).toBeUndefined();
   });
 
   it('a chapter-resolved SSE event drops the matching panel row mid-stream', async () => {
@@ -1663,11 +1774,11 @@ describe('AnalysingView — failed-chapter retry', () => {
       { label: 'Switch to a different analyzer model' },
     ];
 
-    /* Retry clicked while the main run is streaming: the view aborts the main
-       run and runs the subset alone (PAUSE-AND-RETRY). Real slices + middleware
-       so the HALTED hook's toast is observable; capturedOpts is cleared so a
-       later defined value means the main run was re-POSTed. */
-    async function pausedMainRetry() {
+    /* Retry clicked with no main run (the view never started one). Real slices
+       + middleware so the HALTED hook's toast is observable; capturedOpts stays
+       undefined unless something POSTs the main run. #3435 — replaces the
+       pause-and-retry setup (`pausedMainRetry`), which decision A withdrew. */
+    async function idleRetry() {
       getBookStateImpl = () => Promise.resolve(makeBookState([44]));
       const { analysisStreamMiddleware } = await import('../store/analysis-stream-middleware');
       const store = configureStore({
@@ -1692,22 +1803,12 @@ describe('AnalysingView — failed-chapter retry', () => {
           />
         </Provider>,
       );
-      const startBtn = await screen.findByRole('button', { name: /start analysis/i });
-      await act(async () => {
-        fireEvent.click(startBtn);
-      });
-      await waitFor(() => expect(capturedOpts).toBeDefined());
-      const mainSignal = capturedOpts!.signal!;
-      await act(async () => {
-        capturedOpts!.onPhase!({ phaseId: 0, progress: 0.4 });
-      });
       const retryBtn = await screen.findByRole('button', { name: /retry chapter/i });
-      capturedOpts = undefined;
       await act(async () => {
         fireEvent.click(retryBtn);
       });
-      expect(mainSignal.aborted).toBe(true);
       expect(capturedSubsetCall!.chapterIds).toEqual([44]);
+      expect(capturedOpts).toBeUndefined();
       return { store };
     }
 
@@ -1802,14 +1903,12 @@ describe('AnalysingView — failed-chapter retry', () => {
       });
     }
 
-    /* The loop above starts from a halted snapshot with NO main run, so a
-       leaked `.finally` there only clears the snapshot (asserted above). This
-       one starts from a RUNNING main run that the Retry pauses, so a leaked
-       `.finally` would re-POST the main run — a second analyseManuscript call
-       (capturedOpts defined). */
-    it('overflow on a Retry that paused a running main run does NOT re-POST the main run', async () => {
+    /* #3435 — rewritten from "overflow on a Retry that paused a running main run
+       does NOT re-POST the main run" for a Retry with main NOT running: the
+       overflow keeps the row and the main run is never POSTed. */
+    it('overflow on a Retry with main not running does NOT POST the main run', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
-      await pausedMainRetry();
+      await idleRetry();
       await act(async () => {
         rejectSubset?.(
           new AnalysisError(
@@ -1830,13 +1929,13 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
     });
 
-    /* cast_incomplete is the subset route's DESIGNED pause-and-retry frame: the
-       retried chapter SUCCEEDED (chapter-resolved first), no other chapter
-       failed, but Phase 0a coverage is incomplete. Row dropped, main re-POSTed,
-       snapshot running — NOT halted. */
-    it('cast_incomplete after a successful Retry drops the row, re-POSTs the main run, and does not halt', async () => {
+    /* cast_incomplete after a Retry whose chapter SUCCEEDED (chapter-resolved
+       first): the row drops and the run is not halted. #3435 — rewritten for a
+       Retry with main NOT running (the old version re-POSTed the paused main
+       run); nothing is POSTed now. */
+    it('cast_incomplete after a successful Retry drops the row and does not halt', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
-      const { store } = await pausedMainRetry();
+      const { store } = await idleRetry();
       await act(async () => {
         capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
       });
@@ -1848,27 +1947,21 @@ describe('AnalysingView — failed-chapter retry', () => {
           ),
         );
       });
-      await waitFor(() => expect(capturedOpts).toBeDefined());
-      expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument());
       expect(store.getState().analysis.activeStream?.state).not.toBe('halted');
+      expect(capturedOpts).toBeUndefined();
     });
 
-    /* stage1_shrink_refused on a Retry: the main run is re-POSTed and its own
-       guard raises the Accept banner, exactly as on main. */
-    it('stage1_shrink_refused on a Retry reaches the Accept-smaller-roster banner via the resumed main run', async () => {
+    /* #3435 — rewritten from "stage1_shrink_refused on a Retry reaches the
+       Accept-smaller-roster banner via the resumed main run": with no main run
+       to resume, the non-pause half stays — the resolved row drops and nothing
+       POSTs the main run. (The subset's own shrink banner is a later task.) */
+    it('stage1_shrink_refused on a Retry with main not running drops the resolved row and does not POST the main run', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
-      await pausedMainRetry();
+      await idleRetry();
       await act(async () => {
         capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
       });
-      /* The resumed main run is what raises the banner on main. */
-      analyseManuscriptRejection = new AnalysisError(
-        'Cast finalisation would drop from 9 to 4 characters.',
-        'stage1_shrink_refused',
-        undefined,
-        9,
-        4,
-      );
       await act(async () => {
         rejectSubset?.(
           new AnalysisError(
@@ -1880,8 +1973,8 @@ describe('AnalysingView — failed-chapter retry', () => {
           ),
         );
       });
-      expect(await screen.findByTestId('stage1-shrink-refused-banner')).toBeInTheDocument();
-      expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+      await waitFor(() => expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument());
+      expect(capturedOpts).toBeUndefined();
     });
 
     it('control: a Retry that ends without a result still drops the row and raises nothing', async () => {

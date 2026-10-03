@@ -30,6 +30,8 @@ import { notificationsSlice, notificationsActions } from './notifications-slice'
 const pauseAnalysisSpy = vi.fn().mockResolvedValue(undefined);
 const analyseManuscriptMock = vi.fn();
 const runAnalysisForChaptersMock = vi.fn();
+const getAnalysisStateMock = vi.fn();
+const getBookStateMock = vi.fn();
 
 vi.mock('../lib/api', () => {
   /* Re-derive AnalysisError inside the factory so `e instanceof AnalysisError`
@@ -72,6 +74,8 @@ vi.mock('../lib/api', () => {
         analyseManuscriptMock(manuscriptId, opts),
       runAnalysisForChapters: (manuscriptId: string, chapterIds: number[], opts: unknown) =>
         runAnalysisForChaptersMock(manuscriptId, chapterIds, opts),
+      getAnalysisState: (bookId: string) => getAnalysisStateMock(bookId),
+      getBookState: (bookId: string) => getBookStateMock(bookId),
     },
     AnalysisError,
   };
@@ -125,6 +129,9 @@ beforeEach(() => {
   pauseAnalysisSpy.mockClear();
   analyseManuscriptMock.mockReset();
   runAnalysisForChaptersMock.mockReset();
+  getAnalysisStateMock.mockReset();
+  getBookStateMock.mockReset();
+  getBookStateMock.mockResolvedValue({ state: { castConfirmed: false } });
   captured = [];
   const makeImpl =
     (kindMarker: 'main' | 'subset') =>
@@ -1137,5 +1144,65 @@ describe('analysisStreamMiddleware — heartbeat keeps cross-view snapshot fresh
       }),
     );
     expect(store.getState().analysis.activeStream?.lastTickAt).toBe(initialLastTick);
+  });
+});
+
+describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST', () => {
+  const settle = async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  const serverSubset = {
+    manuscriptId: 'm1',
+    phaseId: 1,
+    phaseLabel: 'Parsing and attribution',
+    phaseProgress: 0.4,
+    state: 'running' as const,
+    engine: 'gemini' as const,
+    kind: 'subset' as const,
+    subsetChapterIds: [3],
+    lastTickAt: 42,
+    writtenAt: 43,
+  };
+
+  it('the middleware closes its handle on a refusal code without halting or toasting, re-reads getAnalysisState and restores the snapshot from it (or clears it on null); it never dispatches setPaused', async () => {
+    /* Main handle refused because a subset is running: the server's subset snapshot replaces
+       the stale running main one. */
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    getAnalysisStateMock.mockResolvedValueOnce(serverSubset);
+    lastCall().reject(new AnalysisError('A chapter retry is running on this book.', 'subset_analysis_running'));
+    await settle();
+    expect(captured[0]?.signal.aborted).toBe(true);
+    expect(getAnalysisStateMock).toHaveBeenCalledWith('b1');
+    const snap = store.getState().analysis.activeStream;
+    expect(snap).toMatchObject({ kind: 'subset', state: 'running', subsetChapterIds: [3], bookId: 'b1' });
+    expect(snap?.haltCode).toBeUndefined();
+    expect(store.getState().notifications.toasts).toHaveLength(0);
+    expect(pauseAnalysisSpy).not.toHaveBeenCalled();
+
+    /* Subset handle refused because a main run is live; the server has no state: cleared. */
+    const store2 = buildStore();
+    store2.dispatch(analysisActions.setActiveStream({ ...baseSnapshot, kind: 'subset', subsetChapterIds: [3] }));
+    store2.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, phaseProgress: 0.1 }));
+    getAnalysisStateMock.mockResolvedValueOnce(null);
+    lastCall().reject(new AnalysisError('The analysis is still running on this book.', 'main_analysis_running'));
+    await settle();
+    expect(store2.getState().analysis.activeStream).toBeNull();
+    expect(store2.getState().notifications.toasts).toHaveLength(0);
+    expect(pauseAnalysisSpy).not.toHaveBeenCalled();
+  });
+
+  it('a non-running server snapshot for a confirmed book is not restored (the cold-boot gate)', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
+    getBookStateMock.mockResolvedValueOnce({ state: { castConfirmed: true } });
+    lastCall().reject(new AnalysisError('still finishing', 'main_analysis_running'));
+    await settle();
+    expect(store.getState().analysis.activeStream).toBeNull();
+    expect(pauseAnalysisSpy).not.toHaveBeenCalled();
   });
 });

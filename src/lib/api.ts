@@ -2910,6 +2910,23 @@ export class AnalysisError extends Error {
 }
 
 
+/* #3435 decision A — a 409 refusal body (`{ error, message, draining? }`) as the
+   same AnalysisError(message, code) the late-check SSE `error` frame becomes
+   through each reader's `kind: 'error'` branch, so callers handle one shape.
+   Null for any other body. */
+function analysisRefusalFromBody(status: number, body: string, codes: readonly string[]): AnalysisError | null {
+  if (status !== 409) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const { error, message } = (parsed ?? {}) as { error?: unknown; message?: unknown };
+  if (typeof error !== 'string' || !codes.includes(error)) return null;
+  return new AnalysisError(typeof message === 'string' && message ? message : 'Analysis refused.', error);
+}
+
 async function realAnalyseManuscript(
   manuscriptId: string,
   opts: AnalyseOpts = {},
@@ -2966,6 +2983,10 @@ async function realAnalyseManuscript(
         if (!accepted) reject(new AnalysisError(msg, ANALYSIS_STREAM_FAILED));
       });
     }
+    /* #3435 — a start refused because a chapter retry is running, or because
+       the previous run is still finishing. */
+    const refusal = analysisRefusalFromBody(res.status, body, ['subset_analysis_running', 'main_analysis_running']);
+    if (refusal) throw refusal;
     throw new AnalysisError(msg, ANALYSIS_STREAM_FAILED);
   }
   if (!res.body) throw new AnalysisError(`Analysis stream failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
@@ -5683,8 +5704,15 @@ async function realRunAnalysisForChapters(
      middleware subscribes through this reader too (kind: 'subset') and
      classifies on `code`, so a plain Error here would land in its generic
      terminal branch and paint a designed no-result exit as a dead run. */
-  if (!res.ok || !res.body)
+  if (!res.ok) {
+    /* #3435 — refused while the book has a main analysis run, live or still
+       finishing; the server's message goes on the row. */
+    const body = await res.text().catch(() => '');
+    const refusal = analysisRefusalFromBody(res.status, body, ['main_analysis_running']);
+    if (refusal) throw refusal;
     throw new AnalysisError(`Subset analysis failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
+  }
+  if (!res.body) throw new AnalysisError(`Subset analysis failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

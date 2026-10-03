@@ -34,7 +34,12 @@ import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { uiActions, selectPhaseModelPick } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
-import { analysisActions, type AnalysisStreamSnapshot } from '../store/analysis-slice';
+import {
+  analysisActions,
+  selectMainAnalysisLive,
+  type AnalysisState,
+  type AnalysisStreamSnapshot,
+} from '../store/analysis-slice';
 import { selectAnalyzerSplitIsActive, fetchAnalyzerModels } from '../store/account-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -203,10 +208,11 @@ export function AnalysingView({
      button — after a pause the cache holds completed chapters, so
      "Resume" is the truthful word. */
   const hasStartedOnceRef = useRef(false);
-  /* Tracks whether the current retry attempt was rejected with
-     subset_in_progress (#3202). Used in the finally block to avoid
-     touching the active stream or re-arming the main run when this error
-     occurs — the rejection means another subset job is live. */
+  /* Tracks whether the current retry attempt was refused before it
+     started a job — subset_in_progress (#3202: another subset job is live)
+     or main_analysis_running (#3435: the main run is live or still
+     finishing). Used in the finally block to leave the restored snapshot
+     alone. */
   const subsetInProgressRef = useRef(false);
   /* Same shape for a Retry that ended with a real analyzer error (#3084):
      the catch halted the run, so the finally block must leave it alone. */
@@ -232,6 +238,10 @@ export function AnalysingView({
      failedChapters drains to 0 we auto-resume the main run so Phase 1+
      start without the user having to re-click "Try again". */
   const [castIncomplete, setCastIncomplete] = useState(false);
+  /* #3435 — the server refused this view's main start (a chapter retry is
+     running, or the previous run is still finishing). Its message shows under
+     the Start button; cleared on the next start. */
+  const [startRefusal, setStartRefusal] = useState<string | null>(null);
 
   /* Stage 1 shrink-refused info — surfaced when the server refused to
      overwrite a non-trivial cached roster with a much smaller one
@@ -327,11 +337,22 @@ export function AnalysingView({
     if (activeStreamSnapshot.manuscriptId !== manuscriptId) return;
     coldBootRehydratedRef.current = true;
     hasStartedOnceRef.current = true;
-    if (activeStreamSnapshot.state === 'running') {
+    /* #3435 (C9) — only a running MAIN snapshot re-attaches the main stream. A
+       running subset (a Retry, Re-analyse or Include) never POSTs the main
+       route: the server would refuse it, and the rows come from the
+       book-state GET as usual. */
+    if (activeStreamSnapshot.state === 'running' && activeStreamSnapshot.kind !== 'subset') {
       setAnalysisStarted(true);
       setResuming(true);
     }
   }, [manuscriptId, activeStreamSnapshot]);
+  /* #3435 decision A — a main run is live for this manuscript (on this device
+     or another), so Retry is disabled: the server refuses a subset run beside
+     it. Defensive read for legacy test stores without the analysis slice. */
+  const mainAnalysisLive = useAppSelector((s) => {
+    const analysis = (s as { analysis?: AnalysisState }).analysis;
+    return analysis ? selectMainAnalysisLive({ analysis }, manuscriptId) : false;
+  });
 
   /* Analyzer readiness gate — declared up here (above the analysis
      useEffect) because the analysis effect depends on it. The full
@@ -496,12 +517,19 @@ export function AnalysingView({
        succeeds (banner stays cleared) or hits the gate again and the
        catch below re-sets it with fresh counts. */
     setStage1ShrinkInfo(null);
+    setStartRefusal(null);
     const markEvent = () => {
       setLastEventAt(Date.now());
       /* First event of any run means we're re-attached — drop the
          "Reconnecting…" bridge (issue #865). No-op when not resuming. */
       setResuming(false);
     };
+    /* #3435 (A7) — the snapshot as it was before this POST, restored if the
+       server refuses the start, so a refused start leaves no `running` main
+       snapshot behind to grey out this device's own Retry. */
+    const preStartSnapshot =
+      (store.getState() as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis
+        ?.activeStream ?? null;
     /* Seed the cross-navigation analysis snapshot so the AnalysisPill
        (B3) can read live progress from Redux even after the user
        navigates away from this view. The snapshot updates on every
@@ -690,6 +718,22 @@ export function AnalysingView({
            in the UI. Falling through would flash "Analysis failed:
            Analysis aborted" right before the new attempt renders. */
         if ((e as Error)?.name === 'AbortError') return;
+        /* #3435 (A7) — the server refused this start: a chapter retry is
+           running (`subset_analysis_running`), or the previous run is still
+           finishing (`main_analysis_running`, draining). No job started, so
+           this is neither a halt nor a failure: restore the pre-POST snapshot,
+           go idle, and show the server's message. */
+        if (
+          e instanceof AnalysisError &&
+          (e.code === 'subset_analysis_running' || e.code === 'main_analysis_running')
+        ) {
+          if (preStartSnapshot) dispatch(analysisActions.setActiveStream(preStartSnapshot));
+          else dispatch(analysisActions.clearActiveStream());
+          setConn('idle');
+          setAnalysisStarted(false);
+          setStartRefusal(e.message);
+          return;
+        }
         if (e instanceof AnalysisError && e.code === 'aborted') {
           /* Server-side pause / displacement. Reflect in the snapshot
              so the pill renders the paused variant, but DO NOT clear
@@ -841,18 +885,15 @@ export function AnalysingView({
      cache.failedChapterIds (also broadcast via chapter-resolved SSE so
      this view's row clears in real time).
 
-     Concurrency contract — PAUSE-AND-RETRY. If the main /analysis/stream
-     run is in flight when the user clicks Retry, we abort it before
-     firing the subset call and re-arm it once the subset settles. The
-     previous implementation let the two SSEs run in parallel; both
-     routes load their own snapshot of the disk-backed analysis cache
-     and write back independently, so the second-finisher's stale view
-     of cache.failedChapterIds / cache.chapters silently clobbered the
-     first's progress. The symptom the user saw: after a successful
-     retry, reload restored the failed rows and showed previously-
-     attributed chapters as still-not-parsed. Serialising the two runs
-     on the client side is the smallest fix that closes the race
-     without forcing the user to Pause first. */
+     Concurrency contract — REFUSE UNTIL PAUSED (#3435 decision A). The main
+     run and a subset run must never write one book at once: both load their
+     own snapshot of the disk-backed analysis cache and write back
+     independently, so the second finisher clobbered the first's progress.
+     The server refuses a subset POST while a main run is live or still
+     finishing (409 `main_analysis_running`), and Retry is disabled with
+     "Pause the analysis first" while this view knows a main run is live. The
+     earlier client-side pause-and-retry is withdrawn: it could not wait for
+     the paused run to settle. */
   const handleRetryChapter = (chapterId: number) => {
     if (!manuscriptId) return;
     if (retryingChapterId !== null) return;
@@ -866,25 +907,8 @@ export function AnalysingView({
          "Reconnecting…" bridge (issue #865). No-op when not resuming. */
       setResuming(false);
     };
-    /* Snapshot whether the main run is in flight RIGHT NOW. If yes,
-       abort it before firing subset (avoids the cache-write race) and
-       remember to resume it after subset settles.
-       Both conditions matter: analysisControllerRef.current is set
-       while the effect's controller is live, BUT the effect cleanup
-       only nulls it when deps change — so after a cast_incomplete
-       catch the ref can linger as a zombie even though no fetch is
-       streaming. Gate on conn too so we only pause real in-flight
-       runs and leave the cast_incomplete auto-resume effect to
-       handle that path on its own (it kicks once every failedChapter
-       row clears). */
-    const pausedMainForRetry =
-      analysisControllerRef.current !== null && (conn === 'streaming' || conn === 'connecting');
-    if (pausedMainForRetry) {
-      analysisControllerRef.current?.abort();
-      setAnalysisStarted(false);
-    }
-    /* Retry now owns the conn/phase indicators — main is either already
-       idle or just got paused. */
+    /* Retry now owns the conn/phase indicators — the main run is not
+       running (Retry is disabled while it is). */
     setConn('connecting');
     /* Plan 32 follow-up: switch the cross-navigation snapshot from
        main → subset so the top-bar AnalysisPill renders the "Retrying
@@ -895,9 +919,10 @@ export function AnalysingView({
        map (which has no job) and either start a fresh main run or
        fall through.
 
-       Capture the prior snapshot in case the request fails with
-       subset_in_progress; restoration prevents a stale/clobbered state
-       from becoming permanent (B2 regression guard). */
+       Capture the prior snapshot in case the request is refused
+       (subset_in_progress, or #3435 main_analysis_running); restoration
+       prevents a stale/clobbered state from becoming permanent (B2
+       regression guard). */
     const priorSnapshot = store.getState().analysis.activeStream;
     dispatch(
       analysisActions.setActiveStream({
@@ -1011,18 +1036,16 @@ export function AnalysingView({
            guard: the pre-POST clobber must not persist on rejection) and
            mark this in the ref so the finally block knows not to touch it or
            re-arm the main run. */
-        if (err instanceof AnalysisError && err.code === 'subset_in_progress') {
+        /* #3435 — `main_analysis_running`: the server refused this Retry
+           because the main run is live or still finishing. Same handling:
+           restore, keep the row, show the server's message on it. */
+        if (
+          err instanceof AnalysisError &&
+          (err.code === 'subset_in_progress' || err.code === 'main_analysis_running')
+        ) {
           subsetInProgressRef.current = true;
           if (priorSnapshot) {
-            /* B3 fix: when the main SSE was aborted (pausedMainForRetry is true),
-               we're not re-subscribing to it, so restore with state: 'paused'
-               instead of the original 'running'. This prevents layout.tsx's stall
-               detection from marking the pill as stalled 30s later. */
-            dispatch(
-              analysisActions.setActiveStream(
-                pausedMainForRetry ? { ...priorSnapshot, state: 'paused' } : priorSnapshot,
-              ),
-            );
+            dispatch(analysisActions.setActiveStream(priorSnapshot));
           } else {
             dispatch(analysisActions.clearActiveStream());
           }
@@ -1077,12 +1100,9 @@ export function AnalysingView({
       .finally(() => {
         setRetryingChapterId(null);
         setDroppedQuotesRefreshKey((k) => k + 1);
-        /* If the subset request was rejected with subset_in_progress (#3202),
-           do NOT touch the active stream or re-arm the main run. The rejection
-           means another subset job is live, and resuming the main run while
-           that's active would trigger the cache-write race that the PAUSE-AND-RETRY
-           contract exists to prevent (see the comment at line 751). Leave the
-           main run paused and let the user wait for the other subset to finish. */
+        /* If the subset request was refused (subset_in_progress #3202, or
+           main_analysis_running #3435), the catch restored the prior
+           snapshot: leave it alone. */
         if (subsetInProgressRef.current) {
           return;
         }
@@ -1092,43 +1112,10 @@ export function AnalysingView({
         if (retryHaltedRef.current) {
           return;
         }
-        /* Resume the main run if Retry paused it. The analysis effect
-           is keyed off (analysisStarted, retry.nonce, …) so we flip
-           analysisStarted back on and bump the nonce to re-enter — the
-           same idiom the manual Resume button uses below. The server
-           skips already-cached chapters, so resume picks up exactly
-           where the pause left off (plus the freshly-retried chapter,
-           which is now cached too). */
-        if (pausedMainForRetry) {
-          /* Restore the snapshot to kind=main so the middleware re-opens
-             against the main route's in-flight map on the resumed run's
-             first tick. The analysis effect below will dispatch its own
-             setActiveStream when it re-fires, which will overwrite this
-             with fresh phase data — but the kind has to flip back first
-             or the middleware would still be aiming at the subset route. */
-          dispatch(
-            analysisActions.setActiveStream({
-              bookId: bookId ?? null,
-              manuscriptId,
-              bookTitle: title ?? undefined,
-              engine: effectiveEngine,
-              phaseId: 0,
-              phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
-              phaseProgress: 0,
-              remainingMs: null,
-              lastTickAt: Date.now(),
-              state: 'running',
-            }),
-          );
-          setAnalysisStarted(true);
-          setResuming(false);
-          setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
-        } else {
-          /* Main wasn't running — retry was a standalone (cast_incomplete
-             auto-resume path). Clear the snapshot so the pill drops out;
-             the auto-resume effect handles its own next-step decisions. */
-          dispatch(analysisActions.clearActiveStream());
-        }
+        /* The Retry ran on its own (the main run is never running beside it,
+           #3435). Clear the snapshot so the pill drops out; the cast_incomplete
+           auto-resume effect handles its own next-step decisions. */
+        dispatch(analysisActions.clearActiveStream());
       });
   };
 
@@ -1296,6 +1283,10 @@ export function AnalysingView({
   }, [manuscriptId, isLocalAnalyzer, ollamaHealth, runModelsResident, pendingAnalyzerPill]);
 
   const isAnalysisRunning = conn === 'streaming' || conn === 'connecting';
+  /* #3435 decision A — Retry is disabled while a main run is live: this view's
+     own main stream (conn is also 'connecting'/'streaming' during a Retry, so
+     that case is excluded), or a live main snapshot from anywhere. */
+  const retryBlockedByMain = (isAnalysisRunning && retryingChapterId === null) || mainAnalysisLive;
   /* Single source of truth for the Pause/Resume/Start cycle. Both the
      original header button (inside the centred column) and the new
      `<StickyAnalysisBar/>` (which pins on scroll) call this — keeping
@@ -1431,6 +1422,12 @@ export function AnalysingView({
                   >
                     {label}
                   </button>
+                  {/* #3435 — the server refused the last start; its message says why. */}
+                  {startRefusal && (
+                    <p className="text-xs text-amber-900 text-center max-w-sm" data-testid="analysis-start-refused">
+                      {startRefusal}
+                    </p>
+                  )}
                   {isLocalAnalyzer && !isAnalyzerReady && !isRunning && (
                     <p className="text-[11px] text-ink/50">
                       The model needs to be resident in VRAM before analysis can run.
@@ -1755,12 +1752,10 @@ export function AnalysingView({
 
         {/* Failed-chapter retry panel. Survives reload via book-state
             hydration (see the failed-chapters effect above).
-            Pause-and-retry: clicking Retry while the main run is in
-            flight pauses it for the duration of the subset call and
-            auto-resumes once the row resolves — see handleRetryChapter
-            for why running both SSEs in parallel races the analysis-
-            cache writes. Only one chapter can be in flight at a time
-            (retryingChapterId tracks the active one). */}
+            Refuse until paused (#3435): Retry is disabled while the main
+            run is live — see handleRetryChapter for why the two runs must
+            never write the book at once. Only one chapter can be in flight
+            at a time (retryingChapterId tracks the active one). */}
         {failedChapters.length > 0 && (
           <div className="mt-6 rounded-3xl border border-amber-200 bg-amber-50/60 px-6 py-4">
             <p className="text-sm font-semibold text-amber-900">
@@ -1775,13 +1770,13 @@ export function AnalysingView({
             <p className="mt-1 text-xs text-amber-800/80">
               {castIncomplete
                 ? "Phase 1 (sentence attribution) won't start until every chapter has a cast. Click Retry below — the rest of the analysis resumes automatically once they all clear."
-                : "The model produced malformed output on these chapters even after the analyzer's built-in retry. Retry runs them again on the currently-selected model. If the main run is in flight, Retry pauses it for the duration of the subset call and resumes automatically when the row clears."}
+                : 'Retry runs these chapters again on the currently-selected model.'}
             </p>
             <ul className="mt-3 space-y-2">
               {failedChapters.map((f) => {
                 const isRetrying = retryingChapterId === f.chapterId;
                 const anotherRetryInFlight = retryingChapterId !== null && !isRetrying;
-                const disabled = isRetrying || anotherRetryInFlight;
+                const disabled = isRetrying || anotherRetryInFlight || retryBlockedByMain;
                 const title = chapterTitleById[f.chapterId] ?? `Chapter ${f.chapterId}`;
                 return (
                   <li
@@ -1814,6 +1809,7 @@ export function AnalysingView({
                       type="button"
                       onClick={() => handleRetryChapter(f.chapterId)}
                       disabled={disabled}
+                      title={retryBlockedByMain ? 'Pause the analysis first' : undefined}
                       className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
                         disabled
                           ? 'bg-ink/10 text-ink/40 cursor-not-allowed'
@@ -1827,6 +1823,9 @@ export function AnalysingView({
                 );
               })}
             </ul>
+            {retryBlockedByMain && (
+              <p className="mt-2 text-xs text-amber-800/80">Pause the analysis first</p>
+            )}
           </div>
         )}
       </div>

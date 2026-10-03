@@ -57,7 +57,7 @@ import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
-import { analysisActions } from '../store/analysis-slice';
+import { analysisActions, selectMainAnalysisLive, type AnalysisState } from '../store/analysis-slice';
 import { uiActions } from '../store/ui-slice';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { enqueueQueueEntries } from '../store/queue-thunks';
@@ -210,6 +210,14 @@ export function GenerationView({
   const lastTickAt = useAppSelector((s) => s.chapters.lastTickAt);
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
+  /* #3435 decision A — the server refuses a subset run (Re-analyse, Include)
+     while this book's main analysis run is live, so both controls are
+     disabled with "Pause the analysis first" until it is paused. Defensive
+     read: some test stores are built without the analysis slice. */
+  const mainAnalysisLive = useAppSelector((s) => {
+    const analysis = (s as { analysis?: AnalysisState }).analysis;
+    return analysis ? selectMainAnalysisLive({ analysis }, manuscriptId) : false;
+  });
   const activityEvents = useAppSelector((s) => s.changeLog.events);
   /* srv-36 hardening — live per-book scoreBook progress, ticked over SSE
      during an active generation run (generation-stream-runner.ts). Undefined
@@ -530,7 +538,11 @@ export function GenerationView({
          running for this manuscript; this include never got its own job
          started. Surface the server's message rather than falling
          through to the generic failure text below. */
-      const isSubsetInProgress = e instanceof AnalysisError && e.code === 'subset_in_progress';
+      /* #3435 — `main_analysis_running`: the server refused this include
+         because the book's main analysis run is live or still finishing; it
+         is handled the same way (restore, message on the row). */
+      const isSubsetInProgress =
+        e instanceof AnalysisError && (e.code === 'subset_in_progress' || e.code === 'main_analysis_running');
       await rollbackInclude(chapterId).catch((rollbackErr) => {
         console.warn('[generation] include rollback failed', rollbackErr);
       });
@@ -733,7 +745,9 @@ export function GenerationView({
          clobber must not persist on rejection) rather than leaving the
          other job's snapshot overwritten by this one's. Surface the
          server's message instead of the generic fallback text. */
-      if (e instanceof AnalysisError && e.code === 'subset_in_progress') {
+      /* #3435 — `main_analysis_running` (the main run is live or finishing)
+         never started a job either: same handling. */
+      if (e instanceof AnalysisError && (e.code === 'subset_in_progress' || e.code === 'main_analysis_running')) {
         if (priorSnapshot) {
           dispatch(analysisActions.setActiveStream(priorSnapshot));
         } else {
@@ -1384,6 +1398,7 @@ export function GenerationView({
               onRename={setRenamingChapter}
               onToggleExcluded={handleToggleExcluded}
               onIncludeClick={handleIncludeClick}
+              mainAnalysisLive={mainAnalysisLive}
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
               stale={
@@ -1521,6 +1536,9 @@ interface ChapterRowProps {
       un-exclude call in `useLocalAnalyzerGuard` so the local-analyzer
       mid-gen confirm modal can intercept before the analysis fires. */
   onIncludeClick: (chapterId: number) => void;
+  /** #3435 — the book's main analysis run is live: Re-analyse and Include are
+      disabled ("Pause the analysis first"). */
+  mainAnalysisLive: boolean;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
   /** Bug 2 — true when this `done` chapter's sentence→speaker assignments were
@@ -1558,6 +1576,7 @@ function ChapterRow({
   onRename,
   onToggleExcluded,
   onIncludeClick,
+  mainAnalysisLive,
   onCancelSubset,
   onRetrySubset,
   stale,
@@ -1590,6 +1609,7 @@ function ChapterRow({
         chapter={chapter}
         subsetProgress={subsetProgress}
         onIncludeClick={onIncludeClick}
+        mainAnalysisLive={mainAnalysisLive}
         onCancelSubset={onCancelSubset}
         onRetrySubset={onRetrySubset}
       />
@@ -1930,13 +1950,20 @@ function ChapterRow({
               e.stopPropagation();
               onReanalyse(chapter);
             }}
-            disabled={subsetProgress != null}
+            disabled={subsetProgress != null || mainAnalysisLive}
             data-testid={`chapter-row-${chapter.id}-reanalyse`}
-            title="Re-run character detection + attribution for this chapter (designed voices preserved)."
+            title={
+              mainAnalysisLive
+                ? 'Pause the analysis first'
+                : 'Re-run character detection + attribution for this chapter (designed voices preserved).'
+            }
             className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
             <IconSparkle className="w-3.5 h-3.5" /> Re-analyse
           </button>
+          {mainAnalysisLive && (
+            <span className="text-[11px] text-ink/45">Pause the analysis first</span>
+          )}
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -2162,12 +2189,14 @@ function ExcludedChapterRow({
   chapter,
   subsetProgress,
   onIncludeClick,
+  mainAnalysisLive,
   onCancelSubset,
   onRetrySubset,
 }: {
   chapter: Chapter;
   subsetProgress: SubsetProgress | null;
   onIncludeClick: (chapterId: number) => void;
+  mainAnalysisLive: boolean;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
 }) {
@@ -2212,6 +2241,9 @@ function ExcludedChapterRow({
               Excluded — not analyzed, no audio will be generated.
             </span>
           )}
+          {!running && mainAnalysisLive && (
+            <span className="block text-[11px] text-ink/45 mt-0.5">Pause the analysis first</span>
+          )}
         </span>
         {running ? (
           <button
@@ -2225,7 +2257,9 @@ function ExcludedChapterRow({
           <button
             type="button"
             onClick={() => onRetrySubset(chapter.id)}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            disabled={mainAnalysisLive}
+            title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
             <IconRefresh className="w-3.5 h-3.5" /> Retry
           </button>
@@ -2233,7 +2267,9 @@ function ExcludedChapterRow({
           <button
             type="button"
             onClick={() => onIncludeClick(chapter.id)}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            disabled={mainAnalysisLive}
+            title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
             + Include in book
           </button>
