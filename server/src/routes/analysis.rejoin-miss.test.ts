@@ -40,6 +40,12 @@ beforeAll(() => {
   process.env.WORKSPACE_DIR = workspaceRoot;
 });
 
+/* Warm the cold `./analysis.js` import once, with a generous budget, so the
+   first case doesn't pay it inside its own timeout (flaky under CPU load). */
+beforeAll(async () => {
+  await import('./analysis.js');
+}, 120_000);
+
 afterAll(() => {
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
