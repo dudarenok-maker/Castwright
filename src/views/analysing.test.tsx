@@ -2363,7 +2363,95 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(store.getState().notifications.toasts).toHaveLength(0);
     });
 
-    it('C18: a book whose book-state says resumeRequired shows the rows, "Resume analysis" and the needs-action line with no snapshot (a dropped or cleared snapshot)', async () => {
+    /* PR #3505 review — a Retry after a failed main run. The main run's red
+       banner belongs to that run: a Retry supersedes it, and a Retry whose
+       subset run sends `result` finished the book, so it routes to Confirm
+       exactly like a main run's result. */
+    async function mountAfterMainFailure(castConfirmed: boolean) {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      const base = withFacts(makeBookState([44], { '44': rec('attribution') }), { stage1Ready: true });
+      bookState = { ...base, state: { ...base.state, castConfirmed } };
+      bookStateCalls = 0;
+      getBookStateImpl = () => {
+        bookStateCalls += 1;
+        return Promise.resolve(bookState);
+      };
+      analyseManuscriptRejection = new AnalysisError('The analyzer timed out.', 'analyzer-timeout');
+      const onComplete = vi.fn();
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          account: accountSlice.reducer,
+          bookMeta: bookMetaSlice.reducer,
+          analysis: analysisSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+      });
+      render(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m1"
+            bookId="b1"
+            title="the Coalfall Commission"
+            wordCount={2440}
+            onComplete={onComplete}
+          />
+        </Provider>,
+      );
+      await waitFor(() => expect(bookStateCalls).toBeGreaterThan(0));
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+      });
+      expect(await screen.findByText('The analyzer timed out.')).toBeInTheDocument();
+      analyseManuscriptRejection = undefined;
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /retry chapter/i }));
+      });
+      return { store, onComplete };
+    }
+
+    it('a Retry ending `result` on an unconfirmed book routes to Confirm and clears the failed main run\'s banner', async () => {
+      const { store, onComplete } = await mountAfterMainFailure(false);
+      expect(screen.queryByText('The analyzer timed out.')).not.toBeInTheDocument();
+      bookState = { ...bookState, analysis: { ...bookState.analysis!, failedChapterIds: [] } };
+      const payload = { characters: [] } as unknown as AnalyseResponse;
+      await act(async () => {
+        resolveSubset?.(payload);
+      });
+      await settle();
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      expect(onComplete).toHaveBeenCalledWith(payload);
+      expect(screen.queryByText('The analyzer timed out.')).not.toBeInTheDocument();
+      expect(store.getState().analysis.activeStream).toBeNull();
+    });
+
+    it('a Retry ending resume_required after a failed main run shows only the needs-action line, not the stale banner', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      const { onComplete } = await mountAfterMainFailure(false);
+      const message =
+        'Chapter Forty-Two re-analysed. Chapter Forty-Seven still needs attribution — resume the analysis to finish the book.';
+      await act(async () => {
+        rejectSubset?.(new AnalysisError(message, 'resume_required'));
+      });
+      await settle();
+      expect(screen.getByTestId('analysis-needs-action-line')).toHaveTextContent(message);
+      expect(screen.queryByText('The analyzer timed out.')).not.toBeInTheDocument();
+      expect(onComplete).not.toHaveBeenCalled();
+    });
+
+    it('control: a Retry ending `result` on a cast-confirmed book stays in place (no route to Confirm)', async () => {
+      const { onComplete } = await mountAfterMainFailure(true);
+      bookState = { ...bookState, analysis: { ...bookState.analysis!, failedChapterIds: [] } };
+      await act(async () => {
+        resolveSubset?.({ characters: [] } as unknown as AnalyseResponse);
+      });
+      await settle();
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+    });
+
+    it('C18:a book whose book-state says resumeRequired shows the rows, "Resume analysis" and the needs-action line with no snapshot (a dropped or cleared snapshot)', async () => {
       bookState = withFacts(makeBookState([44], { '44': rec('attribution') }), {
         stage1Ready: true,
         resumeRequired: true,

@@ -293,7 +293,11 @@ export function AnalysingView({
      view observes (`bookStateRefreshKey`). They drive copy and affordances
      only, never the auto-resume. `stage1Ready` is undefined until the GET
      answers (or from a server that predates it). */
-  const [bookFacts, setBookFacts] = useState<{ stage1Ready?: boolean; resumeRequired: boolean } | null>(null);
+  const [bookFacts, setBookFacts] = useState<{
+    stage1Ready?: boolean;
+    resumeRequired: boolean;
+    castConfirmed: boolean;
+  } | null>(null);
   const [bookStateRefreshKey, setBookStateRefreshKey] = useState(0);
   /* #3435 — the server refused this view's main start (a chapter retry is
      running, or the previous run is still finishing). Its message shows on the
@@ -515,6 +519,20 @@ export function AnalysingView({
   const runModelsResident = runModelsAllResident(effectiveModelIds, ollamaHealth?.resident ?? []);
   const isAnalyzerReady =
     !isLocalAnalyzer || (ollamaHealth?.status === 'reachable' && runModelsResident);
+
+  /* A run that sent `result` finished the book: the main run's own ending,
+     and a Retry's whose subset run finished it (#3435 S14). */
+  const completeRun = (payload: AnalyseResponse) => {
+    completedRef.current = true;
+    setConn('done');
+    setDroppedQuotesRefreshKey((k) => k + 1);
+    setBookStateRefreshKey((k) => k + 1);
+    /* Run completed cleanly — tear down the cross-navigation snapshot
+       so the pill drops out (the view will transition to confirm
+       via onComplete below anyway). */
+    dispatch(analysisActions.clearActiveStream());
+    onComplete(payload);
+  };
 
   useEffect(() => {
     if (!manuscriptId) return; // nothing to analyse — UI shows a CTA below
@@ -750,15 +768,7 @@ export function AnalysingView({
           },
         });
         if (cancelled || completedRef.current) return;
-        completedRef.current = true;
-        setConn('done');
-        setDroppedQuotesRefreshKey((k) => k + 1);
-        setBookStateRefreshKey((k) => k + 1);
-        /* Run completed cleanly — tear down the cross-navigation snapshot
-           so the pill drops out (the view will transition to confirm
-           via onComplete below anyway). */
-        dispatch(analysisActions.clearActiveStream());
-        onComplete(payload);
+        completeRun(payload);
       } catch (e) {
         if (cancelled) return;
         /* AbortError = the effect cleanup tore the fetch down (the user
@@ -892,7 +902,11 @@ export function AnalysingView({
         for (const c of res.state.chapters) titles[c.id] = c.title;
         setChapterTitleById(titles);
         const stage1Ready = res.analysis?.stage1Ready;
-        setBookFacts({ stage1Ready, resumeRequired: res.analysis?.resumeRequired === true });
+        setBookFacts({
+          stage1Ready,
+          resumeRequired: res.analysis?.resumeRequired === true,
+          castConfirmed: res.state.castConfirmed === true,
+        });
         /* #3435 (C20) — castIncomplete arming (b): on mount only, from a halted
            cast_incomplete snapshot of either kind, when the roster is not final.
            A later refresh never arms it (C-8). */
@@ -992,8 +1006,11 @@ export function AnalysingView({
     if (!manuscriptId) return;
     if (retryingChapterId !== null) return;
     setRetryingChapterId(chapterId);
-    /* #3435 — the refused-start line is about that start; a Retry supersedes it. */
+    /* #3435 — the refused-start line is about that start; a Retry supersedes it.
+       So does the failed main run's red banner: whatever this Retry ends in is
+       what the screen shows. */
     setStartRefusal(null);
+    setError(null);
     /* Reset the subset_in_progress flag for this attempt. */
     subsetInProgressRef.current = false;
     retryHaltedRef.current = false;
@@ -1124,9 +1141,16 @@ export function AnalysingView({
           );
         },
       })
-      .then(() => {
+      .then((payload) => {
         if (!retryReFailed) {
           setFailedChapters((prev) => prev.filter((f) => f.chapterId !== chapterId));
+        }
+        /* #3435 (S14) — a subset `result` on a book that has not reached
+           Confirm means the book is finished: route to Confirm exactly like a
+           main run's result. A cast-confirmed book stays put (decision F). */
+        if (bookFacts?.castConfirmed !== true && !completedRef.current) {
+          completeRun(payload);
+          return;
         }
         setConn('idle');
       })
