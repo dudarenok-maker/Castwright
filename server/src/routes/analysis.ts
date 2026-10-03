@@ -6516,6 +6516,9 @@ export async function runMainAnalyzerJob(
       if (abortController.signal.aborted) {
         throw new AnalysisAbortedError('Analysis aborted before re-attributing a pending chapter.');
       }
+      /* The pool's per-chapter dispatch check: an overflow the previous M8d
+         chapter recorded (a swallowed escalation window) starts no next one. */
+      throwIfReasoningOverflowed(job);
       dispatchedOnFinalRoster.set(i, true);
       takeWork(job);
       try {

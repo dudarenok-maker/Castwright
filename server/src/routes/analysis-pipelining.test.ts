@@ -903,4 +903,83 @@ describe('runMainAnalyzerJob — pending takes in pipelined mode (plan 285 T5)',
       await clearAnalysisCache(manuscriptId);
     }
   });
+
+  /* #3435 final review M1 — the pool checks for a recorded reasoning overflow
+     before each chapter it dispatches; the M8d pass must too, or an overflow
+     recorded by the first pending chapter's re-attribution (an escalation
+     window, reported through StageCall.onReasoningOverflow and swallowed) does
+     not stop the next one's model call. */
+  it('pipelined: an overflow recorded in the first M8d re-attribution starts no second one', async () => {
+    const manuscriptId = `test-m8d-overflow-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 3);
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '3';
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    /* A resume: chapters 1 and 2 had their cast fail on an earlier run. */
+    await saveAnalysisCache(manuscriptId, {
+      chapters: {},
+      chapterCast: { 1: [], 2: [] },
+      failedChapterIds: [1, 2],
+      failedChapterErrors: {
+        '1': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'cast' },
+        '2': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'cast' },
+      },
+    });
+    const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
+    const calls: Record<number, number> = {};
+    const overflowingPhase1: Analyzer = {
+      ...phase1Analyzer,
+      runStage2Chapter: async (m, id, p, call) => {
+        const out = await phase1Analyzer.runStage2Chapter(m, id, p, call);
+        calls[id] = (calls[id] ?? 0) + 1;
+        /* The first M8d re-attribution (a pending chapter's second take)
+           records an overflow and returns normally, as a swallowed escalation
+           window does. */
+        if ((id === 1 || id === 2) && calls[id] === 2 && (calls[1] ?? 0) + (calls[2] ?? 0) === 3) {
+          call.onReasoningOverflow?.(new AnalyzerReasoningOverflowError('gemini', 'gemini-3.1-flash-lite', 8100));
+        }
+        return out;
+      },
+    };
+    /* Hold both re-casts: chapter 3's cast advances the watermark, so chapters
+       1 and 2 are attributed against the rolling roster while their cast
+       records stand (both go into P). */
+    fixture.holdPhase0.set(1, () => {});
+    fixture.holdPhase0.set(2, () => {});
+    setPipelinedMode({
+      pipelined: true,
+      phase1Selection: buildSpyAnalyzerSelection(overflowingPhase1, 'gemini-3.1-flash-lite'),
+      minLag: 0,
+    });
+    const job = buildStubJob(manuscriptId);
+    const events: Array<{ kind: string; code?: string }> = [];
+    const keepAlive = setInterval(() => {}, 1_000_000);
+    clearInterval(keepAlive);
+    job.subscribers.add({
+      send: (p: unknown) => events.push(p as (typeof events)[number]),
+      res: { end: () => {} } as never,
+      keepAlive,
+    });
+    try {
+      const recordRef = (await import('../store/manuscripts.js')).getManuscript(manuscriptId);
+      const run = runMainAnalyzerJob(job, recordRef as never, buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it'), {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      await fixture.whenDispatched(1, 1);
+      await fixture.whenDispatched(1, 2);
+      await new Promise((r) => setTimeout(r, 200));
+      fixture.releasePhase0(1);
+      fixture.releasePhase0(2);
+      await run.catch(() => {});
+      /* Control: both chapters were attributed before the re-casts landed, and
+         the M8d pass did re-attribute one of them. */
+      expect((calls[1] ?? 0) + (calls[2] ?? 0)).toBe(3);
+      expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  });
 });
