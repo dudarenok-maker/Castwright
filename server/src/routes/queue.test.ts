@@ -182,6 +182,30 @@ describe('POST /api/queue/enqueue', () => {
     ]);
   });
 
+  it('plan 285 — round-trips review through enqueue, GET and the claim (/start)', async () => {
+    const review = { characterId: 'narrator', triggeredBy: 'Narrator voice change' };
+    const enq = await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'r1', bookId: 'book-A', chapterId: 1, scope: 'this', review }] });
+    expect(enq.status).toBe(200);
+    expect(enq.body.entries[0].review).toEqual(review);
+    const got = await request(app).get('/api/queue');
+    expect(got.body.entries[0].review).toEqual(review);
+    const started = await request(app).post('/api/queue/r1/start');
+    expect(started.body.entries[0]).toMatchObject({ status: 'in_progress', review });
+  });
+
+  it('plan 285 — 400 on a malformed review; an entry without one stores no review key', async () => {
+    const bad = await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'r2', bookId: 'book-A', chapterId: 1, scope: 'this', review: { characterId: 'x' } }] });
+    expect(bad.status).toBe(400);
+    const ok = await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'r3', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    expect(ok.body.entries.find((e: { id: string }) => e.id === 'r3')).not.toHaveProperty('review');
+  });
+
   it('rejects missing entries[]', async () => {
     const res = await request(app).post('/api/queue/enqueue').send({});
     expect(res.status).toBe(400);

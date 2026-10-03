@@ -437,6 +437,29 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([row]);
   });
 
+  it('plan 285 — passes no `review` to finalize (PR 1 dark) and threads reviewRecorded onto qa_repair_complete', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({ pcm: tone(0.5, 12000), sampleRate: SR }));
+    const fin = await import('../audio/finalize-chapter-write.js');
+    const real = (
+      await vi.importActual<typeof import('../audio/finalize-chapter-write.js')>('../audio/finalize-chapter-write.js')
+    ).finalizeChapterAudioWrite;
+    const spy = vi.mocked(fin.finalizeChapterAudioWrite);
+    spy.mockClear();
+    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewRecorded: false }));
+
+    const { bookId: id } = await scaffoldVerdictBook('Review Dark Story');
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect('review' in spy.mock.calls[0][0]).toBe(false);
+    const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    expect(done!.reviewRecorded).toBe(false);
+  });
+
   it('a failed repair (never becomes acceptable) still marks the segment suspect:true, not undefined', async () => {
     synthesiseChapterMock.mockReset();
     synthesiseChapterMock.mockImplementation(async () => ({
