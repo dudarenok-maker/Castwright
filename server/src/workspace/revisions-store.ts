@@ -290,3 +290,97 @@ export async function dismissDriftId(
   });
 }
 
+/* ── Two-phase accept / reject (spec §2) ───────────────────────────────────
+   beginRevisionOp (step 1, under the lock) → the caller's audio step (step 2,
+   OUTSIDE the lock) → commitRevisionOp (step 3, under the lock; re-reads and
+   writes only if the entry is still pending). */
+
+export type RevisionOpKind = 'accept' | 'reject';
+
+export type BeginResult =
+  | { kind: 'proceed'; entry: StoredRevision; chapter: ChapterRef; file: RevisionsFile }
+  | { kind: 'already-done'; file: RevisionsFile }
+  | { kind: 'not-found'; file: RevisionsFile };
+
+export type CommitResult =
+  | { kind: 'committed'; file: RevisionsFile }
+  | { kind: 'already-done'; file: RevisionsFile }
+  | { kind: 'gone'; file: RevisionsFile };
+
+/** Idempotence keys on TimelineEntry.id === revisionId (revisions-slice.ts:170-178);
+    the schema's own `revisionId` field means "rollback target" and is not it. */
+function hasOutcome(file: RevisionsFile, op: RevisionOpKind, revisionId: string): boolean {
+  const kind = op === 'accept' ? 'accepted' : 'rejected';
+  return Object.values(file.timeline).some((list) => list.some((t) => t.id === revisionId && t.eventKind === kind));
+}
+
+/** appendTimelineEntryHelper's reversible-chain rule (revisions-slice.ts): a
+    new reversible entry flips every prior entry on the chapter to non-reversible. */
+function appendTimelineEntry(
+  timeline: Record<string, StoredTimelineEntry[]>,
+  entry: StoredTimelineEntry,
+): Record<string, StoredTimelineEntry[]> {
+  const key = String(entry.chapterId);
+  const prior = (timeline[key] ?? []).map((t) => (entry.reversible ? { ...t, reversible: false } : t));
+  return { ...timeline, [key]: [...prior, entry] };
+}
+
+/** Spec §2 step 1. */
+export async function beginRevisionOp(
+  bookDir: string,
+  chapters: readonly ChapterRef[],
+  op: RevisionOpKind,
+  revisionId: string,
+): Promise<BeginResult> {
+  return withKeyLock(revisionsLockKey(bookDir), async () => {
+    const file = await load(bookDir, chapters);
+    const entry = isDangerousKey(revisionId) ? undefined : file.pending.find((p) => p.id === revisionId);
+    if (!entry) {
+      return hasOutcome(file, op, revisionId) ? { kind: 'already-done', file } : { kind: 'not-found', file };
+    }
+    const chapter = chapters.find((c) => c.id === entry.chapterId);
+    if (!chapter) {
+      /* A restructure whose best-effort drop failed: clear the entry so the
+         prompt stops looping, and answer not-found. */
+      const next = await save(bookDir, { ...file, pending: file.pending.filter((p) => p.id !== revisionId) });
+      return { kind: 'not-found', file: next };
+    }
+    return { kind: 'proceed', entry, chapter: { id: chapter.id, slug: chapter.slug }, file };
+  });
+}
+
+/** Spec §2 step 3. Writes ONLY when the entry is still pending. */
+export async function commitRevisionOp(
+  bookDir: string,
+  chapters: readonly ChapterRef[],
+  op: RevisionOpKind,
+  revisionId: string,
+  selection?: Selection,
+): Promise<CommitResult> {
+  return withKeyLock(revisionsLockKey(bookDir), async () => {
+    const file = await load(bookDir, chapters);
+    const entry = isDangerousKey(revisionId) ? undefined : file.pending.find((p) => p.id === revisionId);
+    if (!entry) {
+      return hasOutcome(file, op, revisionId) ? { kind: 'already-done', file } : { kind: 'gone', file };
+    }
+    const timeline = appendTimelineEntry(file.timeline, {
+      id: revisionId,
+      chapterId: entry.chapterId,
+      characterId: entry.characterId,
+      eventKind: op === 'accept' ? 'accepted' : 'rejected',
+      timestamp: new Date().toISOString(),
+      status: 'active',
+      reversible: true,
+    });
+    const acceptedSelections =
+      op === 'accept' ? { ...file.acceptedSelections, [revisionId]: selection ?? {} } : file.acceptedSelections;
+    const next = await save(bookDir, {
+      ...file,
+      pending: file.pending.filter((p) => p.id !== revisionId),
+      timeline,
+      acceptedSelections,
+    });
+    return { kind: 'committed', file: next };
+  });
+}
+

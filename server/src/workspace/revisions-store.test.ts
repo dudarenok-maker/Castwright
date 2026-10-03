@@ -11,6 +11,8 @@ import {
   recordPending,
   dropPendingForChapter,
   dismissDriftId,
+  beginRevisionOp,
+  commitRevisionOp,
   parseSelection,
   mintFileId,
   revisionsLockKey,
@@ -293,3 +295,119 @@ describe('toRevisionsState', () => {
   });
 });
 
+describe('beginRevisionOp / commitRevisionOp', () => {
+  it('accept: removes the entry, records the selection, appends a reversible `accepted`', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'r-old'));
+    await commitRevisionOp(bookDir, CHAPTERS, 'reject', 'r-old');
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'r1'));
+    const begin = await beginRevisionOp(bookDir, CHAPTERS, 'accept', 'r1');
+    expect(begin.kind).toBe('proceed');
+    if (begin.kind === 'proceed') expect(begin.chapter).toEqual({ id: 1, slug: '01-one' });
+    const before = (await readRevisions(bookDir, CHAPTERS)).rev;
+    const commit = await commitRevisionOp(bookDir, CHAPTERS, 'accept', 'r1', { '0': 'B' });
+    expect(commit.kind).toBe('committed');
+    expect(commit.file.rev).toBe(before + 1);
+    expect(commit.file.pending).toEqual([]);
+    expect(commit.file.acceptedSelections.r1).toEqual({ '0': 'B' });
+    expect(commit.file.timeline['1'].map((t) => [t.id, t.eventKind, t.reversible])).toEqual([
+      ['r-old', 'rejected', false],
+      ['r1', 'accepted', true],
+    ]);
+  });
+
+  it('a retried accept is idempotent on TimelineEntry.id and writes nothing', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'r1'));
+    const done = await commitRevisionOp(bookDir, CHAPTERS, 'accept', 'r1');
+    expect((await beginRevisionOp(bookDir, CHAPTERS, 'accept', 'r1')).kind).toBe('already-done');
+    const again = await commitRevisionOp(bookDir, CHAPTERS, 'accept', 'r1');
+    expect(again.kind).toBe('already-done');
+    expect(again.file.rev).toBe(done.file.rev);
+    expect(again.file.timeline['1']).toHaveLength(1);
+  });
+
+  it('a reject does not treat an `accepted` timeline entry as its own', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'r1'));
+    await commitRevisionOp(bookDir, CHAPTERS, 'accept', 'r1');
+    expect((await beginRevisionOp(bookDir, CHAPTERS, 'reject', 'r1')).kind).toBe('not-found');
+    expect((await commitRevisionOp(bookDir, CHAPTERS, 'reject', 'r1')).kind).toBe('gone');
+  });
+
+  it('drops an entry whose chapter no longer exists and answers not-found', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(9, 'r9'));
+    const before = (await readRevisions(bookDir, CHAPTERS)).rev;
+    const begin = await beginRevisionOp(bookDir, CHAPTERS, 'accept', 'r9');
+    expect(begin.kind).toBe('not-found');
+    expect(begin.file.pending).toEqual([]);
+    expect(begin.file.rev).toBe(before + 1);
+  });
+
+  it('unknown and prototype-polluting ids are not-found / gone and write nothing', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'r1'));
+    const rev = (await readRevisions(bookDir, CHAPTERS)).rev;
+    for (const id of ['nope', '__proto__', 'constructor']) {
+      expect((await beginRevisionOp(bookDir, CHAPTERS, 'accept', id)).kind).toBe('not-found');
+      expect((await commitRevisionOp(bookDir, CHAPTERS, 'accept', id)).kind).toBe('gone');
+    }
+    expect((await readRevisions(bookDir, CHAPTERS)).rev).toBe(rev);
+  });
+
+  it('step 3 answers gone and writes nothing when a NEWER upsert replaced the entry', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'revision:1:1000'));
+    await beginRevisionOp(bookDir, CHAPTERS, 'accept', 'revision:1:1000');
+    const upsert = await recordPending(bookDir, CHAPTERS, serverEntry(1, 'revision:1:2000'));
+    const commit = await commitRevisionOp(bookDir, CHAPTERS, 'accept', 'revision:1:1000');
+    expect(commit.kind).toBe('gone');
+    expect(commit.file.rev).toBe(upsert.rev);
+    expect(commit.file.pending.map((p) => p.id)).toEqual(['revision:1:2000']);
+    expect(commit.file.timeline).toEqual({});
+  });
+
+  it('step 3 answers gone when an opposing op finished first', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'r1'));
+    await beginRevisionOp(bookDir, CHAPTERS, 'accept', 'r1');
+    await beginRevisionOp(bookDir, CHAPTERS, 'reject', 'r1');
+    expect((await commitRevisionOp(bookDir, CHAPTERS, 'reject', 'r1')).kind).toBe('committed');
+    const late = await commitRevisionOp(bookDir, CHAPTERS, 'accept', 'r1');
+    expect(late.kind).toBe('gone');
+    expect(late.file.timeline['1'].map((t) => t.eventKind)).toEqual(['rejected']);
+  });
+
+  it('a reset while an op waits for its final write: gone, and nothing is written into the reset file', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'r1'));
+    await beginRevisionOp(bookDir, CHAPTERS, 'accept', 'r1');
+    const reset = await resetRevisions(bookDir);
+    const commit = await commitRevisionOp(bookDir, CHAPTERS, 'accept', 'r1', { '0': 'A' });
+    expect(commit.kind).toBe('gone');
+    expect(onDisk()).toEqual({ ...EMPTY, fileId: reset.fileId });
+  });
+});
+
+describe('lock serialisation — accept racing recordPending', () => {
+  it('commit queued first: committed, then the new entry lands', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'revision:1:1000'));
+    await beginRevisionOp(bookDir, CHAPTERS, 'accept', 'revision:1:1000');
+    const [commit] = await Promise.all([
+      commitRevisionOp(bookDir, CHAPTERS, 'accept', 'revision:1:1000'),
+      recordPending(bookDir, CHAPTERS, serverEntry(1, 'revision:1:2000')),
+    ]);
+    expect(commit.kind).toBe('committed');
+    const file = await readRevisions(bookDir, CHAPTERS);
+    expect(file.pending.map((p) => p.id)).toEqual(['revision:1:2000']);
+    expect(file.timeline['1'].map((t) => t.id)).toEqual(['revision:1:1000']);
+    expect(file.rev).toBe(3);
+  });
+
+  it('upsert queued first: gone, and the new entry survives', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'revision:1:1000'));
+    await beginRevisionOp(bookDir, CHAPTERS, 'accept', 'revision:1:1000');
+    const [, commit] = await Promise.all([
+      recordPending(bookDir, CHAPTERS, serverEntry(1, 'revision:1:2000')),
+      commitRevisionOp(bookDir, CHAPTERS, 'accept', 'revision:1:1000'),
+    ]);
+    expect(commit.kind).toBe('gone');
+    const file = await readRevisions(bookDir, CHAPTERS);
+    expect(file.pending.map((p) => p.id)).toEqual(['revision:1:2000']);
+    expect(file.timeline).toEqual({});
+    expect(file.rev).toBe(2);
+  });
+});
