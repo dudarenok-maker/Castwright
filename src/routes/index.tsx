@@ -600,6 +600,9 @@ export function AnalysingRoute() {
 
   return (
     <AnalysingView
+      /* #3435 — failed rows, refusal text and banners are view state; a direct
+         A -> B switch reuses this element, so key it by book. */
+      key={bookId}
       manuscriptId={manuscriptId}
       bookId={bookId || null}
       title={manuscript.title || activeBook?.title || null}
@@ -878,6 +881,9 @@ function ReadyViewSwitch({
     case 'generate':
       return (
         <GenerationView
+          /* #3435 — in-flight subset rows live in the view's own state; a
+             direct A -> B switch reuses this element, so key it by book. */
+          key={bookId}
           chapters={chapters}
           characters={characters}
           paused={paused}

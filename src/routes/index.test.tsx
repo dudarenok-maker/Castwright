@@ -12,7 +12,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { MemoryRouter, Outlet, Routes, Route } from 'react-router';
+import { MemoryRouter, Outlet, Routes, Route, useNavigate } from 'react-router';
 import { uiSlice, uiActions } from '../store/ui-slice';
 import { castSlice, castActions } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
@@ -51,6 +51,8 @@ const putBookStateMock = vi.fn();
 const getBookStateMock = vi.fn();
 const getWorkspaceInfoMock = vi.fn();
 const completeSetupMock = vi.fn();
+const setChapterExcludedMock = vi.fn();
+const runAnalysisForChaptersMock = vi.fn();
 
 /* #3195 R2 — SetupRoute's onFinish is what the "corruptSettingsFile sync"
    test below exercises; the five-step wizard behind SetupView is pinned by
@@ -75,6 +77,8 @@ vi.mock('../views/advanced', () => ({
 vi.mock('../lib/api', () => ({
   api: {
     completeSetup: () => completeSetupMock(),
+    setChapterExcluded: (...a: unknown[]) => setChapterExcludedMock(...a),
+    runAnalysisForChapters: (...a: unknown[]) => runAnalysisForChaptersMock(...a),
     analyseManuscript: (manuscriptId: string, opts: unknown) => {
       analyseMock(manuscriptId, opts);
       /* Never resolves — keeps the AnalysingView effect parked in its
@@ -1218,5 +1222,173 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
     const heading = await screen.findByRole('heading', { level: 1 });
     expect(heading.textContent).toContain('Mystery Novel');
     expect(heading.textContent).not.toContain('the Coalfall Commission');
+  });
+});
+
+describe('ReadyRoute — Generate view local state is per book (#3435)', () => {
+  /* GenerationView keeps its in-flight subset rows (progress, Cancel, error)
+     in component state. ReadyRoute is the same route element for
+     /books/a/generate and /books/b/generate, so without a per-book key a
+     direct A -> B switch kept the instance and A's row showed on B's chapter
+     with the same number. */
+  function setup() {
+    const store = makeStore();
+    store.dispatch(
+      libraryActions.hydrate({
+        authors: [
+          {
+            name: 'Demo Author',
+            series: [
+              {
+                name: 'Standalones',
+                books: [
+                  makeBook({ bookId: 'b1', title: 'Book One', manuscriptId: 'mns-a', status: 'generating' }),
+                  makeBook({ bookId: 'b2', title: 'Book Two', manuscriptId: 'mns-b', status: 'generating' }),
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'mns-a', title: 'Book One' } as any,
+        sentences: null,
+        wordCount: 1000,
+        format: 'plaintext',
+      }),
+    );
+    store.dispatch(
+      chaptersActions.setChapters([
+        {
+          id: 1,
+          title: 'Chapter 1',
+          duration: '00:00',
+          state: 'queued',
+          progress: 0,
+          excluded: true,
+          characters: {},
+        } as Chapter,
+        { id: 2, title: 'Chapter 2', duration: '00:30', state: 'queued', progress: 0, characters: {} },
+      ]),
+    );
+    const layoutCtx = {
+      showInfo: vi.fn(),
+      showError: vi.fn(),
+      pushToast: vi.fn(),
+      ttsLifecycle: {
+        coqui: { state: 'unreachable', onLoad: vi.fn(), onStop: vi.fn() },
+        kokoro: { state: 'unreachable', onLoad: vi.fn(), onStop: vi.fn() },
+        qwen: { state: 'unreachable', onLoad: vi.fn(), onStop: vi.fn() },
+        qwen1_7b: { state: 'unreachable', onLoad: vi.fn(), onStop: vi.fn() },
+        asr: { enabled: false, state: 'idle', device: null },
+        qwen1_7bInstalled: false,
+        evictionNotice: null,
+        loadErrorNotice: null,
+        tripNotice: null,
+        dismissNotices: vi.fn(),
+      },
+      priorRoster: [],
+      openFixCharacterAudio: vi.fn(),
+    } as unknown as LayoutContext;
+    function LayoutShim() {
+      return (
+        <>
+          <GoTo />
+          <Outlet context={layoutCtx} />
+        </>
+      );
+    }
+    function GoTo() {
+      const navigate = useNavigate();
+      return (
+        <>
+          <button onClick={() => navigate('/books/b2/generate')}>go-b2</button>
+          <button onClick={() => navigate('/books/b1/generate?same=1')}>go-b1-again</button>
+        </>
+      );
+    }
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/generate']}>
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route element={<LayoutShim />}>
+                <Route path="/books/:bookId/:view" element={<ReadyRoute />} />
+              </Route>
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+    return store;
+  }
+
+  async function startInclude() {
+    setChapterExcludedMock.mockResolvedValue({ id: 1, excluded: false });
+    runAnalysisForChaptersMock.mockReturnValue(new Promise(() => {}));
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    await screen.findByRole('button', { name: 'Cancel' });
+  }
+
+  beforeEach(() => {
+    setChapterExcludedMock.mockReset();
+    runAnalysisForChaptersMock.mockReset();
+  });
+
+  it("a direct switch to another book does not show the first book's in-flight row", async () => {
+    setup();
+    await startInclude();
+    fireEvent.click(screen.getByText('go-b2'));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull());
+  });
+
+  it('control: staying on the same book keeps the in-flight row', async () => {
+    setup();
+    await startInclude();
+    fireEvent.click(screen.getByText('go-b1-again'));
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+});
+
+describe('AnalysingRoute — local state is per book (#3435)', () => {
+  /* AnalysingView's failed-row list is seeded from the book-state GET and
+     never emptied by a book with no failures (the mount read returns early),
+     so without a per-book key a direct A -> B switch kept A's rows. */
+  function stateFor(failed: number[]) {
+    return {
+      state: { chapters: [{ id: 2, title: 'Chapter 2' }], castConfirmed: false },
+      analysis: { failedChapterIds: failed },
+    };
+  }
+
+  it("a direct switch to another book does not show the first book's failed rows", async () => {
+    getBookStateMock.mockImplementation((id: string) =>
+      Promise.resolve(stateFor(id === 'b1' ? [2] : [])),
+    );
+    const store = makeStore();
+    function GoTo() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate('/books/b2/analysing')}>go-b2</button>;
+    }
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/analysing']}>
+          <GoTo />
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route path="/books/:bookId/analysing" element={<AnalysingRoute />} />
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await screen.findByText(/Analysis failed on a previous attempt/i);
+    fireEvent.click(screen.getByText('go-b2'));
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b2'));
+    await waitFor(() =>
+      expect(screen.queryByText(/Analysis failed on a previous attempt/i)).toBeNull(),
+    );
   });
 });
