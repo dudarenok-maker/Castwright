@@ -4,7 +4,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, act, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { uiSlice } from '../store/ui-slice';
+import { uiSlice, uiActions } from '../store/ui-slice';
 import { castSlice } from '../store/cast-slice';
 import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { accountSlice } from '../store/account-slice';
@@ -2388,7 +2388,9 @@ describe('AnalysingView — failed-chapter retry', () => {
           notifications: notificationsSlice.reducer,
         },
       });
-      render(
+      /* The view only renders on its book's analysing stage. */
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+      const view = render(
         <Provider store={store}>
           <AnalysingView
             manuscriptId="m1"
@@ -2408,7 +2410,7 @@ describe('AnalysingView — failed-chapter retry', () => {
       await act(async () => {
         fireEvent.click(screen.getByRole('button', { name: /retry chapter/i }));
       });
-      return { store, onComplete };
+      return { store, onComplete, view };
     }
 
     it('a Retry ending `result` on an unconfirmed book routes to Confirm and clears the failed main run\'s banner', async () => {
@@ -2433,6 +2435,8 @@ describe('AnalysingView — failed-chapter retry', () => {
     it('a Retry `result` arriving after unmount never completes the view or clears another book\'s snapshot', async () => {
       const { store, onComplete } = await mountAfterMainFailure(false);
       cleanup();
+      /* The user left: another book is on screen now. */
+      store.dispatch(uiActions.openBook({ id: 'b2', status: 'analysing', manuscriptId: 'm2' }));
       const other = {
         bookId: 'b2',
         manuscriptId: 'm2',
@@ -2451,6 +2455,70 @@ describe('AnalysingView — failed-chapter retry', () => {
       await settle();
       expect(onComplete).not.toHaveBeenCalled();
       expect(store.getState().analysis.activeStream?.manuscriptId).toBe('m2');
+    });
+
+    /* PR #3505 review pass 3 — completion follows what is on screen, not
+       whether the instance that started the Retry is still mounted. */
+    it('a Retry `result` after returning to the book through the pill (a new instance) completes it exactly once', async () => {
+      const { store, onComplete } = await mountAfterMainFailure(false);
+      cleanup();
+      render(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m1"
+            bookId="b1"
+            title="the Coalfall Commission"
+            wordCount={2440}
+            onComplete={onComplete}
+          />
+        </Provider>,
+      );
+      await settle();
+      const payload = { characters: [] } as unknown as AnalyseResponse;
+      await act(async () => {
+        resolveSubset?.(payload);
+      });
+      await settle();
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      expect(onComplete).toHaveBeenCalledWith(payload);
+    });
+
+    it('a Retry `result` after the same instance switched to another book never completes it or touches that book\'s snapshot', async () => {
+      const { store, onComplete, view } = await mountAfterMainFailure(false);
+      const other = {
+        bookId: 'b2',
+        manuscriptId: 'm2',
+        engine: 'local',
+        phaseId: 0,
+        phaseLabel: 'Detecting characters',
+        phaseProgress: 0,
+        remainingMs: null,
+        lastTickAt: 1,
+        state: 'running' as const,
+      };
+      store.dispatch(uiActions.openBook({ id: 'b2', status: 'analysing', manuscriptId: 'm2' }));
+      store.dispatch(analysisActions.setActiveStream(other as never));
+      view.rerender(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m2"
+            bookId="b2"
+            title="Another Book"
+            wordCount={1000}
+            onComplete={onComplete}
+          />
+        </Provider>,
+      );
+      await settle();
+      /* B's own view has written B's snapshot by now; A's Retry must leave it. */
+      const bSnapshot = store.getState().analysis.activeStream;
+      expect(bSnapshot?.manuscriptId).toBe('m2');
+      await act(async () => {
+        resolveSubset?.({ characters: [] } as unknown as AnalyseResponse);
+      });
+      await settle();
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(store.getState().analysis.activeStream).toEqual(bSnapshot);
     });
 
     it.each([
