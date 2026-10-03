@@ -87,7 +87,8 @@ export interface OllamaTransportOptions {
   dispatcher?: Agent;
 }
 
-function ollamaFormat(so: StructuredOutputRequest): unknown {
+/** #3084 spec §2 — the Ollama `format` field per mode; `undefined` omits the key. */
+export function ollamaFormatField(so: StructuredOutputRequest): unknown {
   if (so.mode === 'schema') return so.schema;
   if (so.mode === 'json') return 'json';
   return undefined;
@@ -128,7 +129,7 @@ export class OllamaTransport implements ChatTransport {
          particular) — the model literally cannot produce invalid JSON or
          extra fields. The existing validation-retry loop below still guards
          against semantic violations the schema can't express. */
-      format: ollamaFormat(req.structuredOutput),
+      format: ollamaFormatField(req.structuredOutput),
       /* Per-model keep_alive — see keepAliveFor + resolveKeepAliveSeconds
          above; a user override in analyzerKeepAliveByModel wins over the flat
          DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS fallback. */

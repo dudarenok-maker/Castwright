@@ -8,8 +8,11 @@ import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { OllamaTransport, ANALYZER_DISPATCHER, classifyConnectError } from './transports/ollama-transport.js';
 import { resolveNumPredict, resolveOllamaTemperature } from './ollama-settings.js';
 import { TransportAnalyzer } from './runner/transport-analyzer.js';
-import { StageRunner, identitySchemaAdapter } from './runner/stage-runner.js';
+import { StageRunner } from './runner/stage-runner.js';
+import { adaptSchemaForOllama } from './runner/schema-adapters.js';
+import type { StructuredOutputMode } from './runner/transport.js';
 import { OLLAMA_RETRY_POLICY } from './runner/retry-policy.js';
+import { configValue } from '../config/resolver.js';
 export { AnalysisAbortedError, LocalUnreachableError } from './errors.js';
 export { ANALYZER_DISPATCHER, classifyConnectError } from './transports/ollama-transport.js';
 export {
@@ -49,11 +52,13 @@ export class OllamaAnalyzer extends TransportAnalyzer {
       new StageRunner({
         transport: new OllamaTransport({ url: opts.url, model: opts.model, dispatcher: opts.dispatcher }),
         policy: OLLAMA_RETRY_POLICY,
-        /* Structured output stays 'schema' (wave 3 resolves it from
-           analyzer.ollama.structuredOutput); the output cap is num_predict,
-           resolved per request. */
-        settings: () => ({ structuredOutput: 'schema', maxOutputTokens: resolveNumPredict() }),
-        adaptSchema: identitySchemaAdapter,
+        /* The mode is read per request (analyzer.ollama.structuredOutput); the
+           output cap is num_predict, resolved per request. */
+        settings: () => ({
+          structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'),
+          maxOutputTokens: resolveNumPredict(),
+        }),
+        adaptSchema: adaptSchemaForOllama,
       }),
     );
   }

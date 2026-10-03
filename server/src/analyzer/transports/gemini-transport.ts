@@ -22,12 +22,21 @@ import {
   type RetryClassifier,
 } from '../runner/transport-retry.js';
 
-import type { ChatTransport, TransportRequest, TransportResult } from '../runner/transport.js';
+import type { ChatTransport, StructuredOutputRequest, TransportRequest, TransportResult } from '../runner/transport.js';
 import type { StageChunkInfo } from '../types.js';
 
 /* Idle-chunk watchdog: if the SDK stream goes more than this long between
    chunks (or before the first chunk), assume the upstream is wedged and
    throw a retryable error so the retry loop kicks in. */
+/** #3084 spec §2 — Gemini structured-output config per mode. */
+export function geminiStructuredConfig(
+  so: StructuredOutputRequest,
+): { responseMimeType?: string; responseJsonSchema?: unknown } {
+  if (so.mode === 'schema') return { responseMimeType: 'application/json', responseJsonSchema: so.schema };
+  if (so.mode === 'json') return { responseMimeType: 'application/json' };
+  return {};
+}
+
 export const STREAM_IDLE_TIMEOUT_MS = 45_000;
 
 /* Hard cap on the streamed-response accumulator. */
@@ -202,12 +211,7 @@ export class GeminiTransport implements ChatTransport {
       ...(includeThoughts ? { thinkingConfig: { includeThoughts: true } } : {}),
       maxOutputTokens: req.maxOutputTokens ?? GEMINI_FALLBACK_MAX_OUTPUT_TOKENS,
     };
-    if (req.structuredOutput.mode === 'json') {
-      config.responseMimeType = 'application/json';
-    } else if (req.structuredOutput.mode === 'schema') {
-      config.responseMimeType = 'application/json';
-      config.responseJsonSchema = req.structuredOutput.schema;
-    }
+    Object.assign(config, geminiStructuredConfig(req.structuredOutput));
 
     const watchdog = new AbortController();
     let idleFired = false;
