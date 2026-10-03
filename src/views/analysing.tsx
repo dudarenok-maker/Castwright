@@ -38,6 +38,7 @@ import { analysisActions, selectMainAnalysisLive } from '../store/analysis-slice
 import { selectAnalyzerSplitIsActive, fetchAnalyzerModels } from '../store/account-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 import { notificationsActions } from '../store/notifications-slice';
+import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
 
 /* Heuristic estimate matched to the server's analysis pacing (server/src/
    routes/analysis.ts: STAGE1_BASELINE_RATE × STAGE2_STRETCH ≈ 4 ms per input
@@ -1075,10 +1076,11 @@ export function AnalysingView({
        analysing stage, or not. onComplete hydrates whichever book is open. */
     const bookOnScreen = () => {
       const stage = store.getState().ui.stage;
-      if (stage.kind !== 'analysing') return false;
-      if (bookId && stage.bookId) return stage.bookId === bookId;
-      return stage.manuscriptId === manuscriptId;
+      return stage.kind === 'analysing' && stageNamesBook(stage, { bookId, manuscriptId }) === true;
     };
+    /* The cast slice holds whichever book is open: a live roster lands in it
+       only while that is still this book (see store/open-book.ts). */
+    const isOpenBook = () => selectIsOpenBook(store.getState(), { bookId, manuscriptId });
     /* The snapshot may be another book's by now: touch it only if it is still
        this Retry's. */
     const ownsSnapshot = () =>
@@ -1125,7 +1127,7 @@ export function AnalysingView({
           markEvent();
           /* Full roster snapshot — replace, don't accumulate (see the other
              onCastUpdate handler above and replaceLiveRoster's rationale). */
-          dispatch(castActions.replaceLiveRoster(characters));
+          if (isOpenBook()) dispatch(castActions.replaceLiveRoster(characters));
         },
         onChapterFailed: ({ chapterId: failedId, message, code, remediation, phase }) => {
           markEvent();

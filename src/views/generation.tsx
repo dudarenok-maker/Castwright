@@ -58,6 +58,7 @@ import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions, selectMainAnalysisLive } from '../store/analysis-slice';
+import { selectIsOpenBook } from '../store/open-book';
 import { uiActions } from '../store/ui-slice';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { enqueueQueueEntries } from '../store/queue-thunks';
@@ -351,6 +352,17 @@ export function GenerationView({
      Generate view's content. */
   const { modal: reverseGuardModal } = useReverseLocalAnalyzerGuard();
 
+  /* #3435 — an Include, an Exclude or a Re-analyse is a request that outlives
+     this view (only Cancel aborts it): by the time it settles the user may
+     have opened another book. Its store writes land only while this book is
+     still the open one (store/open-book.ts), and its snapshot writes only
+     while the snapshot is still this book's. The server calls themselves
+     always run. */
+  const isOpenBook = () =>
+    !!manuscriptId && selectIsOpenBook(store.getState(), { bookId, manuscriptId });
+  const ownsSnapshot = () =>
+    !!manuscriptId && store.getState().analysis.activeStream?.manuscriptId === manuscriptId;
+
   const patchSubset = (chapterId: number, patch: Partial<SubsetProgress>) => {
     setSubsetByChapter((prev) => {
       const existing = prev[chapterId];
@@ -407,7 +419,7 @@ export function GenerationView({
     if (excluded) {
       try {
         await api.setChapterExcluded(bookId, chapterId, true);
-        dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
+        if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
       } catch (e) {
         console.error('[generation] exclude failed', e);
       }
@@ -494,7 +506,7 @@ export function GenerationView({
     let targetFailedMessage = '';
     try {
       await api.setChapterExcluded(bookId, chapterId, false);
-      dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: false }));
+      if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: false }));
       includedHere = wasExcluded;
 
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
@@ -539,7 +551,7 @@ export function GenerationView({
           );
         },
         onCastUpdate: ({ characters }) => {
-          dispatch(castActions.mergeCharacters(characters));
+          if (isOpenBook()) dispatch(castActions.mergeCharacters(characters));
         },
         onThrottle: ({ model: throttleModel, waitMs, reason }) => {
           patchSubset(chapterId, {
@@ -559,12 +571,14 @@ export function GenerationView({
          chaptersActions.mergeSubsetAnalysis was dispatched, so the new
          chapter's sentences never reached manuscript.sentences and
          audio generation had nothing to synthesise. */
-      dispatch(castActions.mergeCharacters(res.characters ?? []));
-      dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
-      dispatch(manuscriptActions.hydrateFromAnalysis(res));
-      /* #3435 — the chapter's analysis finished, unless the run flagged it. */
-      if (targetFailed) dispatch(chaptersActions.setAnalysisGap({ chapterId, message: targetFailedMessage }));
-      else dispatch(chaptersActions.clearAnalysisGap(chapterId));
+      if (isOpenBook()) {
+        dispatch(castActions.mergeCharacters(res.characters ?? []));
+        dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
+        dispatch(manuscriptActions.hydrateFromAnalysis(res));
+        /* #3435 — the chapter's analysis finished, unless the run flagged it. */
+        if (targetFailed) dispatch(chaptersActions.setAnalysisGap({ chapterId, message: targetFailedMessage }));
+        else dispatch(chaptersActions.clearAnalysisGap(chapterId));
+      }
 
       setSubsetByChapter((prev) => {
         const { [chapterId]: _, ...rest } = prev;
@@ -572,7 +586,7 @@ export function GenerationView({
       });
       /* Subset retry done — drop the snapshot so the AnalysisPill
          disappears. */
-      dispatch(analysisActions.clearActiveStream());
+      if (ownsSnapshot()) dispatch(analysisActions.clearActiveStream());
     } catch (e) {
       /* AbortError = user clicked Cancel; any other error = subset
          analysis failed (network, analyzer offline, server-side
@@ -600,7 +614,7 @@ export function GenerationView({
          a neutral note with "Open analysis"; the halted snapshot keeps the
          needs-action stop for the pill and the analysing view. */
       if (e instanceof AnalysisError && e.code === 'resume_required') {
-        if (sawPhase1 && !targetFailed) dispatch(chaptersActions.clearAnalysisGap(chapterId));
+        if (sawPhase1 && !targetFailed && isOpenBook()) dispatch(chaptersActions.clearAnalysisGap(chapterId));
         dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
         patchSubset(chapterId, { notice: e.message });
         return;
@@ -615,7 +629,7 @@ export function GenerationView({
       }
       if (isAbort) {
         /* Drop the snapshot on abort — the server-side job already ended. */
-        dispatch(analysisActions.clearActiveStream());
+        if (ownsSnapshot()) dispatch(analysisActions.clearActiveStream());
         setSubsetByChapter((prev) => {
           const { [chapterId]: _, ...rest } = prev;
           return rest;
@@ -627,10 +641,12 @@ export function GenerationView({
            started a job, so restore the prior snapshot (B2 regression guard:
            the pre-POST clobber must not persist on rejection) and surface the
            server's message instead. */
-        if (priorSnapshot) {
-          dispatch(analysisActions.setActiveStream(priorSnapshot));
-        } else {
-          dispatch(analysisActions.clearActiveStream());
+        if (ownsSnapshot()) {
+          if (priorSnapshot) {
+            dispatch(analysisActions.setActiveStream(priorSnapshot));
+          } else {
+            dispatch(analysisActions.clearActiveStream());
+          }
         }
         patchSubset(chapterId, { error: e.message, refused: true });
         return;
@@ -639,7 +655,7 @@ export function GenerationView({
          surfaced an error, and the row's own error state inside subsetByChapter
          carries the message for the user. */
       haltOnReasoningOverflow(e);
-      dispatch(analysisActions.clearActiveStream());
+      if (ownsSnapshot()) dispatch(analysisActions.clearActiveStream());
       const message = (e as Error).message || 'Subset analysis failed.';
       const shrink = e instanceof AnalysisError && e.code === 'stage1_shrink_refused';
       /* #3435 — the chapter's analysis did not finish. Only a chapter that is
@@ -649,7 +665,9 @@ export function GenerationView({
          rollback ran). */
       const stillIncluded =
         store.getState().chapters.chapters.find((c) => c.id === chapterId)?.excluded !== true;
-      if (stillIncluded && !shrink) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+      if (stillIncluded && !shrink && isOpenBook()) {
+        dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+      }
       patchSubset(chapterId, { error: message, shrink });
     }
   }
@@ -657,10 +675,12 @@ export function GenerationView({
   /* Re-exclude server-side AND in the slice to undo the optimistic
      un-exclude when an in-flight Include either failed or was
      cancelled. Kept separate from the main handler so the catch arm
-     stays readable. */
+     stays readable. The server call runs whatever book is open now: it
+     names this book, and leaving the chapter included-but-unanalysed on disk
+     is the drift the rollback exists to prevent. */
   async function rollbackInclude(chapterId: number): Promise<void> {
     await api.setChapterExcluded(bookId, chapterId, true);
-    dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
+    if (isOpenBook()) dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: true }));
   }
 
   /* #3084 F7 — a subset run that fails with a reasoning overflow must still
@@ -811,7 +831,7 @@ export function GenerationView({
           );
         },
         onCastUpdate: ({ characters }) => {
-          dispatch(castActions.mergeCharacters(characters));
+          if (isOpenBook()) dispatch(castActions.mergeCharacters(characters));
         },
         onThrottle: ({ model: throttleModel, waitMs, reason }) => {
           patchSubset(chapterId, {
@@ -826,23 +846,25 @@ export function GenerationView({
           }
         },
       });
-      dispatch(castActions.mergeCharacters(res.characters ?? []));
-      dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
-      dispatch(manuscriptActions.hydrateFromAnalysis(res));
-      /* #3435 — the chapter's analysis finished, unless the run flagged it. */
-      if (targetFailed) dispatch(chaptersActions.setAnalysisGap({ chapterId, message: targetFailedMessage }));
-      else dispatch(chaptersActions.clearAnalysisGap(chapterId));
+      if (isOpenBook()) {
+        dispatch(castActions.mergeCharacters(res.characters ?? []));
+        dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
+        dispatch(manuscriptActions.hydrateFromAnalysis(res));
+        /* #3435 — the chapter's analysis finished, unless the run flagged it. */
+        if (targetFailed) dispatch(chaptersActions.setAnalysisGap({ chapterId, message: targetFailedMessage }));
+        else dispatch(chaptersActions.clearAnalysisGap(chapterId));
+      }
       setSubsetByChapter((prev) => {
         const { [chapterId]: _, ...rest } = prev;
         return rest;
       });
-      dispatch(analysisActions.clearActiveStream());
+      if (ownsSnapshot()) dispatch(analysisActions.clearActiveStream());
     } catch (e) {
       const isAbort =
         (e as Error)?.name === 'AbortError' || (e instanceof AnalysisError && e.code === 'aborted');
       if (isAbort) {
         /* Drop the snapshot on abort — the server-side job already ended. */
-        dispatch(analysisActions.clearActiveStream());
+        if (ownsSnapshot()) dispatch(analysisActions.clearActiveStream());
         setSubsetByChapter((prev) => {
           const { [chapterId]: _, ...rest } = prev;
           return rest;
@@ -858,10 +880,12 @@ export function GenerationView({
       /* #3435 — `main_analysis_running` (the main run is live or finishing)
          never started a job either: same handling. */
       if (e instanceof AnalysisError && (e.code === 'subset_in_progress' || e.code === 'main_analysis_running')) {
-        if (priorSnapshot) {
-          dispatch(analysisActions.setActiveStream(priorSnapshot));
-        } else {
-          dispatch(analysisActions.clearActiveStream());
+        if (ownsSnapshot()) {
+          if (priorSnapshot) {
+            dispatch(analysisActions.setActiveStream(priorSnapshot));
+          } else {
+            dispatch(analysisActions.clearActiveStream());
+          }
         }
         patchSubset(chapterId, { error: e.message, refused: true });
         return;
@@ -873,13 +897,13 @@ export function GenerationView({
          not finished. A neutral note with "Open analysis", and the halted
          snapshot keeps the needs-action stop. */
       if (e instanceof AnalysisError && e.code === 'resume_required') {
-        if (sawPhase1 && !targetFailed) dispatch(chaptersActions.clearAnalysisGap(chapterId));
+        if (sawPhase1 && !targetFailed && isOpenBook()) dispatch(chaptersActions.clearAnalysisGap(chapterId));
         dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
         patchSubset(chapterId, { notice: e.message });
         return;
       }
       haltOnReasoningOverflow(e);
-      dispatch(analysisActions.clearActiveStream());
+      if (ownsSnapshot()) dispatch(analysisActions.clearActiveStream());
       const message = (e as Error).message || 'Re-analysis failed.';
       const shrink = e instanceof AnalysisError && e.code === 'stage1_shrink_refused';
       /* #3435 — the chapter's analysis did not finish. A shrink is not a gap:
@@ -887,7 +911,7 @@ export function GenerationView({
          gap only when the target's own cast failed (M3): otherwise Phase 1
          never ran and the chapter's existing take is untouched. */
       const castIncomplete = e instanceof AnalysisError && e.code === 'cast_incomplete';
-      if (!shrink && (!castIncomplete || targetFailed)) {
+      if (!shrink && (!castIncomplete || targetFailed) && isOpenBook()) {
         dispatch(chaptersActions.setAnalysisGap({ chapterId, message: castIncomplete ? targetFailedMessage : message }));
       }
       patchSubset(chapterId, { error: message, shrink });

@@ -3107,6 +3107,224 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       ).toBeInTheDocument();
     });
   });
+
+  /* PR #3505 review pass 3 — an Include or a Re-analyse is a request that
+     outlives the view (only Cancel aborts it). The cast/chapters/manuscript
+     slices hold whichever book is open, and the persistence middleware saves
+     them into that book, so a late result must never land in another book's
+     slices or touch its analysis snapshot. The server request still runs to
+     the end, and an Include's rollback still re-excludes the chapter on the
+     server. */
+  describe('a late result never writes into another book', () => {
+    const hero: Character = { id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'peach' };
+    const villain: Character = { id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' };
+    const bSnapshot = {
+      bookId: 'b2',
+      manuscriptId: 'm2',
+      engine: 'local',
+      phaseId: 0,
+      phaseLabel: 'Detecting characters',
+      phaseProgress: 0,
+      remainingMs: null,
+      lastTickAt: 1,
+      state: 'running',
+      kind: 'main',
+    } as AnalysisStreamSnapshot;
+    function deferred<T>() {
+      let resolve!: (v: T) => void;
+      let reject!: (e: unknown) => void;
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+    const flush = () => act(() => new Promise((r) => setTimeout(r, 0)));
+    /* Book B opened (its Generate view), hydrated with its own rows: chapter 1
+       carries a gap, chapter 3 is included or excluded per test. */
+    function openBookB(store: ReturnType<typeof makeIncludeStore>, ch3IsExcluded: boolean) {
+      store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'generating' }));
+      store.dispatch(
+        manuscriptSlice.actions.hydrateFromBookState({
+          state: { bookId: 'b2', manuscriptId: 'm2', title: 'Book B' },
+          sentences: [{ id: 900, chapterId: 1, characterId: 'b-hero', text: 'B speaks.' }],
+        } as any),
+      );
+      store.dispatch(
+        chaptersSlice.actions.setChapters([
+          { ...chapter1, title: 'B one' },
+          { ...ch3Excluded, title: 'B three', excluded: ch3IsExcluded },
+        ]),
+      );
+      store.dispatch(chaptersSlice.actions.setCurrentBookId('b2'));
+      store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: "B's own gap." }));
+      store.dispatch(castSlice.actions.setCharacters([hero]));
+      store.dispatch(analysisActions.setActiveStream(bSnapshot));
+    }
+    const bookView = (store: ReturnType<typeof makeIncludeStore>) => {
+      const s = store.getState();
+      return {
+        cast: s.cast.characters,
+        chapters: s.chapters.chapters,
+        gaps: s.chapters.analysisGapById,
+        currentBookId: s.chapters.currentBookId,
+        manuscript: {
+          bookId: s.manuscript.bookId,
+          manuscriptId: s.manuscript.manuscriptId,
+          sentences: s.manuscript.sentences,
+        },
+        snapshot: s.analysis.activeStream,
+      };
+    };
+    type SubsetOpts = {
+      onCastUpdate?: (u: { characters: Character[] }) => void;
+      onPhase?: (p: { phaseId: number; progress: number }) => void;
+    };
+    async function startReanalyse(store: ReturnType<typeof makeIncludeStore>) {
+      const run = deferred<typeof subsetResponse>();
+      runAnalysisForChaptersSpy.mockReturnValueOnce(run.promise);
+      const view = renderInclude(store);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      const opts = runAnalysisForChaptersSpy.mock.calls[0][2] as SubsetOpts;
+      return { run, view, opts };
+    }
+
+    it('a Re-analyse result (and its live cast updates) after book B opened leaves B untouched', async () => {
+      const store = makeIncludeStore();
+      const { run, view, opts } = await startReanalyse(store);
+      view.unmount();
+      openBookB(store, true);
+      const before = bookView(store);
+      act(() => opts.onCastUpdate?.({ characters: [villain] }));
+      await act(async () => run.resolve(subsetResponse));
+      await flush();
+      expect(bookView(store)).toEqual(before);
+    });
+
+    it.each([
+      ['a failure', new AnalysisError('The analyzer timed out.', 'analyzer-timeout')],
+      ['a refusal', new AnalysisError('The analysis is still stopping.', 'main_analysis_running')],
+      ['a resume_required stop', new AnalysisError('Resume the analysis to finish.', 'resume_required')],
+    ])('%s of a Re-analyse after book B opened leaves B untouched (gap, snapshot)', async (_label, err) => {
+      const store = makeIncludeStore();
+      const { run, view, opts } = await startReanalyse(store);
+      /* Phase 1 ran on A: a resume_required then counts as finished. */
+      act(() => opts.onPhase?.({ phaseId: 1, progress: 0.5 }));
+      view.unmount();
+      openBookB(store, true);
+      const before = bookView(store);
+      await act(async () => run.reject(err));
+      await flush();
+      expect(bookView(store)).toEqual(before);
+    });
+
+    it('an Include whose server calls settle after book B opened leaves B untouched', async () => {
+      const store = makeIncludeStore();
+      const include = deferred<unknown>();
+      setChapterExcludedSpy.mockReturnValueOnce(include.promise);
+      const run = deferred<typeof subsetResponse>();
+      runAnalysisForChaptersSpy.mockReturnValueOnce(run.promise);
+      const view = renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(setChapterExcludedSpy).toHaveBeenCalledWith('b1', 3, false));
+      view.unmount();
+      /* B's chapter 3 is excluded: a leaked include would flip it. */
+      openBookB(store, true);
+      const before = bookView(store);
+      await act(async () => include.resolve({ id: 3, title: 'Chapter 3', slug: '03', excluded: false }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      await act(async () => run.resolve(subsetResponse));
+      await flush();
+      expect(bookView(store)).toEqual(before);
+    });
+
+    it('an Include that fails after book B opened still rolls back on the server, and leaves B untouched', async () => {
+      const store = makeIncludeStore();
+      const run = deferred<typeof subsetResponse>();
+      runAnalysisForChaptersSpy.mockReturnValueOnce(run.promise);
+      const view = renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      view.unmount();
+      /* B's chapter 3 is included: a leaked rollback would exclude it. */
+      openBookB(store, false);
+      const before = bookView(store);
+      await act(async () => run.reject(new AnalysisError('The analyzer timed out.', 'analyzer-timeout')));
+      await flush();
+      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+      expect(bookView(store)).toEqual(before);
+    });
+
+    it('Cancel on A\'s Include from the same view instance after it switched to book B leaves B untouched', async () => {
+      const store = makeIncludeStore();
+      runAnalysisForChaptersSpy.mockImplementationOnce(
+        (_m: string, _ids: number[], o: { signal: AbortSignal }) =>
+          new Promise((_res, rej) => {
+            o.signal.addEventListener('abort', () =>
+              rej(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            );
+          }),
+      );
+      const view = renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1));
+      openBookB(store, false);
+      const before = bookView(store);
+      const bRows = store.getState().chapters.chapters;
+      view.rerender(
+        <Provider store={store}>
+          <HostedGenerationView
+            chapters={bRows}
+            characters={[hero]}
+            paused
+            title="Book B"
+            bookId="b2"
+            modelKey="coqui-xtts-v2"
+            onRegenerate={() => {}}
+            onRegenerateBook={() => {}}
+            onRegenerateCharacterInChapter={() => {}}
+            onPreview={() => {}}
+          />
+        </Provider>,
+      );
+      fireEvent.click(await screen.findByRole('button', { name: /Cancel/i }));
+      await flush();
+      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+      expect(bookView(store)).toEqual(before);
+    });
+
+    it('control: a result that lands while the library is on screen still applies to the book the slices hold', async () => {
+      const store = makeIncludeStore();
+      store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+      const { run, view } = await startReanalyse(store);
+      view.unmount();
+      store.dispatch(uiSlice.actions.goHome());
+      await act(async () => run.resolve(subsetResponse));
+      await flush();
+      const s = store.getState();
+      expect(s.cast.characters.map((c) => c.id)).toContain('wren');
+      expect(s.chapters.analysisGapById?.[1]).toBeUndefined();
+      expect(s.analysis.activeStream).toBeNull();
+    });
+
+    it('control: a result on the same book applies everything', async () => {
+      const store = makeIncludeStore();
+      store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+      store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+      const { run, opts } = await startReanalyse(store);
+      act(() => opts.onCastUpdate?.({ characters: [...characters, villain] }));
+      expect(store.getState().cast.characters.map((c) => c.id)).toContain('a-villain');
+      await act(async () => run.resolve(subsetResponse));
+      await flush();
+      const s = store.getState();
+      expect(s.cast.characters.map((c) => c.id)).toContain('wren');
+      expect(s.manuscript.sentences.some((x) => x.id === 51)).toBe(true);
+      expect(s.chapters.analysisGapById?.[1]).toBeUndefined();
+      expect(s.analysis.activeStream).toBeNull();
+    });
+  });
 });
 
 /* Wave 3 — phone viewport contract for the Generation view: the page

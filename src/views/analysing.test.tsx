@@ -10,6 +10,7 @@ import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { notificationsSlice } from '../store/notifications-slice';
+import { manuscriptSlice } from '../store/manuscript-slice';
 import { AnalysingView } from './analysing';
 import { WIKI_BASE } from '../lib/wiki-links';
 import type { AnalyseOpts, AnalysisLiveInfo } from '../lib/api';
@@ -2367,7 +2368,16 @@ describe('AnalysingView — failed-chapter retry', () => {
        banner belongs to that run: a Retry supersedes it, and a Retry whose
        subset run sends `result` finished the book, so it routes to Confirm
        exactly like a main run's result. */
-    async function mountAfterMainFailure(castConfirmed: boolean) {
+    const upload = (manuscriptId: string) => ({
+      manuscriptId,
+      title: manuscriptId,
+      format: 'plaintext' as const,
+      wordCount: 0,
+      byteSize: 0,
+      uploadedAt: new Date(0).toISOString(),
+      sourceText: '',
+    });
+    async function mountAfterMainFailure(castConfirmed: boolean, { withManuscript = false } = {}) {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       const base = withFacts(makeBookState([44], { '44': rec('attribution') }), { stage1Ready: true });
       bookState = { ...base, state: { ...base.state, castConfirmed } };
@@ -2386,10 +2396,12 @@ describe('AnalysingView — failed-chapter retry', () => {
           bookMeta: bookMetaSlice.reducer,
           analysis: analysisSlice.reducer,
           notifications: notificationsSlice.reducer,
+          ...(withManuscript ? { manuscript: manuscriptSlice.reducer } : {}),
         },
       });
       /* The view only renders on its book's analysing stage. */
       store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+      if (withManuscript) store.dispatch(manuscriptSlice.actions.uploadComplete(upload('m1')));
       const view = render(
         <Provider store={store}>
           <AnalysingView
@@ -2519,6 +2531,31 @@ describe('AnalysingView — failed-chapter retry', () => {
       await settle();
       expect(onComplete).not.toHaveBeenCalled();
       expect(store.getState().analysis.activeStream).toEqual(bSnapshot);
+    });
+
+    /* PR #3505 review pass 3 — the Retry's live cast updates are the only
+       writer of the cast slice once the view is gone (the middleware ignores
+       cast-update), and the cast slice holds whichever book is open. */
+    const villain = { id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' as const };
+    const hero = { id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'magenta' as const };
+    it('a Retry cast update after another book opened never writes into that book\'s cast', async () => {
+      const { store } = await mountAfterMainFailure(false, { withManuscript: true });
+      cleanup();
+      store.dispatch(uiActions.openBook({ id: 'b2', status: 'analysing', manuscriptId: 'm2' }));
+      store.dispatch(manuscriptSlice.actions.uploadComplete(upload('m2')));
+      store.dispatch(castSlice.actions.setCharacters([hero] as Character[]));
+      act(() => {
+        capturedSubsetCall!.opts!.onCastUpdate!({ characters: [villain] as Character[] });
+      });
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['b-hero']);
+    });
+
+    it('control: a Retry cast update while its book is open replaces the live roster', async () => {
+      const { store } = await mountAfterMainFailure(false, { withManuscript: true });
+      act(() => {
+        capturedSubsetCall!.opts!.onCastUpdate!({ characters: [villain] as Character[] });
+      });
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['a-villain']);
     });
 
     it.each([
