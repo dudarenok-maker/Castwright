@@ -13,6 +13,30 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
+/* #3400: one-shot gate so a test can park the live take's unlink mid-restore. */
+const { unlinkGate } = vi.hoisted(() => ({
+  unlinkGate: {
+    match: null as null | ((p: string) => boolean),
+    entered: null as null | (() => void),
+    release: null as null | Promise<void>,
+  },
+}));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...real,
+    unlink: async (p: Parameters<typeof real.unlink>[0]) => {
+      if (unlinkGate.match?.(String(p))) {
+        const { entered, release } = unlinkGate;
+        unlinkGate.match = null;
+        entered?.();
+        await release;
+      }
+      return real.unlink(p);
+    },
+  };
+});
+
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
 const TITLE = 'Bonus Story';
@@ -555,6 +579,33 @@ describe('chapter-audio router', () => {
           `/api/books/${bookId}/chapters/1/audio/previous/restore`,
         );
         expect(res.status).toBe(404);
+      });
+
+      it('restore mid-unlink, then DELETE previous (accept): the DELETE waits and 404s; the restored take survives (#3400)', async () => {
+        resetAudio();
+        writeMp3();
+        writePreviousMp3();
+        const fs = await import('node:fs');
+        const prevBytes = fs.readFileSync(join(audioRoot, `${SLUG}.previous.mp3`));
+        let entered!: () => void;
+        let release!: () => void;
+        const hit = new Promise<void>((r) => (entered = r));
+        unlinkGate.release = new Promise<void>((r) => (release = r));
+        unlinkGate.entered = entered;
+        unlinkGate.match = (p) => p.endsWith(`${SLUG}.mp3`);
+        const restoring = request(app)
+          .post(`/api/books/${bookId}/chapters/1/audio/previous/restore`)
+          .then((r) => r);
+        await hit;
+        const accepting = request(app)
+          .delete(`/api/books/${bookId}/chapters/1/audio/previous`)
+          .then((r) => r);
+        await new Promise((r) => setTimeout(r, 100));
+        release();
+        const [rest, acc] = await Promise.all([restoring, accepting]);
+        expect(rest.status).toBe(204);
+        expect(acc.status).toBe(404);
+        expect(fs.readFileSync(join(audioRoot, `${SLUG}.mp3`)).equals(prevBytes)).toBe(true);
       });
 
       it('409s when a generation is in flight for the book', async () => {

@@ -64,6 +64,7 @@ owner: null
      - **Blast radius:** the bulk `GET /api/revisions` maps every requested book through one `Promise.all`. A single such book therefore fails the **whole** bulk response with a 500, and every other book's drift goes with it. Main already has that blast radius for an unparseable file in a cast book. PR 1 extends it to the new cases above. **Visible effect:** The bulk poll only ever asks for non-active books that are past analysis (`layout.tsx:1137-1146` filters out `not_analysed`, `analysing`, `cast_pending`, `voices_pending`, `unreadable` and `orphaned`), so a book with no confirmed cast never enters it. Its `.then` has no `catch` (`layout.tsx` ~1153-1158), so one failing book is a silent unhandled rejection that stalls every *other* book's background drift badges. Main already does this for an unparseable file in a cast book, and the newer-schema case cannot be reached until a later version writes `schema: 2`. That leaves one newly reachable trigger in PR 1: a cast book whose revisions.json is valid JSON with a non-object top level (`null`, `[]`, a string or a number).
   4. **The poll carries extra fields, and `pending` now arrives with an empty cast (D8).** The old client's `applyPoll` and `applyBackgroundPoll` read only `drift`, so it never sees these.
   5. **Three new routes are mounted and reachable:** accept, reject and dismiss. No client calls them.
+  6. **The legacy `DELETE …/audio/previous` and `POST …/audio/previous/restore` now take the per-chapter `revision-op` key around the audio step.** Main's versions raced an opposing accept/reject on the same chapter (both takes lost); the key fixes that on main's routes too. Status codes and ordering are unchanged; the only new outcome is a curated 500 if the key's acquisition times out.
 
 ## Invariants to preserve
 
@@ -162,6 +163,10 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
 **Base:** branch `fix/server-3400-revisions-server-ops` with `origin/main` merged in. HEAD is 7ce51045 and the merge-base is 54205283. All `file:line` citations below were re-anchored against that tree. If a cited line has moved, find it by the quoted text, never by the number alone.
 
 ## Global Constraints
+
+### Per-chapter serialisation of accept/reject (PR #3504 review, pass 1)
+
+- Accept and reject run steps 1–3 inside `withKeyLock(revisionOpLockKey(bookDir, chapterId))` (`revision-op:<resolved bookDir>:<chapterId>`, `workspace/revisions-store.ts`); the revisions lock is taken inside it for steps 1 and 3 only. **Lock order: `revision-op` → `revisions`, never the reverse.** The legacy `DELETE …/audio/previous` and `POST …/audio/previous/restore` take the same key around `acceptPreviousAudio` / `restorePreviousAudio` (the busy 409 and the chapter-id parse still run first, unchanged). Any `LockAcquisitionTimeoutError` from it leaves through `requestFailureMessage` (revision-ops) or the explicit `LOCK_CONTENTION_REQUEST_ERROR` (legacy DELETE); the legacy restore's existing catch already answers its own fixed 500. Tests: opposing-pair, double-reject and cross-chapter cases in `revision-ops.test.ts`, one legacy race in `chapter-audio.test.ts`.
 
 ### Paths and how to run tests
 

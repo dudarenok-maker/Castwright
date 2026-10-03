@@ -584,7 +584,11 @@ Design rationale:
   class while holding a later one, or two requests deadlock. The per-book
   `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
   outside that order: nothing but revisions.json is written under it and no
-  other lock is taken while it is held. Since #2260 that
+  other lock is taken while it is held. Accept/reject (and the legacy
+  `…/audio/previous` routes) additionally serialise per chapter on a
+  `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
+  its order is **`revision-op` → `revisions`** — never take `revision-op`
+  while holding `revisions`. Since #2260 that
   no longer hangs forever: `withKeyLock` bounds each acquisition at 10s and
   throws a `LockAcquisitionTimeoutError`
   (`server/src/workspace/file-lock.ts`) naming the key and both rules. It is a

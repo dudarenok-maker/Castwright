@@ -10,9 +10,37 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
-const { busy, failRestore } = vi.hoisted(() => ({ busy: { value: false }, failRestore: { value: false } }));
+const { busy, failRestore, unlinkGate } = vi.hoisted(() => ({
+  busy: { value: false },
+  failRestore: { value: false },
+  /* One-shot gate: the first unlink whose path matches parks until released. */
+  unlinkGate: {
+    match: null as null | ((p: string) => boolean),
+    entered: null as null | (() => void),
+    release: null as null | Promise<void>,
+  },
+}));
 
 vi.mock('./generation.js', () => ({ isGenerationActive: () => busy.value }));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...real,
+    unlink: async (p: Parameters<typeof real.unlink>[0]) => {
+      if (unlinkGate.match?.(String(p))) {
+        const { entered, release } = unlinkGate;
+        unlinkGate.match = null;
+        entered?.();
+        await release;
+      }
+      return real.unlink(p);
+    },
+  };
+});
+vi.mock('../workspace/file-lock.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/file-lock.js')>();
+  return { ...real, withKeyLock: vi.fn(real.withKeyLock) };
+});
 vi.mock('../workspace/atomic-rename.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/atomic-rename.js')>();
   return {
@@ -85,6 +113,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  unlinkGate.match = null;
   busy.value = false;
   failRestore.value = false;
   rmSync(audioRoot, { recursive: true, force: true });
@@ -332,6 +361,107 @@ describe('POST …/revisions/:revisionId/reject', () => {
     const res = await reject('r1');
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+  });
+});
+
+/* #3400 review pass 1 — accept/reject are serialised per chapter across steps
+   1-3. Park the FIRST op's slow unlink, fire the opposing op, let the parked op
+   finish: the second op must see the first one's outcome, never act on a
+   half-moved pair. */
+function parkUnlink(match: (p: string) => boolean) {
+  let entered!: () => void;
+  let release!: () => void;
+  const hit = new Promise<void>((r) => (entered = r));
+  unlinkGate.release = new Promise<void>((r) => (release = r));
+  unlinkGate.entered = entered;
+  unlinkGate.match = match;
+  return { hit, release };
+}
+const settle = (ms = 100) => new Promise((r) => setTimeout(r, ms));
+
+describe('accept / reject on one chapter are serialised (#3400)', () => {
+  it('reject mid-restore, then accept: accept answers 404 after the reject lands; the restored take survives; one timeline entry', async () => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    seed([entry(1, 'r1')]);
+    const gate = parkUnlink((p) => p.endsWith('01-one.mp3'));
+    const rejecting = reject('r1').then((r) => r);
+    await gate.hit;
+    const accepting = accept('r1').then((r) => r);
+    await settle();
+    gate.release();
+    const [rej, acc] = await Promise.all([rejecting, accepting]);
+    expect(rej.status).toBe(200);
+    expect(acc.status).toBe(404);
+    expect(acc.body.error).toBe('revision_not_found');
+    expect(readFileSync(live(), 'utf8')).toBe('PREV');
+    expect(existsSync(prev())).toBe(false);
+    expect(disk().timeline['1']).toMatchObject([{ id: 'r1', eventKind: 'rejected' }]);
+  });
+
+  it('accept mid-delete, then reject: reject answers 404 after the accept lands; live survives; one timeline entry', async () => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    seed([entry(1, 'r1')]);
+    const gate = parkUnlink((p) => p.endsWith('01-one.previous.mp3'));
+    const accepting = accept('r1').then((r) => r);
+    await gate.hit;
+    const rejecting = reject('r1').then((r) => r);
+    await settle();
+    gate.release();
+    const [acc, rej] = await Promise.all([accepting, rejecting]);
+    expect(acc.status).toBe(200);
+    expect(rej.status).toBe(404);
+    expect(readFileSync(live(), 'utf8')).toBe('LIVE');
+    expect(existsSync(prev())).toBe(false);
+    expect(disk().timeline['1']).toMatchObject([{ id: 'r1', eventKind: 'accepted' }]);
+  });
+
+  it('two concurrent rejects for one id: both 200, live is the restored take, one timeline entry', async () => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    seed([entry(1, 'r1')]);
+    const gate = parkUnlink((p) => p.endsWith('01-one.mp3'));
+    const first = reject('r1').then((r) => r);
+    await gate.hit;
+    const second = reject('r1').then((r) => r);
+    await settle();
+    gate.release();
+    const [a, b] = await Promise.all([first, second]);
+    expect([a.status, b.status]).toEqual([200, 200]);
+    expect(readFileSync(live(), 'utf8')).toBe('PREV');
+    expect(disk().timeline['1']).toMatchObject([{ id: 'r1', eventKind: 'rejected' }]);
+  });
+
+  it('ops on DIFFERENT chapters do not wait on each other', async () => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    writeFileSync(live('02-two'), 'LIVE2');
+    writeFileSync(prev('02-two'), 'PREV2');
+    seed([entry(1, 'r1'), entry(2, 'r2')]);
+    const gate = parkUnlink((p) => p.endsWith('01-one.mp3'));
+    const parked = reject('r1').then((r) => r);
+    await gate.hit;
+    const other = await reject('r2');
+    expect(other.status).toBe(200);
+    expect(readFileSync(live('02-two'), 'utf8')).toBe('PREV2');
+    gate.release();
+    expect((await parked).status).toBe(200);
+  });
+
+  it('a lock timeout on the per-chapter key answers the curated 500 — no key or path in the body', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const { withKeyLock } = await import('../workspace/file-lock.js');
+    vi.mocked(withKeyLock).mockClear();
+    vi.mocked(withKeyLock).mockRejectedValueOnce(
+      new LockAcquisitionTimeoutError('revision-op:C:/SECRET-WORKSPACE/book:1', 10_000),
+    );
+    seed([entry(1, 'r1')]);
+    const res = await accept('r1');
+    expect(vi.mocked(withKeyLock).mock.calls[0][0]).toMatch(/^revision-op:.*:1$/);
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    expect(res.text).not.toContain('SECRET-WORKSPACE');
   });
 });
 

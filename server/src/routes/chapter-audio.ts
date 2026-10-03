@@ -38,6 +38,8 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
 import { acceptPreviousAudio, restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';
 import { isGenerationActive } from './generation.js';
+import { withKeyLock, isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
+import { revisionOpLockKey } from '../workspace/revisions-store.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 /** Disk shape mirror of `ChapterPeaksFile` in `server/src/tts/mp3.ts`.
@@ -377,7 +379,18 @@ chapterAudioRouter.delete(
     const chapter = located.state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
     const root = audioDir(located.bookDir);
-    const outcome = await acceptPreviousAudio(root, chapter.slug);
+    /* #3400: serialised against revision accept/reject on the same chapter
+       (the same audio functions, the same race). */
+    let outcome: 'deleted' | 'none';
+    try {
+      outcome = await withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
+        acceptPreviousAudio(root, chapter.slug),
+      );
+    } catch (e) {
+      /* The lock key embeds the absolute book path — never echo it. */
+      if (isLockAcquisitionTimeout(e)) return res.status(500).json({ message: LOCK_CONTENTION_REQUEST_ERROR });
+      throw e;
+    }
     if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
     res.status(204).end();
   },
@@ -405,7 +418,9 @@ chapterAudioRouter.post(
     const root = audioDir(located.bookDir);
     let outcome: 'restored' | 'none';
     try {
-      outcome = await restorePreviousAudio(root, chapter.slug);
+      outcome = await withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
+        restorePreviousAudio(root, chapter.slug),
+      );
     } catch {
       return res.status(500).json({ message: 'Failed to restore previous audio.' });
     }
