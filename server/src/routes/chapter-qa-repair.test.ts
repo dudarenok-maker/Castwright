@@ -1128,6 +1128,362 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
     expect(synthesiseChapterMock).not.toHaveBeenCalled();
   });
 
+  /* #3449 regression: the F4 fixture above uses a BARE cast (no voice fields) and a
+     FRESH snapshot (resolvedVoiceName='castor-alden-B'), so the pre-#3449 code already
+     drops the stale 'castor-alden-A' audition row (snapshot B ≠ audition A). But the
+     actual #3449 bug is the OPPOSITE shape: the cast WAS reassigned to 'castor-alden-B'
+     (overrideTtsVoices) yet the snapshot is STALE — it still names the PREVIOUS voice
+     'castor-alden-A' because no re-render happened after the reassignment. The audition
+     centroid was recorded under that same old voice 'castor-alden-A'. The pre-#3449
+     filter compared audition vs snap.resolvedVoiceName → A == A → KEPT → the re-render
+     is scored against a centroid for a voice the character no longer uses. The #3449
+     fix derives the current voice from the CAST via pickVoiceForEngine → 'castor-alden-B'
+     ≠ audition 'castor-alden-A' → DROPPED → behaves as "no centroid" → the
+     acoustic-only candidate is skipped. */
+  async function scaffoldReassignedCastStaleSnapshotBook(
+    bookTitle: string,
+  ): Promise<{ bookId: string; chapterSlug: string }> {
+    const id = makeBookId(AUTHOR2, SERIES2, bookTitle);
+    const bookDir = join(workspaceRoot, 'books', AUTHOR2, SERIES2, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author: AUTHOR2,
+        series: SERIES2,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'en',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    // The cast HAS been reassigned: castor now resolves to 'castor-alden-B' via its
+    // kokoro override (pickVoiceForEngine reads overrideTtsVoices[engine].name).
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          {
+            id: 'castor',
+            name: 'Castor',
+            gender: 'female',
+            attributes: [],
+            overrideTtsVoices: { kokoro: { name: 'castor-alden-B' } },
+          },
+        ],
+      }),
+    );
+
+    const amy = tone(1.0, 12000);
+    const castorHealthy = tone(1.0, 12000); // healthy — signal scan won't flag it
+    const chapterPcm = Buffer.concat([amy, castorHealthy]);
+    const mp3Bytes = await encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        ],
+        /* STALE snapshot — from the PREVIOUS render, before the reassignment. It still
+           names the old voice 'castor-alden-A' (no re-render happened after the cast's
+           overrideTtsVoices was changed to 'castor-alden-B'). This is the pre-#3449 bug
+           trigger: snap.resolvedVoiceName ('castor-alden-A') MATCHES the audition
+           centroid's voice, so the old filter wrongly kept it. */
+        characterSnapshots: {
+          castor: { voiceEngine: 'kokoro', resolvedVoiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+        },
+      }),
+    );
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.render-integrity.json`),
+      JSON.stringify([
+        {
+          characterId: 'castor',
+          sentenceIds: [2],
+          verdict: 'voice-mismatch',
+          cosine: 0.3,
+          severity: 'severe',
+          fixable: true,
+          expectedEngine: 'kokoro',
+          renderedEngine: 'kokoro',
+          referenceKind: 'in-book',
+          windowed: false,
+          segmentIndex: 1,
+        },
+      ]),
+    );
+    writeFileSync(
+      join(thisAudioRoot, 'render-integrity.centroids.json'),
+      JSON.stringify({
+        castor: {
+          characterId: 'castor',
+          centroid: unitVec(0),
+          cleanMean: 0.9,
+          pSevere: 0.45,
+          pBand: 0.6,
+          referenceKind: 'audition',
+          // The audition centroid was recorded under the OLD voice 'castor-alden-A'.
+          auditionVoice: { voiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+        },
+      }),
+    );
+
+    return { bookId: id, chapterSlug: SLUG };
+  }
+
+  it('#3449 — drops a stale audition centroid when the cast was reassigned but the snapshot is stale (no re-render)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — would be accepted if reached
+      sampleRate: SR,
+    }));
+
+    const { bookId: id } = await scaffoldReassignedCastStaleSnapshotBook('Reassigned Cast Story');
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    // The cast resolves castor to 'castor-alden-B' (current), but the audition
+    // centroid recorded 'castor-alden-A' (old). The stale snapshot also says
+    // 'castor-alden-A', so the PRE-#3449 filter (snap.resolvedVoiceName) would
+    // MATCH and KEEP the centroid → re-render scored against it. The #3449 fix
+    // derives the current voice from the cast → mismatch → dropped → "no centroid"
+    // → the acoustic-only candidate is skipped before the synth callback.
+    expect((done!.stillSuspect as number[]).includes(1)).toBe(true);
+    expect((done!.repaired as number[]).includes(1)).toBe(false);
+    expect(synthesiseChapterMock).not.toHaveBeenCalled();
+  });
+
+  /* #3460 regression: the #3449 test above covers only the DROP path (cast
+     reassigned, audition centroid's voice ≠ current voice → centroid treated as
+     unusable → candidate skipped before synth, synthesiseChapterMock never
+     called). The complementary KEPT/USABLE path — where the cast's CURRENT
+     resolved voice MATCHES the persisted audition centroid's recorded voice —
+     has no test anywhere in the repo. Without it, a regression that silently
+     broke the match path (e.g. a formatting/case/whitespace mismatch between
+     pickVoiceForEngine's output and the audition centroid's stored voiceName)
+     would make every acoustic-only candidate permanently fall back to "no
+     centroid" — conservative, so it fails safe, but it would silently defeat
+     the entire acoustic-centroid accept-check across the whole system.
+
+     This fixture mirrors scaffoldReassignedCastStaleSnapshotBook but with the
+     voice MATCHING (no reassignment): castor's overrideTtsVoices names
+     'castor-alden-A', the snapshot agrees, and the audition centroid was
+     recorded under that same voice → auditionCentroidUsableForCurrent MATCHES
+     → the centroid survives the filter and ACTUALLY participates in the
+     acoustic accept/reject gate during re-render.
+
+     The mocked embedSegment always returns a 192-dim unit vector along axis 1.
+     The centroid fixture is parameterised by axis: unitVec(0) is orthogonal to
+     the mock (cosine ~0, below cleanMean 0.9 → rejected) and unitVec(1) is
+     aligned with it (cosine ~1.0, at/above cleanMean 0.9 → accepted). This
+     proves the kept centroid genuinely GATES the re-render's outcome — not
+     merely that it avoided the drop branch (which is all #3449 tested). */
+  async function scaffoldMatchingVoiceCentroidBook(
+    bookTitle: string,
+    centroidAxis: number,
+  ): Promise<{ bookId: string; chapterSlug: string }> {
+    const id = makeBookId(AUTHOR2, SERIES2, bookTitle);
+    const bookDir = join(workspaceRoot, 'books', AUTHOR2, SERIES2, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author: AUTHOR2,
+        series: SERIES2,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'en',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    /* The cast has NOT been reassigned: castor resolves to 'castor-alden-A' via
+       its kokoro override (pickVoiceForEngine reads overrideTtsVoices[engine].name),
+       and the audition centroid was recorded under that SAME voice — so
+       auditionCentroidUsableForCurrent MATCHES and the centroid is KEPT (unlike
+       #3449 where the cast was reassigned to 'castor-alden-B' while the audition
+       recorded 'castor-alden-A'). */
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          {
+            id: 'castor',
+            name: 'Castor',
+            gender: 'female',
+            attributes: [],
+            overrideTtsVoices: { kokoro: { name: 'castor-alden-A' } },
+          },
+        ],
+      }),
+    );
+
+    const amy = tone(1.0, 12000);
+    const castorHealthy = tone(1.0, 12000); // healthy — signal scan won't flag it
+    const chapterPcm = Buffer.concat([amy, castorHealthy]);
+    const mp3Bytes = await encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        ],
+        /* The snapshot AGREES with the cast — both name 'castor-alden-A'. No
+           reassignment happened (or the snapshot and cast agree), so the
+           centroid is NOT stale. This is the complementary case to #3449's
+           stale snapshot that names the PREVIOUS voice. */
+        characterSnapshots: {
+          castor: { voiceEngine: 'kokoro', resolvedVoiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+        },
+      }),
+    );
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.render-integrity.json`),
+      JSON.stringify([
+        {
+          characterId: 'castor',
+          sentenceIds: [2],
+          verdict: 'voice-mismatch',
+          cosine: 0.3,
+          severity: 'severe',
+          fixable: true,
+          expectedEngine: 'kokoro',
+          renderedEngine: 'kokoro',
+          referenceKind: 'in-book',
+          windowed: false,
+          segmentIndex: 1,
+        },
+      ]),
+    );
+    writeFileSync(
+      join(thisAudioRoot, 'render-integrity.centroids.json'),
+      JSON.stringify({
+        castor: {
+          characterId: 'castor',
+          /* Parameterised: unitVec(0) is orthogonal to the mocked embedSegment
+             (axis 1) → cosine ~0 < cleanMean 0.9 → rejected. unitVec(1) is
+             aligned with the mock → cosine ~1.0 >= cleanMean 0.9 → accepted. */
+          centroid: unitVec(centroidAxis),
+          cleanMean: 0.9,
+          pSevere: 0.45,
+          pBand: 0.6,
+          referenceKind: 'audition',
+          /* The audition centroid was recorded under the SAME voice the cast
+             currently resolves to — this is what makes it USABLE (the #3449
+             fix's KEPT path, not the DROP path). */
+          auditionVoice: { voiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+        },
+      }),
+    );
+
+    return { bookId: id, chapterSlug: SLUG };
+  }
+
+  it('#3460 — a kept/usable audition centroid gates the re-render: cosine below cleanMean → stillSuspect (not just silently dropped)', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — signal-QA clean
+      sampleRate: SR,
+    }));
+
+    // Centroid along axis 0, orthogonal to the mocked embedSegment (axis 1) →
+    // cosine ~0, below cleanMean 0.9 → the acoustic gate rejects every take.
+    const { bookId: id } = await scaffoldMatchingVoiceCentroidBook('Kept Centroid Below Story', 0);
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    // The centroid was KEPT (audition voice matches current voice), so the
+    // candidate reaches the re-render path — unlike #3449's drop case where
+    // synthesiseChapterMock is never called. This is the key distinction: the
+    // kept centroid is LIVE in the comparison, not merely absent.
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    // But the cosine (~0) is below cleanMean (0.9) → the acoustic gate rejects
+    // the re-render on every attempt → stillSuspect, NOT repaired.
+    expect((done!.stillSuspect as number[]).includes(1)).toBe(true);
+    expect((done!.repaired as number[]).includes(1)).toBe(false);
+  });
+
+  it('#3460 — a kept/usable audition centroid gates the re-render: cosine at/above cleanMean → repaired', async () => {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — signal-QA clean
+      sampleRate: SR,
+    }));
+
+    // Centroid along axis 1, aligned with the mocked embedSegment (axis 1) →
+    // cosine ~1.0, at/above cleanMean 0.9 → the acoustic gate accepts the take.
+    const { bookId: id } = await scaffoldMatchingVoiceCentroidBook('Kept Centroid Above Story', 1);
+
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+
+    const events = parseSse(res.text);
+    const done = events.find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    // The centroid was KEPT and the cosine (~1.0) is at/above cleanMean (0.9) →
+    // the acoustic gate accepts the re-render → repaired, NOT stillSuspect.
+    // Contrast with the test above (cosine ~0 → rejected): the ONLY difference
+    // is the centroid's axis — proving the kept centroid genuinely gates the
+    // outcome, not just that it avoided the drop branch.
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    expect((done!.repaired as number[]).includes(1)).toBe(true);
+    expect((done!.stillSuspect as number[]).includes(1)).toBe(false);
+  });
+
 });
 
 /* fs-38 Wave 3c (fix wave, Task 6) — mirrors generation.ts/chapter-splice.ts's

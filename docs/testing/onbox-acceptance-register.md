@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,11 +563,20 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**56 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**57 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-27 (#3084 wave 2b), 53 → 56.** Rows **B102** (capacity
+> **Last change: 2026-10-03 (#3414), 56 → 57.** Added **A112** — the
+> qa-repair centroid filter now compares a flagged line's new take against
+> the character's CURRENT voice rather than the chapter's last-render
+> snapshot; the regression suite (#3449, #3460) covers the logic branch
+> against a mocked embedder, but nothing has yet proven the repair's
+> accept/reject decision against a real sidecar's ECAPA embedding on real
+> hardware. Group A 33 → 34. `next-id` bumped A112 → A113 in the same
+> change.
+>
+> **Prior change: 2026-09-27 (#3084 wave 2b), 53 → 56.** Rows **B102** (capacity
 > recalibration — the measurement owed before any capacity default changes),
 > **E110** (Gemini thinking-window timing on real chapters — a measurement
 > that gates nothing) and **E111** (a thinking Gemini model on a 20,000-
@@ -1590,7 +1599,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A112 -->
+<!-- next-id: A113 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -5748,6 +5757,39 @@ is the next release cut, per CLAUDE.md's release-notes-gate step), Windows
 for the sleep-prevention leg specifically; the other two legs are
 platform-general. *Criteria:* the three observations above; issue #3406 and
 PR #3404's manifest-guard section for the exact defect each leg closes.
+
+### A112 · The qa-repair repair pass judges a new take against the CURRENT voice, not a stale render snapshot ([Castwright#3414](https://github.com/dudarenok-maker/Castwright/issues/3414)) · **a real sidecar with a real speaker-embedding (ECAPA) model, a book with at least one already-rendered chapter**
+
+`chapter-qa-repair.ts`'s centroid filter derived its comparison voice from
+the chapter's last full-render snapshot (`snap?.resolvedVoiceName`) rather
+than the cast's live voice, so a character reassigned to a new voice since
+that render still had their *old* voice's audition centroid treated as
+usable — silently judging a repair against the wrong reference. The fix
+derives the comparison voice the same way the re-render itself does
+(`pickVoiceForEngine(resolveCharacterEngine(current, engine), ...)`, keyed
+off the live cast entry), and the regression suite (`#3449`, `#3460`)
+exercises both the stale-drop and the kept/gate paths against a mocked
+embedder. Neither test touches a real sidecar or a real ECAPA model.
+
+**What to observe, concretely:**
+
+- Render a chapter, then change one of its characters' voice assignment,
+  then run Fix audio / qa-repair's "Scan & repair" against that chapter on
+  a real sidecar. Confirm the repair's accept/reject decision for that
+  character's flagged lines is judged against the embedding of the
+  character's *new* voice, not the voice the chapter was originally
+  rendered in — e.g. by checking the repair accepts a take that matches the
+  new voice but would have been rejected against the old one (or vice
+  versa).
+- Confirm no crash or inconclusive-verdict regression when the reassigned
+  character has no prior audition centroid for the new voice at all (cold
+  start).
+
+*Needs:* a real GPU box with the speech sidecar and a real ECAPA
+speaker-embedding model running (the mocked unit tests cover the logic branch
+but never the real embedding path). *Criteria:* the observation above; issue
+#3414 and the mutation-tested regression split (#3449 stale-drop, #3460
+kept-and-gates) for the exact defect this closes.
 
 ## Group B — local Ollama analyzer only
 
