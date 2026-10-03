@@ -121,10 +121,9 @@ export const FAILURE_REMEDIATIONS = {
       'The analyzer request was stopped because it ran past a time limit without finishing, instead of ' +
       'being left to hang.',
     remediation:
-      "Retry the chapter. If it recurs: when a thinking Gemini model stayed silent before answering, raise " +
-      "'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most " +
-      "290000 ms, below the 300 s network timeout); when a request ran too long overall, raise 'Gemini request " +
-      "ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) in Advanced Settings. Or switch to a faster analyzer model.",
+      "Retry the chapter. If it recurs, raise the time limit of the engine that timed out — 'Gemini request " +
+      "ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) for Gemini, or the endpoint's request time limit for an " +
+      "OpenAI-compatible endpoint — lower the model's reasoning level, or switch to a faster analyzer model.",
   },
   'analyzer-daily-quota': {
     userMessage: "The analyzer's free-tier daily quota is exhausted.",
@@ -270,6 +269,34 @@ export const FAILURE_REMEDIATIONS = {
       'the cast. Set the language in the book settings and try again.',
     remediation:
       'Open the book settings, choose a language for the book, then retry the chapter.',
+  },
+  'analyzer-request-rejected': {
+    /* #3084 — a 400 from Ollama, Gemini or an OpenAI-compatible endpoint. The
+       live message carries the provider's own (redacted) text and names the
+       settings that shape the request; this is the offline Help copy. */
+    userMessage:
+      'The analyzer refused the request as invalid (HTTP 400) — something about how the request ' +
+      'was shaped is not accepted by this model or server.',
+    remediation:
+      'Change one of the settings named in the error for this engine or endpoint, then retry. ' +
+      'Castwright never retries a rejected request with a setting silently removed.',
+    helpDetail:
+      'A 400 has many causes: a structured-output mode the server does not support (LM Studio ' +
+      'rejects "json", for example), a context or output size larger than the server allows, or an ' +
+      "option the model does not accept. The provider's message is shown with any saved keys removed.",
+  },
+  'analyzer-invalid-output': {
+    userMessage:
+      "The analyzer's reply did not match the expected structure, even after an automatic retry.",
+    remediation:
+      'Retry the chapter. If it keeps failing, set Structured output to "schema" for this engine or ' +
+      'endpoint, or pick a stronger model.',
+  },
+  'analyzer-endpoint-missing': {
+    userMessage: 'The run names an analyzer endpoint that is not configured.',
+    remediation:
+      'Add the endpoint in Settings, or pick a different model for this run. If the model came from ' +
+      'ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL in server/.env, fix or clear that value.',
   },
   unknown: {
     /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead. */

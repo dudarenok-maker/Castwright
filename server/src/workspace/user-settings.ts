@@ -23,6 +23,7 @@ import {
 } from './user-settings-path.js';
 import type { CloneEngine } from '../tts/clone-engines.js';
 import { inferEngineFromModelId, type AnalysisEngine } from '../analyzer/model-id.js';
+import { registerKnownSecretsProvider } from '../analyzer/known-secrets-gate.js';
 
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that
@@ -1110,6 +1111,22 @@ export function getResolvedGeminiApiKey(): string | null {
   if (fromSettings && fromSettings.length > 0) return fromSettings;
   return null;
 }
+
+/* #3084 A9 — register the known-secrets provider at module load so any route or
+   analyzer module can redact saved credentials from upstream error text without
+   importing user-settings.ts (which would add an edge that can close a cycle).
+   The gate (known-secrets-gate.ts) is a leaf: it holds no state of its own. */
+registerKnownSecretsProvider({
+  known: () => {
+    const k = getResolvedGeminiApiKey();
+    return k ? [k] : [];
+  },
+  load: async () => {
+    await readUserSettings();
+    const k = getResolvedGeminiApiKey();
+    return k ? [k] : [];
+  },
+});
 
 /** fs-1 — dedicated write path for upgrade bookkeeping fields. The general
     writeUserSettings() strips these (FORBIDDEN_KEYS), so the only sanctioned

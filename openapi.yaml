@@ -7256,6 +7256,9 @@ components:
         - cloned-voice-broken
         - lock-contention
         - language-unset
+        - analyzer-request-rejected
+        - analyzer-invalid-output
+        - analyzer-endpoint-missing
 
     ChapterQaVerdict:
       type: object
