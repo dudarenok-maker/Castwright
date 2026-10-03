@@ -590,7 +590,7 @@ export function GenerationView({
          started. Surface the server's message rather than falling
          through to the generic failure text below. */
       /* #3435 — `main_analysis_running`: the server refused this include
-         because the book's main analysis run is live or still finishing; it
+         because the book's main analysis run is live or still stopping; it
          is handled the same way (restore, message on the row). */
       const isSubsetInProgress =
         e instanceof AnalysisError && (e.code === 'subset_in_progress' || e.code === 'main_analysis_running');

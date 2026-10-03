@@ -482,7 +482,7 @@ Frontend:
 >
 > Every analysis job ending — Pause, an error, an overflow, a quota stop — now aborts its in-flight model calls; in-flight chapters are left for the next Resume or Retry. This supersedes #3084 P20/N4 ("in-flight work finishes") on the main route. A 60 s drain deadline guarantees the analysis-busy flag and the Ollama pin are released (#3435).
 >
-> A non-fresh Resume while a stopped run is still draining is refused for a moment ("still finishing the chapters it had started") (#3435).
+> A non-fresh Resume while a stopped run is still draining is refused for a moment ("still stopping") (#3435).
 >
 > A Pause between chapters, or after attribution, now ends the run `aborted` with nothing persisted; it no longer stitches and saves a partial book. A halted pipelined run no longer finalises a partial cast (#3435).
 >
@@ -529,7 +529,7 @@ The per-task mutation checks are the mutant battery; there is no out-of-repo mut
 
 1. **(mock) Disabled while running.** Open `#/books/sb/generate`. In the browser console, seed a manuscript id if it is empty and dispatch a raw `analysis/setActiveStream` running main snapshot through `window.__store__` (the e2e spec's steps 1–2). Re-analyse and Include are disabled and read "Pause the analysis first"; dispatch `setPaused` and they come back.
 2. **(real) A Retry that fails stays failed.** Open a book with an attribution row on the Analysing view (`#/books/<id>/analysing`). Stop the analyzer, Retry. The row stays, labelled "Speaker attribution". Reload; it is still there.
-3. **(real) Refused while running, then allowed.** Start an analysis; during Phase 1 the Retry buttons are disabled. Pause. Click Retry at once: either it runs, or the row says the analysis is still finishing; a few seconds later Retry runs. On a second browser that never saw the run start, Retry during the run shows the server's message on the row.
+3. **(real) Refused while running, then allowed.** Start an analysis; during Phase 1 the Retry buttons are disabled. Pause. Click Retry at once: either it runs, or the row says the analysis is still stopping; a few seconds later Retry runs. On a second browser that never saw the run start, Retry during the run shows the server's message on the row.
 4. **(real) An unfinished book asks to resume.** In sequential mode (so stage1 is written before attribution), halt a main run part-way through attribution. Retry a failed row. (In pipelined mode a halt during Phase 0 leaves no stage1, and the attribution rows instead read "Attributed when you resume the analysis." with no Retry — check that too.) The phase card shows "… still need attribution — resume the analysis to finish the book", no red toast. Reload: the line and "Resume analysis" are still there. Resume; the run finishes and routes to Confirm.
 5. **(real) A done book stays done.** On a generated book, Re-analyse one chapter and stop the analyzer mid-run. The library still shows the book as generated; the Generate view row shows the failure with Re-analyse. Start the analyzer and click it: the chapter re-analyses and saves, even if another chapter is still unfinished.
 6. **(real) Start fresh un-confirms.** On a confirmed book, Start fresh: the library shows "Analysing" until the run finishes and you confirm again.

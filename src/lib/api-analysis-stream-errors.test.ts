@@ -171,7 +171,7 @@ describe('#3435 refusal codes map to AnalysisError(message, code)', () => {
   const MAIN_DRAINING = {
     error: 'main_analysis_running',
     draining: true,
-    message: 'The analysis on this book is still finishing the chapters it had started. Try again in a moment.',
+    message: 'The analysis on this book is still stopping. Try again in a moment.',
   };
 
   it('realRunAnalysisForChapters maps a 409 main_analysis_running body to AnalysisError(message, code)', async () => {

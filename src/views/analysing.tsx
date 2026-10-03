@@ -310,7 +310,7 @@ export function AnalysingView({
   } | null>(null);
   const [bookStateRefreshKey, setBookStateRefreshKey] = useState(0);
   /* #3435 — the server refused this view's main start (a chapter retry is
-     running, or the previous run is still finishing). Its message shows on the
+     running, or the previous run is still stopping). Its message shows on the
      needs-action line; cleared on the next start. */
   const [startRefusal, setStartRefusal] = useState<string | null>(null);
 
@@ -1178,7 +1178,7 @@ export function AnalysingView({
            mark this in the ref so the finally block knows not to touch it or
            re-arm the main run. */
         /* #3435 — `main_analysis_running`: the server refused this Retry
-           because the main run is live or still finishing. Same handling:
+           because the main run is live or still stopping. Same handling:
            restore, keep the row, show the server's message on it. */
         if (
           err instanceof AnalysisError &&

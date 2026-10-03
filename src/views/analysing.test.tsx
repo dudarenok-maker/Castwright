@@ -1632,7 +1632,7 @@ describe('AnalysingView — failed-chapter retry', () => {
         fireEvent.click(retryBtn);
       });
       const message =
-        'The analysis on this book is still finishing the chapters it had started. Try again in a moment.';
+        'The analysis on this book is still stopping. Try again in a moment.';
       await act(async () => {
         rejectSubset?.(new AnalysisError(message, 'main_analysis_running'));
       });

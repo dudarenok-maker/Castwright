@@ -254,7 +254,7 @@ Every main terminal path already ends in `endJob` — the main catch (`:6567-662
 
 | Request | Refused when | `code` / body |
 |---|---|---|
-| Subset POST (`/analysis/chapters`, `:6677`) | the manuscript has a main writer, registered or draining | `main_analysis_running`, `draining: boolean` — always present, `false` for a live run, in both the HTTP body and the SSE frame. Live: "The analysis is still running on this book. Pause it first, then try again." Draining: "The analysis on this book is still finishing the chapters it had started. Try again in a moment." |
+| Subset POST (`/analysis/chapters`, `:6677`) | the manuscript has a main writer, registered or draining | `main_analysis_running`, `draining: boolean` — always present, `false` for a live run, in both the HTTP body and the SSE frame. Live: "The analysis is still running on this book. Pause it first, then try again." Draining: "The analysis on this book is still stopping. Try again in a moment." |
 | Main POST (`/analysis`, `:3340`) that would **start** a job (no live main to join, or `fresh: true`) | a subset job is registered | `subset_analysis_running`: "A chapter retry is running on this book. Wait for it to finish, then resume the analysis." |
 | Main POST that would start a job **without** `fresh` (extension, §0; C-7) | a previous main writer for the book is still draining | `main_analysis_running`, `draining: true`, the draining message |
 

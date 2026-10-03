@@ -1033,7 +1033,7 @@ describe('refusals (#3435 decision A)', () => {
     expect(refused.body).toEqual({
       error: 'main_analysis_running',
       draining: true,
-      message: 'The analysis on this book is still finishing the chapters it had started. Try again in a moment.',
+      message: 'The analysis on this book is still stopping. Try again in a moment.',
     });
     saveHeld.open();
     await vi.waitFor(
@@ -1157,7 +1157,7 @@ describe('refusals (#3435 decision A)', () => {
       expect(res.body).toEqual({
         error: 'main_analysis_running',
         draining: true,
-        message: 'The analysis on this book is still finishing the chapters it had started. Try again in a moment.',
+        message: 'The analysis on this book is still stopping. Try again in a moment.',
       });
       const fresh = await supertest(a).post('/api/manuscripts/m_main_draining/analysis').send({ fresh: true });
       expect(fresh.status).toBe(200);

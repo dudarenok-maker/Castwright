@@ -4080,7 +4080,7 @@ export interface components {
             remediation?: string;
             /** @description Collapsible diagnostic blob (engine, model, chapter id, reasoning tokens, upstream status/details). Absent when there is nothing to add. */
             detail?: string;
-            /** @description #3435 — on `main_analysis_running` only: false while the main run is live, true while it is finishing the chapters it had started. */
+            /** @description #3435 — on `main_analysis_running` only: false while the main run is live, true while a stopped run is still winding down. */
             draining?: boolean;
             /**
              * @description #3084 F7 — structured "how to fix" entries, every actionable fix
@@ -7035,8 +7035,8 @@ export interface operations {
              *     chapter retry is running on this book, so a request that would
              *     start a run is refused (a request that joins a running analysis
              *     never is). `main_analysis_running` with `draining: true`
-             *     (#3435): a previous analysis run on this book is still finishing
-             *     the chapters it had started; a non-fresh start is refused until
+             *     (#3435): a previous analysis run on this book is still stopping
+             *     (its in-flight model calls are being aborted); a non-fresh start is refused until
              *     it has. The same two refusal codes can also arrive as a terminal
              *     SSE `error` event when the conflict appears after the stream
              *     opened.
@@ -7091,9 +7091,9 @@ export interface operations {
                 };
             };
             /**
-             * @description #3435 — the book has a main analysis run, live or still finishing
-             *     the chapters it had started (`draining`). Pause it (or wait for it
-             *     to finish), then try again. The same refusal can also arrive as a
+             * @description #3435 — the book has a main analysis run, live or still stopping
+             *     (`draining`). Pause it (or wait for it
+             *     to stop), then try again. The same refusal can also arrive as a
              *     terminal SSE `error` event (`code: main_analysis_running`, with
              *     `draining` and `message`) when the main run registered after the
              *     stream opened.

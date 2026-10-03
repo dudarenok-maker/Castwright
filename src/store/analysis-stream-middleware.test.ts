@@ -1218,7 +1218,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
     let resolveBook!: (v: unknown) => void;
     getBookStateMock.mockReturnValueOnce(new Promise((r) => (resolveBook = r)));
-    lastCall().reject(new AnalysisError('still finishing', 'main_analysis_running'));
+    lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
     await settle();
     expect(getBookStateMock).toHaveBeenCalledWith('b1');
     /* A Retry on this device starts while the book-state read is in flight. */
@@ -1235,7 +1235,7 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
     getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
     getBookStateMock.mockResolvedValueOnce({ state: { castConfirmed: true } });
-    lastCall().reject(new AnalysisError('still finishing', 'main_analysis_running'));
+    lastCall().reject(new AnalysisError('still stopping', 'main_analysis_running'));
     await settle();
     expect(store.getState().analysis.activeStream).toBeNull();
     expect(pauseAnalysisSpy).not.toHaveBeenCalled();

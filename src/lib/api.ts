@@ -2984,7 +2984,7 @@ async function realAnalyseManuscript(
       });
     }
     /* #3435 — a start refused because a chapter retry is running, or because
-       the previous run is still finishing. */
+       the previous run is still stopping. */
     const refusal = analysisRefusalFromBody(res.status, body, ['subset_analysis_running', 'main_analysis_running']);
     if (refusal) throw refusal;
     throw new AnalysisError(msg, ANALYSIS_STREAM_FAILED);

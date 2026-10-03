@@ -812,7 +812,7 @@
       <div class="body">
         <p>Every analysis ending (Pause, an error, an overflow, a quota stop) now aborts the run's in-flight model calls, and Retry / Re-analyse / Include are refused with a 409 until the stopped run has drained. Mock mode has no server, so none of it is visible there.</p>
         <ul>
-          <li><b>(a) Pause:</b> start a pipelined analysis, Pause mid-Phase 1, click Retry on a failed row at once — refused with the “still finishing the chapters it had started” message; a few seconds later it runs.</li>
+          <li><b>(a) Pause:</b> start a pipelined analysis, Pause mid-Phase 1, click Retry on a failed row at once — refused with the “still stopping” message; a few seconds later it runs.</li>
           <li><b>(b) Halt:</b> same, but stop the model mid-Phase 1 so one chapter throws.</li>
           <li>In both: <code>[analysis] main run drained manuscript=&lt;id&gt;</code> appears <b>before</b> <code>[analysis-subset] start manuscript=&lt;id&gt;</code>, no cache or edits write from the main job after it, no <code>drain deadline exceeded</code> line, and <code>ollama ps</code> shows the model released. Note each drain's duration.</li>
         </ul>

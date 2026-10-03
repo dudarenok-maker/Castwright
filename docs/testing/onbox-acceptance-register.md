@@ -5863,7 +5863,7 @@ Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §3](3084
 
 Every analysis ending (Pause, an error, an overflow, a quota stop) now aborts the run's in-flight model calls, and Retry / Re-analyse / Include are refused with a 409 until the stopped run has drained. Mock mode has no server, so none of that is visible there. Run it twice on a book big enough to be in Phase 1 for a while:
 
-- **(a) Pause.** Start a pipelined analysis, Pause mid-Phase 1, click Retry on a failed row at once. Retry is refused with the "still finishing the chapters it had started" message; a few seconds later it runs.
+- **(a) Pause.** Start a pipelined analysis, Pause mid-Phase 1, click Retry on a failed row at once. Retry is refused with the "still stopping" message; a few seconds later it runs.
 - **(b) Halt.** Same, but force a halt instead of a pause: stop the model mid-Phase 1 so one chapter throws.
 
 In both, observe in the server log `[analysis] main run drained manuscript=<id>` **before** `[analysis-subset] start manuscript=<id>`, no cache or edits write from the main job after the drained line, no `drain deadline exceeded` line, and `ollama ps` showing the model released after the drain. Note each drain's duration.

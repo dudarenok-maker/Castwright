@@ -2347,10 +2347,10 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
   });
 
   it('a 409 on Include rolls the include back and shows the message on the row as a neutral notice; on Re-analyse shows it on the row', async () => {
-    /* The paused main run is still finishing (the server's draining 409): the
+    /* The paused main run is still stopping (the server's draining 409): the
        refusal restores the prior snapshot, as subset_in_progress does, rather
        than clearing it. */
-    const message = 'The analysis on this book is still finishing the chapters it had started. Try again in a moment.';
+    const message = 'The analysis on this book is still stopping. Try again in a moment.';
     const pausedMain: AnalysisStreamSnapshot = {
       bookId: 'b1',
       manuscriptId: 'm1',
@@ -2769,7 +2769,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
        flow: the Include flow's rollback re-excludes the chapter, and the server
        deletes an excluded chapter's audio and segments. */
     describe('C1 — Retry after a failed Re-analyse never re-excludes the chapter', () => {
-      const refusal = 'The analysis on this book is still finishing the chapters it had started. Try again in a moment.';
+      const refusal = 'The analysis on this book is still stopping. Try again in a moment.';
       function rejectOnAbort() {
         return (_m: string, _ids: number[], opts: { signal: AbortSignal }) =>
           new Promise((_res, rej) => {

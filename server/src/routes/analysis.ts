@@ -3055,7 +3055,7 @@ function mainWriterState(manuscriptId: string): 'live' | 'draining' | null {
 
 const MAIN_RUNNING_MESSAGE = 'The analysis is still running on this book. Pause it first, then try again.';
 const MAIN_DRAINING_MESSAGE =
-  'The analysis on this book is still finishing the chapters it had started. Try again in a moment.';
+  'The analysis on this book is still stopping. Try again in a moment.';
 const SUBSET_RUNNING_MESSAGE =
   'A chapter retry is running on this book. Wait for it to finish, then resume the analysis.';
 
