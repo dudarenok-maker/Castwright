@@ -627,9 +627,10 @@ Design rationale:
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
   and leaves every other body verbatim — `git grep requestFailureMessage`
-  enumerates all seventeen sites (`book-state` ×4, `voice-library` ×3,
+  enumerates all twenty sites (`book-state` ×4, `voice-library` ×3,
   `revision-ops` ×3, `cast-design` ×2 (both arms of its defensive outer),
-  `voices`, `qwen-voice`, `voice-style`, `single-design`, `script-review`),
+  `revisions` ×2 (the single-book and bulk polls), `qa-report`, `voices`,
+  `qwen-voice`, `voice-style`, `single-design`, `script-review`),
   alongside the two merge routes' own explicit
   `LOCK_CONTENTION_REQUEST_ERROR` branch; and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
