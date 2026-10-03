@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="44" data-publish-id="2fafac098994"></div>
+  <div hidden data-published-as="45" data-publish-id="c13fd9e612ec"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">56</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">57</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->3<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->12<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->13<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1075,7 +1075,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">12 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">13 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1213,6 +1213,17 @@
           <li><b>Pass:</b> Auto completes with no <code>analyzer-timeout</code> and no overflow, using no more requests than the 8192 run, and the Gemma check holds.</li>
         </ul>
         <p class="src">Any machine with a Gemini key; no GPU; two chapter runs within <code>gemini-3.6-flash</code>'s 20 requests a day · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §2 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E112</span><span class="iname">Drifted attribution id resolves correctly on the real Playing with Fire book (#3440)</span><span class="risk low">No GPU needed; a real book with a drifted cast id</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Server-side <code>book-state</code> canonicalisation (<code>buildCastResolver</code>) now resolves attribution ids that drift from the cast's own spelling (e.g. a hyphen vs. an underscore) before building line counts and chapter-character maps, and the client follows the same <code>characterIdAliases</code> map for live SSE ticks and sentence-derived stats. Unit, integration and e2e coverage (mock-mode Playwright) all pass and are mutation-verified; this row is the one thing they cannot prove — that the real book this bug was filed against now resolves correctly.</p>
+        <ul>
+          <li>On the real Playing with Fire book, open the Generate view: the <code>the_torment</code> cast row should show <b>67 lines</b> (not fewer, the drifted-undercounting symptom).</li>
+          <li>Open Fix audio for that character: it should list chapters <b>17, 19, 20, 38 and 40</b> with Re-record enabled on each.</li>
+        </ul>
+        <p class="src">No GPU, just the real manuscript and a running server · ~5 minutes · the line count and chapter list above; <a href="https://github.com/dudarenok-maker/Castwright/issues/3440">#3440</a>'s original bug report for what "wrong" looked like before the fix</p>
       </div>
     </details>
 

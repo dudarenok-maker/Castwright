@@ -557,17 +557,22 @@ setup rather than repeatedly loading and evicting models.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 12 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**56 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**57 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-09-27 (#3084 wave 2b), 53 → 56.** Rows **B102** (capacity
+> **Last change: 2026-10-03 (#3440), 56 → 57.** Row **E112** added — the real-book
+> line-count and Fix-audio check for the drifted-attribution-id fix, owed because
+> unit/integration/e2e coverage all run in mock mode and nobody has yet confirmed the
+> real Playing with Fire book against it. Group E `next-id` marker bumped E112 → E113.
+>
+> **Prior change: 2026-09-27 (#3084 wave 2b), 53 → 56.** Rows **B102** (capacity
 > recalibration — the measurement owed before any capacity default changes),
 > **E110** (Gemini thinking-window timing on real chapters — a measurement
 > that gates nothing) and **E111** (a thinking Gemini model on a 20,000-
@@ -6258,7 +6263,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E112 -->
+<!-- next-id: E113 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -6895,6 +6900,15 @@ On a 19,000–21,000-character chapter, record on `gemini-3.6-flash`, once at Au
 **Pass:** Auto completes with no `analyzer-timeout` and no overflow, using no more requests than the 8192 run; and on Gemma at `64` at least one `bytes=0` truncation appears, each is followed by a re-split, and no `analyzer-reasoning-overflow` failure occurs. **The row fails if no `bytes=0` truncation can be reproduced at `64`.**
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §2](3084-openai-analyzer-onbox-acceptance.md).
+
+### E112 · Drifted attribution id resolves correctly on the real Playing with Fire book ([#3440](https://github.com/dudarenok-maker/Castwright/issues/3440)) · **no GPU needed; a real book with a drifted cast id**
+
+Server-side `book-state` canonicalisation (`buildCastResolver`) now resolves attribution ids that drift between the manuscript's spelling and the cast's spelling (e.g. a hyphen vs. an underscore) before building line counts and chapter-character maps, and the client (chapters slice, Generate view) follows the same `characterIdAliases` map for live SSE ticks and sentence-derived stats. Unit, integration and e2e coverage (mock-mode Playwright) all pass and are mutation-verified; this row is the one thing they cannot prove — that the real book this bug was filed against now resolves correctly.
+
+On the real Playing with Fire book, open the Generate view: the `the_torment` cast row should show **67 lines** (not fewer, which is the drifted-undercounting symptom), and opening Fix audio for that character should list chapters **17, 19, 20, 38 and 40** with Re-record enabled on each.
+
+*Needs:* no GPU, just the real manuscript and a running server. *Cost:* ~5 minutes.
+*Criteria:* the line count and chapter list above; #3440's original bug report for what "wrong" looked like before the fix.
 
 ## Group G — GitHub Actions itself
 
