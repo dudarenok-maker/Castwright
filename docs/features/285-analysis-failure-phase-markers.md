@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # 285 — Analysis failure bookkeeping: explicit phase and completeness markers (#3435)
 
-> Status: draft — **plan approved by the owner on 2026-10-03 (O4)**, after plan checks 1–3 and owner decisions A–C, E–H and O1–O3. Implementation is a new PR superseding #3439, with the normal review gate. No fourth check.
+> Status: active — implemented on `fix/server-failure-phase-markers` (T1–T7), not yet merged or on-box accepted. **Plan approved by the owner on 2026-10-03 (O4)**, after plan checks 1–3 and owner decisions A–C, E–H and O1–O3. Implementation is a new PR superseding #3439, with the normal review gate. No fourth check.
 >
 > **Line numbers** in this plan are on **`origin/main` at c64943ff** (2026-10-03), like the spec. c64943ff differs from the previous basis 6f01fa20 only in test files, so production lines are unchanged; test-file lines were re-derived. Each citation names a symbol or the code at that line; if `origin/main` has moved, re-derive the line from the symbol before editing. Nothing is cited from #3439's head.
 >
@@ -547,6 +547,22 @@ Recorded in `docs/testing/onbox-acceptance-register.md` by T7:
 - #3437: Start fresh displacement stragglers.
 - Restructure remapping (follow-up issue).
 - A better treatment for chapters with no narratable text beyond the copy (decision C follow-up).
+
+## Implementation notes
+
+Deviations and rulings made during the build (recorded in the run ledger as "Ruling:" lines):
+
+- **T2 → T3 ordering.** T2's `phase1Dispatch` skips on `signal.aborted` as written; T3 converts that branch to throw `AnalysisAbortedError` (item A-1). Between them a Pause between chapters briefly persisted a partial book, on the same branch with no release in between.
+- **Subset Phase-1 recording (S11)** landed in T4, whose title names it, not T2.
+- **T3 regressions** (rename-midrun and the H1 guard 14 vs 13) were branch regressions and were fixed in T3, not deferred; the `user-settings` ollama-url failure is an artifact of the mandated `OLLAMA_URL` env.
+- **T3 mutation 4** is unpinnable by construction (halting set in the same sync block as the pool-local aborted flag); it was replaced with "drop both the halting/ended and pool-local checks", which turns the `markPhase0ChapterComplete` wake test red.
+- **Refused main-start message (D1)** shows under the Start button; T4 owns the needs-action line.
+- **`restoreFromServer` staleness (T3 minor 4)** is a defect: it had no staleness re-check after its awaits and could overwrite a newer subset snapshot, so it was fixed in the same round.
+- **T4 same-round fixes:** the `cast_incomplete` copy no longer says "Retry below" on the Generate view, the title list in that message is bounded, and the stage-1-existed plus non-target blocking-chapter branch and "S3/S4 never clear an attribution record at Phase 0" are now pinned. The main route's `phase0FailedCount` message keeps "Retry below": main runs are shown only on the Analysing view, which has the Retry panel.
+- **G3 guard bump 2 → 3** is the guard's documented maintenance (census re-measured), not a swallow.
+- **T5 → T6:** the subset persist set its flags before S14 as an interim; T6 moved flag-setting inside S14's pass branch and asserts `confirmReached` absent and `takesPersisted` false on the `resume_required` path.
+- **Incidental fix #3503:** Start fresh now verifies the book folder before deleting analysis files (found in T5, fixed in a510d8f9).
+- **T6 `castIncomplete` mount-arming (b)** is kept per the spec's arming row, but a `castIncomplete` armed on mount does not auto-resume after a reload (`analysisStarted` unset): the user clicks Resume once. The double POST that arming exposed was fixed. Arming (b) has no observable consumer and no test; whether to drop it or make it imply `analysisStarted` is an owner question.
 
 ## Ship notes
 
