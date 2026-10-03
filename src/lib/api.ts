@@ -60,6 +60,7 @@ import type {
   AnalyzerDeviceResponse,
   AnalyzerGpuSplitResponse,
   BookQaReport,
+  ReviewRequest,
 } from './types';
 import type { components as ApiComponents, paths as ApiPaths } from './api-types';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
@@ -642,6 +643,8 @@ export interface StreamArgs {
       parked chapter's "Render anyway" confirmation so the server skips the
       park instead of re-queuing it. */
   fallbackConfirmed?: boolean;
+  /** Plan 285 — single-chapter A/B review intent; forwarded in the POST body. */
+  review?: ReviewRequest;
 }
 /** fs-26 — one SSE frame from the per-character splice endpoint. */
 export type SpliceTick =
@@ -5902,6 +5905,7 @@ function realStreamGeneration({
   force,
   queueEntryId,
   fallbackConfirmed,
+  review,
   onTick: rawOnTick,
 }: StreamArgs): () => void {
   const onTick = safeOnTick(rawOnTick);
@@ -5933,6 +5937,7 @@ function realStreamGeneration({
           force,
           ...(queueEntryId ? { queueEntryId } : {}),
           ...(fallbackConfirmed ? { fallbackConfirmed: true } : {}),
+          ...(review ? { review } : {}),
         }),
         signal: controller.signal,
       });
