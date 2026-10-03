@@ -71,6 +71,8 @@ export interface ChapterErrorRecord {
   phase?: 'cast' | 'attribution';
 }
 
+const MISSING_RECORD_MESSAGE = 'Analysis failed on a previous attempt. Retry to try again.';
+
 /* Plan 285 spec 2.1 — tag the untagged legacy failure records of a freshly
    loaded cache, mutating it in place. Rules, first match wins:
    1. already tagged: keep;
@@ -83,8 +85,6 @@ export interface ChapterErrorRecord {
       2026-06-05..06-12 records that have no record object);
    5. otherwise 'cast'.
    An id with no record gets a synthesised 'unknown' one. */
-const MISSING_RECORD_MESSAGE = 'Analysis failed on a previous attempt. Retry to try again.';
-
 export function normaliseFailureRecords(cache: AnalysisCache): void {
   const ids = cache.failedChapterIds;
   if (!ids || ids.length === 0) return;

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, expectTypeOf, vi, afterEach } from 'vitest';
 import {
   sortEvidence,
   normaliseForMatch,
@@ -1207,6 +1207,8 @@ describe('failedChapterErrors records (spec A4)', () => {
       phase: 'cast',
     };
     expect(effective).toEqual(expected);
+    /* #3435 — the returned record always carries its phase (typecheck-pinned). */
+    expectTypeOf(effective.phase).toEqualTypeOf<'cast' | 'attribution'>();
     expect(cache.failedChapterErrors?.['7']).toEqual(expected);
     expect(cache.failedChapterIds).toEqual([7]);
   });

@@ -78,6 +78,16 @@ describe('normaliseFailureRecords (via loadAnalysisCache) — untagged legacy re
     expect(loaded.failedChapterErrors?.['1']?.phase).toBe('attribution');
   });
 
+  it('normalise: rule 5 — stage1 present, cast [], a non-attribution code → cast', async () => {
+    const loaded = await roundTrip({
+      stage1,
+      chapterCast: { 1: [] },
+      failedChapterIds: [1],
+      failedChapterErrors: { '1': rec('analyzer-timeout') },
+    });
+    expect(loaded.failedChapterErrors?.['1']?.phase).toBe('cast');
+  });
+
   it('normalise: tagged record is never reclassified', async () => {
     /* Shape that rule 2 would call 'cast' (no stage1, empty cast) — a tagged
        'attribution' record must survive untouched. */

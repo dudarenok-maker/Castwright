@@ -1462,14 +1462,14 @@ export function recordFailedChapter(
   chapterId: number,
   classified: { code: string; userMessage: string; remediation: string },
   phase: 'cast' | 'attribution',
-): ChapterErrorRecord {
+): ChapterErrorRecord & { phase: 'cast' | 'attribution' } {
   const failedSet = new Set(cache.failedChapterIds ?? []);
   failedSet.add(chapterId);
   cache.failedChapterIds = Array.from(failedSet);
   if (!cache.failedChapterErrors) cache.failedChapterErrors = {};
   const existing = cache.failedChapterErrors[String(chapterId)];
-  if (phase === 'attribution' && existing?.phase === 'cast') return existing;
-  const record: ChapterErrorRecord = {
+  if (phase === 'attribution' && existing?.phase === 'cast') return { ...existing, phase: 'cast' };
+  const record: ChapterErrorRecord & { phase: 'cast' | 'attribution' } = {
     code: classified.code,
     message: classified.userMessage,
     remediation: classified.remediation,
