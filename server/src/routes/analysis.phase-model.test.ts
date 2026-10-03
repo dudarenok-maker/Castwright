@@ -625,10 +625,10 @@ describe('noteReasoningOverflow (#3084 P20)', () => {
   it('marks the job and empties the book escalation budget for a reasoning overflow only', () => {
     const job = buildStubJob('m-note-overflow');
     const budget = { remainingWindows: 600 };
-    expect(noteReasoningOverflow(job, budget, new Error('503'))).toBe(false);
+    expect(noteReasoningOverflow(job, budget, new Error('503'), undefined, 0)).toBe(false);
     expect(job.reasoningOverflowed).toBeUndefined();
     expect(budget.remainingWindows).toBe(600);
-    expect(noteReasoningOverflow(job, budget, new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100))).toBe(true);
+    expect(noteReasoningOverflow(job, budget, new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100), undefined, 0)).toBe(true);
     expect(job.reasoningOverflowed).toBe(true);
     expect(budget.remainingWindows).toBe(0);
   });
@@ -641,8 +641,17 @@ describe('noteReasoningOverflow (#3084 P20)', () => {
       budget,
       new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
       { id: 4, title: 'The Long Night' },
+      0,
     );
     expect(job.reasoningOverflowChapter).toEqual({ id: 4, title: 'The Long Night' });
+  });
+
+  it('records the phase it was told about, and keeps the FIRST overflow phase (#3435)', () => {
+    const job = buildStubJob('m-note-overflow-phase');
+    const budget = { remainingWindows: 600 };
+    noteReasoningOverflow(job, budget, new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100), undefined, 1);
+    noteReasoningOverflow(job, budget, new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 4200), undefined, 0);
+    expect(job.reasoningOverflowPhase).toBe(1);
   });
 
   it('keeps the FIRST overflow chapter, like reasoningOverflowError, even when a later call names a different one', () => {
@@ -653,12 +662,14 @@ describe('noteReasoningOverflow (#3084 P20)', () => {
       budget,
       new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 8100),
       { id: 4, title: 'The Long Night' },
+      0,
     );
     noteReasoningOverflow(
       job,
       budget,
       new AnalyzerReasoningOverflowError('gemini', 'gemini-3.6-flash', 4200),
       { id: 5, title: 'The Fen' },
+      0,
     );
     expect(job.reasoningOverflowChapter).toEqual({ id: 4, title: 'The Long Night' });
   });
@@ -666,7 +677,7 @@ describe('noteReasoningOverflow (#3084 P20)', () => {
   it('leaves reasoningOverflowChapter undefined when no chapter is passed', () => {
     const job = buildStubJob('m-note-overflow-no-chapter');
     const budget = { remainingWindows: 600 };
-    noteReasoningOverflow(job, budget, new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', undefined));
+    noteReasoningOverflow(job, budget, new AnalyzerReasoningOverflowError('ollama', 'qwen3.5:4b', undefined), undefined, 0);
     expect(job.reasoningOverflowChapter).toBeUndefined();
   });
 });

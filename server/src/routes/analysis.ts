@@ -1392,16 +1392,21 @@ export function durationsForEngine(
    check so the full-route Phase 0a success path and the subset
    retry's success path stay in lockstep (both must clear AND notify;
    either one alone leaks state to the FE). Idempotent: a second call
-   for the same id is a no-op and returns false. Exported for unit
-   testing. */
+   for the same id is a no-op and returns false. With `phase` the clear is
+   conditional (#3435 M8): only a record of that phase is cleared, so a
+   Phase-1 completion never clears a chapter that still has no cast.
+   Exported for unit testing. */
 export function clearFailedChapterId(
   cache: {
     failedChapterIds?: number[];
     failedChapterErrors?: Record<string, ChapterErrorRecord>;
   },
   chapterId: number,
+  phase?: 'cast' | 'attribution',
 ): boolean {
-  const wasFailed = cache.failedChapterIds?.includes(chapterId) === true;
+  const wasFailed =
+    cache.failedChapterIds?.includes(chapterId) === true &&
+    (phase === undefined || cache.failedChapterErrors?.[String(chapterId)]?.phase === phase);
   if (wasFailed) {
     cache.failedChapterIds = cache.failedChapterIds!.filter((id) => id !== chapterId);
     if (cache.failedChapterErrors) delete cache.failedChapterErrors[String(chapterId)];
@@ -1439,6 +1444,26 @@ export function recordFailedChapter(
   };
   cache.failedChapterErrors[String(chapterId)] = record;
   return record;
+}
+
+/* #3435 — save the cache from INSIDE a per-chapter failure catch. That save can
+   itself throw (ENOSPC, renameWithRetry exhausted); unguarded, its error replaces
+   the one being handled (an overflow loses its code and fixes) and the
+   chapter-failed that follows is never sent. Log it and carry on: the live
+   chapter-failed and the original error still reach the user. */
+async function saveCacheInFailureCatch(
+  manuscriptId: string,
+  cache: AnalysisCache,
+  chapterId: number,
+): Promise<void> {
+  try {
+    await saveAnalysisCache(manuscriptId, cache);
+  } catch (saveErr) {
+    console.warn(
+      `[analysis] could not persist chapter ${chapterId}'s failure record (reporting the original failure)`,
+      saveErr,
+    );
+  }
 }
 
 /* Phase 0a coverage check — every non-excluded chapter must have a
@@ -2458,18 +2483,22 @@ export async function attributeChapterStage2(opts: {
     as the pools are designed to (:5672-5675). `chapter` records WHICH chapter
     was calling the model when the overflow happened, for the terminal
     failure's copy (F7 — "naming the chapter"); only the FIRST overflow's
-    chapter is kept, mirroring `reasoningOverflowError`'s own ??=. Returns
+    chapter is kept, mirroring `reasoningOverflowError`'s own ??=. `phase` is
+    the phase whose model made the overflowing call (#3435), kept the same
+    way, so the terminal failure names that phase's model. Returns
     whether `err` was a reasoning overflow. */
 export function noteReasoningOverflow(
   job: AnalysisJob,
   structureBudget: { remainingWindows: number },
   err: unknown,
-  chapter?: { id: number; title?: string },
+  chapter: { id: number; title?: string } | undefined,
+  phase: 0 | 1,
 ): boolean {
   if (!(err instanceof AnalyzerReasoningOverflowError)) return false;
   job.reasoningOverflowed = true;
   job.reasoningOverflowError ??= err;
   job.reasoningOverflowChapter ??= chapter;
+  job.reasoningOverflowPhase ??= phase;
   structureBudget.remainingWindows = 0;
   return true;
 }
@@ -2517,7 +2546,7 @@ export function buildNonStoryClassifier(opts: {
     } catch (err) {
       if (err instanceof AnalysisAbortedError) throw err;
       /* #3084 F7 — this classifier already has the chapter (`ch`). */
-      noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title });
+      noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }, 0);
       return false; // Signal-2 hiccup → treat as story, degrade to Signal-1-only
     }
   };
@@ -2770,6 +2799,20 @@ export interface AnalysisJob {
       chapter" fallback is defence-in-depth for a call site a later change
       forgets to update, not an expected path. */
   reasoningOverflowChapter?: { id: number; title?: string };
+  /** #3435 — the phase (0 = cast, 1 = attribution) of the call that made the
+      first overflow, set with the fields above. The terminal failure names that
+      phase's model. */
+  reasoningOverflowPhase?: 0 | 1;
+  /** #3435 — set to 1 when a Phase-1 chapter's own call threw, so the terminal
+      failure names the Phase-1 model. */
+  failingPhase?: 1;
+}
+
+/* #3435 — which model the terminal failure names: the overflowing call's phase,
+   else the phase of the chapter whose call threw, else Phase 0. */
+function terminalFailureLabel(job: AnalysisJob, phase0Label: string, phase1Label: string | undefined): string {
+  if (job.reasoningOverflowPhase !== undefined) return job.reasoningOverflowPhase === 1 ? (phase1Label ?? phase0Label) : phase0Label;
+  return job.failingPhase === 1 ? (phase1Label ?? phase0Label) : phase0Label;
 }
 
 const inFlightAnalysisByManuscript: Map<string, AnalysisJob> = new Map();
@@ -3760,6 +3803,10 @@ export async function runMainAnalyzerJob(
      they always were. */
   let activeModelId = selection.model;
   const analyzerLabel = engineLabel(selection.engine, activeModelId);
+  /* #3435 — the Phase-1 label, hoisted so the terminal catch can name the
+     Phase-1 model for a failure that happened there. Set where Phase 1's
+     selection resolves, below. */
+  let phase1TerminalLabel: string | undefined;
   /* `lastStep` mirrors the most recent phase milestone to the server log (so a
      stall's last log line names where it wedged) and feeds the fatal-error log
      below (so a failure names its phase, not just a stack). */
@@ -3829,6 +3876,7 @@ export async function runMainAnalyzerJob(
        reassigns it to the effective Gemini model on a local→Gemini switch. */
     let phase1ModelId = phase1Selection.model;
     const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1ModelId);
+    phase1TerminalLabel = phase1AnalyzerLabel;
     /* srv-59 Task 9b — ONE escalation-window budget shared across every
        chapter's attributeChapterStage2 call below, so the cap is per-BOOK
        (`analyzer.structure.maxWindowsPerBook`), not silently reset per chapter. */
@@ -4703,7 +4751,7 @@ export async function runMainAnalyzerJob(
              change, instead of grinding chapter by chapter. `ch` (`ch.id`,
              `ch.title`) is already in scope here, from `const ch =
              recordRef.chapterHints[i];` at the top of `runCastChapter`. */
-          if (noteReasoningOverflow(job, structureBudget, chErr, { id: ch.id, title: ch.title })) throw chErr;
+          if (noteReasoningOverflow(job, structureBudget, chErr, { id: ch.id, title: ch.title }, 0)) throw chErr;
           /* Per-chapter failure (malformed JSON after retry, validation
              miss, model truncation, …) is NON-FATAL for the run. The
              chapter is dropped from cast detection; the rest of the
@@ -4736,7 +4784,7 @@ export async function runMainAnalyzerJob(
           cache.chapterCast = chapterCast;
           const classified = classifyAnalysisFailure(chErr, analyzerLabel);
           const castRecord = recordFailedChapter(cache, ch.id, classified, 'cast');
-          await saveAnalysisCache(manuscriptId, cache);
+          await saveCacheInFailureCatch(manuscriptId, cache, ch.id);
           send({
             kind: 'chapter-failed',
             chapterId: ch.id,
@@ -5406,8 +5454,11 @@ export async function runMainAnalyzerJob(
       });
     };
 
-    async function runChapter(i: number): Promise<void> {
-      const ch = recordRef.chapterHints[i];
+    /* #3435 — the Phase-1 dispatch: everything `runChapter` did before the
+       chapter's own model call. It runs OUTSIDE the pool's recording catch, so a
+       throw here (the recorded overflow rethrown, say) is the job's error and
+       never a failure of chapter `i`. `isPoolAborted` is the pool-local flag. */
+    async function phase1Dispatch(i: number, isPoolAborted: () => boolean): Promise<'run' | 'skip'> {
       /* Plan 88 — back-pressure semaphore.
          In sequential mode this resolves once `markPhase0AllDone()`
          fires inside `runPhase0Pool` (today's hard phase gate). In
@@ -5423,15 +5474,17 @@ export async function runMainAnalyzerJob(
          chapters, `runPhase0Pool` set `phase0FailedCount` and called
          `markPhase0AllDone` to release us. Exit cleanly without
          dispatching the Phase 1 call — the outer post-Promise.all
-         handler emits the `cast_incomplete` SSE error. Returning
+         handler emits the `cast_incomplete` SSE error. Skipping
          here also keeps the worker pool's normal early-termination
          path intact (no thrown error, no `aborted = true`). */
-      if (phase0FailedCount > 0) return;
+      if (phase0FailedCount > 0) return 'skip';
       /* #3084 P20 — checked here, after the watermark, rather than at the top of
          launchNext's loop: in pipelined mode a worker can be parked on
          awaitPhase1Dispatch when the job is marked. The pool catch below sets
          `aborted` and rethrows. */
       throwIfReasoningOverflowed(job);
+      /* A Pause, or another worker's failure, while this one was parked. */
+      if (abortController.signal.aborted || isPoolAborted()) return 'skip';
       const dispatchWaitMs = Date.now() - dispatchWaitStart;
       if (dispatchWaitMs > 250) {
         /* Surface the back-pressure wait so the user can tell Gemini
@@ -5444,6 +5497,13 @@ export async function runMainAnalyzerJob(
           `Chapter ${i + 1}/${totalChapters} — held back ${humanSeconds(dispatchWaitMs)} to preserve ${resolvePhase1MinLagChapters()}-chapter roster lag.`,
         );
       }
+      return 'run';
+    }
+
+    /* The chapter's own work, after `phase1Dispatch` said 'run'. The pool's
+       recording catch wraps exactly this. */
+    async function runChapterBody(i: number): Promise<void> {
+      const ch = recordRef.chapterHints[i];
       const chapterEstMs = chapterEstMsFor(ch.body.length);
       const startedAt = Date.now();
       inFlight.set(i, {
@@ -5541,7 +5601,7 @@ export async function runMainAnalyzerJob(
            other sends a further window (escalation.ts:235). `ch` is in scope
            (this literal is built inside `runChapter`, same as `stage2Call`'s
            other fields). */
-        onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }),
+        onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }, 1),
         onWaiting: () => tickOverall(),
         /* Local analyzer unreachable → switched to Gemini. Re-label so the pill
            names the effective model (later phase-1 events read the reassigned
@@ -5758,6 +5818,11 @@ export async function runMainAnalyzerJob(
           remediation: attributionRecord.remediation,
           phase: attributionRecord.phase,
         });
+      } else if (clearFailedChapterId(cache, ch.id, 'attribution')) {
+        /* #3435 M8 — a clean Phase-1 completion resolves a chapter whose record
+           is an attribution failure (a collapse flag, or a Phase-1 throw an
+           earlier run recorded). A cast record is left for Phase 0a to clear. */
+        send({ kind: 'chapter-resolved', chapterId: ch.id });
       }
       for (const s of stage2Sentences) s.chapterId = ch.id;
       sentencesByChapter.set(ch.id, stage2Sentences);
@@ -5866,20 +5931,57 @@ export async function runMainAnalyzerJob(
       const launchNext = async (): Promise<void> => {
         while (nextTask < taskIndices.length && !aborted) {
           const i = taskIndices[nextTask++];
+          /* #3435 — dispatch is outside the recording catch below: a throw here
+             (the recorded overflow rethrown at this chapter's dispatch) never ran
+             the chapter, so it is not the chapter's failure and records nothing. */
+          let verdict: 'run' | 'skip';
           try {
-            await runChapter(i);
+            verdict = await phase1Dispatch(i, () => aborted);
           } catch (e) {
             inFlight.delete(i);
             aborted = true;
+            throw e;
+          }
+          if (verdict === 'skip') continue;
+          try {
+            await runChapterBody(i);
+          } catch (e) {
+            inFlight.delete(i);
+            aborted = true;
+            const failedId = recordRef.chapterHints[i].id;
             /* #3084 P20/F7 — the chapters still running in the other workers
                start no further escalation window. They are not aborted, and
                still finish and cache (the pool comment above). `launchNext`
-               has no `ch` of its own (unlike `runChapter`, which this `i`
-               belongs to) — re-derive it the same way `runChapter` does. */
-            noteReasoningOverflow(job, structureBudget, e, {
-              id: recordRef.chapterHints[i].id,
-              title: recordRef.chapterHints[i].title,
-            });
+               has no `ch` of its own (unlike `runChapterBody`, which this `i`
+               belongs to) — re-derive it the same way. */
+            noteReasoningOverflow(
+              job,
+              structureBudget,
+              e,
+              { id: failedId, title: recordRef.chapterHints[i].title },
+              1,
+            );
+            /* #3435 — record the chapter's failure (save, chapter-failed) BEFORE
+               the rethrow, so a failed re-attribution leaves no stale record (an
+               `attribution-collapse` flag on a chapter whose sentences were just
+               dropped) and the view hears about it. An abort is the user pausing,
+               not a failure of the chapter. */
+            if (!(e instanceof AnalysisAbortedError)) {
+              job.failingPhase ??= 1;
+              const classified = classifyAnalysisFailure(e, phase1AnalyzerLabel, {
+                chapter: { id: failedId, title: recordRef.chapterHints[i].title },
+              });
+              const attributionRecord = recordFailedChapter(cache, failedId, classified, 'attribution');
+              await saveCacheInFailureCatch(manuscriptId, cache, failedId);
+              send({
+                kind: 'chapter-failed',
+                chapterId: failedId,
+                message: attributionRecord.message,
+                code: attributionRecord.code,
+                remediation: attributionRecord.remediation,
+                phase: attributionRecord.phase,
+              });
+            }
             throw e;
           }
         }
@@ -6641,7 +6743,9 @@ export async function runMainAnalyzerJob(
       remediation,
       detail,
       fixes,
-    } = classifyAnalysisFailure(e, analyzerLabel, { chapter: job.reasoningOverflowChapter });
+    } = classifyAnalysisFailure(e, terminalFailureLabel(job, analyzerLabel, phase1TerminalLabel), {
+      chapter: job.reasoningOverflowChapter,
+    });
     /* #3084 F7 — `fixes` travels on the SSE `error` event ONLY. `endJob`'s
        #3004 last-outcome record deliberately stays code+message (nothing on the
        frontend reads `priorOutcome`'s extras — see endJob's own comment). */
@@ -7010,6 +7114,8 @@ export async function runSubsetAnalyzerJob(
      surfaced only as "sentences.map is not a function" with no
      phase/chapter context. */
   const analyzerLabel = engineLabel(selection.engine, selection.model);
+  /* #3435 — hoisted for the terminal catch, as in the main route. */
+  let phase1TerminalLabel: string | undefined;
   let lastStep = 'init';
 
   try {
@@ -7042,6 +7148,7 @@ export async function runSubsetAnalyzerJob(
        `selection` when no split is configured. */
     const phase1Analyzer = phase1Selection.analyzer;
     const phase1AnalyzerLabel = engineLabel(phase1Selection.engine, phase1Selection.model);
+    phase1TerminalLabel = phase1AnalyzerLabel;
     const phase1ModelId = phase1Selection.model;
     /* srv-59 Task 9b — ONE escalation-window budget shared across every
        chapter's attributeChapterStage2 call in this subset/retry job, mirroring
@@ -7393,12 +7500,12 @@ export async function runSubsetAnalyzerJob(
         if (chErr instanceof GeminiContentBlockedError) throw chErr;
         /* #3084 P20/F7 — whole-book-fatal reasoning overflow; see the main
            route. `ch` is in scope here the same way. */
-        if (noteReasoningOverflow(job, structureBudget, chErr, { id: ch.id, title: ch.title })) throw chErr;
+        if (noteReasoningOverflow(job, structureBudget, chErr, { id: ch.id, title: ch.title }, 0)) throw chErr;
         chapterCast[ch.id] = [];
         cache.chapterCast = chapterCast;
         const classified = classifyAnalysisFailure(chErr, analyzerLabel);
         const castRecord = recordFailedChapter(cache, ch.id, classified, 'cast');
-        await saveAnalysisCache(manuscriptId, cache);
+        await saveCacheInFailureCatch(manuscriptId, cache, ch.id);
         log(0, `❌ Chapter ${ch.id} cast FAILED — ${ch.title}: ${(chErr as Error).message}`);
         send({
           kind: 'chapter-failed',
@@ -7623,7 +7730,7 @@ export async function runSubsetAnalyzerJob(
                stage2Call. `ch` is in scope (`const ch = toRun[idx];`, the
                same loop the "Subset route, Phase 1" dispatch-check bullet
                above adds throwIfReasoningOverflowed(job) to). */
-            onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }),
+            onReasoningOverflow: (err) => noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }, 1),
             onWaiting: () => emitHeartbeat(1, ch.id),
             onChunk: (info) => emitHeartbeat(1, ch.id, info),
             onThrottle: (waitMs, reason) => {
@@ -7665,7 +7772,9 @@ export async function runSubsetAnalyzerJob(
            reaches the terminal classifyAnalysisFailure call the same way an
            un-marked throw always has. noteReasoningOverflow is a no-op (and
            the chapter is not recorded) for any other error. */
-        noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title });
+        noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }, 1);
+        /* #3435 — the terminal failure names the model that made this call. */
+        job.failingPhase ??= 1;
         throw err;
       }
       if (subsetChunkCount > 1) {
@@ -8312,7 +8421,9 @@ export async function runSubsetAnalyzerJob(
       remediation,
       detail,
       fixes,
-    } = classifyAnalysisFailure(e, analyzerLabel, { chapter: job.reasoningOverflowChapter });
+    } = classifyAnalysisFailure(e, terminalFailureLabel(job, analyzerLabel, phase1TerminalLabel), {
+      chapter: job.reasoningOverflowChapter,
+    });
     console.error('[analysis-subset] failed', {
       manuscriptId,
       code,

@@ -62,6 +62,8 @@ vi.mock('../store/analysis-cache.js', async () => {
   return {
     ...actual,
     saveAnalysisCache: async (...args: Parameters<typeof actual.saveAnalysisCache>) => {
+      /* A case sets this to make chosen saves throw (fs failure: ENOSPC, rename retries exhausted). */
+      await (globalThis as Record<string, unknown> & { __overflow_spend_test_save_hook?: (c: typeof args[1]) => void | Promise<void> }).__overflow_spend_test_save_hook?.(args[1]);
       if (args[1].stage1) (globalThis as Record<string, unknown> & { __overflow_spend_test_stage1_saved?: () => void }).__overflow_spend_test_stage1_saved?.();
       return actual.saveAnalysisCache(...args);
     },
@@ -115,6 +117,7 @@ afterAll(() => {
 afterEach(() => {
   delete (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection;
   delete (globalThis as Record<string, unknown>).__overflow_spend_test_pipelined;
+  delete (globalThis as Record<string, unknown>).__overflow_spend_test_save_hook;
 });
 
 function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
@@ -371,7 +374,15 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
 
       /* N4 — read the persisted snapshot, not only the first event: chapter 1's
          late completion must not overwrite the terminal state or its code.
-         endJob's snapshot write is fire-and-forget. */
+         endJob's snapshot write is fire-and-forget, so under load it can land after a fixed
+         sleep: wait for the halted write first, then give a late overwrite time to show. */
+      await vi.waitFor(
+        () =>
+          expect(JSON.parse(readFileSync(analysisStateJsonPath(seed.bookDir), 'utf8'))).toMatchObject({
+            state: 'halted',
+          }),
+        { timeout: 5_000, interval: 50 },
+      );
       await new Promise((r) => setTimeout(r, 500));
       expect(existsSync(analysisStateJsonPath(seed.bookDir))).toBe(true);
       expect(JSON.parse(readFileSync(analysisStateJsonPath(seed.bookDir), 'utf8'))).toMatchObject({
@@ -892,4 +903,352 @@ describe('nonStoryOverflowWarningMessage — advice follows the fixes list (#308
       _resetGeminiCatalogForTest();
     }
   });
+});
+
+/* #3435 (plan 285 T2) — the main route's Phase-1 (attribution) failure
+   bookkeeping, the dispatch split, the guarded failure-catch saves and the
+   terminal label. Ported by name from #3439 (9a063ea6), adapted to the
+   `phase` marker; `PA:` tests are not ported (decision D4). */
+describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (#3435)', () => {
+  const NOVA_2 = [{ id: 201, chapterId: 2, characterId: 'nova', confidence: 0.9, text: BODIES[2] }];
+  const PHASE1_MODEL = 'phase1-only-model';
+
+  interface SaveSnapshot {
+    failedChapterIds?: number[];
+    failedChapterErrors?: Record<string, unknown>;
+    chapterCast?: Record<number, unknown[]>;
+  }
+  interface MainOpts {
+    chapterIds?: number[];
+    fresh?: boolean;
+    width?: string;
+    pipelined?: boolean;
+    phase1Model?: string;
+    phase1?: Partial<Analyzer>;
+    phase0?: Partial<Analyzer>;
+    saveHook?: (c: SaveSnapshot) => void | Promise<void>;
+  }
+
+  /** Seeds an arbitrary cache and runs one main run against it. `failedSaves`
+      lists every save that carried a non-empty failed-id list. */
+  async function runMainOn(
+    label: string,
+    seedCache: Record<string, unknown>,
+    stage2: Analyzer['runStage2Chapter'],
+    opts: MainOpts = {},
+  ) {
+    const seed = await seedBook(label, opts.chapterIds ?? [1, 2]);
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runMainAnalyzerJob } = await import('./analysis.js');
+    await saveAnalysisCache(seed.manuscriptId, seedCache as never);
+    const castCalls: number[] = [];
+    const stage2Calls: number[] = [];
+    const failedSaves: number[][] = [];
+    const g = globalThis as Record<string, unknown>;
+    g.__overflow_spend_test_save_hook = async (c: SaveSnapshot) => {
+      if (c.failedChapterIds?.length) failedSaves.push([...c.failedChapterIds]);
+      await opts.saveHook?.(c);
+    };
+    const phase0 = buildSelection(
+      stubAnalyzer({
+        async runStage1Chapter(_m, chapterId): Promise<Stage1ChapterOutput> {
+          castCalls.push(chapterId);
+          return { characters: [novaCharacter()] };
+        },
+        ...opts.phase0,
+      }),
+      'phase0-model',
+    );
+    g.__overflow_spend_test_phase1_selection = buildSelection(
+      stubAnalyzer({
+        runStage2Chapter: async (m, id, ...rest) => {
+          stage2Calls.push(id);
+          return stage2(m, id, ...rest);
+        },
+        ...opts.phase1,
+      }),
+      opts.phase1Model ?? MODEL,
+    );
+    const originalMinLag = process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS;
+    if (opts.pipelined) {
+      g.__overflow_spend_test_pipelined = true;
+      process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '0';
+    }
+    if (opts.width) process.env.ANALYZER_OLLAMA_CONCURRENCY = opts.width;
+    const events = captureEvents(seed.job);
+    try {
+      await runMainAnalyzerJob(seed.job, getManuscript(seed.manuscriptId)! as never, phase0, {
+        requestedFresh: opts.fresh ?? false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      await new Promise((r) => setTimeout(r, 100));
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      return { castCalls, stage2Calls, events, after, failedSaves, job: seed.job };
+    } finally {
+      process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
+      restoreEnv('ANALYZER_PHASE1_MIN_LAG_CHAPTERS', originalMinLag);
+      delete g.__overflow_spend_test_pipelined;
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  const BOTH_CAST = { chapterCast: { 1: [novaCharacter()], 2: [novaCharacter()] } };
+
+  /** Chapter `overflowOn`'s escalation call reports a reasoning overflow. */
+  const escalationOverflow = async (overflowOn: number): Promise<Partial<Analyzer>> => {
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    return {
+      runAttributionEscalation: async (_m: string, chapterId: number, _w: number, _p: string, call: StageCall) => {
+        if (chapterId === overflowOn) call.onReasoningOverflow?.(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100));
+        return null;
+      },
+    };
+  };
+
+  it('P-zeta: pool width 1, ch1 escalation overflows — ch2 is stopped at its dispatch, with no chapter-failed and no record (control)', async () => {
+    const r = await runMainOn('p-zeta', BOTH_CAST, async (_m, id) => stage2For(id), {
+      width: '1',
+      phase1: await escalationOverflow(1),
+    });
+    /* Control: ch1 really overflowed and ch2 was really stopped. */
+    expect(r.job.reasoningOverflowed).toBe(true);
+    expect(r.stage2Calls).toEqual([1]);
+    expect(r.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
+    expect(r.events.filter((e) => e.kind === 'chapter-failed')).toEqual([]);
+    expect(r.failedSaves).toEqual([]);
+    expect(r.after.failedChapterIds ?? []).toEqual([]);
+  }, 60_000);
+
+  it('A9 pipelined: ch1 Phase-0 overflow rethrown at ch1 Phase-1 dispatch records nothing, and the terminal names the Phase-0 model (control)', async () => {
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    const r = await runMainOn('a9-pipelined', {}, async (_m, id) => stage2For(id), {
+      pipelined: true,
+      width: '1',
+      fresh: true,
+      phase1Model: PHASE1_MODEL,
+      phase0: { runStage1Chapter: () => Promise.reject(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100)) },
+    });
+    const terminal = r.events.find((e) => e.kind === 'error')!;
+    expect(terminal.code).toBe('analyzer-reasoning-overflow');
+    expect(String(terminal.message)).toContain('phase0-model');
+    expect(String(terminal.message)).not.toContain(PHASE1_MODEL);
+    expect(r.events.filter((e) => e.kind === 'chapter-failed')).toEqual([]);
+    expect(r.failedSaves).toEqual([]);
+    expect(r.after.failedChapterIds ?? []).toEqual([]);
+  }, 60_000);
+
+  it('P-gamma: a main-route Phase-1 failure on a re-attributed chapter is recorded (chapter-failed) and replaces the stale collapse record', async () => {
+    const { events, after } = await runMainOn(
+      'p-gamma',
+      {
+        /* Chapter 1's cached sentences are not seeded: dropping them for a flagged chapter is a later
+           task's rule, and a cached chapter is replayed instead of attributed. */
+        chapters: { 2: NOVA_2 },
+        chapterCast: { 1: [novaCharacter()], 2: [novaCharacter()] },
+        failedChapterIds: [1],
+        failedChapterErrors: { '1': { code: 'attribution-collapse', message: 'seeded', remediation: 'seeded', phase: 'attribution' } },
+      },
+      async (_m, id) => {
+        if (id === 1) throw new Error('Phase 1 fails for chapter 1');
+        return stage2For(id);
+      },
+    );
+    const failed = events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1);
+    expect(failed).toBeDefined();
+    expect(failed!.code).not.toBe('attribution-collapse');
+    expect(failed!.phase).toBe('attribution');
+    expect(after.failedChapterIds).toEqual([1]);
+    expect(after.failedChapterErrors?.['1']?.code).toBe(failed!.code);
+    expect(after.failedChapterErrors?.['1']?.phase).toBe('attribution');
+  }, 60_000);
+
+  it('a main resume that re-attributes an M10-recorded chapter clears its record and sends chapter-resolved', async () => {
+    const { events, after, stage2Calls } = await runMainOn(
+      'm8-clear',
+      {
+        ...BOTH_CAST,
+        /* stage1 on disk: Phase 0 (and its own clear of a failed id) is skipped, so only the
+           Phase-1 completion can clear this record. Chapter 1 has no cached sentences. */
+        stage1: { characters: [novaCharacter()], chapters: [1, 2].map((id) => ({ id, title: CHAPTER_TITLES[id] })) },
+        chapters: { 2: NOVA_2 },
+        failedChapterIds: [1],
+        failedChapterErrors: { '1': { code: 'analyzer-timeout', message: 'seeded', remediation: 'seeded', phase: 'attribution' } },
+      },
+      async (_m, id) => stage2For(id),
+    );
+    expect(stage2Calls).toContain(1);
+    expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+    expect(events.some((e) => e.kind === 'chapter-failed')).toBe(false);
+    expect(after.failedChapterIds ?? []).toEqual([]);
+    expect(after.failedChapterErrors?.['1']).toBeUndefined();
+  }, 60_000);
+
+  it('MD: a Pause during the main Phase 1 records nothing (control)', async () => {
+    const { AnalysisAbortedError } = await import('../analyzer/errors.js');
+    const r = await runMainOn('md-pause', BOTH_CAST, () => Promise.reject(new AnalysisAbortedError('paused')));
+    expect(r.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['aborted']);
+    expect(r.events.filter((e) => e.kind === 'chapter-failed')).toEqual([]);
+    expect(r.failedSaves).toEqual([]);
+    expect(r.after.failedChapterIds ?? []).toEqual([]);
+  }, 60_000);
+
+  it('MG: with split phase models, a Phase-1 failure row AND its terminal error name the Phase-1 model, not the Phase-0 one', async () => {
+    const { AnalyzerTruncatedError } = await import('../analyzer/errors.js');
+    const r = await runMainOn(
+      'mg-main',
+      BOTH_CAST,
+      async (_m, id) => {
+        if (id === 1) throw new AnalyzerTruncatedError('gemini', 'MAX_TOKENS', 100);
+        return stage2For(id);
+      },
+      { phase1Model: PHASE1_MODEL },
+    );
+    const terminal = r.events.find((e) => e.kind === 'error')!;
+    expect(terminal.code).toBe('analyzer-truncated');
+    expect(String(terminal.message)).toContain(PHASE1_MODEL);
+    expect(String(terminal.message)).not.toContain('phase0-model');
+    const row = r.events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1)!;
+    expect(String(row.message)).toContain(PHASE1_MODEL);
+    expect(String(row.message)).not.toContain('phase0-model');
+  }, 60_000);
+
+  for (const kind of ['overflow', 'truncated'] as const) {
+  it(`MG (subset): with split phase models, a Phase-1 ${kind} terminal names the Phase-1 model`, async () => {
+    const seed = await seedBook(`mg-subset-${kind}`, [1], { fullCache: true });
+    const { AnalyzerReasoningOverflowError, AnalyzerTruncatedError } = await import('../analyzer/errors.js');
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runSubsetAnalyzerJob } = await import('./analysis.js');
+    const record = getManuscript(seed.manuscriptId)!;
+    const job = { ...seed.job, kind: 'subset' as const } as unknown as AnalysisJob;
+    const events = captureEvents(job, () => {});
+    try {
+      await runSubsetAnalyzerJob(
+        job,
+        record,
+        seed.phase0Selection,
+        buildSelection(
+          stubAnalyzer({
+            runStage2Chapter: () =>
+              Promise.reject(
+                kind === 'overflow'
+                  ? new AnalyzerReasoningOverflowError('gemini', MODEL, 8100)
+                  : new AnalyzerTruncatedError('gemini', 'MAX_TOKENS', 100),
+              ),
+          }),
+          PHASE1_MODEL,
+        ),
+        record.chapterHints,
+        false,
+      );
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+    const terminal = events.find((e) => e.kind === 'error')!;
+    expect(terminal.code).toBe(kind === 'overflow' ? 'analyzer-reasoning-overflow' : 'analyzer-truncated');
+    expect(String(terminal.message)).toContain(PHASE1_MODEL);
+    expect(String(terminal.message)).not.toContain('phase0-model');
+  }, 60_000);
+  }
+
+  it('sequential last-chapter escalation overflow: the terminal names the Phase-1 model', async () => {
+    const r = await runMainOn('seq-last-overflow', BOTH_CAST, async (_m, id) => stage2For(id), {
+      width: '1',
+      phase1Model: PHASE1_MODEL,
+      phase1: await escalationOverflow(2),
+    });
+    const terminal = r.events.find((e) => e.kind === 'error')!;
+    expect(terminal.code).toBe('analyzer-reasoning-overflow');
+    expect(String(terminal.message)).toContain(PHASE1_MODEL);
+    expect(String(terminal.message)).not.toContain('phase0-model');
+  }, 60_000);
+
+  it('the overflow terminal names its chapter', async () => {
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    const r = await runMainOn('overflow-names-chapter', BOTH_CAST, async (_m, id) => {
+      if (id === 1) throw new AnalyzerReasoningOverflowError('gemini', MODEL, 8100);
+      return stage2For(id);
+    });
+    const terminal = r.events.find((e) => e.kind === 'error')!;
+    expect(terminal.code).toBe('analyzer-reasoning-overflow');
+    expect(String(terminal.message)).toContain('chapter "Chapter One"');
+    expect(String(terminal.message)).not.toContain('a chapter');
+  }, 60_000);
+
+  it('a save that throws while recording a Phase-1 failure does not replace the real error or swallow chapter-failed', async () => {
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    const r = await runMainOn(
+      'save-throws-p1',
+      BOTH_CAST,
+      () => Promise.reject(new AnalyzerReasoningOverflowError('gemini', MODEL, 8100)),
+      {
+        saveHook: (c) => {
+          if ((c.failedChapterErrors?.['1'] as { code?: string } | undefined)?.code === 'analyzer-reasoning-overflow') {
+            throw new Error('ENOSPC: disk full');
+          }
+        },
+      },
+    );
+    const terminal = r.events.find((e) => e.kind === 'error')!;
+    expect(terminal.code).toBe('analyzer-reasoning-overflow');
+    expect(String(terminal.message)).not.toMatch(/ENOSPC/);
+    expect((terminal.fixes as unknown[]).length).toBeGreaterThan(0);
+    expect(r.events.find((e) => e.kind === 'chapter-failed')).toMatchObject({ chapterId: 1, code: 'analyzer-reasoning-overflow' });
+  }, 60_000);
+
+  it('a save that throws in the Phase-0a failure catch keeps the original error and still sends chapter-failed', async () => {
+    let thrown = false;
+    const r = await runMainOn('save-throws-main', {}, async (_m, id) => stage2For(id), {
+      fresh: true,
+      phase0: { runStage1Chapter: () => Promise.reject(new Error('cast model exploded')) },
+      saveHook: (c) => {
+        /* Only the save inside the failure catch (the record is there, the cast is the empty marker). */
+        if (!thrown && c.failedChapterErrors?.['1'] && c.chapterCast?.[1] && !c.chapterCast[1].length) {
+          thrown = true;
+          throw new Error('ENOSPC: disk full');
+        }
+      },
+    });
+    expect(thrown).toBe(true);
+    expect(r.events.find((e) => e.kind === 'chapter-failed' && e.chapterId === 1)).toBeDefined();
+    expect(r.events.filter((e) => e.kind === 'error' && /ENOSPC/.test(String(e.message)))).toEqual([]);
+  }, 60_000);
+
+  it('a save that throws while recording a Phase-0 failure on the subset route still reports chapter-failed and does not end the run on the fs error', async () => {
+    const seed = await seedBook('save-throws-p0-subset', [1], { fullCache: true });
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runSubsetAnalyzerJob } = await import('./analysis.js');
+    let thrown = false;
+    (globalThis as Record<string, unknown>).__overflow_spend_test_save_hook = (c: SaveSnapshot) => {
+      /* Only the save inside the failure catch: later saves are a different path. */
+      if (!thrown && c.failedChapterErrors?.['1'] && !c.chapterCast?.[1]?.length) {
+        thrown = true;
+        throw new Error('ENOSPC: disk full');
+      }
+    };
+    const record = getManuscript(seed.manuscriptId)!;
+    const job = { ...seed.job, kind: 'subset' as const } as unknown as AnalysisJob;
+    const events = captureEvents(job, () => {});
+    try {
+      await runSubsetAnalyzerJob(
+        job,
+        record,
+        buildSelection(stubAnalyzer({ runStage1Chapter: () => Promise.reject(new Error('cast model exploded')) }), 'phase0-model'),
+        buildSelection(stubAnalyzer({ runStage2Chapter: async (_m, id) => stage2For(id) }), MODEL),
+        record.chapterHints,
+        false,
+      );
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+    expect(thrown).toBe(true);
+    expect(events.find((e) => e.kind === 'chapter-failed')).toMatchObject({ chapterId: 1 });
+    expect(events.filter((e) => e.kind === 'error' && /ENOSPC/.test(String(e.message)))).toEqual([]);
+  }, 60_000);
 });

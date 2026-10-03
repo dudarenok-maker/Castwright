@@ -1088,6 +1088,21 @@ describe('clearFailedChapterId — recovery detection helper', () => {
     expect(clearFailedChapterId(cache, 44)).toBe(false);
     expect(cache.failedChapterIds).toEqual([]);
   });
+
+  /* #3435 M8 — a phase argument makes the clear conditional: a Phase-1
+     completion clears an attribution record only, never a cast one. */
+  it('with a phase, clears only a record of that phase', () => {
+    const rec = (phase: 'cast' | 'attribution') => ({ code: 'c', message: 'm', remediation: 'r', phase });
+    const castCache = { failedChapterIds: [44], failedChapterErrors: { '44': rec('cast') } };
+    expect(clearFailedChapterId(castCache, 44, 'attribution')).toBe(false);
+    expect(castCache.failedChapterIds).toEqual([44]);
+    expect(castCache.failedChapterErrors['44']).toBeDefined();
+
+    const attrCache = { failedChapterIds: [44], failedChapterErrors: { '44': rec('attribution') } };
+    expect(clearFailedChapterId(attrCache, 44, 'attribution')).toBe(true);
+    expect(attrCache.failedChapterIds).toEqual([]);
+    expect(attrCache.failedChapterErrors).toEqual({});
+  });
 });
 
 describe('failedChapterErrors records (spec A4)', () => {
