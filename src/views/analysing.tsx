@@ -34,12 +34,7 @@ import type { AnalyseResponse } from '../lib/types';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { uiActions, selectPhaseModelPick } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
-import {
-  analysisActions,
-  selectMainAnalysisLive,
-  type AnalysisState,
-  type AnalysisStreamSnapshot,
-} from '../store/analysis-slice';
+import { analysisActions, selectMainAnalysisLive } from '../store/analysis-slice';
 import { selectAnalyzerSplitIsActive, fetchAnalyzerModels } from '../store/account-slice';
 import { bookMetaActions, selectProsodyEnabled } from '../store/book-meta-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -362,14 +357,7 @@ export function AnalysingView({
        button reads "Resume analysis" instead of "Start analysis".
      One-shot per mount so a user's explicit Pause (which keeps the
      paused snapshot in the slice) is never auto-undone. */
-  /* Defensive read mirroring SeriesPriorPill — some legacy test
-     harnesses construct configureStore without the analysis slice.
-     Production always has it. */
-  const activeStreamSnapshot = useAppSelector(
-    (s) =>
-      (s as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis
-        ?.activeStream ?? null,
-  );
+  const activeStreamSnapshot = useAppSelector((s) => s.analysis.activeStream);
   /* #3084 F7 — the run-level "How to fix" list must survive the user leaving
      the view and coming back in the same session. This view's own `error`
      state does not (it is per-mount), but the halted-run snapshot the
@@ -387,8 +375,7 @@ export function AnalysingView({
        inside failure chrome for a state that is explicitly not a failure.
        Neither code carries fixes today, so this is a guard, not a carve-out. */
   const haltFixes = useAppSelector((s) => {
-    const snap = (s as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis
-      ?.activeStream;
+    const snap = s.analysis.activeStream;
     if (!snap) return undefined;
     if (snap.manuscriptId !== manuscriptId) return undefined;
     if (snap.state !== 'halted') return undefined;
@@ -414,11 +401,8 @@ export function AnalysingView({
   }, [manuscriptId, activeStreamSnapshot]);
   /* #3435 decision A — a main run is live for this manuscript (on this device
      or another), so Retry is disabled: the server refuses a subset run beside
-     it. Defensive read for legacy test stores without the analysis slice. */
-  const mainAnalysisLive = useAppSelector((s) => {
-    const analysis = (s as { analysis?: AnalysisState }).analysis;
-    return analysis ? selectMainAnalysisLive({ analysis }, manuscriptId) : false;
-  });
+     it. */
+  const mainAnalysisLive = useAppSelector((s) => selectMainAnalysisLive(s, manuscriptId));
 
   /* Analyzer readiness gate — declared up here (above the analysis
      useEffect) because the analysis effect depends on it. The full
@@ -594,9 +578,7 @@ export function AnalysingView({
     /* #3435 (A7) — the snapshot as it was before this POST, restored if the
        server refuses the start, so a refused start leaves no `running` main
        snapshot behind to grey out this device's own Retry. */
-    const preStartSnapshot =
-      (store.getState() as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } }).analysis
-        ?.activeStream ?? null;
+    const preStartSnapshot = store.getState().analysis.activeStream;
     /* Seed the cross-navigation analysis snapshot so the AnalysisPill
        (B3) can read live progress from Redux even after the user
        navigates away from this view. The snapshot updates on every
@@ -913,11 +895,9 @@ export function AnalysingView({
         setBookFacts({ stage1Ready, resumeRequired: res.analysis?.resumeRequired === true });
         /* #3435 (C20) — castIncomplete arming (b): on mount only, from a halted
            cast_incomplete snapshot of either kind, when the roster is not final.
-           A later refresh never arms it (C-8). Defensive read for legacy test
-           stores without the analysis slice. */
+           A later refresh never arms it (C-8). */
         if (isMountRead) {
-          const snap = (store.getState() as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } })
-            .analysis?.activeStream;
+          const snap = store.getState().analysis.activeStream;
           if (
             stage1Ready === false &&
             snap &&

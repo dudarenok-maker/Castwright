@@ -25,6 +25,7 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { tourSlice } from '../store/tour-slice';
+import { analysisSlice } from '../store/analysis-slice';
 import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
 import { router as appRouter } from './index';
 import {
@@ -172,6 +173,7 @@ function makeStore(opts: { persist?: boolean } = {}) {
       bookMeta: bookMetaSlice.reducer,
       queue: queueSlice.reducer,
       tour: tourSlice.reducer,
+      analysis: analysisSlice.reducer,
     },
     ...(opts.persist
       ? { middleware: (getDefault) => getDefault().concat(persistenceMiddleware) }

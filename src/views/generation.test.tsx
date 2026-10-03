@@ -188,6 +188,7 @@ const chapter2: Chapter = {
 function makeStore() {
   const store = configureStore({
     reducer: {
+      analysis: analysisSlice.reducer,
       ui: uiSlice.reducer,
       chapters: chaptersSlice.reducer,
       manuscript: manuscriptSlice.reducer,
@@ -322,6 +323,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     ];
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -378,6 +380,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     const ch2Queued: Chapter = { ...chapter2 };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -429,6 +432,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     const ch2Queued: Chapter = { ...chapter2 };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -480,6 +484,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     const ch2Queued: Chapter = { ...chapter2 };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -533,6 +538,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     const ch2Queued: Chapter = { ...chapter2 };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -592,6 +598,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -705,6 +712,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -801,6 +809,7 @@ describe('GenerationView — heartbeat / stalled state', () => {
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -869,6 +878,7 @@ describe('GenerationView — activity sidebar', () => {
   it('renders generation-related change-log events in the sidebar', () => {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1022,6 +1032,7 @@ describe('GenerationView — header action once the run is complete', () => {
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1078,6 +1089,7 @@ describe('GenerationView — header action once the run is complete', () => {
        still shows up when allComplete is true (separate test above). */
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1266,6 +1278,7 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
   ): void {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1436,6 +1449,7 @@ describe('GenerationView — reassignment staleness caption (Bug 2)', () => {
   function renderWithReassign(chapters: Chapter[], reassignedChapterIds: number[]): void {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1513,6 +1527,7 @@ describe('GenerationView — precise reassignment staleness via render map (#650
   ): void {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1588,6 +1603,7 @@ describe('GenerationView — precise reassignment staleness via render map (#650
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1653,6 +1669,7 @@ describe('GenerationView — precise text-edit staleness via render text map (#1
   function renderWithTextMap(renderedTextByChapter: Record<number, Record<number, string>>): void {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1740,6 +1757,7 @@ describe('GenerationView — precise instruct-edit staleness via render instruct
   function renderWithInstructMap(renderedInstructByChapter: Record<number, Record<number, string>>): void {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1820,6 +1838,7 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
   function makeDriftStore(chapters: Chapter[]) {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -3060,6 +3079,7 @@ describe('GenerationView — stuck-queued escape hatch + generated-time (side: s
   function makeViewStore(chapters: Chapter[]) {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -3170,6 +3190,7 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
   function makeResumeStore(chapters: Chapter[]) {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -3328,6 +3349,7 @@ describe('GenerationView — srv-27 advisory QA badge', () => {
   function renderWithChapters(rows: Chapter[]) {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -3417,6 +3439,7 @@ describe('GenerationView — fe-29 More-help deep-link', () => {
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,

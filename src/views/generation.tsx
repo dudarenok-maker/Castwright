@@ -57,7 +57,7 @@ import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
-import { analysisActions, selectMainAnalysisLive, type AnalysisState } from '../store/analysis-slice';
+import { analysisActions, selectMainAnalysisLive } from '../store/analysis-slice';
 import { uiActions } from '../store/ui-slice';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { enqueueQueueEntries } from '../store/queue-thunks';
@@ -234,12 +234,8 @@ export function GenerationView({
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   /* #3435 decision A — the server refuses a subset run (Re-analyse, Include)
      while this book's main analysis run is live, so both controls are
-     disabled with "Pause the analysis first" until it is paused. Defensive
-     read: some test stores are built without the analysis slice. */
-  const mainAnalysisLive = useAppSelector((s) => {
-    const analysis = (s as { analysis?: AnalysisState }).analysis;
-    return analysis ? selectMainAnalysisLive({ analysis }, manuscriptId) : false;
-  });
+     disabled with "Pause the analysis first" until it is paused. */
+  const mainAnalysisLive = useAppSelector((s) => selectMainAnalysisLive(s, manuscriptId));
   const activityEvents = useAppSelector((s) => s.changeLog.events);
   /* #3435 (decision F, O2) — chapters whose analysis did not finish (from the
      book-state GET via the layout's hydrate, kept current by this view's
