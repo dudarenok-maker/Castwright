@@ -2208,7 +2208,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
 
     expect(
       await screen.findByText(
-        /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+        /^A different subset re-analysis is already in progress for this manuscript: Chapter 5\.$/i,
       ),
     ).toBeInTheDocument();
   });
@@ -2253,7 +2253,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
 
     await screen.findByText(
-      /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+      /^A different subset re-analysis is already in progress for this manuscript: Chapter 5\.$/i,
     );
 
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
@@ -2291,7 +2291,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
 
     await screen.findByText(
-      /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+      /^A different subset re-analysis is already in progress for this manuscript: Chapter 5\.$/i,
     );
 
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
@@ -2327,7 +2327,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(screen.queryByText('Pause the analysis first')).not.toBeInTheDocument();
   });
 
-  it('a 409 on Include rolls the include back and shows the message on the row; on Re-analyse shows it on the row', async () => {
+  it('a 409 on Include rolls the include back and shows the message on the row as a neutral notice; on Re-analyse shows it on the row', async () => {
     /* The paused main run is still finishing (the server's draining 409): the
        refusal restores the prior snapshot, as subset_in_progress does, rather
        than clearing it. */
@@ -2349,7 +2349,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'main_analysis_running'));
     const { unmount } = renderInclude(store);
     fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
-    expect(await screen.findByText(`Re-analysis failed: ${message}`)).toBeInTheDocument();
+    expect(await screen.findByText(message)).toBeInTheDocument();
     expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
     expect(store.getState().analysis.activeStream).toEqual(pausedMain);
     unmount();
@@ -2360,7 +2360,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     renderInclude(store2);
     fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
     fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
-    expect(await screen.findByText(`Re-analysis failed: ${message}`)).toBeInTheDocument();
+    expect(await screen.findByText(message)).toBeInTheDocument();
     expect(store2.getState().analysis.activeStream).toEqual(pausedMain);
   });
 
@@ -2619,7 +2619,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
     expect(
       await screen.findByText(
-        /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+        /^A different subset re-analysis is already in progress for this manuscript: Chapter 5\.$/i,
       ),
     ).toBeInTheDocument();
   });
@@ -2743,6 +2743,86 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       await waitFor(() =>
         expect(store2.getState().chapters.analysisGapById?.[1]).toEqual({ message: 'The analyzer timed out.' }),
       );
+    });
+
+    /* #3435 final review C1 — a failed Re-analyse lands in the errored row that
+       offers Retry. That Retry must re-run the Re-analyse, never the Include
+       flow: the Include flow's rollback re-excludes the chapter, and the server
+       deletes an excluded chapter's audio and segments. */
+    describe('C1 — Retry after a failed Re-analyse never re-excludes the chapter', () => {
+      const refusal = 'The analysis on this book is still finishing the chapters it had started. Try again in a moment.';
+      function rejectOnAbort() {
+        return (_m: string, _ids: number[], opts: { signal: AbortSignal }) =>
+          new Promise((_res, rej) => {
+            opts.signal.addEventListener('abort', () =>
+              rej(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            );
+          });
+      }
+      async function failReanalyse(err: Error) {
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(err);
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+        return screen.findByRole('button', { name: /Retry/i });
+      }
+
+      it('a refused Re-analyse, retried and refused again, never calls setChapterExcluded(…, true)', async () => {
+        const store = makeIncludeStore();
+        renderInclude(store);
+        const retry = await failReanalyse(new AnalysisError(refusal, 'main_analysis_running'));
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(refusal, 'main_analysis_running'));
+        fireEvent.click(retry);
+        await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(runAnalysisForChaptersSpy.mock.calls[1][1]).toEqual([1]);
+        expect(setChapterExcludedSpy).not.toHaveBeenCalledWith('b1', 1, true);
+        expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+      });
+
+      it('Cancel during a Re-analyse Retry never calls setChapterExcluded(…, true)', async () => {
+        const store = makeIncludeStore();
+        renderInclude(store);
+        const retry = await failReanalyse(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+        runAnalysisForChaptersSpy.mockImplementationOnce(rejectOnAbort());
+        fireEvent.click(retry);
+        fireEvent.click(await screen.findByRole('button', { name: /Cancel/i }));
+        await waitFor(() => expect(screen.queryByRole('button', { name: /Cancel/i })).not.toBeInTheDocument());
+        expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+      });
+
+      it('a Re-analyse blocked by another chapter\'s cast (cast_incomplete), retried, never excludes the chapter', async () => {
+        const message = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter 2). Retry to continue.';
+        const store = makeIncludeStore();
+        renderInclude(store);
+        const retry = await failReanalyse(new AnalysisError(message, 'cast_incomplete'));
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'cast_incomplete'));
+        fireEvent.click(retry);
+        await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+      });
+
+      it('control: an Include that fails, retried and failing again, still rolls the include back each time', async () => {
+        const store = makeIncludeStore();
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+        renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        const retry = await screen.findByRole('button', { name: /Retry/i });
+        expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+        fireEvent.click(retry);
+        await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(setChapterExcludedSpy.mock.calls.map((c) => c[2])).toEqual([false, true, false, true]);
+      });
+
+      it('a refusal reads as a neutral notice, not "Re-analysis failed"', async () => {
+        const store = makeIncludeStore();
+        renderInclude(store);
+        await failReanalyse(new AnalysisError(refusal, 'main_analysis_running'));
+        expect(screen.getByText(refusal)).toBeInTheDocument();
+        expect(screen.queryByText(/Re-analysis failed/)).not.toBeInTheDocument();
+      });
     });
 
     it('Generate view: no Include rollback on resume_required — a neutral note with "Open analysis", and a halted snapshot', async () => {

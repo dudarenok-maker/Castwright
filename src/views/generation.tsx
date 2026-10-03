@@ -179,6 +179,10 @@ interface SubsetProgress {
       the book is unfinished. A neutral note with "Open analysis", not an
       error. */
   notice?: string;
+  /** #3435 — the error is a 409 refusal (`main_analysis_running`,
+      `subset_in_progress`): the run never started, so the row reads it as a
+      neutral notice, not "Re-analysis failed". */
+  refused?: boolean;
 }
 
 /* Stable empty map for the analysisGapById selector fallback. */
@@ -477,9 +481,17 @@ export function GenerationView({
       }),
     );
 
+    /* #3435 C1 — the rollback below re-excludes the chapter, and the server
+       deletes an excluded chapter's audio. Only an include THIS click
+       performed may be rolled back: a chapter that was already included
+       keeps its state (and its audio) whatever happens to the run. */
+    const wasExcluded =
+      store.getState().chapters.chapters.find((c) => c.id === chapterId)?.excluded === true;
+    let includedHere = false;
     try {
       await api.setChapterExcluded(bookId, chapterId, false);
       dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: false }));
+      includedHere = wasExcluded;
 
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
@@ -586,14 +598,17 @@ export function GenerationView({
         return;
       }
       /* #3435 — whether the chapter is excluded again: a gap note belongs only
-         on an included chapter. */
-      const rolledBack = await rollbackInclude(chapterId).then(
-        () => true,
-        (rollbackErr) => {
-          console.warn('[generation] include rollback failed', rollbackErr);
-          return false;
-        },
-      );
+         on an included chapter. C1: only an include this click performed is
+         rolled back (an excluded-before-click chapter has no audio to lose). */
+      const rolledBack = includedHere
+        ? await rollbackInclude(chapterId).then(
+            () => true,
+            (rollbackErr) => {
+              console.warn('[generation] include rollback failed', rollbackErr);
+              return false;
+            },
+          )
+        : false;
       if (isAbort) {
         /* Drop the snapshot on abort — the server-side job already ended. */
         dispatch(analysisActions.clearActiveStream());
@@ -613,7 +628,7 @@ export function GenerationView({
         } else {
           dispatch(analysisActions.clearActiveStream());
         }
-        patchSubset(chapterId, { error: e.message });
+        patchSubset(chapterId, { error: e.message, refused: true });
         return;
       }
       /* Drop the snapshot on terminal failure — the server-side job
@@ -666,8 +681,12 @@ export function GenerationView({
     if (entry) entry.controller.abort();
   }
 
+  /* #3435 C1 — Retry re-runs the flow that failed. A failed Re-analyse must
+     never re-run as an Include: the Include flow's rollback re-excludes the
+     chapter, which deletes its audio server-side. */
   function handleRetrySubset(chapterId: number): void {
-    void handleToggleExcluded(chapterId, false);
+    if (subsetByChapter[chapterId]?.origin === 'reanalyse') void handleReanalyse(chapterId);
+    else void handleToggleExcluded(chapterId, false);
   }
 
   /* #3435 — "Accept smaller cast": re-run the same subset with
@@ -823,7 +842,7 @@ export function GenerationView({
         } else {
           dispatch(analysisActions.clearActiveStream());
         }
-        patchSubset(chapterId, { error: e.message });
+        patchSubset(chapterId, { error: e.message, refused: true });
         return;
       }
       /* Drop the snapshot on terminal failure — the server-side job surfaced
@@ -2384,6 +2403,9 @@ function ExcludedChapterRow({
                 </span>
               )}
             </span>
+          ) : errored?.refused ? (
+            /* #3435 — a 409 refusal: the run never started; neutral, not a failure. */
+            <span className="block text-[11px] text-ink/60 mt-0.5">{errored.error}</span>
           ) : errored ? (
             <span className="block text-[11px] text-rose-700 mt-0.5">
               Re-analysis failed: {errored.error}
