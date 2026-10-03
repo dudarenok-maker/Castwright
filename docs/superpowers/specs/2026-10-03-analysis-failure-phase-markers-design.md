@@ -1,7 +1,7 @@
 # Analysis failure bookkeeping: explicit phase and completeness markers
 
-**Date:** 2026-10-03 (revised twice the same day, after plan checks 1 and 2 — see History)
-**Status:** **Approved by owner 2026-10-03**, including decisions A–C (after plan check 1) and E–H (after plan check 2). Decisions are recorded in §0. No owner question is open (§9); one extension this revision makes is flagged in §0 for the owner to reject if unwanted.
+**Date:** 2026-10-03 (revised three times the same day, after plan checks 1–3 — see History)
+**Status:** **Approved by owner 2026-10-03** (plan approved, O4), including decisions A–C (after plan check 1), E–H (after plan check 2) and O1–O3 (after plan check 3). Decisions are recorded in §0. No owner question is open (§9). Implementation is a new PR superseding #3439, with the normal review gate.
 **Issues:**
 - #3435: the defect.
 - #3436: its scope is re-stated in §2.6.
@@ -20,7 +20,9 @@
 
 **History.** v1 → v3 went through design checks 1–3; the approved v3 and its plan went through plan check 1 (`scratchpad/design-3435/check-*.md`, `check-plan-1.md`). Plan check 1 found that the v3 "pause the main run for real" mechanism (old D2) could wedge a book forever (C1) and opened a window with no job registered (C2). The owner then took decisions A–C (§0), which replace D2 and narrow D3. This revision applies them and every implementation-time finding (C9, C11–C20) that still applies; C1–C2 and C5–C8, C10 were findings against the withdrawn mechanism and are moot (§8).
 
-Plan check 2 (`check-plan-2.md`) found that a halted main run's in-flight work does **not** settle by itself: a local Ollama call has no client timeout (`ANALYZER_DISPATCHER`, `server/src/analyzer/transports/ollama-transport.ts:56-60`, `headersTimeout: 0`, `bodyTimeout: 0`), and a halt never fired the job's signal, so a drain could hold the book, the busy flag and resident VRAM until restart (A1). It also found that `takesPersisted` demoted confirmed books (A2) and that M8c could loop (A3). The owner took decisions E–H; this revision applies them and every implementation-time item from that check (A4–A10, A15–A18, C-2…C-9).
+Plan check 2 (`check-plan-2.md`) found that a halted main run's in-flight work does **not** settle by itself: a local Ollama call has no client timeout (`ANALYZER_DISPATCHER`, `server/src/analyzer/transports/ollama-transport.ts:56-60`, `headersTimeout: 0`, `bodyTimeout: 0`), and a halt never fired the job's signal, so a drain could hold the book, the busy flag and resident VRAM until restart (A1). It also found that `takesPersisted` demoted confirmed books (A2) and that M8c could loop (A3). The owner took decisions E–H; that revision applied them and every implementation-time item from that check (A4–A10, A15–A18, C-2…C-9).
+
+Plan check 3 (`check-plan-3.md`, final) found that two stop paths **resolved instead of rejecting** (item A): `phase1Dispatch` returning `'skip'` on an aborted signal let a Pause between chapters stitch and persist a partial book, and the cast loop's exit on `job.halting || job.ended` let Phase 0b write a partial stage1. The owner approved the plan with item A, decisions O1–O3 and the implementation-time lines folded in by this one edit, and no fourth check (O4).
 
 ## 0. Decisions (owner, 2026-10-03)
 
@@ -35,11 +37,14 @@ Plan check 2 (`check-plan-2.md`) found that a halted main run's in-flight work d
 | E | **A halt aborts in-flight work.** Any main terminal — error, overflow, quota, cast_incomplete, drift, every `endJob` — aborts the run's in-flight calls at once, like Pause. In-flight chapters' partial work is discarded; they stay un-attributed for the next Resume or Retry. Pause can reach a job that is still draining, and the drain has a safety deadline so busy and VRAM are never held for ever (§2.4) | A halted run's calls had no bound (A1). **This supersedes #3084 P20/N4's "an overflow stops new spend, not work already in flight"** for the main route; the test that pins N4 (`analysis.reasoning-overflow.test.ts:314`, under the describe at `:288`) is rewritten (plan T3) |
 | F | **Done books are never demoted.** The "no book reaches Confirm unsaved" marker applies only to a book that has never reached Confirm. A cast-confirmed or generated book keeps its status after a failed or interrupted per-chapter run; the failed chapter shows as a row with Re-analyse (§2.2, §3.4) | One interrupted Re-analyse or Include sent a generated book back to "Analysing", and Resume there runs main on a confirmed book — the voice-strip incident class (A2) |
 | G | **Interpretations confirmed:** (1) a subset Retry's Phase 1 counts as the attribution step for decision B; (2) refusal applies both ways — a main *start* is refused while a subset is live, a *join* to a running main never is; (3) D3's text check is kept only to spot genuinely word-free chapters, never as a general done-test | A11, A12, C-1 |
+| O1 | **Start fresh un-confirms the book.** Start fresh clears `castConfirmed`, as Re-parse already does (`applyReparse`, `server/src/routes/book-state.ts:1125`), so the book reads "Analysing" until the new run finishes and the user confirms again. Start fresh is therefore outside decision F | Start fresh discards the cast (`analysis.ts:4036-4038` removes cast.json) and the cache; a book still marked confirmed would be "done" with nothing behind it |
+| O2 | **Per-chapter Re-analyse on a book past Confirm persists normally, and the unfinished chapter gets a fix button.** S14's result gate is relaxed for a book that has reached Confirm: a target chapter's result persists even while another chapter lacks a current take. The unfinished chapter's Generate-view row gets a Re-analyse control, and the Generate view learns which chapters are unfinished from the book-state GET (§3.4) | Under F such a book is never demoted, so refusing its per-chapter results would leave nothing to retry with. Today a queued or generation-failed row has no Re-analyse (`generation.tsx:1878`) |
+| O3 | **Confirmed consequences:** (1) E reverses #3084 P20/N4 — an overflow halt now aborts in-flight work, not only new work; (2) a non-fresh Resume is refused while a stopped run drains; (3) a confirmed book missing one chapter's analysis no longer shows "Analysing" in the library | Recorded as accepted |
 | H | **M8c only for rolling-roster dispatches.** A main run with stage1 present attributes against the final roster, so that take is current. A chapter goes into P at a Phase-1 completion only if it was dispatched while `phase1Stage1Ready` was false | The v2 rule looped: a stage1-present Resume put the chapter back in P every lap (A3) |
 
 D2 (pause the main run for real) is **withdrawn** by A. D3 (check the chapter text for an empty take) is **narrowed** by B and G(3): the text check survives only to recognise a word-free chapter (§2.2), never to decide whether a chapter is done.
 
-**One extension this revision makes — the owner may reject it.** Plan check 2 (C-7) showed that once a Retry during a drain is refused, the likelier remaining two-writer path is a **Resume while the previous main run is still draining**. The registry that decision A needs makes refusing that a one-line check, and decision E makes the drain seconds long, so this design also refuses a **non-fresh** main start while a previous main writer for the book is draining (§2.4). Start fresh (displacement) is unchanged and stays #3437's. If the owner prefers to leave all main-after-main to #3437, delete that one table row in §2.4 and its test; nothing else depends on it.
+**Refusing a non-fresh Resume during a drain** (from plan check 2, C-7) is confirmed by O3(2). Once a Retry during a drain is refused, the likelier remaining two-writer path is a Resume while the previous main run still drains; the registry decision A needs makes refusing it a one-line check, and decision E makes the drain seconds long (§2.4). Start fresh (displacement) is unchanged and stays #3437's.
 
 ## 1. Problem
 
@@ -122,8 +127,8 @@ An id with no record gets a synthesised `{code:'unknown', message: <the fallback
 | Add to P | M1/S0 at load (stage1 absent): every non-excluded failed id that has an own key **including `[]`**; and M8c: a main Phase-1 completion for a chapter whose record is still `'cast'` **and that was dispatched while `phase1Stage1Ready` was false** (decision H) | §3 |
 | Remove from P | Any other Phase-1 completion for the chapter, including a coverage re-flag and the word-free short-circuit | M8/M9, S9/S10 |
 | `takesPersisted = false` | Every Phase-1 completion that writes a take (main or subset, including word-free) | M8/M9, S9/S10 |
-| `takesPersisted = true`, `confirmReached = true` | The end of an authoritative persist block whose `try` completed **without entering `catch (persistErr)`** (main `:6517-6532`, subset `:8217-8229`), i.e. state.json was written. Saved right after the deferred rethrows (main `:6545`, subset `:8237`). Not set when the block was skipped (abort, `attribution_drift`) or swallowed an error | M17, S14 |
-| Cleared with the cache | Start fresh, re-parse, book delete | `clearAnalysisCache` callers: `:4016` (fresh), `book-state.ts:1200`, `:1573` |
+| `takesPersisted = true`, `confirmReached = true` | Only when **this persist block actually wrote state.json**: a local `wroteStateJson` is set immediately after `writeStateJsonAtomic` (main `:6514`, subset `:8214`). The `try` completing is **not** enough — on `attribution_drift` it completes with the cast.json/state.json writes skipped. Saved right after the deferred rethrows (main `:6545`, subset `:8237`). Not set when the block was skipped (abort, drift) or its `catch (persistErr)` (main `:6517-6532`, subset `:8217-8229`) swallowed the state.json write's error | M17, S14 |
+| Cleared with the cache | Start fresh, re-parse, book delete | `clearAnalysisCache` callers: `:4016` (fresh), `book-state.ts:1200`, `:1573`. Start fresh also writes `castConfirmed: false` (O1) |
 
 A pending take is never deleted.
 
@@ -150,9 +155,9 @@ analysisCompleteFor(cache, ids) :=
 reachedConfirm(state, cache) := state.castConfirmed === true || cache.confirmReached === true
 ```
 
-**Decision F — which books the book-level rule gates.** Only a book that has **never reached Confirm**. "Has reached Confirm" is `reachedConfirm`: the book's cast was confirmed (`state.json` `castConfirmed`), or an authoritative persist has run since the cache was last cleared (`confirmReached`). A book reaches the Confirm screen only after such a persist (main `result` → `ui-slice.ts:234-237`), so the second clause is the server-side fact behind "the user was shown Confirm".
+**Decision F — which books the book-level rule gates.** Only a book that has **never reached Confirm**, counted since its last Start fresh or Re-parse: both clear the cache (`confirmReached`) and `castConfirmed` (O1; Re-parse at `book-state.ts:1125`), so a book restarted from scratch reads "Analysing" until the new run finishes and is confirmed again. "Has reached Confirm" is `reachedConfirm`: the book's cast was confirmed (`state.json` `castConfirmed`), or an authoritative persist has run since the cache was last cleared (`confirmReached`). A book reaches the Confirm screen only after such a persist (main `result` → `ui-slice.ts:234-237`), so the second clause is the server-side fact behind "the user was shown Confirm".
 - **Legacy books** (no `confirmReached`, no `takesPersisted`): a confirmed one is covered by `castConfirmed`; an unconfirmed one has `takesPersisted` absent, which counts as persisted, so it reads as today's own-key rule would, except that a `[]` take now counts (decision B) and a pending take does not.
-- **A book that has reached Confirm is never demoted** by the analysis rule: its status comes from `castConfirmed` and generation as today. Its unfinished chapters surface as rows instead (§3.4, Generate view).
+- **A book that has reached Confirm is never demoted** by the analysis rule: its status comes from `castConfirmed` and generation as today (O3(3)). Its unfinished chapters surface as Generate-view rows with Re-analyse instead (O2, §3.4).
 
 | Reader | Uses |
 |---|---|
@@ -167,7 +172,7 @@ reachedConfirm(state, cache) := state.castConfirmed === true || cache.confirmRea
 
 **Word-free chapters** (`!hasAttributableContent(body)`, `stage2-coverage.ts:132`). In both routes the analyzer call is replaced by a synthetic successful result (`sentences: []`, coverage ok, `chunkCount: 0`); every normal success step still runs. `origin/main` already makes no model call for such a chapter (`server/src/analyzer/stage2-chunk.ts:390`) but flags it `noSentences`, which shows a misleading row. At each route's load (M0/S0), a failed word-free chapter whose take is `[]` and whose record is `attribution-incomplete` has that record cleared. Generation then reports it with decision C's copy (§3.3).
 
-**Rebuild becomes overlay** (`analysis-cache-rebuild.ts:32-54`), option `mode: 'overlay' | 'replace'`, default overlay. It never changes P, the records or `takesPersisted`.
+**Rebuild becomes overlay** (`analysis-cache-rebuild.ts:32-54`), option `mode: 'overlay' | 'replace'`, default overlay. It never changes P, the records, `takesPersisted` or `confirmReached`. Today an edits file with no sentences **clears the whole cache** (`:38-44`); in overlay mode that case applies the rules below to an empty edits set instead (keeping stage1, P, records and the two flags), and only `'replace'` keeps the clear.
 - Chapters the edits carry replace their prior entry **wholesale**, so a sentence the user deleted (tombstoned in `mergedAwayKeys`, `src/store/manuscript-slice.ts`, carried by `book-state.ts:341-342`) cannot come back.
 - A prior chapter the edits do **not** carry is kept only if it is `[]`, or excluded in `state.json`.
 - Any other prior chapter absent from the edits is an **intended removal**; its key is deleted. That chapter lacks a current take, which is unchanged from today for a chapter the user emptied.
@@ -175,7 +180,10 @@ reachedConfirm(state, cache) := state.castConfirmed === true || cache.confirmRea
 
 **The main per-chapter edits roll** (`rollManuscriptEdits`, `:5766-5779`) builds from `sentencesByChapter.get(id) ?? cachedChapters[id]` over non-excluded chapters, so a pending take stays in the edits until it is replaced. The subset roll (`:7727-7737`) already builds from the cache.
 
-**Stitching never includes a pending take:** the main run re-attributes every pending chapter before it stitches (`:5906-5909`); the subset gate refuses to stitch while any chapter lacks a current take. So `attribution_drift` never counts a stale take.
+**Stitching never includes a pending take.**
+- **Main (M8d):** after both pools join (`:5882`) and before the stitch (`:5906-5909`), the main run re-attributes, against the final roster, every non-excluded chapter still in P. This is needed because M8c can fire inside a run that goes on to reach `result`: a chapter dispatched before Phase 0b while its re-cast (M15) was still queued is attributed against the rolling roster and put in P; its re-cast then succeeds and M4 clears the cast record, so nothing else in the run would re-attribute it, and the stitch would include its pending take (`sentencesByChapter` holds it). The pass runs those chapters sequentially through the same body (dispatched on the final roster, so M8 removes them from P); a throw there is M10.
+- **Subset:** the gate refuses to stitch while any chapter lacks a current take (S14), except on a book past Confirm (O2), where no chapter can be pending: M1/S0 need stage1 absent and M8c needs a rolling roster.
+- So `attribution_drift` never counts a stale take.
 
 **How each case heals:**
 
@@ -191,7 +199,7 @@ reachedConfirm(state, cache) := state.castConfirmed === true || cache.confirmRea
 
 "The roster is final." It gates: the main route's Phase-0 skip (`:4259`); whether a subset may attribute (`stage1Existed`); M1/S0, which apply only while stage1 is absent; M8c (via `phase1Stage1Ready`, `:4164`, set `:4328` / `:4996`); and the library's book-level clause. stage1 is never read as "attribution is done".
 
-**Consequence of decision E for pipelined runs (A10).** A pipelined main run that halts while Phase 0 is still running aborts the in-flight cast calls and skips Phase 0b, so it leaves **no stage1**, even if every cast chapter had already succeeded. What the user sees:
+**Consequence of decision E for pipelined runs (A10).** A pipelined main run that halts while Phase 0 is still running aborts the in-flight cast calls and skips Phase 0b (§2.4, "Stops reject"), so it leaves **no stage1**, even if every cast chapter had already succeeded. What the user sees:
 - the halted chapter's attribution row and the run-level halt message;
 - **attribution rows offer no Retry while `stage1Ready` is false.** A subset run cannot attribute without a final roster (it would only re-detect that chapter's cast and end `resume_required`), so the row reads "Attributed when you resume the analysis." and the action is the existing Resume button;
 - cast rows keep Retry, as today;
@@ -208,9 +216,17 @@ A sequential run is unaffected: its Phase 1 starts only after Phase 0b wrote sta
 
 Every main terminal path already ends in `endJob` — the main catch (`:6567-6627`: `aborted`, `STALE_BOOK_DIR`, every classified error including overflow and quota), `cast_incomplete` (`:5897`), the re-verify shrink refusal (`:4299`), `attribution_drift` (`:6556`) and `result` (`:6564-6565`) — so decision E holds on all of them by construction. Plan T3 has one test per path.
 
-**The halt decision comes before `endJob`.** The Phase-1 pool catch (`:5850`) and the cast pool catch (`:4873`) set `job.halting = true` synchronously, before any `await` (T2's guarded save is one). Both pool loops (`:4866`, `:5846`) and `phase1Dispatch` stop on `job.halting || job.ended`, so no chapter starts between the halt decision and `endJob`. The controller is **not** aborted in the pool catch: sibling chapters would then reject with `AnalysisAbortedError`, which can reach `Promise.all` (`:5882`) first and be classified as a pause. Aborting at `endJob` keeps the halt's own error as the terminal.
+**The halt decision comes before `endJob`.** The Phase-1 pool catch (`:5850`) and the cast pool catch (`:4873`) set `job.halting = true` synchronously, before any `await` (T2's guarded save is one). Both pool loops (`:4866`, `:5846`) and `phase1Dispatch` stop on `job.halting || job.ended`, so no chapter starts between the halt decision and `endJob`.
+
+**Stops reject; they never resolve (plan check 3, item A).** A pool that stops early must not let the run carry on as if it had finished:
+- `phase1Dispatch` **throws `AnalysisAbortedError`** when the signal is aborted (a Pause that lands between chapters, when no call is in flight to throw it). It returns `'skip'` only for `phase0FailedCount > 0`, `job.halting`, `job.ended` and the pool-local `aborted` — every one of which means a sibling has already rejected or the job has ended, so the run cannot reach the stitch.
+- **Phase 0b runs only after every cast task ran.** After the cast join (`:4884`), the arm throws `AnalysisAbortedError` if the signal is aborted, and **returns without Phase 0b** if `job.halting || job.ended` (the Phase-1 arm has already rejected). A loop that exited early therefore never writes a partial stage1 or cast.json.
+- **Abort check before the main persist:** `if (job.controller.signal.aborted) throw new AnalysisAbortedError()` immediately before the persist block (`if (record.bookDir) {`, `:6188`). The fold, the non-story classifier and the Phase-2 stub (`:5935-5940`, whose timeouts ignore the signal) run between the pool join and the persist, and a Pause landing there must end `aborted` with nothing persisted. The subset already skips its persist on `!isAborted()` (`:7989`) and gains S14a.
+- **The non-story classifier gets the job signal:** its `nonStoryCall` (`:2498`) is `{ language }` today; it gains `signal: job.controller.signal`, so the abort reaches that call too. The controller is **not** aborted in the pool catch: sibling chapters would then reject with `AnalysisAbortedError`, which can reach `Promise.all` (`:5882`) first and be classified as a pause. Aborting at `endJob` keeps the halt's own error as the terminal.
 
 **What happens to in-flight chapters.** An aborted call throws `AnalysisAbortedError`; the chapter body exits without caching; nothing is recorded (an abort is not a failure, M12). The chapter has no new take and is attributed by the next Resume or Retry. A body whose model call had already returned finishes its save, because it makes no further call. This **supersedes #3084 P20/N4** ("an overflow stops new spend, not work already in flight") for the main route; the comments that state N4 (`:5838-5841`, `:5853-5857`) become false and are corrected in T3. The subset route is sequential, so its single in-flight call has already ended when its `endJob` runs.
+
+**Job fields.** `AnalysisJob` (`:2706`) gains `ended`, `halting`, `left` (booleans), `liveWork` (number) and `watermark?`. The first four are initialised (`false`/`0`) in both job literals (main `:3567-3584`, subset `:6906-6924`); `__testRegisterJobForTest` (`:2792`) fills them for hand-built test jobs. `watermark` is **optional**: `endJob` can run before `createWatermarkForJob()` (`:3836`) — the `language_unset` terminal does, at `:3767` — so `endJob` calls `job.watermark?.releaseAll()`.
 
 **Writers.** A new in-memory registry, `mainWritersByManuscript: Map<manuscriptId, Set<AnalysisJob>>`, next to the job maps (`:2764-2770`).
 - A main job **joins** in the same synchronous block as `inFlightAnalysisByManuscript.set` (`:3585`).
@@ -223,11 +239,11 @@ Every main terminal path already ends in `endJob` — the main catch (`:6567-662
 2. the Phase-0 arm itself (`phase0PoolPromise`, `:5101`), which covers Phase 0b's stage1 and cast.json writes;
 3. each Phase-1 chapter **body**. Its token is taken **inside** `phase1Dispatch`, in the same synchronous block as its last checks, immediately before it returns `'run'` — no `await` separates the checks from the increment (A5 gap 1). The body releases it in a `finally`.
 
-**Not tracked: a Phase-1 worker parked in `awaitPhase1Dispatch`** (`:5402`). It is woken by its own job's `markPhase0AllDone` (`:4329`, `:4931`, `:5092`) and, in pipelined mode, by `markPhase0ChapterComplete` whenever the watermark advances (`phase-watermark.ts:85-92`, called at `:4751`) — and now by `releaseAll`. After the `await`, `phase1Dispatch` returns `'skip'` if `job.ended`, `job.halting`, the signal, or the **pool-local `aborted`** flag (`:5843`) says so (A5 gap 2). So a woken worker never writes, and `releaseAll` guarantees every parked worker wakes once its job ends: no leak (A10), and no promise the drain could wait on for ever (the C1 fact).
+**Not tracked: a Phase-1 worker parked in `awaitPhase1Dispatch`** (`:5402`). It is woken by its own job's `markPhase0AllDone` (`:4329`, `:4931`, `:5092`) and, in pipelined mode, by `markPhase0ChapterComplete` whenever the watermark advances (`phase-watermark.ts:85-92`, called at `:4751`) — and now by `releaseAll`. After the `await`, `phase1Dispatch` throws `AnalysisAbortedError` if the signal is aborted, and returns `'skip'` if `job.ended`, `job.halting` or the **pool-local `aborted`** flag (`:5843`) says so (A5 gap 2; item A). So a woken worker never writes, and `releaseAll` guarantees every parked worker wakes once its job ends: no leak (A10), and no promise the drain could wait on for ever (the C1 fact).
 
 **Draining, re-derived.** A main writer drains from `endJob` until it leaves: the time for each tracked unit to observe the abort and run its `catch`/`finally`. Under decision E that is the abort latency of the in-flight calls — a `fetch` rejects at once on abort; a multi-call chapter body (sections, coverage retries, escalation windows) checks the signal at its next call — not the length of a chapter (C-4).
 
-**Safety deadline.** `MAIN_DRAIN_DEADLINE_MS = 60_000`, a constant (not a setting). `endJob` on a main job with `liveWork > 0` arms an `unref()`'d timer. If the job has not left when it fires: log `[analysis] main run drain deadline exceeded manuscript=<id> liveWork=<n>` and call `leaveWriters`. So neither the busy flag, the Ollama pin (`isAnyAnalyzerRunBusy` → `keepAliveFor`) nor resident VRAM can be held more than 60 s past a job's end. A unit that ignored the abort could still write after the deadline; that is logged and named in §6.
+**Safety deadline.** `MAIN_DRAIN_DEADLINE_MS = 60_000`, a constant (not a setting). `endJob` on a main job with `liveWork > 0` arms an `unref()`'d timer. If the job has not left when it fires: log `[analysis] main run drain deadline exceeded manuscript=<id> liveWork=<n>` and call `leaveWriters`. So neither the busy flag, the Ollama pin (`isAnyAnalyzerRunBusy` → `keepAliveFor`) nor resident VRAM can be held more than 60 s past a job's end. Every reader of the busy flag sees it for up to that long after a job ends: `ollama-settings.ts:76`, `ollama.ts:91`, `script-review.ts:1066`, `cast-design.ts:793`, `book-state.ts:977`, `:1012`, `gpu/gpu-load.ts:73`, `routes/accelerator-profile.ts:36`, `tts/persona-gpu-plan.ts:34`. All treat "busy" as "wait or refuse", which is the intended behaviour during a drain. A unit that ignored the abort could still write after the deadline; that is logged and named in §6.
 
 **Pause and a draining job.** `/pause` (`:6638-6662`) also walks the manuscript's writer set and aborts any controller not yet aborted. Under decision E an ended job is always already aborted, so this only makes Pause idempotent over a drain; it writes no snapshot for an ended job (its `endJob` already wrote the terminal one) and never resets the deadline.
 
@@ -238,7 +254,7 @@ Every main terminal path already ends in `endJob` — the main catch (`:6567-662
 
 | Request | Refused when | `code` / body |
 |---|---|---|
-| Subset POST (`/analysis/chapters`, `:6677`) | the manuscript has a main writer, registered or draining | `main_analysis_running`, `draining: boolean`. Live: "The analysis is still running on this book. Pause it first, then try again." Draining: "The analysis on this book is still finishing the chapters it had started. Try again in a moment." |
+| Subset POST (`/analysis/chapters`, `:6677`) | the manuscript has a main writer, registered or draining | `main_analysis_running`, `draining: boolean` — always present, `false` for a live run, in both the HTTP body and the SSE frame. Live: "The analysis is still running on this book. Pause it first, then try again." Draining: "The analysis on this book is still finishing the chapters it had started. Try again in a moment." |
 | Main POST (`/analysis`, `:3340`) that would **start** a job (no live main to join, or `fresh: true`) | a subset job is registered | `subset_analysis_running`: "A chapter retry is running on this book. Wait for it to finish, then resume the analysis." |
 | Main POST that would start a job **without** `fresh` (extension, §0; C-7) | a previous main writer for the book is still draining | `main_analysis_running`, `draining: true`, the draining message |
 
@@ -262,7 +278,7 @@ Decision A makes main and subset jobs on one manuscript mutually exclusive on th
 - **manuscript-edits.json:** the book-state PUT (`book-state.ts:740`, edits write `:786`; it also writes cast.json `:765`); restructure (`chapters-restructure.ts:176`, `:186`); cast-merge (`cast-merge.ts:229`) and its accept path in `cast-merge-suggestions.ts`.
 - **The analysis cache:** the rebuild in `generation.ts:1020` (no busy check), `chapter-splice.ts:249`, `chapter-qa-repair.ts:403`; `cast-merge.ts:377`.
 - **state.json and the live `record.chapterHints`:** the exclude toggle (`book-state.ts:1424`), which an Include calls *before* its subset POST (`generation.tsx:446`), so a second device that did not know main was live rewrites the hints a running main reads before the 409 arrives (A17); `samples.ts:128`.
-- **cast.json outside the cast lock's merge contract:** `cast-aliases.ts:167`, `:277`, `:366` (it also reads edits, `:175`, `:281`); `library-cast-override.ts:123`. The `cast-*`/voice routes write under `withCastLock`; a stale merge base there is #2015's.
+- **cast.json writers that serialise with the analysis persist's locked write but not with its run-start merge base** (the #2015 stale-merge-base class): `cast-aliases.ts:167`, `:277`, `:366`, under `withCastLock` (`:109`, `:240`, `:331`; it also reads edits, `:175`, `:281`); `library-cast-override.ts:123`, `:165`, `:168`, under `withCastLocks` (`:98`). The other `cast-*`/voice routes are the same shape.
 - **Checked and not writers of these files:** `annotate-emotion.ts` (streams only, header `:3`); `info.ts` (writes upgrade metadata, `:169`).
 
 This design adds no new writer.
@@ -288,15 +304,17 @@ This design adds no new writer.
 | M7 | Cast failures remain (`:5896-5903`) | unchanged | stage1 not written | `cast_incomplete` |
 | M8 | Phase-1 completion, incl. word-free (`:5728-5757`) | clear iff `a` | remove from P; cache; `takesPersisted=false`; roll | `chapter-resolved` iff cleared |
 | M8c | Phase-1 completion while `F(x)=c`, for a chapter **dispatched while `phase1Stage1Ready` was false** (pipelined, M14; decision H). `phase1Dispatch` records the flag at dispatch | `c` kept | **add** to P; cache; `takesPersisted=false` | — |
+| M8d | After both pools join, before the stitch | as M8 / M9 / M10 | every non-excluded chapter still in P is re-attributed on the final roster (§2.2) | as M8 / M9 / M10 |
 | M9 | Coverage re-flag | `record(a)`, cast dominates | as M8 / M8c | `chapter-failed` with the effective record |
 | M10 | Throw from the chapter's own call | `job.halting = true` first (before any `await`); then `record(a)` with `{chapter}`; guarded save; `job.failingPhase ??= 1` | unchanged | `chapter-failed`, then terminal; `endJob` aborts every in-flight call (E) |
 | M11 | Phase-1 dispatch | none | see note | terminal on overflow |
 | M12 | Abort (Pause, or the abort `endJob` fires on a halt) | none; the aborted chapter keeps no new take | — | `aborted` for a Pause; a halt keeps its own terminal |
 | M13 | Post-join overflow (`:5889`) | none | `takesPersisted` stays false | terminal |
+| M13a | Pause after the pools join (fold, classifier, Phase-2 stub) | none | the abort check before the persist (`:6188`) throws; nothing persisted | `aborted` |
 | M14 | Pipelined: cast-failed chapter attributed in the same run | `c` kept | M8c | — |
 | M15 | Resume after M14 | M3 re-casts; M4 clears | it is in P, so it is re-attributed | `chapter-resolved` |
 | M16 | `attribution_drift` (`:6548-6563`) | — | `takesPersisted` stays false | unchanged code; message gains the Start-fresh clause |
-| M17 | Result (`:6564`) | — | `takesPersisted = true` (end of persist block, `:6545`); `analysis-state.json` deleted by `endJob` | `result` |
+| M17 | Result (`:6564`) | — | `takesPersisted = true`, `confirmReached = true` iff this block wrote state.json (`:6514`); `analysis-state.json` deleted by `endJob` | `result` |
 
 **Dispatch note (M11).** The dispatch becomes `phase1Dispatch(i): Promise<'run' | 'skip'>` — the first part of `runChapter` (`:5390-5415`): `awaitPhase1Dispatch`, the `phase0FailedCount` return (now `'skip'`), a new `job.ended || signal.aborted` check (`'skip'`), and the overflow check. It runs **outside** the recording catch:
 
@@ -309,13 +327,15 @@ try { await runChapterBody(i); }                               // the recording 
 finally { releaseWork(job); }                                  // T3; T2 has no token yet
 ```
 
-After its `await awaitPhase1Dispatch(i)`, `phase1Dispatch` returns `'skip'` on `phase0FailedCount > 0`, `job.halting`, `job.ended`, `signal.aborted` or the pool-local `aborted` (passed in); it rethrows a recorded overflow; otherwise, in the same synchronous block, it notes `dispatchedOnFinalRoster = phase1Stage1Ready` for M8c, increments `job.liveWork` and returns `'run'`. This also covers a chapter's own Phase-0 overflow being rethrown at its own Phase-1 dispatch.
+After its `await awaitPhase1Dispatch(i)`, `phase1Dispatch` **throws `AnalysisAbortedError` on `signal.aborted`** (item A), returns `'skip'` on `phase0FailedCount > 0`, `job.halting`, `job.ended` or the pool-local `aborted` (passed in); it rethrows a recorded overflow; otherwise, in the same synchronous block, it notes `dispatchedOnFinalRoster = phase1Stage1Ready` for M8c, increments `job.liveWork` and returns `'run'`. This also covers a chapter's own Phase-0 overflow being rethrown at its own Phase-1 dispatch.
 
 **Terminal label** (`classifyAnalysisFailure(e, analyzerLabel, …)`, main `:6623`, subset `:8287`):
 - For an overflow, the label of `job.reasoningOverflowPhase`. `noteReasoningOverflow` (`:2453`) gains `phase: 0 | 1`, stored with `??=`. Its seven callers: `:2510`→0 (the non-story classifier, which both routes build with the Phase-0 `analyzer`, `:3782`, `:7018`), `:4688`→0, `:5525`→1, `:5858`→1, `:7375`→0, `:7604`→1, `:7646`→1.
 - Otherwise, `job.failingPhase === 1` → the Phase-1 label; else `analyzerLabel`.
 - The Phase-1 label is declared inside the try today (`phase1AnalyzerLabel`, main `:3813`, subset `:7023`); hoist a `let` to function scope next to `analyzerLabel` (`:3744`, `:6991`) so the catch can read it.
 - `{chapter}` is passed for the overflow row.
+
+**ETA (minor).** `remainingNonCachedChars` (`:5198-5208`) skips any chapter with a cached take; it switches to `hasCurrentTake`, so a pending chapter counts as remaining.
 
 **Decision (i).** The rule marks only *failed* chapters, because a record is evidence the take is bad. A successful pipelined run deliberately accepts unflagged takes made against the rolling roster (Plan 88).
 
@@ -324,7 +344,7 @@ After its `await awaitPhase1Dispatch(i)`, `phase1Dispatch` returns `'skip'` on `
 The subset makes three separate decisions:
 - **Run at all** iff no main writer exists for the manuscript (§2.4).
 - **Attribute the targets** iff stage1 existed at load, the gate passes and coverage is complete.
-- **Send a result and do the final persist** iff every non-excluded chapter outside `toRun` has a current take (D1).
+- **Send a result and do the final persist** iff every non-excluded chapter outside `toRun` has a current take (D1), or the book has reached Confirm (O2).
 
 | # | Event | Record | P / takes / stage1 | Outcome |
 |---|---|---|---|---|
@@ -344,7 +364,7 @@ The subset makes three separate decisions:
 | S12 | Post-loop overflow (`:7759`) | none | — | terminal |
 | S13 | Abort | none | — | `aborted` |
 | S14a | Aborted after the loop (a Pause landed after the last chapter; today the persist is skipped by `!isAborted()`, `:7989`, but `result` is still sent, `:8249`) | — | no persist | `endJob(error aborted)` (A18) |
-| S14 | Result gate (before the stitch, `:7763`) | — | **Every other chapter current:** stitch, full persist (`:7989-8237`), `takesPersisted = true`, `result` (`:8249`), then delete a `subset`-kind `analysis-state.json`. **Otherwise:** no fold, no authoritative cast.json, state.json, provenance or cast-id-history write, no final folded edits | `result`, or `endJob(error resume_required)`: "<titles> re-analysed. <missing titles> still need attribution — resume the analysis to finish the book." |
+| S14 | Result gate (before the stitch, `:7763`). **On a book past Confirm (`reachedConfirm`, read at load) the gate always passes (O2)**: the targets' takes persist and `result` is sent even while another chapter lacks a current take; that chapter stays a Generate-view row with Re-analyse | — | **Every other chapter current (or the book is past Confirm):** stitch, full persist (`:7989-8237`), `takesPersisted = true`, `result` (`:8249`), then delete a `subset`-kind `analysis-state.json`. **Otherwise:** no fold, no authoritative cast.json, state.json, provenance or cast-id-history write, no final folded edits | `result`, or `endJob(error resume_required)`: "<titles> re-analysed. <missing titles> still need attribution — resume the analysis to finish the book." |
 
 **What S14 does not undo.** These writes landed earlier in the run and stay; they are the same partial-progress writes a main run makes: the interim cast.json overlay (`:7334-7360`); the per-chapter edits roll (`:7727-7737`); the cache. The next authoritative persist supersedes them. Until then the library reads "analysing" (`takesPersisted` false), so the book cannot be generated from them through the normal flow.
 
@@ -357,7 +377,7 @@ The subset makes three separate decisions:
 
 | Event | Effect |
 |---|---|
-| Start fresh / re-parse / delete | Cache cleared (P and `takesPersisted` with it) |
+| Start fresh / re-parse / delete | Cache cleared (P, `takesPersisted` and `confirmReached` with it). **Start fresh also writes `castConfirmed: false`** to state.json (O1), through the same `writeStateJsonAtomic` path re-parse uses (`book-state.ts:1125`), inside the fresh branch (`:4015-4062`) before the run starts; the book reads "Analysing" until the new run persists and the user confirms |
 | Include / Exclude | No cache change. An Include target is attributed whenever stage1 exists, so an Include ending `resume_required` needs **no rollback**. An Include refused with 409, or ending S5, S6 or S7, keeps today's rollback (`rollbackInclude`, `generation.tsx:534`) |
 | Generate / splice / QA-repair | Overlay rebuild (§2.2) |
 | Generate, a chapter whose take is `[]` (`generation.ts:1394-1403`) | **Decision C.** Own key, `[]`, **no** failure record (word-free): "This chapter has no text to narrate — exclude it to finish the book." Own key, `[]`, **with** a record (worded, decision B): "Speaker attribution found no lines in this chapter. Re-analyse it, or exclude it." No own key: today's "analysis cache is incomplete" copy. The chapter still fails; nothing else changes |
@@ -378,7 +398,7 @@ The subset makes three separate decisions:
 | Analysing view, Retry (`handleRetryChapter`, `analysing.tsx:856-1131`) | **Disabled** while main is live — the view's own main stream (`isAnalysisRunning`, `:1298`, while `retryingChapterId === null`) or `selectMainAnalysisLive`. The button shows "Pause the analysis first" as its tooltip and as a line under the row list. The pause-and-retry branch (`pausedMainForRetry`, `:879-885`, and its resume in the `finally`, `:1102-1131`) is **deleted**. A 409 `main_analysis_running` is handled like `subset_in_progress` today (`:1004-1035`): restore the prior snapshot, keep the row, show the server's message on it. **Not-a-failure endings keep their halt (A8):** a catch that dispatched `setHalted` for `cast_incomplete`, `stage1_shrink_refused` or `resume_required` sets `retryNeedsActionRef` (reset at Retry start next to `retryHaltedRef`, `:862`), and the `finally` returns before its `clearActiveStream()` (`:1130`), as it already does for `retryHaltedRef` |
 | Analysing view, main catch (A7) | `subset_analysis_running` / `main_analysis_running`: restore the snapshot captured **before** the effect's own `setActiveStream({state:'running'})` (`:509-525`) — as the `subset_in_progress` branch does (`:1016-1028`) — or `clearActiveStream()` if there was none; then `setConn('idle')`, `setAnalysisStarted(false)`, and show the server's message on the needs-action line; no `setHalted`, no toast. Without the restore, `selectMainAnalysisLive` would stay true on this device and grey out its own Retry with no run going |
 | Generate view, Re-analyse and Include (`handleReanalyse` `:620`, `handleToggleExcluded` `:369`) | **Disabled** while `selectMainAnalysisLive`, with the same "Pause the analysis first" copy. A 409 is handled like `subset_in_progress` (`:529-561`, `:730-746`): restore the prior snapshot, `patchSubset(id, {error: message})`; Include also rolls back |
-| Middleware (`src/store/analysis-stream-middleware.ts`) | `main_analysis_running` / `subset_analysis_running` on a subscribe POST: `closeHandle()`, dispatch nothing (the same shape as `ANALYSIS_STREAM_NO_RESULT`, `:279-282`). Subset handle plus a not-a-failure code: `setHalted`, no toast |
+| Middleware (`src/store/analysis-stream-middleware.ts`) | `main_analysis_running` / `subset_analysis_running` on a subscribe POST: `closeHandle()`, then **restore the snapshot from the server**: re-read `api.getAnalysisState(bookId)` and dispatch `setActiveStream` from it (the layout's cold-boot shape, `layout.tsx:948-980`, including its confirmed-book gate), or `clearActiveStream()` when it returns null. Never `setPaused` (its hook fires `/pause`, which would abort a live subset). Without the restore, a stale `running` main snapshot keeps `selectMainAnalysisLive` true and the pill stalls. Subset handle plus a not-a-failure code: `setHalted`, no toast |
 | Cold boot (C9) | The rehydrate effect (`analysing.tsx:322-334`) sets `analysisStarted` only for a running snapshot whose `kind !== 'subset'`. A running **subset** snapshot never POSTs the main route; the rows come from the book-state GET as usual. A Retry clicked then joins the live subset (same chapter set, `:6816-6832`) or is told `subset_in_progress` |
 | Needs-action line | `phase-card.tsx:488-491` is an icon only. Add one line under the phase card: `activeStream.haltReason` for a not-a-failure code; otherwise, when the book-state GET says `resumeRequired`, the copy in §4 |
 | Book-state GET (C18, C20, F) | `analysis.stage1Ready = !!cache.stage1`; `analysis.resumeRequired = !reachedConfirm && stage1Ready && !analysisCompleteFor(...)`; `analysis.unattributedChapterIds`. Server facts, so they survive a reload and a dropped snapshot (`src/lib/analysis-pill-gate.ts:15-21`). `resumeRequired` is never true on a book that has reached Confirm, so no Resume is offered there (voice-strip class) |
@@ -391,7 +411,7 @@ The subset makes three separate decisions:
 | Subset shrink (Analysing) | Catch: `setStage1ShrinkInfo({prev, next, retryChapterId})`. Accept (`:1743`) calls `handleRetryChapter(id, {allowStage1Shrink: true})`, which re-runs Phase 0 for that chapter (accepted cost). Main re-entry clears only a **main** shrink banner (`:498` becomes `if (!info?.retryChapterId)`) |
 | Subset shrink (Generate) | `generation.tsx:517-566` and `:718-751` have no banner. Add an inline "Accept smaller cast" action on the row that re-runs the same subset with `allowStage1Shrink: true`. An Include re-does the include first, because the rollback ran |
 | Generate view, `resume_required` | No rollback, a neutral note with "Open analysis", and `setHalted` instead of `clearActiveStream` (`:563`, `:749`). `cast_incomplete`: the server message plus the existing rollback |
-| Generate view, unfinished chapters on a book past Confirm (F) | On hydrate, a chapter in `analysis.unattributedChapterIds` or `analysis.failedChapterErrors` shows an analysis note on its row ("Analysis didn't finish for this chapter." or the record's message) next to the existing Re-analyse action (`chapter-row-<id>-reanalyse`, `:1934`). The book's status is not touched |
+| Generate view, unfinished chapters on a book past Confirm (F, O2) | **Signal:** the Generate view never calls `getBookState`; the book-state GET is fetched by the layout (`layout.tsx:829`) and hydrated into the chapters slice (`chaptersActions.hydrateFromBookState`, `:878`). That hydrate also carries `analysis.unattributedChapterIds` and `analysis.failedChapterErrors` into a new chapters-slice field, `analysisGapById: Record<number, {message: string}>`; a subset `result` for a chapter clears its entry, a subset failure sets it. **Row:** a chapter with an entry shows an analysis note ("Analysis didn't finish for this chapter." or the record's message) **and a Re-analyse control** whatever its generation state — today Re-analyse renders only for `done` or message-less `failed` rows (`:1878`, button `:1928-1939`), so a queued or generation-failed row has none. The control reuses `onReanalyse` and the same disabled rules (subset in flight; main live). The book's status is not touched |
 | Row phase | Comes from the server. A client-synthesised row (`:810-811`) inherits the existing row's phase, else `'cast'` |
 
 **Books that have reached Confirm (decision F).** Cold boot drops halted and paused snapshots for confirmed books (`analysis-pill-gate.ts:15-21`, used at `layout.tsx:957`), and the active-analyses scan skips them (`server/src/workspace/active-analyses.ts:89`). That is deliberate (the 2026-07-14 voice-strip incident) and stays. Such a book is **never demoted** by the analysis rule: the library keeps `cast_pending` / `voices_pending` / `generating` / `complete`, so `openBook` never sends it to the Analysing view because of an interrupted Retry, Re-analyse or Include (`ui-slice.ts:259-262`). Its unfinished chapters show on their Generate-view rows with Re-analyse (§3.4). A main run on a confirmed book happens only when the user deliberately opens the analysis; it replays, attributes and persists, then routes to Confirm (`ui-slice.ts:234-237`), and must keep designed voices (invariant 6; on-box).
@@ -421,7 +441,7 @@ Drop "The model produced malformed output…" and its pause-and-retry sentence (
 
 ## 5. Invariants
 
-1. **No `result` and no final persist** while a non-excluded chapter outside `toRun` lacks a current take (S14). The main run's own invariant is unchanged (D1 rationale).
+1. **No `result` and no final persist** while a non-excluded chapter outside `toRun` lacks a current take (S14), **except on a book past Confirm** (O2), where the targets persist and the gap stays a Generate-view row. The main run's own invariant is unchanged (D1 rationale).
 2. **One per-chapter predicate**, `hasCurrentTake`, decides the main replay, the subset result gate and the library; **one book-level predicate**, `analysisCompleteFor`, decides the library and `resumeRequired`.
 3. **Phase is explicit:** an attribution record never overwrites a cast record; only a cast success clears `c`, and only a Phase-1 completion clears `a`; `[]` is never read as a phase.
 4. **At most one analysis job per manuscript writes at a time**, across kinds and across non-fresh main runs. A subset POST is refused while a main writer is registered or draining; a main start is refused while a subset is registered; a non-fresh main start is refused while a previous main writer drains. (Start fresh displacement is #3437's.)
@@ -429,7 +449,7 @@ Drop "The model produced malformed output…" and its pause-and-retry sentence (
 6. **A main run on a cast-confirmed book keeps the cast's designed voice fields** (merge via `mergeAnalysisResultWithExistingCast`; pinned by a test).
 7. **No book reaches Confirm without an authoritative persist after its last take** (`takesPersisted`), and **no book that has reached Confirm is demoted** by the analysis rule (`reachedConfirm`).
 8. **Cold boot never surfaces a halted or paused pill for a cast-confirmed book** (unchanged).
-9. **Every job ending aborts the job's controller**, so no model call outlives its run; a drained writer leaves exactly once, and no writer is held past `MAIN_DRAIN_DEADLINE_MS`.
+9. **A stop rejects; it never resolves.** A Pause or halt never lets a run stitch, persist or write stage1 (item A). **Every job ending aborts the job's controller**, so no model call outlives its run; a drained writer leaves exactly once, and no writer is held past `MAIN_DRAIN_DEADLINE_MS`.
 10. **A take made against the final roster is current** (decision H); only a rolling-roster dispatch can put a chapter back in P.
 
 ## 6. Risks
@@ -470,4 +490,4 @@ Drop "The model produced malformed output…" and its pause-and-retry sentence (
 
 ## 9. Open questions
 
-None. Decisions A–C closed the three questions plan check 1 raised (a main POST during a Retry; a server-side resume on a confirmed book; 1–4-word chapters that attribute to `[]`), and the two v3 questions (included chapters with no narratable text → C; the D3 consequence → B). Decisions E–H closed plan check 2's four blockers and confirmed the v2 interpretations. The one extension in §0 (refusing a non-fresh Resume during a drain) is stated so the owner can reject it, not because it is open.
+None. O1–O3 closed plan check 3's questions, and O4 approved the plan. Decisions A–C closed the three questions plan check 1 raised (a main POST during a Retry; a server-side resume on a confirmed book; 1–4-word chapters that attribute to `[]`), and the two v3 questions (included chapters with no narratable text → C; the D3 consequence → B). Decisions E–H closed plan check 2's four blockers and confirmed the v2 interpretations. The non-fresh-Resume refusal is confirmed (O3(2)).

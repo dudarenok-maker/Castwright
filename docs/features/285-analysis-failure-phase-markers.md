@@ -6,7 +6,7 @@ owner: null
 
 # 285 — Analysis failure bookkeeping: explicit phase and completeness markers (#3435)
 
-> Status: draft. The design was approved by the owner on 2026-10-03, and revised the same day with owner decisions A–C (after plan check 1) and E–H (after plan check 2). Supersedes PR #3439.
+> Status: draft — **plan approved by the owner on 2026-10-03 (O4)**, after plan checks 1–3 and owner decisions A–C, E–H and O1–O3. Implementation is a new PR superseding #3439, with the normal review gate. No fourth check.
 >
 > **Line numbers** in this plan are on **`origin/main` at c64943ff** (2026-10-03), like the spec. c64943ff differs from the previous basis 6f01fa20 only in test files, so production lines are unchanged; test-file lines were re-derived. Each citation names a symbol or the code at that line; if `origin/main` has moved, re-derive the line from the symbol before editing. Nothing is cited from #3439's head.
 >
@@ -21,7 +21,7 @@ owner: null
 > URL surface: indirect. The Analysing view's Retry, the Generate view's Re-analyse and Include, the library badge.
 > OpenAPI ops: `GET /api/books/{bookId}` (`analysis.failedChapterErrors[].phase`, `analysis.stage1Ready`, `analysis.resumeRequired`, `analysis.unattributedChapterIds`); `POST /api/manuscripts/{id}/analysis` and `…/analysis/chapters` (new 409 bodies, the `resume_required` terminal code, `phase` on `chapter-failed`).
 
-- **Design:** [2026-10-03-analysis-failure-phase-markers-design.md](../superpowers/specs/2026-10-03-analysis-failure-phase-markers-design.md). Section numbers below (§, M-rules, S-rules, decisions A–C, E–H, D1, D4, D5) refer to it.
+- **Design:** [2026-10-03-analysis-failure-phase-markers-design.md](../superpowers/specs/2026-10-03-analysis-failure-phase-markers-design.md). Section numbers below (§, M-rules, S-rules, decisions A–C, E–H, O1–O3, D1, D4, D5) refer to it.
 
 ## Benefit / Rationale
 
@@ -30,7 +30,8 @@ owner: null
   - A Retry never produces a "finished" book that is missing chapters, and no book reaches the confirm screen without its results saved.
   - While an analysis is running, Retry, Re-analyse and Include are greyed out with "Pause the analysis first", on every device; a device that did not know is told why instead of failing silently.
   - Stopping or a failure stops the analysis's model calls at once, so a halted run never keeps a local model busy.
-  - A finished or confirmed book stays finished when a per-chapter Retry, Re-analyse or Include is interrupted; the chapter shows on its row with Re-analyse.
+  - A finished or confirmed book stays finished when a per-chapter Retry, Re-analyse or Include is interrupted; the chapter shows on its Generate-view row with Re-analyse, whatever its generation state, and a Re-analyse there saves normally.
+  - Start fresh un-confirms the book, so it reads "Analysing" until the new run finishes and is confirmed again.
   - Rows say whether cast detection or speaker attribution failed.
   - A chapter with no text to narrate says so when you generate.
 - **Technical:**
@@ -49,7 +50,7 @@ owner: null
   - `mainWritersByManuscript`, `leaveWriters`, `MAIN_DRAIN_DEADLINE_MS`, `job.ended` / `halting` / `left` / `liveWork` / `watermark`, `PhaseWatermark.releaseAll`, `phase1Dispatch`, `job.reasoningOverflowPhase`, `job.failingPhase`;
   - the 409 bodies and SSE codes `main_analysis_running` / `subset_analysis_running`; the `resume_required` code; `selectMainAnalysisLive`;
   - book-state `analysis.stage1Ready` / `resumeRequired` / `unattributedChapterIds`; rebuild `mode`.
-- **Invariant deliberately changed:** #3084 P20/N4 ("an overflow stops new spend, not work already in flight") is superseded on the main route by decision E; its pinning test is rewritten in T3.
+- **Behaviour deliberately changed (owner-confirmed, O3):** #3084 P20/N4 ("an overflow stops new spend, not work already in flight") is superseded on the main route by decision E, and its pinning test is rewritten in T3; a non-fresh Resume is refused while a stopped run drains; a confirmed book missing one chapter's analysis no longer reads "Analysing" in the library. Also: Start fresh clears `castConfirmed` (O1).
 - **Invariants preserved:** the #3084 overflow halt with `fixes`; #3427's ordered cache writes (`writeJsonAtomicOrdered` / `enqueuePathOp`, `analysis-cache.ts:146-165`); the #2196 guarded snapshot writes; the voice-strip guard (`analysis-pill-gate.ts:15-21`, `active-analyses.ts:89`).
 - **Migration:** lazy, on load (`normaliseFailureRecords`), no rewrite pass. `pendingAttributionChapterIds` absent means empty; `takesPersisted` absent means persisted; `confirmReached` absent falls back to `castConfirmed`. openapi gains one required field, three optional book-state fields, two refusal codes and one terminal code.
 - **Reversibility (A15):** each task is its own commit and is green on its own, in order. Reverting is in **reverse order**: T3 can be reverted alone only before T4 lands, because T4 and T6 edit the `handleRetryChapter` catch/finally T3 reshapes, and T6's snapshot delete uses T3's ordered snapshot writes. The cache fields and `phase` are additive, so older builds ignore them.
@@ -193,7 +194,7 @@ Use it at every save inside a failure catch: main Phase 0 (`:4721`), subset Phas
 **Depends on:** T2 (`phase1Dispatch`, the pool catch). **Later tasks depend on it:** T4 and T6 edit the `handleRetryChapter` catch/finally this task reshapes, and T6's subset-snapshot delete uses this task's ordered snapshot writes.
 
 **Files:**
-- `server/src/routes/analysis.ts`: `AnalysisJob` `:2706` (`ended`, `halting`, `left`, `liveWork`, `watermark`); the job maps `:2764-2770` and `activeAnalysisManuscripts` `:2800-2809`; `persistRunningSnapshot` `:2924-2962`; `endJob` `:3162-3337` (abort + `releaseAll` first; busy release `:3323` and evict `:3333-3337` move to `leaveWriters`); main POST `:3340` (early check before `:3391`, late check at `:3585`); the watermark at `:3836`; the cast pool `:4862-4884` and its catch `:4873`; Phase 0b; `phase1Dispatch` from T2; the Phase-1 pool `:5842-5872`; the N4 comments `:5838-5841`, `:5853-5857`; `/pause` `:6638-6662`; subset POST `:6677` (early check before `:6716`, late check at `:6925`)
+- `server/src/routes/analysis.ts`: `AnalysisJob` `:2706` (`ended`, `halting`, `left`, `liveWork`, optional `watermark`; initialised in the literals `:3567-3584`, `:6906-6924` and in `__testRegisterJobForTest` `:2792`); `nonStoryCall` `:2498` (job signal); the abort check before the main persist `:6188`; the cast join `:4884` (no Phase 0b after an early exit); the job maps `:2764-2770` and `activeAnalysisManuscripts` `:2800-2809`; `persistRunningSnapshot` `:2924-2962`; `endJob` `:3162-3337` (abort + `releaseAll` first; busy release `:3323` and evict `:3333-3337` move to `leaveWriters`); main POST `:3340` (early check before `:3391`, late check at `:3585`); the watermark at `:3836`; the cast pool `:4862-4884` and its catch `:4873`; Phase 0b; `phase1Dispatch` from T2; the Phase-1 pool `:5842-5872`; the N4 comments `:5838-5841`, `:5853-5857`; `/pause` `:6638-6662`; subset POST `:6677` (early check before `:6716`, late check at `:6925`)
 - `server/src/analyzer/phase-watermark.ts` (`releaseAll` on the interface `:42` and both implementations `:65`, `:144`)
 - `server/src/store/analysis-state.ts:101-131` (writes and delete onto the per-path op chain)
 - `openapi.yaml` `:589-601` (both 409s)
@@ -209,6 +210,11 @@ Use it at every save inside a failure catch: main Phase 0 (`:4721`), subset Phas
 | Test | RED at `origin/main` because |
 |---|---|
 | `a Phase-1 throw aborts the other in-flight chapter's call; that chapter is not cached and has no record` (E) | the call runs on and caches |
+| **Item A-1:** `Pause between chapters ends aborted, no persist` — pause while no call is in flight (a worker between its save and its next dispatch); the run ends `aborted`, no stitch, no state.json, no `confirmReached` | `phase1Dispatch` skips the rest and the run persists a partial book |
+| **Item A-2:** `pipelined Phase-1 throw with un-launched cast chapters writes no stage1` — a Phase-1 chapter throws while cast chapters are still queued; no stage1 or cast.json write from Phase 0b | the cast loop exits early and Phase 0b writes a partial stage1 |
+| `a Pause during the fold / Phase-2 window ends aborted with no state.json write` (the abort check before `:6188`) | the persist has no abort check |
+| `the non-story classifier call receives the job signal and aborts with the job` | `nonStoryCall` has no signal (`:2498`) |
+| `endJob before the watermark exists (language_unset, :3767) does not throw` and `a hand-registered test job has ended/halting/left/liveWork initialised` | `job.watermark` undefined |
 | `every main ending aborts the controller` — one case each: classified error, overflow, `cast_incomplete`, re-verify shrink refusal, `attribution_drift`, `aborted`, `result` (E) | only Pause aborts |
 | `the halt's own error is the terminal even when a sibling's aborted call rejects first` | — (control: guards "no abort in the pool catch") |
 | `no chapter starts between the halt decision and endJob` (the pool catch's guarded save is held open) (A5 gap 4) | a sibling starts one |
@@ -246,7 +252,7 @@ Frontend:
 | `Re-analyse and Include are disabled with "Pause the analysis first" while main is live` | `src/views/generation.test.tsx` | enabled |
 | `a 409 on Include rolls the include back and shows the message on the row; on Re-analyse shows it on the row` | same | generic text |
 | `realRunAnalysisForChapters maps a 409 main_analysis_running body to AnalysisError(message, code)`; `realAnalyseManuscript maps 409 subset_analysis_running and main_analysis_running`; `the same codes as SSE error frames map to the same AnalysisError` | `src/lib/api-analysis-stream-errors.test.ts` | `ANALYSIS_STREAM_FAILED` |
-| `the middleware closes its handle on a refusal code without halting or toasting` | `src/store/analysis-stream-middleware.test.ts` | it halts and toasts |
+| `the middleware closes its handle on a refusal code without halting or toasting, re-reads getAnalysisState and restores the snapshot from it (or clears it on null); it never dispatches setPaused` | `src/store/analysis-stream-middleware.test.ts` | it halts and toasts; the stale running snapshot stays |
 | `selectMainAnalysisLive` table (other manuscript / subset kind / paused / running main) | `src/store/analysis-slice.test.ts` | does not exist |
 
 **Replace, do not delete without replacement:** these `analysing.test.tsx` tests pin the client pause-and-retry that decision A withdraws — `clicking Retry while the main run is streaming aborts the main run, runs the subset alone, then resumes the main run on settle` (`:1354`), `#3215 C2 — a subset_in_progress rejection does not re-arm the paused main run` (`:1440`), `overflow on a Retry that paused a running main run does NOT re-POST the main run` (`:1810`), `cast_incomplete after a successful Retry drops the row, re-POSTs the main run, and does not halt` (`:1837`), `stage1_shrink_refused on a Retry reaches the Accept-smaller-roster banner via the resumed main run` (`:1858`). Each is rewritten for a Retry with main **not** running, keeping its non-pause assertion; the first is replaced by the "disabled while live" test.
@@ -261,10 +267,10 @@ E2E — `e2e/analysis-retry-refused-while-running.spec.ts` (chromium, mock mode)
 
 **Implementation:** spec §2.4 in full; the §3.1 M10/M12 rows; §3.3 snapshot row; the §3.4 rows for api, openapi, selector, middleware, cold boot, Analysing Retry and main catch, Generate view; §4 copy. Delete `pausedMainForRetry` and everything only it used. Correct every comment the change makes false: the pause-and-retry comment `:839-855`, the panel subtext `:1778`, and the N4 comments `:5838-5841`, `:5853-5857`.
 
-**Verify:**
-- `OLLAMA_URL=http://127.0.0.1:1 npx vitest run src/routes/analysis.refuse-while-main.test.ts src/routes/analysis.test.ts src/routes/analysis.reasoning-overflow.test.ts src/routes/analysis.rejoin-miss.test.ts src/routes/analysis.snapshot-detach.test.ts src/routes/analysis.request-log.test.ts src/routes/analysis.setup-throw.test.ts src/routes/analysis.rename-midrun.test.ts src/analyzer/phase-watermark.test.ts src/store/analysis-state.test.ts src/routes/book-state.rename-analysis-busy.test.ts --retry=0`
-- `OLLAMA_URL=http://127.0.0.1:1 npx vitest run --config vitest.config.slow.ts src/routes/analysis-pipelining.test.ts src/routes/book-state.test.ts --retry=0`
-- `npx vitest run src/views/analysing.test.tsx src/views/generation.test.tsx src/store/analysis-stream-middleware.test.ts src/store/analysis-slice.test.ts src/lib/api-analysis-stream-errors.test.ts src/components/layout.test.tsx src/components/top-bar.test.tsx --retry=0`
+**Verify** (widened: this task changes `endJob` and every job's lifecycle, which every analysis, design, busy and upgrade test can observe):
+- the new and directly-touched files first, at `--retry=0`: `OLLAMA_URL=http://127.0.0.1:1 npx vitest run src/routes/analysis.refuse-while-main.test.ts src/routes/analysis.reasoning-overflow.test.ts src/analyzer/phase-watermark.test.ts src/store/analysis-state.test.ts --retry=0`
+- then the **full** server suites: `OLLAMA_URL=http://127.0.0.1:1 npm run test:server` and `OLLAMA_URL=http://127.0.0.1:1 npm run test:server-slow` (from the repo root)
+- the **full** frontend suite: `npm run test`
 - `npx playwright test e2e/analysis-retry-refused-while-running.spec.ts --project=chromium`
 - `npm run typecheck`
 
@@ -276,6 +282,9 @@ E2E — `e2e/analysis-retry-refused-while-running.spec.ts` (chromium, mock mode)
 - Remove the `job.left` guard → `busy is released exactly once …` goes red.
 - Move the `job.ended` check in `persistRunningSnapshot` back before the dir resolution → the A6 test goes red.
 - Drop the `kind !== 'subset'` guard in the cold-boot effect → the C9 test goes red.
+- Make `phase1Dispatch` return `'skip'` on `signal.aborted` → **Item A-1** goes red.
+- Remove the early return before Phase 0b → **Item A-2** goes red.
+- Remove the abort check before the main persist → the fold/Phase-2-window Pause test goes red.
 
 **Accept:** no model call outlives its run; a main and a subset job never write one book at once; busy and VRAM are released within the deadline; the UI explains every refusal. Shippable.
 
@@ -338,6 +347,7 @@ Frontend (`src/views/analysing.test.tsx`, `src/store/analysis-stream-middleware.
 - `server/src/routes/analysis.ts`: M0/M1 at `:4063`; M3 `:4434-4440`; replay `:5262-5276`; M8/M8c/M9 `:5728-5757`; the roll `:5766-5779`; S0 at `:7160`; S9/S10 `:7701-7719`; word-free short-circuit in both Phase-1 call paths; `takesPersisted = true` and `confirmReached = true` after `:6545` and `:8237`, only when the block's `catch (persistErr)` (`:6517`, `:8217`) was not entered; the drift messages `:6556-6560`, `:8241-8245`
 - `server/src/workspace/scan.ts:789-816` (status rule with `reachedConfirm`, decision F)
 - `server/src/routes/generation.ts:1394-1403` (decision C copy)
+- the Start fresh branch `analysis.ts:4015-4062` (O1: write `castConfirmed: false`); `remainingNonCachedChars` `:5198-5208` (use `hasCurrentTake`); the M8d pass between the join `:5882` and the stitch `:5906`; the `wroteStateJson` flag after `:6514` / `:8214`
 
 **Tests first:**
 
@@ -358,7 +368,11 @@ Frontend (`src/views/analysing.test.tsx`, `src/store/analysis-stream-middleware.
 | A pending chapter's take survives the main roll and a rebuild | `analysis.test.ts` | dropped from edits |
 | Word-free short-circuit: no analyzer call, no flag, every bookkeeping step runs | same | flagged `noSentences` |
 | M0 heals a legacy word-free `attribution-incomplete` record | same | record kept |
-| `takesPersisted` / `confirmReached`: false / absent after a Phase-1 completion; both true after the persist block; still false after `attribution_drift`, after a post-join overflow, and after a persist block that swallowed an error | same | fields absent |
+| `takesPersisted` / `confirmReached`: false / absent after a Phase-1 completion; both true after a persist block that wrote state.json; still false after `attribution_drift` (whose `try` completes with state.json skipped), after a post-join overflow, and after a persist block that swallowed the state.json error | same | fields absent |
+| **M8d:** `pipelined: a chapter dispatched before Phase 0b while its re-cast was queued, whose re-cast then succeeds, is re-attributed after the join; the result carries the second take and the chapter is not in P` | `analysis-pipelining.test.ts` (**slow**) | the pending take is stitched and persisted, and the persisted book has a chapter in P |
+| **O1:** `Start fresh on a castConfirmed book writes castConfirmed:false; the library reads analysing until the new run persists and the book is confirmed again` | `analysis.test.ts` + `scan.test.ts` | castConfirmed stays true |
+| `the ETA counts a pending chapter as remaining` | `analysis.test.ts` | it is skipped as cached |
+| `overlay rebuild with an edits file that has no sentences keeps stage1, P, records and both flags; replace mode still clears` | `analysis-cache-rebuild.test.ts` | the whole cache is cleared |
 | Finished-book main run replays a flagged chapter that has a take (port `a FINISHED book (stage1 on disk): a main run replays a flagged chapter cached sentences instead of re-attributing it`) | `analysis.reasoning-overflow.test.ts` | — (control) |
 | `scan` (book not yet at Confirm): a pending chapter reads analysing; a flagged chapter with a take reads analysed; a worded `[]` reads analysed; `takesPersisted:false` reads analysing; no stage1 reads analysing | `scan.test.ts` | own-key count |
 | Decision F, `scan`: `a castConfirmed book with takesPersisted:false and a chapter without a take keeps voices_pending / generating / complete`; `a book with confirmReached and castConfirmed false keeps cast_pending`; `a legacy book with neither field reads as before` | same | today's `:815` demotes the confirmed book to analysing |
@@ -377,6 +391,9 @@ Frontend (`src/views/analysing.test.tsx`, `src/store/analysis-stream-middleware.
 - In `analysisCompleteFor`, drop the `takesPersisted` clause → `scan: takesPersisted:false reads analysing` goes red.
 - In the scan status rule, drop the `!reachedConfirm` guard → `a castConfirmed book … keeps voices_pending …` goes red.
 - Make M8c ignore `dispatchedOnFinalRoster` (the v2 rule) → the decision-H test goes red.
+- Remove the M8d pass → the M8d test goes red.
+- Set the flags when the persist `try` completes instead of after the state.json write → the drift case goes red.
+- Drop the `castConfirmed: false` write from Start fresh → the O1 test goes red.
 - Restore `cached.length > 0` in the replay → the decision-B test goes red.
 
 **Accept:** one per-chapter predicate in three places, one book-level predicate in the library; decisions (i), B, F and H hold; no take is deleted. Shippable.
@@ -388,6 +405,7 @@ Frontend (`src/views/analysing.test.tsx`, `src/store/analysis-stream-middleware.
 **Files:**
 - `server/src/routes/analysis.ts`: S8 `:7513-7520`; S14a (aborted after the loop, `:7989`, `:8249`); S14 before the stitch `:7763` through the persist `:7989-8237` and result `:8249`; `endJob` `:3162` (subset-kind snapshot delete in one op)
 - `server/src/routes/book-state.ts:321-326`, `:637` (`stage1Ready`, `resumeRequired`, `unattributedChapterIds`)
+- O2: the S14 gate reads `reachedConfirm` at subset load; `src/components/layout.tsx:829`, `:878` (carry the analysis gaps into the chapters slice); `src/store/chapters-slice.ts` (`analysisGapById`); the Generate row actions `src/views/generation.tsx:1878-1939`
 - `openapi.yaml`: `AnalyseErrorEvent` codes `:5634-5636`; book-state `analysis` `:8201-8220`
 - `src/lib/analysis-phase-state.ts:11-13`; `src/lib/types.ts:524`; `src/store/analysis-stream-middleware.ts`; `src/views/analysing.tsx` (hydrate effect `:780-823`, auto-resume `:832-837`, `castIncomplete` `:234`/`:709`, label `:1393-1397`, shrink `:498`/`:1743`, rows `:1764-1828`); `src/views/generation.tsx` (`:517-566`, `:718-751`, row analysis note next to `:1934`)
 
@@ -401,6 +419,8 @@ Frontend (`src/views/analysing.test.tsx`, `src/store/analysis-stream-middleware.
 | Finished-book Retry sends `result`, sets `takesPersisted`, and deletes a `subset`-kind snapshot but not a `main`-kind one | `analysis.test.ts` | the snapshot stays |
 | A18 (S14a): `a Pause that lands after the subset loop ends the job aborted, with no persist and no result` | same | `result` is sent without a persist |
 | Decision F: `an interrupted Re-analyse on a castConfirmed book (S11) leaves the library status unchanged and lists the chapter in unattributedChapterIds or failedChapterErrors` | same + `book-state.test.ts` (**slow**) | — |
+| **O2:** `on a castConfirmed book with another chapter lacking a current take, a Re-analyse of ch2 sends result and persists (state.json, cast.json, edits); the other chapter stays in unattributedChapterIds` | `analysis.test.ts` | `resume_required`, nothing persisted |
+| O2 control: `on a book that has not reached Confirm, the same Retry still ends resume_required` | same | — |
 | Hint snapshot: a mid-run Exclude is ignored by S14 | same | live hints read |
 | Main run on a confirmed book keeps designed voice fields (invariant 6) | `analysis.test.ts` | — (control) |
 | `GET book-state: stage1Ready, resumeRequired, unattributedChapterIds` (no stage1 / pending / complete / reached Confirm → resumeRequired false) | `book-state.test.ts` (**slow**) | fields absent |
@@ -416,19 +436,24 @@ Frontend:
 | C-8: `after S8, the refreshed stage1Ready:true does not disarm the auto-resume` (P-beta still POSTs main) and `castIncomplete is never armed by a refresh` | same | — |
 | A8: `a Retry ending resume_required keeps the halted snapshot; the needs-action line reads its haltReason` | same | the `finally` clears it |
 | A10: `with stage1Ready false, an attribution row has no Retry and reads "Attributed when you resume the analysis."; a cast row keeps Retry` | same | Retry shown, copy promises a re-run |
-| Decision F: `Generate view shows "Analysis didn't finish for this chapter." with Re-analyse for a chapter in unattributedChapterIds; the book stays in the Generate view` | `generation.test.tsx` | no note |
+| Decision F / O2: `Generate view shows "Analysis didn't finish for this chapter." and a Re-analyse control for a chapter in analysisGapById — on a queued row and on a generation-failed row with an errorReason, which have no Re-analyse today (:1878)`; `a Re-analyse result clears the gap; a failure sets it` | `generation.test.tsx` | no note, no control |
+| `the layout's book-state hydrate carries unattributedChapterIds and failedChapterErrors into analysisGapById` | `src/components/layout.test.tsx` | not carried |
+| `analysisGapById` set / clear reducers | `src/store/chapters-slice.test.ts` | do not exist |
 | Analysing subset shrink: Accept re-runs the subset with `allowStage1Shrink`; main re-entry does not clear a subset shrink banner | same | — |
 | Generate view: no Include rollback on `resume_required`; inline "Accept smaller cast" for a shrink | `generation.test.tsx` | rollback; no action |
 | `isNotAFailureHaltCode('resume_required')` | `analysis-phase-state.test.ts` | false |
 
 **Implementation:** spec §3.2 S8, S14a, S14; the subset-snapshot part of §3.3's snapshot row; §3.4 rows for book-state, refresh policy, `castIncomplete` arming, attribution rows while `stage1Ready` is false, label, auto-resume, shrink, Generate `resume_required` and unfinished chapters past Confirm; the confirmed-books paragraph; §4.
 
+**E2E (crosses the layout hydrate → chapters slice → Generate row seam):** add a second test to `e2e/analysis-retry-refused-while-running.spec.ts`: on `#/books/sb/generate`, dispatch the raw chapters action that sets `analysisGapById` for chapter 1 (and mark it queued, as `e2e/generate-disabled-while-analysing.spec.ts` does), expand the row, and assert the analysis note and an enabled `chapter-row-1-reanalyse`. Add the spec to this task's verify.
+
 **Fixtures:** update every test that seeds stage1 with a chapter lacking a current take and asserts `result` or a persist (e.g. `C2 — subset route computes maxMergedTurnsInParagraph over every non-excluded chapter …`, `analysis.test.ts:4173`, which seeds `chapters: {}` at `:4228-4232` and retries only ch2: seed ch1's take).
 
 **Verify:**
 - `OLLAMA_URL=http://127.0.0.1:1 npx vitest run src/routes/analysis.reasoning-overflow.test.ts src/routes/analysis.test.ts src/routes/analysis.request-log.test.ts src/routes/analysis.setup-throw.test.ts src/routes/analysis.persist-lock-timeout.test.ts src/routes/analysis.merge-base-detect.test.ts src/routes/analysis.phase-model.test.ts src/routes/analysis.rejoin-miss.test.ts src/routes/analysis.snapshot-detach.test.ts src/store/analysis-state.test.ts src/workspace/scan.test.ts --retry=0`
 - `OLLAMA_URL=http://127.0.0.1:1 npx vitest run --config vitest.config.slow.ts src/routes/book-state.test.ts --retry=0`
-- `npx vitest run src/views/analysing.test.tsx src/views/generation.test.tsx src/store/analysis-stream-middleware.test.ts src/lib/analysis-phase-state.test.ts src/lib/analysis-pill-gate.test.ts src/components/layout.test.tsx --retry=0`
+- `npx vitest run src/views/analysing.test.tsx src/views/generation.test.tsx src/store/analysis-stream-middleware.test.ts src/lib/analysis-phase-state.test.ts src/lib/analysis-pill-gate.test.ts src/components/layout.test.tsx src/store/chapters-slice.test.ts --retry=0`
+- `npx playwright test e2e/analysis-retry-refused-while-running.spec.ts --project=chromium`
 - `npm run typecheck`
 
 **Mutation checks** (after committing the task):
@@ -436,6 +461,8 @@ Frontend:
 - Remove S14a → the A18 test goes red.
 - Arm `castIncomplete` from every book-state refresh → `castIncomplete is never armed by a refresh` goes red.
 - Return `resumeRequired` without the `!reachedConfirm` clause → the book-state "reached Confirm → resumeRequired false" case goes red.
+- Drop the `reachedConfirm` relaxation from S14 → the O2 test goes red.
+- Render the Generate-view Re-analyse only for `done` rows again → the queued / generation-failed row test goes red.
 
 **Accept:** a subset run never sends or persists a `result` for an unfinished book, and an unfinished book says so after any reload. Shippable.
 
@@ -443,7 +470,7 @@ Frontend:
 
 **Release notes, `RELEASE_NOTES.md`:**
 
-> A chapter whose Retry fails now stays marked as failed, even after a reload. A Retry no longer reports a book as finished while other chapters still need attribution — it asks you to resume the analysis instead. While an analysis is running, Retry, Re-analyse and Include wait for you to pause it first. When an analysis stops — paused or halted by an error — it stops its model work straight away. A finished book stays finished if a single-chapter re-analysis is interrupted; that chapter shows on its row with Re-analyse. A chapter with no text to narrate now says so when you generate.
+> A chapter whose Retry fails now stays marked as failed, even after a reload. A Retry no longer reports a book as finished while other chapters still need attribution — it asks you to resume the analysis instead. While an analysis is running, Retry, Re-analyse and Include wait for you to pause it first. When an analysis stops — paused or halted by an error — it stops its model work straight away. A finished book stays finished if a single-chapter re-analysis is interrupted; that chapter shows on its row with Re-analyse, and a re-analysis there saves even while another chapter is still unfinished. Start fresh now un-confirms the cast, so the book shows as analysing until you confirm it again. A chapter with no text to narrate now says so when you generate.
 
 **Release notes, `docs/release-notes-next.md`** (under "🗣️ Analyzer, script review & manuscript"):
 
@@ -456,6 +483,10 @@ Frontend:
 > Every analysis job ending — Pause, an error, an overflow, a quota stop — now aborts its in-flight model calls; in-flight chapters are left for the next Resume or Retry. This supersedes #3084 P20/N4 ("in-flight work finishes") on the main route. A 60 s drain deadline guarantees the analysis-busy flag and the Ollama pin are released (#3435).
 >
 > A non-fresh Resume while a stopped run is still draining is refused for a moment ("still finishing the chapters it had started") (#3435).
+>
+> A Pause between chapters, or after attribution, now ends the run `aborted` with nothing persisted; it no longer stitches and saves a partial book. A halted pipelined run no longer finalises a partial cast (#3435).
+>
+> Start fresh clears `castConfirmed`, as Re-parse does (#3435). On a book past Confirm, a per-chapter Re-analyse persists even while another chapter lacks a current take, and every unfinished chapter's Generate-view row offers Re-analyse (#3435).
 >
 > A book that has not yet reached Confirm reads "Analysing" until its results are saved after the last attributed chapter; a run that halted after attribution (overflow, attribution drift, a save failure) no longer lands on the confirm screen. A book that has reached Confirm is never sent back to "Analysing" — including a confirmed book with a chapter missing its analysis, which today's library demotes (#3435).
 >
@@ -500,7 +531,8 @@ The per-task mutation checks are the mutant battery; there is no out-of-repo mut
 2. **(real) A Retry that fails stays failed.** Open a book with an attribution row on the Analysing view (`#/books/<id>/analysing`). Stop the analyzer, Retry. The row stays, labelled "Speaker attribution". Reload; it is still there.
 3. **(real) Refused while running, then allowed.** Start an analysis; during Phase 1 the Retry buttons are disabled. Pause. Click Retry at once: either it runs, or the row says the analysis is still finishing; a few seconds later Retry runs. On a second browser that never saw the run start, Retry during the run shows the server's message on the row.
 4. **(real) An unfinished book asks to resume.** In sequential mode (so stage1 is written before attribution), halt a main run part-way through attribution. Retry a failed row. (In pipelined mode a halt during Phase 0 leaves no stage1, and the attribution rows instead read "Attributed when you resume the analysis." with no Retry — check that too.) The phase card shows "… still need attribution — resume the analysis to finish the book", no red toast. Reload: the line and "Resume analysis" are still there. Resume; the run finishes and routes to Confirm.
-5. **(real) A done book stays done.** On a generated book, Re-analyse one chapter and stop the analyzer mid-run. The library still shows the book as generated; the Generate view row shows the failure with Re-analyse.
+5. **(real) A done book stays done.** On a generated book, Re-analyse one chapter and stop the analyzer mid-run. The library still shows the book as generated; the Generate view row shows the failure with Re-analyse. Start the analyzer and click it: the chapter re-analyses and saves, even if another chapter is still unfinished.
+6. **(real) Start fresh un-confirms.** On a confirmed book, Start fresh: the library shows "Analysing" until the run finishes and you confirm again.
 
 ### On-box acceptance owed
 
