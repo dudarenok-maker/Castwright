@@ -1576,6 +1576,32 @@ describe('POST /api/books/:bookId/generation — [] takes (plan 285)', () => {
     expect(after.chapters[1]).toEqual([]);
   });
 
+  it("a Generate POST keeps an excluded chapter's take (the route passes state.json's excluded ids)", async () => {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const original = fsModule.readFileSync(statePath, 'utf8');
+    const state = JSON.parse(original);
+    state.chapters = state.chapters.map((c: { id: number }) => (c.id === 2 ? { ...c, excluded: true } : c));
+    fsModule.writeFileSync(statePath, JSON.stringify(state));
+    try {
+      await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, {
+        chapters: { 1: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }], 2: WORLD },
+      });
+      /* The edits never carry an excluded chapter. */
+      fsModule.writeFileSync(
+        editsPath,
+        JSON.stringify({ sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'Hello.' }] }),
+      );
+      const res = await request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash', force: true });
+      expect(res.status).toBe(200);
+      const after = await cacheModule.loadAnalysisCache(MANUSCRIPT_ID);
+      expect(after.chapters[2]).toEqual(WORLD);
+    } finally {
+      fsModule.writeFileSync(statePath, original);
+    }
+  });
+
   it('a [] take with no record fails with "This chapter has no text to narrate — exclude it to finish the book."', async () => {
     await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, { chapters: { 1: [], 2: WORLD } });
     expect(await chapterOneFailure()).toBe('This chapter has no text to narrate — exclude it to finish the book.');
