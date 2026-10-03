@@ -4056,11 +4056,14 @@ export interface components {
          *     analyzer failure carries `remediation` + `detail` (+ `fixes` when the
          *     classifier can name something actionable); the route's own terminal
          *     codes (`language_unset`, `cast_incomplete`, `stage1_shrink_refused`,
-         *     `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
+         *     `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
          *     `design_in_progress`, `bad_request`, `chapter_excluded`,
          *     `main_analysis_running`, `subset_analysis_running`) carry `code`
          *     and `message` only — `main_analysis_running` also carries
          *     `draining` (#3435: the late refusal check, after the stream opened).
+         *     `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
+         *     the chapters it ran are done, but the book still needs a main
+         *     resume to attribute the rest; nothing was persisted as final.
          */
         AnalyseErrorEvent: {
             /** @enum {string} */
@@ -6038,6 +6041,25 @@ export interface components {
                         phase: "cast" | "attribution";
                     };
                 };
+                /**
+                 * @description #3435 — the cast roster is final (the analysis cache holds
+                 *     stage1). While false, an attribution-failed chapter is
+                 *     attributed by a main resume, not by a per-chapter Retry.
+                 */
+                stage1Ready?: boolean;
+                /**
+                 * @description #3435 — the book has not reached Confirm, its roster is final,
+                 *     and some chapter still lacks a current take (or the takes were
+                 *     never persisted): a main resume is needed to finish it. Never
+                 *     true on a book that has reached Confirm.
+                 */
+                resumeRequired?: boolean;
+                /**
+                 * @description #3435 — the non-excluded chapters with no current take (no
+                 *     attribution, or one made against a stale roster). On a book
+                 *     past Confirm these show as Generate-view rows with Re-analyse.
+                 */
+                unattributedChapterIds?: number[];
             };
         };
         /**

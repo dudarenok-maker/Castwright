@@ -164,7 +164,7 @@ function stubAnalyzer(over: Partial<Analyzer>): Analyzer {
 async function seedBook(
   label: string,
   chapterIds: readonly number[] = [1, 2],
-  opts: { fullCache?: boolean } = {},
+  opts: { fullCache?: boolean; unconfirmed?: boolean } = {},
 ): Promise<{
   manuscriptId: string;
   bookDir: string;
@@ -189,7 +189,9 @@ async function seedBook(
       seriesPosition: null,
       isStandalone: true,
       manuscriptFile: 'manuscript.md',
-      castConfirmed: true,
+      /* `unconfirmed`: a book that has not reached Confirm (#3435 decision F),
+         so the subset result gate S14 is not relaxed for it (O2). */
+      castConfirmed: !opts.unconfirmed,
       language: 'en',
       chapters: chapterIds.map((id) => ({
         id,
@@ -1979,4 +1981,175 @@ describe('castIncompleteMessage (#3435 S5 copy)', () => {
       'Phase 0 paused — 6 chapters still need cast detection (A, B, C and 3 more). Retry to continue.',
     );
   });
+});
+
+describe('the subset result gate: S8 and S14 end resume_required on an unfinished book (#3435)', () => {
+  const takeOf = (id: number, characterId = 'nova') => [
+    { id: id * 100 + 1, chapterId: id, characterId, confidence: 0.9, text: BODIES[id] },
+  ];
+  const rec = (code: string, phase: 'cast' | 'attribution') => ({ code, message: 'seeded', remediation: 'seeded', phase });
+  const STAGE1 = {
+    characters: [novaCharacter()],
+    chapters: [1, 2, 3].map((id) => ({ id, title: CHAPTER_TITLES[id] })),
+  };
+
+  type GateStep = { subset: number[] } | { main: true };
+
+  /** A three-chapter book that has NOT reached Confirm (castConfirmed false,
+      no confirmReached), its seeded cache, then each step in turn: a subset
+      Retry of `subset`, or a main resume. */
+  async function runGate(label: string, seedCache: Record<string, unknown>, steps: GateStep[]) {
+    const seed = await seedBook(label, [1, 2, 3], { unconfirmed: true });
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runSubsetAnalyzerJob, runMainAnalyzerJob } = await import('./analysis.js');
+    const { castJsonPath, manuscriptEditsJsonPath, stateJsonPath } = await import('../workspace/paths.js');
+    await saveAnalysisCache(seed.manuscriptId, seedCache as never);
+    const record = getManuscript(seed.manuscriptId)!;
+    const stage2Calls: number[][] = [];
+    const phase1 = (calls: number[]) =>
+      buildSelection(
+        stubAnalyzer({
+          runStage2Chapter: async (_m, id) => {
+            calls.push(id);
+            return stage2For(id);
+          },
+        }),
+        MODEL,
+      );
+    const results: CapturedEvent[][] = [];
+    const caches: Array<Awaited<ReturnType<typeof loadAnalysisCache>>> = [];
+    try {
+      for (const step of steps) {
+        const calls: number[] = [];
+        stage2Calls.push(calls);
+        if ('subset' in step) {
+          const job = {
+            ...seed.job,
+            controller: new AbortController(),
+            subscribers: new Set(),
+            kind: 'subset' as const,
+          } as unknown as AnalysisJob;
+          const events = captureEvents(job);
+          await runSubsetAnalyzerJob(
+            job,
+            record,
+            seed.phase0Selection,
+            phase1(calls),
+            record.chapterHints.filter((c) => step.subset.includes(c.id)),
+            false,
+          );
+          results.push(events);
+        } else {
+          const job = {
+            ...seed.job,
+            controller: new AbortController(),
+            subscribers: new Set(),
+          } as unknown as AnalysisJob;
+          (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection = phase1(calls);
+          const events = captureEvents(job);
+          await runMainAnalyzerJob(job, record as never, seed.phase0Selection, {
+            requestedFresh: false,
+            allowStage1Shrink: true,
+            requestedModel: undefined,
+          });
+          await new Promise((r) => setTimeout(r, 100));
+          results.push(events);
+        }
+        caches.push(await loadAnalysisCache(seed.manuscriptId));
+      }
+      const readOr = (p: string) => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : undefined);
+      return {
+        steps: results,
+        caches,
+        stage2Calls,
+        bookDir: seed.bookDir,
+        after: await loadAnalysisCache(seed.manuscriptId),
+        state: readOr(stateJsonPath(seed.bookDir)) as Record<string, unknown>,
+        cast: readOr(castJsonPath(seed.bookDir)) as { characters: Array<{ lines?: number }> } | undefined,
+        edits: readOr(manuscriptEditsJsonPath(seed.bookDir)) as { sentences: Array<{ chapterId: number }> } | undefined,
+      };
+    } finally {
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  const endings = (events: CapturedEvent[]) =>
+    events
+      .filter((e) => e.kind === 'result' || e.kind === 'error')
+      .map((e) => (e.kind === 'error' ? `error:${e.code}` : 'result'));
+
+  it('P-delta: a Retry of ch2 while ch3 has no take ends resume_required naming ch3; no state.json or authoritative cast.json write, the interim roll is present, and the takes are not marked persisted', async () => {
+    const r = await runGate(
+      'p-delta',
+      {
+        stage1: STAGE1,
+        chapterCast: { 1: [novaCharacter()], 2: [novaCharacter()], 3: [novaCharacter()] },
+        chapters: { 1: takeOf(1) },
+      },
+      [{ subset: [2] }],
+    );
+    expect(r.stage2Calls[0]).toEqual([2]);
+    expect(endings(r.steps[0])).toEqual(['error:resume_required']);
+    const terminal = r.steps[0].find((e) => e.kind === 'error')!;
+    expect(String(terminal.message)).toBe(
+      'Chapter Two re-analysed. Chapter Three still need attribution — resume the analysis to finish the book.',
+    );
+    /* No authoritative persist: state.json carries no provenance, and cast.json
+       (if the interim overlay wrote one) has no attributed line counts. */
+    expect(r.state.analysisProvenance).toBeUndefined();
+    for (const c of r.cast?.characters ?? []) expect(c.lines ?? 0).toBe(0);
+    /* The per-chapter roll did land. */
+    expect(r.edits?.sentences.some((s) => s.chapterId === 2)).toBe(true);
+    /* Binding (T5 review): the flags are set only on S14's pass branch. */
+    expect(r.after.takesPersisted).toBe(false);
+    expect(r.after.confirmReached).toBeUndefined();
+  }, 60_000);
+
+  it('P-eta: a Retry of ch2 while ch1 is pending ends resume_required; a main resume then re-attributes ch1 and sends result', async () => {
+    const r = await runGate(
+      'p-eta',
+      {
+        chapterCast: { 1: [], 2: [novaCharacter()], 3: [novaCharacter()] },
+        chapters: { 1: takeOf(1, 'narrator'), 2: takeOf(2, 'narrator'), 3: takeOf(3) },
+        failedChapterIds: [1, 2],
+        failedChapterErrors: { '1': rec('analyzer-timeout', 'cast'), '2': rec('attribution-collapse', 'attribution') },
+      },
+      [{ subset: [1] }, { subset: [2] }, { main: true }],
+    );
+    /* Step 1 is S8 (stage1 absent at load): no attribution. */
+    expect(endings(r.steps[0])).toEqual(['error:resume_required']);
+    expect(r.stage2Calls[0]).toEqual([]);
+    /* Step 2 attributes ch2, but ch1 (S0 put it in P) is still pending. */
+    expect(r.stage2Calls[1]).toEqual([2]);
+    expect(endings(r.steps[1])).toEqual(['error:resume_required']);
+    expect(String(r.steps[1].find((e) => e.kind === 'error')!.message)).toContain('Chapter One still need attribution');
+    expect(r.caches[1].takesPersisted).toBe(false);
+    expect(r.caches[1].confirmReached).toBeUndefined();
+    /* The main resume re-attributes the pending chapter and finishes the book. */
+    expect(r.stage2Calls[2]).toEqual([1]);
+    expect(endings(r.steps[2])).toEqual(['result']);
+    expect(r.after.pendingAttributionChapterIds ?? []).toEqual([]);
+    expect(r.after.takesPersisted).toBe(true);
+  }, 60_000);
+
+  it('P-beta (server): with no stage1, a Retry whose cast detection completes the book ends resume_required (S8), not silently', async () => {
+    const r = await runGate(
+      'p-beta',
+      {
+        chapterCast: { 1: [], 2: [novaCharacter()], 3: [novaCharacter()] },
+        chapters: {},
+        failedChapterIds: [1],
+        failedChapterErrors: { '1': rec('analyzer-timeout', 'cast') },
+      },
+      [{ subset: [1] }],
+    );
+    expect(endings(r.steps[0])).toEqual(['error:resume_required']);
+    expect(String(r.steps[0].find((e) => e.kind === 'error')!.message)).toBe(
+      'Cast detection for Chapter One is done. The rest of the book still needs attribution — resume the analysis to finish.',
+    );
+    expect(r.stage2Calls[0]).toEqual([]);
+    expect(r.after.stage1).toBeDefined();
+  }, 60_000);
 });

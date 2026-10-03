@@ -2654,3 +2654,95 @@ describe('book-state router — analysis.failedChapterErrors phase (plan 285 T1)
     }
   });
 });
+
+describe('book-state router — analysis completeness fields (plan 285 T6)', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  let originalState: string;
+  beforeEach(() => {
+    originalState = readFileSync(statePath(), 'utf8');
+  });
+  afterEach(async () => {
+    writeFileSync(statePath(), originalState);
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    await clearAnalysisCache('m_test');
+  });
+
+  /** Two chapters; `castConfirmed` as given. */
+  function seedState(castConfirmed: boolean): void {
+    const s = JSON.parse(originalState);
+    writeFileSync(
+      statePath(),
+      JSON.stringify({
+        ...s,
+        castConfirmed,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: 'chapter-one' },
+          { id: 2, title: 'Chapter 2', slug: 'chapter-two' },
+        ],
+      }),
+    );
+  }
+  const take = (id: number) => [{ id: id * 100 + 1, chapterId: id, characterId: 'narrator', confidence: 0.9, text: 'x' }];
+  const stage1 = {
+    characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' }],
+    chapters: [
+      { id: 1, title: 'Chapter 1' },
+      { id: 2, title: 'Chapter 2' },
+    ],
+  };
+  async function get(cache: Record<string, unknown>) {
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    await saveAnalysisCache('m_test', cache as never);
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    return res.body.analysis as {
+      stage1Ready: boolean;
+      resumeRequired: boolean;
+      unattributedChapterIds: number[];
+      failedChapterErrors: Record<string, unknown>;
+    };
+  }
+
+  it('GET book-state: stage1Ready, resumeRequired, unattributedChapterIds — no stage1', async () => {
+    seedState(false);
+    const a = await get({ chapters: { 1: take(1) }, chapterCast: { 1: stage1.characters } });
+    expect(a).toMatchObject({ stage1Ready: false, resumeRequired: false, unattributedChapterIds: [2] });
+  });
+
+  it('GET book-state: stage1Ready, resumeRequired, unattributedChapterIds — a pending chapter', async () => {
+    seedState(false);
+    const a = await get({ stage1, chapters: { 1: take(1), 2: take(2) }, pendingAttributionChapterIds: [2] });
+    expect(a).toMatchObject({ stage1Ready: true, resumeRequired: true, unattributedChapterIds: [2] });
+  });
+
+  it('GET book-state: stage1Ready, resumeRequired, unattributedChapterIds — complete', async () => {
+    seedState(false);
+    const a = await get({ stage1, chapters: { 1: take(1), 2: take(2) }, takesPersisted: true });
+    expect(a).toMatchObject({ stage1Ready: true, resumeRequired: false, unattributedChapterIds: [] });
+  });
+
+  it('GET book-state: stage1Ready, resumeRequired, unattributedChapterIds — reached Confirm → resumeRequired false', async () => {
+    seedState(false);
+    const a = await get({ stage1, chapters: { 1: take(1) }, takesPersisted: false, confirmReached: true });
+    expect(a).toMatchObject({ stage1Ready: true, resumeRequired: false, unattributedChapterIds: [2] });
+    seedState(true);
+    const b = await get({ stage1, chapters: { 1: take(1) }, takesPersisted: false });
+    expect(b).toMatchObject({ stage1Ready: true, resumeRequired: false, unattributedChapterIds: [2] });
+  });
+
+  it('decision F: an interrupted Re-analyse on a castConfirmed book (S11) leaves the library status unchanged and lists the chapter in unattributedChapterIds or failedChapterErrors', async () => {
+    seedState(true);
+    const a = await get({
+      stage1,
+      chapters: { 1: take(1), 2: take(2) },
+      takesPersisted: false,
+      confirmReached: true,
+      failedChapterIds: [2],
+      failedChapterErrors: { '2': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'attribution' } },
+    });
+    expect(a.resumeRequired).toBe(false);
+    expect(a.unattributedChapterIds.includes(2) || Object.hasOwn(a.failedChapterErrors, '2')).toBe(true);
+    /* The library side of decision F (never demoted) is pinned in scan.test.ts's
+       'decision F' block. */
+  });
+});

@@ -4375,8 +4375,13 @@ describe('runMainAnalyzerJob / runSubsetAnalyzerJob — analysisProvenance persi
       // EVERY non-excluded chapter (including chapter 1, which this test
       // never re-runs Phase 0a for) or the subset job defers cast
       // finalisation and returns before ever reaching Phase 1 / persist.
+      // #3435 S14 — chapter 1 carries a current take: on a book that has not
+      // reached Confirm, the subset result gate ends `resume_required` (no
+      // persist) while any chapter outside `toRun` lacks one.
       await saveAnalysisCache(manuscriptId, {
-        chapters: {},
+        chapters: {
+          1: [{ id: 101, chapterId: 1, characterId: 'narrator', confidence: 1, text: 'Реплика 0' }],
+        },
         stage1,
         chapterCast: { 1: narratorCast, 2: narratorCast },
       });
@@ -9939,7 +9944,11 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
   }, 60_000);
 
   describe('subset route (S9/S10, word-free)', () => {
-    async function runSubset(book: Book, targets: number[], opts: Pick<RunOpts, 'saveHook' | 'stage2'> = {}) {
+    interface SubsetOpts extends Pick<RunOpts, 'stage2'> {
+      /** Sees every cache save, with the running job and its manuscript record. */
+      saveHook?: (c: SaveSnapshot, ctx: { job: AnalysisJob; record: { chapterHints: ChapterHint[] } }) => void;
+    }
+    async function runSubset(book: Book, targets: number[], opts: SubsetOpts = {}) {
       const stage2Calls: number[] = [];
       const body = (id: number) => book.chapters.find((c) => c.id === id)!.body;
       const phase1: Analyzer = {
@@ -9961,7 +9970,6 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
         runStage2Chapter: () => Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
       };
       const g = globalThis as Record<string, unknown>;
-      if (opts.saveHook) g.__p285_save_hook = opts.saveHook;
       const events: Array<{ kind: string; [k: string]: unknown }> = [];
       const keepAlive = setInterval(() => {}, 1_000_000);
       clearInterval(keepAlive);
@@ -9987,8 +9995,12 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
       } as unknown as AnalysisJob;
       const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
       process.env.STAGE2_COVERAGE_RETRIES = '0';
+      const record = getManuscript(book.manuscriptId)!;
+      if (opts.saveHook) {
+        const hook = opts.saveHook;
+        g.__p285_save_hook = (c: SaveSnapshot) => hook(c, { job, record });
+      }
       try {
-        const record = getManuscript(book.manuscriptId)!;
         await runSubsetAnalyzerJob(
           job,
           record as never,
@@ -10003,7 +10015,15 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
         else process.env.STAGE2_COVERAGE_RETRIES = originalRetries;
       }
       const after = await loadAnalysisCache(book.manuscriptId);
-      return { events, stage2Calls, after };
+      const readOr = (p: string) => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : undefined);
+      return {
+        events,
+        stage2Calls,
+        after,
+        state: readOr(join(book.bookDir, '.audiobook', 'state.json')) as Record<string, unknown>,
+        cast: readOr(castJsonPath(book.bookDir)) as { characters: Array<Record<string, unknown>> } | undefined,
+        edits: readOr(manuscriptEditsJsonPath(book.bookDir)) as { sentences: SentenceOutput[] } | undefined,
+      };
     }
 
     it('a subset Retry on a word-free target makes no analyzer call and raises no flag', async () => {
@@ -10050,5 +10070,194 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
       expect(atTakeSave).toEqual({ pending: [], takesPersisted: false });
       expect(r.after.pendingAttributionChapterIds ?? []).not.toContain(2);
     }, 60_000);
+
+  describe('subset result gate (S14, S14a, O2)', () => {
+    const three: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORDED[2] },
+      { id: 3, body: WORDED[3] },
+    ];
+    /** Every chapter has a current take: a finished book. */
+    const finishedCache = (chapters: BookChapter[]) => ({
+      stage1: stage1For(chapters),
+      chapterCast: Object.fromEntries(chapters.map((c) => [c.id, roster()])),
+      chapters: Object.fromEntries(chapters.map((c) => [c.id, takeOf(c.id, c.body)])),
+    });
+    /** Chapter 3 has no take. */
+    const gapCache = () => {
+      const c = finishedCache(three);
+      delete (c.chapters as Record<number, unknown>)[3];
+      return c;
+    };
+    const snapshotFile = (book: Book) => join(book.bookDir, '.audiobook', 'analysis-state.json');
+    const writeSnapshot = (book: Book, kind: 'main' | 'subset') =>
+      writeFileSync(
+        snapshotFile(book),
+        JSON.stringify({
+          manuscriptId: book.manuscriptId,
+          phaseId: 1,
+          phaseLabel: 'x',
+          phaseProgress: 0.5,
+          state: kind === 'main' ? 'paused' : 'running',
+          kind,
+          lastTickAt: Date.now(),
+          writtenAt: Date.now(),
+        }),
+      );
+    const waitFor = async (pred: () => boolean, ms = 2_000) => {
+      for (let t = 0; t < ms && !pred(); t += 25) await new Promise((r) => setTimeout(r, 25));
+    };
+    const endings = (events: Array<{ kind: string; code?: unknown }>) =>
+      events
+        .filter((e) => e.kind === 'result' || e.kind === 'error')
+        .map((e) => (e.kind === 'error' ? `error:${String(e.code)}` : 'result'));
+
+    it('a finished-book Retry sends result, sets takesPersisted, and deletes a subset-kind snapshot but not a main-kind one', async () => {
+      const subsetBook = makeBook('gate-snap-subset', three);
+      await saveAnalysisCache(subsetBook.manuscriptId, finishedCache(three));
+      writeSnapshot(subsetBook, 'subset');
+      const r = await runSubset(subsetBook, [2]);
+      expect(endings(r.events)).toEqual(['result']);
+      expect(r.after.takesPersisted).toBe(true);
+      await waitFor(() => !existsSync(snapshotFile(subsetBook)));
+      expect(existsSync(snapshotFile(subsetBook))).toBe(false);
+
+      const mainBook = makeBook('gate-snap-main', three);
+      await saveAnalysisCache(mainBook.manuscriptId, finishedCache(three));
+      /* Written at the loop's save of the target's take: the subset's own
+         running snapshot (its first phase tick) has landed by then, and the
+         throttle keeps a second one from overwriting this main-kind file. */
+      let wroteMain = false;
+      const m = await runSubset(mainBook, [2], {
+        saveHook: (c) => {
+          if (wroteMain || c.takesPersisted !== false) return;
+          wroteMain = true;
+          writeSnapshot(mainBook, 'main');
+        },
+      });
+      expect(wroteMain).toBe(true);
+      expect(endings(m.events)).toEqual(['result']);
+      await new Promise((res) => setTimeout(res, 300));
+      expect(JSON.parse(readFileSync(snapshotFile(mainBook), 'utf8')).kind).toBe('main');
+    }, 60_000);
+
+    it('A18 (S14a): a Pause that lands after the subset loop ends the job aborted, with no persist and no result', async () => {
+      const book = makeBook('gate-s14a', three);
+      await saveAnalysisCache(book.manuscriptId, finishedCache(three));
+      let paused = false;
+      const r = await runSubset(book, [2], {
+        saveHook: (c, { job }) => {
+          /* The loop's own save of the last target's take: its model call is
+             over, so the Pause lands after the loop's last abort-aware step. */
+          const take = (c.chapters as Record<number, SentenceOutput[]> | undefined)?.[2];
+          if (!paused && take?.[0]?.text === WORDED[2] && c.takesPersisted === false) {
+            paused = true;
+            job.controller.abort();
+          }
+        },
+      });
+      expect(paused).toBe(true);
+      expect(r.stage2Calls).toEqual([2]);
+      expect(endings(r.events)).toEqual(['error:aborted']);
+      expect(r.state.analysisProvenance).toBeUndefined();
+      expect(r.after.takesPersisted).toBe(false);
+    }, 60_000);
+
+    it('decision F: an interrupted Re-analyse on a castConfirmed book (S11) leaves the library status unchanged and lists the chapter in unattributedChapterIds or failedChapterErrors', async () => {
+      const book = makeBook('gate-decision-f', three, { castConfirmed: true });
+      await saveAnalysisCache(book.manuscriptId, { ...finishedCache(three), takesPersisted: true, confirmReached: true });
+      const r = await runSubset(book, [2], {
+        stage2: async () => {
+          throw new Error('Phase 1 fails for chapter 2');
+        },
+      });
+      expect(endings(r.events)).toHaveLength(1);
+      expect(endings(r.events)[0]).toMatch(/^error:/);
+      expect(r.state.castConfirmed).toBe(true);
+      /* The library's rule (scan.ts): a book that has reached Confirm is never demoted. */
+      expect(reachedConfirm(r.state, r.after)).toBe(true);
+      const listed = !hasCurrentTake(r.after, 2) || Object.hasOwn(r.after.failedChapterErrors ?? {}, '2');
+      expect(listed).toBe(true);
+      expect(r.after.failedChapterErrors?.['2']).toMatchObject({ phase: 'attribution' });
+    }, 60_000);
+
+    it('O2: on a castConfirmed book with another chapter lacking a current take, a Re-analyse of ch2 sends result and persists (state.json, cast.json, edits); the other chapter stays in unattributedChapterIds', async () => {
+      const book = makeBook('gate-o2', three, { castConfirmed: true });
+      await saveAnalysisCache(book.manuscriptId, gapCache());
+      const r = await runSubset(book, [2]);
+      expect(r.stage2Calls).toEqual([2]);
+      expect(endings(r.events)).toEqual(['result']);
+      expect(r.state.analysisProvenance).toBeDefined();
+      expect(r.cast?.characters.some((c) => Number(c.lines ?? 0) > 0)).toBe(true);
+      expect(r.edits?.sentences.some((s) => s.chapterId === 2)).toBe(true);
+      expect(r.after.takesPersisted).toBe(true);
+      expect(hasCurrentTake(r.after, 3)).toBe(false);
+    }, 60_000);
+
+    it('O2 control: on a book that has not reached Confirm, the same Retry still ends resume_required', async () => {
+      const book = makeBook('gate-o2-control', three);
+      await saveAnalysisCache(book.manuscriptId, gapCache());
+      const r = await runSubset(book, [2]);
+      expect(r.stage2Calls).toEqual([2]);
+      expect(endings(r.events)).toEqual(['error:resume_required']);
+      expect(r.state.analysisProvenance).toBeUndefined();
+      expect(r.after.takesPersisted).toBe(false);
+      expect(r.after.confirmReached).toBeUndefined();
+    }, 60_000);
+
+    it('hint snapshot: a mid-run Exclude is ignored by S14', async () => {
+      const book = makeBook('gate-hint-snapshot', three);
+      await saveAnalysisCache(book.manuscriptId, gapCache());
+      let excluded = false;
+      const r = await runSubset(book, [2], {
+        saveHook: (c, { record }) => {
+          const take = (c.chapters as Record<number, SentenceOutput[]> | undefined)?.[2];
+          /* The loop's save of the target's new take (S9 sets takesPersisted false). */
+          if (excluded || take?.[0]?.text !== WORDED[2] || c.takesPersisted !== false) return;
+          excluded = true;
+          /* What the exclude toggle does to the live record (book-state.ts). */
+          record.chapterHints = record.chapterHints.map((h) => (h.id === 3 ? { ...h, excluded: true } : h));
+        },
+      });
+      expect(excluded).toBe(true);
+      expect(endings(r.events)).toEqual(['error:resume_required']);
+    }, 60_000);
   });
+  });
+
+  it('a main run on a confirmed book keeps the designed voice fields (invariant 6)', async () => {
+    const chapters: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORDED[2] },
+    ];
+    const book = makeBook('invariant-6', chapters, { castConfirmed: true });
+    await saveAnalysisCache(book.manuscriptId, {
+      stage1: stage1For(chapters),
+      chapterCast: { 1: roster(), 2: roster() },
+      chapters: { 1: takeOf(1, WORDED[1]) },
+    });
+    writeFileSync(
+      castJsonPath(book.bookDir),
+      JSON.stringify({
+        characters: [
+          {
+            ...roster()[0],
+            voiceUuid: 'designed-voice-1',
+            voiceState: 'designed',
+            overrideTtsVoices: { qwen: { name: 'designed-voice-1' } },
+          },
+        ],
+      }),
+    );
+    const r = await run(book);
+    expect(endings(r.events)).toEqual(['result']);
+    const narrator = JSON.parse(readFileSync(castJsonPath(book.bookDir), 'utf8')).characters.find(
+      (c: { id: string }) => c.id === 'narrator',
+    );
+    expect(narrator).toMatchObject({
+      voiceUuid: 'designed-voice-1',
+      voiceState: 'designed',
+      overrideTtsVoices: { qwen: { name: 'designed-voice-1' } },
+    });
+  }, 60_000);
 });

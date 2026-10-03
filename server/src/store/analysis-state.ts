@@ -145,6 +145,24 @@ export async function deleteAnalysisState(bookDir: string): Promise<void> {
   });
 }
 
+/** #3435 S14 — remove the snapshot only if it is a `subset`-kind one: a subset
+    `result` leaves a main run's snapshot (a paused main, say) where it is.
+    Reads, checks and unlinks inside ONE op on the per-path chain, so no write
+    queued around it can land between the check and the unlink. */
+export async function deleteSubsetAnalysisState(bookDir: string): Promise<void> {
+  const path = analysisStateJsonPath(bookDir);
+  await enqueuePathOp(path, async () => {
+    if (!existsSync(path)) return;
+    try {
+      const snap = await readJson<AnalysisStateFile>(path);
+      if (snap?.kind !== 'subset') return;
+      await unlink(path);
+    } catch {
+      /* Swallow — as deleteAnalysisState: the file is non-load-bearing. */
+    }
+  });
+}
+
 /** #3004 — the LAST terminal outcome a `kind: 'main'` job ended with for a
     manuscript, so a rejoin that finds no live job can tell "it already
     finished" apart from "it crashed" apart from "nothing was ever tracked

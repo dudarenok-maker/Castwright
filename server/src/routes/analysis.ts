@@ -86,12 +86,14 @@ import {
   clearAnalysisCache,
   hasCurrentTake,
   loadAnalysisCache,
+  reachedConfirm,
   saveAnalysisCache,
   type AnalysisCache,
   type ChapterErrorRecord,
 } from '../store/analysis-cache.js';
 import {
   deleteAnalysisState,
+  deleteSubsetAnalysisState,
   writeAnalysisState,
   readAnalysisLastOutcome,
   writeAnalysisLastOutcome,
@@ -1392,10 +1394,28 @@ export function durationsForEngine(
    "retry below"; the title list is capped so a many-chapter book can't
    produce a paragraph. Exported for unit testing. */
 export function castIncompleteMessage(titles: string[]): string {
+  return `Phase 0 paused — ${titles.length} chapter${titles.length === 1 ? '' : 's'} still need cast detection (${titleList(titles)}). Retry to continue.`;
+}
+
+/* Up to three titles, then "and N more", so a many-chapter book can't produce
+   a paragraph. */
+function titleList(titles: string[]): string {
   const MAX_TITLES = 3;
   const shown = titles.slice(0, MAX_TITLES).join(', ');
   const more = titles.length > MAX_TITLES ? ` and ${titles.length - MAX_TITLES} more` : '';
-  return `Phase 0 paused — ${titles.length} chapter${titles.length === 1 ? '' : 's'} still need cast detection (${shown}${more}). Retry to continue.`;
+  return `${shown}${more}`;
+}
+
+/* #3435 S8 — a subset run on a book with no stage1 finished cast detection,
+   but the main run still has to attribute the book (plan 285 §3.2). */
+export function resumeRequiredAfterCastMessage(titles: string[]): string {
+  return `Cast detection for ${titleList(titles)} is done. The rest of the book still needs attribution — resume the analysis to finish.`;
+}
+
+/* #3435 S14 — a subset run attributed its targets, but other chapters of an
+   unfinished book still lack a current take. */
+export function resumeRequiredAfterRetryMessage(doneTitles: string[], missingTitles: string[]): string {
+  return `${titleList(doneTitles)} re-analysed. ${titleList(missingTitles)} still need attribution — resume the analysis to finish the book.`;
 }
 
 /* Remove `chapterId` from `cache.failedChapterIds` if present, mutating
@@ -3497,13 +3517,13 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
      down subscribers + deregister synchronously below so the route
      response isn't held up by the disk write.
 
-     Plan 32 D1: subset jobs DON'T delete the on-disk snapshot on
-     terminal success because the main run may still be alive and
-     using it. The subset's own state isn't load-bearing for cold-
-     boot once it's done (the pill drops back to the main run's
-     state), so leaving the file in whatever state main left it in
-     is correct. Subset's paused/halted snapshots still land for
-     mid-flight aborts so the pill can render the Resume affordance. */
+     Plan 32 D1: a subset job's terminal success never deletes a MAIN
+     run's snapshot (a paused main's Resume affordance must survive a
+     sibling Retry). #3435 S14: it does delete its OWN `subset`-kind
+     snapshot, which would otherwise outlive the finished Retry; the
+     kind check and the unlink run in one op on the per-path chain.
+     Subset's paused/halted snapshots still land for mid-flight aborts
+     so the pill can render the Resume affordance. */
   const kind = (finalEv as { kind?: string } | undefined)?.kind;
   const code = (finalEv as { code?: string } | undefined)?.code;
   /* #3004 — record the LAST terminal outcome so a later rejoin that finds no
@@ -3556,9 +3576,9 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
     if (!finalEv || kind === 'result') {
       /* Terminal success OR a clean teardown with no final event.
          Main: the analysis is complete (no pill should appear) —
-         delete the snapshot file. Subset: leave the file alone so
-         any main run's snapshot survives a sibling subset
-         completing successfully. */
+         delete the snapshot file. Subset: on a `result`, delete the
+         snapshot only if it is subset-kind, so any main run's
+         snapshot survives a sibling subset completing successfully. */
       if (job.kind === 'main') {
         /* #2165 — the CURRENT directory, not the pinned copy: deleting the
            pre-rename path leaves the real analysis-state.json behind, and
@@ -3589,6 +3609,23 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
                  book's stale analysis-state.json lingers and is offered
                  as resumable (see the comment above) — log and continue. */
               console.warn('[analysis-state] stale snapshot delete failed', err);
+            }
+          })();
+        }
+      } else if (kind === 'result') {
+        const dir = liveBookDir(job);
+        if (dir) {
+          void (async () => {
+            try {
+              const verified = await tryResolveVerifiedBookDir({
+                manuscriptId: job.manuscriptId,
+                candidateBookDir: dir,
+                identityBearing: false,
+              });
+              if (verified) await deleteSubsetAnalysisState(verified);
+            } catch (err) {
+              /* Non-fatal, as the main delete above. */
+              console.warn('[analysis-state] subset snapshot delete failed', err);
             }
           })();
         }
@@ -7809,6 +7846,18 @@ export async function runSubsetAnalyzerJob(
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
     /* #3435 S0 — the main route's M0/M1, book-wide. */
     if (applyAnalysisLoadRules(cache, record.chapterHints)) await saveAnalysisCache(manuscriptId, cache);
+    /* #3435 hint snapshot — the chapter hints as they stood at load. The
+       exclude toggle replaces `record.chapterHints` live (book-state.ts), so
+       the cast gate, coverage, the roll, the stitch and the result gate (S14)
+       read this copy: one run judges one chapter set. */
+    const hints = record.chapterHints.map((h) => ({ ...h }));
+    /* #3435 O2 — read at load: a book past Confirm (cast confirmed, or an
+       authoritative persist since the cache was last cleared) always passes
+       the result gate, since decision F never demotes it. A state.json that
+       belongs to another manuscript (a stale path) counts as not confirmed. */
+    const loadDir = liveBookDir(job);
+    const loadState = loadDir ? await readJson<BookStateJson>(stateJsonPath(loadDir)).catch(() => null) : null;
+    const bookReachedConfirm = reachedConfirm(loadState?.manuscriptId === manuscriptId ? loadState : null, cache);
     const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
     const cachedChapters = cache.chapters ?? {};
     /* The subset route serves two flows: (a) un-exclude an
@@ -7817,15 +7866,16 @@ export async function runSubsetAnalyzerJob(
        0a in a still-paused run (cast_incomplete gate). They have
        different needs:
        - (a) main pipeline is finished; subset attributes the new
-         chapter and emits a fresh result.
+         chapter and emits a fresh result (only if every other chapter
+         has a current take, or the book is past Confirm — S14 below).
        - (b) main pipeline never ran Phase 1; subset must NOT
          attribute piecemeal because the global cast may still grow
          (the user could retry more chapters next) and Phase 1's
          folding/lines/scenes pass needs the whole sentence set.
        The clean signal: did cache.stage1 exist BEFORE this batch?
-       Yes → flow (a). No → flow (b); skip Phase 1, end after
-       cast-update so the analysing view's auto-resume kicks the
-       full /analysis/stream which runs Phase 1 globally. */
+       Yes → flow (a). No → flow (b); skip Phase 1, end `resume_required`
+       after cast-update so the analysing view's auto-resume kicks the
+       full /analysis/stream which runs Phase 1 globally (S8). */
     const stage1Existed = !!cache.stage1;
 
     /* ── Phase 0a (subset). Re-run cast detection only for the targeted
@@ -8083,7 +8133,7 @@ export async function runSubsetAnalyzerJob(
        attribution record (a chapter whose own Phase 1 failed or was flagged)
        says nothing about the roster, and an excluded chapter's record is
        never a reason to stop. */
-    const remainingFailedCastIds = castFailedChapterIds(cache, record.chapterHints);
+    const remainingFailedCastIds = castFailedChapterIds(cache, hints);
     /* Coverage gate (in addition to the no-failed-chapters check) — stage1
        is finalised only when EVERY non-excluded chapter has a chapterCast
        entry. Without this guard a sparse cache (chapters 1–N
@@ -8091,7 +8141,7 @@ export async function runSubsetAnalyzerJob(
        partial roster that overwrites a richer existing stage1. See the
        comment on isPhase0aCoverageComplete for the regression that
        motivated this gate. */
-    const coverage = isPhase0aCoverageComplete(chapterCast, record.chapterHints, remainingFailedCastIds);
+    const coverage = isPhase0aCoverageComplete(chapterCast, hints, remainingFailedCastIds);
     let coverageIncompleteMessage: string | undefined;
     /* Stage 1 shrink guard — see comment on stage1ShrinkRefused. The
        prior count is captured BEFORE the assignment so a no-op rewrite
@@ -8193,15 +8243,21 @@ export async function runSubsetAnalyzerJob(
        Phase 1 globally, so attributing JUST `toRun` here would emit a
        result with only those chapters' sentences and the view's
        onComplete would advance to the confirm screen with a near-empty
-       book. End cleanly instead — the client's auto-resume effect
-       will fire /analysis/stream which discovers cache.stage1 is set
-       and runs Phase 1 across every chapter. */
+       book. #3435 S8 — end through endJob with `resume_required` (a soft
+       stop, with the halted snapshot that comes with it) instead of a
+       silent end: an armed client auto-resumes /analysis/stream, which
+       discovers cache.stage1 is set and runs Phase 1 across every chapter;
+       any other client shows the needs-action line. */
     if (!stage1Existed) {
       log(
         0,
         'All cast detection retries succeeded — resuming full analysis to run Phase 1 globally.',
       );
-      endJob(job);
+      endJob(job, {
+        kind: 'error',
+        code: 'resume_required',
+        message: resumeRequiredAfterCastMessage(toRun.map((c) => c.title)),
+      });
       return;
     }
     send({
@@ -8455,7 +8511,7 @@ export async function runSubsetAnalyzerJob(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             () => {
               const running: SentenceOutput[] = [];
-              for (const order of record.chapterHints) {
+              for (const order of hints) {
                 if (order.excluded) continue;
                 const arr = cachedChapters[order.id];
                 if (arr) running.push(...arr);
@@ -8485,10 +8541,43 @@ export async function runSubsetAnalyzerJob(
        Rethrow it now that the loop has finished. */
     throwIfReasoningOverflowed(job);
 
+    /* #3435 S14a — a Pause that landed after the loop's last abort-aware step
+       ends the run `aborted` (no persist, no result), as one landing mid-loop
+       does. Re-checked before the persist below, for a Pause during the fold. */
+    if (isAborted()) throw new AnalysisAbortedError('Analysis aborted after the last chapter.');
+
+    /* #3435 S14 — the result gate. On a book that has not reached Confirm, a
+       `result` (and the authoritative persist behind it) needs every OTHER
+       non-excluded chapter to have a current take: otherwise the book would
+       reach Confirm with chapters never attributed, or attributed against a
+       stale roster. The targets' takes, the per-chapter roll and the interim
+       cast.json overlay stay; the next authoritative persist supersedes them.
+       A book past Confirm always passes (O2): decision F never demotes it, so
+       its unfinished chapters stay Generate-view rows with Re-analyse. */
+    if (!bookReachedConfirm) {
+      const targetIds = new Set(toRun.map((c) => c.id));
+      const missing = hints.filter((h) => !h.excluded && !targetIds.has(h.id) && !hasCurrentTake(cache, h.id));
+      if (missing.length > 0) {
+        log(
+          1,
+          `${missing.length} other chapter${missing.length === 1 ? '' : 's'} still need attribution — resume the analysis to finish the book.`,
+        );
+        endJob(job, {
+          kind: 'error',
+          code: 'resume_required',
+          message: resumeRequiredAfterRetryMessage(
+            toRun.map((c) => c.title),
+            missing.map((h) => h.title),
+          ),
+        });
+        return;
+      }
+    }
+
     /* Stitch the full sentence list across all cached chapters (old + new),
        in narrative order. Excluded chapters contribute nothing. */
     const allSentences: SentenceOutput[] = [];
-    for (const h of record.chapterHints) {
+    for (const h of hints) {
       if (h.excluded) continue;
       const arr = cachedChapters[h.id];
       if (arr) allSentences.push(...arr);
@@ -8708,12 +8797,14 @@ export async function runSubsetAnalyzerJob(
 
     /* Persist cast.json + manuscript-edits.json + state.json so a refresh
        (or a follow-up generation pass) sees the merged state.
-       Skipped when the job was aborted via /pause — a paused retry
+       #3435 S14a — a /pause that landed during the fold ends the run
+       `aborted` here, with nothing persisted and no result: a paused retry
        shouldn't flip the library status out from under the user.
-       Also skipped (for cast.json / state.json) when attribution drift
+       Skipped (for cast.json / state.json) when attribution drift
        exceeded the threshold — same reasoning as the main route's
        persist block. */
-    if (record.bookDir && !isAborted()) {
+    if (isAborted()) throw new AnalysisAbortedError('Analysis aborted before persisting.');
+    if (record.bookDir) {
       /* #2260 round 3 (C1) — see the main job's persist block for why a lock-
          acquisition timeout is parked rather than thrown from inside this
          try: thrown here it skips state.json and is then swallowed by

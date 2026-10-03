@@ -183,6 +183,12 @@ export function analysisCompleteFor(cache: AnalysisCache, chapterIds: readonly n
   );
 }
 
+/** Plan 285 §3.4 — the chapters of `chapterIds` (the non-excluded chapters)
+    that have no current take. */
+export function unattributedChapterIds(cache: AnalysisCache, chapterIds: readonly number[]): number[] {
+  return chapterIds.filter((id) => !hasCurrentTake(cache, id));
+}
+
 /** Plan 285 decision F — the book has reached Confirm: its cast was confirmed,
     or an authoritative persist has run since the cache was last cleared. */
 export function reachedConfirm(
