@@ -106,14 +106,22 @@ export const analysisStreamMiddleware: Middleware = (store) => {
      would abort the live subset. */
   const restoreFromServer = async (snap: AnalysisStreamSnapshot): Promise<void> => {
     const bookId = snap.bookId;
+    /* Staleness guard, the equivalent of the catch branches' `handle !==
+       localHandle`: a snapshot dispatched while the re-read is in flight (a
+       Retry's subset snapshot, say) is newer than the server's answer, so the
+       server one must not overwrite it. */
+    const current = () => (store.getState() as AnalysisRootState).analysis.activeStream;
+    const atStart = current();
     try {
       const server = bookId ? await api.getAnalysisState(bookId) : null;
+      if (current() !== atStart) return;
       if (!server) {
         dispatch(analysisActions.clearActiveStream());
         return;
       }
       if (server.state !== 'running') {
         const book = bookId ? await api.getBookState(bookId) : null;
+        if (current() !== atStart) return;
         if (!shouldSurfaceColdBootAnalysisPill(book?.state.castConfirmed ?? false, server.state)) {
           dispatch(analysisActions.clearActiveStream());
           return;

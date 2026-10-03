@@ -1194,6 +1194,23 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     expect(pauseAnalysisSpy).not.toHaveBeenCalled();
   });
 
+  it('a snapshot dispatched while the refusal re-read is pending is not overwritten by the server one', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    let resolveRead!: (v: unknown) => void;
+    getAnalysisStateMock.mockReturnValueOnce(new Promise((r) => (resolveRead = r)));
+    lastCall().reject(new AnalysisError('A chapter retry is running on this book.', 'subset_analysis_running'));
+    await settle();
+    expect(getAnalysisStateMock).toHaveBeenCalled();
+    /* A Retry on this device starts while the re-read is in flight. */
+    const newer = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [7], lastTickAt: 99 };
+    store.dispatch(analysisActions.setActiveStream(newer));
+    resolveRead({ ...serverSubset, kind: 'main', subsetChapterIds: undefined, lastTickAt: 5 });
+    await settle();
+    expect(store.getState().analysis.activeStream).toEqual(newer);
+  });
+
   it('a non-running server snapshot for a confirmed book is not restored (the cold-boot gate)', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
