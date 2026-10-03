@@ -1455,6 +1455,7 @@ export function AnalysingView({
      own main stream (conn is also 'connecting'/'streaming' during a Retry, so
      that case is excluded), or a live main snapshot from anywhere. */
   const retryBlockedByMain = (isAnalysisRunning && retryingChapterId === null) || mainAnalysisLive;
+  const shrinkAcceptBlocked = stage1ShrinkInfo?.retryChapterId !== undefined && retryBlockedByMain;
   /* Single source of truth for the Pause/Resume/Start cycle. Both the
      original header button (inside the centred column) and the new
      `<StickyAnalysisBar/>` (which pins on scroll) call this — keeping
@@ -1940,7 +1941,11 @@ export function AnalysingView({
                   }
                   setRetry((r) => ({ nonce: r.nonce + 1, fresh: false, allowStage1Shrink: true }));
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-ink text-canvas hover:bg-ink/90 transition-colors"
+                /* #3435 — a Retry's Accept starts a subset run, which the server
+                   refuses beside a live main run: disabled like Retry. */
+                disabled={shrinkAcceptBlocked}
+                title={shrinkAcceptBlocked ? 'Pause the analysis first' : undefined}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-ink text-canvas hover:bg-ink/90 transition-colors disabled:opacity-40 disabled:pointer-events-none"
               >
                 Accept smaller roster ({stage1ShrinkInfo.next} characters)
               </button>
@@ -1952,6 +1957,7 @@ export function AnalysingView({
                 Dismiss
               </button>
             </div>
+            {shrinkAcceptBlocked && <p className="mt-2 text-xs text-amber-800/80">Pause the analysis first</p>}
           </div>
         )}
 

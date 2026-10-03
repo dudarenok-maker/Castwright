@@ -2582,6 +2582,33 @@ describe('AnalysingView — failed-chapter retry', () => {
       await waitFor(() => expect(capturedOpts).toBeDefined());
       expect(screen.getByTestId('stage1-shrink-refused-banner')).toBeInTheDocument();
     });
+
+    /* #3435 final review M6 — the kept banner's Accept starts a subset run,
+       which the server refuses beside a live main run: it is disabled with
+       the same "Pause the analysis first" treatment as Retry. */
+    it('Analysing subset shrink: the kept banner’s Accept is disabled while main is live', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      bookState = withFacts(makeBookState([44], { '44': rec('cast') }), { stage1Ready: true });
+      await mount();
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /retry chapter/i }));
+      });
+      await act(async () => {
+        rejectSubset?.(new AnalysisError('Cast finalisation would drop from 9 to 4 characters.', 'stage1_shrink_refused', undefined, 9, 4));
+      });
+      const accept = await screen.findByRole('button', { name: /accept smaller roster/i });
+      expect(accept).not.toBeDisabled();
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /resume analysis|start analysis/i }));
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+      const blocked = screen.getByRole('button', { name: /accept smaller roster/i });
+      expect(blocked).toBeDisabled();
+      expect(blocked).toHaveAttribute('title', 'Pause the analysis first');
+      capturedSubsetCall = undefined;
+      fireEvent.click(blocked);
+      expect(capturedSubsetCall).toBeUndefined();
+    });
   });
 });
 
