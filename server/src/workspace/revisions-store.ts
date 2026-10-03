@@ -217,13 +217,28 @@ async function loadRaw(bookDir: string): Promise<Record<string, unknown> | null>
 }
 
 async function load(bookDir: string, chapters: readonly ChapterRef[]): Promise<RevisionsFile> {
+  return (await loadWithStored(bookDir, chapters)).file;
+}
+
+/** `file` is the normalised view (legacy entries kept only while `.previous.mp3`
+    exists). `stored` is the same normalisation WITHOUT that `.previous` filter —
+    the entries as stored. commitRevisionOp looks its own entry up there: the
+    op's audio step has by then consumed `.previous`, which would otherwise make
+    a legacy entry (every pending entry in production today) look gone. */
+async function loadWithStored(
+  bookDir: string,
+  chapters: readonly ChapterRef[],
+): Promise<{ file: RevisionsFile; stored: RevisionsFile }> {
   const slugById = new Map(chapters.map((c) => [c.id, c.slug] as const));
   const root = audioDir(bookDir);
   const raw = await loadRaw(bookDir);
-  return normaliseRevisions(raw, (chapterId) => {
-    const slug = slugById.get(chapterId);
-    return slug !== undefined && previousAudioExists(root, slug);
-  });
+  return {
+    file: normaliseRevisions(raw, (chapterId) => {
+      const slug = slugById.get(chapterId);
+      return slug !== undefined && previousAudioExists(root, slug);
+    }),
+    stored: normaliseRevisions(raw, () => true),
+  };
 }
 
 async function writeStamped(bookDir: string, file: RevisionsFile): Promise<void> {
@@ -365,8 +380,8 @@ export async function commitRevisionOp(
   selection?: Selection,
 ): Promise<CommitResult> {
   return withKeyLock(revisionsLockKey(bookDir), async () => {
-    const file = await load(bookDir, chapters);
-    const entry = isDangerousKey(revisionId) ? undefined : file.pending.find((p) => p.id === revisionId);
+    const { file, stored } = await loadWithStored(bookDir, chapters);
+    const entry = isDangerousKey(revisionId) ? undefined : stored.pending.find((p) => p.id === revisionId);
     if (!entry) {
       return hasOutcome(file, op, revisionId) ? { kind: 'already-done', file } : { kind: 'gone', file };
     }

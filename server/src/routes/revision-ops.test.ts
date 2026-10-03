@@ -282,6 +282,51 @@ describe('POST …/revisions/:revisionId/accept', () => {
   });
 });
 
+/* #3400 pass 2 — every pending entry in production today is a LEGACY one
+   (client-written: no `origin`), which normalisation keeps only while
+   `.previous.mp3` exists. The op's own audio step consumes `.previous`, so
+   step 3 must still find the entry (by id, in the stored list). */
+function legacyEntry(chapterId: number) {
+  const { origin: _origin, ...rest } = entry(chapterId, `revision:${chapterId}:narrator`);
+  return rest;
+}
+describe('legacy (origin-less) pending entries commit like server ones (#3400)', () => {
+  const LEGACY_ID = 'revision:1:narrator';
+
+  it('accept: 200, timeline entry recorded, entry removed', async () => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    seed([legacyEntry(1)]);
+    const res = await accept(LEGACY_ID);
+    expect(res.status).toBe(200);
+    expect(res.body.pending).toEqual([]);
+    expect(res.body.timeline['1']).toMatchObject([{ id: LEGACY_ID, eventKind: 'accepted' }]);
+    expect(disk().pending).toEqual([]);
+    expect(existsSync(prev())).toBe(false);
+  });
+
+  it('reject: 200, live is PREV, outcome recorded, entry removed', async () => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    seed([legacyEntry(1)]);
+    const res = await reject(LEGACY_ID);
+    expect(res.status).toBe(200);
+    expect(readFileSync(live(), 'utf8')).toBe('PREV');
+    expect(res.body.timeline['1']).toMatchObject([{ id: LEGACY_ID, eventKind: 'rejected' }]);
+    expect(disk().pending).toEqual([]);
+  });
+
+  it('a retried legacy accept answers 200 already-done, not 404', async () => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    seed([legacyEntry(1)]);
+    await accept(LEGACY_ID);
+    const again = await accept(LEGACY_ID);
+    expect(again.status).toBe(200);
+    expect(again.body.timeline['1']).toHaveLength(1);
+  });
+});
+
 describe('POST …/revisions/:revisionId/reject', () => {
   it('restores .previous over live and records `rejected`', async () => {
     writeFileSync(live(), 'LIVE');

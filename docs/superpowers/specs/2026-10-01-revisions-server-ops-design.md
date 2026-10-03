@@ -99,6 +99,8 @@ Server-recorded entries carry `origin: 'server'`. Legacy (client-written) entrie
 - keeps legacy `playable:true` entries only if `.previous.mp3` exists;
 - keeps the last entry when a chapter has several.
 
+This `.previous.mp3` filter applies to the **read view only**. An accept/reject's step 3 looks up its own entry by id in the entries **as stored** (the same normalisation without that filter), because the op's own audio step has by then consumed `.previous`; otherwise a legacy entry, which is every pending entry in production today, would read as gone and its outcome would never be recorded.
+
 **Reparse and replace** no longer delete the file. They **reset** it **through the store**, under its lock, to an empty state with a **new `fileId`** and `rev: 0`. Today they `rm` it outside any lock (`book-state.ts:1199-1203`). Once the store has written a file, its `fileId` never reads `null` again, so a `null` `fileId` only ever means "a legacy file nobody has written yet" (see the cache rule in §4).
 
 ### 2. HTTP contract
@@ -130,7 +132,7 @@ Body: `{ selection?: Record<segmentIndex,'A'|'B'> }`.
 2. **Outside the lock:**
    - **Refuse to delete the last copy.** If no live chapter audio exists (`findChapterAudio`) **and** `.previous` does exist, return 409 `live_audio_missing` and change nothing. A failed restore leaves exactly this state (`chapter-audio.ts:422-434`), and so does a failed finalize rename. Either way, accepting would delete the only copy. After a failed finalize rename, `.previous` holds the take under review, and after a server restart fsck may already have promoted `.previous`. In both cases the timeline can still record an outcome that doesn't match the audio. That is a residual for the take-lifecycle issue; no audio is lost. This is a read-only pre-check; the audio code is unchanged. **The recovery is to retry Reject**, which works while `.previous` is intact. If neither file exists, there is nothing to lose: accept proceeds and clears the entry, as main does today, where the old client treats the DELETE's 404 as success (`api.ts:10220`).
    - Otherwise run `acceptPreviousAudio`. Both `'deleted'` and `'none'` proceed; `'none'` is today's 404-as-success.
-3. **Under the lock:** re-read.
+3. **Under the lock:** re-read. The entry is looked up **by id in the stored list, without the legacy `.previous.mp3` filter** (§1), since step 2 has just consumed `.previous`; a legacy entry therefore commits exactly like a server one.
    - **If the entry is no longer present** and the timeline already holds this op's outcome for this id (another tab finished the same op), return 200 with the current state.
    - **If the entry is gone for any other reason** (a newer upsert or a reparse reset — an opposing accept/reject on the same chapter can no longer get here, see "Per-chapter serialisation" below), write nothing and return 409 `revision_gone` with the current state. That way no outcome is appended twice and nothing is written to a reset file. For reject, the restored audio stands with no timeline record. That is logged, and it belongs to the take-lifecycle residuals.
    - Otherwise remove the entry, set `acceptedSelections`, and append `accepted` using the reversible-chain rule from `appendTimelineEntryHelper`. One write, `rev + 1`.
