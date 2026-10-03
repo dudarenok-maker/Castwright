@@ -93,7 +93,7 @@ let workspaceRoot: string;
       character would be folded even with a fully completed run. We write a
       throwaway user-settings file (pointed at via USER_SETTINGS_FILE) whose
       extra pin flips only this knob. Set at module scope so it lands before the
-      lazy `await import('./analysis.js')` inside each test forces
+      `await import('./analysis.js')` in the beforeAll below forces
       user-settings.ts to resolve USER_SETTINGS_PATH; test-setup.ts already
       redirects user settings to a throwaway temp file, so this file's override
       stays out of the developer's real settings. */
