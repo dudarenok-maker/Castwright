@@ -332,6 +332,14 @@ describe('beginRevisionOp / commitRevisionOp', () => {
     expect((await commitRevisionOp(bookDir, CHAPTERS, 'reject', 'r1')).kind).toBe('gone');
   });
 
+  it('a reject writes no acceptedSelections entry, even when a selection is sent', async () => {
+    await recordPending(bookDir, CHAPTERS, serverEntry(1, 'r1'));
+    const commit = await commitRevisionOp(bookDir, CHAPTERS, 'reject', 'r1', { '0': 'A' });
+    expect(commit.kind).toBe('committed');
+    expect(commit.file.acceptedSelections).toEqual({});
+    expect(onDisk().acceptedSelections).toEqual({});
+  });
+
   it('drops an entry whose chapter no longer exists and answers not-found', async () => {
     await recordPending(bookDir, CHAPTERS, serverEntry(9, 'r9'));
     const before = (await readRevisions(bookDir, CHAPTERS)).rev;
@@ -349,6 +357,15 @@ describe('beginRevisionOp / commitRevisionOp', () => {
       expect((await commitRevisionOp(bookDir, CHAPTERS, 'accept', id)).kind).toBe('gone');
     }
     expect((await readRevisions(bookDir, CHAPTERS)).rev).toBe(rev);
+  });
+
+  it('a pending entry whose id is __proto__ is never accepted, and no __proto__ selection is written', async () => {
+    seedRaw({ pending: [serverEntry(1, '__proto__')] });
+    const begin = await beginRevisionOp(bookDir, CHAPTERS, 'accept', '__proto__');
+    expect(begin.kind).toBe('not-found');
+    const commit = await commitRevisionOp(bookDir, CHAPTERS, 'accept', '__proto__', { '0': 'A' });
+    expect(commit.kind).toBe('gone');
+    expect(Object.prototype.hasOwnProperty.call(onDisk().acceptedSelections ?? {}, '__proto__')).toBe(false);
   });
 
   it('step 3 answers gone and writes nothing when a NEWER upsert replaced the entry', async () => {

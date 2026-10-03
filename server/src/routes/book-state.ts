@@ -1379,8 +1379,8 @@ bookStateRouter.post(
       if (!located) return res.status(404).json({ error: 'Book not found.' });
       const { bookDir, state } = located;
 
-      /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
-         deleted or rewritten (applyReparse's state write + Promise.all). */
+      /* Plan 285 — refuse a newer-schema revisions.json BEFORE this route
+         writes the new manuscript, unlinks the old one, or sets manuscriptFile. */
       await assertRevisionsResettable(bookDir);
 
       const parsed = await parseManuscript({

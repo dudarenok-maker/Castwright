@@ -8,18 +8,27 @@ import type { ReviewRequest } from './types';
 
 type S = components['schemas'];
 type RevisionsState = S['RevisionsState'];
-type Ok<P extends keyof paths> = paths[P] extends { post: { responses: { 200: { content: { 'application/json': infer B } } } } }
+type Ok<P extends keyof paths> = paths[P] extends {
+  post: { responses: { 200: { content: { 'application/json': infer B } } } };
+}
   ? B
   : never;
 
 describe('openapi: plan 285 PR 1', () => {
   it('accept / reject / dismiss each answer a full RevisionsState', () => {
-    expectTypeOf<Ok<'/api/books/{bookId}/revisions/{revisionId}/accept'>>().toEqualTypeOf<RevisionsState>();
-    expectTypeOf<Ok<'/api/books/{bookId}/revisions/{revisionId}/reject'>>().toEqualTypeOf<RevisionsState>();
-    expectTypeOf<Ok<'/api/books/{bookId}/drift/{driftId}/dismiss'>>().toEqualTypeOf<RevisionsState>();
+    expectTypeOf<
+      Ok<'/api/books/{bookId}/revisions/{revisionId}/accept'>
+    >().toEqualTypeOf<RevisionsState>();
+    expectTypeOf<
+      Ok<'/api/books/{bookId}/revisions/{revisionId}/reject'>
+    >().toEqualTypeOf<RevisionsState>();
+    expectTypeOf<
+      Ok<'/api/books/{bookId}/drift/{driftId}/dismiss'>
+    >().toEqualTypeOf<RevisionsState>();
   });
 
   it('RevisionsState is fully required, fileId nullable', () => {
+    expectTypeOf<RevisionsState>().toEqualTypeOf<Required<RevisionsState>>();
     expectTypeOf<RevisionsState['fileId']>().toEqualTypeOf<string | null>();
     expectTypeOf<RevisionsState['rev']>().toEqualTypeOf<number>();
     const s: RevisionsState = {
@@ -61,11 +70,11 @@ describe('openapi: plan 285 PR 1', () => {
   });
 
   it('the hand-written splice / qa-repair completion ticks carry an optional reviewRecorded', () => {
-    expectTypeOf<Extract<SpliceTick, { type: 'splice_complete' }>['reviewRecorded']>().toEqualTypeOf<
-      boolean | undefined
-    >();
-    expectTypeOf<Extract<QaRepairTick, { type: 'qa_repair_complete' }>['reviewRecorded']>().toEqualTypeOf<
-      boolean | undefined
-    >();
+    expectTypeOf<
+      Extract<SpliceTick, { type: 'splice_complete' }>['reviewRecorded']
+    >().toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<
+      Extract<QaRepairTick, { type: 'qa_repair_complete' }>['reviewRecorded']
+    >().toEqualTypeOf<boolean | undefined>();
   });
 });

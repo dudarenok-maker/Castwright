@@ -224,20 +224,30 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
     writeFileSync(revisionsPath, JSON.stringify({ schema: 2, pending: [] }));
     const stateBefore = readFileSync(statePath, 'utf8');
 
-    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/reparse`);
 
-    expect(res.status).toBe(500);
-    expect(res.body.error).toMatch(/schema=2/);
-    /* FIRST, deliberately: applyReparse writes state.json synchronously in
-       sequence (before its Promise.all), so this is the one check that is
-       deterministically red when the preflight is missing. The cast/audio
-       deletions run as Promise.all siblings and may still be in flight when
-       the 500 returns. */
-    expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
-    expect(existsSync(castPath)).toBe(true);
-    expect(readFileSync(audioFile, 'utf8')).toBe('LIVE');
-    expect(JSON.parse(readFileSync(revisionsPath, 'utf8'))).toEqual({ schema: 2, pending: [] });
-    rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/schema=2/);
+      /* FIRST, deliberately: applyReparse writes state.json synchronously in
+         sequence (before its Promise.all), so this is the one check that is
+         deterministically red when the preflight is missing. The cast/audio
+         deletions run as Promise.all siblings and may still be in flight when
+         the 500 returns. */
+      expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
+      expect(existsSync(castPath)).toBe(true);
+      expect(readFileSync(audioFile, 'utf8')).toBe('LIVE');
+      expect(JSON.parse(readFileSync(revisionsPath, 'utf8'))).toEqual({ schema: 2, pending: [] });
+    } finally {
+      /* A failure above must not leak this newer-schema fixture into the
+         tests that follow (they reuse bookDir). Under a mutated route the
+         reparse's cast-arm (delete + carryover snapshot) can still be queued
+         on the cast lock after the 500 returns; drain that queue first. */
+      const { withCastLock } = await import('../workspace/cast-lock.js');
+      await withCastLock(bookDir, async () => undefined);
+      rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
+      rmSync(revisionsPath, { force: true });
+    }
   });
 });
 
