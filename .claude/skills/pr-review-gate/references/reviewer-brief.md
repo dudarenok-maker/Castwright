@@ -133,7 +133,6 @@ recite:
     write, is the value read in the same synchronous step as the enqueue (no
     `await` between), and does a test make the FIRST caller's await slower
     than the second's with distinct snapshots?
-
 17. **A clear on one phase's success path that does not check which phase
     the record came from** — a failure record is cleared when a later phase
     completes for the chapter (here: Phase 1 clears any `failedChapterIds`
@@ -159,22 +158,28 @@ recite:
     claim, find what actually starts Y in the product, and ask whether a test
     reaches Y through that trigger (the view harness with the real slice and
     middleware) or only by calling it.
-
 19. **A sentinel that is also a valid value** — a marker meaning "none" or
     "not recorded" (an empty array, `0`, `''`, `null`) is also something the
     field legitimately holds, so the reader cannot tell "never written" from
-    "written as empty". A chapter's own key with `[]` (no characters found)
-    read as "absent, infer it" re-ran or skipped the wrong work (plan 285).
+    "written as empty". In `server/src/store/analysis-cache.ts` a chapter's
+    own key holding `[]` (cast detection found no characters) is a real take,
+    but the legacy `{cast record, [] take}` shape used the same `[]` to mean
+    "no take yet"; `hasCurrentTake` has to read an own key as done, and a
+    reader that treated `[]` as absent re-ran a finished chapter, while one
+    that treated it as done skipped a chapter that never ran (#3435).
     Checkable: for every default or "empty" value a reader branches on, ask
     whether a real writer can produce exactly that value, and whether a test
     seeds that case.
 20. **A flag read as "phase N finished" that is written before phase N** —
-    a completeness marker (`takesPersisted`, `confirmReached`) set on entry
-    to, or in the middle of, the step it vouches for, so an interrupted or
-    refused step leaves the flag claiming success. Checkable: for every
-    marker, find the write site and ask whether it sits inside the success
-    branch of the last step the marker is read as proving, and whether a
-    test fails that step and asserts the marker is absent.
+    a completeness marker set on entry to, or in the middle of, the step it
+    vouches for, so an interrupted or refused step leaves the flag claiming
+    success. In `server/src/routes/analysis.ts` the subset persist set
+    `takesPersisted`/`confirmReached` before the S14 gate had passed, so a
+    `resume_required` exit left the book marked as having reached Confirm;
+    the fix sits inside S14's pass branch (`if (wroteStateJson)`) (#3435).
+    Checkable: for every marker, find the write site and ask whether it sits
+    inside the success branch of the last step the marker is read as proving,
+    and whether a test fails that step and asserts the marker is absent.
 
 ### Keeping the catalogue current
 

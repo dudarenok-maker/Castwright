@@ -552,7 +552,7 @@ Recorded in `docs/testing/onbox-acceptance-register.md` by T7:
 
 Deviations and rulings made during the build (recorded in the run ledger as "Ruling:" lines):
 
-- **T2 → T3 ordering.** T2's `phase1Dispatch` skips on `signal.aborted` as written; T3 converts that branch to throw `AnalysisAbortedError` (item A-1). Between them a Pause between chapters briefly persisted a partial book, on the same branch with no release in between.
+- **`phase1Dispatch` throws on abort, in T2.** The preflight ruling had T2 skip on `signal.aborted` and T3 convert it to a throw; the ledger reversed that. T2 throws `AnalysisAbortedError` on `signal.aborted` and T3's Item A-1 test ("Pause between chapters ends aborted, no persist") moved into T2, because the skip let a Pause between chapters end as success with a partial persist, a regression against `main`. The plan's own T2 and T3 task text is stale on this point.
 - **Subset Phase-1 recording (S11)** landed in T4, whose title names it, not T2.
 - **T3 regressions** (rename-midrun and the H1 guard 14 vs 13) were branch regressions and were fixed in T3, not deferred; the `user-settings` ollama-url failure is an artifact of the mandated `OLLAMA_URL` env.
 - **T3 mutation 4** is unpinnable by construction (halting set in the same sync block as the pool-local aborted flag); it was replaced with "drop both the halting/ended and pool-local checks", which turns the `markPhase0ChapterComplete` wake test red.
@@ -563,6 +563,9 @@ Deviations and rulings made during the build (recorded in the run ledger as "Rul
 - **T5 → T6:** the subset persist set its flags before S14 as an interim; T6 moved flag-setting inside S14's pass branch and asserts `confirmReached` absent and `takesPersisted` false on the `resume_required` path.
 - **Incidental fix #3503:** Start fresh now verifies the book folder before deleting analysis files (found in T5, fixed in a510d8f9).
 - **T6 `castIncomplete` mount-arming (b)** is kept per the spec's arming row, but a `castIncomplete` armed on mount does not auto-resume after a reload (`analysisStarted` unset): the user clicks Resume once. The double POST that arming exposed was fixed. Arming (b) has no observable consumer and no test; whether to drop it or make it imply `analysisStarted` is an owner question.
+- **T5 regression fixed in passing (b4486856):** a stale `vi.mock` of `analysis-cache.js` in `analysis.stage2-estimate-label` lacked `hasCurrentTake`; it now passes the real module through via `importOriginal`.
+- **D1 copy placement:** the refused main-start message started under the Start button (T3); T4 moved it onto the needs-action line, as the spec wants.
+- **Owner question, T6 arming (b):** `castIncomplete` mount-arming is kept per the spec but has no observable effect, and its mount-read keying is untested.
 
 ## Ship notes
 
