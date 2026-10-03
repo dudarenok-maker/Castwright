@@ -774,17 +774,21 @@ export function hashFile(absPath) {
 // own writes can't reach that window (npm/node start-up and a `git ls-files`
 // spawn sit between steps); only an external writer saving twice within a tick
 // could. Unlike git's index, this memo does no racy-entry re-check.
+export function statIdentity(absPath, stat = statSync) {
+  try {
+    const s = stat(absPath);
+    return `${s.size}:${s.mtimeMs}:${s.ctimeMs}:${s.ino}`;
+  } catch {
+    return null; // missing/unreadable
+  }
+}
+
 export function makeStatHashMemo(cwd, { hash = hashFile, stat = statSync } = {}) {
   const memo = new Map(); // rel -> { id, hash }
   return (rel) => {
     const abs = join(cwd, rel);
-    let id = null;
-    try {
-      const s = stat(abs);
-      id = `${s.size}:${s.mtimeMs}:${s.ctimeMs}:${s.ino}`;
-    } catch {
-      // missing/unreadable: fall through to hash(), which owns the sentinel
-    }
+    // null (missing/unreadable) falls through to hash(), which owns the sentinel
+    const id = statIdentity(abs, stat);
     const hit = memo.get(rel);
     if (id !== null && hit && hit.id === id) return hit.hash;
     const h = hash(abs);
@@ -1857,6 +1861,16 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
   function planStep(step) {
     const files = fileList ? selectStepFiles({ fileList, step }) : [];
     const entries = files.map((rel) => [rel, hashOf(rel)]);
+    // Stat identity of the same files, for the #3413 post-run check: content
+    // alone cannot tell an input that was edited and restored during a step
+    // from one that never moved, a restore still moves mtime/ctime.
+    // The lockfiles are hashed into currentHash too (pickLockHashes below), and
+    // for the lockfile-only audit steps they are the ONLY input, so they join
+    // the signature (#3413 review pass 2).
+    const lockRels = [];
+    if ((step.inputs.includeLockfiles ?? []).includes('root')) lockRels.push('package-lock.json');
+    if ((step.inputs.includeLockfiles ?? []).includes('server')) lockRels.push('server/package-lock.json');
+    const statSig = [...files, ...lockRels].map((rel) => `${rel}\0${statIdentity(join(cwd, rel))}`).join('\n');
     const lockHashes = pickLockHashes(cwd, step.inputs.includeLockfiles ?? []);
     const fp = step.toolFingerprint ? step.toolFingerprint() : null;
     const currentHash = composeInputHash({
@@ -1878,7 +1892,7 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
             noCache: flags.noCache,
           });
 
-    return { currentHash, action };
+    return { currentHash, action, statSig };
   }
   const stepPlan = new Map();
   for (const step of activeSteps) {
@@ -1936,7 +1950,7 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
         console.log('[verify-cache] git ls-files failed; running uncached');
       }
     }
-    const { currentHash, action } = planStep(step);
+    const { currentHash, action, statSig } = planStep(step);
 
     if (action === 'skip') {
       console.log(`[cached] ${step.name} (input hash unchanged)`);
@@ -2003,14 +2017,29 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
       // same hash) read [cached] and skip a full run that never actually
       // happened (review finding: this silently removed the full-suite net
       // pre-push and CI both depend on). Only a full run is cache-worthy.
+      // The entry is keyed on the START-time hash, so it is written only if
+      // the step's inputs hash the same after it finished: an input edited
+      // while the step ran would otherwise be vouched for under its old
+      // content (#3413). The file list is re-taken first — the step may have
+      // created a file inside its own globs.
       if (fileList !== null && !changedOnlyScript) {
-        cache.steps[step.name] = {
-          inputHash: currentHash,
-          lastGreenAt: new Date().toISOString(),
-          durationMs: dt,
-          attempts,
-        };
-        saveCache(cachePath, cache);
+        fileList = gitFileList(cwd);
+        // Content AND stat identity: an input edited then restored before the
+        // step exited hashes the same but was not held still.
+        const end = fileList === null ? null : planStep(step);
+        if (end === null) {
+          console.log('[verify-cache] git ls-files failed; running uncached');
+        } else if (end.currentHash !== currentHash || end.statSig !== statSig) {
+          console.log(`[verify-cache] ${step.name} inputs changed while it ran; not caching`);
+        } else {
+          cache.steps[step.name] = {
+            inputHash: currentHash,
+            lastGreenAt: new Date().toISOString(),
+            durationMs: dt,
+            attempts,
+          };
+          saveCache(cachePath, cache);
+        }
       }
     } else {
       console.log(`[fail] ${step.name} (exit ${code}, took ${formatSecs(dt)}${attemptsNote})`);
