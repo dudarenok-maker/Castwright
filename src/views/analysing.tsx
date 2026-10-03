@@ -1012,6 +1012,8 @@ export function AnalysingView({
     if (!manuscriptId) return;
     if (retryingChapterId !== null) return;
     setRetryingChapterId(chapterId);
+    /* #3435 — the refused-start line is about that start; a Retry supersedes it. */
+    setStartRefusal(null);
     /* Reset the subset_in_progress flag for this attempt. */
     subsetInProgressRef.current = false;
     retryHaltedRef.current = false;

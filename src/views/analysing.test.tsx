@@ -1676,6 +1676,38 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(screen.queryByText('Pause the analysis first')).not.toBeInTheDocument();
   });
 
+  /* #3435 final review M7 — the refusal line is about the refused start; a
+     later Retry (which can start, and succeed) must not leave it behind. */
+  it('M7: a Retry started after a refused main start clears the refusal line', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    const message = 'A chapter retry is running on this book. Wait for it to finish, then resume the analysis.';
+    analyseManuscriptRejection = new AnalysisError(message, 'subset_analysis_running');
+    getBookStateImpl = () => Promise.resolve(makeBookState([44]));
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    expect(await screen.findByTestId('analysis-needs-action-line')).toHaveTextContent(message);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /retry chapter/i }));
+    });
+    expect(screen.queryByText(message)).not.toBeInTheDocument();
+  });
+
   it('C9: cold boot with a running SUBSET snapshot does not POST the main route', async () => {
     getBookStateImpl = () => Promise.resolve(makeBookState([44]));
     const store = configureStore({
