@@ -83,7 +83,7 @@ vi.mock('undici', async () => {
   return {
     ...actual,
     fetch: ((...args: Parameters<typeof actual.fetch>) => {
-      const g = globalThis as Record<string, number>;
+      const g = globalThis as unknown as Record<string, number>;
       g.__analysis_test_undici_calls = (g.__analysis_test_undici_calls ?? 0) + 1;
       return actual.fetch(...args);
     }) as typeof actual.fetch,
