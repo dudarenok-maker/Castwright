@@ -370,7 +370,12 @@ A server test round-trips `review` through enqueue and claim into the request.
 - `PUT /state` with `slice:'revisions'` is still accepted;
 - `GET /state` returns revisions.json **raw**, so the old client's `hydrateFromBookState` still sees `drift` (`revisions-slice.ts:396-402`).
 
-The new routes and the store exist but nothing calls them. The only PR 1 changes an old client could observe are reparse/replace **resetting** the file under the lock instead of deleting it (observably the same: the old client's hydrate spreads the payload, `layout.tsx:915`, and an empty file reads like a missing one, `revisions.ts:149-153`), and D8 (pending with an empty cast), which the old `applyPoll` ignores (`revisions-slice.ts:318-322`).
+The new routes and the store exist but nothing calls them. The PR 1 changes an old client could observe (the plan's Reversibility list, `docs/features/285-revisions-server-ops.md`):
+- reparse/replace **reset** the file under the lock instead of deleting it — observably the same: the old client's hydrate spreads the payload (`layout.tsx:915`) and an empty file reads like a missing one;
+- reparse/replace **refuse** a newer-schema revisions.json with a 500 **before** deleting or writing anything (main deleted it);
+- the single-book poll, the bulk poll and qa-report answer 500 for an unparseable revisions.json even when the book has no cast (main returned early and answered 200), for a newer-schema one cast or not (main answered 200), and — accepted, new — for valid JSON whose top level is not a plain object (`null`, `[]`, a string, a number), cast or not (main read every field as empty and answered 200); because the bulk route maps every book through one `Promise.all`, one such book fails the whole bulk response — the blast radius main already has for an unparseable file in a cast book;
+- D8 (pending with an empty cast) and the poll's extra fields, which the old `applyPoll`/`applyBackgroundPoll` ignore (`revisions-slice.ts:318-331`);
+- three new, uncalled routes (accept, reject, dismiss).
 
 **Invariant on `main` between PR 1 and PR 2: the client is the only writer of `pending`.**
 
@@ -474,7 +479,7 @@ Every behavioural item has a paired test, mutation-checked: revert the fix and o
 - **PR 1 also adds:**
   - the regression plan `docs/features/285-revisions-server-ops.md` and its INDEX entry;
   - the two CLAUDE.md sentence updates (the lock order and the `requestFailureMessage` count);
-  - release notes. PR 1's are none: dark, with no shippable delta. Say so explicitly in the PR.
+  - release notes. PR 1 carries one technical, operator-facing entry in `docs/release-notes-next.md` (reparse/replace refuse a newer-schema revisions.json before touching anything, and otherwise reset it rather than delete it; the polls and QA report answer 500 where they used to answer 200 — an unparseable file in a book with no confirmed cast, a newer-schema file, or a non-object top level — and one such book fails the whole bulk poll; three unused revisions routes) plus one user-facing `RELEASE_NOTES.md` line carrying only the forward-looking newer-version refusal (no user can reach it until a later version writes `schema: 2`). The bulk-poll side effect is technical-only: main already stalls the bulk poll on an unparseable file in a cast book; a book with no confirmed cast never enters the bulk request (`layout.tsx:1137-1146`); so the only newly reachable trigger is a cast book whose file has a non-object top level. Say so in the PR.
 - **PR 2 also adds:** release notes, and the on-box register row on all three surfaces.
 - **Before PR 1 starts:**
   - file the take-lifecycle design issue, carrying the passes' findings and this spec's named residuals;

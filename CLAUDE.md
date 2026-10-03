@@ -581,7 +581,10 @@ Design rationale:
   derived from it — wrapping only the write buys nothing at all; (3) two or
   more books → `withCastLocks`, never nested `withCastLock`s; (4) global lock
   order is **`design` → `library-voice` → `cast`** — never acquire an earlier
-  class while holding a later one, or two requests deadlock. Since #2260 that
+  class while holding a later one, or two requests deadlock. The per-book
+  `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
+  outside that order: nothing but revisions.json is written under it and no
+  other lock is taken while it is held. Since #2260 that
   no longer hangs forever: `withKeyLock` bounds each acquisition at 10s and
   throws a `LockAcquisitionTimeoutError`
   (`server/src/workspace/file-lock.ts`) naming the key and both rules. It is a
