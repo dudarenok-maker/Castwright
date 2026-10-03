@@ -1040,7 +1040,9 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     expect(r.after.failedChapterIds ?? []).toEqual([]);
   }, 60_000);
 
-  it('A9 pipelined: ch1 Phase-0 overflow rethrown at ch1 Phase-1 dispatch records nothing, and the terminal names the Phase-0 model (control)', async () => {
+  /* What this pins is the pipelined Phase-0-overflow terminal; it never
+     reaches the Phase-1 dispatch rethrow its earlier name claimed. */
+  it('A9 pipelined: a ch1 Phase-0 overflow ends the run with a terminal that names the Phase-0 model, and records nothing (control)', async () => {
     const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
     const r = await runMainOn('a9-pipelined', {}, async (_m, id) => stage2For(id), {
       pipelined: true,
