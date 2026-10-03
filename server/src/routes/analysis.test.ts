@@ -9916,7 +9916,8 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
     const resuming = r.events
       .filter((e) => e.kind === 'log' && e.phaseId === 1 && /^Resuming — /.test(String(e.message)))
       .map((e) => String(e.message));
-    expect(resuming).toEqual(['Resuming — 1 of 3 chapter already cached.']);
+    /* The denominator is the non-excluded chapters, and the noun follows it. */
+    expect(resuming).toEqual(['Resuming — 1 of 2 chapters already cached.']);
   }, 60_000);
 
   it("O1's state.json write goes through the verified book dir: a stale path now holding another book is not touched", async () => {

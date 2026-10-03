@@ -5632,9 +5632,12 @@ export async function runMainAnalyzerJob(
       `Estimated stage time: ~${humanSeconds(stage2EstMs)} (pre-flight estimate, refined after stage 1)`,
     );
     if (cachedChapterCount > 0) {
+      /* #3435 — over the non-excluded chapters (the count above excludes
+         them), and the noun follows the denominator ("1 of 2 chapters"). */
+      const resumeDenominator = recordRef.chapterHints.filter((c) => !c.excluded).length;
       log(
         1,
-        `Resuming — ${cachedChapterCount} of ${totalChapters} chapter${cachedChapterCount === 1 ? '' : 's'} already cached.`,
+        `Resuming — ${cachedChapterCount} of ${resumeDenominator} chapter${resumeDenominator === 1 ? '' : 's'} already cached.`,
       );
     }
     /* Per-chapter budget weighted by char count so a fat chapter doesn't get
