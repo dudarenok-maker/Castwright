@@ -6067,6 +6067,8 @@ export interface components {
                 /** @description Plan 285 — absent on a legacy file (PR 1 returns revisions.json raw). */
                 fileId?: string | null;
                 rev?: number;
+                /** @description Plan 285 — the file's schema stamp; present once the server has rewritten the file (reparse/replace or a store write), absent on a legacy file. */
+                schema?: number;
             } | null;
             /** @description Slugs of chapters that already have an audio file on disk. */
             completedSlugs: string[];

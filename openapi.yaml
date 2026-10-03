@@ -8340,6 +8340,9 @@ components:
               nullable: true
               description: Plan 285 — absent on a legacy file (PR 1 returns revisions.json raw).
             rev: { type: integer }
+            schema:
+              type: integer
+              description: Plan 285 — the file's schema stamp; present once the server has rewritten the file (reparse/replace or a store write), absent on a legacy file.
         completedSlugs:
           type: array
           items: { type: string }

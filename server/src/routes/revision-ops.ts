@@ -1,4 +1,4 @@
-﻿/* Plan 285 (#3400) — server-owned revisions operations (spec §2). One route per
+/* Plan 285 (#3400) — server-owned revisions operations (spec §2). One route per
    operation. Accept and reject run the audio step (today's code,
    audio/previous-audio.ts) and then the JSON write, in that order; the JSON is
    written only if the audio step succeeded.

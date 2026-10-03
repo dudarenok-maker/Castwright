@@ -8,7 +8,9 @@
 
    Plan 285 — revisions.json is read through workspace/revisions-store.ts
    (lock-free, normalised: legacy drift dropped, stale legacy pending
-   dropped; a corrupt or newer-schema file throws → 500, as before). The
+   dropped; a corrupt, newer-schema or non-object file throws → 500, cast or
+   not — main answered 200 for a newer-schema file and for a corrupt file in
+   a book with no cast). The
    single-book poll answers the whole RevisionsState plus live `drift`, and
    returns `pending` even when the cast is empty (D8). The drift detector
    never creates pending — the user still chooses. */

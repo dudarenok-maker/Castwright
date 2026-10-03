@@ -77,7 +77,7 @@ Recorded by the operator on #3400/#3397 and in session, 2026-10-01/02:
 
 **It is a leaf lock.** Nothing acquires another lock class while holding it. Verified: generation, splice, QA repair, finalize and chapter-audio hold no cast, design or library-voice lock, and the reparse wipe's revisions branch sits beside its `withCastLock` branch rather than inside it (`book-state.ts:1132-1204`). Add the rule to the lock-order comment in `cast-lock.ts:11-24` and to CLAUDE.md's rule 4.
 
-**Reads** (`readRevisions`) take no lock. `writeJsonAtomic` renames atomically, so a reader sees one whole version. The GET handlers therefore cannot hit a lock timeout and need no new curation sites.
+**Reads** (`readRevisions`) take no lock. `writeJsonAtomic` renames atomically, so a reader sees one whole version. The GET handlers therefore cannot hit a lock timeout, so a lock-timeout curation site is not needed on them. (They still call `requestFailureMessage` once each, for the corrupt/newer-schema 500s: `revisions.ts` has two sites and `qa-report.ts` one.)
 
 **File shape, `schema: 1`:**
 ```ts
@@ -170,7 +170,7 @@ Adds the id to `dismissed`. It is idempotent and touches no audio.
 | 409 (PR 2, `restore-unrecorded` only) | `has_revision`. |
 | 500 | Through `requestFailureMessage` (`file-lock.ts:214`). |
 
-The CLAUDE.md sentence "`git grep requestFailureMessage` enumerates all thirteen sites" is already stale: there are 14 call sites today, with `cast-design.ts` having two, at `:927` and `:933`. Update it to the true count after this PR's three new sites.
+The CLAUDE.md sentence "`git grep requestFailureMessage` enumerates all thirteen sites" is already stale: there are 14 call sites today, with `cast-design.ts` having two, at `:927` and `:933`. Update it to the true count after this PR's new sites: 20 in total (`git grep "requestFailureMessage("` over `server/src` non-test files), the PR adding `revision-ops.ts` ×3, `revisions.ts` ×2 and `qa-report.ts` ×1.
 
 #### OpenAPI
 

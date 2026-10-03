@@ -63,6 +63,9 @@ describe('openapi: plan 285 PR 1', () => {
     expectTypeOf<S['Revision']['origin']>().toEqualTypeOf<'server' | undefined>();
     expectTypeOf<S['QueueEntry']['review']>().toEqualTypeOf<ReviewRequest | undefined>();
     expectTypeOf<S['QueueEnqueueEntry']['review']>().toEqualTypeOf<ReviewRequest | undefined>();
+    expectTypeOf<NonNullable<S['BookStateResponse']['revisions']>['schema']>().toEqualTypeOf<
+      number | undefined
+    >();
   });
 
   it('ReviewRequest is { characterId, triggeredBy }', () => {

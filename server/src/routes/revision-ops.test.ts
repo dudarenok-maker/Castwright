@@ -1,4 +1,4 @@
-﻿/* Plan 285 Task 4 — accept / reject / dismiss (spec §2). Tempdir workspace +
+/* Plan 285 Task 4 — accept / reject / dismiss (spec §2). Tempdir workspace +
    supertest, like chapter-audio.test.ts. generation.js is mocked (only
    isGenerationActive is needed); atomic-rename.js is wrapped so a test can fail
    the .previous → live rename; the store's two lock-taking entry points are
