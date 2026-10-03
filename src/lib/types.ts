@@ -457,6 +457,14 @@ export interface BookStateResponse {
       reducer falls back to all-cast and the Generate view's pill list
       flickers from filtered to everyone on hydrate. */
   chapterCharacters?: Record<number, string[]>;
+  /** #3440 — raw manuscript attribution id → canonical cast id, only for ids
+      whose canonical form differs; same resolution `chapterCharacters` and
+      cast `lines` use. Lets a client holding raw ids (SSE progress ticks,
+      manuscript sentences, voice-prepare events) join them against the
+      canonical chapter rows without re-implementing the resolver. Absent
+      entries mean the raw id already equals its cast id or could not be
+      resolved. */
+  characterIdAliases?: Record<string, string>;
   /** fe-16 — characterId → engine the character ACTUALLY rendered in when it
       differs from its configured engine (`'kokoro'` when a Qwen character fell
       back across any rendered chapter). Threaded into `resolveVoiceStatus` so
