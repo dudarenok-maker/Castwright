@@ -161,12 +161,14 @@ recite:
 19. **A sentinel that is also a valid value** — a marker meaning "none" or
     "not recorded" (an empty array, `0`, `''`, `null`) is also something the
     field legitimately holds, so the reader cannot tell "never written" from
-    "written as empty". In `server/src/store/analysis-cache.ts` a chapter's
-    own key holding `[]` (cast detection found no characters) is a real take,
-    but the legacy `{cast record, [] take}` shape used the same `[]` to mean
-    "no take yet"; `hasCurrentTake` has to read an own key as done, and a
-    reader that treated `[]` as absent re-ran a finished chapter, while one
-    that treated it as done skipped a chapter that never ran (#3435).
+    "written as empty". In `server/src/routes/analysis.ts` the Phase-0
+    failure catch wrote `chapterCast[id] = []` as the cast-failure marker,
+    but `[]` is also a real cast for a narration-only chapter (cast detection
+    succeeded and found no characters). `isPhase0aCoverageComplete` read every
+    `[]` as "cast missing", so a Retry or Re-analyse on a book with a
+    narration-only chapter never reached Phase 1 (test P-theta). #3435 makes
+    the failure record's `phase: 'cast'` the discriminator, passed in as
+    `castFailedIds`.
     Checkable: for every default or "empty" value a reader branches on, ask
     whether a real writer can produce exactly that value, and whether a test
     seeds that case.
