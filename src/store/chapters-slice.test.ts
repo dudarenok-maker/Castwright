@@ -1227,9 +1227,26 @@ describe('chaptersSlice — characterIdAliases raw→canonical tick mapping (#34
      their canonical id regardless of which key the chapter row uses, so a
      row left keyed raw here would silently lose that character's line count
      and drop out of the Fix-audio modal's candidate list after a re-analyze
-     or un-exclude, even though the pre-rework row was keyed canonical. */
+     or un-exclude, even though the pre-rework row was keyed canonical.
+
+     The initial hydrate seeds chapter 17 with ONLY `narrator` (not
+     `the_torment`), so `the_torment` is a NEW speaker introduced solely by
+     this merge — a no-op reducer would leave the row at `{ narrator:
+     'queued' }` and fail the assertion below, rather than coincidentally
+     matching because the pre-existing row already had the right keys. */
   it('mergeSubsetAnalysis canonicalises the raw speaker id, keeping the row keyed consistently with hydrateFromBookState', () => {
-    const state = chaptersSlice.reducer(baseState([]), bookState('book-A', driftAliases));
+    const state = chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.hydrateFromBookState({
+        bookId: 'book-A',
+        chapters,
+        completedSlugs: [],
+        characters: cast,
+        chapterCharacters: { 17: ['narrator'] },
+        characterIdAliases: driftAliases,
+      }),
+    );
+    expect(state.chapters[0].characters).toEqual({ narrator: 'queued' });
     const next = chaptersSlice.reducer(
       state,
       chaptersActions.mergeSubsetAnalysis({
