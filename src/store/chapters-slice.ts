@@ -122,6 +122,31 @@ export interface ChaptersState {
     failure record of its own. */
 export const ANALYSIS_GAP_MESSAGE = "Analysis didn't finish for this chapter.";
 
+/** #3435 — the book-state's analysis facts a gap is derived from. */
+type AnalysisGapFacts = {
+  unattributedChapterIds?: number[];
+  failedChapterErrors?: Record<string, { message: string }>;
+};
+
+/* #3435 — the server's gaps: chapters with no current take, and every failure
+   record (a record's own message wins over the generic note). Excluded
+   chapters get no entry. */
+function analysisGapsFrom(
+  chapters: Array<{ id: number; excluded?: boolean }>,
+  analysis: AnalysisGapFacts | undefined,
+): Record<number, { message: string }> {
+  const included = new Set(chapters.filter((c) => !c.excluded).map((c) => c.id));
+  const gaps: Record<number, { message: string }> = {};
+  for (const id of analysis?.unattributedChapterIds ?? []) {
+    if (included.has(id)) gaps[id] = { message: ANALYSIS_GAP_MESSAGE };
+  }
+  for (const [key, record] of Object.entries(analysis?.failedChapterErrors ?? {})) {
+    const id = Number(key);
+    if (included.has(id)) gaps[id] = { message: record.message };
+  }
+  return gaps;
+}
+
 const initialState: ChaptersState = {
   chapters: [],
   lastError: null,
@@ -164,6 +189,14 @@ export const chaptersSlice = createSlice({
     /** #3435 — a subset `result` for this chapter: its analysis finished. */
     clearAnalysisGap: (s, a: PayloadAction<number>) => {
       if (s.analysisGapById) delete s.analysisGapById[a.payload];
+    },
+    /** #3435 — replace the gaps from a book-state read (the server's truth),
+        e.g. after a main `result`, which skips the layout's hydrate. */
+    setAnalysisGapsFromBookState: (
+      s,
+      a: PayloadAction<{ chapters: Array<{ id: number; excluded?: boolean }>; analysis?: AnalysisGapFacts }>,
+    ) => {
+      s.analysisGapById = analysisGapsFrom(a.payload.chapters, a.payload.analysis);
     },
 
     /** fs-26 — after a per-character splice rewrites a chapter's audio in
@@ -250,10 +283,9 @@ export const chaptersSlice = createSlice({
          gating both have a truthful frame of reference the instant
          chapters land. */
       if (bookId) s.currentBookId = bookId;
-      /* #3435 — a main `result` lands only once every non-excluded chapter
-         has a current take (the main route halts on the first chapter
-         failure), so the gaps of the chapters it carries are stale. */
-      if (s.analysisGapById) for (const c of chapters) delete s.analysisGapById[c.id];
+      /* #3435 — the gaps are left alone: a main `result` can still carry a
+         flagged chapter (decision B), so the Confirm route's book-state re-read
+         replaces them from the server (setAnalysisGapsFromBookState). */
       /* Server emits `chapters[i].characters = {}` from analysis; the
          per-chapter speaker map is recoverable from sentences. Without
          this seeding the Generate view's expanded chapter row shows no
@@ -331,17 +363,7 @@ export const chaptersSlice = createSlice({
         analysis,
       } = a.payload;
       if (bookId) s.currentBookId = bookId;
-      /* #3435 — a record's own message wins over the generic note. */
-      const included = new Set(chapters.filter((c) => !c.excluded).map((c) => c.id));
-      const gaps: Record<number, { message: string }> = {};
-      for (const id of analysis?.unattributedChapterIds ?? []) {
-        if (included.has(id)) gaps[id] = { message: ANALYSIS_GAP_MESSAGE };
-      }
-      for (const [key, record] of Object.entries(analysis?.failedChapterErrors ?? {})) {
-        const id = Number(key);
-        if (included.has(id)) gaps[id] = { message: record.message };
-      }
-      s.analysisGapById = gaps;
+      s.analysisGapById = analysisGapsFrom(chapters, analysis);
       s.renderedSpeakersByChapter = renderedSpeakersByChapter ?? {};
       s.renderedTextByChapter = renderedTextByChapter ?? {};
       s.renderedInstructByChapter = renderedInstructByChapter ?? {};

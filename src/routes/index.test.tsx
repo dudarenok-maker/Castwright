@@ -33,6 +33,7 @@ import {
   AdvancedRoute,
   BooksRoute,
   ChangelogRoute,
+  ConfirmRoute,
   ReadyRoute,
   SetupRoute,
 } from './index';
@@ -1040,6 +1041,51 @@ describe('ChangelogRoute', () => {
     expect(screen.getByText(/Northern Star/)).toBeInTheDocument();
     /* The per-book log seed fixture must NOT leak into the workspace view. */
     expect(screen.queryByText("Tuned Eliza Gray's voice")).toBeNull();
+  });
+});
+
+/* #3435 final review I1 — a main `result` lands on Confirm with the layout's
+   book-state hydrate skipped, so the Confirm route's own re-read is where the
+   Generate view's analysis gaps come back from the server. A main result can
+   still carry a flagged chapter (decision B), so a gap backed by a failure
+   record survives, and one for a current, unflagged chapter clears. */
+describe('ConfirmRoute — analysis gaps from the server after a main result', () => {
+  it('replaces the gaps from book-state: the attribution-collapse gap stays, the resolved one clears', async () => {
+    const store = makeStore();
+    store.dispatch(chaptersActions.setAnalysisGap({ chapterId: 1, message: 'Old 1.' }));
+    store.dispatch(chaptersActions.setAnalysisGap({ chapterId: 2, message: 'Old 2.' }));
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        title: 'T',
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', duration: '0:00' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', duration: '0:00' },
+        ],
+      },
+      cast: null,
+      analysis: {
+        failedChapterIds: [2],
+        failedChapterErrors: {
+          '2': { code: 'attribution-collapse', message: 'Speaker attribution collapsed.', remediation: '', phase: 'attribution' },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() =>
+      expect(store.getState().chapters.analysisGapById).toEqual({ 2: { message: 'Speaker attribution collapsed.' } }),
+    );
   });
 });
 
