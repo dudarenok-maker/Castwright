@@ -30,6 +30,7 @@ import {
 import { configValue } from '../config/resolver.js';
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
+import { endpointKeyStatus, type EndpointKeyStatus } from '../workspace/analyzer-endpoints.js';
 
 export const userSettingsRouter = Router();
 
@@ -47,10 +48,12 @@ const RETIRED_ANALYZER_FIELDS = [
   'analyzerPhase1MinLagChapters',
 ] as const;
 
-interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
+interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey' | 'analyzerEndpointKeys'> {
   apiKeyStatus: 'set' | 'unset';
   workspaceRoot: string;
   workspaceSource: 'env' | 'default' | 'override';
+  /* #3084 — per endpoint id; the keys themselves are never returned. */
+  analyzerEndpointKeyStatus: Record<string, EndpointKeyStatus>;
   /* The EFFECTIVE default TTS model after the Qwen-when-installed resolution
      (getResolvedTtsModelKey). Distinct from the STORED `defaultTtsModelKey`
      (which the Model Manager picker shows + round-trips): the frontend seeds the
@@ -68,15 +71,17 @@ interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
   corruptSettingsFile: boolean;
 }
 
-function envDerived(settings: UserSettings): UserSettingsResponse {
+export function envDerived(settings: UserSettings): UserSettingsResponse {
   /* Drop the plaintext key — frontend only ever sees apiKeyStatus. */
   const rest = { ...settings } as Partial<UserSettings>;
   delete rest.geminiApiKey;
+  delete rest.analyzerEndpointKeys; // #3084 — the keys are never returned, only their status
   const phase0Model = configValue<string>('analyzer.phase0.model');
   const phase1Model = configValue<string>('analyzer.phase1.model');
   return {
-    ...(rest as Omit<UserSettings, 'geminiApiKey'>),
+    ...(rest as Omit<UserSettings, 'geminiApiKey' | 'analyzerEndpointKeys'>),
     apiKeyStatus: getResolvedGeminiApiKey() ? 'set' : 'unset',
+    analyzerEndpointKeyStatus: endpointKeyStatus(settings),
     /* Surface the ENV-resolved worker count (GEN_WORKERS env > account setting >
        default 2), mirroring apiKeyStatus. The client queue-dispatcher reads
        `account.generationWorkers` from this response, so without this overlay
