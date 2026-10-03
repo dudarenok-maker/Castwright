@@ -182,6 +182,27 @@ recite:
     Checkable: for every marker, find the write site and ask whether it sits
     inside the success branch of the last step the marker is read as proving,
     and whether a test fails that step and asserts the marker is absent.
+21. **A derived "not done" list computed from a store that isn't the record
+    for every book it's applied to, so an absent store reads as "nothing
+    done"** — the list is correct where its source exists and silently wrong
+    where it does not. `server/src/routes/book-state.ts` built
+    `unattributedChapterIds` from the analysis cache alone, and a missing
+    cache loads as `{ chapters: {} }`, so a confirmed sample book with no
+    cache showed every chapter as unfinished; the fix treats
+    `manuscript-edits.json` as authoritative past Confirm (#3435, PR #3505
+    gate pass 1).
+    Checkable: for every derived list, name the store it reads, and ask what
+    it reports for a book where that store is absent or was never written.
+22. **Test cleanup that deletes a directory the code under test is still
+    writing to fire-and-forget** — the test passes its assertions, then the
+    teardown races the detached writes and fails intermittently. The
+    plan-285 `afterEach` in `server/src/routes/analysis.test.ts` `rmSync`'d
+    the book dir while `endJob`'s detached `persistTerminalSnapshot`/outcome
+    writes were still landing (ENOTEMPTY, 1 run in 3); fixed by awaiting the
+    recorded `withVerifiedBookDir` promises (#3435, PR #3505 gate pass 1).
+    Checkable: for every `afterEach` that removes a directory, list the
+    fire-and-forget writes the code under test can still be making into it,
+    and confirm the test awaits them.
 
 ### Keeping the catalogue current
 
