@@ -74,6 +74,35 @@ import {
 import { loadCastIdHistory, retireCharacterId, castIdHistoryPath } from '../store/cast-id-history.js';
 import { loadSuggestions } from '../store/cast-merge-suggestions.js';
 
+/* endJob persists its paused/halted snapshot and last-outcome on DETACHED
+   promises (`void persistTerminalSnapshot`), so a run that ends in `error`
+   returns before those writes have landed, and a test that then removes the
+   book dir races them (ENOTEMPTY). Every such write runs inside
+   `withVerifiedBookDir`, entered synchronously when endJob fires, so the mock
+   below records each call's promise and `settleDetachedWrites` awaits them.
+   Waiting on the snapshot file instead cannot work: a write that is dropped
+   (stale book dir) or fails (EPERM on rename) never lands. */
+const inFlightGuarded = new Set<Promise<unknown>>();
+vi.mock('../workspace/book-dir-guard.js', async () => {
+  const actual = await vi.importActual<typeof import('../workspace/book-dir-guard.js')>(
+    '../workspace/book-dir-guard.js',
+  );
+  return {
+    ...actual,
+    withVerifiedBookDir: ((...args: Parameters<typeof actual.withVerifiedBookDir>) => {
+      const p = actual.withVerifiedBookDir(...args);
+      inFlightGuarded.add(p);
+      const drop = () => void inFlightGuarded.delete(p);
+      p.then(drop, drop);
+      return p;
+    }) as typeof actual.withVerifiedBookDir,
+  };
+});
+
+async function settleDetachedWrites(): Promise<void> {
+  while (inFlightGuarded.size > 0) await Promise.allSettled([...inFlightGuarded]);
+}
+
 /* W2.6 — Node cross-charge/cross-evict guards: the analyzer's confirmed
    GPU/CPU placement must be cached wherever detectOllamaDevice() actually
    runs. Mock its two call-site dependencies so the test below can assert
@@ -4915,6 +4944,7 @@ describe('runSubsetAnalyzerJob — re-reports a coverage failure instead of sile
             recordRef.chapterHints,
             false,
           ).catch(() => undefined);
+          await settleDetachedWrites();
           return job;
         } finally {
           removeManuscript(manuscriptId);
@@ -5040,6 +5070,7 @@ describe('runMainAnalyzerJob — chapter-failed frames carry phase (plan 285 T1)
         allowStage1Shrink: true,
         requestedModel: undefined,
       }).catch(() => undefined);
+      await settleDetachedWrites();
       return job;
     } finally {
       delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
@@ -9480,6 +9511,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
     delete g.__analyzer_device_test_phase1_selection;
     delete g.__analysis_test_state_write_throws;
     delete g.__p285_save_hook;
+    await settleDetachedWrites();
     for (const b of made.splice(0)) {
       removeManuscript(b.manuscriptId);
       await clearAnalysisCache(b.manuscriptId);
@@ -9622,6 +9654,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
       if (originalWidth === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
       else process.env.ANALYZER_OLLAMA_CONCURRENCY = originalWidth;
     }
+    await settleDetachedWrites();
     const after = await loadAnalysisCache(book.manuscriptId);
     const state = JSON.parse(readFileSync(join(book.bookDir, '.audiobook', 'state.json'), 'utf8'));
     return { events, stage2Calls, castCalls, after, state, job };
@@ -10056,6 +10089,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
         if (originalRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
         else process.env.STAGE2_COVERAGE_RETRIES = originalRetries;
       }
+      await settleDetachedWrites();
       const after = await loadAnalysisCache(book.manuscriptId);
       const readOr = (p: string) => (existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : undefined);
       return {
