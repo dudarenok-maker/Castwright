@@ -587,6 +587,28 @@ describe('chapter-audio router', () => {
         vi.doUnmock('./generation.js');
         vi.resetModules();
       });
+
+      it('409s (not 404) for an INVALID chapter id while a generation is in flight — the busy check runs first', async () => {
+        /* Plan 285 — pins today's ORDER: isGenerationActive is checked before
+           the chapter-id parse, so the extraction into audio/previous-audio.ts
+           must not move it. */
+        vi.resetModules();
+        vi.doMock('./generation.js', () => ({
+          generationRouter: undefined,
+          isGenerationActive: () => true,
+        }));
+        const { chapterAudioRouter: mockedRouter } = await import('./chapter-audio.js');
+        const mockedApp = express();
+        mockedApp.use('/api/books', mockedRouter);
+
+        const res = await request(mockedApp).post(
+          `/api/books/${bookId}/chapters/not-a-number/audio/previous/restore`,
+        );
+        expect(res.status).toBe(409);
+
+        vi.doUnmock('./generation.js');
+        vi.resetModules();
+      });
     });
   });
 });

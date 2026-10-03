@@ -31,13 +31,12 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { existsSync } from 'node:fs';
-import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
-import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
+import { acceptPreviousAudio, restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';
 import { isGenerationActive } from './generation.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
@@ -229,13 +228,6 @@ async function locateChapterAudio(
   return { audio, segPath, peaksPath, lufsPath, chapterId, chapterTitle: chapter.title };
 }
 
-/** Mirror of findChapterAudio but for the `.previous.mp3` sibling. */
-function findPreviousChapterAudio(audioRoot: string, slug: string): ChapterAudioFile | null {
-  const path = join(audioRoot, `${slug}.previous.mp3`);
-  if (!existsSync(path)) return null;
-  return { path, ext: 'mp3', mime: 'audio/mpeg', urlSuffix: 'audio.mp3' };
-}
-
 chapterAudioRouter.get(
   '/:bookId/chapters/:chapterId/audio',
   async (req: Request, res: Response) => {
@@ -385,11 +377,8 @@ chapterAudioRouter.delete(
     const chapter = located.state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
     const root = audioDir(located.bookDir);
-    const previous = findPreviousChapterAudio(root, chapter.slug);
-    if (!previous) return res.status(404).json({ message: 'No preserved previous audio.' });
-    /* Delete both files — segments.json absence on its own isn't a fault. */
-    await unlink(previous.path).catch(() => {});
-    await unlink(join(root, `${chapter.slug}.previous.segments.json`)).catch(() => {});
+    const outcome = await acceptPreviousAudio(root, chapter.slug);
+    if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
     res.status(204).end();
   },
 );
@@ -414,28 +403,13 @@ chapterAudioRouter.post(
     const chapter = located.state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
     const root = audioDir(located.bookDir);
-    const previous = findPreviousChapterAudio(root, chapter.slug);
-    if (!previous) return res.status(404).json({ message: 'No preserved previous audio.' });
-
-    /* Delete the live render first so the previous → live rename doesn't
-     race a still-present current file. */
-    const currentLive = findChapterAudio(root, chapter.slug);
-    if (currentLive) await unlink(currentLive.path).catch(() => {});
-    const liveSegments = join(root, `${chapter.slug}.segments.json`);
-    if (existsSync(liveSegments)) await unlink(liveSegments).catch(() => {});
-
+    let outcome: 'restored' | 'none';
     try {
-      await renameWithRetry(previous.path, join(root, `${chapter.slug}.${previous.ext}`));
-    } catch (err) {
-      console.error(
-        `[chapter-audio] failed to restore previous audio for ${chapter.slug}: ${(err as Error).message}`,
-      );
+      outcome = await restorePreviousAudio(root, chapter.slug);
+    } catch {
       return res.status(500).json({ message: 'Failed to restore previous audio.' });
     }
-    const previousSegments = join(root, `${chapter.slug}.previous.segments.json`);
-    if (existsSync(previousSegments)) {
-      await renameWithRetry(previousSegments, liveSegments).catch(() => {});
-    }
+    if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
     res.status(204).end();
   },
 );
