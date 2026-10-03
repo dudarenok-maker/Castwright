@@ -132,18 +132,19 @@ interface FailedChapterRow {
   phase?: 'cast' | 'attribution';
 }
 
-/* Panel heading and subtext for the rows' phases (#3435, spec 4). `castPaused`
-   is a run that ended `cast_incomplete` this session, i.e. the roster is not
-   final yet; it only changes the copy of the cast rows. */
+/* Panel heading and subtext for the rows' phases (#3435, spec 4).
+   `stage1Ready` is the book-state fact "the roster is final": while it is false
+   a cast row pauses the analysis, and an attribution row waits for the main
+   resume (a Retry cannot attribute without a final roster). */
 function failedPanelCopy(
   rows: FailedChapterRow[],
-  castPaused: boolean,
+  stage1Ready: boolean,
 ): { heading: string; subtext: string; mixed: boolean } {
   const n = rows.length;
   const plural = n === 1 ? '' : 's';
   const castRows = rows.filter((r) => (r.phase ?? 'cast') === 'cast').length;
   if (castRows === n) {
-    return castPaused
+    return !stage1Ready
       ? {
           heading: `Paused — ${n} chapter${n === 1 ? ' still needs' : 's still need'} cast detection.`,
           subtext:
@@ -159,7 +160,9 @@ function failedPanelCopy(
   if (castRows === 0) {
     return {
       heading: `Speaker attribution failed on ${n} chapter${plural}.`,
-      subtext: 'Retry re-runs this chapter.',
+      subtext: stage1Ready
+        ? 'Retry re-runs this chapter.'
+        : "Cast detection hasn't finished for the whole book, so these chapters are attributed when you resume the analysis.",
       mixed: false,
     };
   }
@@ -266,7 +269,7 @@ export function AnalysingView({
      the catch halted the run, so the finally block must leave it alone. */
   const retryHaltedRef = useRef(false);
   /* Same shape for a Retry that ended in a not-a-failure stop (`cast_incomplete`,
-     `stage1_shrink_refused`): the catch halted the snapshot with the server's
+     `stage1_shrink_refused`, `resume_required`): the catch halted the snapshot with the server's
      message for the needs-action line, so the finally block must leave it
      alone (#3435 A8). */
   const retryNeedsActionRef = useRef(false);
@@ -289,6 +292,17 @@ export function AnalysingView({
      failedChapters drains to 0 we auto-resume the main run so Phase 1+
      start without the user having to re-click "Try again". */
   const [castIncomplete, setCastIncomplete] = useState(false);
+  /* #3435 (C18, C20, C-8) — the book-state GET's server facts: the roster is
+     final (`stage1Ready`) and an unfinished book needs a main resume
+     (`resumeRequired`). Read on mount and again after every run ending this
+     view observes (`bookStateRefreshKey`). They drive copy and affordances
+     only, never the auto-resume. `stage1Ready` is undefined until the GET
+     answers (or from a server that predates it). */
+  const [bookFacts, setBookFacts] = useState<{ stage1Ready?: boolean; resumeRequired: boolean } | null>(null);
+  const [bookStateRefreshKey, setBookStateRefreshKey] = useState(0);
+  /* Set once the mount-time GET has answered: castIncomplete is armed from a
+     halted snapshot only then, never by a later refresh. */
+  const mountFactsReadRef = useRef(false);
   /* #3435 — the server refused this view's main start (a chapter retry is
      running, or the previous run is still finishing). Its message shows on the
      needs-action line; cleared on the next start. */
@@ -301,9 +315,13 @@ export function AnalysingView({
      button re-fires the analysis with allowStage1Shrink:true so the
      next attempt bypasses the gate. Null when no shrink has been
      refused on this view session. */
-  const [stage1ShrinkInfo, setStage1ShrinkInfo] = useState<{ prev: number; next: number } | null>(
-    null,
-  );
+  /* #3435 — `retryChapterId` marks a shrink a per-chapter Retry hit: its
+     Accept re-runs that subset, and a main re-entry leaves its banner alone. */
+  const [stage1ShrinkInfo, setStage1ShrinkInfo] = useState<{
+    prev: number;
+    next: number;
+    retryChapterId?: number;
+  } | null>(null);
 
   /* Explicit "Start analysis" gate. The previous auto-fire path was hard
      to reason about — auto-load fires, probe re-runs, isAnalyzerReady
@@ -566,8 +584,9 @@ export function AnalysingView({
     setCastIncomplete(false);
     /* Same clear for the shrink-refused banner — a new attempt either
        succeeds (banner stays cleared) or hits the gate again and the
-       catch below re-sets it with fresh counts. */
-    setStage1ShrinkInfo(null);
+       catch below re-sets it with fresh counts. Only a MAIN shrink banner:
+       a Retry's (#3435) belongs to that chapter's subset run. */
+    setStage1ShrinkInfo((info) => (info?.retryChapterId !== undefined ? info : null));
     setStartRefusal(null);
     const markEvent = () => {
       setLastEventAt(Date.now());
@@ -755,6 +774,7 @@ export function AnalysingView({
         completedRef.current = true;
         setConn('done');
         setDroppedQuotesRefreshKey((k) => k + 1);
+        setBookStateRefreshKey((k) => k + 1);
         /* Run completed cleanly — tear down the cross-navigation snapshot
            so the pill drops out (the view will transition to confirm
            via onComplete below anyway). */
@@ -769,6 +789,9 @@ export function AnalysingView({
            in the UI. Falling through would flash "Analysis failed:
            Analysis aborted" right before the new attempt renders. */
         if ((e as Error)?.name === 'AbortError') return;
+        /* #3435 (C-8) — every run ending this view observes re-reads the
+           book-state facts. */
+        setBookStateRefreshKey((k) => k + 1);
         /* #3435 (A7) — the server refused this start: a chapter retry is
            running (`subset_analysis_running`), or the previous run is still
            finishing (`main_analysis_running`, draining). No job started, so
@@ -870,7 +893,9 @@ export function AnalysingView({
      chapter rows survive page reload — without this the rows would only
      live as long as the SSE that emitted the chapter-failed event.
      Also seeds chapterTitleById from state.chapters so the rows can
-     show a human title instead of a bare numeric id. */
+     show a human title instead of a bare numeric id.
+     #3435 (C-8) — re-read after every run ending this view observes
+     (`bookStateRefreshKey`), for the analysis facts as well as the rows. */
   const [chapterTitleById, setChapterTitleById] = useState<Record<number, string>>({});
   useEffect(() => {
     if (!bookId) return;
@@ -882,6 +907,26 @@ export function AnalysingView({
         const titles: Record<number, string> = {};
         for (const c of res.state.chapters) titles[c.id] = c.title;
         setChapterTitleById(titles);
+        const stage1Ready = res.analysis?.stage1Ready;
+        setBookFacts({ stage1Ready, resumeRequired: res.analysis?.resumeRequired === true });
+        /* #3435 (C20) — castIncomplete arming (b): on mount only, from a halted
+           cast_incomplete snapshot of either kind, when the roster is not final.
+           A later refresh never arms it (C-8). Defensive read for legacy test
+           stores without the analysis slice. */
+        if (!mountFactsReadRef.current) {
+          mountFactsReadRef.current = true;
+          const snap = (store.getState() as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } })
+            .analysis?.activeStream;
+          if (
+            stage1Ready === false &&
+            snap &&
+            snap.manuscriptId === manuscriptId &&
+            snap.state === 'halted' &&
+            snap.haltCode === 'cast_incomplete'
+          ) {
+            setCastIncomplete(true);
+          }
+        }
         const failedIds = res.analysis?.failedChapterIds ?? [];
         if (failedIds.length === 0) return;
         const errorById = res.analysis?.failedChapterErrors ?? {};
@@ -919,21 +964,26 @@ export function AnalysingView({
     return () => {
       cancelled = true;
     };
-  }, [bookId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookId, bookStateRefreshKey]);
 
   /* Auto-resume the main run after the user resolves every failed
-     chapter. The server's cast_incomplete gate stops the run before
-     Phase 1; once failedChapters drains to 0 we re-enter
-     /analysis/stream which discovers the cache is complete and
-     advances. Without this the user would have to click "Try again"
-     themselves after the final retry — easy to miss when the panel
-     has just disappeared. */
+     cast chapter. The server's cast_incomplete gate stops the run before
+     Phase 1; once no cast row is left we re-enter /analysis/stream which
+     discovers the roster is final and attributes the book. Without this
+     the user would have to click "Try again" themselves after the final
+     retry — easy to miss when the panel has just disappeared.
+     #3435 (P-beta) — keyed on CAST rows only: an attribution row waits for
+     exactly this resume, so it must not block it. The book-state facts never
+     arm or disarm it (C-8); it fires only for a run this view started. */
+  const castRowCount = failedChapters.filter((f) => (f.phase ?? 'cast') === 'cast').length;
   useEffect(() => {
     if (!castIncomplete) return;
-    if (failedChapters.length > 0) return;
+    if (!analysisStarted) return;
+    if (castRowCount > 0) return;
     if (retryingChapterId !== null) return;
     setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
-  }, [castIncomplete, failedChapters.length, retryingChapterId]);
+  }, [castIncomplete, analysisStarted, castRowCount, retryingChapterId]);
 
   /* Per-chapter retry handler. Hits POST /api/manuscripts/:id/analysis/
      chapters, which on success removes the chapter id from
@@ -949,7 +999,7 @@ export function AnalysingView({
      "Pause the analysis first" while this view knows a main run is live. The
      earlier client-side pause-and-retry is withdrawn: it could not wait for
      the paused run to settle. */
-  const handleRetryChapter = (chapterId: number) => {
+  const handleRetryChapter = (chapterId: number, opts: { allowStage1Shrink?: boolean } = {}) => {
     if (!manuscriptId) return;
     if (retryingChapterId !== null) return;
     setRetryingChapterId(chapterId);
@@ -1013,6 +1063,8 @@ export function AnalysingView({
     api
       .runAnalysisForChapters(manuscriptId, [chapterId], {
         model: requestModel,
+        /* #3435 — set only by the subset shrink banner's Accept. */
+        allowStage1Shrink: opts.allowStage1Shrink || undefined,
         onPhase: ({ phaseId, progress, live }) => {
           markEvent();
           setConn('streaming');
@@ -1160,15 +1212,24 @@ export function AnalysingView({
           setConn('idle');
           return;
         }
-        /* #3435 — a soft stop (`cast_incomplete`, `stage1_shrink_refused`) is the
-           user's call to action, not a failure: halt the snapshot with the
-           server's message (the needs-action line and the pill read it), raise
-           no toast, and tell the finally block to leave the snapshot alone. The
-           row follows the same rule as the plain no-result ending below. */
+        /* #3435 — a soft stop (`cast_incomplete`, `stage1_shrink_refused`,
+           `resume_required`) is the user's call to action, not a failure: halt
+           the snapshot with the server's message (the needs-action line and the
+           pill read it), raise no toast, and tell the finally block to leave the
+           snapshot alone. The row follows the same rule as the plain no-result
+           ending below. A shrink also raises the banner, whose Accept re-runs
+           this chapter's subset with allowStage1Shrink. */
         if (err instanceof AnalysisError && isNotAFailureHaltCode(err.code)) {
           retryNeedsActionRef.current = true;
           if (retryResolved && !retryReFailed) {
             setFailedChapters((prev) => prev.filter((f) => f.chapterId !== chapterId));
+          }
+          if (err.code === 'stage1_shrink_refused') {
+            setStage1ShrinkInfo({
+              prev: err.prevCharCount ?? 0,
+              next: err.nextCharCount ?? 0,
+              retryChapterId: chapterId,
+            });
           }
           dispatch(
             analysisActions.setHalted({ manuscriptId, code: err.code, message: err.message }),
@@ -1190,6 +1251,8 @@ export function AnalysingView({
       .finally(() => {
         setRetryingChapterId(null);
         setDroppedQuotesRefreshKey((k) => k + 1);
+        /* #3435 (C-8) — re-read the book-state facts after the subset ended. */
+        setBookStateRefreshKey((k) => k + 1);
         /* If the subset request was refused (subset_in_progress #3202, or
            main_analysis_running #3435), the catch restored the prior
            snapshot: leave it alone. */
@@ -1202,7 +1265,8 @@ export function AnalysingView({
         if (retryHaltedRef.current) {
           return;
         }
-        /* #3435 A8 — and for a Retry that ended in a not-a-failure stop: the
+        /* #3435 A8 — and for a Retry that ended in a not-a-failure stop
+           (`cast_incomplete`, `stage1_shrink_refused`, `resume_required`): the
            halted snapshot carries the message the needs-action line shows. */
         if (retryNeedsActionRef.current) {
           return;
@@ -1400,23 +1464,36 @@ export function AnalysingView({
     }
   };
 
+  /* #3435 — the book-state facts. Until the GET answers (or from a server
+     that predates them) the roster counts as final unless this session's run
+     ended cast_incomplete. */
+  const stage1Ready = bookFacts?.stage1Ready ?? !castIncomplete;
+  const resumeRequired = bookFacts?.resumeRequired === true;
   /* #3435 — the one line of "what now" under the phase list: a start the server
      refused (its message), else the halted snapshot's reason for a
-     not-a-failure stop. The shrink banner below already says its own stop, so
-     that one is not repeated here. */
-  const needsActionMessage =
-    startRefusal ??
-    (activeStreamSnapshot &&
+     not-a-failure stop, else — after a reload or a dropped snapshot — the
+     book-state's resumeRequired. The shrink banner below already says its own
+     stop, so that one is not repeated here. */
+  const haltNeedsActionMessage =
+    activeStreamSnapshot &&
     activeStreamSnapshot.manuscriptId === manuscriptId &&
     activeStreamSnapshot.state === 'halted' &&
     isNotAFailureHaltCode(activeStreamSnapshot.haltCode) &&
     !stage1ShrinkInfo
       ? (activeStreamSnapshot.haltReason ?? null)
-      : null);
-  const failedPanel = failedPanelCopy(failedChapters, castIncomplete);
+      : null;
+  const resumeRequiredMessage =
+    resumeRequired && !isAnalysisRunning
+      ? 'Some chapters still need attribution — resume the analysis to finish the book.'
+      : null;
+  const needsActionMessage = startRefusal ?? haltNeedsActionMessage ?? resumeRequiredMessage;
+  const failedPanel = failedPanelCopy(failedChapters, stage1Ready);
 
   return (
-    <div className="relative min-h-[calc(100vh-64px)] flex flex-col items-center px-6 py-16">
+    <div
+      className="relative min-h-[calc(100vh-64px)] flex flex-col items-center px-6 py-16"
+      data-cast-incomplete={castIncomplete ? 'true' : 'false'}
+    >
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-60 pointer-events-none" />
       {/* Sticky bar lives only while the SSE is in flight. Outside the
           streaming/connecting window the inline header button handles
@@ -1492,7 +1569,7 @@ export function AnalysingView({
             (() => {
               const isRunning = false;
               const label = isAnalyzerReady
-                ? hasStartedOnceRef.current
+                ? hasStartedOnceRef.current || resumeRequired
                   ? 'Resume analysis'
                   : 'Start analysis'
                 : 'Waiting for analyzer…';
@@ -1838,9 +1915,18 @@ export function AnalysingView({
             <div className="mt-3 flex flex-wrap gap-2">
               <button
                 type="button"
-                onClick={() =>
-                  setRetry((r) => ({ nonce: r.nonce + 1, fresh: false, allowStage1Shrink: true }))
-                }
+                onClick={() => {
+                  /* #3435 — a Retry's shrink re-runs that chapter's subset (its
+                     Phase 0 runs again, an accepted cost); a main shrink re-fires
+                     the main run. */
+                  if (stage1ShrinkInfo.retryChapterId !== undefined) {
+                    const id = stage1ShrinkInfo.retryChapterId;
+                    setStage1ShrinkInfo(null);
+                    handleRetryChapter(id, { allowStage1Shrink: true });
+                    return;
+                  }
+                  setRetry((r) => ({ nonce: r.nonce + 1, fresh: false, allowStage1Shrink: true }));
+                }}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-ink text-canvas hover:bg-ink/90 transition-colors"
               >
                 Accept smaller roster ({stage1ShrinkInfo.next} characters)
@@ -1872,6 +1958,10 @@ export function AnalysingView({
                 const anotherRetryInFlight = retryingChapterId !== null && !isRetrying;
                 const disabled = isRetrying || anotherRetryInFlight || retryBlockedByMain;
                 const title = chapterTitleById[f.chapterId] ?? `Chapter ${f.chapterId}`;
+                /* #3435 (A10) — without a final roster a Retry cannot attribute
+                   (it would only re-detect the cast and end resume_required), so
+                   an attribution row waits for the main resume instead. */
+                const waitsForResume = (f.phase ?? 'cast') === 'attribution' && !stage1Ready;
                 return (
                   <li
                     key={f.chapterId}
@@ -1887,6 +1977,11 @@ export function AnalysingView({
                         </p>
                       )}
                       <p className="mt-0.5 text-xs text-ink/60 wrap-break-word">{f.message}</p>
+                      {waitsForResume && (
+                        <p className="mt-1 text-xs text-amber-900/90">
+                          Attributed when you resume the analysis.
+                        </p>
+                      )}
                       {f.remediation && (
                         <p className="mt-1 text-xs text-amber-900/90 wrap-break-word">
                           <span className="font-semibold">What to do:</span> {f.remediation}
@@ -1904,20 +1999,22 @@ export function AnalysingView({
                         </p>
                       )}
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleRetryChapter(f.chapterId)}
-                      disabled={disabled}
-                      title={retryBlockedByMain ? 'Pause the analysis first' : undefined}
-                      className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
-                        disabled
-                          ? 'bg-ink/10 text-ink/40 cursor-not-allowed'
-                          : 'bg-ink text-canvas hover:bg-ink/90'
-                      }`}
-                    >
-                      <IconRefresh className="w-3.5 h-3.5" />
-                      {isRetrying ? 'Retrying…' : 'Retry chapter'}
-                    </button>
+                    {!waitsForResume && (
+                      <button
+                        type="button"
+                        onClick={() => handleRetryChapter(f.chapterId)}
+                        disabled={disabled}
+                        title={retryBlockedByMain ? 'Pause the analysis first' : undefined}
+                        className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition-colors ${
+                          disabled
+                            ? 'bg-ink/10 text-ink/40 cursor-not-allowed'
+                            : 'bg-ink text-canvas hover:bg-ink/90'
+                        }`}
+                      >
+                        <IconRefresh className="w-3.5 h-3.5" />
+                        {isRetrying ? 'Retrying…' : 'Retry chapter'}
+                      </button>
+                    )}
                   </li>
                 );
               })}

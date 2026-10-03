@@ -1792,6 +1792,9 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(capturedSubsetCall!.chapterIds).toEqual([44]);
     /* Button reads Retrying… while the subset promise is pending. */
     expect(screen.getByRole('button', { name: /retrying/i })).toBeInTheDocument();
+    /* #3435 (C-8) — the Retry's ending re-reads book-state: the server has
+       cleared the chapter by then. */
+    getBookStateImpl = () => Promise.resolve(makeBookState([]));
 
     /* Resolve the subset call as if the server succeeded — the row drops
        out of the panel, and because that was the only failed chapter the
@@ -2040,6 +2043,9 @@ describe('AnalysingView — failed-chapter retry', () => {
     it('cast_incomplete after a successful Retry drops the row and ends needs-action (halted, no toast)', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       const { store } = await idleRetry();
+      /* #3435 (C-8) — the Retry's ending re-reads book-state: the server has
+         cleared the chapter by then. */
+      getBookStateImpl = () => Promise.resolve(makeBookState([]));
       await act(async () => {
         capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
       });
@@ -2141,6 +2147,9 @@ describe('AnalysingView — failed-chapter retry', () => {
     it('stage1_shrink_refused on a Retry with main not running drops the resolved row and does not POST the main run', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       await idleRetry();
+      /* #3435 (C-8) — the Retry's ending re-reads book-state: the server has
+         cleared the chapter by then. */
+      getBookStateImpl = () => Promise.resolve(makeBookState([]));
       await act(async () => {
         capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
       });
@@ -2161,6 +2170,9 @@ describe('AnalysingView — failed-chapter retry', () => {
 
     it('control: a Retry that resolved the chapter then ends without a result drops the row and raises nothing', async () => {
       const { store, AnalysisError, viewReject, viewOpts } = await startRetry();
+      /* #3435 (C-8) — the Retry's ending re-reads book-state: the server has
+         cleared the chapter by then. */
+      getBookStateImpl = () => Promise.resolve(makeBookState([]));
       await act(async () => {
         viewOpts.onChapterResolved!({ chapterId: 44 });
       });
@@ -2171,6 +2183,296 @@ describe('AnalysingView — failed-chapter retry', () => {
         expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
       });
       expect(store.getState().notifications.toasts.filter((t) => t.fixes?.length)).toHaveLength(0);
+    });
+  });
+
+  /* #3435 T6 — the book-state facts (stage1Ready, resumeRequired), the
+     `resume_required` ending, castIncomplete arming and the subset shrink. */
+  describe('#3435 — resume_required and the book-state facts', () => {
+    const RESUME_LINE = 'Some chapters still need attribution — resume the analysis to finish the book.';
+    const withFacts = (
+      bs: BookStateResponse,
+      facts: { stage1Ready?: boolean; resumeRequired?: boolean; castConfirmed?: boolean },
+    ): BookStateResponse => ({
+      ...bs,
+      state: { ...bs.state, castConfirmed: facts.castConfirmed ?? bs.state.castConfirmed },
+      analysis: {
+        ...bs.analysis!,
+        ...(facts.stage1Ready !== undefined ? { stage1Ready: facts.stage1Ready } : {}),
+        ...(facts.resumeRequired !== undefined ? { resumeRequired: facts.resumeRequired } : {}),
+      },
+    });
+    const haltedSnapshot = (haltCode: string, kind: 'main' | 'subset' = 'subset') =>
+      ({
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        phaseId: 0,
+        phaseLabel: 'x',
+        phaseProgress: 0,
+        remainingMs: null,
+        lastTickAt: 1,
+        state: 'halted',
+        haltCode,
+        haltReason: 'Phase 0 paused — 1 chapter still needs cast detection (Chapter Forty-Two). Retry to continue.',
+        kind,
+        ...(kind === 'subset' ? { subsetChapterIds: [44] } : {}),
+      }) as never;
+
+    let bookState: BookStateResponse;
+    let bookStateCalls = 0;
+    async function mount(opts: { snapshot?: unknown; middleware?: boolean } = {}) {
+      bookStateCalls = 0;
+      getBookStateImpl = () => {
+        bookStateCalls += 1;
+        return Promise.resolve(bookState);
+      };
+      const { analysisStreamMiddleware } = await import('../store/analysis-stream-middleware');
+      const store = configureStore({
+        reducer: {
+          ui: uiSlice.reducer,
+          cast: castSlice.reducer,
+          account: accountSlice.reducer,
+          bookMeta: bookMetaSlice.reducer,
+          analysis: analysisSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        middleware: (g) => (opts.middleware ? g().concat(analysisStreamMiddleware) : g()),
+      });
+      if (opts.snapshot) store.dispatch(analysisActions.setActiveStream(opts.snapshot as never));
+      const view = render(
+        <Provider store={store}>
+          <AnalysingView
+            manuscriptId="m1"
+            bookId="b1"
+            title="the Coalfall Commission"
+            wordCount={2440}
+            onComplete={() => {}}
+          />
+        </Provider>,
+      );
+      await waitFor(() => expect(bookStateCalls).toBeGreaterThan(0));
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      return { store, view };
+    }
+    const castIncompleteFlag = (container: HTMLElement) =>
+      container.querySelector('[data-cast-incomplete]')?.getAttribute('data-cast-incomplete');
+    async function settle() {
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+    }
+
+    it('P-beta (view): an armed cast_incomplete run whose Retry ends resume_required POSTs the main run', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      bookState = withFacts(makeBookState([44], { '44': rec('cast') }), { stage1Ready: false });
+      analyseManuscriptRejection = new AnalysisError('Phase 0 paused.', 'cast_incomplete');
+      await mount();
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+      });
+      await screen.findByText('Paused — 1 chapter still needs cast detection.');
+      analyseManuscriptRejection = undefined;
+      capturedOpts = undefined;
+      bookState = withFacts(makeBookState([]), { stage1Ready: true, resumeRequired: true });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /retry chapter/i }));
+      });
+      await act(async () => {
+        capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
+        rejectSubset?.(
+          new AnalysisError(
+            'Cast detection for Chapter Forty-Two is done. The rest of the book still needs attribution — resume the analysis to finish.',
+            'resume_required',
+          ),
+        );
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+    });
+
+    it('unarmed resume_required: the needs-action line, "Resume analysis", and no main POST', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      bookState = withFacts(makeBookState([44], { '44': rec('attribution') }), { stage1Ready: true });
+      const { store } = await mount({ middleware: true });
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /retry chapter/i }));
+      });
+      const message =
+        'Chapter Forty-Two re-analysed. Chapter Forty-Seven still need attribution — resume the analysis to finish the book.';
+      await act(async () => {
+        rejectSubset?.(new AnalysisError(message, 'resume_required'));
+      });
+      await settle();
+      expect(screen.getByTestId('analysis-needs-action-line')).toHaveTextContent(message);
+      expect(screen.getByRole('button', { name: /resume analysis/i })).toBeInTheDocument();
+      expect(capturedOpts).toBeUndefined();
+      expect(store.getState().notifications.toasts).toHaveLength(0);
+    });
+
+    it('C18: a confirmed book whose book-state says resumeRequired shows the rows, "Resume analysis" and the needs-action line with no snapshot', async () => {
+      bookState = withFacts(makeBookState([44], { '44': rec('attribution') }), {
+        stage1Ready: true,
+        resumeRequired: true,
+        castConfirmed: true,
+      });
+      const { store } = await mount();
+      expect(store.getState().analysis.activeStream).toBeNull();
+      expect(await screen.findByText('Chapter Forty-Two')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /resume analysis/i })).toBeInTheDocument();
+      expect(screen.getByTestId('analysis-needs-action-line')).toHaveTextContent(RESUME_LINE);
+    });
+
+    it('C20: castIncomplete is armed on mount from a halted subset cast_incomplete snapshot only when the mount-time stage1Ready is false; the copy follows the latest stage1Ready', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      bookState = withFacts(makeBookState([44, 49], { '44': rec('cast'), '49': rec('cast') }), { stage1Ready: false });
+      const armed = await mount({ snapshot: haltedSnapshot('cast_incomplete') });
+      expect(castIncompleteFlag(armed.view.container)).toBe('true');
+      expect(screen.getByText('Paused — 2 chapters still need cast detection.')).toBeInTheDocument();
+      /* A run ending refreshes the facts: the copy follows the new stage1Ready. */
+      bookState = withFacts(makeBookState([44, 49], { '44': rec('cast'), '49': rec('cast') }), { stage1Ready: true });
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole('button', { name: /retry chapter/i })[1]);
+      });
+      await act(async () => {
+        rejectSubset?.(new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result'));
+      });
+      expect(await screen.findByText('Cast detection failed on 2 chapters.')).toBeInTheDocument();
+      armed.view.unmount();
+
+      bookState = withFacts(makeBookState([44], { '44': rec('cast') }), { stage1Ready: true });
+      const unarmed = await mount({ snapshot: haltedSnapshot('cast_incomplete') });
+      expect(castIncompleteFlag(unarmed.view.container)).toBe('false');
+    });
+
+    it('C-8: after S8, the refreshed stage1Ready:true does not disarm the auto-resume', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      bookState = withFacts(makeBookState([44], { '44': rec('cast') }), { stage1Ready: false });
+      analyseManuscriptRejection = new AnalysisError('Phase 0 paused.', 'cast_incomplete');
+      await mount();
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+      });
+      await screen.findByText('Paused — 1 chapter still needs cast detection.');
+      analyseManuscriptRejection = undefined;
+      capturedOpts = undefined;
+      bookState = withFacts(makeBookState([]), { stage1Ready: true, resumeRequired: true });
+      const callsBefore = bookStateCalls;
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /retry chapter/i }));
+      });
+      await act(async () => {
+        capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
+        rejectSubset?.(new AnalysisError('Cast detection for Chapter Forty-Two is done.', 'resume_required'));
+      });
+      await waitFor(() => expect(bookStateCalls).toBeGreaterThan(callsBefore));
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+    });
+
+    it('C-8: castIncomplete is never armed by a refresh', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      bookState = withFacts(makeBookState([44, 49], { '44': rec('cast'), '49': rec('cast') }), { stage1Ready: true });
+      const { view } = await mount({ snapshot: haltedSnapshot('cast_incomplete') });
+      expect(castIncompleteFlag(view.container)).toBe('false');
+      /* A later refresh says stage1 is absent, with the halted snapshot still there. */
+      bookState = withFacts(makeBookState([44, 49], { '44': rec('cast'), '49': rec('cast') }), { stage1Ready: false });
+      const callsBefore = bookStateCalls;
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole('button', { name: /retry chapter/i })[1]);
+      });
+      await act(async () => {
+        rejectSubset?.(new AnalysisError('Phase 0 paused.', 'cast_incomplete'));
+      });
+      await waitFor(() => expect(bookStateCalls).toBeGreaterThan(callsBefore));
+      await settle();
+      expect(castIncompleteFlag(view.container)).toBe('false');
+    });
+
+    it('A8: a Retry ending resume_required keeps the halted snapshot; the needs-action line reads its haltReason', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      bookState = withFacts(makeBookState([44], { '44': rec('attribution') }), { stage1Ready: true });
+      const { store } = await mount({ middleware: true });
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /retry chapter/i }));
+      });
+      const reason = 'Chapter Forty-Two re-analysed. Chapter Forty-Seven still need attribution — resume the analysis to finish the book.';
+      await act(async () => {
+        rejectSubset?.(new AnalysisError(reason, 'resume_required'));
+      });
+      await settle();
+      expect(store.getState().analysis.activeStream).toMatchObject({
+        state: 'halted',
+        haltCode: 'resume_required',
+        haltReason: reason,
+      });
+      expect(screen.getByTestId('analysis-needs-action-line')).toHaveTextContent(reason);
+    });
+
+    it('A10: with stage1Ready false, an attribution row has no Retry and reads "Attributed when you resume the analysis."; a cast row keeps Retry', async () => {
+      bookState = withFacts(makeBookState([44, 49], { '44': rec('cast'), '49': rec('attribution') }), {
+        stage1Ready: false,
+      });
+      await mount();
+      expect(await screen.findByText('Attributed when you resume the analysis.')).toBeInTheDocument();
+      const buttons = screen.getAllByRole('button', { name: /retry chapter/i });
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0].closest('li')).toHaveTextContent('Chapter Forty-Two');
+    });
+
+    it('A10: attribution rows while stage1 is absent get the resume subtext', async () => {
+      bookState = withFacts(makeBookState([49], { '49': rec('attribution') }), { stage1Ready: false });
+      await mount();
+      expect(await screen.findByText('Speaker attribution failed on 1 chapter.')).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Cast detection hasn't finished for the whole book, so these chapters are attributed when you resume the analysis.",
+        ),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /retry chapter/i })).not.toBeInTheDocument();
+    });
+
+    it('a reload with stage1 absent shows the paused cast copy (no run this session)', async () => {
+      bookState = withFacts(makeBookState([44], { '44': rec('cast') }), { stage1Ready: false });
+      await mount();
+      expect(await screen.findByText('Paused — 1 chapter still needs cast detection.')).toBeInTheDocument();
+    });
+
+    it('Analysing subset shrink: Accept re-runs the subset with allowStage1Shrink', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      bookState = withFacts(makeBookState([44], { '44': rec('cast') }), { stage1Ready: true });
+      await mount();
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /retry chapter/i }));
+      });
+      await act(async () => {
+        rejectSubset?.(new AnalysisError('Cast finalisation would drop from 9 to 4 characters.', 'stage1_shrink_refused', undefined, 9, 4));
+      });
+      expect(await screen.findByTestId('stage1-shrink-refused-banner')).toBeInTheDocument();
+      capturedSubsetCall = undefined;
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /accept smaller roster/i }));
+      });
+      expect(capturedSubsetCall!.chapterIds).toEqual([44]);
+      expect(capturedSubsetCall!.opts!.allowStage1Shrink).toBe(true);
+      expect(capturedOpts).toBeUndefined();
+    });
+
+    it('Analysing subset shrink: main re-entry does not clear a subset shrink banner', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      bookState = withFacts(makeBookState([44], { '44': rec('cast') }), { stage1Ready: true });
+      await mount();
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: /retry chapter/i }));
+      });
+      await act(async () => {
+        rejectSubset?.(new AnalysisError('Cast finalisation would drop from 9 to 4 characters.', 'stage1_shrink_refused', undefined, 9, 4));
+      });
+      expect(await screen.findByTestId('stage1-shrink-refused-banner')).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /resume analysis|start analysis/i }));
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+      expect(screen.getByTestId('stage1-shrink-refused-banner')).toBeInTheDocument();
     });
   });
 });

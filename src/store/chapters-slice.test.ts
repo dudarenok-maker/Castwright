@@ -1777,3 +1777,60 @@ describe('forwardRegenChapters', () => {
     expect(forwardRegenChapters(chapters, 4).map((c) => c.id)).toEqual([4]);
   });
 });
+
+describe('chaptersSlice — analysisGapById (#3435 decision F / O2)', () => {
+  const chapters = [
+    { id: 1, title: 'Chapter 1', slug: '01-chapter-one' },
+    { id: 2, title: 'Chapter 2', slug: '02-chapter-two' },
+    { id: 3, title: 'Chapter 3', slug: '03-chapter-three', excluded: true },
+  ];
+  const hydrate = (analysis?: {
+    unattributedChapterIds?: number[];
+    failedChapterErrors?: Record<string, { message: string }>;
+  }) =>
+    chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters,
+        completedSlugs: [],
+        characters: [],
+        analysis,
+      }),
+    );
+
+  it("the book-state hydrate carries unattributedChapterIds and failedChapterErrors; a record's message wins", () => {
+    const next = hydrate({
+      unattributedChapterIds: [2],
+      failedChapterErrors: { '1': { message: 'Attribution broke.' }, '2': { message: 'Timed out.' } },
+    });
+    expect(next.analysisGapById).toEqual({
+      1: { message: 'Attribution broke.' },
+      2: { message: 'Timed out.' },
+    });
+  });
+
+  it("an unattributed chapter with no record reads \"Analysis didn't finish for this chapter.\"; an excluded chapter gets no entry", () => {
+    const next = hydrate({
+      unattributedChapterIds: [2],
+      failedChapterErrors: { '3': { message: 'Excluded and failed.' } },
+    });
+    expect(next.analysisGapById).toEqual({ 2: { message: "Analysis didn't finish for this chapter." } });
+  });
+
+  it('a hydrate with no analysis leaves the map empty', () => {
+    expect(hydrate(undefined).analysisGapById).toEqual({});
+  });
+
+  it('setAnalysisGap sets an entry; clearAnalysisGap removes it', () => {
+    const set = chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.setAnalysisGap({ chapterId: 4, message: 'It failed.' }),
+    );
+    expect(set.analysisGapById).toEqual({ 4: { message: 'It failed.' } });
+    const cleared = chaptersSlice.reducer(set, chaptersActions.clearAnalysisGap(4));
+    expect(cleared.analysisGapById).toEqual({});
+    /* Clearing an absent entry is a no-op. */
+    expect(chaptersSlice.reducer(baseState([]), chaptersActions.clearAnalysisGap(9)).analysisGapById ?? {}).toEqual({});
+  });
+});

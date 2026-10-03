@@ -372,9 +372,10 @@ export const analysisStreamMiddleware: Middleware = (store) => {
             }),
           );
           /* #3435 — a subset run that ends in a not-a-failure code
-             (`cast_incomplete`, `stage1_shrink_refused`) is a needs-action stop,
-             not an error: the halted snapshot carries the server's message for
-             the needs-action line and the pill, and no red toast is raised. */
+             (`cast_incomplete`, `stage1_shrink_refused`, `resume_required`) is a
+             needs-action stop, not an error: the halted snapshot carries the
+             server's message for the needs-action line and the pill, and no red
+             toast is raised. */
           if (localHandle.kind === 'subset' && isNotAFailureHaltCode(e.code)) return;
           dispatch(
             e.code === 'analyzer-reasoning-overflow'

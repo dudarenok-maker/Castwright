@@ -2672,6 +2672,131 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(screen.queryByText(/Pause audio generation to analyse\?/i)).toBeNull();
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
   });
+
+  /* #3435 decision F / O2 — a chapter whose analysis did not finish (the
+     book-state's unattributedChapterIds / failedChapterErrors, carried into
+     chapters.analysisGapById by the layout) gets a note and a Re-analyse
+     control on its Generate row, whatever its generation state. */
+  describe('#3435 — unfinished chapters and resume_required', () => {
+    const failedChapter2: Chapter = { ...chapter2, state: 'failed', errorReason: 'Synthesis broke.' };
+    function renderRows(store: ReturnType<typeof makeIncludeStore>, rows: Chapter[]) {
+      store.dispatch(chaptersSlice.actions.setChapters(rows));
+      return render(
+        <Provider store={store}>
+          <HostedGenerationView
+            chapters={rows}
+            characters={characters}
+            paused
+            title="the Coalfall Commission"
+            bookId="b1"
+            modelKey="coqui-xtts-v2"
+            onRegenerate={() => {}}
+            onRegenerateBook={() => {}}
+            onRegenerateCharacterInChapter={() => {}}
+            onPreview={() => {}}
+          />
+        </Provider>,
+      );
+    }
+
+    it('Decision F / O2: Generate view shows "Analysis didn\'t finish for this chapter." and a Re-analyse control for a chapter in analysisGapById — on a queued row and on a generation-failed row with an errorReason, which have no Re-analyse today', async () => {
+      for (const row of [chapter2, failedChapter2]) {
+        const store = makeIncludeStore();
+        store.dispatch(
+          chaptersSlice.actions.setAnalysisGap({ chapterId: 2, message: "Analysis didn't finish for this chapter." }),
+        );
+        runAnalysisForChaptersSpy.mockReturnValue(new Promise(() => {}));
+        const { unmount } = renderRows(store, [chapter1, row, ch3Excluded]);
+        expect(screen.getByText("Analysis didn't finish for this chapter.")).toBeInTheDocument();
+        const btn = screen.getByTestId('chapter-row-2-reanalyse');
+        expect(btn).not.toBeDisabled();
+        fireEvent.click(btn);
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+        expect(runAnalysisForChaptersSpy).toHaveBeenLastCalledWith('m1', [2], expect.anything());
+        unmount();
+        runAnalysisForChaptersSpy.mockReset();
+      }
+    });
+
+    it('a chapter with no gap gets no analysis note (queued row: no Re-analyse, as today)', () => {
+      const store = makeIncludeStore();
+      renderRows(store, [chapter1, chapter2, ch3Excluded]);
+      expect(screen.queryByText("Analysis didn't finish for this chapter.")).not.toBeInTheDocument();
+      expect(screen.queryByTestId('chapter-row-2-reanalyse')).not.toBeInTheDocument();
+    });
+
+    it('a Re-analyse result clears the gap; a failure sets it', async () => {
+      const store = makeIncludeStore();
+      store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+      runAnalysisForChaptersSpy.mockResolvedValueOnce(subsetResponse);
+      const { unmount } = renderInclude(store);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(store.getState().chapters.analysisGapById?.[1]).toBeUndefined());
+      unmount();
+
+      const store2 = makeIncludeStore();
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+      renderInclude(store2);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() =>
+        expect(store2.getState().chapters.analysisGapById?.[1]).toEqual({ message: 'The analyzer timed out.' }),
+      );
+    });
+
+    it('Generate view: no Include rollback on resume_required — a neutral note with "Open analysis", and a halted snapshot', async () => {
+      const message =
+        'Chapter 3 re-analysed. Chapter 2 still need attribution — resume the analysis to finish the book.';
+      const store = makeIncludeStore();
+      setChapterExcludedSpy.mockReset();
+      setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'resume_required'));
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(setChapterExcludedSpy).not.toHaveBeenCalledWith('b1', 3, true);
+      expect(screen.getByRole('link', { name: /Open analysis/i })).toHaveAttribute('href', '#/books/b1/analysing');
+      expect(store.getState().analysis.activeStream).toMatchObject({ state: 'halted', haltCode: 'resume_required' });
+      expect(screen.queryByText(/Re-analysis failed/)).not.toBeInTheDocument();
+    });
+
+    it('Generate view: inline "Accept smaller cast" for a shrink re-runs the subset with allowStage1Shrink (an Include re-does the include first)', async () => {
+      const store = makeIncludeStore();
+      setChapterExcludedSpy.mockReset();
+      setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(
+        new AnalysisError('Cast finalisation would drop from 9 to 4 characters.', 'stage1_shrink_refused', undefined, 9, 4),
+      );
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      const accept = await screen.findByRole('button', { name: /Accept smaller cast/i });
+      /* The include was rolled back, as for any failed include. */
+      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+      runAnalysisForChaptersSpy.mockReturnValueOnce(new Promise(() => {}));
+      fireEvent.click(accept);
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, false);
+      expect(runAnalysisForChaptersSpy.mock.calls[1][1]).toEqual([3]);
+      expect(runAnalysisForChaptersSpy.mock.calls[1][2]).toMatchObject({ allowStage1Shrink: true });
+    });
+
+    it('Generate view: "Accept smaller cast" on a Re-analyse shrink re-runs that Re-analyse with allowStage1Shrink', async () => {
+      const store = makeIncludeStore();
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(
+        new AnalysisError('Cast finalisation would drop from 9 to 4 characters.', 'stage1_shrink_refused', undefined, 9, 4),
+      );
+      renderInclude(store);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      const accept = await screen.findByRole('button', { name: /Accept smaller cast/i });
+      runAnalysisForChaptersSpy.mockReturnValueOnce(new Promise(() => {}));
+      fireEvent.click(accept);
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+      expect(runAnalysisForChaptersSpy.mock.calls[1][1]).toEqual([1]);
+      expect(runAnalysisForChaptersSpy.mock.calls[1][2]).toMatchObject({ allowStage1Shrink: true });
+    });
+  });
 });
 
 /* Wave 3 — phone viewport contract for the Generation view: the page

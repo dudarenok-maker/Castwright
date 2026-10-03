@@ -26,6 +26,11 @@ type Store = {
   dispatch: (action: unknown) => void;
 };
 
+type GapStore = {
+  getState: () => { chapters: { chapters: Array<Record<string, unknown>> } };
+  dispatch: (action: unknown) => void;
+};
+
 test('Re-analyse is disabled with "Pause the analysis first" while the main analysis runs, enabled once paused', async ({
   page,
 }) => {
@@ -82,4 +87,34 @@ test('Re-analyse is disabled with "Pause the analysis first" while the main anal
 
   await expect(reanalyse).toBeEnabled();
   await expect(page.getByText('Pause the analysis first')).toHaveCount(0);
+});
+
+/* #3435 decision F / O2 — a chapter whose analysis did not finish (the
+ * book-state's analysis gaps, carried by the layout's hydrate into
+ * `chapters.analysisGapById`) shows an analysis note and an enabled Re-analyse
+ * control on its Generate row, even on a queued row, which has no Re-analyse
+ * otherwise. Crosses the chapters slice → Generate row seam. */
+test('a queued chapter with an analysis gap shows the note and an enabled Re-analyse', async ({ page }) => {
+  await page.goto('/#/books/sb/generate');
+  await expect(page.getByTestId('chapter-row-1-reanalyse')).toBeVisible({ timeout: 10_000 });
+
+  await page.evaluate(() => {
+    const store = (window as unknown as { __store__: GapStore }).__store__;
+    const chapters = store.getState().chapters.chapters;
+    /* Flip only chapter 1 to 'queued' (as generate-disabled-while-analysing does). */
+    store.dispatch({
+      type: 'chapters/setChapters',
+      payload: chapters.map((c, i) => (i === 0 ? { ...c, state: 'queued' } : c)),
+    });
+    store.dispatch({
+      type: 'chapters/setAnalysisGap',
+      payload: { chapterId: 1, message: "Analysis didn't finish for this chapter." },
+    });
+  });
+
+  await page.locator('#chapter-1 > button').click();
+  await expect(page.getByTestId('chapter-row-1-analysis-gap')).toContainText(
+    "Analysis didn't finish for this chapter.",
+  );
+  await expect(page.getByTestId('chapter-row-1-reanalyse')).toBeEnabled();
 });

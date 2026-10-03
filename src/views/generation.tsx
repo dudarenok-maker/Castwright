@@ -169,6 +169,24 @@ interface SubsetProgress {
   throttle: { until: number; reason: 'rpm' | 'tpm' | 'rpd' | 'retry-after'; model: string } | null;
   error: string | null;
   controller: AbortController;
+  /** #3435 — which flow started the run, so "Accept smaller cast" re-runs the
+      same one (an Include re-does the include first: its rollback ran). */
+  origin: 'include' | 'reanalyse';
+  /** #3435 — the error is a `stage1_shrink_refused`: the row offers "Accept
+      smaller cast". */
+  shrink?: boolean;
+  /** #3435 — the run ended `resume_required`: the chapter was attributed but
+      the book is unfinished. A neutral note with "Open analysis", not an
+      error. */
+  notice?: string;
+}
+
+/* Stable empty map for the analysisGapById selector fallback. */
+const EMPTY_GAPS: Record<number, { message: string }> = {};
+
+/* #3435 — an entry still streaming (not ended in an error or a notice). */
+function isSubsetRunning(entry: SubsetProgress | null | undefined): boolean {
+  return !!entry && entry.error == null && entry.notice == null;
 }
 
 interface Props {
@@ -219,6 +237,10 @@ export function GenerationView({
     return analysis ? selectMainAnalysisLive({ analysis }, manuscriptId) : false;
   });
   const activityEvents = useAppSelector((s) => s.changeLog.events);
+  /* #3435 (decision F, O2) — chapters whose analysis did not finish (from the
+     book-state GET via the layout's hydrate, kept current by this view's
+     subset runs). Each such row gets a note and a Re-analyse control. */
+  const analysisGapById = useAppSelector((s) => s.chapters.analysisGapById ?? EMPTY_GAPS);
   /* srv-36 hardening — live per-book scoreBook progress, ticked over SSE
      during an active generation run (generation-stream-runner.ts). Undefined
      when no scoring pass is currently in flight for this book. */
@@ -374,7 +396,11 @@ export function GenerationView({
     });
   };
 
-  async function handleToggleExcluded(chapterId: number, excluded: boolean): Promise<void> {
+  async function handleToggleExcluded(
+    chapterId: number,
+    excluded: boolean,
+    opts: { allowStage1Shrink?: boolean } = {},
+  ): Promise<void> {
     /* Exclude direction — flip the flag and walk away. No analysis is
        needed; the server cleans up audio + segments and the slice resets
        transient generation state for the row. */
@@ -403,7 +429,7 @@ export function GenerationView({
        An errored entry doesn't block retry: handleRetrySubset relies
        on this so the user can re-fire the flow without a state-update
        microtask dance. */
-    if (subsetByChapter[chapterId] && subsetByChapter[chapterId].error == null) return;
+    if (isSubsetRunning(subsetByChapter[chapterId])) return;
 
     const controller = new AbortController();
     setSubsetByChapter((prev) => ({
@@ -419,6 +445,7 @@ export function GenerationView({
         throttle: null,
         error: null,
         controller,
+        origin: 'include',
       },
     }));
 
@@ -456,6 +483,8 @@ export function GenerationView({
 
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
+        /* #3435 — set only by the row's "Accept smaller cast". */
+        allowStage1Shrink: opts.allowStage1Shrink || undefined,
         /* #3084 — surfaces the non-story overflow advisory; this subset call
            is otherwise a silent consumer of `warning` frames. */
         onWarning: (w) => deliverNonStoryOverflowWarning(dispatch, w),
@@ -514,6 +543,8 @@ export function GenerationView({
       dispatch(castActions.mergeCharacters(res.characters ?? []));
       dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
       dispatch(manuscriptActions.hydrateFromAnalysis(res));
+      /* #3435 — the chapter's analysis finished. */
+      dispatch(chaptersActions.clearAnalysisGap(chapterId));
 
       setSubsetByChapter((prev) => {
         const { [chapterId]: _, ...rest } = prev;
@@ -543,6 +574,17 @@ export function GenerationView({
          is handled the same way (restore, message on the row). */
       const isSubsetInProgress =
         e instanceof AnalysisError && (e.code === 'subset_in_progress' || e.code === 'main_analysis_running');
+      /* #3435 — `resume_required`: the server attributed the chapter (an
+         Include target is attributed whenever the roster is final), but the
+         book is not finished, so nothing was persisted as final. No rollback;
+         a neutral note with "Open analysis"; the halted snapshot keeps the
+         needs-action stop for the pill and the analysing view. */
+      if (e instanceof AnalysisError && e.code === 'resume_required') {
+        dispatch(chaptersActions.clearAnalysisGap(chapterId));
+        dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
+        patchSubset(chapterId, { notice: e.message });
+        return;
+      }
       await rollbackInclude(chapterId).catch((rollbackErr) => {
         console.warn('[generation] include rollback failed', rollbackErr);
       });
@@ -574,7 +616,13 @@ export function GenerationView({
       haltOnReasoningOverflow(e);
       dispatch(analysisActions.clearActiveStream());
       const message = (e as Error).message || 'Subset analysis failed.';
-      patchSubset(chapterId, { error: message });
+      /* #3435 — the chapter's analysis did not finish. A shrink also offers
+         "Accept smaller cast", which re-does the include (the rollback ran). */
+      dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+      patchSubset(chapterId, {
+        error: message,
+        shrink: e instanceof AnalysisError && e.code === 'stage1_shrink_refused',
+      });
     }
   }
 
@@ -616,6 +664,14 @@ export function GenerationView({
     void handleToggleExcluded(chapterId, false);
   }
 
+  /* #3435 — "Accept smaller cast": re-run the same subset with
+     allowStage1Shrink (its Phase 0 runs again, an accepted cost). */
+  function handleAcceptShrink(chapterId: number): void {
+    const entry = subsetByChapter[chapterId];
+    if (entry?.origin === 'include') void handleToggleExcluded(chapterId, false, { allowStage1Shrink: true });
+    else void handleReanalyse(chapterId, { allowStage1Shrink: true });
+  }
+
   function handleIncludeClick(chapterId: number): void {
     guard(() => {
       void handleToggleExcluded(chapterId, false);
@@ -629,9 +685,12 @@ export function GenerationView({
      preserved server-side. Streaming + progress mirror `handleToggleExcluded`'s
      include branch, minus the exclude flip + rollback (the chapter stays
      included throughout). */
-  async function handleReanalyse(chapterId: number): Promise<void> {
+  async function handleReanalyse(
+    chapterId: number,
+    opts: { allowStage1Shrink?: boolean } = {},
+  ): Promise<void> {
     if (!manuscriptId) return;
-    if (subsetByChapter[chapterId] && subsetByChapter[chapterId].error == null) return;
+    if (isSubsetRunning(subsetByChapter[chapterId])) return;
     const controller = new AbortController();
     setSubsetByChapter((prev) => ({
       ...prev,
@@ -646,6 +705,7 @@ export function GenerationView({
         throttle: null,
         error: null,
         controller,
+        origin: 'reanalyse',
       },
     }));
     const engine = engineForModelId(selectedAnalyzerModelId);
@@ -673,6 +733,8 @@ export function GenerationView({
     try {
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
+        /* #3435 — set only by the row's "Accept smaller cast". */
+        allowStage1Shrink: opts.allowStage1Shrink || undefined,
         /* #3084 — surfaces the non-story overflow advisory; this subset call
            is otherwise a silent consumer of `warning` frames. */
         onWarning: (w) => deliverNonStoryOverflowWarning(dispatch, w),
@@ -722,6 +784,8 @@ export function GenerationView({
       dispatch(castActions.mergeCharacters(res.characters ?? []));
       dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
       dispatch(manuscriptActions.hydrateFromAnalysis(res));
+      /* #3435 — the chapter's analysis finished. */
+      dispatch(chaptersActions.clearAnalysisGap(chapterId));
       setSubsetByChapter((prev) => {
         const { [chapterId]: _, ...rest } = prev;
         return rest;
@@ -759,9 +823,24 @@ export function GenerationView({
       /* Drop the snapshot on terminal failure — the server-side job surfaced
          an error, and the row's own error state inside subsetByChapter carries
          the message for the user. */
+      /* #3435 — `resume_required`: the chapter was attributed, the book is
+         not finished. A neutral note with "Open analysis", and the halted
+         snapshot keeps the needs-action stop. */
+      if (e instanceof AnalysisError && e.code === 'resume_required') {
+        dispatch(chaptersActions.clearAnalysisGap(chapterId));
+        dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
+        patchSubset(chapterId, { notice: e.message });
+        return;
+      }
       haltOnReasoningOverflow(e);
       dispatch(analysisActions.clearActiveStream());
-      patchSubset(chapterId, { error: (e as Error).message || 'Re-analysis failed.' });
+      const message = (e as Error).message || 'Re-analysis failed.';
+      /* #3435 — the chapter's analysis did not finish. */
+      dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+      patchSubset(chapterId, {
+        error: message,
+        shrink: e instanceof AnalysisError && e.code === 'stage1_shrink_refused',
+      });
     }
   }
 
@@ -1401,6 +1480,8 @@ export function GenerationView({
               mainAnalysisLive={mainAnalysisLive}
               onCancelSubset={handleCancelSubset}
               onRetrySubset={handleRetrySubset}
+              onAcceptShrink={handleAcceptShrink}
+              analysisGap={analysisGapById[ch.id]}
               stale={
                 /* OR-gate (fs-58 Task 3 + #1105 + fs-58 Unit B): stale if the
                    precise render-map diff flags a speaker change OR the precise
@@ -1541,6 +1622,12 @@ interface ChapterRowProps {
   mainAnalysisLive: boolean;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
+  /** #3435 — re-run this chapter's subset with allowStage1Shrink. */
+  onAcceptShrink: (chapterId: number) => void;
+  /** #3435 (decision F, O2) — this chapter's analysis did not finish: the
+      row shows the note and a Re-analyse control whatever its generation
+      state. Undefined when the analysis finished. */
+  analysisGap: { message: string } | undefined;
   /** Bug 2 — true when this `done` chapter's sentence→speaker assignments were
       reassigned after its audio was rendered (derived from the change-log vs
       `audioRenderedAt`). Drives the "Sentences reassigned · regenerate" caption. */
@@ -1579,6 +1666,8 @@ function ChapterRow({
   mainAnalysisLive,
   onCancelSubset,
   onRetrySubset,
+  onAcceptShrink,
+  analysisGap,
   stale,
   subsetProgress,
   activeModelKey,
@@ -1602,19 +1691,26 @@ function ChapterRow({
      running) MUST keep the special row visible — without it the
      in-flight progress / Cancel / error UI would disappear the moment
      the slice action lands and the row would morph into an empty
-     normal queued row mid-stream. */
-  if (chapter.excluded || subsetProgress) {
+     normal queued row mid-stream. #3435 — a run that ended
+     `resume_required` (`notice`) leaves an included chapter, so it renders
+     as a normal row carrying the note. */
+  if (chapter.excluded || (subsetProgress && subsetProgress.notice == null)) {
     return (
       <ExcludedChapterRow
         chapter={chapter}
+        bookId={bookId}
         subsetProgress={subsetProgress}
         onIncludeClick={onIncludeClick}
         mainAnalysisLive={mainAnalysisLive}
         onCancelSubset={onCancelSubset}
         onRetrySubset={onRetrySubset}
+        onAcceptShrink={onAcceptShrink}
       />
     );
   }
+  /* #3435 — the action row below (done, or failed without a message)
+     already carries Re-analyse; every other row gets it on the gap note. */
+  const actionRowShown = chapter.state === 'done' || (chapter.state === 'failed' && !chapter.errorReason);
 
   const assembling = chapter.phase === 'assembling';
   const verifying = chapter.phase === 'verifying';
@@ -1860,6 +1956,47 @@ function ChapterRow({
           <IconArrowDn className="w-4 h-4" />
         </span>
       </button>
+      {subsetProgress?.notice != null && (
+        /* #3435 — a subset run ended `resume_required`: neutral, not a failure. */
+        <div className="mx-5 mb-4 -mt-1 rounded-2xl border border-ink/10 bg-ink/3 px-4 py-3 flex items-start gap-3">
+          <p className="flex-1 min-w-0 text-xs text-ink/70 leading-relaxed">{subsetProgress.notice}</p>
+          <a
+            href={`#/books/${bookId}/analysing`}
+            className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] fine-pointer:min-h-0 px-2 text-xs font-semibold text-ink/70 hover:text-magenta transition-colors"
+          >
+            Open analysis
+          </a>
+        </div>
+      )}
+      {analysisGap && (
+        /* #3435 (decision F, O2) — this chapter's analysis did not finish; the
+           book's status is untouched. */
+        <div
+          className="mx-5 mb-4 -mt-1 rounded-2xl border border-amber-200 bg-amber-50/70 px-4 py-3 flex items-start gap-3"
+          data-testid={`chapter-row-${chapter.id}-analysis-gap`}
+        >
+          <IconWarning className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+          <p className="flex-1 min-w-0 text-xs text-amber-900/90 leading-relaxed">{analysisGap.message}</p>
+          {!actionRowShown && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onReanalyse(chapter);
+              }}
+              disabled={isSubsetRunning(subsetProgress) || mainAnalysisLive}
+              data-testid={`chapter-row-${chapter.id}-reanalyse`}
+              title={
+                mainAnalysisLive
+                  ? 'Pause the analysis first'
+                  : 'Re-run character detection + attribution for this chapter (designed voices preserved).'
+              }
+              className="shrink-0 inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <IconSparkle className="w-3.5 h-3.5" /> Re-analyse
+            </button>
+          )}
+        </div>
+      )}
       {chapter.state === 'failed' && chapter.errorReason && (
         <div className="mx-5 mb-4 -mt-1 rounded-2xl border border-rose-200 bg-rose-50/80 px-4 py-3 flex items-start gap-3">
           <IconWarning className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
@@ -1950,7 +2087,7 @@ function ChapterRow({
               e.stopPropagation();
               onReanalyse(chapter);
             }}
-            disabled={subsetProgress != null || mainAnalysisLive}
+            disabled={isSubsetRunning(subsetProgress) || mainAnalysisLive}
             data-testid={`chapter-row-${chapter.id}-reanalyse`}
             title={
               mainAnalysisLive
@@ -2187,24 +2324,31 @@ function ChapterRow({
    → optional error/retry). */
 function ExcludedChapterRow({
   chapter,
+  bookId,
   subsetProgress,
   onIncludeClick,
   mainAnalysisLive,
   onCancelSubset,
   onRetrySubset,
+  onAcceptShrink,
 }: {
   chapter: Chapter;
+  bookId: string;
   subsetProgress: SubsetProgress | null;
   onIncludeClick: (chapterId: number) => void;
   mainAnalysisLive: boolean;
   onCancelSubset: (chapterId: number) => void;
   onRetrySubset: (chapterId: number) => void;
+  onAcceptShrink: (chapterId: number) => void;
 }) {
   /* Three-state UI: idle (subsetProgress null) → running (entry exists,
      no error) → errored (entry exists with error). Narrowing via direct
      null/error checks rather than aliased booleans so TypeScript's
-     control-flow analysis flows through every branch. */
-  const running = subsetProgress && subsetProgress.error == null ? subsetProgress : null;
+     control-flow analysis flows through every branch. #3435 — plus a
+     `noticed` state (the run ended `resume_required`) for a row whose
+     chapter still reads excluded. */
+  const noticed = subsetProgress && subsetProgress.notice != null ? subsetProgress : null;
+  const running = subsetProgress && subsetProgress.error == null && !noticed ? subsetProgress : null;
   const errored = subsetProgress && subsetProgress.error != null ? subsetProgress : null;
   const throttleActive = running?.throttle != null && running.throttle.until > Date.now();
 
@@ -2236,6 +2380,8 @@ function ExcludedChapterRow({
             <span className="block text-[11px] text-rose-700 mt-0.5">
               Re-analysis failed: {errored.error}
             </span>
+          ) : noticed ? (
+            <span className="block text-[11px] text-ink/60 mt-0.5">{noticed.notice}</span>
           ) : (
             <span className="block text-[11px] text-ink/45 mt-0.5">
               Excluded — not analyzed, no audio will be generated.
@@ -2254,15 +2400,36 @@ function ExcludedChapterRow({
             Cancel
           </button>
         ) : errored ? (
-          <button
-            type="button"
-            onClick={() => onRetrySubset(chapter.id)}
-            disabled={mainAnalysisLive}
-            title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
+          <span className="flex flex-wrap items-center justify-end gap-x-1">
+            {errored.shrink && (
+              /* #3435 — re-runs the same subset with allowStage1Shrink. */
+              <button
+                type="button"
+                onClick={() => onAcceptShrink(chapter.id)}
+                disabled={mainAnalysisLive}
+                title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
+                className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-ink/70 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
+              >
+                Accept smaller cast
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onRetrySubset(chapter.id)}
+              disabled={mainAnalysisLive}
+              title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
+              className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
+            >
+              <IconRefresh className="w-3.5 h-3.5" /> Retry
+            </button>
+          </span>
+        ) : noticed ? (
+          <a
+            href={`#/books/${bookId}/analysing`}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-ink/70 hover:text-magenta transition-colors"
           >
-            <IconRefresh className="w-3.5 h-3.5" /> Retry
-          </button>
+            Open analysis
+          </a>
         ) : (
           <button
             type="button"

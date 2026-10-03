@@ -898,6 +898,10 @@ export function Layout() {
                    view falls back to the time-based heuristic for text edits. */
                 renderedTextByChapter: res.renderedTextByChapter,
                 renderedInstructByChapter: res.renderedInstructByChapter,
+                /* #3435 (decision F, O2) — the chapters whose analysis did not
+                   finish, so the Generate view (which never reads book-state
+                   itself) can give each its note and a Re-analyse control. */
+                analysis: res.analysis,
               }),
             );
           }

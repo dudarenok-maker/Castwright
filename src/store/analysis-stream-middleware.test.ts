@@ -1263,6 +1263,22 @@ describe('analysisStreamMiddleware — #3435 a subset handle ending in a not-a-f
     expect(store.getState().notifications.toasts).toHaveLength(0);
   });
 
+  it('a subset resume_required halts the snapshot with its message and raises no toast', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, phaseProgress: 0.5 }));
+    const message =
+      'Chapter Two re-analysed. Chapter Three still need attribution — resume the analysis to finish the book.';
+    lastCall().reject(new AnalysisError(message, 'resume_required'));
+    await settle();
+    expect(store.getState().analysis.activeStream).toMatchObject({
+      state: 'halted',
+      haltCode: 'resume_required',
+      haltReason: message,
+    });
+    expect(store.getState().notifications.toasts).toHaveLength(0);
+  });
+
   it('control: a subset handle ending in a real failure code still toasts', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
