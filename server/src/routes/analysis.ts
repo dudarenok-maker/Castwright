@@ -8578,10 +8578,14 @@ export async function runSubsetAnalyzerJob(
     }
 
     /* Stitch the full sentence list across all cached chapters (old + new),
-       in narrative order. Excluded chapters contribute nothing. */
+       in narrative order. Excluded chapters contribute nothing, and neither
+       does a pending take (#3435 M8d: never stitched — O2 lets the gate pass
+       on a book past Confirm while another chapter is still in P; it stays
+       listed as unattributed). The targets left P in the loop above. */
     const allSentences: SentenceOutput[] = [];
+    const pendingIds = new Set(cache.pendingAttributionChapterIds ?? []);
     for (const h of hints) {
-      if (h.excluded) continue;
+      if (h.excluded || pendingIds.has(h.id)) continue;
       const arr = cachedChapters[h.id];
       if (arr) allSentences.push(...arr);
     }

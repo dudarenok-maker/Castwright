@@ -10243,6 +10243,25 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
         expect(hasCurrentTake(r.after, 3)).toBe(false);
       }, 60_000);
 
+      /* #3435 final review M2 — a pending take is never stitched: O2 passes the
+         gate on a book past Confirm, and the stitch then took cachedChapters for
+         every hint, a P take included. */
+      it('O2: a pending (P) take on another chapter is not stitched into the result or the edits, and stays unattributed', async () => {
+        const book = makeBook('gate-o2-pending', three, { castConfirmed: true });
+        const seed = finishedCache(three);
+        await saveAnalysisCache(book.manuscriptId, { ...seed, pendingAttributionChapterIds: [3] });
+        const r = await runSubset(book, [2]);
+        expect(endings(r.events)).toEqual(['result']);
+        const result = r.events.find((e) => e.kind === 'result') as unknown as {
+          response: { sentences: Array<{ chapterId: number }> };
+        };
+        /* Control: the current takes are stitched. */
+        expect(result.response.sentences.some((s) => s.chapterId === 1)).toBe(true);
+        expect(result.response.sentences.some((s) => s.chapterId === 3)).toBe(false);
+        expect(r.edits?.sentences.some((s) => s.chapterId === 3)).toBe(false);
+        expect(hasCurrentTake(r.after, 3)).toBe(false);
+      }, 60_000);
+
       it('O2 control: on a book that has not reached Confirm, the same Retry still ends resume_required', async () => {
         const book = makeBook('gate-o2-control', three);
         await saveAnalysisCache(book.manuscriptId, gapCache());
