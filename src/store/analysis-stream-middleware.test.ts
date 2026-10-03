@@ -1268,7 +1268,7 @@ describe('analysisStreamMiddleware — #3435 a subset handle ending in a not-a-f
     store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
     store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 1, phaseProgress: 0.5 }));
     const message =
-      'Chapter Two re-analysed. Chapter Three still need attribution — resume the analysis to finish the book.';
+      'Chapter Two re-analysed. Chapter Three still needs attribution — resume the analysis to finish the book.';
     lastCall().reject(new AnalysisError(message, 'resume_required'));
     await settle();
     expect(store.getState().analysis.activeStream).toMatchObject({

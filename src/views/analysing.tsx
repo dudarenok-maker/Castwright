@@ -300,9 +300,6 @@ export function AnalysingView({
      answers (or from a server that predates it). */
   const [bookFacts, setBookFacts] = useState<{ stage1Ready?: boolean; resumeRequired: boolean } | null>(null);
   const [bookStateRefreshKey, setBookStateRefreshKey] = useState(0);
-  /* Set once the mount-time GET has answered: castIncomplete is armed from a
-     halted snapshot only then, never by a later refresh. */
-  const mountFactsReadRef = useRef(false);
   /* #3435 — the server refused this view's main start (a chapter retry is
      running, or the previous run is still finishing). Its message shows on the
      needs-action line; cleared on the next start. */
@@ -788,10 +785,11 @@ export function AnalysingView({
            either way it's a benign disconnect, not a failure to surface
            in the UI. Falling through would flash "Analysis failed:
            Analysis aborted" right before the new attempt renders. */
-        if ((e as Error)?.name === 'AbortError') return;
         /* #3435 (C-8) — every run ending this view observes re-reads the
-           book-state facts. */
+           book-state facts, an abort included: the run may have written
+           stage1 before it stopped. */
         setBookStateRefreshKey((k) => k + 1);
+        if ((e as Error)?.name === 'AbortError') return;
         /* #3435 (A7) — the server refused this start: a chapter retry is
            running (`subset_analysis_running`), or the previous run is still
            finishing (`main_analysis_running`, draining). No job started, so
@@ -900,6 +898,10 @@ export function AnalysingView({
   useEffect(() => {
     if (!bookId) return;
     let cancelled = false;
+    /* The mount read is the one fired with the initial key; a refresh (a later
+       key) never arms castIncomplete, even if the mount read was cancelled
+       before it answered. */
+    const isMountRead = bookStateRefreshKey === 0;
     api
       .getBookState(bookId)
       .then((res) => {
@@ -913,8 +915,7 @@ export function AnalysingView({
            cast_incomplete snapshot of either kind, when the roster is not final.
            A later refresh never arms it (C-8). Defensive read for legacy test
            stores without the analysis slice. */
-        if (!mountFactsReadRef.current) {
-          mountFactsReadRef.current = true;
+        if (isMountRead) {
           const snap = (store.getState() as { analysis?: { activeStream?: AnalysisStreamSnapshot | null } })
             .analysis?.activeStream;
           if (
@@ -1457,7 +1458,14 @@ export function AnalysingView({
       if (manuscriptId) dispatch(analysisActions.setPaused({ manuscriptId }));
       setAnalysisStarted(false);
       setConn('idle');
+      /* #3435 (C-8) — a Pause is a run ending this view observes (its own
+         catch returns early on the cancelled fetch): re-read the facts. */
+      setBookStateRefreshKey((k) => k + 1);
     } else {
+      /* #3435 — this click IS the resume: disarm the auto-resume first, or it
+         sees analysisStarted turn true in the same commit and fires a second
+         main POST. */
+      setCastIncomplete(false);
       setAnalysisStarted(true);
       setResuming(false);
       setRetry((r) => ({ nonce: r.nonce + 1, fresh: false }));
@@ -1490,10 +1498,7 @@ export function AnalysingView({
   const failedPanel = failedPanelCopy(failedChapters, stage1Ready);
 
   return (
-    <div
-      className="relative min-h-[calc(100vh-64px)] flex flex-col items-center px-6 py-16"
-      data-cast-incomplete={castIncomplete ? 'true' : 'false'}
-    >
+    <div className="relative min-h-[calc(100vh-64px)] flex flex-col items-center px-6 py-16">
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-60 pointer-events-none" />
       {/* Sticky bar lives only while the SSE is in flight. Outside the
           streaming/connecting window the inline header button handles

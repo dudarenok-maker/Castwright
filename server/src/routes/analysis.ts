@@ -1415,7 +1415,7 @@ export function resumeRequiredAfterCastMessage(titles: string[]): string {
 /* #3435 S14 — a subset run attributed its targets, but other chapters of an
    unfinished book still lack a current take. */
 export function resumeRequiredAfterRetryMessage(doneTitles: string[], missingTitles: string[]): string {
-  return `${titleList(doneTitles)} re-analysed. ${titleList(missingTitles)} still need attribution — resume the analysis to finish the book.`;
+  return `${titleList(doneTitles)} re-analysed. ${titleList(missingTitles)} still ${missingTitles.length === 1 ? 'needs' : 'need'} attribution — resume the analysis to finish the book.`;
 }
 
 /* Remove `chapterId` from `cache.failedChapterIds` if present, mutating
@@ -8560,7 +8560,7 @@ export async function runSubsetAnalyzerJob(
       if (missing.length > 0) {
         log(
           1,
-          `${missing.length} other chapter${missing.length === 1 ? '' : 's'} still need attribution — resume the analysis to finish the book.`,
+          `${missing.length} other chapter${missing.length === 1 ? ' still needs' : 's still need'} attribution — resume the analysis to finish the book.`,
         );
         endJob(job, {
           kind: 'error',

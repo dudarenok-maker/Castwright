@@ -2747,7 +2747,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
 
     it('Generate view: no Include rollback on resume_required — a neutral note with "Open analysis", and a halted snapshot', async () => {
       const message =
-        'Chapter 3 re-analysed. Chapter 2 still need attribution — resume the analysis to finish the book.';
+        'Chapter 3 re-analysed. Chapter 2 still needs attribution — resume the analysis to finish the book.';
       const store = makeIncludeStore();
       setChapterExcludedSpy.mockReset();
       setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
@@ -2779,6 +2779,8 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, false);
       expect(runAnalysisForChaptersSpy.mock.calls[1][1]).toEqual([3]);
       expect(runAnalysisForChaptersSpy.mock.calls[1][2]).toMatchObject({ allowStage1Shrink: true });
+      /* A shrink is not an analysis gap. */
+      expect(store.getState().chapters.analysisGapById?.[3]).toBeUndefined();
     });
 
     it('Generate view: "Accept smaller cast" on a Re-analyse shrink re-runs that Re-analyse with allowStage1Shrink', async () => {
@@ -2795,6 +2797,56 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
       expect(runAnalysisForChaptersSpy.mock.calls[1][1]).toEqual([1]);
       expect(runAnalysisForChaptersSpy.mock.calls[1][2]).toMatchObject({ allowStage1Shrink: true });
+      /* A shrink is not an analysis gap. */
+      expect(store.getState().chapters.analysisGapById?.[1]).toBeUndefined();
+    });
+
+    it('a failed Include sets no gap on the chapter its rollback re-excluded; a failed rollback leaves it included, with a gap', async () => {
+      const store = makeIncludeStore();
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+      const { unmount } = renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      expect(await screen.findByText('Re-analysis failed: The analyzer timed out.')).toBeInTheDocument();
+      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+      expect(store.getState().chapters.analysisGapById?.[3]).toBeUndefined();
+      unmount();
+
+      const store2 = makeIncludeStore();
+      setChapterExcludedSpy.mockImplementation(async (_b: string, _id: number, excluded: boolean) => {
+        if (excluded) throw new Error('rollback failed');
+        return { id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false };
+      });
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+      renderInclude(store2);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() =>
+        expect(store2.getState().chapters.analysisGapById?.[3]).toEqual({ message: 'The analyzer timed out.' }),
+      );
+    });
+
+    it('the gap note\'s Re-analyse is disabled with a visible "Pause the analysis first" while main is live', () => {
+      const store = makeIncludeStore();
+      store.dispatch(
+        chaptersSlice.actions.setAnalysisGap({ chapterId: 2, message: "Analysis didn't finish for this chapter." }),
+      );
+      store.dispatch(
+        analysisActions.setActiveStream({
+          bookId: 'b1',
+          manuscriptId: 'm1',
+          phaseId: 1,
+          phaseLabel: 'Parsing and attribution',
+          phaseProgress: 0.3,
+          remainingMs: null,
+          lastTickAt: Date.now(),
+          state: 'running',
+          kind: 'main',
+        }),
+      );
+      renderRows(store, [chapter1, chapter2, ch3Excluded]);
+      expect(screen.getByTestId('chapter-row-2-reanalyse')).toBeDisabled();
+      expect(
+        within(screen.getByTestId('chapter-row-2-analysis-gap')).getByText('Pause the analysis first'),
+      ).toBeInTheDocument();
     });
   });
 });

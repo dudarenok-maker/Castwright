@@ -585,9 +585,15 @@ export function GenerationView({
         patchSubset(chapterId, { notice: e.message });
         return;
       }
-      await rollbackInclude(chapterId).catch((rollbackErr) => {
-        console.warn('[generation] include rollback failed', rollbackErr);
-      });
+      /* #3435 — whether the chapter is excluded again: a gap note belongs only
+         on an included chapter. */
+      const rolledBack = await rollbackInclude(chapterId).then(
+        () => true,
+        (rollbackErr) => {
+          console.warn('[generation] include rollback failed', rollbackErr);
+          return false;
+        },
+      );
       if (isAbort) {
         /* Drop the snapshot on abort — the server-side job already ended. */
         dispatch(analysisActions.clearActiveStream());
@@ -616,13 +622,13 @@ export function GenerationView({
       haltOnReasoningOverflow(e);
       dispatch(analysisActions.clearActiveStream());
       const message = (e as Error).message || 'Subset analysis failed.';
-      /* #3435 — the chapter's analysis did not finish. A shrink also offers
-         "Accept smaller cast", which re-does the include (the rollback ran). */
-      dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
-      patchSubset(chapterId, {
-        error: message,
-        shrink: e instanceof AnalysisError && e.code === 'stage1_shrink_refused',
-      });
+      const shrink = e instanceof AnalysisError && e.code === 'stage1_shrink_refused';
+      /* #3435 — the chapter's analysis did not finish. Only an included
+         chapter gets a gap note (a failed rollback left it included), and a
+         shrink is not a gap: its row offers "Accept smaller cast", which
+         re-does the include (the rollback ran). */
+      if (!rolledBack && !shrink) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+      patchSubset(chapterId, { error: message, shrink });
     }
   }
 
@@ -835,12 +841,11 @@ export function GenerationView({
       haltOnReasoningOverflow(e);
       dispatch(analysisActions.clearActiveStream());
       const message = (e as Error).message || 'Re-analysis failed.';
-      /* #3435 — the chapter's analysis did not finish. */
-      dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
-      patchSubset(chapterId, {
-        error: message,
-        shrink: e instanceof AnalysisError && e.code === 'stage1_shrink_refused',
-      });
+      const shrink = e instanceof AnalysisError && e.code === 'stage1_shrink_refused';
+      /* #3435 — the chapter's analysis did not finish. A shrink is not a gap:
+         its row offers "Accept smaller cast" instead. */
+      if (!shrink) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+      patchSubset(chapterId, { error: message, shrink });
     }
   }
 
@@ -1994,6 +1999,9 @@ function ChapterRow({
             >
               <IconSparkle className="w-3.5 h-3.5" /> Re-analyse
             </button>
+          )}
+          {!actionRowShown && mainAnalysisLive && (
+            <span className="shrink-0 self-center text-[11px] text-ink/45">Pause the analysis first</span>
           )}
         </div>
       )}

@@ -2094,7 +2094,7 @@ describe('the subset result gate: S8 and S14 end resume_required on an unfinishe
     expect(endings(r.steps[0])).toEqual(['error:resume_required']);
     const terminal = r.steps[0].find((e) => e.kind === 'error')!;
     expect(String(terminal.message)).toBe(
-      'Chapter Two re-analysed. Chapter Three still need attribution — resume the analysis to finish the book.',
+      'Chapter Two re-analysed. Chapter Three still needs attribution — resume the analysis to finish the book.',
     );
     /* No authoritative persist: state.json carries no provenance, and cast.json
        (if the interim overlay wrote one) has no attributed line counts. */
@@ -2124,7 +2124,7 @@ describe('the subset result gate: S8 and S14 end resume_required on an unfinishe
     /* Step 2 attributes ch2, but ch1 (S0 put it in P) is still pending. */
     expect(r.stage2Calls[1]).toEqual([2]);
     expect(endings(r.steps[1])).toEqual(['error:resume_required']);
-    expect(String(r.steps[1].find((e) => e.kind === 'error')!.message)).toContain('Chapter One still need attribution');
+    expect(String(r.steps[1].find((e) => e.kind === 'error')!.message)).toContain('Chapter One still needs attribution');
     expect(r.caches[1].takesPersisted).toBe(false);
     expect(r.caches[1].confirmReached).toBeUndefined();
     /* The main resume re-attributes the pending chapter and finishes the book. */

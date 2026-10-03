@@ -10071,158 +10071,166 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
       expect(r.after.pendingAttributionChapterIds ?? []).not.toContain(2);
     }, 60_000);
 
-  describe('subset result gate (S14, S14a, O2)', () => {
-    const three: BookChapter[] = [
-      { id: 1, body: WORDED[1] },
-      { id: 2, body: WORDED[2] },
-      { id: 3, body: WORDED[3] },
-    ];
-    /** Every chapter has a current take: a finished book. */
-    const finishedCache = (chapters: BookChapter[]) => ({
-      stage1: stage1For(chapters),
-      chapterCast: Object.fromEntries(chapters.map((c) => [c.id, roster()])),
-      chapters: Object.fromEntries(chapters.map((c) => [c.id, takeOf(c.id, c.body)])),
+    describe('subset result gate (S14, S14a, O2)', () => {
+      const three: BookChapter[] = [
+        { id: 1, body: WORDED[1] },
+        { id: 2, body: WORDED[2] },
+        { id: 3, body: WORDED[3] },
+      ];
+      /** Every chapter has a current take: a finished book. */
+      const finishedCache = (chapters: BookChapter[]) => ({
+        stage1: stage1For(chapters),
+        chapterCast: Object.fromEntries(chapters.map((c) => [c.id, roster()])),
+        chapters: Object.fromEntries(chapters.map((c) => [c.id, takeOf(c.id, c.body)])),
+      });
+      /** Chapter 3 has no take. */
+      const gapCache = () => {
+        const c = finishedCache(three);
+        delete (c.chapters as Record<number, unknown>)[3];
+        return c;
+      };
+      const snapshotFile = (book: Book) => join(book.bookDir, '.audiobook', 'analysis-state.json');
+      const writeSnapshot = (book: Book, kind: 'main' | 'subset') =>
+        writeFileSync(
+          snapshotFile(book),
+          JSON.stringify({
+            manuscriptId: book.manuscriptId,
+            phaseId: 1,
+            phaseLabel: 'x',
+            phaseProgress: 0.5,
+            state: kind === 'main' ? 'paused' : 'running',
+            kind,
+            lastTickAt: Date.now(),
+            writtenAt: Date.now(),
+          }),
+        );
+      const waitFor = async (pred: () => boolean, ms = 2_000) => {
+        for (let t = 0; t < ms && !pred(); t += 25) await new Promise((r) => setTimeout(r, 25));
+      };
+      const endings = (events: Array<{ kind: string; code?: unknown }>) =>
+        events
+          .filter((e) => e.kind === 'result' || e.kind === 'error')
+          .map((e) => (e.kind === 'error' ? `error:${String(e.code)}` : 'result'));
+
+      it('a finished-book Retry sends result, sets takesPersisted, and deletes a subset-kind snapshot but not a main-kind one', async () => {
+        const subsetBook = makeBook('gate-snap-subset', three);
+        await saveAnalysisCache(subsetBook.manuscriptId, finishedCache(three));
+        writeSnapshot(subsetBook, 'subset');
+        const r = await runSubset(subsetBook, [2]);
+        expect(endings(r.events)).toEqual(['result']);
+        expect(r.after.takesPersisted).toBe(true);
+        await waitFor(() => !existsSync(snapshotFile(subsetBook)));
+        expect(existsSync(snapshotFile(subsetBook))).toBe(false);
+
+        const mainBook = makeBook('gate-snap-main', three);
+        await saveAnalysisCache(mainBook.manuscriptId, finishedCache(three));
+        /* Written at the loop's save of the target's take: the subset's own
+           running snapshot (its first phase tick) has landed by then, and the
+           throttle keeps a second one from overwriting this main-kind file. */
+        let wroteMain = false;
+        const m = await runSubset(mainBook, [2], {
+          saveHook: (c) => {
+            if (wroteMain || c.takesPersisted !== false) return;
+            wroteMain = true;
+            writeSnapshot(mainBook, 'main');
+          },
+        });
+        expect(wroteMain).toBe(true);
+        expect(endings(m.events)).toEqual(['result']);
+        await new Promise((res) => setTimeout(res, 300));
+        expect(JSON.parse(readFileSync(snapshotFile(mainBook), 'utf8')).kind).toBe('main');
+      }, 60_000);
+
+      /* Both shapes: on a finished book the pre-persist check decides it; on an
+         unfinished one (chapter 3 has no take) only the post-loop check stops the
+         run before S14 would end it `resume_required` (review fix round 1). */
+      for (const [shape, seed] of [
+        ['a finished book', () => finishedCache(three)],
+        ['an unfinished book', () => gapCache()],
+      ] as const) {
+        it(`A18 (S14a): a Pause that lands after the subset loop ends the job aborted, with no persist and no result (${shape})`, async () => {
+          const book = makeBook(`gate-s14a-${shape.split(' ')[1]}`, three);
+          await saveAnalysisCache(book.manuscriptId, seed());
+          let paused = false;
+          const r = await runSubset(book, [2], {
+            saveHook: (c, { job }) => {
+              /* The loop's own save of the last target's take: its model call is
+                 over, so the Pause lands after the loop's last abort-aware step. */
+              const take = (c.chapters as Record<number, SentenceOutput[]> | undefined)?.[2];
+              if (!paused && take?.[0]?.text === WORDED[2] && c.takesPersisted === false) {
+                paused = true;
+                job.controller.abort();
+              }
+            },
+          });
+          expect(paused).toBe(true);
+          expect(r.stage2Calls).toEqual([2]);
+          expect(endings(r.events)).toEqual(['error:aborted']);
+          expect(r.state.analysisProvenance).toBeUndefined();
+          expect(r.after.takesPersisted).toBe(false);
+        }, 60_000);
+      }
+
+      it('decision F: an interrupted Re-analyse on a castConfirmed book (S11) leaves the library status unchanged and lists the chapter in unattributedChapterIds or failedChapterErrors', async () => {
+        const book = makeBook('gate-decision-f', three, { castConfirmed: true });
+        await saveAnalysisCache(book.manuscriptId, { ...finishedCache(three), takesPersisted: true, confirmReached: true });
+        const r = await runSubset(book, [2], {
+          stage2: async () => {
+            throw new Error('Phase 1 fails for chapter 2');
+          },
+        });
+        expect(endings(r.events)).toHaveLength(1);
+        expect(endings(r.events)[0]).toMatch(/^error:/);
+        expect(r.state.castConfirmed).toBe(true);
+        /* The library's rule (scan.ts): a book that has reached Confirm is never demoted. */
+        expect(reachedConfirm(r.state, r.after)).toBe(true);
+        const listed = !hasCurrentTake(r.after, 2) || Object.hasOwn(r.after.failedChapterErrors ?? {}, '2');
+        expect(listed).toBe(true);
+        expect(r.after.failedChapterErrors?.['2']).toMatchObject({ phase: 'attribution' });
+      }, 60_000);
+
+      it('O2: on a castConfirmed book with another chapter lacking a current take, a Re-analyse of ch2 sends result and persists (state.json, cast.json, edits); the other chapter stays in unattributedChapterIds', async () => {
+        const book = makeBook('gate-o2', three, { castConfirmed: true });
+        await saveAnalysisCache(book.manuscriptId, gapCache());
+        const r = await runSubset(book, [2]);
+        expect(r.stage2Calls).toEqual([2]);
+        expect(endings(r.events)).toEqual(['result']);
+        expect(r.state.analysisProvenance).toBeDefined();
+        expect(r.cast?.characters.some((c) => Number(c.lines ?? 0) > 0)).toBe(true);
+        expect(r.edits?.sentences.some((s) => s.chapterId === 2)).toBe(true);
+        expect(r.after.takesPersisted).toBe(true);
+        expect(hasCurrentTake(r.after, 3)).toBe(false);
+      }, 60_000);
+
+      it('O2 control: on a book that has not reached Confirm, the same Retry still ends resume_required', async () => {
+        const book = makeBook('gate-o2-control', three);
+        await saveAnalysisCache(book.manuscriptId, gapCache());
+        const r = await runSubset(book, [2]);
+        expect(r.stage2Calls).toEqual([2]);
+        expect(endings(r.events)).toEqual(['error:resume_required']);
+        expect(r.state.analysisProvenance).toBeUndefined();
+        expect(r.after.takesPersisted).toBe(false);
+        expect(r.after.confirmReached).toBeUndefined();
+      }, 60_000);
+
+      it('hint snapshot: a mid-run Exclude is ignored by S14', async () => {
+        const book = makeBook('gate-hint-snapshot', three);
+        await saveAnalysisCache(book.manuscriptId, gapCache());
+        let excluded = false;
+        const r = await runSubset(book, [2], {
+          saveHook: (c, { record }) => {
+            const take = (c.chapters as Record<number, SentenceOutput[]> | undefined)?.[2];
+            /* The loop's save of the target's new take (S9 sets takesPersisted false). */
+            if (excluded || take?.[0]?.text !== WORDED[2] || c.takesPersisted !== false) return;
+            excluded = true;
+            /* What the exclude toggle does to the live record (book-state.ts). */
+            record.chapterHints = record.chapterHints.map((h) => (h.id === 3 ? { ...h, excluded: true } : h));
+          },
+        });
+        expect(excluded).toBe(true);
+        expect(endings(r.events)).toEqual(['error:resume_required']);
+      }, 60_000);
     });
-    /** Chapter 3 has no take. */
-    const gapCache = () => {
-      const c = finishedCache(three);
-      delete (c.chapters as Record<number, unknown>)[3];
-      return c;
-    };
-    const snapshotFile = (book: Book) => join(book.bookDir, '.audiobook', 'analysis-state.json');
-    const writeSnapshot = (book: Book, kind: 'main' | 'subset') =>
-      writeFileSync(
-        snapshotFile(book),
-        JSON.stringify({
-          manuscriptId: book.manuscriptId,
-          phaseId: 1,
-          phaseLabel: 'x',
-          phaseProgress: 0.5,
-          state: kind === 'main' ? 'paused' : 'running',
-          kind,
-          lastTickAt: Date.now(),
-          writtenAt: Date.now(),
-        }),
-      );
-    const waitFor = async (pred: () => boolean, ms = 2_000) => {
-      for (let t = 0; t < ms && !pred(); t += 25) await new Promise((r) => setTimeout(r, 25));
-    };
-    const endings = (events: Array<{ kind: string; code?: unknown }>) =>
-      events
-        .filter((e) => e.kind === 'result' || e.kind === 'error')
-        .map((e) => (e.kind === 'error' ? `error:${String(e.code)}` : 'result'));
-
-    it('a finished-book Retry sends result, sets takesPersisted, and deletes a subset-kind snapshot but not a main-kind one', async () => {
-      const subsetBook = makeBook('gate-snap-subset', three);
-      await saveAnalysisCache(subsetBook.manuscriptId, finishedCache(three));
-      writeSnapshot(subsetBook, 'subset');
-      const r = await runSubset(subsetBook, [2]);
-      expect(endings(r.events)).toEqual(['result']);
-      expect(r.after.takesPersisted).toBe(true);
-      await waitFor(() => !existsSync(snapshotFile(subsetBook)));
-      expect(existsSync(snapshotFile(subsetBook))).toBe(false);
-
-      const mainBook = makeBook('gate-snap-main', three);
-      await saveAnalysisCache(mainBook.manuscriptId, finishedCache(three));
-      /* Written at the loop's save of the target's take: the subset's own
-         running snapshot (its first phase tick) has landed by then, and the
-         throttle keeps a second one from overwriting this main-kind file. */
-      let wroteMain = false;
-      const m = await runSubset(mainBook, [2], {
-        saveHook: (c) => {
-          if (wroteMain || c.takesPersisted !== false) return;
-          wroteMain = true;
-          writeSnapshot(mainBook, 'main');
-        },
-      });
-      expect(wroteMain).toBe(true);
-      expect(endings(m.events)).toEqual(['result']);
-      await new Promise((res) => setTimeout(res, 300));
-      expect(JSON.parse(readFileSync(snapshotFile(mainBook), 'utf8')).kind).toBe('main');
-    }, 60_000);
-
-    it('A18 (S14a): a Pause that lands after the subset loop ends the job aborted, with no persist and no result', async () => {
-      const book = makeBook('gate-s14a', three);
-      await saveAnalysisCache(book.manuscriptId, finishedCache(three));
-      let paused = false;
-      const r = await runSubset(book, [2], {
-        saveHook: (c, { job }) => {
-          /* The loop's own save of the last target's take: its model call is
-             over, so the Pause lands after the loop's last abort-aware step. */
-          const take = (c.chapters as Record<number, SentenceOutput[]> | undefined)?.[2];
-          if (!paused && take?.[0]?.text === WORDED[2] && c.takesPersisted === false) {
-            paused = true;
-            job.controller.abort();
-          }
-        },
-      });
-      expect(paused).toBe(true);
-      expect(r.stage2Calls).toEqual([2]);
-      expect(endings(r.events)).toEqual(['error:aborted']);
-      expect(r.state.analysisProvenance).toBeUndefined();
-      expect(r.after.takesPersisted).toBe(false);
-    }, 60_000);
-
-    it('decision F: an interrupted Re-analyse on a castConfirmed book (S11) leaves the library status unchanged and lists the chapter in unattributedChapterIds or failedChapterErrors', async () => {
-      const book = makeBook('gate-decision-f', three, { castConfirmed: true });
-      await saveAnalysisCache(book.manuscriptId, { ...finishedCache(three), takesPersisted: true, confirmReached: true });
-      const r = await runSubset(book, [2], {
-        stage2: async () => {
-          throw new Error('Phase 1 fails for chapter 2');
-        },
-      });
-      expect(endings(r.events)).toHaveLength(1);
-      expect(endings(r.events)[0]).toMatch(/^error:/);
-      expect(r.state.castConfirmed).toBe(true);
-      /* The library's rule (scan.ts): a book that has reached Confirm is never demoted. */
-      expect(reachedConfirm(r.state, r.after)).toBe(true);
-      const listed = !hasCurrentTake(r.after, 2) || Object.hasOwn(r.after.failedChapterErrors ?? {}, '2');
-      expect(listed).toBe(true);
-      expect(r.after.failedChapterErrors?.['2']).toMatchObject({ phase: 'attribution' });
-    }, 60_000);
-
-    it('O2: on a castConfirmed book with another chapter lacking a current take, a Re-analyse of ch2 sends result and persists (state.json, cast.json, edits); the other chapter stays in unattributedChapterIds', async () => {
-      const book = makeBook('gate-o2', three, { castConfirmed: true });
-      await saveAnalysisCache(book.manuscriptId, gapCache());
-      const r = await runSubset(book, [2]);
-      expect(r.stage2Calls).toEqual([2]);
-      expect(endings(r.events)).toEqual(['result']);
-      expect(r.state.analysisProvenance).toBeDefined();
-      expect(r.cast?.characters.some((c) => Number(c.lines ?? 0) > 0)).toBe(true);
-      expect(r.edits?.sentences.some((s) => s.chapterId === 2)).toBe(true);
-      expect(r.after.takesPersisted).toBe(true);
-      expect(hasCurrentTake(r.after, 3)).toBe(false);
-    }, 60_000);
-
-    it('O2 control: on a book that has not reached Confirm, the same Retry still ends resume_required', async () => {
-      const book = makeBook('gate-o2-control', three);
-      await saveAnalysisCache(book.manuscriptId, gapCache());
-      const r = await runSubset(book, [2]);
-      expect(r.stage2Calls).toEqual([2]);
-      expect(endings(r.events)).toEqual(['error:resume_required']);
-      expect(r.state.analysisProvenance).toBeUndefined();
-      expect(r.after.takesPersisted).toBe(false);
-      expect(r.after.confirmReached).toBeUndefined();
-    }, 60_000);
-
-    it('hint snapshot: a mid-run Exclude is ignored by S14', async () => {
-      const book = makeBook('gate-hint-snapshot', three);
-      await saveAnalysisCache(book.manuscriptId, gapCache());
-      let excluded = false;
-      const r = await runSubset(book, [2], {
-        saveHook: (c, { record }) => {
-          const take = (c.chapters as Record<number, SentenceOutput[]> | undefined)?.[2];
-          /* The loop's save of the target's new take (S9 sets takesPersisted false). */
-          if (excluded || take?.[0]?.text !== WORDED[2] || c.takesPersisted !== false) return;
-          excluded = true;
-          /* What the exclude toggle does to the live record (book-state.ts). */
-          record.chapterHints = record.chapterHints.map((h) => (h.id === 3 ? { ...h, excluded: true } : h));
-        },
-      });
-      expect(excluded).toBe(true);
-      expect(endings(r.events)).toEqual(['error:resume_required']);
-    }, 60_000);
-  });
   });
 
   it('a main run on a confirmed book keeps the designed voice fields (invariant 6)', async () => {

@@ -32,6 +32,8 @@ let getDroppedQuotesImpl: ((bookId: string) => Promise<DroppedQuotesResponse>) |
    exercise the view's catch branches (cast_incomplete,
    stage1_shrink_refused, etc.) without rewiring the whole mock. */
 let analyseManuscriptRejection: unknown | undefined;
+/* Every analyseManuscript (main POST) call, with its signal (#3435). */
+let analyseManuscriptCalls: Array<AbortSignal | undefined> = [];
 const loadAnalyzerSpy = vi.fn();
 const unloadAnalyzerSpy = vi.fn();
 const unloadSidecarSpy = vi.fn();
@@ -48,6 +50,7 @@ vi.mock('../lib/api', async () => {
          for the duration of the test. */
       analyseManuscript: (_id: string, opts?: AnalyseOpts) => {
         capturedOpts = opts;
+        analyseManuscriptCalls.push(opts?.signal);
         if (analyseManuscriptRejection !== undefined) {
           return Promise.reject(analyseManuscriptRejection);
         }
@@ -86,6 +89,7 @@ beforeEach(() => {
   getBookStateImpl = undefined;
   getDroppedQuotesImpl = undefined;
   analyseManuscriptRejection = undefined;
+  analyseManuscriptCalls = [];
   loadAnalyzerSpy.mockReset();
   unloadAnalyzerSpy.mockReset();
   unloadSidecarSpy.mockReset();
@@ -2192,10 +2196,9 @@ describe('AnalysingView — failed-chapter retry', () => {
     const RESUME_LINE = 'Some chapters still need attribution — resume the analysis to finish the book.';
     const withFacts = (
       bs: BookStateResponse,
-      facts: { stage1Ready?: boolean; resumeRequired?: boolean; castConfirmed?: boolean },
+      facts: { stage1Ready?: boolean; resumeRequired?: boolean },
     ): BookStateResponse => ({
       ...bs,
-      state: { ...bs.state, castConfirmed: facts.castConfirmed ?? bs.state.castConfirmed },
       analysis: {
         ...bs.analysis!,
         ...(facts.stage1Ready !== undefined ? { stage1Ready: facts.stage1Ready } : {}),
@@ -2256,8 +2259,22 @@ describe('AnalysingView — failed-chapter retry', () => {
       });
       return { store, view };
     }
-    const castIncompleteFlag = (container: HTMLElement) =>
-      container.querySelector('[data-cast-incomplete]')?.getAttribute('data-cast-incomplete');
+    /* Retry the cast row `id`: the server resolves it and ends S8. */
+    async function retryToS8(id: number) {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /retry chapter/i }));
+      });
+      await act(async () => {
+        capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: id });
+        rejectSubset?.(
+          new AnalysisError(
+            'Cast detection for Chapter Forty-Two is done. The rest of the book still needs attribution — resume the analysis to finish.',
+            'resume_required',
+          ),
+        );
+      });
+    }
     async function settle() {
       await act(async () => {
         await new Promise((r) => setTimeout(r, 50));
@@ -2299,7 +2316,7 @@ describe('AnalysingView — failed-chapter retry', () => {
         fireEvent.click(await screen.findByRole('button', { name: /retry chapter/i }));
       });
       const message =
-        'Chapter Forty-Two re-analysed. Chapter Forty-Seven still need attribution — resume the analysis to finish the book.';
+        'Chapter Forty-Two re-analysed. Chapter Forty-Seven still needs attribution — resume the analysis to finish the book.';
       await act(async () => {
         rejectSubset?.(new AnalysisError(message, 'resume_required'));
       });
@@ -2310,11 +2327,10 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(store.getState().notifications.toasts).toHaveLength(0);
     });
 
-    it('C18: a confirmed book whose book-state says resumeRequired shows the rows, "Resume analysis" and the needs-action line with no snapshot', async () => {
+    it('C18: a book whose book-state says resumeRequired shows the rows, "Resume analysis" and the needs-action line with no snapshot (a dropped or cleared snapshot)', async () => {
       bookState = withFacts(makeBookState([44], { '44': rec('attribution') }), {
         stage1Ready: true,
         resumeRequired: true,
-        castConfirmed: true,
       });
       const { store } = await mount();
       expect(store.getState().analysis.activeStream).toBeNull();
@@ -2323,11 +2339,10 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(screen.getByTestId('analysis-needs-action-line')).toHaveTextContent(RESUME_LINE);
     });
 
-    it('C20: castIncomplete is armed on mount from a halted subset cast_incomplete snapshot only when the mount-time stage1Ready is false; the copy follows the latest stage1Ready', async () => {
+    it('C20: with a halted subset cast_incomplete snapshot at mount, the cast-row copy follows the latest stage1Ready', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       bookState = withFacts(makeBookState([44, 49], { '44': rec('cast'), '49': rec('cast') }), { stage1Ready: false });
-      const armed = await mount({ snapshot: haltedSnapshot('cast_incomplete') });
-      expect(castIncompleteFlag(armed.view.container)).toBe('true');
+      await mount({ snapshot: haltedSnapshot('cast_incomplete') });
       expect(screen.getByText('Paused — 2 chapters still need cast detection.')).toBeInTheDocument();
       /* A run ending refreshes the facts: the copy follows the new stage1Ready. */
       bookState = withFacts(makeBookState([44, 49], { '44': rec('cast'), '49': rec('cast') }), { stage1Ready: true });
@@ -2338,12 +2353,27 @@ describe('AnalysingView — failed-chapter retry', () => {
         rejectSubset?.(new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result'));
       });
       expect(await screen.findByText('Cast detection failed on 2 chapters.')).toBeInTheDocument();
-      armed.view.unmount();
-
-      bookState = withFacts(makeBookState([44], { '44': rec('cast') }), { stage1Ready: true });
-      const unarmed = await mount({ snapshot: haltedSnapshot('cast_incomplete') });
-      expect(castIncompleteFlag(unarmed.view.container)).toBe('false');
     });
+
+    /* Review finding 1 — a mount armed from the halted snapshot (stage1Ready
+       false), whose last cast row then ends S8: the Resume click is the resume,
+       so exactly one main POST goes out, not one aborted and one sent. */
+    for (const stage1Ready of [false, true]) {
+      it(`a Resume click after a reload with a halted cast_incomplete snapshot (mount stage1Ready ${stage1Ready}) and an S8 Retry sends exactly one main POST`, async () => {
+        bookState = withFacts(makeBookState([44], { '44': rec('cast') }), { stage1Ready });
+        await mount({ snapshot: haltedSnapshot('cast_incomplete') });
+        bookState = withFacts(makeBookState([]), { stage1Ready: true, resumeRequired: true });
+        await retryToS8(44);
+        await settle();
+        expect(analyseManuscriptCalls).toHaveLength(0);
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: /resume analysis/i }));
+        });
+        await settle();
+        expect(analyseManuscriptCalls).toHaveLength(1);
+        expect(analyseManuscriptCalls[0]?.aborted).toBe(false);
+      });
+    }
 
     it('C-8: after S8, the refreshed stage1Ready:true does not disarm the auto-resume', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
@@ -2369,23 +2399,48 @@ describe('AnalysingView — failed-chapter retry', () => {
       await waitFor(() => expect(capturedOpts).toBeDefined());
     });
 
-    it('C-8: castIncomplete is never armed by a refresh', async () => {
+    it('C-8: a refresh never arms the auto-resume — after one says stage1 is absent, an S8 Retry starts no main run and Resume sends exactly one', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       bookState = withFacts(makeBookState([44, 49], { '44': rec('cast'), '49': rec('cast') }), { stage1Ready: true });
-      const { view } = await mount({ snapshot: haltedSnapshot('cast_incomplete') });
-      expect(castIncompleteFlag(view.container)).toBe('false');
-      /* A later refresh says stage1 is absent, with the halted snapshot still there. */
-      bookState = withFacts(makeBookState([44, 49], { '44': rec('cast'), '49': rec('cast') }), { stage1Ready: false });
+      await mount({ snapshot: haltedSnapshot('cast_incomplete') });
+      /* A later refresh says stage1 is absent (chapter 49 resolved, 44 still
+         failing), with the halted snapshot still there. */
+      bookState = withFacts(makeBookState([44], { '44': rec('cast') }), { stage1Ready: false });
       const callsBefore = bookStateCalls;
       await act(async () => {
         fireEvent.click(screen.getAllByRole('button', { name: /retry chapter/i })[1]);
       });
       await act(async () => {
+        capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 49 });
         rejectSubset?.(new AnalysisError('Phase 0 paused.', 'cast_incomplete'));
       });
       await waitFor(() => expect(bookStateCalls).toBeGreaterThan(callsBefore));
+      bookState = withFacts(makeBookState([]), { stage1Ready: true, resumeRequired: true });
+      await retryToS8(44);
       await settle();
-      expect(castIncompleteFlag(view.container)).toBe('false');
+      expect(analyseManuscriptCalls).toHaveLength(0);
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /resume analysis/i }));
+      });
+      await settle();
+      expect(analyseManuscriptCalls).toHaveLength(1);
+    });
+
+    it('C-8: a Pause re-reads the facts — an attribution row gets its Retry once the paused run has written stage1', async () => {
+      bookState = withFacts(makeBookState([49], { '49': rec('attribution') }), { stage1Ready: false });
+      await mount();
+      expect(await screen.findByText('Attributed when you resume the analysis.')).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /start analysis/i }));
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+      /* The run finalised the roster before the user paused it. */
+      bookState = withFacts(makeBookState([49], { '49': rec('attribution') }), { stage1Ready: true });
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole('button', { name: /pause analysis/i })[0]);
+      });
+      expect(await screen.findByRole('button', { name: /retry chapter/i })).not.toBeDisabled();
+      expect(screen.queryByText('Attributed when you resume the analysis.')).not.toBeInTheDocument();
     });
 
     it('A8: a Retry ending resume_required keeps the halted snapshot; the needs-action line reads its haltReason', async () => {
@@ -2395,7 +2450,7 @@ describe('AnalysingView — failed-chapter retry', () => {
       await act(async () => {
         fireEvent.click(await screen.findByRole('button', { name: /retry chapter/i }));
       });
-      const reason = 'Chapter Forty-Two re-analysed. Chapter Forty-Seven still need attribution — resume the analysis to finish the book.';
+      const reason = 'Chapter Forty-Two re-analysed. Chapter Forty-Seven still needs attribution — resume the analysis to finish the book.';
       await act(async () => {
         rejectSubset?.(new AnalysisError(reason, 'resume_required'));
       });
