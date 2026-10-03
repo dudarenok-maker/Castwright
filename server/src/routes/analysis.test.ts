@@ -9880,4 +9880,151 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
     /* After chapter 1 completes, chapter 2 (no take) and chapter 3 (pending) remain. */
     expect(paceLines[0]).toMatch(/remaining over 2 chapters\.$/);
   }, 60_000);
+
+  it('the "Resuming" line counts current takes over non-excluded chapters', async () => {
+    const chapters: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORDED[2] },
+      { id: 3, body: WORDED[3], excluded: true },
+    ];
+    const book = makeBook('resuming-count', chapters);
+    await saveAnalysisCache(book.manuscriptId, {
+      stage1: stage1For(chapters),
+      chapterCast: { 1: roster(), 2: roster(), 3: roster() },
+      /* 1 is current; 2 is pending; 3 is excluded. */
+      chapters: { 1: takeOf(1, WORDED[1]), 2: takeOf(2, WORDED[2]), 3: takeOf(3, WORDED[3]) },
+      pendingAttributionChapterIds: [2],
+    });
+    const r = await run(book);
+    const resuming = r.events
+      .filter((e) => e.kind === 'log' && e.phaseId === 1 && /^Resuming — /.test(String(e.message)))
+      .map((e) => String(e.message));
+    expect(resuming).toEqual(['Resuming — 1 of 3 chapter already cached.']);
+  }, 60_000);
+
+  it("O1's state.json write goes through the verified book dir: a stale path now holding another book is not touched", async () => {
+    const chapters: BookChapter[] = [{ id: 1, body: WORDED[1] }];
+    const book = makeBook('o1-stale', chapters, { castConfirmed: true });
+    /* The run's book path now holds a DIFFERENT book (its state.json carries
+       another manuscriptId), as after an out-of-process move. */
+    const statePath = join(book.bookDir, '.audiobook', 'state.json');
+    const other = { ...JSON.parse(readFileSync(statePath, 'utf8')), manuscriptId: 'some-other-book' };
+    writeFileSync(statePath, JSON.stringify(other));
+    await run(book, { fresh: true });
+    expect(JSON.parse(readFileSync(statePath, 'utf8')).castConfirmed).toBe(true);
+  }, 60_000);
+
+  describe('subset route (S9/S10, word-free)', () => {
+    async function runSubset(book: Book, targets: number[], opts: Pick<RunOpts, 'saveHook' | 'stage2'> = {}) {
+      const stage2Calls: number[] = [];
+      const body = (id: number) => book.chapters.find((c) => c.id === id)!.body;
+      const phase1: Analyzer = {
+        runStage1: unused,
+        runStage1Chapter: unused,
+        runStage2Chapter: async (_m, id, _p, call) => {
+          stage2Calls.push(id);
+          if (opts.stage2) return opts.stage2(id, call, 1);
+          return { sentences: takeOf(id, body(id)) };
+        },
+        runEmotionChapter: unused,
+        runScriptReviewChapter: unused,
+        runStage3Chapter: unused,
+        runAttributionEscalation: async () => null,
+      };
+      const phase0: Analyzer = {
+        ...phase1,
+        runStage1Chapter: async (): Promise<Stage1ChapterOutput> => ({ characters: roster() }),
+        runStage2Chapter: () => Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+      };
+      const g = globalThis as Record<string, unknown>;
+      if (opts.saveHook) g.__p285_save_hook = opts.saveHook;
+      const events: Array<{ kind: string; [k: string]: unknown }> = [];
+      const keepAlive = setInterval(() => {}, 1_000_000);
+      clearInterval(keepAlive);
+      const job = {
+        controller: new AbortController(),
+        subscribers: new Set([
+          { send: (p: unknown) => events.push(p as { kind: string }), res: { end: () => {} }, keepAlive },
+        ]),
+        manuscriptId: book.manuscriptId,
+        kind: 'subset',
+        bookDir: book.bookDir,
+        engine: 'gemini',
+        replay: {
+          logs: [],
+          lastPhase: null,
+          lastEta: null,
+          lastCastUpdate: null,
+          failedByChapterId: new Map(),
+          lastSeriesPrior: null,
+          warnings: new Map(),
+        },
+        lastDiskWriteAt: 0,
+      } as unknown as AnalysisJob;
+      const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
+      process.env.STAGE2_COVERAGE_RETRIES = '0';
+      try {
+        const record = getManuscript(book.manuscriptId)!;
+        await runSubsetAnalyzerJob(
+          job,
+          record as never,
+          { analyzer: phase0, engine: 'gemini', model: 'm0', fallbackModel: null },
+          { analyzer: phase1, engine: 'gemini', model: 'm1', fallbackModel: null },
+          record.chapterHints.filter((c) => targets.includes(c.id)),
+          false,
+        );
+      } finally {
+        delete g.__p285_save_hook;
+        if (originalRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+        else process.env.STAGE2_COVERAGE_RETRIES = originalRetries;
+      }
+      const after = await loadAnalysisCache(book.manuscriptId);
+      return { events, stage2Calls, after };
+    }
+
+    it('a subset Retry on a word-free target makes no analyzer call and raises no flag', async () => {
+      const chapters: BookChapter[] = [
+        { id: 1, body: WORDED[1] },
+        { id: 2, body: WORD_FREE },
+      ];
+      const book = makeBook('subset-word-free', chapters);
+      await saveAnalysisCache(book.manuscriptId, {
+        stage1: stage1For(chapters),
+        chapterCast: { 1: roster(), 2: roster() },
+        chapters: { 1: takeOf(1, WORDED[1]) },
+      });
+      const r = await runSubset(book, [2]);
+      expect(r.stage2Calls).toEqual([]);
+      expect(r.events.filter((e) => e.kind === 'chapter-failed')).toEqual([]);
+      expect(r.after.failedChapterIds ?? []).toEqual([]);
+      expect(Object.hasOwn(r.after.chapters, 2)).toBe(true);
+      expect(r.after.chapters[2]).toEqual([]);
+    }, 60_000);
+
+    it('a subset Retry takes the target out of P and saves takesPersisted:false with the take', async () => {
+      const chapters: BookChapter[] = [
+        { id: 1, body: WORDED[1] },
+        { id: 2, body: WORDED[2] },
+      ];
+      const book = makeBook('subset-pending', chapters);
+      await saveAnalysisCache(book.manuscriptId, {
+        stage1: stage1For(chapters),
+        chapterCast: { 1: roster(), 2: roster() },
+        chapters: { 1: takeOf(1, WORDED[1]), 2: takeOf(2, 'A stale pending take.') },
+        pendingAttributionChapterIds: [2],
+        takesPersisted: true,
+      });
+      let atTakeSave: { pending?: number[]; takesPersisted?: boolean } | undefined;
+      const r = await runSubset(book, [2], {
+        saveHook: (c) => {
+          const snap = c as { chapters?: Record<number, SentenceOutput[]>; pendingAttributionChapterIds?: number[] };
+          if (atTakeSave || snap.chapters?.[2]?.[0]?.text !== WORDED[2]) return;
+          atTakeSave = { pending: snap.pendingAttributionChapterIds, takesPersisted: c.takesPersisted };
+        },
+      });
+      expect(r.stage2Calls).toEqual([2]);
+      expect(atTakeSave).toEqual({ pending: [], takesPersisted: false });
+      expect(r.after.pendingAttributionChapterIds ?? []).not.toContain(2);
+    }, 60_000);
+  });
 });

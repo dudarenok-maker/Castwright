@@ -4458,17 +4458,25 @@ export async function runMainAnalyzerJob(
         /* #3435 O1 — Start fresh un-confirms the book, as Re-parse does
            (`applyReparse`, book-state.ts): the cast is gone, so a book still
            marked confirmed would read "done" with nothing behind it. It reads
-           "Analysing" until this run persists and the user confirms again. */
-        const freshStatePath = stateJsonPath(recordRef.bookDir);
-        const freshState = await readJson<BookStateJson>(freshStatePath);
-        if (freshState?.castConfirmed) {
-          await writeStateJsonAtomic(freshStatePath, {
-            ...freshState,
-            castConfirmed: false,
-            updatedAt: new Date().toISOString(),
-            language: freshState.language ?? null,
-          });
-        }
+           "Analysing" until this run persists and the user confirms again.
+           #2196 — through the identity-verified LIVE book dir in mode:'drop':
+           a stale path (moved book, or one now holding another book) is
+           never written. */
+        await withVerifiedBookDir(
+          { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
+          async (bookDir) => {
+            const freshStatePath = stateJsonPath(bookDir);
+            const freshState = await readJson<BookStateJson>(freshStatePath);
+            if (freshState?.castConfirmed) {
+              await writeStateJsonAtomic(freshStatePath, {
+                ...freshState,
+                castConfirmed: false,
+                updatedAt: new Date().toISOString(),
+                language: freshState.language ?? null,
+              });
+            }
+          },
+        );
       }
       log(0, 'Discarded cached progress — starting from scratch.');
     }
@@ -4477,7 +4485,10 @@ export async function runMainAnalyzerJob(
        chapter's take is pending. */
     if (applyAnalysisLoadRules(cache, recordRef.chapterHints)) await saveAnalysisCache(manuscriptId, cache);
     const cachedChapters = cache.chapters ?? {};
-    const cachedChapterCount = Object.keys(cachedChapters).length;
+    /* #3435 — chapters the replay will skip: a current take, not excluded. */
+    const cachedChapterCount = recordRef.chapterHints.filter(
+      (c) => !c.excluded && hasCurrentTake(cache, c.id),
+    ).length;
 
     /* ── Phase 0: detecting characters.
        The route runs Phase 0a (per-chapter cast detection) over the
