@@ -2479,8 +2479,9 @@ export async function attributeChapterStage2(opts: {
     escalation budget: the object every chapter's attributeChapterStage2 call
     shares (:3695, :6855), which escalateFlaggedWindows checks before each
     window (escalation.ts:235), so no chapter still in flight starts another
-    window. Nothing is aborted: in-flight chapters finish and cache for resume,
-    as the pools are designed to (:5672-5675). `chapter` records WHICH chapter
+    window. Marking aborts nothing by itself; when the run then ends, endJob
+    aborts the chapters still in flight (#3435 decision E, superseding N4's
+    "they finish and cache"). `chapter` records WHICH chapter
     was calling the model when the overflow happened, for the terminal
     failure's copy (F7 — "naming the chapter"); only the FIRST overflow's
     chapter is kept, mirroring `reasoningOverflowError`'s own ??=. `phase` is
@@ -2534,7 +2535,8 @@ export function buildNonStoryClassifier(opts: {
     const promptMd = `Title: ${ch.title ?? '(untitled)'}\n\n${ch.body}`;
     /* srv-61 — the SAME StageCall goes to the runner and withPassEval, so its
        fresh-per-call accumulator attaches to this call. */
-    const nonStoryCall: StageCall = { language: bookLanguage };
+    /* #3435 decision E — the job's signal, so ending the run aborts this call too. */
+    const nonStoryCall: StageCall = { language: bookLanguage, signal: job.controller.signal };
     try {
       const out = await withPassEval(
         nonStoryCall,
@@ -2782,7 +2784,8 @@ export interface AnalysisJob {
   /** #3084 P20 — set the first time this job sees a reasoning overflow, by
       noteReasoningOverflow. From then on the job starts no new escalation
       window or non-story classification call; chapters already calling the
-      model finish and cache. Optional, so every existing job literal compiles. */
+      model are aborted when the run ends (#3435 decision E). Optional, so
+      every existing job literal compiles. */
   reasoningOverflowed?: boolean;
   /** #3084 P20 — the first overflow noteReasoningOverflow saw, set together with
       reasoningOverflowed. The chapter pools' dispatch check rethrows it, so a job
@@ -2806,6 +2809,23 @@ export interface AnalysisJob {
   /** #3435 — set to 1 when a Phase-1 chapter's own call threw, so the terminal
       failure names the Phase-1 model. */
   failingPhase?: 1;
+  /** #3435 decision E — set first thing in endJob. From then on no chapter
+      starts, and every in-flight call has been aborted. */
+  ended: boolean;
+  /** #3435 — set by a pool catch, synchronously and before any await, when the
+      run is about to end on a failure. No chapter starts once it is set. */
+  halting: boolean;
+  /** #3435 decision A — set once the job has left the writer registry; makes
+      the leave (and its busy release) happen exactly once. */
+  left: boolean;
+  /** #3435 decision A — tracked units of work still running (cast chapters,
+      the Phase-0 arm, Phase-1 chapter bodies). A main job stays a writer until
+      it has ended and this is 0, or the drain deadline passes. */
+  liveWork: number;
+  /** #3435 — the main run's watermark, stored so endJob can release every
+      parked Phase-1 worker. Absent until the run creates it (endJob can run
+      before that: the `language_unset` terminal). */
+  watermark?: PhaseWatermark;
 }
 
 /* #3435 — which model the terminal failure names: the overflowing call's phase,
@@ -2827,6 +2847,108 @@ function jobMapFor(kind: 'main' | 'subset'): Map<string, AnalysisJob> {
   return kind === 'subset' ? inFlightSubsetByManuscript : inFlightAnalysisByManuscript;
 }
 
+/* #3435 decision A — every main job that can still write to its book: from
+   registration until it has ended AND its tracked units have finished (or the
+   drain deadline passed). A displaced or ended main job leaves the in-flight
+   map at once but stays here while it drains, so a subset run (and a non-fresh
+   main start) is refused until no main writer is left. In memory only: a
+   restart empties it together with every job. */
+const mainWritersByManuscript: Map<string, Set<AnalysisJob>> = new Map();
+
+/* #3435 — how long an ended main job may hold the book (and the busy flag,
+   the Ollama pin, resident VRAM) for a unit that has not yet observed the
+   abort. A constant, not a setting. */
+export const MAIN_DRAIN_DEADLINE_MS = 60_000;
+
+function joinWriters(job: AnalysisJob): void {
+  let set = mainWritersByManuscript.get(job.manuscriptId);
+  if (!set) {
+    set = new Set();
+    mainWritersByManuscript.set(job.manuscriptId, set);
+  }
+  set.add(job);
+}
+
+/* #3435 — leave the writer registry, exactly once (`job.left`). For a main job
+   this is where the busy flag and the local-Ollama pin are released: a job
+   still draining after endJob must keep both. */
+function leaveWriters(job: AnalysisJob): void {
+  if (job.left) return;
+  job.left = true;
+  const set = mainWritersByManuscript.get(job.manuscriptId);
+  if (set) {
+    set.delete(job);
+    if (set.size === 0) mainWritersByManuscript.delete(job.manuscriptId);
+  }
+  console.log(`[analysis] main run drained manuscript=${job.manuscriptId}`);
+  releaseBusyAndPin(job);
+}
+
+/** #3435 — take a tracked unit of work for this job. Exported for unit testing. */
+export function takeWork(job: AnalysisJob): void {
+  job.liveWork = (job.liveWork ?? 0) + 1;
+}
+
+/** #3435 — release a tracked unit; an ended main job with no work left leaves
+    the writer registry. Exported for unit testing. */
+export function releaseWork(job: AnalysisJob): void {
+  job.liveWork = (job.liveWork ?? 0) - 1;
+  if (job.kind === 'main' && job.ended && job.liveWork <= 0) leaveWriters(job);
+}
+
+/* #3435 decision A — the main writer state for a manuscript: 'live' when a
+   main writer is still running, 'draining' when every main writer has ended or
+   been aborted, null when there is none. */
+function mainWriterState(manuscriptId: string): 'live' | 'draining' | null {
+  const set = mainWritersByManuscript.get(manuscriptId);
+  if (!set || set.size === 0) return null;
+  for (const w of set) if (!w.ended && !w.controller.signal.aborted) return 'live';
+  return 'draining';
+}
+
+const MAIN_RUNNING_MESSAGE = 'The analysis is still running on this book. Pause it first, then try again.';
+const MAIN_DRAINING_MESSAGE =
+  'The analysis on this book is still finishing the chapters it had started. Try again in a moment.';
+const SUBSET_RUNNING_MESSAGE =
+  'A chapter retry is running on this book. Wait for it to finish, then resume the analysis.';
+
+/* #3435 decision A — why a subset POST is refused, or null. Any main writer,
+   live or draining. */
+function subsetRefusal(
+  manuscriptId: string,
+): { error: 'main_analysis_running'; draining: boolean; message: string } | null {
+  const state = mainWriterState(manuscriptId);
+  if (!state) return null;
+  const draining = state === 'draining';
+  return { error: 'main_analysis_running', draining, message: draining ? MAIN_DRAINING_MESSAGE : MAIN_RUNNING_MESSAGE };
+}
+
+/* #3435 decision A — why a main POST that would START a job is refused, or
+   null. A registered subset refuses any start; a draining previous main run
+   refuses a non-fresh start (Start fresh still displaces). Never called for a
+   join. */
+function mainStartRefusal(
+  manuscriptId: string,
+  requestedFresh: boolean,
+):
+  | { error: 'subset_analysis_running'; message: string }
+  | { error: 'main_analysis_running'; draining: true; message: string }
+  | null {
+  if (inFlightSubsetByManuscript.has(manuscriptId)) {
+    return { error: 'subset_analysis_running', message: SUBSET_RUNNING_MESSAGE };
+  }
+  if (!requestedFresh && mainWriterState(manuscriptId) === 'draining') {
+    return { error: 'main_analysis_running', draining: true, message: MAIN_DRAINING_MESSAGE };
+  }
+  return null;
+}
+
+/* #3435 — the same refusal as an SSE terminal `error` frame, for the late check
+   (headers are already flushed by then). */
+function refusalFrame(r: { error: string; message: string; draining?: boolean }): Record<string, unknown> {
+  return { kind: 'error', code: r.error, message: r.message, ...(r.draining !== undefined ? { draining: r.draining } : {}) };
+}
+
 /* Exported for tests + the B2 frontend's cheap "is a job running?" probe
    before opening an SSE. Returns false when the map entry is present but
    its controller has been aborted — that entry will be cleared at the
@@ -2842,15 +2964,23 @@ export function isAnalysisJobRunning(manuscriptId: string): boolean {
 
 /** Test helper: register a job into the in-flight map. Used by
     analysis.rejoin-miss.test.ts's buildJob to ensure the staleness guard
-    in endJob has a valid map entry to check. */
+    in endJob has a valid map entry to check. #3435 — fills the lifecycle
+    fields a hand-built job omits, and enters a main job in the writer
+    registry, as the main route does. */
 export function __testRegisterJobForTest(job: AnalysisJob): void {
+  job.ended ??= false;
+  job.halting ??= false;
+  job.left ??= false;
+  job.liveWork ??= 0;
   const targetMap = jobMapFor(job.kind);
   targetMap.set(job.manuscriptId, job);
+  if (job.kind === 'main') joinWriters(job);
 }
 
 /** fs-1 — true when ANY analyzer job (main or subset) is in flight. The upgrade
     gate refuses to restart the server out from under an active analysis. Returns
-    the busy manuscript ids so the 409 can name them. */
+    the busy manuscript ids so the 409 can name them. #3435 (A9) — a main run
+    still draining after its end counts too, so a restart cannot land mid-drain. */
 export function activeAnalysisManuscripts(): string[] {
   const out = new Set<string>();
   for (const [id, job] of inFlightAnalysisByManuscript) {
@@ -2859,6 +2989,7 @@ export function activeAnalysisManuscripts(): string[] {
   for (const [id, job] of inFlightSubsetByManuscript) {
     if (!job.controller.signal.aborted) out.add(id);
   }
+  for (const id of mainWritersByManuscript.keys()) out.add(id);
   return [...out];
 }
 
@@ -3004,6 +3135,11 @@ async function persistRunningSnapshot(job: AnalysisJob, force: boolean): Promise
             kind: job.kind,
             subsetChapterIds: job.kind === 'subset' ? job.subsetChapterIds : undefined,
             lastTickAt: now,
+          }, {
+            /* #3435 (A6) — checked inside the queued op, after the dir resolved:
+               a running snapshot that waited past endJob must not land after
+               the terminal write or delete. */
+            shouldWrite: () => !job.ended,
           });
         } catch (err) {
           /* Non-fatal — the on-disk file only powers cold-boot pill
@@ -3221,6 +3357,14 @@ export function buildRejoinMissEvent(priorOutcome: AnalysisLastOutcome | null): 
    production call sites still reach this only via the analyzer loop's own
    terminal transitions. */
 export function endJob(job: AnalysisJob, finalEv?: unknown): void {
+  /* #3435 decision E — every ending, for every kind, first ends the job and
+     aborts its in-flight calls (harmless on a `result`: nothing is in flight
+     then), and releases every Phase-1 worker parked on the watermark so none
+     is left waiting for ever. Setting `ended` first also orders this job's
+     snapshot writes: a running snapshot queued from here on is dropped. */
+  job.ended = true;
+  if (!job.controller.signal.aborted) job.controller.abort();
+  job.watermark?.releaseAll();
   if (finalEv) broadcastToJob(job, finalEv);
   /* Cold-boot snapshot transition. Fire-and-forget; we still tear
      down subscribers + deregister synchronously below so the route
@@ -3364,6 +3508,32 @@ export function endJob(job: AnalysisJob, finalEv?: unknown): void {
   if (targetMap.get(job.manuscriptId) === job) {
     targetMap.delete(job.manuscriptId);
   }
+  /* #3435 decision A — a subset job releases busy and the pin here, as before:
+     it is sequential, so nothing of it is still running. A main job releases
+     them when it leaves the writer registry: now if no tracked unit is still
+     running, else when the last one finishes, or at the drain deadline. */
+  if (job.kind !== 'main') {
+    releaseBusyAndPin(job);
+    return;
+  }
+  if ((job.liveWork ?? 0) <= 0) {
+    leaveWriters(job);
+    return;
+  }
+  const deadline = setTimeout(() => {
+    if (job.left) return;
+    console.warn(
+      `[analysis] main run drain deadline exceeded manuscript=${job.manuscriptId} liveWork=${job.liveWork}`,
+    );
+    leaveWriters(job);
+  }, MAIN_DRAIN_DEADLINE_MS);
+  deadline.unref?.();
+}
+
+/* The release half of a job's lifetime: the busy flag and the local-Ollama pin.
+   Called once per job — from endJob for a subset job, from leaveWriters (whose
+   `job.left` guard makes it exactly once) for a main job. */
+function releaseBusyAndPin(job: AnalysisJob): void {
   /* Release the cross-operation busy flag so a "Design full cast" run can
      start once analysis is done (mutual exclusion — re-analysis rewrites the
      whole cast). Ref-counted, so a sibling main/subset job keeps it held. */
@@ -3443,6 +3613,21 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       return res.status(409).json({ error: 'language_unset' });
     }
     throw e;
+  }
+
+  /* #3435 decision A, early check — a POST that would START a job is refused
+     while a subset run is registered, and (unless fresh) while the previous
+     main run still drains. A join to a live main run is never refused. The
+     same check runs again at registration (the late check below), because
+     this handler awaits before it registers. */
+  {
+    const live = inFlightAnalysisByManuscript.get(manuscriptId);
+    const joins = !!live && !live.controller.signal.aborted && !requestedFresh;
+    const refusal = joins ? null : mainStartRefusal(manuscriptId, requestedFresh);
+    if (refusal) {
+      console.log(`[analysis] refused ${refusal.error} manuscript=${JSON.stringify(manuscriptId)}`);
+      return res.status(409).json(refusal);
+    }
   }
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -3569,6 +3754,18 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      Otherwise (no existing job, or fresh: true displacement), abort
      any prior job and start a new one detached in the background. */
   const existing = inFlightAnalysisByManuscript.get(manuscriptId);
+  /* #3435 decision A, late check — in the same synchronous block as the
+     registration below. Headers are flushed, so the refusal is an SSE terminal
+     `error` frame with the same code; no job is registered. */
+  if (!(existing && !existing.controller.signal.aborted && !requestedFresh)) {
+    const refusal = mainStartRefusal(manuscriptId, requestedFresh);
+    if (refusal) {
+      console.log(`[analysis] refused ${refusal.error} manuscript=${JSON.stringify(manuscriptId)}`);
+      send(refusalFrame(refusal));
+      clearInterval(keepAlive);
+      return res.end();
+    }
+  }
   if (existing && !existing.controller.signal.aborted && !requestedFresh) {
     /* F2 (#3169 fix wave) — the one outcome line for the attach path. The
        job object doesn't store the model it's running (only `engine`), so
@@ -3642,8 +3839,14 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       warnings: new Map(),
     },
     lastDiskWriteAt: 0,
+    ended: false,
+    halting: false,
+    left: false,
+    liveWork: 0,
   };
   inFlightAnalysisByManuscript.set(manuscriptId, job);
+  /* #3435 decision A — a writer from here until it leaves (endJob + drain). */
+  joinWriters(job);
   if (job.bookDir) markAnalysisBusy(job.bookDir);
   const subscriber: AnalysisSubscriber = { send, res, keepAlive };
   job.subscribers.add(subscriber);
@@ -3900,6 +4103,8 @@ export async function runMainAnalyzerJob(
       );
     }
     const watermark: PhaseWatermark = createWatermarkForJob();
+    /* #3435 — endJob releases every Phase-1 worker parked on it. */
+    job.watermark = watermark;
 
     /* Best-effort GPU/CPU detection for the first-chapter ETA rate (issue 3).
        Only meaningful for local Ollama; cloud engines pass 'unknown' → the
@@ -4930,14 +5135,24 @@ export async function runMainAnalyzerJob(
         let castAborted = false;
         const castWorkers: Promise<void>[] = [];
         const launchNextCast = async (): Promise<void> => {
-          while (nextCastTask < castTaskIndices.length && !castAborted) {
+          /* #3435 — no cast chapter starts once the run is halting or has ended
+             (in pipelined mode a Phase-1 failure halts it mid-pool). */
+          while (nextCastTask < castTaskIndices.length && !castAborted && !job.halting && !job.ended) {
             const i = castTaskIndices[nextCastTask++];
             try {
               /* #3084 P20 — a job marked by a reasoning overflow starts no further cast
                  chapter. In pipelined mode, Phase 1 escalation can mark it mid-pool. */
               throwIfReasoningOverflowed(job);
-              await runCastChapter(i);
+              /* #3435 decision A — a tracked unit: the job stays a writer until it ends. */
+              takeWork(job);
+              try {
+                await runCastChapter(i);
+              } finally {
+                releaseWork(job);
+              }
             } catch (e) {
+              /* #3435 — the halt decision, synchronously and before any await. */
+              job.halting = true;
               castInFlight.delete(i);
               castAborted = true;
               throw e;
@@ -4949,6 +5164,12 @@ export async function runMainAnalyzerJob(
           castWorkers.push(launchNextCast());
         }
         await Promise.all(castWorkers);
+        /* #3435 (plan check 3, item A) — a stop rejects; it never resolves into
+           Phase 0b. A Pause ends the run aborted; a loop that exited early on a
+           halt (the Phase-1 arm has already rejected) writes no partial stage1
+           or cast.json. */
+        if (abortController.signal.aborted) throw new AnalysisAbortedError('Analysis aborted during cast detection.');
+        if (job.halting || job.ended) return;
         log(0, analyzerConcurrencyPeakLine('Cast detection', castTaskIndices.length));
 
         /* #3084 P20 — stop new spend: skip Phase 0b. In pipelined mode Phase 1
@@ -5165,7 +5386,10 @@ export async function runMainAnalyzerJob(
          this function, so observable behaviour matches today's strict
          phase gate. In pipelined mode, Phase 1 dispatches as Phase 0
          chapters complete (subject to the LAG semaphore). */
-      phase0PoolPromise = runPhase0Pool();
+      /* #3435 decision A — the arm itself is a tracked unit: it covers Phase
+         0b's stage1 and cast.json writes. */
+      takeWork(job);
+      phase0PoolPromise = runPhase0Pool().finally(() => releaseWork(job));
     }
 
     /* ── Phase 1: parsing and attribution (handoff stage 2, per chapter).
@@ -5457,7 +5681,9 @@ export async function runMainAnalyzerJob(
     /* #3435 — the Phase-1 dispatch: everything `runChapter` did before the
        chapter's own model call. It runs OUTSIDE the pool's recording catch, so a
        throw here (the recorded overflow rethrown, say) is the job's error and
-       never a failure of chapter `i`. `isPoolAborted` is the pool-local flag. */
+       never a failure of chapter `i`. `isPoolAborted` is the pool-local flag.
+       On 'run' it has taken the chapter body's liveWork token, in the same
+       synchronous block as its last checks (A5 gap 1); the caller releases it. */
     async function phase1Dispatch(i: number, isPoolAborted: () => boolean): Promise<'run' | 'skip'> {
       /* Plan 88 — back-pressure semaphore.
          In sequential mode this resolves once `markPhase0AllDone()`
@@ -5470,6 +5696,10 @@ export async function runMainAnalyzerJob(
          between them" rule enforces a wait. */
       const dispatchWaitStart = Date.now();
       await watermark.awaitPhase1Dispatch(i);
+      /* A Pause while this worker was parked or between chapters: end the run as
+         aborted rather than let the pool resolve with chapters missing (plan
+         check 3, item A). A worker woken by endJob's releaseAll lands here too. */
+      if (abortController.signal.aborted) throw new AnalysisAbortedError('Analysis aborted before dispatching the chapter.');
       /* Plan 88 follow-up — if Phase 0 finished with failed cast
          chapters, `runPhase0Pool` set `phase0FailedCount` and called
          `markPhase0AllDone` to release us. Exit cleanly without
@@ -5478,16 +5708,16 @@ export async function runMainAnalyzerJob(
          here also keeps the worker pool's normal early-termination
          path intact (no thrown error, no `aborted = true`). */
       if (phase0FailedCount > 0) return 'skip';
+      /* #3435 — the run is halting (a pool catch decided it) or has ended: a
+         worker woken by a watermark advance after the halt starts nothing. */
+      if (job.halting || job.ended) return 'skip';
+      /* Another worker's failure while this one was parked. */
+      if (isPoolAborted()) return 'skip';
       /* #3084 P20 — checked here, after the watermark, rather than at the top of
          launchNext's loop: in pipelined mode a worker can be parked on
          awaitPhase1Dispatch when the job is marked. The pool catch below sets
          `aborted` and rethrows. */
       throwIfReasoningOverflowed(job);
-      /* A Pause while this worker was parked or between chapters: end the run as
-         aborted rather than let the pool resolve with chapters missing. */
-      if (abortController.signal.aborted) throw new AnalysisAbortedError('Analysis aborted before dispatching the chapter.');
-      /* Another worker's failure while this one was parked. */
-      if (isPoolAborted()) return 'skip';
       const dispatchWaitMs = Date.now() - dispatchWaitStart;
       if (dispatchWaitMs > 250) {
         /* Surface the back-pressure wait so the user can tell Gemini
@@ -5500,6 +5730,8 @@ export async function runMainAnalyzerJob(
           `Chapter ${i + 1}/${totalChapters} — held back ${humanSeconds(dispatchWaitMs)} to preserve ${resolvePhase1MinLagChapters()}-chapter roster lag.`,
         );
       }
+      /* #3435 decision A — the chapter body's token, taken before this returns. */
+      takeWork(job);
       return 'run';
     }
 
@@ -5925,14 +6157,16 @@ export async function runMainAnalyzerJob(
        the outer await moved. */
     const runPhase1Pool = async (): Promise<void> => {
       /* Concurrency pool — keep up to `concurrency` chapters in flight at
-         a time. The first failure aborts new task dispatch, but already-
-         running tasks finish their work and write to the cache, so a
-         resume picks up cleanly from where the run left off. */
+         a time. The first failure stops new task dispatch (`aborted`, and
+         `job.halting` for the other pool), and the run's end aborts the
+         chapters still calling the model (#3435 decision E, superseding #3084
+         N4): they cache nothing and are attributed by the next Resume or
+         Retry. A body whose call had already returned finishes its save. */
       let nextTask = 0;
       let aborted = false;
       const workers: Promise<void>[] = [];
       const launchNext = async (): Promise<void> => {
-        while (nextTask < taskIndices.length && !aborted) {
+        while (nextTask < taskIndices.length && !aborted && !job.halting && !job.ended) {
           const i = taskIndices[nextTask++];
           /* #3435 — dispatch is outside the recording catch below: a throw here
              (the recorded overflow rethrown at this chapter's dispatch) never ran
@@ -5943,20 +6177,27 @@ export async function runMainAnalyzerJob(
           } catch (e) {
             inFlight.delete(i);
             aborted = true;
+            job.halting = true;
             throw e;
           }
           if (verdict === 'skip') continue;
           try {
             await runChapterBody(i);
           } catch (e) {
+            /* #3435 — the halt decision, synchronously and before any await (the
+               guarded save below is one), so no chapter in either pool starts
+               between here and endJob. The controller is NOT aborted here: a
+               sibling's AnalysisAbortedError could then reach Promise.all first
+               and be read as a pause. endJob aborts, after this terminal. */
+            job.halting = true;
             inFlight.delete(i);
             aborted = true;
             const failedId = recordRef.chapterHints[i].id;
             /* #3084 P20/F7 — the chapters still running in the other workers
-               start no further escalation window. They are not aborted, and
-               still finish and cache (the pool comment above). `launchNext`
-               has no `ch` of its own (unlike `runChapterBody`, which this `i`
-               belongs to) — re-derive it the same way. */
+               start no further escalation window, and are aborted when the run
+               ends (#3435 decision E). `launchNext` has no `ch` of its own
+               (unlike `runChapterBody`, which this `i` belongs to) — re-derive
+               it the same way. */
             noteReasoningOverflow(
               job,
               structureBudget,
@@ -5986,6 +6227,9 @@ export async function runMainAnalyzerJob(
               });
             }
             throw e;
+          } finally {
+            /* #3435 — the body's liveWork token, taken in phase1Dispatch. */
+            releaseWork(job);
           }
         }
       };
@@ -6311,6 +6555,10 @@ export async function runMainAnalyzerJob(
     // state.json untouched so the book doesn't flip to `cast_pending`
     // against a corrupted run. The user sees the `attribution_drift`
     // error in the analysing view and can retry.
+    /* #3435 (M13a) — a Pause that landed after the pools joined (the fold, the
+       non-story classifier, the Phase-2 stub — whose timeouts ignore the signal)
+       ends the run aborted with nothing persisted. */
+    if (job.controller.signal.aborted) throw new AnalysisAbortedError('Analysis aborted before persisting.');
     if (record.bookDir) {
       /* #2260 review round 3 (C1) — a lock-acquisition timeout out of the
          identity block below must fail the JOB, but it must NOT be thrown
@@ -6784,6 +7032,13 @@ analysisRouter.post('/:id/analysis/pause', async (req: Request, res: Response) =
     job.controller.abort();
     paused = true;
   }
+  /* #3435 — also reach any main writer still draining (displaced, or ended).
+     endJob has always aborted an ended job already, so this only makes Pause
+     idempotent over a drain: it writes no snapshot (endJob wrote the terminal
+     one) and leaves the drain deadline as it is. */
+  for (const writer of mainWritersByManuscript.get(manuscriptId) ?? []) {
+    if (!writer.controller.signal.aborted) writer.controller.abort();
+  }
   res.status(200).json({ ok: true, paused });
 });
 
@@ -6836,6 +7091,17 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     `[analysis-subset] request received manuscript=${JSON.stringify(manuscriptId)} ` +
       `model=${JSON.stringify(requestedModel ?? '(saved/default)')} chapters=${requestedChapterCount}`,
   );
+
+  /* #3435 decision A, early check — refused while the book has a main writer,
+     live or still draining. Checked again at registration (the late check
+     below), because this handler awaits before it registers. */
+  {
+    const refusal = subsetRefusal(manuscriptId);
+    if (refusal) {
+      console.log(`[analysis-subset] refused main_analysis_running manuscript=${JSON.stringify(manuscriptId)}`);
+      return res.status(409).json(refusal);
+    }
+  }
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -6941,6 +7207,17 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      reattach for the main run. Otherwise we register a new sticky job
      and spawn the analyzer work detached so the user can navigate
      away without aborting the retry. */
+  /* #3435 decision A, late check — in the same synchronous block as the
+     registration below; an SSE terminal `error` frame, no job registered. */
+  {
+    const refusal = subsetRefusal(manuscriptId);
+    if (refusal) {
+      console.log(`[analysis-subset] refused main_analysis_running manuscript=${JSON.stringify(manuscriptId)}`);
+      send(refusalFrame(refusal));
+      clearInterval(keepAlive);
+      return res.end();
+    }
+  }
   const existing = inFlightSubsetByManuscript.get(manuscriptId);
   if (existing && !existing.controller.signal.aborted) {
     /* #3202 — join only when this request's chapter set matches the
@@ -7049,6 +7326,10 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       warnings: new Map(),
     },
     lastDiskWriteAt: 0,
+    ended: false,
+    halting: false,
+    left: false,
+    liveWork: 0,
   };
   inFlightSubsetByManuscript.set(manuscriptId, job);
   if (job.bookDir) markAnalysisBusy(job.bookDir);

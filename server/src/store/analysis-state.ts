@@ -26,7 +26,7 @@
 
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
-import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
 import { analysisStateJsonPath, analysisLastOutcomeJsonPath } from '../workspace/paths.js';
 import type { AnalysisEngine } from '../analyzer/model-id.js';
 
@@ -97,10 +97,17 @@ export async function readAnalysisState(bookDir: string): Promise<AnalysisStateF
     OneDrive sync hold can't corrupt the file. Throws on terminal
     failure; callers swallow because losing this snapshot is non-fatal
     (the analyzer cache is the real source of truth — this file only
-    feeds the pill). */
+    feeds the pill).
+
+    #3435 (C19, A6) — writes and deletes for one path go through the
+    per-path op chain (`enqueuePathOp`, as the analyzer cache does), so they
+    land in call order. `shouldWrite`, when given, is checked inside the
+    queued op immediately before the write, so a caller can drop a write
+    whose job ended while it waited. */
 export async function writeAnalysisState(
   bookDir: string,
   snapshot: Omit<AnalysisStateFile, 'writtenAt'>,
+  opts: { shouldWrite?: () => boolean } = {},
 ): Promise<void> {
   const payload: AnalysisStateFile = {
     ...snapshot,
@@ -111,7 +118,11 @@ export async function writeAnalysisState(
     haltReason: snapshot.haltReason ? snapshot.haltReason.slice(0, 256) : undefined,
     writtenAt: Date.now(),
   };
-  await writeJsonAtomic(analysisStateJsonPath(bookDir), payload);
+  const path = analysisStateJsonPath(bookDir);
+  await enqueuePathOp(path, async () => {
+    if (opts.shouldWrite && !opts.shouldWrite()) return;
+    await writeJsonAtomic(path, payload);
+  });
 }
 
 /** Remove the snapshot file. Called on terminal success (kind:'result')
@@ -121,13 +132,17 @@ export async function writeAnalysisState(
     a phase boundary). */
 export async function deleteAnalysisState(bookDir: string): Promise<void> {
   const path = analysisStateJsonPath(bookDir);
-  if (!existsSync(path)) return;
-  try {
-    await unlink(path);
-  } catch {
-    /* Swallow — the file is non-load-bearing. Worst case it lingers
-       and the next phase-boundary write overwrites it. */
-  }
+  /* #3435 — on the same per-path chain as writeAnalysisState, so a write
+     queued before this delete lands before it, never after. */
+  await enqueuePathOp(path, async () => {
+    if (!existsSync(path)) return;
+    try {
+      await unlink(path);
+    } catch {
+      /* Swallow — the file is non-load-bearing. Worst case it lingers
+         and the next phase-boundary write overwrites it. */
+    }
+  });
 }
 
 /** #3004 — the LAST terminal outcome a `kind: 'main'` job ended with for a

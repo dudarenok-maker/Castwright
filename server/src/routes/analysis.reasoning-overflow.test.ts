@@ -2,10 +2,10 @@
    through runMainAnalyzerJob against a real workspace book (the harness of
    analysis.rename-midrun.test.ts: a tmpdir workspace, the analyzer/GPU mocks,
    lazy imports). A stage-2 overflow in chapter 2 ends the run while chapter 1
-   is still calling the model. Chapter 1 must still finish and cache for resume
-   (the pools' design, analysis.ts:5672-5675), must start no escalation window,
-   and its late completion must not overwrite the job's terminal `halted`
-   snapshot or its code (N4).
+   is still calling the model. Chapter 1's call is aborted when the run ends
+   (#3435 decision E, superseding N4's "it finishes and caches"): it caches
+   nothing, starts no escalation window, and the job's terminal `halted`
+   snapshot keeps its code.
 
    The deterministic structure engine stays ON (its default): the untagged
    quoted line below flags a crossExamine window, which is what sends a chapter
@@ -288,7 +288,7 @@ function captureEvents(job: AnalysisJob, onError?: () => void): CapturedEvent[] 
   return events;
 }
 
-describe('a reasoning overflow stops new spend, not work already in flight (#3084 P20, N4)', () => {
+describe('a reasoning overflow stops new spend and aborts work in flight (#3084 P20, #3435 decision E)', () => {
   it('positive control: with no overflow, this fixture reaches attribution escalation', async () => {
     const seed = await seedBook('control');
     const escalate = vi.fn(async () => null);
@@ -314,7 +314,7 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
     }
   }, 30_000);
 
-  it('after a stage-2 overflow in chapter 2, chapter 1 (already calling the model) finishes and caches, starts no escalation window, and the halted snapshot keeps its code (P20, N4)', async () => {
+  it("after a stage-2 overflow in chapter 2, chapter 1's in-flight call is aborted, chapter 1 is not cached, no escalation window starts, and the halted snapshot keeps its code", async () => {
     const seed = await seedBook('overflow');
     const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
     const escalate = vi.fn(async () => null);
@@ -326,17 +326,30 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
     const runEnded = new Promise<void>((resolve) => {
       markRunEnded = resolve;
     });
+    const { AnalysisAbortedError } = await import('../analyzer/errors.js');
+    let chapterOneAborted = false;
     (globalThis as Record<string, unknown>).__overflow_spend_test_phase1_selection = buildSelection(
       stubAnalyzer({
         runAttributionEscalation: escalate,
-        async runStage2Chapter(_m: string, chapterId: number, _p: string, _call: StageCall): Promise<Stage2ChapterOutput> {
+        async runStage2Chapter(_m: string, chapterId: number, _p: string, call: StageCall): Promise<Stage2ChapterOutput> {
           if (chapterId === 2) {
             await chapterOneInFlight;
             throw new AnalyzerReasoningOverflowError('gemini', MODEL, 8100);
           }
           markChapterOneInFlight();
-          /* Chapter 1's model call returns only after the run has ended on chapter 2's overflow. */
-          await runEnded;
+          /* Chapter 1's model call would return only after the run has ended on chapter 2's
+             overflow; it rejects as soon as the job's signal aborts. */
+          await new Promise<void>((resolve, reject) => {
+            call.signal?.addEventListener(
+              'abort',
+              () => {
+                chapterOneAborted = true;
+                reject(new AnalysisAbortedError('aborted by the job signal'));
+              },
+              { once: true },
+            );
+            void runEnded.then(() => setTimeout(resolve, 200));
+          });
           return stage2For(1);
         },
       }),
@@ -362,20 +375,19 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
       // so the SSE error's message names it by title rather than saying "a chapter".
       expect(events.find((e) => e.kind === 'error')!.message).toContain('chapter "Chapter Two"');
 
-      /* P20 — chapter 1 still finishes and caches for resume. */
-      await vi.waitFor(
-        async () => expect((await loadAnalysisCache(seed.manuscriptId)).chapters[1]).toBeDefined(),
-        { timeout: 10_000, interval: 50 },
-      );
-      /* P20 — but it started no escalation window, and nothing aborted the job. */
+      /* #3435 decision E — the run's end aborted chapter 1's call: it caches nothing (the
+         call would have returned 200 ms after the run ended; wait past that). */
+      expect(seed.job.controller.signal.aborted).toBe(true);
+      await vi.waitFor(() => expect(chapterOneAborted).toBe(true), { timeout: 5_000, interval: 20 });
+      await new Promise((r) => setTimeout(r, 500));
+      expect((await loadAnalysisCache(seed.manuscriptId)).chapters?.[1]).toBeUndefined();
+      /* P20 — and it started no escalation window. */
       expect(escalate).not.toHaveBeenCalled();
-      expect(seed.job.controller.signal.aborted).toBe(false);
       expect(events.some((e) => e.kind === 'result')).toBe(false);
 
-      /* N4 — read the persisted snapshot, not only the first event: chapter 1's
-         late completion must not overwrite the terminal state or its code.
-         endJob's snapshot write is fire-and-forget, so under load it can land after a fixed
-         sleep: wait for the halted write first, then give a late overwrite time to show. */
+      /* Read the persisted snapshot, not only the first event: nothing after the end may
+         overwrite the terminal state or its code. endJob's snapshot write is fire-and-forget,
+         so under load it can land after a fixed sleep: wait for the halted write first. */
       await vi.waitFor(
         () =>
           expect(JSON.parse(readFileSync(analysisStateJsonPath(seed.bookDir), 'utf8'))).toMatchObject({
@@ -515,7 +527,8 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
       const { escalate, job } = await runEscalationCase(route, true);
       expect(escalate).toHaveBeenCalledTimes(1);
       expect(job.reasoningOverflowed).toBe(true);
-      expect(job.controller.signal.aborted).toBe(false);
+      /* #3435 decision E — every ending aborts the job's controller (N4 no longer holds). */
+      expect(job.controller.signal.aborted).toBe(true);
     }, 60_000);
 
     /* #3084 P20 — the dispatch check. An overflow that only escalation saw is swallowed by
@@ -534,7 +547,8 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
       expect(stage2Chapters).not.toContain(2);
       expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
       expect(events.some((e) => e.kind === 'result')).toBe(false);
-      expect(job.controller.signal.aborted).toBe(false);
+      /* #3435 decision E — every ending aborts the job's controller (N4 no longer holds). */
+      expect(job.controller.signal.aborted).toBe(true);
       /* endJob's snapshot write is fire-and-forget. */
       const { analysisStateJsonPath } = await import('../workspace/paths.js');
       await vi.waitFor(
@@ -627,7 +641,8 @@ describe('a reasoning overflow stops new spend, not work already in flight (#308
     expect(run.escalate).toHaveBeenCalledTimes(1);
     expect(run.castCalls).not.toContain(3);
     expect(run.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
-    expect(run.job.controller.signal.aborted).toBe(false);
+    /* #3435 decision E — every ending aborts the job's controller (N4 no longer holds). */
+    expect(run.job.controller.signal.aborted).toBe(true);
   }, 90_000);
 
   /* #3084 P20 — the check after the Phase-0 pool joins. Here the overflow lands while the LAST

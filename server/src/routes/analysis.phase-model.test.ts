@@ -137,6 +137,10 @@ function buildStubJob(manuscriptId: string): AnalysisJob {
       warnings: new Map(),
     },
     lastDiskWriteAt: 0,
+    ended: false,
+    halting: false,
+    left: false,
+    liveWork: 0,
   };
 }
 
@@ -535,7 +539,7 @@ describe('a reasoning overflow ends the analysis run (#3084 P20)', () => {
          the signature row (mutation row 10). */
       expect(errorEvent?.message).toContain('spent its whole output budget reasoning on');
       expect(job.reasoningOverflowed).toBe(true); // P20: the first rethrow marks the job
-      expect(job.controller.signal.aborted).toBe(false); // P20: new spend stops; the job is not aborted
+      expect(job.controller.signal.aborted).toBe(true); // #3435 decision E: every ending aborts the job (N4 superseded)
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
@@ -578,7 +582,7 @@ describe('a reasoning overflow ends the analysis run (#3084 P20)', () => {
       /* Same deviation, same reason as the stage-1 case above. */
       expect(errorEvent?.message).toContain('spent its whole output budget reasoning on');
       expect(job.reasoningOverflowed).toBe(true); // P20: the first rethrow marks the job
-      expect(job.controller.signal.aborted).toBe(false); // P20: new spend stops; the job is not aborted
+      expect(job.controller.signal.aborted).toBe(true); // #3435 decision E: every ending aborts the job (N4 superseded)
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
@@ -611,7 +615,7 @@ describe('a reasoning overflow ends the analysis run (#3084 P20)', () => {
 
       expect(terminalError(events)?.code).toBe('analyzer-reasoning-overflow');
       expect(job.reasoningOverflowed).toBe(true); // P20: the subset Phase-0 catch marks the job
-      expect(job.controller.signal.aborted).toBe(false);
+      expect(job.controller.signal.aborted).toBe(true); // #3435 decision E: every ending aborts the job (N4 superseded)
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);

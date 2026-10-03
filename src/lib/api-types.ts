@@ -4057,8 +4057,10 @@ export interface components {
          *     classifier can name something actionable); the route's own terminal
          *     codes (`language_unset`, `cast_incomplete`, `stage1_shrink_refused`,
          *     `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
-         *     `design_in_progress`, `bad_request`, `chapter_excluded`) carry `code`
-         *     and `message` only.
+         *     `design_in_progress`, `bad_request`, `chapter_excluded`,
+         *     `main_analysis_running`, `subset_analysis_running`) carry `code`
+         *     and `message` only — `main_analysis_running` also carries
+         *     `draining` (#3435: the late refusal check, after the stream opened).
          */
         AnalyseErrorEvent: {
             /** @enum {string} */
@@ -4075,6 +4077,8 @@ export interface components {
             remediation?: string;
             /** @description Collapsible diagnostic blob (engine, model, chapter id, reasoning tokens, upstream status/details). Absent when there is nothing to add. */
             detail?: string;
+            /** @description #3435 — on `main_analysis_running` only: false while the main run is live, true while it is finishing the chapters it had started. */
+            draining?: boolean;
             /**
              * @description #3084 F7 — structured "how to fix" entries, every actionable fix
              *     first and every `Read: …` wiki entry last. Present only for
@@ -7003,8 +7007,17 @@ export interface operations {
                 };
             };
             /**
-             * @description The manuscript's book has no language set. Set the book language
-             *     before requesting analysis.
+             * @description Refused before the stream opens. `language_unset`: the
+             *     manuscript's book has no language set — set the book language
+             *     before requesting analysis. `subset_analysis_running` (#3435): a
+             *     chapter retry is running on this book, so a request that would
+             *     start a run is refused (a request that joins a running analysis
+             *     never is). `main_analysis_running` with `draining: true`
+             *     (#3435): a previous analysis run on this book is still finishing
+             *     the chapters it had started; a non-fresh start is refused until
+             *     it has. The same two refusal codes can also arrive as a terminal
+             *     SSE `error` event when the conflict appears after the stream
+             *     opened.
              */
             409: {
                 headers: {
@@ -7013,6 +7026,10 @@ export interface operations {
                 content: {
                     "application/json": {
                         error: string;
+                        /** @description User-facing reason (both #3435 refusals). */
+                        message?: string;
+                        /** @description Present on `main_analysis_running`: always true here. */
+                        draining?: boolean;
                     };
                 };
             };
@@ -7049,6 +7066,28 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseErrorEvent"] | components["schemas"]["AnalyseResponse"];
+                };
+            };
+            /**
+             * @description #3435 — the book has a main analysis run, live or still finishing
+             *     the chapters it had started (`draining`). Pause it (or wait for it
+             *     to finish), then try again. The same refusal can also arrive as a
+             *     terminal SSE `error` event (`code: main_analysis_running`, with
+             *     `draining` and `message`) when the main run registered after the
+             *     stream opened.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        error: "main_analysis_running";
+                        /** @description false while the main run is live; true while it is finishing after a pause or halt. */
+                        draining: boolean;
+                        message: string;
+                    };
                 };
             };
         };

@@ -173,6 +173,10 @@ function buildStubJob(manuscriptId: string): AnalysisJob {
       warnings: new Map(),
     },
     lastDiskWriteAt: 0,
+    ended: false,
+    halting: false,
+    left: false,
+    liveWork: 0,
   };
 }
 
