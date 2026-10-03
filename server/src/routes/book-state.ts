@@ -344,6 +344,17 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       stage1Ready = !!cache.stage1;
       resumeRequired = !reachedConfirm(state, cache) && stage1Ready && !analysisCompleteFor(cache, activeIds);
       unattributed = unattributedChapterIds(cache, activeIds);
+      /* Spec A10 — past Confirm, manuscript-edits.json is authoritative
+         downstream, so a chapter whose sentences it carries is attributed even
+         when the cache has no take for it (a sample / handoff-less book). A
+         chapter in failedChapterErrors keeps its gap. */
+      if (reachedConfirm(state, cache) && Array.isArray(edits?.sentences)) {
+        const editedChapters = new Set<number>();
+        for (const s of edits.sentences as Array<{ chapterId?: unknown }>) {
+          if (typeof s?.chapterId === 'number') editedChapters.add(s.chapterId);
+        }
+        unattributed = unattributed.filter((id) => !editedChapters.has(id) || Object.hasOwn(failedChapterErrors, String(id)));
+      }
       const cachedSentences = Object.values(cache.chapters ?? {}).flat();
       if (edits && Array.isArray(edits.sentences) && edits.sentences.length > 0) {
         if (cachedSentences.length > 0) {

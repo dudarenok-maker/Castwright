@@ -2745,4 +2745,59 @@ describe('book-state router — analysis completeness fields (plan 285 T6)', () 
     /* The library side of decision F (never demoted) is pinned in scan.test.ts's
        'decision F' block. */
   });
+
+  describe('edits count as attributed on a confirmed book (spec A10)', () => {
+    const editsPath = () => join(bookDir, '.audiobook', 'manuscript-edits.json');
+    let originalEdits: string | null;
+    beforeEach(() => {
+      originalEdits = existsSync(editsPath()) ? readFileSync(editsPath(), 'utf8') : null;
+    });
+    afterEach(() => {
+      if (originalEdits === null) rmSync(editsPath(), { force: true });
+      else writeFileSync(editsPath(), originalEdits);
+    });
+    const writeEdits = (chapterIds: number[]) =>
+      writeFileSync(editsPath(), JSON.stringify({ sentences: chapterIds.flatMap((id) => take(id)) }));
+    /** No cache file on disk (a sample / handoff-less book): loads as `{ chapters: {} }`. */
+    async function getNoCache() {
+      const res = await request(app).get(`/api/books/${bookId}/state`);
+      expect(res.status).toBe(200);
+      return res.body.analysis as { resumeRequired: boolean; unattributedChapterIds: number[] };
+    }
+
+    it('a confirmed book with no cache and edits for every active chapter lists no gaps', async () => {
+      seedState(true);
+      writeEdits([1, 2]);
+      const a = await getNoCache();
+      expect(a.unattributedChapterIds).toEqual([]);
+      expect(a.resumeRequired).toBe(false);
+    });
+
+    it('a confirmed book with no cache still lists an active chapter absent from edits', async () => {
+      seedState(true);
+      writeEdits([1]);
+      const a = await getNoCache();
+      expect(a.unattributedChapterIds).toEqual([2]);
+    });
+
+    it('a confirmed book keeps the gap for a chapter in failedChapterErrors even with edits', async () => {
+      seedState(true);
+      writeEdits([1, 2]);
+      const a = await get({
+        stage1,
+        chapters: { 1: take(1) },
+        confirmReached: true,
+        failedChapterIds: [2],
+        failedChapterErrors: { '2': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'attribution' } },
+      });
+      expect(a.unattributedChapterIds).toEqual([2]);
+    });
+
+    it('an unconfirmed book with no cache is unchanged: every active chapter is listed', async () => {
+      seedState(false);
+      writeEdits([1, 2]);
+      const a = await getNoCache();
+      expect(a.unattributedChapterIds).toEqual([1, 2]);
+    });
+  });
 });
