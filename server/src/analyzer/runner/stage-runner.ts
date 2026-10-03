@@ -6,7 +6,7 @@ import { writeFile } from 'node:fs/promises';
 import { z } from 'zod';
 import { writeInbox, errorPath, rawAttemptPath, type HandoffKey } from '../../handoff/protocol.js';
 import type { StageCall } from '../types.js';
-import { AnalyzerReasoningOverflowError } from '../errors.js';
+import { AnalyzerInvalidOutputError, AnalyzerReasoningOverflowError } from '../errors.js';
 import { mapFinish, withThinkEvidence } from './finish.js';
 import { parseAndValidate, persistResponse, summariseDetail } from './parse.js';
 import { buildSystemInstruction, estimateInputTokens, loadSkill, type SkillName } from './prompt.js';
@@ -56,7 +56,12 @@ export class StageRunner {
 
     const skill = await loadSkill(spec.skillName);
     const system = buildSystemInstruction(skill, call.language, spec.skillName);
-    const structuredOutput = this.structuredOutput(key, spec.grammarSchema);
+    /* Bind the request settings once for this call (#3084 Task 3b.2): the same
+       structured-output mode builds the request and identifies the final throw
+       below. maxOutputTokens stays read inside send(), after prepare() warms
+       the catalog Auto max-output resolution depends on (wave 2b). */
+    const settings = this.settings();
+    const structuredOutput = this.structuredOutput(key, spec.grammarSchema, settings);
 
     const start = Date.now();
     const tick = call.onWaiting ? setInterval(() => call.onWaiting!(Date.now() - start), 500) : null;
@@ -113,12 +118,12 @@ export class StageRunner {
         ),
         'utf8',
       );
-      throw new Error(
-        this.policy.finalFailureMessage({
-          model,
-          key,
-          detail: `${secondAttempt.kind} — ${summariseDetail(secondAttempt.detail)}`,
-        }),
+      throw new AnalyzerInvalidOutputError(
+        this.transport.kind,
+        model,
+        key,
+        `${secondAttempt.kind} — ${summariseDetail(secondAttempt.detail)}`,
+        settings.structuredOutput,
       );
     } finally {
       if (tick) clearInterval(tick);
@@ -138,7 +143,8 @@ export class StageRunner {
     const tag = this.transport.kind;
     const model = this.transport.model;
     await writeInbox(spec.manuscriptId, spec.key, spec.promptMd);
-    const structuredOutput = this.structuredOutput(spec.key, spec.grammarSchema);
+    const settings = this.settings();
+    const structuredOutput = this.structuredOutput(spec.key, spec.grammarSchema, settings);
 
     let text: string;
     try {
@@ -165,8 +171,12 @@ export class StageRunner {
   /* The GRAMMAR schema (may differ from the validation schema) as draft-07
      with reused:'inline' so no $ref reaches the provider. Only built in
      'schema' mode; pre-W1 Gemini never built one. */
-  private structuredOutput(key: HandoffKey, grammarSchema: z.ZodType<unknown>): StructuredOutputRequest {
-    const mode = this.settings().structuredOutput;
+  private structuredOutput(
+    key: HandoffKey,
+    grammarSchema: z.ZodType<unknown>,
+    settings: EngineRequestSettings,
+  ): StructuredOutputRequest {
+    const mode = settings.structuredOutput;
     if (mode !== 'schema') return { mode };
     const draft07 = z.toJSONSchema(grammarSchema, { target: 'draft-07', reused: 'inline' }) as Record<string, unknown>;
     const adapted = this.adaptSchema(draft07);

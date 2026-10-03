@@ -3,7 +3,7 @@ import { OLLAMA_RETRY_POLICY, GEMINI_RETRY_POLICY } from './retry-policy.js';
 import { buildRetryMessage, type ParseResult } from './parse.js';
 import { resolveOllamaTemperature, resolveOllamaRetryTemperature } from '../ollama-settings.js';
 import { resolveGeminiTemperature } from '../transports/gemini-transport.js';
-import { AnalysisAbortedError, AnalyzerHttpError, LocalUnreachableError } from '../errors.js';
+import { AnalysisAbortedError, AnalyzerHttpError, AnalyzerInvalidOutputError, LocalUnreachableError } from '../errors.js';
 import { DailyQuotaExhaustedError } from '../rate-limit.js';
 import type { ChatMessage } from './transport.js';
 
@@ -49,7 +49,7 @@ describe('OLLAMA_RETRY_POLICY', () => {
   });
 
   it('final failure message names model and key', () => {
-    expect(OLLAMA_RETRY_POLICY.finalFailureMessage({ model: 'qwen3.5:9b', key: '1-ch1', detail: 'schema-validation — []' })).toBe(
+    expect(new AnalyzerInvalidOutputError('ollama', 'qwen3.5:9b', '1-ch1', 'schema-validation — []', 'schema').message).toBe(
       'Ollama qwen3.5:9b 1-ch1 failed validation after retry: schema-validation — []',
     );
   });
@@ -81,7 +81,7 @@ describe('GEMINI_RETRY_POLICY', () => {
   });
 
   it('final failure message names the key but not the model', () => {
-    expect(GEMINI_RETRY_POLICY.finalFailureMessage({ model: 'gemma-x', key: '1-ch1', detail: 'invalid-json — x' })).toBe(
+    expect(new AnalyzerInvalidOutputError('gemini', 'gemma-x', '1-ch1', 'invalid-json — x', 'json').message).toBe(
       'Gemini 1-ch1 failed validation after retry: invalid-json — x',
     );
   });

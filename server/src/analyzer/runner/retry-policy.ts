@@ -23,8 +23,6 @@ export interface ValidationRetryPolicy {
   readonly warnsOnRepair: boolean;
   /** Errors the best-effort escalation pass must rethrow rather than resolve null. */
   escalationRethrows(err: unknown): boolean;
-  /** Today's exact post-retry failure text; `detail` is "<kind> — <summarised detail>". */
-  finalFailureMessage(input: { model: string; key: string; detail: string }): string;
 }
 
 function replayAndCorrect(messages: ChatMessage[], firstRaw: string, failure: ParseFailure): ChatMessage[] {
@@ -47,7 +45,6 @@ export const OLLAMA_RETRY_POLICY: ValidationRetryPolicy = {
   writesRawAttempts: true,
   warnsOnRepair: true,
   escalationRethrows: (err) => err instanceof AnalysisAbortedError || err instanceof LocalUnreachableError,
-  finalFailureMessage: ({ model, key, detail }) => `Ollama ${model} ${key} failed validation after retry: ${detail}`,
 };
 
 export const GEMINI_RETRY_POLICY: ValidationRetryPolicy = {
@@ -60,5 +57,4 @@ export const GEMINI_RETRY_POLICY: ValidationRetryPolicy = {
   writesRawAttempts: false,
   warnsOnRepair: false,
   escalationRethrows: (err) => err instanceof AnalysisAbortedError,
-  finalFailureMessage: ({ key, detail }) => `Gemini ${key} failed validation after retry: ${detail}`,
 };
