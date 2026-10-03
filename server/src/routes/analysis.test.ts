@@ -4875,6 +4875,7 @@ describe('runMainAnalyzerJob — chapter-failed frames carry phase (plan 285 T1)
         bookId: 'b_main_frame_phase_test',
         manuscriptId,
         title: 'Main Frame Phase Test Book',
+        language: 'en',
         author: 'Test Author',
         series: 'Standalones',
         seriesPosition: null,
