@@ -2816,6 +2816,24 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         expect(setChapterExcludedSpy.mock.calls.map((c) => c[2])).toEqual([false, true, false, true]);
       });
 
+      it('an Include whose rollback failed (chapter still included), retried and failing again, is not re-excluded by the Retry', async () => {
+        const store = makeIncludeStore();
+        setChapterExcludedSpy.mockImplementation(async (_b: string, _id: number, excluded: boolean) => {
+          if (excluded) throw new Error('rollback failed');
+          return { id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false };
+        });
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+        renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        const retry = await screen.findByRole('button', { name: /Retry/i });
+        expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBeFalsy();
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+        fireEvent.click(retry);
+        await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(setChapterExcludedSpy.mock.calls.map((c) => c[2])).toEqual([false, true, false]);
+      });
+
       it('a refusal reads as a neutral notice, not "Re-analysis failed"', async () => {
         const store = makeIncludeStore();
         renderInclude(store);
