@@ -4660,6 +4660,8 @@ export async function runMainAnalyzerJob(
        set, we set this so Phase 1 workers can bail without dispatching and
        the outer code can emit the `cast_incomplete` SSE error. */
     let phase0FailedCount = 0;
+    /* #3435 — the titles of those chapters, for the `cast_incomplete` copy. */
+    let phase0FailedTitles: string[] = [];
     let stage1ActualMs = 0;
     /* Plan 88 follow-up — Promise.all arm for Phase 0. Set in the
        cache-miss branch (real work); stays `null` in the cache-hit
@@ -5399,6 +5401,9 @@ export async function runMainAnalyzerJob(
         if (failedCastChapters.size > 0) {
           const failedCount = failedCastChapters.size;
           phase0FailedCount = failedCount;
+          phase0FailedTitles = [...failedCastChapters].map(
+            (id) => recordRef.chapterHints.find((h) => h.id === id)?.title ?? `chapter ${id}`,
+          );
           log(
             0,
             `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? ' still needs' : 's still need'} cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.`,
@@ -6498,7 +6503,9 @@ export async function runMainAnalyzerJob(
       endJob(job, {
         kind: 'error',
         code: 'cast_incomplete',
-        message: `Phase 0 paused — ${phase0FailedCount} chapter${phase0FailedCount === 1 ? '' : 's'} failed cast detection. Retry below to continue.`,
+        /* #3435 — the subset route's S5 copy: this becomes the top-bar pill's
+           haltReason on every view, so no "Retry below". */
+        message: castIncompleteMessage(phase0FailedTitles),
       });
       return;
     }

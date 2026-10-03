@@ -9652,6 +9652,12 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
       stage1: (id) => (id === 3 ? Promise.reject(new Error('cast down')) : Promise.resolve({ characters: roster() })),
     });
     expect(endings(r.events)).toEqual(['error:cast_incomplete']);
+    /* #3435 final review M5 — the main route's stop uses the same copy as the
+       subset route's S5 stop: it becomes the top-bar pill's haltReason on every
+       view, so it names the chapters and carries no "Retry below". */
+    const { castIncompleteMessage } = await import('./analysis.js');
+    const title3 = getManuscript(book.manuscriptId)!.chapterHints.find((h) => h.id === 3)!.title;
+    expect(r.events.find((e) => e.kind === 'error')?.message).toBe(castIncompleteMessage([title3]));
     expect([...(r.after.pendingAttributionChapterIds ?? [])].sort()).toEqual([1, 2]);
     /* A pending take is never deleted. */
     expect(r.after.chapters[1]).toEqual(takeOf(1, WORDED[1]));
