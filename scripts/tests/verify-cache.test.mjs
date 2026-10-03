@@ -2353,11 +2353,18 @@ process.exit(0);
 // Castwright#3413 review pass 2: `audit` has `globs: []`, so its lockfile is its
 // ONLY real input. The lockfile is hashed (pickLockHashes) but was not in the
 // stat signature, so an edit-and-restore of it mid-step was cached.
-test('runPipeline: a lockfile edited and restored while the audit step runs is not cached (#3413)', async () => {
+// Both lockfile-only audit steps are run: `audit:server`'s lockfile joins the
+// stat signature through its own `'server'` line, which `audit` never reaches.
+for (const { stepName, lockRel } of [
+  { stepName: 'audit', lockRel: 'package-lock.json' },
+  { stepName: 'audit:server', lockRel: 'server/package-lock.json' },
+]) {
+test(`runPipeline: a lockfile edited and restored while the ${stepName} step runs is not cached (#3413)`, async () => {
   const dir = makeGitFixture();
   const side = mkdtempSync(join(tmpdir(), 'lockaba-side-'));
   try {
-    const lock = join(dir, 'package-lock.json');
+    const lock = join(dir, lockRel);
+    mkdirSync(dirname(lock), { recursive: true });
     writeFileSync(lock, '{"v":"orig"}', 'utf8');
     writeFileSync(join(dir, 'audit-waivers.json'), '[]', 'utf8');
     const started = join(side, 'started');
@@ -2378,7 +2385,7 @@ process.exit(0);
     );
     writeFileSync(
       join(dir, 'package.json'),
-      JSON.stringify({ name: 'lockaba-fixture', private: true, scripts: { audit: 'node s.mjs' } }),
+      JSON.stringify({ name: 'lockaba-fixture', private: true, scripts: { [stepName]: 'node s.mjs' } }),
       'utf8',
     );
     gitAt(dir, ['add', '.']);
@@ -2391,7 +2398,7 @@ process.exit(0);
       console.log = (...args) => logs.push(args.join(' '));
       try {
         const result = await runPipeline({
-          argv: ['--steps', 'audit'],
+          argv: ['--steps', stepName],
           cwd: dir,
           env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
         });
@@ -2405,15 +2412,15 @@ process.exit(0);
     await writer;
     assert.equal(readFileSync(lock, 'utf8'), '{"v":"orig"}', 'the lockfile ends restored');
     assert.ok(
-      first.logs.some((l) => l.includes('audit inputs changed while it ran; not caching')),
+      first.logs.some((l) => l.includes(`${stepName} inputs changed while it ran; not caching`)),
       `run 1 must log the not-caching line:\n${first.logs.join('\n')}`,
     );
     const cacheFile = join(dir, _internals.CACHE_FILENAME);
-    const entry = existsSync(cacheFile) ? JSON.parse(readFileSync(cacheFile, 'utf8')).steps?.audit : undefined;
+    const entry = existsSync(cacheFile) ? JSON.parse(readFileSync(cacheFile, 'utf8')).steps?.[stepName] : undefined;
     assert.equal(entry, undefined, 'no cache entry may be written for the lockfile-ABA step');
     const second = await run();
     assert.ok(
-      !second.logs.some((l) => l.includes('[cached] audit')),
+      !second.logs.some((l) => l.includes(`[cached] ${stepName}`)),
       `the step exits 1 on the restored lockfile; it must not be [cached]:\n${second.logs.join('\n')}`,
     );
     assert.equal(second.result, 1);
@@ -2421,6 +2428,7 @@ process.exit(0);
     rmSync(side, { recursive: true, force: true });
   }
 });
+}
 
 test('runPipeline: a per-step file listing that fails mid-run logs the uncached notice once and writes no entry (#3393 pass 4)', async () => {
   const dir = makeGitFixture();

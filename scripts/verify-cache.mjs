@@ -2025,7 +2025,17 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
       if (fileList !== null && !changedOnlyScript) {
         fileList = gitFileList(cwd);
         // Content AND stat identity: an input edited then restored before the
-        // step exited hashes the same but was not held still.
+        // step exited hashes the same but its mtime/ctime moved. Known limits:
+        // two writes inside one filesystem timestamp tick (see ~:773) move
+        // neither; and a file CREATED then DELETED inside the step's globs
+        // while it runs is invisible to both the hash and statSig (absent at
+        // both ends — only the parent directory's stat moves), e.g. switching
+        // to a branch that only adds files and back during a long step. A
+        // false green needs an end-state tree that fails in a way the
+        // transient file hid. Directory stat identity in statSig was
+        // considered and deliberately not done: it would stop caching any
+        // step that creates/removes its own scratch files in an input dir, and
+        // the per-step audit measured files, not directories.
         const end = fileList === null ? null : planStep(step);
         if (end === null) {
           console.log('[verify-cache] git ls-files failed; running uncached');
