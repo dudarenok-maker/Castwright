@@ -1290,7 +1290,10 @@ describe('AnalysingView — Start/Pause/Resume button cycle', () => {
 });
 
 describe('AnalysingView — failed-chapter retry', () => {
-  function makeBookState(failedIds: number[]): BookStateResponse {
+  function makeBookState(
+    failedIds: number[],
+    errors?: Record<string, { code: string; message: string; remediation: string; phase: 'cast' | 'attribution' }>,
+  ): BookStateResponse {
     /* Minimal shape — only the fields the analysing view reads, padded
        with required BookStateJson fields so the type-check stays happy. */
     return {
@@ -1323,7 +1326,7 @@ describe('AnalysingView — failed-chapter retry', () => {
       revisions: null,
       completedSlugs: [],
       changeLog: null,
-      analysis: { failedChapterIds: failedIds },
+      analysis: { failedChapterIds: failedIds, ...(errors ? { failedChapterErrors: errors } : {}) },
     };
   }
 
@@ -1345,10 +1348,106 @@ describe('AnalysingView — failed-chapter retry', () => {
       </Provider>,
     );
 
-    expect(await screen.findByText(/2 chapters failed cast detection/i)).toBeInTheDocument();
+    expect(await screen.findByText('Cast detection failed on 2 chapters.')).toBeInTheDocument();
+    expect(screen.getByText('Retry detects the cast again and re-attributes that chapter.')).toBeInTheDocument();
     expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
     expect(screen.getByText('Chapter Forty-Seven')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /retry chapter/i })).toHaveLength(2);
+  });
+
+  /* #3435 — the panel reads each row's phase: a cast row and an attribution
+     row are different failures with different Retry meanings. */
+  function renderPanel(bookState: BookStateResponse) {
+    getBookStateImpl = () => Promise.resolve(bookState);
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, account: accountSlice.reducer, bookMeta: bookMetaSlice.reducer, analysis: analysisSlice.reducer },
+    });
+    render(
+      <Provider store={store}>
+        <AnalysingView
+          manuscriptId="m1"
+          bookId="b1"
+          title="the Coalfall Commission"
+          wordCount={2440}
+          onComplete={() => {}}
+        />
+      </Provider>,
+    );
+    return store;
+  }
+  const rec = (phase: 'cast' | 'attribution', message = 'It failed.') => ({
+    code: phase === 'cast' ? 'analyzer-timeout' : 'attribution-collapse',
+    message,
+    remediation: '',
+    phase,
+  });
+
+  it('attribution rows get the attribution heading and subtext (not the cast-detection ones)', async () => {
+    renderPanel(makeBookState([44, 49], { '44': rec('attribution'), '49': rec('attribution') }));
+    expect(await screen.findByText('Speaker attribution failed on 2 chapters.')).toBeInTheDocument();
+    expect(screen.getByText('Retry re-runs this chapter.')).toBeInTheDocument();
+    expect(screen.queryByText(/Cast detection failed on/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Paused/)).not.toBeInTheDocument();
+  });
+
+  it('a single attribution row uses the singular heading', async () => {
+    renderPanel(makeBookState([44], { '44': rec('attribution') }));
+    expect(await screen.findByText('Speaker attribution failed on 1 chapter.')).toBeInTheDocument();
+  });
+
+  it('mixed rows get a neutral heading and a per-row step label', async () => {
+    renderPanel(makeBookState([44, 49], { '44': rec('cast'), '49': rec('attribution') }));
+    expect(await screen.findByText('2 chapters failed.')).toBeInTheDocument();
+    expect(screen.getByText('Cast detection')).toBeInTheDocument();
+    expect(screen.getByText('Speaker attribution')).toBeInTheDocument();
+    expect(screen.queryByText(/Cast detection failed on/)).not.toBeInTheDocument();
+  });
+
+  it('a run that ended cast_incomplete shows the paused cast copy for cast rows', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    analyseManuscriptRejection = new AnalysisError('Phase 0 paused.', 'cast_incomplete');
+    renderPanel(makeBookState([44], { '44': rec('cast') }));
+    const startBtn = await screen.findByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    expect(await screen.findByText('Paused — 1 chapter still needs cast detection.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Sentence attribution starts once every chapter has a cast. Retry below; the analysis resumes on its own.'),
+    ).toBeInTheDocument();
+  });
+
+  it('a refused Retry keeps its row in the same phase group (the synthesised row inherits the phase)', async () => {
+    const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+    renderPanel(makeBookState([44], { '44': rec('attribution') }));
+    await screen.findByText('Speaker attribution failed on 1 chapter.');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /retry chapter/i }));
+    });
+    await act(async () => {
+      rejectSubset?.(new AnalysisError('A different subset re-analysis is already in progress.', 'subset_in_progress'));
+    });
+    expect(await screen.findByText('A different subset re-analysis is already in progress.')).toBeInTheDocument();
+    expect(screen.getByText('Speaker attribution failed on 1 chapter.')).toBeInTheDocument();
+  });
+
+  it('a placeholder row (no stored record) reads as a cast row', async () => {
+    renderPanel(makeBookState([44]));
+    expect(await screen.findByText('Cast detection failed on 1 chapter.')).toBeInTheDocument();
+  });
+
+  it('a chapter-failed event carries its phase into the row grouping', async () => {
+    renderPanel(makeBookState([44], { '44': rec('cast') }));
+    await screen.findByText('Cast detection failed on 1 chapter.');
+    const startBtn = screen.getByRole('button', { name: /start analysis/i });
+    await act(async () => {
+      fireEvent.click(startBtn);
+    });
+    await waitFor(() => expect(capturedOpts).toBeDefined());
+    await act(async () => {
+      capturedOpts!.onChapterFailed!({ chapterId: 44, message: 'Attribution broke.', code: 'analyzer-timeout', phase: 'attribution' });
+    });
+    expect(await screen.findByText('Speaker attribution failed on 1 chapter.')).toBeInTheDocument();
   });
 
   /* #3435 decision A — replaces the client pause-and-retry: the server now
@@ -1564,6 +1663,9 @@ describe('AnalysingView — failed-chapter retry', () => {
       fireEvent.click(startBtn);
     });
     expect(await screen.findByText(message)).toBeInTheDocument();
+    /* The refusal reads on the needs-action line, not under the Start button. */
+    expect(screen.getByTestId('analysis-needs-action-line')).toHaveTextContent(message);
+    expect(screen.queryByTestId('analysis-start-refused')).not.toBeInTheDocument();
     /* No snapshot existed before the POST: none is left behind. */
     expect(store.getState().analysis.activeStream).toBeNull();
     expect(screen.getByRole('button', { name: /retry chapter/i })).not.toBeDisabled();
@@ -1635,7 +1737,7 @@ describe('AnalysingView — failed-chapter retry', () => {
 
     /* Hydrate the panel from book-state, then start the analysis so
        the SSE callbacks bind to the running main run. */
-    await screen.findByText(/2 chapters failed cast detection/i);
+    await screen.findByText('Cast detection failed on 2 chapters.');
     const startBtn = screen.getByRole('button', { name: /start analysis/i });
     await act(async () => {
       fireEvent.click(startBtn);
@@ -1652,14 +1754,14 @@ describe('AnalysingView — failed-chapter retry', () => {
     });
     /* The unresolved row stays. */
     expect(screen.getByText('Chapter Forty-Seven')).toBeInTheDocument();
-    expect(screen.getByText(/1 chapter failed cast detection/i)).toBeInTheDocument();
+    expect(screen.getByText('Cast detection failed on 1 chapter.')).toBeInTheDocument();
 
     /* Resolving the last row collapses the panel entirely. */
     await act(async () => {
       capturedOpts!.onChapterResolved!({ chapterId: 49 });
     });
     await waitFor(() => {
-      expect(screen.queryByText(/chapter failed cast detection/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Cast detection failed on/)).not.toBeInTheDocument();
     });
   });
 
@@ -1708,7 +1810,7 @@ describe('AnalysingView — failed-chapter retry', () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText(/chapter failed cast detection/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Cast detection failed on/)).not.toBeInTheDocument();
     });
     expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
   });
@@ -1861,6 +1963,7 @@ describe('AnalysingView — failed-chapter retry', () => {
         fireEvent.click(retryBtn);
       });
       const viewReject = rejectSubset!;
+      const viewOpts = capturedSubsetCall!.opts!;
       /* The view's first subset tick lets the middleware attach as a second
          subscriber on the same subset route. */
       await act(async () => {
@@ -1868,7 +1971,7 @@ describe('AnalysingView — failed-chapter retry', () => {
       });
       const mwReject = rejectSubset!;
       expect(mwReject).not.toBe(viewReject);
-      return { store, AnalysisError, viewReject, mwReject };
+      return { store, AnalysisError, viewReject, mwReject, viewOpts };
     }
 
     for (const viewFirst of [true, false]) {
@@ -1930,10 +2033,11 @@ describe('AnalysingView — failed-chapter retry', () => {
     });
 
     /* cast_incomplete after a Retry whose chapter SUCCEEDED (chapter-resolved
-       first): the row drops and the run is not halted. #3435 — rewritten for a
-       Retry with main NOT running (the old version re-POSTed the paused main
-       run); nothing is POSTed now. */
-    it('cast_incomplete after a successful Retry drops the row and does not halt', async () => {
+       first): the row drops, and the run ends as a needs-action stop - a halted
+       snapshot carrying the server's message, no red toast. #3435 — rewritten
+       for a Retry with main NOT running (the old version re-POSTed the paused
+       main run); nothing is POSTed now. */
+    it('cast_incomplete after a successful Retry drops the row and ends needs-action (halted, no toast)', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       const { store } = await idleRetry();
       await act(async () => {
@@ -1948,8 +2052,86 @@ describe('AnalysingView — failed-chapter retry', () => {
         );
       });
       await waitFor(() => expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument());
-      expect(store.getState().analysis.activeStream?.state).not.toBe('halted');
+      expect(store.getState().analysis.activeStream).toMatchObject({ state: 'halted', haltCode: 'cast_incomplete' });
+      expect(store.getState().notifications.toasts).toHaveLength(0);
       expect(capturedOpts).toBeUndefined();
+    });
+
+    /* A8 - the Retry's finally used to clear the snapshot unconditionally, which
+       erased the needs-action stop the catch had just recorded. */
+    it('a Retry ending in a subset cast_incomplete keeps the halted snapshot; the needs-action line reads its haltReason', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      const { store } = await idleRetry();
+      const reason = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter Forty-Two). Retry below to continue.';
+      await act(async () => {
+        rejectSubset?.(new AnalysisError(reason, 'cast_incomplete'));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(store.getState().analysis.activeStream).toMatchObject({
+        state: 'halted',
+        haltCode: 'cast_incomplete',
+        haltReason: reason,
+      });
+      expect(screen.getByTestId('analysis-needs-action-line')).toHaveTextContent(reason);
+      expect(store.getState().notifications.toasts).toHaveLength(0);
+    });
+
+    it('A8: a Retry ending in stage1_shrink_refused also keeps its halted snapshot', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      const { store } = await idleRetry();
+      await act(async () => {
+        rejectSubset?.(new AnalysisError('Cast finalisation would drop from 9 to 4 characters.', 'stage1_shrink_refused', undefined, 9, 4));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(store.getState().analysis.activeStream).toMatchObject({ state: 'halted', haltCode: 'stage1_shrink_refused' });
+    });
+
+    /* #3435 - a Retry whose Phase 1 fails with a non-overflow analyzer error. The
+       server sends chapter-failed (the Phase-1 catch records it), then the
+       terminal `error`. The row must stay with its message, not be dropped as the
+       benign "ended without a result" case. (A chapter that had NO cast on file
+       is cleared in Phase 0, so chapter-resolved may still precede
+       chapter-failed.) */
+    it('a Phase-1 failure on Retry (chapter-resolved, chapter-failed, error analyzer-timeout) keeps the row with its message', async () => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      await idleRetry();
+      const message = 'Gemini stayed silent longer than its thinking window.';
+      await act(async () => {
+        capturedSubsetCall!.opts!.onChapterResolved!({ chapterId: 44 });
+        capturedSubsetCall!.opts!.onChapterFailed!({
+          chapterId: 44,
+          message,
+          code: 'analyzer-timeout',
+          remediation: 'Raise the thinking idle timeout, then retry.',
+          phase: 'attribution',
+        });
+      });
+      await act(async () => {
+        rejectSubset?.(new AnalysisError(message, 'analyzer-timeout'));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
+      expect(screen.getByText(message)).toBeInTheDocument();
+      expect(screen.getByText('Speaker attribution failed on 1 chapter.')).toBeInTheDocument();
+    });
+
+    /* The server's gate exit used to be silent: no events, no result. The chapter
+       was never resolved, so its row must stay. */
+    it('a Retry that ends without a result and with no chapter-resolved keeps the row', async () => {
+      const { AnalysisError, viewReject } = await startRetry();
+      await act(async () =>
+        viewReject(new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result')),
+      );
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 50));
+      });
+      expect(screen.getByText('Chapter Forty-Two')).toBeInTheDocument();
     });
 
     /* #3435 — rewritten from "stage1_shrink_refused on a Retry reaches the
@@ -1977,8 +2159,11 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(capturedOpts).toBeUndefined();
     });
 
-    it('control: a Retry that ends without a result still drops the row and raises nothing', async () => {
-      const { store, AnalysisError, viewReject } = await startRetry();
+    it('control: a Retry that resolved the chapter then ends without a result drops the row and raises nothing', async () => {
+      const { store, AnalysisError, viewReject, viewOpts } = await startRetry();
+      await act(async () => {
+        viewOpts.onChapterResolved!({ chapterId: 44 });
+      });
       await act(async () =>
         viewReject(new AnalysisError('Analysis stream ended without a result event.', 'stream_no_result')),
       );
@@ -2322,7 +2507,7 @@ describe('AnalysingView — needs-action phase-card state (#3203)', () => {
      failedChapters drains to 0) re-fires analyseManuscript forever against
      a rejection mock that never seeds a failed chapter, which is a hazard
      of the live flow, not of the fix itself. */
-  function renderViewWithHaltedSnapshot(haltCode: string) {
+  function renderViewWithHaltedSnapshot(haltCode: string, haltReason?: string) {
     const store = configureStore({
       reducer: {
         ui: uiSlice.reducer,
@@ -2346,6 +2531,7 @@ describe('AnalysingView — needs-action phase-card state (#3203)', () => {
             lastTickAt: Date.now(),
             state: 'halted' as const,
             haltCode,
+            haltReason,
           },
         },
       },
@@ -2375,6 +2561,20 @@ describe('AnalysingView — needs-action phase-card state (#3203)', () => {
   it('still routes the phase card to halted (not needs-action) for an unknown/other haltCode', () => {
     renderViewWithHaltedSnapshot('some_other_error');
     expect(getPhaseCardChip(0)).toHaveAttribute('data-phase-state', 'halted');
+  });
+
+  /* #3435 — the needs-action state was an icon only; the server's message says
+     what to do. */
+  it('shows the snapshot haltReason on the needs-action line for a not-a-failure code', () => {
+    renderViewWithHaltedSnapshot('cast_incomplete', 'Phase 0 paused - 1 chapter still needs cast detection.');
+    expect(screen.getByTestId('analysis-needs-action-line')).toHaveTextContent(
+      'Phase 0 paused - 1 chapter still needs cast detection.',
+    );
+  });
+
+  it('shows no needs-action line for a genuine failure code', () => {
+    renderViewWithHaltedSnapshot('some_other_error', 'The analyzer fell over.');
+    expect(screen.queryByTestId('analysis-needs-action-line')).not.toBeInTheDocument();
   });
 });
 

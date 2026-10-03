@@ -27,7 +27,7 @@ import {
 import type { AnalysisEngine } from '../lib/model-id';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
-import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
+import { PhaseCard, NeedsActionLine, type ConnState } from '../components/analysing/phase-card';
 import { FailureFixList } from '../components/failure-fix-list';
 import { StickyAnalysisBar } from '../components/analysing/sticky-analysis-bar';
 import type { AnalyseResponse } from '../lib/types';
@@ -120,6 +120,54 @@ function describeRemaining(remainingMs: number, wordCount?: number): string {
     return `${words}~${mins} minute${mins === 1 ? '' : 's'} remaining at the current pace.`;
   if (mins <= 15) return `${words}~${mins} minutes remaining at the current pace. Grab a coffee.`;
   return `${words}~${mins} minutes remaining at the current pace. This is a long one.`;
+}
+
+/* One row of the failed-chapter panel. `phase` is which step failed (plan 285):
+   a pre-285 server sends none, and a row with no phase reads as a cast failure. */
+interface FailedChapterRow {
+  chapterId: number;
+  message: string;
+  code?: string;
+  remediation?: string;
+  phase?: 'cast' | 'attribution';
+}
+
+/* Panel heading and subtext for the rows' phases (#3435, spec 4). `castPaused`
+   is a run that ended `cast_incomplete` this session, i.e. the roster is not
+   final yet; it only changes the copy of the cast rows. */
+function failedPanelCopy(
+  rows: FailedChapterRow[],
+  castPaused: boolean,
+): { heading: string; subtext: string; mixed: boolean } {
+  const n = rows.length;
+  const plural = n === 1 ? '' : 's';
+  const castRows = rows.filter((r) => (r.phase ?? 'cast') === 'cast').length;
+  if (castRows === n) {
+    return castPaused
+      ? {
+          heading: `Paused — ${n} chapter${n === 1 ? ' still needs' : 's still need'} cast detection.`,
+          subtext:
+            'Sentence attribution starts once every chapter has a cast. Retry below; the analysis resumes on its own.',
+          mixed: false,
+        }
+      : {
+          heading: `Cast detection failed on ${n} chapter${plural}.`,
+          subtext: 'Retry detects the cast again and re-attributes that chapter.',
+          mixed: false,
+        };
+  }
+  if (castRows === 0) {
+    return {
+      heading: `Speaker attribution failed on ${n} chapter${plural}.`,
+      subtext: 'Retry re-runs this chapter.',
+      mixed: false,
+    };
+  }
+  return {
+    heading: `${n} chapters failed.`,
+    subtext: 'Each row says which step failed. Retry re-runs that chapter.',
+    mixed: true,
+  };
 }
 
 interface Props {
@@ -217,12 +265,15 @@ export function AnalysingView({
   /* Same shape for a Retry that ended with a real analyzer error (#3084):
      the catch halted the run, so the finally block must leave it alone. */
   const retryHaltedRef = useRef(false);
-  /* Per-chapter cast-detection failures that survive across reload. Seeded
+  /* Same shape for a Retry that ended in a not-a-failure stop (`cast_incomplete`,
+     `stage1_shrink_refused`): the catch halted the snapshot with the server's
+     message for the needs-action line, so the finally block must leave it
+     alone (#3435 A8). */
+  const retryNeedsActionRef = useRef(false);
+  /* Per-chapter analysis failures that survive across reload. Seeded
      from /api/books/:bookId/state on mount; appended to from the SSE's
      chapter-failed event; cleared per id when a Retry succeeds. */
-  const [failedChapters, setFailedChapters] = useState<
-    Array<{ chapterId: number; message: string; code?: string; remediation?: string }>
-  >([]);
+  const [failedChapters, setFailedChapters] = useState<FailedChapterRow[]>([]);
   const [retryingChapterId, setRetryingChapterId] = useState<number | null>(null);
   /* Bump to refetch the dropped-quotes ledger. Goes up when the server
      finishes a verify pass (run completes, hits cast_incomplete, or a
@@ -239,8 +290,8 @@ export function AnalysingView({
      start without the user having to re-click "Try again". */
   const [castIncomplete, setCastIncomplete] = useState(false);
   /* #3435 — the server refused this view's main start (a chapter retry is
-     running, or the previous run is still finishing). Its message shows under
-     the Start button; cleared on the next start. */
+     running, or the previous run is still finishing). Its message shows on the
+     needs-action line; cleared on the next start. */
   const [startRefusal, setStartRefusal] = useState<string | null>(null);
 
   /* Stage 1 shrink-refused info — surfaced when the server refused to
@@ -652,7 +703,7 @@ export function AnalysingView({
                — snapshots upsert by id, preserving locked voices on survivors. */
             dispatch(castActions.replaceLiveRoster(characters));
           },
-          onChapterFailed: ({ chapterId, message, code, remediation }) => {
+          onChapterFailed: ({ chapterId, message, code, remediation, phase }) => {
             if (cancelled) return;
             markEvent();
             /* Upsert by chapterId so a retry of the same chapter (which
@@ -660,7 +711,7 @@ export function AnalysingView({
                the row. */
             setFailedChapters((prev) => {
               const filtered = prev.filter((f) => f.chapterId !== chapterId);
-              return [...filtered, { chapterId, message, code, remediation }];
+              return [...filtered, { chapterId, message, code, remediation, phase }];
             });
           },
           onChapterResolved: ({ chapterId }) => {
@@ -849,11 +900,15 @@ export function AnalysingView({
                 message: record.message,
                 code: record.code,
                 remediation: record.remediation,
+                phase: record.phase,
               };
             }
+            /* No stored record: the legacy placeholder. Its phase is unknown, so
+               it reads as a cast row (what every row was before plan 285). */
             return {
               chapterId: id,
               message: 'Analysis failed on a previous attempt. Retry to try again.',
+              phase: 'cast' as const,
             };
           });
         });
@@ -901,6 +956,7 @@ export function AnalysingView({
     /* Reset the subset_in_progress flag for this attempt. */
     subsetInProgressRef.current = false;
     retryHaltedRef.current = false;
+    retryNeedsActionRef.current = false;
     const markEvent = () => {
       setLastEventAt(Date.now());
       /* First event of any run means we're re-attached — drop the
@@ -950,6 +1006,10 @@ export function AnalysingView({
        succeeded. The retryReFailed flag lets us correctly drop the
        row on success regardless of which promise branch we land in. */
     let retryReFailed = false;
+    /* The server announced this chapter resolved (its record was cleared). A
+       stream that ends without a `result` drops the row only on this; a chapter
+       the server never resolved still has its record, so its row stays. */
+    let retryResolved = false;
     api
       .runAnalysisForChapters(manuscriptId, [chapterId], {
         model: requestModel,
@@ -992,16 +1052,17 @@ export function AnalysingView({
              onCastUpdate handler above and replaceLiveRoster's rationale). */
           dispatch(castActions.replaceLiveRoster(characters));
         },
-        onChapterFailed: ({ chapterId: failedId, message, code, remediation }) => {
+        onChapterFailed: ({ chapterId: failedId, message, code, remediation, phase }) => {
           markEvent();
           if (failedId === chapterId) retryReFailed = true;
           setFailedChapters((prev) => {
             const filtered = prev.filter((f) => f.chapterId !== failedId);
-            return [...filtered, { chapterId: failedId, message, code, remediation }];
+            return [...filtered, { chapterId: failedId, message, code, remediation, phase }];
           });
         },
         onChapterResolved: ({ chapterId: resolvedId }) => {
           markEvent();
+          if (resolvedId === chapterId) retryResolved = true;
           setFailedChapters((prev) => prev.filter((f) => f.chapterId !== resolvedId));
         },
         onThrottle: ({ phaseId, model: throttleModel, waitMs, reason }) => {
@@ -1050,8 +1111,14 @@ export function AnalysingView({
             dispatch(analysisActions.clearActiveStream());
           }
           setFailedChapters((prev) => {
+            /* The refusal row replaces the failure row: it keeps that row's
+               phase, so the panel still groups it under the step that failed. */
+            const existing = prev.find((f) => f.chapterId === chapterId);
             const filtered = prev.filter((f) => f.chapterId !== chapterId);
-            return [...filtered, { chapterId, message: err.message, code: err.code }];
+            return [
+              ...filtered,
+              { chapterId, message: err.message, code: err.code, phase: existing?.phase ?? 'cast' },
+            ];
           });
           setConn('idle');
           return;
@@ -1069,10 +1136,17 @@ export function AnalysingView({
         if (err instanceof AnalysisError && err.code === 'analyzer-reasoning-overflow') {
           retryHaltedRef.current = true;
           setFailedChapters((prev) => {
+            const existing = prev.find((f) => f.chapterId === chapterId);
             const filtered = prev.filter((f) => f.chapterId !== chapterId);
             return [
               ...filtered,
-              { chapterId, message: err.message, code: err.code, remediation: err.remediation },
+              {
+                chapterId,
+                message: err.message,
+                code: err.code,
+                remediation: err.remediation,
+                phase: existing?.phase ?? 'cast',
+              },
             ];
           });
           dispatch(
@@ -1086,13 +1160,29 @@ export function AnalysingView({
           setConn('idle');
           return;
         }
-        /* The subset route ends without a `result` event when other
-           chapters still need retry (Phase 1 gate). api.ts throws
-           "no result" in that case — not a real failure, drop the
-           row if this chapter itself succeeded. */
-        if (!retryReFailed) {
+        /* #3435 — a soft stop (`cast_incomplete`, `stage1_shrink_refused`) is the
+           user's call to action, not a failure: halt the snapshot with the
+           server's message (the needs-action line and the pill read it), raise
+           no toast, and tell the finally block to leave the snapshot alone. The
+           row follows the same rule as the plain no-result ending below. */
+        if (err instanceof AnalysisError && isNotAFailureHaltCode(err.code)) {
+          retryNeedsActionRef.current = true;
+          if (retryResolved && !retryReFailed) {
+            setFailedChapters((prev) => prev.filter((f) => f.chapterId !== chapterId));
+          }
+          dispatch(
+            analysisActions.setHalted({ manuscriptId, code: err.code, message: err.message }),
+          );
+          setConn('idle');
+          return;
+        }
+        /* The subset route ends without a `result` event on a gate exit.
+           api.ts throws "no result" in that case — not a real failure. The row
+           drops only if the server said this chapter resolved; otherwise its
+           record is still on the server and the row stays. */
+        if (retryResolved && !retryReFailed) {
           setFailedChapters((prev) => prev.filter((f) => f.chapterId !== chapterId));
-        } else {
+        } else if (retryReFailed) {
           console.warn('[analysing] retry failed:', err);
         }
         setConn('idle');
@@ -1110,6 +1200,11 @@ export function AnalysingView({
            the halted snapshot is the user's call to action — don't clear it
            or restart the run behind it. */
         if (retryHaltedRef.current) {
+          return;
+        }
+        /* #3435 A8 — and for a Retry that ended in a not-a-failure stop: the
+           halted snapshot carries the message the needs-action line shows. */
+        if (retryNeedsActionRef.current) {
           return;
         }
         /* The Retry ran on its own (the main run is never running beside it,
@@ -1305,6 +1400,21 @@ export function AnalysingView({
     }
   };
 
+  /* #3435 — the one line of "what now" under the phase list: a start the server
+     refused (its message), else the halted snapshot's reason for a
+     not-a-failure stop. The shrink banner below already says its own stop, so
+     that one is not repeated here. */
+  const needsActionMessage =
+    startRefusal ??
+    (activeStreamSnapshot &&
+    activeStreamSnapshot.manuscriptId === manuscriptId &&
+    activeStreamSnapshot.state === 'halted' &&
+    isNotAFailureHaltCode(activeStreamSnapshot.haltCode) &&
+    !stage1ShrinkInfo
+      ? (activeStreamSnapshot.haltReason ?? null)
+      : null);
+  const failedPanel = failedPanelCopy(failedChapters, castIncomplete);
+
   return (
     <div className="relative min-h-[calc(100vh-64px)] flex flex-col items-center px-6 py-16">
       <div className="absolute inset-0 bg-gradient-hero-wash opacity-60 pointer-events-none" />
@@ -1422,12 +1532,6 @@ export function AnalysingView({
                   >
                     {label}
                   </button>
-                  {/* #3435 — the server refused the last start; its message says why. */}
-                  {startRefusal && (
-                    <p className="text-xs text-amber-900 text-center max-w-sm" data-testid="analysis-start-refused">
-                      {startRefusal}
-                    </p>
-                  )}
                   {isLocalAnalyzer && !isAnalyzerReady && !isRunning && (
                     <p className="text-[11px] text-ink/50">
                       The model needs to be resident in VRAM before analysis can run.
@@ -1706,6 +1810,8 @@ export function AnalysingView({
           })}
         </div>
 
+        {needsActionMessage && <NeedsActionLine message={needsActionMessage} />}
+
         {/* Stage 1 shrink-refused banner. The server refused to overwrite
             a non-trivial cached roster with a much smaller one — usually
             a sign that a follow-up run with a worse model (or a chapter
@@ -1758,20 +1864,8 @@ export function AnalysingView({
             at a time (retryingChapterId tracks the active one). */}
         {failedChapters.length > 0 && (
           <div className="mt-6 rounded-3xl border border-amber-200 bg-amber-50/60 px-6 py-4">
-            <p className="text-sm font-semibold text-amber-900">
-              {castIncomplete
-                ? failedChapters.length === 1
-                  ? 'Paused — 1 chapter still needs cast detection'
-                  : `Paused — ${failedChapters.length} chapters still need cast detection`
-                : failedChapters.length === 1
-                  ? '1 chapter failed cast detection'
-                  : `${failedChapters.length} chapters failed cast detection`}
-            </p>
-            <p className="mt-1 text-xs text-amber-800/80">
-              {castIncomplete
-                ? "Phase 1 (sentence attribution) won't start until every chapter has a cast. Click Retry below — the rest of the analysis resumes automatically once they all clear."
-                : 'Retry runs these chapters again on the currently-selected model.'}
-            </p>
+            <p className="text-sm font-semibold text-amber-900">{failedPanel.heading}</p>
+            <p className="mt-1 text-xs text-amber-800/80">{failedPanel.subtext}</p>
             <ul className="mt-3 space-y-2">
               {failedChapters.map((f) => {
                 const isRetrying = retryingChapterId === f.chapterId;
@@ -1787,6 +1881,11 @@ export function AnalysingView({
                       <p className="text-sm font-semibold text-ink truncate" title={title}>
                         {title}
                       </p>
+                      {failedPanel.mixed && (
+                        <p className="text-[11px] font-medium uppercase tracking-wide text-ink/50">
+                          {(f.phase ?? 'cast') === 'cast' ? 'Cast detection' : 'Speaker attribution'}
+                        </p>
+                      )}
                       <p className="mt-0.5 text-xs text-ink/60 wrap-break-word">{f.message}</p>
                       {f.remediation && (
                         <p className="mt-1 text-xs text-amber-900/90 wrap-break-word">

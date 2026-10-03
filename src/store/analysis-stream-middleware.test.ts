@@ -1241,3 +1241,35 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     expect(pauseAnalysisSpy).not.toHaveBeenCalled();
   });
 });
+
+describe('analysisStreamMiddleware — #3435 a subset handle ending in a not-a-failure code', () => {
+  const settle = async () => {
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await new Promise((r) => setTimeout(r, 0));
+  };
+  const subsetSnapshot: AnalysisStreamSnapshot = { ...baseSnapshot, kind: 'subset', subsetChapterIds: [3] };
+
+  it('a subset cast_incomplete halts the snapshot with its message and raises no toast (needs-action, not a failure)', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    lastCall().reject(new AnalysisError('Phase 0 paused - 1 chapter still needs cast detection.', 'cast_incomplete'));
+    await settle();
+    expect(store.getState().analysis.activeStream).toMatchObject({
+      state: 'halted',
+      haltCode: 'cast_incomplete',
+      haltReason: 'Phase 0 paused - 1 chapter still needs cast detection.',
+    });
+    expect(store.getState().notifications.toasts).toHaveLength(0);
+  });
+
+  it('control: a subset handle ending in a real failure code still toasts', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(subsetSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    lastCall().reject(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+    await settle();
+    expect(store.getState().analysis.activeStream).toMatchObject({ state: 'halted', haltCode: 'analyzer-timeout' });
+    expect(store.getState().notifications.toasts).toHaveLength(1);
+  });
+});

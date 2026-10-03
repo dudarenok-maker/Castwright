@@ -805,6 +805,30 @@ describe('AnalysisPill subset variant (plan 32 D2)', () => {
     expect(pill.textContent).toContain('Paused');
     expect(pill.textContent).not.toContain('Retrying');
   });
+
+  /* #3435 - a subset run that ended in a not-a-failure stop is a needs-action
+     pill that says why (the server's message), not "Retrying N chapters" and not
+     the stale phase label of a run that is no longer going. */
+  it('a subset in needs-action shows its haltReason instead of the retry copy or the phase label', () => {
+    render(
+      <AnalysisPill
+        data={{
+          state: 'needs-action',
+          phaseLabel: 'Detecting characters',
+          percent: 0,
+          kind: 'subset',
+          subsetChapterCount: 2,
+          haltReason: 'Cast detection failed',
+          onClick: vi.fn(),
+        }}
+      />,
+    );
+    const pill = screen.getByTestId('analysis-pill');
+    expect(pill.textContent).toContain('Needs action');
+    expect(pill.textContent).toContain('Cast detection failed');
+    expect(pill.textContent).not.toContain('Retrying');
+    expect(pill.textContent).not.toContain('Detecting characters');
+  });
 });
 
 describe('GenerationPill', () => {

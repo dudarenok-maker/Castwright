@@ -2364,6 +2364,33 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     expect(store2.getState().analysis.activeStream).toEqual(pausedMain);
   });
 
+  /* #3435 - `cast_incomplete` is a soft stop (a chapter outside this batch, or
+     the target's own cast, still has no cast): the row shows the server's
+     message, an Include is rolled back as for any failed include, and no
+     needs-action snapshot is left behind for a surface that has no way to act
+     on it. */
+  it('cast_incomplete on Include shows the server message on the row, rolls the include back and leaves no snapshot', async () => {
+    const message = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter 2). Retry below to continue.';
+    const store = makeIncludeStore();
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'cast_incomplete'));
+    renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    expect(await screen.findByText(`Re-analysis failed: ${message}`)).toBeInTheDocument();
+    expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+    expect(store.getState().analysis.activeStream).toBeNull();
+  });
+
+  it('cast_incomplete on Re-analyse shows the server message on the row and leaves no snapshot', async () => {
+    const message = 'Phase 0a covers 1 of 2 chapters — run main analysis to detect the rest before stage1 can finalise.';
+    const store = makeIncludeStore();
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'cast_incomplete'));
+    renderInclude(store);
+    fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+    fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+    expect(await screen.findByText(`Re-analysis failed: ${message}`)).toBeInTheDocument();
+    expect(store.getState().analysis.activeStream).toBeNull();
+  });
+
   /* #3084 pass-3 — a reasoning overflow from a subset run must leave exactly
      one persistent toast carrying the structured fixes, whichever subscriber
      (this view's own stream vs the middleware's) sees the terminal frame

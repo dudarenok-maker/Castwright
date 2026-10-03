@@ -48,6 +48,7 @@ import { ANALYSIS_PHASES } from '../data/analysis-phases';
 import { emitLanguageGuard } from '../lib/language-guard-bus';
 import { deliverNonStoryOverflowWarning } from '../lib/analysis-warning-toast';
 import { shouldSurfaceColdBootAnalysisPill } from '../lib/analysis-pill-gate';
+import { isNotAFailureHaltCode } from '../lib/analysis-phase-state';
 
 interface AnalysisRootState {
   analysis: { activeStream: AnalysisStreamSnapshot | null };
@@ -370,6 +371,11 @@ export const analysisStreamMiddleware: Middleware = (store) => {
               fixes: e.fixes,
             }),
           );
+          /* #3435 — a subset run that ends in a not-a-failure code
+             (`cast_incomplete`, `stage1_shrink_refused`) is a needs-action stop,
+             not an error: the halted snapshot carries the server's message for
+             the needs-action line and the pill, and no red toast is raised. */
+          if (localHandle.kind === 'subset' && isNotAFailureHaltCode(e.code)) return;
           dispatch(
             e.code === 'analyzer-reasoning-overflow'
               ? overflowToast(e.message, e.fixes)
