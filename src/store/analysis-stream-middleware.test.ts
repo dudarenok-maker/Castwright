@@ -1211,6 +1211,24 @@ describe('analysisStreamMiddleware — #3435 refusal codes on a subscribe POST',
     expect(store.getState().analysis.activeStream).toEqual(newer);
   });
 
+  it('a snapshot dispatched while the book-state read is pending is not overwritten or cleared by the server one', async () => {
+    const store = buildStore();
+    store.dispatch(analysisActions.setActiveStream(baseSnapshot));
+    store.dispatch(analysisActions.applyAnalysisSnapshotTick({ manuscriptId: 'm1', phaseId: 0, phaseProgress: 0.1 }));
+    getAnalysisStateMock.mockResolvedValueOnce({ ...serverSubset, kind: 'main', state: 'paused' });
+    let resolveBook!: (v: unknown) => void;
+    getBookStateMock.mockReturnValueOnce(new Promise((r) => (resolveBook = r)));
+    lastCall().reject(new AnalysisError('still finishing', 'main_analysis_running'));
+    await settle();
+    expect(getBookStateMock).toHaveBeenCalledWith('b1');
+    /* A Retry on this device starts while the book-state read is in flight. */
+    const newer = { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [7], lastTickAt: 99 };
+    store.dispatch(analysisActions.setActiveStream(newer));
+    resolveBook({ state: { castConfirmed: true } });
+    await settle();
+    expect(store.getState().analysis.activeStream).toEqual(newer);
+  });
+
   it('a non-running server snapshot for a confirmed book is not restored (the cold-boot gate)', async () => {
     const store = buildStore();
     store.dispatch(analysisActions.setActiveStream(baseSnapshot));
