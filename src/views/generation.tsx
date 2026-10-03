@@ -488,6 +488,11 @@ export function GenerationView({
     const wasExcluded =
       store.getState().chapters.chapters.find((c) => c.id === chapterId)?.excluded === true;
     let includedHere = false;
+    /* #3435 M3 — a `resume_required` ends S8 (cast detection only, nothing
+       attributed: no Phase 1 frame) or S14 (the targets were attributed in
+       Phase 1). Only S14 finished this chapter's analysis. */
+    let sawPhase1 = false;
+    let targetFailed = false;
     try {
       await api.setChapterExcluded(bookId, chapterId, false);
       dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: false }));
@@ -501,6 +506,7 @@ export function GenerationView({
            is otherwise a silent consumer of `warning` frames. */
         onWarning: (w) => deliverNonStoryOverflowWarning(dispatch, w),
         onPhase: ({ phaseId, progress }) => {
+          if (phaseId === 1) sawPhase1 = true;
           applySubsetTick(chapterId, { phaseId: phaseId as 0 | 1, serverProgress: progress });
           /* Snapshot tick — middleware uses this to attach a sticky
              subscriber against the subset route's in-flight map. */
@@ -543,6 +549,7 @@ export function GenerationView({
         },
         onChapterFailed: ({ chapterId: failedId, message }) => {
           if (failedId === chapterId) {
+            targetFailed = true;
             patchSubset(chapterId, { error: message });
           }
         },
@@ -592,7 +599,7 @@ export function GenerationView({
          a neutral note with "Open analysis"; the halted snapshot keeps the
          needs-action stop for the pill and the analysing view. */
       if (e instanceof AnalysisError && e.code === 'resume_required') {
-        dispatch(chaptersActions.clearAnalysisGap(chapterId));
+        if (sawPhase1 && !targetFailed) dispatch(chaptersActions.clearAnalysisGap(chapterId));
         dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
         patchSubset(chapterId, { notice: e.message });
         return;
@@ -755,6 +762,11 @@ export function GenerationView({
         subsetChapterIds: [chapterId],
       }),
     );
+    /* #3435 M3 — a `resume_required` ends S8 (cast detection only, nothing
+       attributed: no Phase 1 frame) or S14 (the targets were attributed in
+       Phase 1). Only S14 finished this chapter's analysis. */
+    let sawPhase1 = false;
+    let targetFailed = false;
     try {
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
@@ -764,6 +776,7 @@ export function GenerationView({
            is otherwise a silent consumer of `warning` frames. */
         onWarning: (w) => deliverNonStoryOverflowWarning(dispatch, w),
         onPhase: ({ phaseId, progress }) => {
+          if (phaseId === 1) sawPhase1 = true;
           applySubsetTick(chapterId, { phaseId: phaseId as 0 | 1, serverProgress: progress });
           dispatch(
             analysisActions.applyAnalysisSnapshotTick({
@@ -803,7 +816,10 @@ export function GenerationView({
           });
         },
         onChapterFailed: ({ chapterId: failedId, message }) => {
-          if (failedId === chapterId) patchSubset(chapterId, { error: message });
+          if (failedId === chapterId) {
+            targetFailed = true;
+            patchSubset(chapterId, { error: message });
+          }
         },
       });
       dispatch(castActions.mergeCharacters(res.characters ?? []));
@@ -852,7 +868,7 @@ export function GenerationView({
          not finished. A neutral note with "Open analysis", and the halted
          snapshot keeps the needs-action stop. */
       if (e instanceof AnalysisError && e.code === 'resume_required') {
-        dispatch(chaptersActions.clearAnalysisGap(chapterId));
+        if (sawPhase1 && !targetFailed) dispatch(chaptersActions.clearAnalysisGap(chapterId));
         dispatch(analysisActions.setHalted({ manuscriptId, code: e.code, message: e.message }));
         patchSubset(chapterId, { notice: e.message });
         return;
@@ -862,8 +878,10 @@ export function GenerationView({
       const message = (e as Error).message || 'Re-analysis failed.';
       const shrink = e instanceof AnalysisError && e.code === 'stage1_shrink_refused';
       /* #3435 — the chapter's analysis did not finish. A shrink is not a gap:
-         its row offers "Accept smaller cast" instead. */
-      if (!shrink) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+         its row offers "Accept smaller cast" instead. Nor is `cast_incomplete`
+         (M3): Phase 1 never ran, so the chapter's existing take is untouched. */
+      const castIncomplete = e instanceof AnalysisError && e.code === 'cast_incomplete';
+      if (!shrink && !castIncomplete) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
       patchSubset(chapterId, { error: message, shrink });
     }
   }

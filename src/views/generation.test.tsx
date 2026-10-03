@@ -2843,6 +2843,51 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       });
     });
 
+    /* #3435 final review M3 — gap bookkeeping on the soft stops. */
+    describe('M3 — soft stops leave the gap as the server left it', () => {
+      it('a Re-analyse blocked by another chapter cast (cast_incomplete) sets no gap: Phase 1 never ran, the take is untouched', async () => {
+        const message = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter 2). Retry to continue.';
+        const store = makeIncludeStore();
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'cast_incomplete'));
+        renderInclude(store);
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(store.getState().chapters.analysisGapById?.[1]).toBeUndefined();
+      });
+
+      it('resume_required with no Phase 1 frame (S8: nothing attributed) keeps the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(
+          async (_m: string, _ids: number[], opts: { onPhase?: (p: { phaseId: number; progress: number }) => void }) => {
+            opts.onPhase?.({ phaseId: 0, progress: 1 });
+            throw new AnalysisError('Cast detection finished. Resume the analysis to attribute the book.', 'resume_required');
+          },
+        );
+        renderInclude(store);
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+        await waitFor(() => expect(store.getState().analysis.activeStream).toMatchObject({ haltCode: 'resume_required' }));
+        expect(store.getState().chapters.analysisGapById?.[1]).toEqual({ message: 'It failed before.' });
+      });
+
+      it('resume_required after a Phase 1 frame (S14: the target was attributed) clears the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(
+          async (_m: string, _ids: number[], opts: { onPhase?: (p: { phaseId: number; progress: number }) => void }) => {
+            opts.onPhase?.({ phaseId: 1, progress: 1 });
+            throw new AnalysisError('Chapter 1 re-analysed. Chapter 2 still needs attribution.', 'resume_required');
+          },
+        );
+        renderInclude(store);
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+        await waitFor(() => expect(store.getState().chapters.analysisGapById?.[1]).toBeUndefined());
+      });
+    });
+
     it('Generate view: no Include rollback on resume_required — a neutral note with "Open analysis", and a halted snapshot', async () => {
       const message =
         'Chapter 3 re-analysed. Chapter 2 still needs attribution — resume the analysis to finish the book.';
