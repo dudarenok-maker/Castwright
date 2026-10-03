@@ -872,7 +872,7 @@ describe('runMainAnalyzerJob — pending takes in pipelined mode (plan 285 T5)',
     });
     const job = buildStubJob(manuscriptId);
     const events: Array<{ kind: string; response?: { sentences: Array<{ chapterId: number; text: string }> } }> = [];
-    const keepAlive = setInterval(() => {}, 1_000_000);
+    const keepAlive = setInterval(() => {}, 1);
     clearInterval(keepAlive);
     job.subscribers.add({
       send: (p: unknown) => events.push(p as (typeof events)[number]),
@@ -953,7 +953,7 @@ describe('runMainAnalyzerJob — pending takes in pipelined mode (plan 285 T5)',
     });
     const job = buildStubJob(manuscriptId);
     const events: Array<{ kind: string; code?: string }> = [];
-    const keepAlive = setInterval(() => {}, 1_000_000);
+    const keepAlive = setInterval(() => {}, 1);
     clearInterval(keepAlive);
     job.subscribers.add({
       send: (p: unknown) => events.push(p as (typeof events)[number]),

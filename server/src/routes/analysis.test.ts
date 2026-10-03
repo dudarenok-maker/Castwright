@@ -9582,7 +9582,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
     } satisfies AnalyzerSelection;
     if (opts.saveHook) g.__p285_save_hook = opts.saveHook;
     const events: Array<{ kind: string; [k: string]: unknown }> = [];
-    const keepAlive = setInterval(() => {}, 1_000_000);
+    const keepAlive = setInterval(() => {}, 1);
     clearInterval(keepAlive);
     const job = {
       controller: new AbortController(),
@@ -10006,7 +10006,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
       };
       const g = globalThis as Record<string, unknown>;
       const events: Array<{ kind: string; [k: string]: unknown }> = [];
-      const keepAlive = setInterval(() => {}, 1_000_000);
+      const keepAlive = setInterval(() => {}, 1);
       clearInterval(keepAlive);
       const job: AnalysisJob = {
         controller: new AbortController(),
