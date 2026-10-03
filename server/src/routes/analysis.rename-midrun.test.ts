@@ -155,22 +155,6 @@ function buildPhase1Analyzer(): Analyzer {
   };
 }
 
-/* #2165 — a Phase-1 analyzer that FAILS stage-2 attribution, ending the run in
-   a real terminal error (state `'halted'`). The #2165 analysis-state test
-   asserts the cold-boot snapshot FOLLOWS the rename; that `halted` snapshot is
-   only written for a genuine run error. Before srv-59 the run naturally ended
-   on a Phase-1 error; once structure+escalation landed, a REJECTING
-   runAttributionEscalation stub supplied that error implicitly (and also broke
-   the #2196 halt-path tests by crashing before the persist gate). With the
-   escalation stub now a no-op, tests that want a halted terminal supply it
-   explicitly via this analyzer instead of leaning on the crash. */
-function buildFailingPhase1Analyzer(): Analyzer {
-  return {
-    ...buildPhase1Analyzer(),
-    runStage2Chapter: () => Promise.reject(new Error('simulated stage-2 attribution failure')),
-  };
-}
-
 /* Seeds a workspace book + its in-memory ManuscriptRecord and returns the
    pieces each case needs. Fresh manuscriptId per case so the module-level
    job maps and the manuscript store can't leak between them. */
@@ -400,15 +384,6 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
       const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
       process.env.STAGE2_COVERAGE_RETRIES = '0';
 
-      /* This case wants the terminal SNAPSHOT to follow the rename, and a
-         `halted` snapshot exists only for a run that ends in a genuine error.
-         Give it a Phase-1 analyzer that fails stage-2 attribution (rather than
-         leaning on the escalation-stub crash that used to supply the error) so
-         the run halts and its `halted` cold-boot snapshot lands at newDir. */
-      (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection =
-        buildSelection(buildFailingPhase1Analyzer(), 'phase1-model');
-
-
       let jobPromise: Promise<void> | undefined;
       try {
         jobPromise = runMainAnalyzerJob(
@@ -444,12 +419,13 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
          BEFORE the rename and renameWithRetry carries it across — existence
          at newDir is therefore satisfied even with persistTerminalSnapshot
          deleted outright. The running snapshot writes state:'running'; only
-         the TERMINAL one writes 'halted' (this run ends on a Phase-1 error,
-         not an abort, so it halts rather than pausing). Asserting 'halted' is
+         the TERMINAL one writes 'paused' (this run ends on the abort above,
+         which Phase-1 dispatch surfaces as AnalysisAbortedError since #3435,
+         so it pauses rather than halting). Asserting 'paused' is
          what separates "the terminal snapshot followed the rename" from "some
          earlier file rode along with it". */
       const after = readFileSync(analysisStateJsonPath(seed.newDir), 'utf8');
-      expect(JSON.parse(after).state).toBe('halted');
+      expect(JSON.parse(after).state).toBe('paused');
 
       /* Per-mechanism assertion — the write did NOT also go to the old path. */
       expect(existsSync(analysisStateJsonPath(seed.oldDir))).toBe(false);
