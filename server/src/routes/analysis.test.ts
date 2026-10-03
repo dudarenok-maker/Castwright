@@ -77,9 +77,12 @@ import { loadSuggestions } from '../store/cast-merge-suggestions.js';
 /* endJob persists its paused/halted snapshot and last-outcome on DETACHED
    promises (`void persistTerminalSnapshot`), so a run that ends in `error`
    returns before those writes have landed, and a test that then removes the
-   book dir races them (ENOTEMPTY). Every such write runs inside
+   book dir races them (ENOTEMPTY). The snapshot write runs inside
    `withVerifiedBookDir`, entered synchronously when endJob fires, so the mock
    below records each call's promise and `settleDetachedWrites` awaits them.
+   It does NOT cover the last-outcome write (`writeAnalysisLastOutcome`, via
+   `tryResolveVerifiedBookDir`, for a registered main job): that one is not
+   awaited here, and the tests using this helper run unregistered jobs.
    Waiting on the snapshot file instead cannot work: a write that is dropped
    (stale book dir) or fails (EPERM on rename) never lands. */
 const inFlightGuarded = new Set<Promise<unknown>>();

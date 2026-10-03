@@ -2506,7 +2506,7 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
     });
 
-    it('C18:a book whose book-state says resumeRequired shows the rows, "Resume analysis" and the needs-action line with no snapshot (a dropped or cleared snapshot)', async () => {
+    it('C18: a book whose book-state says resumeRequired shows the rows, "Resume analysis" and the needs-action line with no snapshot (a dropped or cleared snapshot)', async () => {
       bookState = withFacts(makeBookState([44], { '44': rec('attribution') }), {
         stage1Ready: true,
         resumeRequired: true,

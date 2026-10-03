@@ -197,12 +197,25 @@ recite:
     writing to fire-and-forget** — the test passes its assertions, then the
     teardown races the detached writes and fails intermittently. The
     plan-285 `afterEach` in `server/src/routes/analysis.test.ts` `rmSync`'d
-    the book dir while `endJob`'s detached `persistTerminalSnapshot`/outcome
-    writes were still landing (ENOTEMPTY, 1 run in 3); fixed by awaiting the
-    recorded `withVerifiedBookDir` promises (#3435, PR #3505 gate pass 1).
+    the book dir while `endJob`'s detached `persistTerminalSnapshot` write was
+    still landing (ENOTEMPTY, 1 run in 3); fixed by awaiting the recorded
+    `withVerifiedBookDir` promises. That covers the snapshot write only; the
+    last-outcome write (`tryResolveVerifiedBookDir`) of a registered job is
+    not awaited (#3435, PR #3505 gate pass 1).
     Checkable: for every `afterEach` that removes a directory, list the
     fire-and-forget writes the code under test can still be making into it,
     and confirm the test awaits them.
+23. **A completion moved onto a promise chain that outlives its view** — in
+    `src/views/analysing.tsx` a Retry's `.then` began calling the shared
+    `completeRun`/`onComplete`; the main run's call sat behind an unmount
+    guard (`cancelled`) but the Retry's chain did not, so a late Retry result
+    hydrated whichever book was open and could persist one book's roster into
+    another's cast.json; fixed with a `mountedRef` / `ownsSnapshot()` guard on
+    `.then`, `.catch` and `.finally` (#3435, PR #3505 gate pass 2).
+    Checkable: when a completion/dispatch is moved or added onto an async
+    chain, find the guard the original call site had against unmount or
+    navigation and confirm the new site has it too, with a test that resolves
+    the chain after unmount.
 
 ### Keeping the catalogue current
 
