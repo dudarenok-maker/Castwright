@@ -65,6 +65,45 @@ export interface ChapterErrorRecord {
   code: string;
   message: string;
   remediation: string;
+  /** Which phase failed: Phase 0a cast detection or Phase 1 attribution.
+      Optional on disk only for records written before plan 285;
+      `normaliseFailureRecords` tags those on load. */
+  phase?: 'cast' | 'attribution';
+}
+
+const MISSING_RECORD_MESSAGE = 'Analysis failed on a previous attempt. Retry to try again.';
+
+/* Plan 285 spec 2.1 — tag the untagged legacy failure records of a freshly
+   loaded cache, mutating it in place. Rules, first match wins:
+   1. already tagged: keep;
+   2. no stage1 and the cast is missing or `[]`: 'cast' (origin/main writes
+      coverage flags over any record, and pipelined Phase 1 can attribute a
+      chapter whose cast failed, so `{attribution-*, [], take, no stage1}`
+      exists on disk);
+   3. attribution-collapse / attribution-incomplete: 'attribution';
+   4. a non-empty cast: 'attribution' (cast failures write `[]`; covers the
+      2026-06-05..06-12 records that have no record object);
+   5. otherwise 'cast'.
+   An id with no record gets a synthesised 'unknown' one. */
+export function normaliseFailureRecords(cache: AnalysisCache): void {
+  const ids = cache.failedChapterIds;
+  if (!ids || ids.length === 0) return;
+  const records = (cache.failedChapterErrors ??= {});
+  for (const id of ids) {
+    const existing = records[String(id)];
+    if (existing?.phase) continue;
+    const castRows = cache.chapterCast?.[id];
+    const castEmpty = !castRows || castRows.length === 0;
+    let phase: 'cast' | 'attribution';
+    if (!cache.stage1 && castEmpty) phase = 'cast';
+    else if (existing?.code === 'attribution-collapse' || existing?.code === 'attribution-incomplete')
+      phase = 'attribution';
+    else if (!castEmpty) phase = 'attribution';
+    else phase = 'cast';
+    records[String(id)] = existing
+      ? { ...existing, phase }
+      : { code: 'unknown', message: MISSING_RECORD_MESSAGE, remediation: '', phase };
+  }
 }
 
 export interface AnalysisCache {
@@ -107,7 +146,56 @@ export interface AnalysisCache {
       classified code + copy so the analysing view shows a real message +
       remediation after reload instead of the generic fallback. */
   failedChapterErrors?: Record<string, ChapterErrorRecord>;
+  /** Plan 285 spec 2.2 — P: chapters whose take predates the final roster and
+      is known to be bad (a failed chapter's take at a stage1-less load, or a
+      take made against the rolling roster while the chapter's cast record
+      stood). A pending take is kept, never deleted, until it is replaced.
+      Absent means empty. */
+  pendingAttributionChapterIds?: number[];
+  /** Plan 285 spec 2.2 — false means a take was written after the last
+      authoritative persist (state.json). Absent (legacy caches) means
+      persisted. */
+  takesPersisted?: boolean;
+  /** Plan 285 decision F — set by the first authoritative persist and never
+      cleared except with the cache: the book has reached Confirm. */
+  confirmReached?: true;
   updatedAt?: string;
+}
+
+/** Plan 285 spec 2.2 — the one per-chapter "done" predicate: the chapter has a
+    take (an own key, including `[]`, decision B) that is not pending. */
+export function hasCurrentTake(cache: AnalysisCache, chapterId: number): boolean {
+  return (
+    Object.hasOwn(cache.chapters, chapterId) &&
+    !(cache.pendingAttributionChapterIds ?? []).includes(chapterId)
+  );
+}
+
+/** Plan 285 spec 2.2 — book-level completeness over `chapterIds` (the
+    non-excluded chapters): the roster is final, every chapter has a current
+    take, and no take was written after the last authoritative persist. */
+export function analysisCompleteFor(cache: AnalysisCache, chapterIds: readonly number[]): boolean {
+  return (
+    chapterIds.length === 0 ||
+    (!!cache.stage1 &&
+      chapterIds.every((id) => hasCurrentTake(cache, id)) &&
+      cache.takesPersisted !== false)
+  );
+}
+
+/** Plan 285 §3.4 — the chapters of `chapterIds` (the non-excluded chapters)
+    that have no current take. */
+export function unattributedChapterIds(cache: AnalysisCache, chapterIds: readonly number[]): number[] {
+  return chapterIds.filter((id) => !hasCurrentTake(cache, id));
+}
+
+/** Plan 285 decision F — the book has reached Confirm: its cast was confirmed,
+    or an authoritative persist has run since the cache was last cleared. */
+export function reachedConfirm(
+  state: { castConfirmed?: boolean } | null | undefined,
+  cache: AnalysisCache,
+): boolean {
+  return state?.castConfirmed === true || cache.confirmReached === true;
 }
 
 export function cachePath(manuscriptId: string): string {
@@ -126,7 +214,7 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
   /* JSON parse turns the chapter-id keys into strings, but the route uses
      numeric ids. Coerce shape so callers can use cache.chapters[chapterId]
      directly. */
-  return {
+  const loaded: AnalysisCache = {
     chapterCast: cache.chapterCast ?? undefined,
     stage1: cache.stage1,
     chapters: cache.chapters ?? {},
@@ -136,8 +224,13 @@ export async function loadAnalysisCache(manuscriptId: string): Promise<AnalysisC
     stage2DurationsEngine: cache.stage2DurationsEngine ?? undefined,
     failedChapterIds: cache.failedChapterIds ?? undefined,
     failedChapterErrors: cache.failedChapterErrors ?? undefined,
+    pendingAttributionChapterIds: cache.pendingAttributionChapterIds ?? undefined,
+    takesPersisted: cache.takesPersisted ?? undefined,
+    confirmReached: cache.confirmReached ?? undefined,
     updatedAt: cache.updatedAt,
   };
+  normaliseFailureRecords(loaded);
+  return loaded;
 }
 
 /* #3427 — saves and clears for one manuscript run through the shared per-path

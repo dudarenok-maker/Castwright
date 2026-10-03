@@ -4056,9 +4056,14 @@ export interface components {
          *     analyzer failure carries `remediation` + `detail` (+ `fixes` when the
          *     classifier can name something actionable); the route's own terminal
          *     codes (`language_unset`, `cast_incomplete`, `stage1_shrink_refused`,
-         *     `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
-         *     `design_in_progress`, `bad_request`, `chapter_excluded`) carry `code`
-         *     and `message` only.
+         *     `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
+         *     `design_in_progress`, `bad_request`, `chapter_excluded`,
+         *     `main_analysis_running`, `subset_analysis_running`) carry `code`
+         *     and `message` only — `main_analysis_running` also carries
+         *     `draining` (#3435: the late refusal check, after the stream opened).
+         *     `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
+         *     the chapters it ran are done, but the book still needs a main
+         *     resume to attribute the rest; nothing was persisted as final.
          */
         AnalyseErrorEvent: {
             /** @enum {string} */
@@ -4075,6 +4080,8 @@ export interface components {
             remediation?: string;
             /** @description Collapsible diagnostic blob (engine, model, chapter id, reasoning tokens, upstream status/details). Absent when there is nothing to add. */
             detail?: string;
+            /** @description #3435 — on `main_analysis_running` only: false while the main run is live, true while it is finishing the chapters it had started. */
+            draining?: boolean;
             /**
              * @description #3084 F7 — structured "how to fix" entries, every actionable fix
              *     first and every `Read: …` wiki entry last. Present only for
@@ -6025,8 +6032,34 @@ export interface components {
                         code: components["schemas"]["FailureCode"];
                         message: string;
                         remediation: string;
+                        /**
+                         * @description Which phase failed — Phase 0a cast detection or Phase 1
+                         *     attribution. Always present on the wire; the server tags
+                         *     pre-existing untagged records when it loads the cache.
+                         * @enum {string}
+                         */
+                        phase: "cast" | "attribution";
                     };
                 };
+                /**
+                 * @description #3435 — the cast roster is final (the analysis cache holds
+                 *     stage1). While false, an attribution-failed chapter is
+                 *     attributed by a main resume, not by a per-chapter Retry.
+                 */
+                stage1Ready?: boolean;
+                /**
+                 * @description #3435 — the book has not reached Confirm, its roster is final,
+                 *     and some chapter still lacks a current take (or the takes were
+                 *     never persisted): a main resume is needed to finish it. Never
+                 *     true on a book that has reached Confirm.
+                 */
+                resumeRequired?: boolean;
+                /**
+                 * @description #3435 — the non-excluded chapters with no current take (no
+                 *     attribution, or one made against a stale roster). On a book
+                 *     past Confirm these show as Generate-view rows with Re-analyse.
+                 */
+                unattributedChapterIds?: number[];
             };
         };
         /**
@@ -6996,8 +7029,17 @@ export interface operations {
                 };
             };
             /**
-             * @description The manuscript's book has no language set. Set the book language
-             *     before requesting analysis.
+             * @description Refused before the stream opens. `language_unset`: the
+             *     manuscript's book has no language set — set the book language
+             *     before requesting analysis. `subset_analysis_running` (#3435): a
+             *     chapter retry is running on this book, so a request that would
+             *     start a run is refused (a request that joins a running analysis
+             *     never is). `main_analysis_running` with `draining: true`
+             *     (#3435): a previous analysis run on this book is still finishing
+             *     the chapters it had started; a non-fresh start is refused until
+             *     it has. The same two refusal codes can also arrive as a terminal
+             *     SSE `error` event when the conflict appears after the stream
+             *     opened.
              */
             409: {
                 headers: {
@@ -7006,6 +7048,10 @@ export interface operations {
                 content: {
                     "application/json": {
                         error: string;
+                        /** @description User-facing reason (both #3435 refusals). */
+                        message?: string;
+                        /** @description Present on `main_analysis_running`: always true here. */
+                        draining?: boolean;
                     };
                 };
             };
@@ -7042,6 +7088,28 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseErrorEvent"] | components["schemas"]["AnalyseResponse"];
+                };
+            };
+            /**
+             * @description #3435 — the book has a main analysis run, live or still finishing
+             *     the chapters it had started (`draining`). Pause it (or wait for it
+             *     to finish), then try again. The same refusal can also arrive as a
+             *     terminal SSE `error` event (`code: main_analysis_running`, with
+             *     `draining` and `message`) when the main run registered after the
+             *     stream opened.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        error: "main_analysis_running";
+                        /** @description false while the main run is live; true while it is finishing after a pause or halt. */
+                        draining: boolean;
+                        message: string;
+                    };
                 };
             };
         };

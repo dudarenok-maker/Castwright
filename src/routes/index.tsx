@@ -659,6 +659,14 @@ export function ConfirmRoute() {
              this disk snapshot straight back as a cast.json PUT (#3376). */
           dispatch(castActions.hydrateCharacters(res.cast.characters));
         }
+        /* #3435 — the same skipped hydrate left the Generate view's analysis
+           gaps as they were before the run; take them from the server (a main
+           result can still carry a flagged chapter, decision B). */
+        if (!cancelled && res) {
+          dispatch(
+            chaptersActions.setAnalysisGapsFromBookState({ chapters: res.state.chapters, analysis: res.analysis }),
+          );
+        }
       })
       .catch(() => {
         /* non-fatal — fall back to whatever the slice already holds */

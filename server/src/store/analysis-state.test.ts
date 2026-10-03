@@ -129,6 +129,22 @@ describe('analysis-state store', () => {
     expect(existsSync(analysisStateJsonPath(bookDir))).toBe(false);
   });
 
+  it('writeAnalysisState then deleteAnalysisState called back to back land in call order', async () => {
+    /* #3435 (C19) — a running snapshot written just before endJob's terminal
+       delete must not land after it and leave a stale `running` file behind. */
+    const write = writeAnalysisState(bookDir, {
+      manuscriptId: 'm_test',
+      phaseId: 1,
+      phaseLabel: 'Parsing and attribution',
+      phaseProgress: 0.5,
+      state: 'running',
+      lastTickAt: Date.now(),
+    });
+    const del = deleteAnalysisState(bookDir);
+    await Promise.all([write, del]);
+    expect(existsSync(analysisStateJsonPath(bookDir))).toBe(false);
+  });
+
   it('deleteAnalysisState is a no-op when the file is already missing', async () => {
     /* Idempotent — never throws. Mirrors the endJob path where we
        fire deleteAnalysisState whether or not a snapshot was ever

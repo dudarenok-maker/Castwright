@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # 285 — Analysis failure bookkeeping: explicit phase and completeness markers (#3435)
 
-> Status: draft — **plan approved by the owner on 2026-10-03 (O4)**, after plan checks 1–3 and owner decisions A–C, E–H and O1–O3. Implementation is a new PR superseding #3439, with the normal review gate. No fourth check.
+> Status: active — implemented on `fix/server-failure-phase-markers` (T1–T7), not yet merged or on-box accepted. **Plan approved by the owner on 2026-10-03 (O4)**, after plan checks 1–3 and owner decisions A–C, E–H and O1–O3. Implementation is a new PR superseding #3439, with the normal review gate. No fourth check.
 >
 > **Line numbers** in this plan are on **`origin/main` at c64943ff** (2026-10-03), like the spec. c64943ff differs from the previous basis 6f01fa20 only in test files, so production lines are unchanged; test-file lines were re-derived. Each citation names a symbol or the code at that line; if `origin/main` has moved, re-derive the line from the symbol before editing. Nothing is cited from #3439's head.
 >
@@ -547,6 +547,24 @@ Recorded in `docs/testing/onbox-acceptance-register.md` by T7:
 - #3437: Start fresh displacement stragglers.
 - Restructure remapping (follow-up issue).
 - A better treatment for chapters with no narratable text beyond the copy (decision C follow-up).
+
+## Implementation notes
+
+Deviations and rulings made during the build (recorded in the run ledger as "Ruling:" lines):
+
+- **`phase1Dispatch` throws on abort, in T2.** The preflight ruling had T2 skip on `signal.aborted` and T3 convert it to a throw; the ledger reversed that. T2 throws `AnalysisAbortedError` on `signal.aborted` and T3's Item A-1 test ("Pause between chapters ends aborted, no persist") moved into T2, because the skip let a Pause between chapters end as success with a partial persist, a regression against `main`. The plan's own T2 and T3 task text is stale on this point.
+- **Subset Phase-1 recording (S11)** landed in T4, whose title names it, not T2.
+- **T3 regressions** (rename-midrun and the H1 guard 14 vs 13) were branch regressions and were fixed in T3, not deferred; the `user-settings` ollama-url failure is an artifact of the mandated `OLLAMA_URL` env.
+- **T3 mutation 4** is unpinnable by construction (halting set in the same sync block as the pool-local aborted flag); it was replaced with "drop both the halting/ended and pool-local checks", which turns the `markPhase0ChapterComplete` wake test red.
+- **`restoreFromServer` staleness (T3 minor 4)** is a defect: it had no staleness re-check after its awaits and could overwrite a newer subset snapshot, so it was fixed in the same round.
+- **T4 same-round fixes:** the `cast_incomplete` copy no longer says "Retry below" on the Generate view, the title list in that message is bounded, and the stage-1-existed plus non-target blocking-chapter branch and "S3/S4 never clear an attribution record at Phase 0" are now pinned. The main route's `phase0FailedCount` stop first kept "Retry below"; the final review changed it to the same `castIncompleteMessage(titles)` copy, because its message becomes the top-bar pill's `haltReason` on every view.
+- **G3 guard bump 2 → 3** is the guard's documented maintenance (census re-measured), not a swallow.
+- **T5 → T6:** the subset persist set its flags before S14 as an interim; T6 moved flag-setting inside S14's pass branch and asserts `confirmReached` absent and `takesPersisted` false on the `resume_required` path.
+- **Incidental fix #3503:** Start fresh now verifies the book folder before deleting analysis files (found in T5, fixed in a510d8f9).
+- **T6 `castIncomplete` mount-arming (b)** is kept per the spec's arming row, but a `castIncomplete` armed on mount does not auto-resume after a reload (`analysisStarted` unset): the user clicks Resume once. The double POST that arming exposed was fixed. Arming (b) has no observable consumer, and neither it nor its mount-read keying is tested; whether to drop it or make it imply `analysisStarted` is an owner question. Because it is inert, the plan's T6 mutation "arm `castIncomplete` from every refresh" is no longer pinned by any test.
+- **T5 regression fixed in passing (b4486856):** a stale `vi.mock` of `analysis-cache.js` in `analysis.stage2-estimate-label` lacked `hasCurrentTake`; it now passes the real module through via `importOriginal`.
+- **D1 copy placement:** the refused main-start message started under the Start button (T3); T4 moved it onto the needs-action line, as the spec wants.
+- **A15 ("each task green on its own") did not hold at two task tips:** the T2 tip (527c4d8f) failed `analysis.rename-midrun` and the H1 guard, and the T5 tip (e800d319) failed `analysis.stage2-estimate-label`. Both were fixed in later commits (T3, and b4486856 respectively); the branch tip is green.
 
 ## Ship notes
 

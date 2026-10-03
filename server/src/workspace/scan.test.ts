@@ -19,10 +19,21 @@ let clearAnalysisCache: typeof import('../store/analysis-cache.js').clearAnalysi
    tempdir, so the tempdir rmSync won't catch them. */
 const seededManuscriptIds: string[] = [];
 
-async function seedAnalysisCache(manuscriptId: string, chapterIds: number[]): Promise<void> {
+/* A finished analysis of `chapterIds`: Phase 0's stage1 plus a take per chapter
+   (plan 285: a book is analysed only once its roster is final). `extra` overrides
+   or adds cache fields. */
+async function seedAnalysisCache(
+  manuscriptId: string,
+  chapterIds: number[],
+  extra: Partial<import('../store/analysis-cache.js').AnalysisCache> = {},
+): Promise<void> {
   const chapters: Record<number, []> = {};
   for (const id of chapterIds) chapters[id] = [];
-  await saveAnalysisCache(manuscriptId, { chapters });
+  await saveAnalysisCache(manuscriptId, {
+    stage1: { characters: [], chapters: [] },
+    chapters,
+    ...extra,
+  });
   seededManuscriptIds.push(manuscriptId);
 }
 
@@ -682,5 +693,105 @@ describe('voices_pending status', () => {
     writeFileSync(join(audioRoot, 'db-1.mp3'), '');
     const b = (await flatten()).find((x) => x.title === 'Done Book')!;
     expect(b.status).toBe('complete');
+  });
+});
+
+/* Plan 285 spec 2.2 — the library's analysis rule is `analysisCompleteFor`
+   (one current take per non-excluded chapter, a final roster, takes persisted),
+   and it gates only a book that has never reached Confirm (decision F). */
+describe('scan status — current takes (plan 285)', () => {
+  const take = [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'A line.' }] as never;
+  const twoChapters = [
+    { id: 1, slug: 'c-01' },
+    { id: 2, slug: 'c-02' },
+  ];
+
+  async function statusOf(
+    title: string,
+    cache: Partial<import('../store/analysis-cache.js').AnalysisCache>,
+    opts: { castConfirmed?: boolean; audio?: string[]; failed?: boolean } = {},
+  ): Promise<string> {
+    const { bookDir, bookId, audioRoot } = bookSkeleton(title, {
+      castConfirmed: opts.castConfirmed,
+      chapters: twoChapters.map((c) => (opts.failed && c.id === 2 ? { ...c, generationState: 'failed' as const } : c)),
+    });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2], cache);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    for (const slug of opts.audio ?? []) writeFileSync(join(audioRoot, `${slug}.mp3`), '');
+    const books = await flatten();
+    return books.find((x) => x.title === title)!.status;
+  }
+
+  it('scan: a pending chapter reads analysing', async () => {
+    expect(await statusOf('P285 Pending', { pendingAttributionChapterIds: [2] })).toBe('analysing');
+  });
+
+  it('scan: a flagged chapter with a take reads analysed', async () => {
+    expect(
+      await statusOf('P285 Flagged', {
+        chapters: { 1: take, 2: take },
+        failedChapterIds: [2],
+        failedChapterErrors: { '2': { code: 'attribution-collapse', message: 'm', remediation: 'r', phase: 'attribution' } },
+      }),
+    ).toBe('cast_pending');
+  });
+
+  it('scan: a worded [] reads analysed', async () => {
+    expect(
+      await statusOf('P285 Worded Empty', {
+        chapters: { 1: take, 2: [] },
+        failedChapterIds: [2],
+        failedChapterErrors: { '2': { code: 'attribution-incomplete', message: 'm', remediation: 'r', phase: 'attribution' } },
+      }),
+    ).toBe('cast_pending');
+  });
+
+  it('scan: takesPersisted:false reads analysing', async () => {
+    expect(await statusOf('P285 Unpersisted', { takesPersisted: false })).toBe('analysing');
+  });
+
+  it('scan: no stage1 reads analysing', async () => {
+    expect(await statusOf('P285 No Stage1', { stage1: undefined })).toBe('analysing');
+  });
+
+  it('scan: the analysing progress counts current takes only', async () => {
+    const { bookDir, bookId } = bookSkeleton('P285 Progress', { chapters: twoChapters });
+    await seedAnalysisCache(`m_${bookId}`, [1, 2], { pendingAttributionChapterIds: [2] });
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    const b = (await flatten()).find((x) => x.title === 'P285 Progress')!;
+    expect(b.progress).toBeCloseTo(0.5, 5);
+  });
+
+  describe('decision F', () => {
+    /* Chapter 2 has no take and the takes are unpersisted: the analysis rule
+       would read analysing, but a confirmed book is never demoted. */
+    const unfinished = { chapters: { 1: take }, takesPersisted: false };
+
+    it('a castConfirmed book with takesPersisted:false and a chapter without a take keeps voices_pending / generating / complete', async () => {
+      expect(await statusOf('P285 F Voices', unfinished, { castConfirmed: true })).toBe('voices_pending');
+      expect(await statusOf('P285 F Generating', unfinished, { castConfirmed: true, audio: ['c-01'] })).toBe(
+        'generating',
+      );
+      expect(
+        await statusOf('P285 F Complete', unfinished, { castConfirmed: true, audio: ['c-01', 'c-02'] }),
+      ).toBe('complete');
+    });
+
+    it('a book with confirmReached and castConfirmed false keeps cast_pending', async () => {
+      expect(await statusOf('P285 F Reached', { ...unfinished, confirmReached: true })).toBe('cast_pending');
+    });
+
+    it('a legacy book with neither field reads as before', async () => {
+      /* Legacy: no takesPersisted (counts as persisted), no confirmReached. */
+      expect(await statusOf('P285 F Legacy Done', {})).toBe('cast_pending');
+      expect(await statusOf('P285 F Legacy Partial', { chapters: { 1: take } })).toBe('analysing');
+    });
+  });
+
+  it('O1: after Start fresh (castConfirmed false, cache re-filled but not yet persisted) the book reads analysing; once the run persists it reads cast_pending', async () => {
+    expect(await statusOf('P285 O1 Running', { takesPersisted: false }, { castConfirmed: false })).toBe('analysing');
+    expect(
+      await statusOf('P285 O1 Persisted', { takesPersisted: true, confirmReached: true }, { castConfirmed: false }),
+    ).toBe('cast_pending');
   });
 });

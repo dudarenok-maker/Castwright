@@ -133,6 +133,76 @@ recite:
     write, is the value read in the same synchronous step as the enqueue (no
     `await` between), and does a test make the FIRST caller's await slower
     than the second's with distinct snapshots?
+17. **A clear on one phase's success path that does not check which phase
+    the record came from** — a failure record is cleared when a later phase
+    completes for the chapter (here: Phase 1 clears any `failedChapterIds`
+    entry). Harmless while the phases run in sequence, because a chapter
+    reaching Phase 1 has necessarily passed Phase 0; wrong once they overlap.
+    In pipelined mode Phase 1 dispatches off a watermark (the highest Phase-0
+    index completed, not a contiguous prefix), so a chapter whose own Phase 0a
+    failed is still attributed, and its Phase-1 success erased the cast-phase
+    record the resume needed to re-cast it (PR #3439 pass 3,
+    `routes/analysis.ts`). Checkable: for every clear, name every phase that
+    can have written the record, and ask whether this phase's success is
+    evidence that THAT phase's failure is fixed — and whether a test
+    interleaves the two phases for one chapter rather than running them in
+    order.
+18. **A hand-off tested by calling the receiver directly** — the producer
+    is meant to cause a later step (a subset Retry that "hands off to the
+    main resume"), and the test invokes that later step itself, so it cannot
+    see that the product's real trigger never fires. Here the trigger was the
+    view's auto-resume, which waits for every failed row to clear; the Retry
+    kept its row, so the main run was never re-POSTed, while the test that
+    called `runMainAnalyzerJob` itself passed (PR #3439 pass 3,
+    `src/views/analysing.tsx`). Checkable: for every "X then Y resumes"
+    claim, find what actually starts Y in the product, and ask whether a test
+    reaches Y through that trigger (the view harness with the real slice and
+    middleware) or only by calling it.
+19. **A sentinel that is also a valid value** — a marker meaning "none" or
+    "not recorded" (an empty array, `0`, `''`, `null`) is also something the
+    field legitimately holds, so the reader cannot tell "never written" from
+    "written as empty". In `server/src/routes/analysis.ts` the Phase-0
+    failure catch wrote `chapterCast[id] = []` as the cast-failure marker,
+    but `[]` is also a real cast for a narration-only chapter (cast detection
+    succeeded and found no characters). `isPhase0aCoverageComplete` read every
+    `[]` as "cast missing", so a Retry or Re-analyse on a book with a
+    narration-only chapter never reached Phase 1 (test P-theta). #3435 makes
+    the failure record's `phase: 'cast'` the discriminator, passed in as
+    `castFailedIds`.
+    Checkable: for every default or "empty" value a reader branches on, ask
+    whether a real writer can produce exactly that value, and whether a test
+    seeds that case.
+20. **A flag read as "phase N finished" that is written before phase N** —
+    a completeness marker set on entry to, or in the middle of, the step it
+    vouches for, so an interrupted or refused step leaves the flag claiming
+    success. In `server/src/routes/analysis.ts` the subset persist set
+    `takesPersisted`/`confirmReached` before the S14 gate had passed, so a
+    `resume_required` exit left the book marked as having reached Confirm;
+    the fix sits inside S14's pass branch (`if (wroteStateJson)`) (#3435).
+    Checkable: for every marker, find the write site and ask whether it sits
+    inside the success branch of the last step the marker is read as proving,
+    and whether a test fails that step and asserts the marker is absent.
+21. **A derived "not done" list computed from a store that isn't the record
+    for every book it's applied to, so an absent store reads as "nothing
+    done"** — the list is correct where its source exists and silently wrong
+    where it does not. `server/src/routes/book-state.ts` built
+    `unattributedChapterIds` from the analysis cache alone, and a missing
+    cache loads as `{ chapters: {} }`, so a confirmed sample book with no
+    cache showed every chapter as unfinished; the fix treats
+    `manuscript-edits.json` as authoritative past Confirm (#3435, PR #3505
+    gate pass 1).
+    Checkable: for every derived list, name the store it reads, and ask what
+    it reports for a book where that store is absent or was never written.
+22. **Test cleanup that deletes a directory the code under test is still
+    writing to fire-and-forget** — the test passes its assertions, then the
+    teardown races the detached writes and fails intermittently. The
+    plan-285 `afterEach` in `server/src/routes/analysis.test.ts` `rmSync`'d
+    the book dir while `endJob`'s detached `persistTerminalSnapshot`/outcome
+    writes were still landing (ENOTEMPTY, 1 run in 3); fixed by awaiting the
+    recorded `withVerifiedBookDir` promises (#3435, PR #3505 gate pass 1).
+    Checkable: for every `afterEach` that removes a directory, list the
+    fire-and-forget writes the code under test can still be making into it,
+    and confirm the test awaits them.
 
 ### Keeping the catalogue current
 

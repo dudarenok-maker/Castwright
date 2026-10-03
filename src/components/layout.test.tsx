@@ -2705,3 +2705,62 @@ describe('Layout — active book poll never overwrites client-owned pending (#33
   });
 });
 
+
+describe('Layout — analysis gaps reach the chapters slice (#3435 decision F / O2)', () => {
+  it("the layout's book-state hydrate carries unattributedChapterIds and failedChapterErrors into analysisGapById", async () => {
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'mns1',
+        title: 'Test Book',
+        author: 'Author',
+        series: null,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      cast: { characters: [] },
+      manuscript: { wordCount: 0, format: 'plaintext' },
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+      analysis: {
+        failedChapterIds: [1],
+        failedChapterErrors: {
+          '1': { code: 'analyzer-timeout', message: 'Attribution broke.', remediation: '', phase: 'attribution' },
+        },
+        stage1Ready: true,
+        resumeRequired: false,
+        unattributedChapterIds: [2],
+      },
+    });
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_confirmed' }));
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/listen']}>
+          <Routes>
+            <Route path="/books/:bookId/listen" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => {
+      expect(store.getState().chapters.analysisGapById).toEqual({
+        1: { message: 'Attribution broke.' },
+        2: { message: "Analysis didn't finish for this chapter." },
+      });
+    });
+  });
+});

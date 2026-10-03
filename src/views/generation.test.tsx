@@ -188,6 +188,7 @@ const chapter2: Chapter = {
 function makeStore() {
   const store = configureStore({
     reducer: {
+      analysis: analysisSlice.reducer,
       ui: uiSlice.reducer,
       chapters: chaptersSlice.reducer,
       manuscript: manuscriptSlice.reducer,
@@ -322,6 +323,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     ];
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -378,6 +380,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     const ch2Queued: Chapter = { ...chapter2 };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -429,6 +432,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     const ch2Queued: Chapter = { ...chapter2 };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -480,6 +484,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     const ch2Queued: Chapter = { ...chapter2 };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -533,6 +538,7 @@ describe('GenerationView — counters exclude ignored chapters (regression)', ()
     const ch2Queued: Chapter = { ...chapter2 };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -592,6 +598,7 @@ describe('GenerationView — early-tick render guards (regression)', () => {
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -705,6 +712,7 @@ describe('GenerationView — per-character progress is derived from the manuscri
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -801,6 +809,7 @@ describe('GenerationView — heartbeat / stalled state', () => {
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -869,6 +878,7 @@ describe('GenerationView — activity sidebar', () => {
   it('renders generation-related change-log events in the sidebar', () => {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1022,6 +1032,7 @@ describe('GenerationView — header action once the run is complete', () => {
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1078,6 +1089,7 @@ describe('GenerationView — header action once the run is complete', () => {
        still shows up when allComplete is true (separate test above). */
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1266,6 +1278,7 @@ describe('GenerationView — engine drift detection (plan 35)', () => {
   ): void {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1436,6 +1449,7 @@ describe('GenerationView — reassignment staleness caption (Bug 2)', () => {
   function renderWithReassign(chapters: Chapter[], reassignedChapterIds: number[]): void {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1513,6 +1527,7 @@ describe('GenerationView — precise reassignment staleness via render map (#650
   ): void {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1588,6 +1603,7 @@ describe('GenerationView — precise reassignment staleness via render map (#650
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1653,6 +1669,7 @@ describe('GenerationView — precise text-edit staleness via render text map (#1
   function renderWithTextMap(renderedTextByChapter: Record<number, Record<number, string>>): void {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1740,6 +1757,7 @@ describe('GenerationView — precise instruct-edit staleness via render instruct
   function renderWithInstructMap(renderedInstructByChapter: Record<number, Record<number, string>>): void {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1820,6 +1838,7 @@ describe('GenerationView — bulk Regenerate all drifted (plan 35 follow-up)', (
   function makeDriftStore(chapters: Chapter[]) {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -2208,7 +2227,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
 
     expect(
       await screen.findByText(
-        /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+        /^A different subset re-analysis is already in progress for this manuscript: Chapter 5\.$/i,
       ),
     ).toBeInTheDocument();
   });
@@ -2253,7 +2272,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
 
     await screen.findByText(
-      /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+      /^A different subset re-analysis is already in progress for this manuscript: Chapter 5\.$/i,
     );
 
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
@@ -2291,10 +2310,104 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
 
     await screen.findByText(
-      /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+      /^A different subset re-analysis is already in progress for this manuscript: Chapter 5\.$/i,
     );
 
     expect(store.getState().analysis.activeStream).toEqual(otherJobSnapshot);
+  });
+
+  /* #3435 decision A — the server refuses a subset run while a main analysis
+     run is live for the book, so the controls that start one are disabled
+     until it is paused. */
+  it('Re-analyse and Include are disabled with "Pause the analysis first" while main is live', async () => {
+    const store = makeIncludeStore();
+    const mainRunning: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 1,
+      phaseLabel: 'Parsing and attribution',
+      phaseProgress: 0.3,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'running',
+      kind: 'main',
+    };
+    store.dispatch(analysisActions.setActiveStream(mainRunning));
+    renderInclude(store);
+    expect(screen.getByTestId('chapter-row-1-reanalyse')).toBeDisabled();
+    expect(screen.getByRole('button', { name: /\+ Include in book/i })).toBeDisabled();
+    expect(screen.getAllByText('Pause the analysis first').length).toBeGreaterThan(0);
+    /* Paused → enabled again. */
+    act(() => {
+      store.dispatch(analysisActions.setPaused({ manuscriptId: 'm1' }));
+    });
+    expect(screen.getByTestId('chapter-row-1-reanalyse')).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: /\+ Include in book/i })).not.toBeDisabled();
+    expect(screen.queryByText('Pause the analysis first')).not.toBeInTheDocument();
+  });
+
+  it('a 409 on Include rolls the include back and shows the message on the row as a neutral notice; on Re-analyse shows it on the row', async () => {
+    /* The paused main run is still finishing (the server's draining 409): the
+       refusal restores the prior snapshot, as subset_in_progress does, rather
+       than clearing it. */
+    const message = 'The analysis on this book is still finishing the chapters it had started. Try again in a moment.';
+    const pausedMain: AnalysisStreamSnapshot = {
+      bookId: 'b1',
+      manuscriptId: 'm1',
+      phaseId: 1,
+      phaseLabel: 'Parsing and attribution',
+      phaseProgress: 0.3,
+      remainingMs: null,
+      lastTickAt: Date.now(),
+      state: 'paused',
+      kind: 'main',
+    };
+    /* Include. */
+    const store = makeIncludeStore();
+    store.dispatch(analysisActions.setActiveStream(pausedMain));
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'main_analysis_running'));
+    const { unmount } = renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+    expect(store.getState().analysis.activeStream).toEqual(pausedMain);
+    unmount();
+    /* Re-analyse. */
+    const store2 = makeIncludeStore();
+    store2.dispatch(analysisActions.setActiveStream(pausedMain));
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'main_analysis_running'));
+    renderInclude(store2);
+    fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+    fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(store2.getState().analysis.activeStream).toEqual(pausedMain);
+  });
+
+  /* #3435 - `cast_incomplete` is a soft stop (a chapter outside this batch, or
+     the target's own cast, still has no cast): the row shows the server's
+     message, an Include is rolled back as for any failed include, and no
+     needs-action snapshot is left behind for a surface that has no way to act
+     on it. */
+  it('cast_incomplete on Include shows the server message on the row, rolls the include back and leaves no snapshot', async () => {
+    const message = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter 2). Retry to continue.';
+    const store = makeIncludeStore();
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'cast_incomplete'));
+    renderInclude(store);
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    expect(await screen.findByText(`Re-analysis failed: ${message}`)).toBeInTheDocument();
+    expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+    expect(store.getState().analysis.activeStream).toBeNull();
+  });
+
+  it('cast_incomplete on Re-analyse shows the server message on the row and leaves no snapshot', async () => {
+    const message = 'Phase 0a covers 1 of 2 chapters — run main analysis to detect the rest before stage1 can finalise.';
+    const store = makeIncludeStore();
+    runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'cast_incomplete'));
+    renderInclude(store);
+    fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+    fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+    expect(await screen.findByText(`Re-analysis failed: ${message}`)).toBeInTheDocument();
+    expect(store.getState().analysis.activeStream).toBeNull();
   });
 
   /* #3084 pass-3 — a reasoning overflow from a subset run must leave exactly
@@ -2525,7 +2638,7 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
     expect(
       await screen.findByText(
-        /Re-analysis failed: A different subset re-analysis is already in progress for this manuscript: Chapter 5\./i,
+        /^A different subset re-analysis is already in progress for this manuscript: Chapter 5\.$/i,
       ),
     ).toBeInTheDocument();
   });
@@ -2577,6 +2690,422 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     /* No pause-modal in the DOM, and the analysis spy fired right away. */
     expect(screen.queryByText(/Pause audio generation to analyse\?/i)).toBeNull();
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
+  });
+
+  /* #3435 decision F / O2 — a chapter whose analysis did not finish (the
+     book-state's unattributedChapterIds / failedChapterErrors, carried into
+     chapters.analysisGapById by the layout) gets a note and a Re-analyse
+     control on its Generate row, whatever its generation state. */
+  describe('#3435 — unfinished chapters and resume_required', () => {
+    const failedChapter2: Chapter = { ...chapter2, state: 'failed', errorReason: 'Synthesis broke.' };
+    function renderRows(store: ReturnType<typeof makeIncludeStore>, rows: Chapter[]) {
+      store.dispatch(chaptersSlice.actions.setChapters(rows));
+      return render(
+        <Provider store={store}>
+          <HostedGenerationView
+            chapters={rows}
+            characters={characters}
+            paused
+            title="the Coalfall Commission"
+            bookId="b1"
+            modelKey="coqui-xtts-v2"
+            onRegenerate={() => {}}
+            onRegenerateBook={() => {}}
+            onRegenerateCharacterInChapter={() => {}}
+            onPreview={() => {}}
+          />
+        </Provider>,
+      );
+    }
+
+    it('Decision F / O2: Generate view shows "Analysis didn\'t finish for this chapter." and a Re-analyse control for a chapter in analysisGapById — on a queued row and on a generation-failed row with an errorReason, which have no Re-analyse today', async () => {
+      for (const row of [chapter2, failedChapter2]) {
+        const store = makeIncludeStore();
+        store.dispatch(
+          chaptersSlice.actions.setAnalysisGap({ chapterId: 2, message: "Analysis didn't finish for this chapter." }),
+        );
+        runAnalysisForChaptersSpy.mockReturnValue(new Promise(() => {}));
+        const { unmount } = renderRows(store, [chapter1, row, ch3Excluded]);
+        expect(screen.getByText("Analysis didn't finish for this chapter.")).toBeInTheDocument();
+        const btn = screen.getByTestId('chapter-row-2-reanalyse');
+        expect(btn).not.toBeDisabled();
+        fireEvent.click(btn);
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+        expect(runAnalysisForChaptersSpy).toHaveBeenLastCalledWith('m1', [2], expect.anything());
+        unmount();
+        runAnalysisForChaptersSpy.mockReset();
+      }
+    });
+
+    it('a chapter with no gap gets no analysis note (queued row: no Re-analyse, as today)', () => {
+      const store = makeIncludeStore();
+      renderRows(store, [chapter1, chapter2, ch3Excluded]);
+      expect(screen.queryByText("Analysis didn't finish for this chapter.")).not.toBeInTheDocument();
+      expect(screen.queryByTestId('chapter-row-2-reanalyse')).not.toBeInTheDocument();
+    });
+
+    it('a Re-analyse result clears the gap; a failure sets it', async () => {
+      const store = makeIncludeStore();
+      store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+      runAnalysisForChaptersSpy.mockResolvedValueOnce(subsetResponse);
+      const { unmount } = renderInclude(store);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() => expect(store.getState().chapters.analysisGapById?.[1]).toBeUndefined());
+      unmount();
+
+      const store2 = makeIncludeStore();
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+      renderInclude(store2);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      await waitFor(() =>
+        expect(store2.getState().chapters.analysisGapById?.[1]).toEqual({ message: 'The analyzer timed out.' }),
+      );
+    });
+
+    /* #3435 final review C1 — a failed Re-analyse lands in the errored row that
+       offers Retry. That Retry must re-run the Re-analyse, never the Include
+       flow: the Include flow's rollback re-excludes the chapter, and the server
+       deletes an excluded chapter's audio and segments. */
+    describe('C1 — Retry after a failed Re-analyse never re-excludes the chapter', () => {
+      const refusal = 'The analysis on this book is still finishing the chapters it had started. Try again in a moment.';
+      function rejectOnAbort() {
+        return (_m: string, _ids: number[], opts: { signal: AbortSignal }) =>
+          new Promise((_res, rej) => {
+            opts.signal.addEventListener('abort', () =>
+              rej(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+            );
+          });
+      }
+      async function failReanalyse(err: Error) {
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(err);
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+        return screen.findByRole('button', { name: /Retry/i });
+      }
+
+      it('a refused Re-analyse, retried and refused again, never calls setChapterExcluded(…, true)', async () => {
+        const store = makeIncludeStore();
+        renderInclude(store);
+        const retry = await failReanalyse(new AnalysisError(refusal, 'main_analysis_running'));
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(refusal, 'main_analysis_running'));
+        fireEvent.click(retry);
+        await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(runAnalysisForChaptersSpy.mock.calls[1][1]).toEqual([1]);
+        expect(setChapterExcludedSpy).not.toHaveBeenCalledWith('b1', 1, true);
+        expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+      });
+
+      it('Cancel during a Re-analyse Retry never calls setChapterExcluded(…, true)', async () => {
+        const store = makeIncludeStore();
+        renderInclude(store);
+        const retry = await failReanalyse(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+        runAnalysisForChaptersSpy.mockImplementationOnce(rejectOnAbort());
+        fireEvent.click(retry);
+        fireEvent.click(await screen.findByRole('button', { name: /Cancel/i }));
+        await waitFor(() => expect(screen.queryByRole('button', { name: /Cancel/i })).not.toBeInTheDocument());
+        expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+      });
+
+      it('a Re-analyse blocked by another chapter\'s cast (cast_incomplete), retried, never excludes the chapter', async () => {
+        const message = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter 2). Retry to continue.';
+        const store = makeIncludeStore();
+        renderInclude(store);
+        const retry = await failReanalyse(new AnalysisError(message, 'cast_incomplete'));
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'cast_incomplete'));
+        fireEvent.click(retry);
+        await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+      });
+
+      it('control: an Include that fails, retried and failing again, still rolls the include back each time', async () => {
+        const store = makeIncludeStore();
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+        renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        const retry = await screen.findByRole('button', { name: /Retry/i });
+        expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+        fireEvent.click(retry);
+        await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(setChapterExcludedSpy.mock.calls.map((c) => c[2])).toEqual([false, true, false, true]);
+      });
+
+      it('an Include whose rollback failed (chapter still included), retried and failing again, is not re-excluded by the Retry', async () => {
+        const store = makeIncludeStore();
+        setChapterExcludedSpy.mockImplementation(async (_b: string, _id: number, excluded: boolean) => {
+          if (excluded) throw new Error('rollback failed');
+          return { id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false };
+        });
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+        renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+        const retry = await screen.findByRole('button', { name: /Retry/i });
+        expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBeFalsy();
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+        fireEvent.click(retry);
+        await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(setChapterExcludedSpy.mock.calls.map((c) => c[2])).toEqual([false, true, false]);
+      });
+
+      it('a refusal reads as a neutral notice, not "Re-analysis failed"', async () => {
+        const store = makeIncludeStore();
+        renderInclude(store);
+        await failReanalyse(new AnalysisError(refusal, 'main_analysis_running'));
+        expect(screen.getByText(refusal)).toBeInTheDocument();
+        expect(screen.queryByText(/Re-analysis failed/)).not.toBeInTheDocument();
+      });
+    });
+
+    /* #3435 final review M3 — gap bookkeeping on the soft stops. */
+    describe('M3 — soft stops leave the gap as the server left it', () => {
+      it('a Re-analyse blocked by another chapter cast (cast_incomplete) sets no gap: Phase 1 never ran, the take is untouched', async () => {
+        const message = 'Phase 0 paused — 1 chapter still needs cast detection (Chapter 2). Retry to continue.';
+        const store = makeIncludeStore();
+        runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'cast_incomplete'));
+        renderInclude(store);
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(store.getState().chapters.analysisGapById?.[1]).toBeUndefined();
+      });
+
+      it('resume_required with no Phase 1 frame (S8: nothing attributed) keeps the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(
+          async (_m: string, _ids: number[], opts: { onPhase?: (p: { phaseId: number; progress: number }) => void }) => {
+            opts.onPhase?.({ phaseId: 0, progress: 1 });
+            throw new AnalysisError('Cast detection finished. Resume the analysis to attribute the book.', 'resume_required');
+          },
+        );
+        renderInclude(store);
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+        await waitFor(() => expect(store.getState().analysis.activeStream).toMatchObject({ haltCode: 'resume_required' }));
+        expect(store.getState().chapters.analysisGapById?.[1]).toEqual({ message: 'It failed before.' });
+      });
+
+      type Opts = {
+        onPhase?: (p: { phaseId: number; progress: number }) => void;
+        onChapterFailed?: (f: { chapterId: number; message: string }) => void;
+      };
+      /** A subset run that sends a Phase-`phase` frame, optionally flags the
+          target, then ends with `end` (a response, or an error to throw). */
+      const scripted =
+        (target: number, phase: 0 | 1, flag: string | null, end: unknown) =>
+        async (_m: string, _ids: number[], opts: Opts) => {
+          opts.onPhase?.({ phaseId: phase, progress: 1 });
+          if (flag) opts.onChapterFailed?.({ chapterId: target, message: flag });
+          if (end instanceof Error) throw end;
+          return end;
+        };
+      const s8 = () => new AnalysisError('Cast detection finished. Resume the analysis.', 'resume_required');
+      const s14 = () => new AnalysisError('Chapter re-analysed. Chapter 2 still needs attribution.', 'resume_required');
+      async function include(store: ReturnType<typeof makeIncludeStore>) {
+        renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      }
+      async function reanalyse(store: ReturnType<typeof makeIncludeStore>) {
+        renderInclude(store);
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      }
+      const gapOf = (store: ReturnType<typeof makeIncludeStore>, id: number) =>
+        store.getState().chapters.analysisGapById?.[id];
+
+      it('Include: resume_required with no Phase 1 frame (S8) keeps the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 3, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(3, 0, null, s8()));
+        await include(store);
+        await waitFor(() => expect(store.getState().analysis.activeStream).toMatchObject({ haltCode: 'resume_required' }));
+        expect(gapOf(store, 3)).toEqual({ message: 'It failed before.' });
+      });
+
+      it('Include: resume_required after a Phase 1 frame (S14) clears the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 3, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(3, 1, null, s14()));
+        await include(store);
+        await waitFor(() => expect(gapOf(store, 3)).toBeUndefined());
+      });
+
+      it('Include: S14 for a target the run flagged (chapter-failed) keeps the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 3, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(3, 1, 'Attribution collapsed.', s14()));
+        await include(store);
+        await waitFor(() => expect(store.getState().analysis.activeStream).toMatchObject({ haltCode: 'resume_required' }));
+        expect(gapOf(store, 3)).toEqual({ message: 'It failed before.' });
+      });
+
+      it('Re-analyse: S14 for a target the run flagged (chapter-failed) keeps the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(1, 1, 'Attribution collapsed.', s14()));
+        await reanalyse(store);
+        await waitFor(() => expect(store.getState().analysis.activeStream).toMatchObject({ haltCode: 'resume_required' }));
+        expect(gapOf(store, 1)).toEqual({ message: 'It failed before.' });
+      });
+
+      it('Re-analyse: a result for a target the run flagged (chapter-failed) leaves a gap with the flag', async () => {
+        const store = makeIncludeStore();
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(1, 1, 'Attribution collapsed.', subsetResponse));
+        await reanalyse(store);
+        await waitFor(() => expect(gapOf(store, 1)).toEqual({ message: 'Attribution collapsed.' }));
+      });
+
+      it('Include: a result for a target the run flagged (chapter-failed) leaves a gap with the flag', async () => {
+        const store = makeIncludeStore();
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(3, 1, 'Attribution collapsed.', subsetResponse));
+        await include(store);
+        await waitFor(() => expect(gapOf(store, 3)).toEqual({ message: 'Attribution collapsed.' }));
+      });
+
+      it('Re-analyse: cast_incomplete after the target’s own cast failed sets the gap', async () => {
+        const store = makeIncludeStore();
+        runAnalysisForChaptersSpy.mockImplementationOnce(
+          scripted(1, 0, 'Cast detection failed for this chapter.', new AnalysisError('Phase 0 paused.', 'cast_incomplete')),
+        );
+        await reanalyse(store);
+        await waitFor(() => expect(gapOf(store, 1)).toEqual({ message: 'Cast detection failed for this chapter.' }));
+      });
+
+      it('Include: a failed include POST leaves the chapter excluded, with no gap', async () => {
+        const store = makeIncludeStore();
+        setChapterExcludedSpy.mockRejectedValueOnce(new Error('include failed'));
+        await include(store);
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+        expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true);
+        expect(gapOf(store, 3)).toBeUndefined();
+      });
+
+      it('resume_required after a Phase 1 frame (S14: the target was attributed) clears the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(
+          async (_m: string, _ids: number[], opts: { onPhase?: (p: { phaseId: number; progress: number }) => void }) => {
+            opts.onPhase?.({ phaseId: 1, progress: 1 });
+            throw new AnalysisError('Chapter 1 re-analysed. Chapter 2 still needs attribution.', 'resume_required');
+          },
+        );
+        renderInclude(store);
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+        await waitFor(() => expect(store.getState().chapters.analysisGapById?.[1]).toBeUndefined());
+      });
+    });
+
+    it('Generate view: no Include rollback on resume_required — a neutral note with "Open analysis", and a halted snapshot', async () => {
+      const message =
+        'Chapter 3 re-analysed. Chapter 2 still needs attribution — resume the analysis to finish the book.';
+      const store = makeIncludeStore();
+      setChapterExcludedSpy.mockReset();
+      setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError(message, 'resume_required'));
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(setChapterExcludedSpy).not.toHaveBeenCalledWith('b1', 3, true);
+      expect(screen.getByRole('link', { name: /Open analysis/i })).toHaveAttribute('href', '#/books/b1/analysing');
+      expect(store.getState().analysis.activeStream).toMatchObject({ state: 'halted', haltCode: 'resume_required' });
+      expect(screen.queryByText(/Re-analysis failed/)).not.toBeInTheDocument();
+    });
+
+    it('Generate view: inline "Accept smaller cast" for a shrink re-runs the subset with allowStage1Shrink (an Include re-does the include first)', async () => {
+      const store = makeIncludeStore();
+      setChapterExcludedSpy.mockReset();
+      setChapterExcludedSpy.mockResolvedValue({ id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false });
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(
+        new AnalysisError('Cast finalisation would drop from 9 to 4 characters.', 'stage1_shrink_refused', undefined, 9, 4),
+      );
+      renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      const accept = await screen.findByRole('button', { name: /Accept smaller cast/i });
+      /* The include was rolled back, as for any failed include. */
+      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+      runAnalysisForChaptersSpy.mockReturnValueOnce(new Promise(() => {}));
+      fireEvent.click(accept);
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, false);
+      expect(runAnalysisForChaptersSpy.mock.calls[1][1]).toEqual([3]);
+      expect(runAnalysisForChaptersSpy.mock.calls[1][2]).toMatchObject({ allowStage1Shrink: true });
+      /* A shrink is not an analysis gap. */
+      expect(store.getState().chapters.analysisGapById?.[3]).toBeUndefined();
+    });
+
+    it('Generate view: "Accept smaller cast" on a Re-analyse shrink re-runs that Re-analyse with allowStage1Shrink', async () => {
+      const store = makeIncludeStore();
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(
+        new AnalysisError('Cast finalisation would drop from 9 to 4 characters.', 'stage1_shrink_refused', undefined, 9, 4),
+      );
+      renderInclude(store);
+      fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+      fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      const accept = await screen.findByRole('button', { name: /Accept smaller cast/i });
+      runAnalysisForChaptersSpy.mockReturnValueOnce(new Promise(() => {}));
+      fireEvent.click(accept);
+      await waitFor(() => expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(2));
+      expect(runAnalysisForChaptersSpy.mock.calls[1][1]).toEqual([1]);
+      expect(runAnalysisForChaptersSpy.mock.calls[1][2]).toMatchObject({ allowStage1Shrink: true });
+      /* A shrink is not an analysis gap. */
+      expect(store.getState().chapters.analysisGapById?.[1]).toBeUndefined();
+    });
+
+    it('a failed Include sets no gap on the chapter its rollback re-excluded; a failed rollback leaves it included, with a gap', async () => {
+      const store = makeIncludeStore();
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+      const { unmount } = renderInclude(store);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      expect(await screen.findByText('Re-analysis failed: The analyzer timed out.')).toBeInTheDocument();
+      expect(setChapterExcludedSpy).toHaveBeenLastCalledWith('b1', 3, true);
+      expect(store.getState().chapters.analysisGapById?.[3]).toBeUndefined();
+      unmount();
+
+      const store2 = makeIncludeStore();
+      setChapterExcludedSpy.mockImplementation(async (_b: string, _id: number, excluded: boolean) => {
+        if (excluded) throw new Error('rollback failed');
+        return { id: 3, title: 'Chapter 3', slug: '03-chapter-3', excluded: false };
+      });
+      runAnalysisForChaptersSpy.mockRejectedValueOnce(new AnalysisError('The analyzer timed out.', 'analyzer-timeout'));
+      renderInclude(store2);
+      fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      await waitFor(() =>
+        expect(store2.getState().chapters.analysisGapById?.[3]).toEqual({ message: 'The analyzer timed out.' }),
+      );
+    });
+
+    it('the gap note\'s Re-analyse is disabled with a visible "Pause the analysis first" while main is live', () => {
+      const store = makeIncludeStore();
+      store.dispatch(
+        chaptersSlice.actions.setAnalysisGap({ chapterId: 2, message: "Analysis didn't finish for this chapter." }),
+      );
+      store.dispatch(
+        analysisActions.setActiveStream({
+          bookId: 'b1',
+          manuscriptId: 'm1',
+          phaseId: 1,
+          phaseLabel: 'Parsing and attribution',
+          phaseProgress: 0.3,
+          remainingMs: null,
+          lastTickAt: Date.now(),
+          state: 'running',
+          kind: 'main',
+        }),
+      );
+      renderRows(store, [chapter1, chapter2, ch3Excluded]);
+      expect(screen.getByTestId('chapter-row-2-reanalyse')).toBeDisabled();
+      expect(
+        within(screen.getByTestId('chapter-row-2-analysis-gap')).getByText('Pause the analysis first'),
+      ).toBeInTheDocument();
+    });
   });
 });
 
@@ -2646,6 +3175,7 @@ describe('GenerationView — stuck-queued escape hatch + generated-time (side: s
   function makeViewStore(chapters: Chapter[]) {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -2756,6 +3286,7 @@ describe('GenerationView — Resume generation button (fe-17)', () => {
   function makeResumeStore(chapters: Chapter[]) {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -2914,6 +3445,7 @@ describe('GenerationView — srv-27 advisory QA badge', () => {
   function renderWithChapters(rows: Chapter[]) {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -3003,6 +3535,7 @@ describe('GenerationView — fe-29 More-help deep-link', () => {
     };
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
