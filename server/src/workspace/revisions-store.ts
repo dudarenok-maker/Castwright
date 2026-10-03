@@ -42,7 +42,9 @@ export interface StoredRevision {
   id: string; chapterId: number; characterId: string;
   triggeredBy?: string; triggeredAgo?: string; oldDuration?: string; newDuration?: string;
   confidence?: number; playable: boolean; hasPreviousAudio: boolean;
-  segments: unknown[]; origin?: 'server';
+  segments: unknown[];
+  /** Present (`'server'`) on entries the server recorded; absent on legacy client-written ones. */
+  origin?: 'server';
 }
 export interface StoredTimelineEntry {
   id: string; chapterId: number; characterId?: string;
