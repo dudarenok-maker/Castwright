@@ -1592,13 +1592,13 @@ describe('AnalysingView — failed-chapter retry', () => {
     expect(store.getState().analysis.activeStream).toEqual(prior);
   });
 
-  it.each(['http', 'sse'])(
-    'a 409 main_analysis_running keeps the row, shows the server message on it and restores the prior snapshot (%s form)',
+  it(
+    'a 409 main_analysis_running keeps the row, shows the server message on it and restores the prior snapshot',
     async () => {
-      /* Both forms reach the view as the same AnalysisError (api.ts maps the 409
-         body and the late-check SSE frame alike — pinned in
-         api-analysis-stream-errors.test.ts), so one rejection shape covers both;
-         the parametrisation pins that the view needs nothing per form. */
+      /* Both forms (the 409 body and the late-check SSE frame) reach the view as
+         the same AnalysisError (api.ts maps them alike — pinned in
+         api-analysis-stream-errors.test.ts), so one rejection shape covers both:
+         the view needs nothing per form. */
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       getBookStateImpl = () => Promise.resolve(makeBookState([44]));
       const store = configureStore({
