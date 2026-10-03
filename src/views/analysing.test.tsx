@@ -2453,6 +2453,34 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(store.getState().analysis.activeStream?.manuscriptId).toBe('m2');
     });
 
+    it.each([
+      ['main_analysis_running', true],
+      ['subset_in_progress', true],
+      ['analyzer-timeout', false],
+    ])('a Retry rejecting with %s after unmount leaves another book\'s snapshot alone', async (code) => {
+      const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
+      const { store, onComplete } = await mountAfterMainFailure(false);
+      cleanup();
+      const other = {
+        bookId: 'b2',
+        manuscriptId: 'm2',
+        engine: 'local',
+        phaseId: 0,
+        phaseLabel: 'Detecting characters',
+        phaseProgress: 0,
+        remainingMs: null,
+        lastTickAt: 1,
+        state: 'running' as const,
+      };
+      store.dispatch(analysisActions.setActiveStream(other as never));
+      await act(async () => {
+        rejectSubset?.(new AnalysisError('refused', code));
+      });
+      await settle();
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(store.getState().analysis.activeStream).toEqual(other);
+    });
+
     it('a Retry ending resume_required after a failed main run shows only the needs-action line, not the stale banner', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       const { onComplete } = await mountAfterMainFailure(false);

@@ -1078,6 +1078,9 @@ export function AnalysingView({
        stream that ends without a `result` drops the row only on this; a chapter
        the server never resolved still has its record, so its row stays. */
     let retryResolved = false;
+    const ownsSnapshot = () =>
+      mountedRef.current ||
+      store.getState().analysis.activeStream?.manuscriptId === manuscriptId;
     api
       .runAnalysisForChapters(manuscriptId, [chapterId], {
         model: requestModel,
@@ -1182,10 +1185,14 @@ export function AnalysingView({
           (err.code === 'subset_in_progress' || err.code === 'main_analysis_running')
         ) {
           subsetInProgressRef.current = true;
-          if (priorSnapshot) {
-            dispatch(analysisActions.setActiveStream(priorSnapshot));
-          } else {
-            dispatch(analysisActions.clearActiveStream());
+          /* After unmount the snapshot may be another book's: restore only
+             if it is still this Retry's. */
+          if (ownsSnapshot()) {
+            if (priorSnapshot) {
+              dispatch(analysisActions.setActiveStream(priorSnapshot));
+            } else {
+              dispatch(analysisActions.clearActiveStream());
+            }
           }
           setFailedChapters((prev) => {
             /* The refusal row replaces the failure row: it keeps that row's
@@ -1301,10 +1308,7 @@ export function AnalysingView({
            auto-resume effect handles its own next-step decisions. */
         /* After unmount the snapshot may belong to another book now: clear it
            only if it is still this Retry's. */
-        if (
-          mountedRef.current ||
-          store.getState().analysis.activeStream?.manuscriptId === manuscriptId
-        ) {
+        if (ownsSnapshot()) {
           dispatch(analysisActions.clearActiveStream());
         }
       });
