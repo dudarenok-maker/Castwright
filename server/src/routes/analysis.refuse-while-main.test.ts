@@ -399,7 +399,8 @@ const errorCodes = (events: CapturedEvent[]) => events.filter((e) => e.kind === 
 describe('every ending aborts in-flight work (#3435 decision E)', () => {
   it("a Phase-1 throw aborts the other in-flight chapter's call; that chapter is not cached and has no record", async () => {
     const chapterOneInFlight = gate();
-    const fallback = sleep(1500);
+    /* Only a hang bound: chapter 1 finishes by the job's abort, never by this timer. */
+    const fallback = sleep(8000);
     let chapterOneAborted = false;
     const r = await runMain('e-abort', BOTH_CAST, {
       phase1: {
@@ -415,10 +416,9 @@ describe('every ending aborts in-flight work (#3435 decision E)', () => {
         },
       },
     });
-    await sleep(1600);
+    await vi.waitFor(() => expect(chapterOneAborted).toBe(true), { timeout: 10_000 });
     expect(errorCodes(r.events)).toHaveLength(1);
     expect(errorCodes(r.events)[0]).not.toBe('aborted');
-    expect(chapterOneAborted).toBe(true);
     expect(r.job.controller.signal.aborted).toBe(true);
     const { loadAnalysisCache } = await import('../store/analysis-cache.js');
     const after = await loadAnalysisCache(r.manuscriptId);
@@ -665,7 +665,7 @@ describe('every ending aborts in-flight work (#3435 decision E)', () => {
             throw new Error('Phase 1 fails for chapter 2');
           }
           chapterOneInFlight.open();
-          return parkedCall(call, sleep(1500), () => stage2For(1));
+          return parkedCall(call, sleep(8000), () => stage2For(1));
         },
       },
       /* Hold the halting chapter's save open: an abort fired in the pool catch would make
