@@ -1864,7 +1864,13 @@ export async function runPipeline({ argv = [], cwd = process.cwd(), env = proces
     // Stat identity of the same files, for the #3413 post-run check: content
     // alone cannot tell an input that was edited and restored during a step
     // from one that never moved, a restore still moves mtime/ctime.
-    const statSig = files.map((rel) => `${rel}\0${statIdentity(join(cwd, rel))}`).join('\n');
+    // The lockfiles are hashed into currentHash too (pickLockHashes below), and
+    // for the lockfile-only audit steps they are the ONLY input, so they join
+    // the signature (#3413 review pass 2).
+    const lockRels = [];
+    if ((step.inputs.includeLockfiles ?? []).includes('root')) lockRels.push('package-lock.json');
+    if ((step.inputs.includeLockfiles ?? []).includes('server')) lockRels.push('server/package-lock.json');
+    const statSig = [...files, ...lockRels].map((rel) => `${rel}\0${statIdentity(join(cwd, rel))}`).join('\n');
     const lockHashes = pickLockHashes(cwd, step.inputs.includeLockfiles ?? []);
     const fp = step.toolFingerprint ? step.toolFingerprint() : null;
     const currentHash = composeInputHash({

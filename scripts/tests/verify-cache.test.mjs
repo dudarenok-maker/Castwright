@@ -2250,6 +2250,32 @@ test('runPipeline: a step that leaves its inputs alone is still cached (#3413 co
   );
 });
 
+// Castwright#3413 review pass 2: the external writer of an edit-and-restore
+// test. Every wait is bounded by a deadline that throws a clear message, so a
+// run that never starts the step fails the test instead of hanging it. The
+// promise is `.catch`-observed so an unawaited rejection can't crash the runner
+// when the caller bails out on run 1's assertion first.
+function abaWriter({ started, sawMutated, file, mutated, restored, deadlineMs = 15000 }) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const until = async (path, what) => {
+    const end = Date.now() + deadlineMs;
+    while (!existsSync(path)) {
+      if (Date.now() > end) throw new Error(`abaWriter: timed out waiting for ${what} (${path})`);
+      await sleep(20);
+    }
+  };
+  const p = (async () => {
+    await until(started, 'the step to start');
+    await sleep(100);
+    writeFileSync(file, mutated, 'utf8');
+    await until(sawMutated, 'the step to see the edit');
+    await sleep(100);
+    writeFileSync(file, restored, 'utf8');
+  })();
+  p.catch(() => {});
+  return p;
+}
+
 // Castwright#3413 review pass 1: an input edited AND restored while its own step
 // runs has the same CONTENT at step end as at step start, so a content-only
 // re-hash would cache it. The step below passes only because it saw `mutated`
@@ -2290,15 +2316,7 @@ process.exit(0);
     gitAt(dir, ['add', '.']);
     gitAt(dir, ['commit', '-q', '-m', 'fixture']);
 
-    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-    const writer = (async () => {
-      while (!existsSync(started)) await sleep(20);
-      await sleep(100);
-      writeFileSync(register, 'mutated', 'utf8');
-      while (!existsSync(sawMutated)) await sleep(20);
-      await sleep(100);
-      writeFileSync(register, 'orig', 'utf8');
-    })();
+    const writer = abaWriter({ started, sawMutated, file: register, mutated: 'mutated', restored: 'orig' });
 
     const run = async () => {
       const logs = [];
@@ -2316,13 +2334,87 @@ process.exit(0);
       }
     };
     const first = await run();
-    await writer;
+    // Assert run 1 BEFORE awaiting the writer: if run 1 never started the step,
+    // fail here with its log rather than waiting on a writer that never fires.
     assert.equal(first.result, 0, `run 1 must pass (the step saw the edit):\n${first.logs.join('\n')}`);
+    await writer;
     assert.equal(readFileSync(register, 'utf8'), 'orig', 'the register ends restored');
     const second = await run();
     assert.ok(
       !second.logs.some((l) => l.includes('[cached] check:onbox-register')),
       `the step exits 1 on the restored content; it must not be [cached]:\n${second.logs.join('\n')}`,
+    );
+    assert.equal(second.result, 1);
+  } finally {
+    rmSync(side, { recursive: true, force: true });
+  }
+});
+
+// Castwright#3413 review pass 2: `audit` has `globs: []`, so its lockfile is its
+// ONLY real input. The lockfile is hashed (pickLockHashes) but was not in the
+// stat signature, so an edit-and-restore of it mid-step was cached.
+test('runPipeline: a lockfile edited and restored while the audit step runs is not cached (#3413)', async () => {
+  const dir = makeGitFixture();
+  const side = mkdtempSync(join(tmpdir(), 'lockaba-side-'));
+  try {
+    const lock = join(dir, 'package-lock.json');
+    writeFileSync(lock, '{"v":"orig"}', 'utf8');
+    writeFileSync(join(dir, 'audit-waivers.json'), '[]', 'utf8');
+    const started = join(side, 'started');
+    const sawMutated = join(side, 'saw');
+    writeFileSync(
+      join(dir, 's.mjs'),
+      `import { readFileSync, writeFileSync } from 'node:fs';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+writeFileSync(${JSON.stringify(started)}, '1');
+let ok = false;
+for (let i = 0; i < 100; i++) { if (readFileSync(${JSON.stringify(lock)}, 'utf8').includes('mutated')) { ok = true; break; } await sleep(50); }
+if (!ok) process.exit(1);
+writeFileSync(${JSON.stringify(sawMutated)}, '1');
+for (let i = 0; i < 100; i++) { if (readFileSync(${JSON.stringify(lock)}, 'utf8').includes('orig')) break; await sleep(50); }
+process.exit(0);
+`,
+      'utf8',
+    );
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'lockaba-fixture', private: true, scripts: { audit: 'node s.mjs' } }),
+      'utf8',
+    );
+    gitAt(dir, ['add', '.']);
+    gitAt(dir, ['commit', '-q', '-m', 'fixture']);
+
+    const writer = abaWriter({ started, sawMutated, file: lock, mutated: '{"v":"mutated"}', restored: '{"v":"orig"}' });
+    const run = async () => {
+      const logs = [];
+      const originalLog = console.log;
+      console.log = (...args) => logs.push(args.join(' '));
+      try {
+        const result = await runPipeline({
+          argv: ['--steps', 'audit'],
+          cwd: dir,
+          env: { ...scrubGitEnvForThrowawayRepo(process.env), SKIP_CONTENTION_CHECK: '1' },
+        });
+        return { result, logs };
+      } finally {
+        console.log = originalLog;
+      }
+    };
+    const first = await run();
+    assert.equal(first.result, 0, `run 1 must pass (the step saw the edit):\n${first.logs.join('\n')}`);
+    await writer;
+    assert.equal(readFileSync(lock, 'utf8'), '{"v":"orig"}', 'the lockfile ends restored');
+    assert.ok(
+      first.logs.some((l) => l.includes('audit inputs changed while it ran; not caching')),
+      `run 1 must log the not-caching line:\n${first.logs.join('\n')}`,
+    );
+    const cacheFile = join(dir, _internals.CACHE_FILENAME);
+    const entry = existsSync(cacheFile) ? JSON.parse(readFileSync(cacheFile, 'utf8')).steps?.audit : undefined;
+    assert.equal(entry, undefined, 'no cache entry may be written for the lockfile-ABA step');
+    const second = await run();
+    assert.ok(
+      !second.logs.some((l) => l.includes('[cached] audit')),
+      `the step exits 1 on the restored lockfile; it must not be [cached]:\n${second.logs.join('\n')}`,
     );
     assert.equal(second.result, 1);
   } finally {

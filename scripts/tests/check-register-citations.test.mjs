@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { makeScratchRepo } from '../lib/scratch-repo.mjs';
+import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 import {
   parseRegisterRows,
   isFrozenPath,
@@ -33,7 +34,15 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-register-citations.mjs');
 
 function runCli(args, cliPath = CLI_PATH) {
-  return spawnSync(process.execPath, [cliPath, ...args], { encoding: 'utf8', timeout: 60000, windowsHide: true });
+  // The real CLI scans the real repo (ambient git env honoured); any other
+  // cliPath is a scratch-repo copy, where an inherited GIT_INDEX_FILE would be
+  // the real index.
+  return spawnSync(process.execPath, [cliPath, ...args], {
+    encoding: 'utf8',
+    timeout: 60000,
+    windowsHide: true,
+    env: cliPath === CLI_PATH ? process.env : scrubGitEnvForThrowawayRepo(),
+  });
 }
 
 // #3413 — the CLI mutation tests below used to rewrite the real tracked CLI /
