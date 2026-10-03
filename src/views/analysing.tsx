@@ -929,7 +929,9 @@ export function AnalysingView({
           }
         }
         const failedIds = res.analysis?.failedChapterIds ?? [];
-        if (failedIds.length === 0) return;
+        /* #3435 — a refresh is the server's current view of the rows: one it no
+           longer reports drops, even when it reports none. */
+        if (failedIds.length === 0 && isMountRead) return;
         const errorById = res.analysis?.failedChapterErrors ?? {};
         setFailedChapters((prev) => {
           /* Merge with whatever the SSE already pushed during this session
@@ -938,8 +940,14 @@ export function AnalysingView({
           const liveById = new Map(prev.map((f) => [f.chapterId, f]));
           return failedIds.map((id) => {
             const live = liveById.get(id);
-            if (live) return live;
             const record = errorById[String(id)];
+            if (live) {
+              /* #3435 — on a refresh a kept row takes the server's phase; it
+                 keeps its own message (a live one, e.g. a refused Retry's, is
+                 more useful than the stored record's). */
+              if (isMountRead || !record?.phase) return live;
+              return { ...live, phase: record.phase };
+            }
             if (record) {
               return {
                 chapterId: id,

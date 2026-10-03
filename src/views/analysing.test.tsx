@@ -2447,6 +2447,55 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(screen.queryByText('Attributed when you resume the analysis.')).not.toBeInTheDocument();
     });
 
+    /* #3435 final review M4 — a refresh (not the mount hydrate) is the server's
+       current view of the rows: a row it no longer reports drops, and a row
+       it still reports takes the server's phase. */
+    async function startThenPause(next: BookStateResponse) {
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /start analysis/i }));
+      });
+      await waitFor(() => expect(capturedOpts).toBeDefined());
+      bookState = next;
+      const callsBefore = bookStateCalls;
+      await act(async () => {
+        fireEvent.click(screen.getAllByRole('button', { name: /pause analysis/i })[0]);
+      });
+      await waitFor(() => expect(bookStateCalls).toBeGreaterThan(callsBefore));
+      await settle();
+    }
+
+    it('M4: a refresh that reports no failed chapters drops the rows', async () => {
+      bookState = withFacts(makeBookState([49], { '49': rec('attribution') }), { stage1Ready: false });
+      await mount();
+      expect(await screen.findByText('Chapter Forty-Seven')).toBeInTheDocument();
+      await startThenPause(withFacts(makeBookState([]), { stage1Ready: true }));
+      expect(screen.queryByText('Chapter Forty-Seven')).not.toBeInTheDocument();
+    });
+
+    it('M4: a refresh drops a row the server no longer reports and keeps the one it does', async () => {
+      bookState = withFacts(makeBookState([44, 49], { '44': rec('attribution'), '49': rec('attribution') }), {
+        stage1Ready: false,
+      });
+      await mount();
+      expect(await screen.findByText('Chapter Forty-Two')).toBeInTheDocument();
+      await startThenPause(withFacts(makeBookState([49], { '49': rec('attribution') }), { stage1Ready: false }));
+      expect(screen.queryByText('Chapter Forty-Two')).not.toBeInTheDocument();
+      expect(screen.getByText('Chapter Forty-Seven')).toBeInTheDocument();
+    });
+
+    it('M4: a refresh gives a kept row the server phase; with no server record it keeps the row message', async () => {
+      bookState = withFacts(makeBookState([44, 49], { '44': rec('attribution'), '49': rec('attribution', 'Kept message.') }), {
+        stage1Ready: false,
+      });
+      await mount();
+      expect(await screen.findByText('Speaker attribution failed on 2 chapters.')).toBeInTheDocument();
+      const next = withFacts(makeBookState([44, 49], { '44': rec('cast') }), { stage1Ready: false });
+      await startThenPause(next);
+      /* Mixed: chapter 44 took the server's cast phase. */
+      expect(screen.getByText('2 chapters failed.')).toBeInTheDocument();
+      expect(screen.getByText('Kept message.')).toBeInTheDocument();
+    });
+
     it('A8: a Retry ending resume_required keeps the halted snapshot; the needs-action line reads its haltReason', async () => {
       const { AnalysisError } = await vi.importActual<typeof import('../lib/api')>('../lib/api');
       bookState = withFacts(makeBookState([44], { '44': rec('attribution') }), { stage1Ready: true });
