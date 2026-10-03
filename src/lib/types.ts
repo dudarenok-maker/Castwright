@@ -78,6 +78,8 @@ export type AnalyseResponse = components['schemas']['AnalyseResponse'];
 export type VoiceMatchResponse = components['schemas']['VoiceMatchResponse'];
 export type RevisionsResponse = components['schemas']['RevisionsResponse'];
 export type BulkRevisionsResponse = components['schemas']['BulkRevisionsResponse'];
+/** Plan 285 — the A/B review intent a queue entry / generation request carries. */
+export type ReviewRequest = components['schemas']['ReviewRequest'];
 export type VoiceSample = components['schemas']['VoiceSample'];
 export type VoiceSampleRequest = components['schemas']['VoiceSampleRequest'];
 export type TtsModelKey = NonNullable<VoiceSampleRequest['modelKey']>;

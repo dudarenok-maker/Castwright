@@ -1789,12 +1789,31 @@ paths:
                 force:
                   type: boolean
                   description: Re-synthesise even if an audio file already exists on disk.
+                review:
+                  allOf:
+                    - $ref: '#/components/schemas/ReviewRequest'
+                  description: |
+                    Plan 285 — present only on a single-chapter A/B review render.
+                    A request carrying `review` that does not name exactly one
+                    chapter gets a 400 before any SSE header is sent. The chapter
+                    actually rendered with it gets `reviewChapter: true` on its
+                    `chapter_complete` (never a replayed done chapter). Not sent
+                    by the client until PR 2.
       responses:
         '200':
           description: Tick stream
           content:
             text/event-stream:
               schema: { $ref: '#/components/schemas/GenerationTick' }
+        '400':
+          description: '`review` is malformed (`invalid_review`) or does not name exactly one chapter (`review_requires_single_chapter`).'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  message: { type: string }
 
   /api/books/{bookId}/chapters/{chapterId}/splice:
     post:
@@ -1856,6 +1875,9 @@ paths:
                   durationSec: { type: number }
                   segmentCount: { type: integer }
                   hasPreviousAudio: { type: boolean }
+                  reviewRecorded:
+                    type: boolean
+                    description: Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live).
                   progress: { type: number }
                   errorReason: { type: string }
                   code:
@@ -1952,6 +1974,9 @@ paths:
                   durationSec: { type: number }
                   segmentCount: { type: integer }
                   hasPreviousAudio: { type: boolean }
+                  reviewRecorded:
+                    type: boolean
+                    description: Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live).
                   progress: { type: number }
                   errorReason: { type: string }
                   code:
@@ -2830,6 +2855,118 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RevisionsResponse' }
 
+  /api/books/{bookId}/revisions/{revisionId}/accept:
+    post:
+      summary: Accept a pending A/B revision — keep the new take (plan 285)
+      operationId: acceptRevision
+      description: |
+        One request runs the audio step (delete the chapter's `.previous.*`
+        pair — today's code) and then records the outcome in revisions.json
+        under the per-book revisions lock; the JSON is written only after the
+        audio step. Idempotent on the revision id. Refuses with 409
+        `live_audio_missing` when the chapter has no live audio but still has a
+        `.previous` take (accepting would delete the only copy — retry Reject).
+        No client caller until PR 2.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: revisionId, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                selection:
+                  type: object
+                  description: segmentIndex (a canonical non-negative integer key) → 'A' | 'B'.
+                  additionalProperties: { type: string, enum: [A, B] }
+      responses:
+        '200':
+          description: Accepted (or already accepted).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionsState' }
+        '400':
+          description: '`invalid_selection`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '404':
+          description: '`book_not_found` or `revision_not_found`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '409':
+          description: '`live_audio_missing` or `revision_gone`; the body carries the current state.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '500':
+          description: Unexpected failure (a lock-acquisition timeout carries the curated contention message).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+
+  /api/books/{bookId}/revisions/{revisionId}/reject:
+    post:
+      summary: Reject a pending A/B revision — restore the earlier take (plan 285)
+      operationId: rejectRevision
+      description: |
+        One request runs the audio step (promote `.previous.*` over the live
+        names — today's code) and then records the outcome. The JSON is
+        untouched when the request is refused as busy, finds no `.previous`, or
+        the audio step throws. No client caller until PR 2.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: revisionId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Rejected (or already rejected).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionsState' }
+        '404':
+          description: '`book_not_found` or `revision_not_found`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '409':
+          description: '`chapter_busy`, `no_previous_audio` or `revision_gone`; the body carries the current state.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '500':
+          description: '`restore_failed` (the audio step threw — retry Reject), or an unexpected failure.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+
+  /api/books/{bookId}/drift/{driftId}/dismiss:
+    post:
+      summary: Dismiss a drift event (plan 285)
+      operationId: dismissDrift
+      description: Adds the id to revisions.json's `dismissed`. Idempotent; touches no audio. No client caller until PR 2.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: driftId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The full revisions state after the dismiss.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionsState' }
+        '404':
+          description: '`book_not_found`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '500':
+          description: Unexpected failure (a lock-acquisition timeout carries the curated contention message).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+
   /api/revisions:
     get:
       summary: Bulk pending A/B revisions + voice-drift events across books (plan 83)
@@ -2839,6 +2976,7 @@ paths:
         poll (120 s tick) — the active book keeps using `pollRevisions`
         above. Skips any bookId that doesn't exist on disk rather than
         404ing, so one removed book doesn't take down the whole poll.
+        Plan 285 — each value carries exactly `pending` (read through the server store, normalised) and `drift`.
       parameters:
         - in: query
           name: bookIds
@@ -5910,6 +6048,17 @@ components:
             srv-27 — Only on `chapter_complete` — the advisory post-synthesis
             QA verdict, so the frontend can stamp a "Suspect" badge the moment
             the Done pill flips without a state.json reload.
+        reviewChapter:
+          type: boolean
+          description: |
+            Plan 285 — only on a live `chapter_complete` for the chapter actually
+            rendered with a request `review` (never on a replayed done chapter).
+        reviewRecorded:
+          type: boolean
+          description: |
+            Plan 285 — only on `chapter_complete` when finalize was asked to
+            record A/B review state; false when that record failed (the new take
+            is still live).
         errorReason: { type: string, nullable: true }
         errorCode:
           allOf:
@@ -6041,6 +6190,10 @@ components:
             Loud-fallback gate — true once the user confirmed this entry's
             Qwen→Kokoro fallback, so the worker renders it straight through on
             re-dispatch instead of re-parking it.
+        review:
+          allOf:
+            - $ref: '#/components/schemas/ReviewRequest'
+          description: Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2.
         parkedAt:
           type: string
           format: date-time
@@ -6129,6 +6282,10 @@ components:
             Qwen→Kokoro fallback (e.g. the voice-readiness gate's "proceed
             anyway"), so the per-chapter `awaiting_confirm` gate doesn't
             re-prompt for it.
+        review:
+          allOf:
+            - $ref: '#/components/schemas/ReviewRequest'
+          description: Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2.
 
     QueueReorderRequest:
       type: object
@@ -6858,15 +7015,28 @@ components:
           additionalProperties:
             type: array
             items: { $ref: '#/components/schemas/TimelineEntry' }
+        bookId: { type: string }
+        fileId:
+          type: string
+          nullable: true
+          description: Plan 285 — see RevisionsState.fileId. Optional here; the bulk values omit it.
+        rev: { type: integer, minimum: 0 }
+        dismissed:
+          type: array
+          items: { type: string }
+        acceptedSelections:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: { type: string, enum: [A, B] }
 
     BulkRevisionsResponse:
       description: |
-        Response of `GET /api/revisions?bookIds=...` (plan 83). Each value
-        is the same per-book computation as `RevisionsResponse` — neither
-        the bulk route nor the single-book `GET /:bookId/revisions` route
-        computes or returns `timeline` (only the disk-hydrate response from
-        `GET /book-state` does) — bookIds that don't exist on disk are
-        simply omitted from the map.
+        Response of `GET /api/revisions?bookIds=...` (plan 83). Each value is
+        `{ pending, drift }` for that book — pending read through the server
+        store (plan 285, normalised) — and bookIds that don't exist on disk are
+        simply omitted from the map. The single-book `GET /:bookId/revisions`
+        additionally returns the whole RevisionsState.
       type: object
       required: [byBookId]
       properties:
@@ -6946,6 +7116,10 @@ components:
             (no .previous.* pair was preserved). The a/b player renders
             "Original audio not preserved — review by metadata only" on
             the A card when this is false.
+        origin:
+          type: string
+          enum: [server]
+          description: Plan 285 — present on entries the server recorded; absent on legacy client-written ones.
         segments:
           type: array
           items:
@@ -6957,6 +7131,60 @@ components:
               newDuration: { type: string }
               changed: { type: boolean }
               narratorOnly: { type: boolean }
+
+    RevisionsState:
+      type: object
+      description: |
+        Plan 285 — a book's revisions.json as the server store holds it,
+        answered by every revisions operation. `fileId` changes on every reset
+        (reparse / manuscript replace) and is null only for a legacy file the
+        store has never written; `rev` increments on every write within one
+        `fileId`.
+      required: [bookId, fileId, rev, pending, dismissed, acceptedSelections, timeline]
+      properties:
+        bookId: { type: string }
+        fileId:
+          type: string
+          nullable: true
+          description: '`${epochMs zero-padded to 15 digits}-${random}`.'
+        rev: { type: integer, minimum: 0 }
+        pending:
+          type: array
+          items: { $ref: '#/components/schemas/Revision' }
+        dismissed:
+          type: array
+          items: { type: string }
+        acceptedSelections:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: { type: string, enum: [A, B] }
+        timeline:
+          type: object
+          additionalProperties:
+            type: array
+            items: { $ref: '#/components/schemas/TimelineEntry' }
+
+    RevisionOpError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: |
+            A machine-readable code — `invalid_selection`, `book_not_found`,
+            `revision_not_found`, `chapter_busy`, `no_previous_audio`,
+            `live_audio_missing`, `revision_gone`, `restore_failed` — or, on an
+            unexpected 500, the curated failure message.
+        message: { type: string }
+        state: { $ref: '#/components/schemas/RevisionsState' }
+
+    ReviewRequest:
+      type: object
+      required: [characterId, triggeredBy]
+      properties:
+        characterId: { type: string }
+        triggeredBy: { type: string }
 
     DriftEvent:
       type: object
@@ -8102,6 +8330,16 @@ components:
               type: object
               additionalProperties: true
               description: revisionId → { segmentIndex → 'A' | 'B' } captured at accept time.
+            timeline:
+              type: object
+              additionalProperties:
+                type: array
+                items: { $ref: '#/components/schemas/TimelineEntry' }
+            fileId:
+              type: string
+              nullable: true
+              description: Plan 285 — absent on a legacy file (PR 1 returns revisions.json raw).
+            rev: { type: integer }
         completedSlugs:
           type: array
           items: { type: string }

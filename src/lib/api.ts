@@ -661,6 +661,8 @@ export type SpliceTick =
       durationSec: number;
       segmentCount: number;
       hasPreviousAudio: boolean;
+      /** Plan 285 — present only when finalize recorded (or failed to record) A/B review state. */
+      reviewRecorded?: boolean;
     }
   | { type: 'chapter_failed'; chapterId?: number; errorReason: string };
 
@@ -704,6 +706,8 @@ export type QaRepairTick =
       repaired?: number[];
       stillSuspect?: number[];
       durationSec?: number;
+      /** Plan 285 — present only when finalize recorded (or failed to record) A/B review state. */
+      reviewRecorded?: boolean;
     }
   | { type: 'chapter_failed'; chapterId?: number; errorReason: string };
 
