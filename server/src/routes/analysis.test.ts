@@ -9947,6 +9947,8 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
     interface SubsetOpts extends Pick<RunOpts, 'stage2'> {
       /** Sees every cache save, with the running job and its manuscript record. */
       saveHook?: (c: SaveSnapshot, ctx: { job: AnalysisJob; record: { chapterHints: ChapterHint[] } }) => void;
+      /** Sees every event the job sends, with the running job. */
+      onEvent?: (ev: { kind: string; [k: string]: unknown }, job: AnalysisJob) => void;
     }
     async function runSubset(book: Book, targets: number[], opts: SubsetOpts = {}) {
       const stage2Calls: number[] = [];
@@ -9973,10 +9975,17 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
       const events: Array<{ kind: string; [k: string]: unknown }> = [];
       const keepAlive = setInterval(() => {}, 1_000_000);
       clearInterval(keepAlive);
-      const job = {
+      const job: AnalysisJob = {
         controller: new AbortController(),
         subscribers: new Set([
-          { send: (p: unknown) => events.push(p as { kind: string }), res: { end: () => {} }, keepAlive },
+          {
+            send: (p: unknown) => {
+              events.push(p as { kind: string });
+              opts.onEvent?.(p as { kind: string }, job);
+            },
+            res: { end: () => {} },
+            keepAlive,
+          },
         ]),
         manuscriptId: book.manuscriptId,
         kind: 'subset',
@@ -10141,9 +10150,10 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
         expect(JSON.parse(readFileSync(snapshotFile(mainBook), 'utf8')).kind).toBe('main');
       }, 60_000);
 
-      /* Both shapes: on a finished book the pre-persist check decides it; on an
-         unfinished one (chapter 3 has no take) only the post-loop check stops the
-         run before S14 would end it `resume_required` (review fix round 1). */
+      /* Both shapes, Pause at the target's take save (before the loop ends): the
+         post-loop check stops the run. On the unfinished book (chapter 3 has no
+         take) S14 would otherwise end it `resume_required`. The fold-window
+         Pause, which only the pre-persist check catches, is the next test. */
       for (const [shape, seed] of [
         ['a finished book', () => finishedCache(three)],
         ['an unfinished book', () => gapCache()],
@@ -10170,6 +10180,37 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
           expect(r.after.takesPersisted).toBe(false);
         }, 60_000);
       }
+
+      it('A18 (S14a): a Pause that lands in the fold window, after the post-loop check, ends the job aborted with no persist and no result', async () => {
+        const book = makeBook('gate-s14a-fold', three);
+        /* A cast member with verifiable evidence but no attributed lines: the
+           fold drops it and logs "Dropped 1 non-speaking character", which is
+           sent between the post-loop check and the persist. */
+        const silent: CharacterOutput = {
+          id: 'mara',
+          name: 'Mara',
+          role: 'character',
+          color: '#abc',
+          evidence: [{ quote: 'Mara opened the door' }],
+        };
+        await saveAnalysisCache(book.manuscriptId, {
+          ...finishedCache(three),
+          chapterCast: { 1: [...roster(), silent], 2: roster(), 3: roster() },
+        });
+        let paused = false;
+        const r = await runSubset(book, [2], {
+          onEvent: (ev, job) => {
+            if (!paused && ev.kind === 'log' && /^Dropped \d+ non-speaking/.test(String(ev.message))) {
+              paused = true;
+              job.controller.abort();
+            }
+          },
+        });
+        expect(paused).toBe(true);
+        expect(endings(r.events)).toEqual(['error:aborted']);
+        expect(r.state.analysisProvenance).toBeUndefined();
+        expect(r.after.takesPersisted).toBe(false);
+      }, 60_000);
 
       it('decision F: an interrupted Re-analyse on a castConfirmed book (S11) leaves the library status unchanged and lists the chapter in unattributedChapterIds or failedChapterErrors', async () => {
         const book = makeBook('gate-decision-f', three, { castConfirmed: true });

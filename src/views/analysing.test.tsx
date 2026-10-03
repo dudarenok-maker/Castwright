@@ -2306,6 +2306,10 @@ describe('AnalysingView — failed-chapter retry', () => {
         );
       });
       await waitFor(() => expect(capturedOpts).toBeDefined());
+      await settle();
+      /* The Start, then exactly one auto-resume POST, which is not aborted. */
+      expect(analyseManuscriptCalls).toHaveLength(2);
+      expect(analyseManuscriptCalls[1]?.aborted).toBe(false);
     });
 
     it('unarmed resume_required: the needs-action line, "Resume analysis", and no main POST', async () => {

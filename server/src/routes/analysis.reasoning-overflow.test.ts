@@ -1969,6 +1969,12 @@ describe('the subset route: failure records vs the Phase-1 gate, soft stops and 
 });
 
 describe('castIncompleteMessage (#3435 S5 copy)', () => {
+  it('agrees with a single title', async () => {
+    const { castIncompleteMessage } = await import('./analysis.js');
+    expect(castIncompleteMessage(['A'])).toBe(
+      'Phase 0 paused — 1 chapter still needs cast detection (A). Retry to continue.',
+    );
+  });
   it('lists up to three titles, location-neutral', async () => {
     const { castIncompleteMessage } = await import('./analysis.js');
     expect(castIncompleteMessage(['A', 'B', 'C'])).toBe(
@@ -2132,6 +2138,48 @@ describe('the subset result gate: S8 and S14 end resume_required on an unfinishe
     expect(endings(r.steps[2])).toEqual(['result']);
     expect(r.after.pendingAttributionChapterIds ?? []).toEqual([]);
     expect(r.after.takesPersisted).toBe(true);
+  }, 60_000);
+
+  it('S14 with two chapters missing: the message and the log line use the plural', async () => {
+    const r = await runGate(
+      's14-plural',
+      {
+        stage1: STAGE1,
+        chapterCast: { 1: [novaCharacter()], 2: [novaCharacter()], 3: [novaCharacter()] },
+        chapters: {},
+      },
+      [{ subset: [1] }],
+    );
+    expect(endings(r.steps[0])).toEqual(['error:resume_required']);
+    expect(String(r.steps[0].find((e) => e.kind === 'error')!.message)).toBe(
+      'Chapter One re-analysed. Chapter Two, Chapter Three still need attribution — resume the analysis to finish the book.',
+    );
+    expect(
+      r.steps[0].some(
+        (e) =>
+          e.kind === 'log' &&
+          e.message === '2 other chapters still need attribution — resume the analysis to finish the book.',
+      ),
+    ).toBe(true);
+  }, 60_000);
+
+  it('S14 with one chapter missing: the log line uses the singular', async () => {
+    const r = await runGate(
+      's14-singular-log',
+      {
+        stage1: STAGE1,
+        chapterCast: { 1: [novaCharacter()], 2: [novaCharacter()], 3: [novaCharacter()] },
+        chapters: { 1: takeOf(1) },
+      },
+      [{ subset: [2] }],
+    );
+    expect(
+      r.steps[0].some(
+        (e) =>
+          e.kind === 'log' &&
+          e.message === '1 other chapter still needs attribution — resume the analysis to finish the book.',
+      ),
+    ).toBe(true);
   }, 60_000);
 
   it('P-beta (server): with no stage1, a Retry whose cast detection completes the book ends resume_required (S8), not silently', async () => {

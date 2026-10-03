@@ -1394,7 +1394,7 @@ export function durationsForEngine(
    "retry below"; the title list is capped so a many-chapter book can't
    produce a paragraph. Exported for unit testing. */
 export function castIncompleteMessage(titles: string[]): string {
-  return `Phase 0 paused — ${titles.length} chapter${titles.length === 1 ? '' : 's'} still need cast detection (${titleList(titles)}). Retry to continue.`;
+  return `Phase 0 paused — ${titles.length} chapter${titles.length === 1 ? ' still needs' : 's still need'} cast detection (${titleList(titles)}). Retry to continue.`;
 }
 
 /* Up to three titles, then "and N more", so a many-chapter book can't produce
@@ -5401,7 +5401,7 @@ export async function runMainAnalyzerJob(
           phase0FailedCount = failedCount;
           log(
             0,
-            `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? '' : 's'} still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.`,
+            `Phase 0 paused — ${failedCount} chapter${failedCount === 1 ? ' still needs' : 's still need'} cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.`,
           );
           send({
             kind: 'phase',
@@ -8174,7 +8174,7 @@ export async function runSubsetAnalyzerJob(
       const covered = coverage.totalRequired - coverage.missingChapterIds.length;
       log(
         0,
-        `Cast finalisation deferred — ${coverage.missingChapterIds.length} non-excluded chapter${coverage.missingChapterIds.length === 1 ? '' : 's'} still need Phase 0a detection (${covered}/${coverage.totalRequired} covered). Existing stage1 left intact; run the main analysis to fill the gaps.`,
+        `Cast finalisation deferred — ${coverage.missingChapterIds.length} non-excluded chapter${coverage.missingChapterIds.length === 1 ? ' still needs' : 's still need'} Phase 0a detection (${covered}/${coverage.totalRequired} covered). Existing stage1 left intact; run the main analysis to fill the gaps.`,
       );
       coverageIncompleteMessage = `Phase 0a covers ${covered} of ${coverage.totalRequired} chapters — run main analysis to detect the rest before stage1 can finalise.`;
     }
@@ -8202,7 +8202,7 @@ export async function runSubsetAnalyzerJob(
     if (remainingFailedCastIds.length > 0) {
       log(
         0,
-        `Cast retry done. ${remainingFailedCastIds.length} chapter${remainingFailedCastIds.length === 1 ? '' : 's'} still need retry before Phase 1 can run.`,
+        `Cast retry done. ${remainingFailedCastIds.length} chapter${remainingFailedCastIds.length === 1 ? ' still needs' : 's still need'} a retry before Phase 1 can run.`,
       );
       /* #3435 S5 — a gate exit is an outcome the user must hear about, so it
          ends through endJob with a final event (and the halted snapshot that
