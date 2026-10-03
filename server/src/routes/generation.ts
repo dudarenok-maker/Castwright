@@ -101,6 +101,7 @@ import { configValue } from '../config/resolver.js';
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
 import { setActiveGenerationBooksProvider } from '../gpu/active-generation-gate.js';
 import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
+import { parseReviewRequest, INVALID_REVIEW, type ReviewRequest } from './review-request.js';
 
 export const generationRouter = Router();
 
@@ -383,6 +384,10 @@ interface RunningJob {
       gate (renders straight through) for a confirmed entry, so a confirm →
       re-claim → re-enter cycle doesn't re-prompt. Default false. */
   fallbackConfirmed: boolean;
+  /** Plan 285 — the request's A/B review intent (null when absent). Stamps
+      `reviewChapter: true` on THIS job's live chapter_complete. Not yet passed
+      to finalize (PR 2). */
+  review: ReviewRequest | null;
   /** The chapter the loop is currently synthesising. Set at the top of
       each loop iteration and cleared on chapter_complete / break. Used
       by the catch-up replay so a post-reload subscriber's UI immediately
@@ -580,6 +585,7 @@ export function __registerFakeJobForTest(
     chapterId: null,
     queueEntryId: null,
     fallbackConfirmed: false,
+    review: null,
     currentChapterId: null,
     lastProgressTick: null,
     runTotal: 0,
@@ -711,11 +717,33 @@ interface GenerationRequestBody {
       the user has CONFIRMED for Qwen→Kokoro fallback, so the worker renders
       straight through instead of re-parking it. Optional / back-compat. */
   fallbackConfirmed?: unknown;
+  /** Plan 285 — see ReviewRequest. */
+  review?: unknown;
 }
 
 generationRouter.post('/:bookId/generation', async (req: Request, res: Response) => {
   const { bookId } = req.params;
   const body = (req.body ?? {}) as GenerationRequestBody;
+
+  /* Plan 285 — a review render must name exactly one chapter. Rejected with a
+     JSON 400 BEFORE the SSE headers flush; the client already turns a non-OK
+     response into chapter_failed + idle (api.ts realStreamGeneration). */
+  const parsedReview = parseReviewRequest(body.review);
+  if (parsedReview === INVALID_REVIEW) {
+    return res
+      .status(400)
+      .json({ error: 'invalid_review', message: 'review must be { characterId, triggeredBy }.' });
+  }
+  if (parsedReview !== undefined) {
+    const ids = Array.isArray(body.chapterIds) ? body.chapterIds : [];
+    if (ids.length !== 1 || typeof ids[0] !== 'number' || !Number.isInteger(ids[0])) {
+      return res.status(400).json({
+        error: 'review_requires_single_chapter',
+        message: 'A review render must name exactly one chapter.',
+      });
+    }
+  }
+  const review: ReviewRequest | null = parsedReview ?? null;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -1286,6 +1314,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     chapterId: jobChapterId,
     queueEntryId,
     fallbackConfirmed,
+    review,
     currentChapterId: null,
     lastProgressTick: null,
     runTotal: nonExcluded.length,
@@ -2065,6 +2094,9 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         audioQa,
         /* Plan 285 — present only when finalize was asked to record review state. */
         ...(reviewRecorded === undefined ? {} : { reviewRecorded }),
+        /* Plan 285 — only the chapter actually rendered with `review`; the
+           replay loop above never carries it. */
+        ...(job.review !== null && job.chapterId === chapter.id ? { reviewChapter: true } : {}),
       });
 
       /* srv-16 — server-authoritative completion. The chapter is rendered +

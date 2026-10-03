@@ -2395,4 +2395,51 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
     expect(line, res.text).toBeTruthy();
     expect(line).not.toContain('reviewRecorded');
   });
+
+  const REVIEW = { characterId: 'narrator', triggeredBy: 'Narrator voice change' };
+
+  it('400 before any SSE header when review names ≠ 1 chapter, or is malformed', async () => {
+    for (const body of [
+      { modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1, 2], review: REVIEW },
+      { modelKey: 'gemini-2.5-flash', force: true, review: REVIEW },
+      { modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1], review: { characterId: 'narrator' } },
+    ]) {
+      const res = await request(app).post(`/api/books/${bookId}/generation`).send(body);
+      expect(res.status).toBe(400);
+      expect(res.headers['content-type']).toMatch(/application\/json/);
+      expect(['review_requires_single_chapter', 'invalid_review']).toContain(res.body.error);
+    }
+  });
+
+  it('reviewChapter:true only on the chapter rendered with review — never a replay — and finalize still gets no review', async () => {
+    const fs = await import('node:fs');
+    const audioRoot = join(bookDir, 'audio');
+    fs.mkdirSync(audioRoot, { recursive: true });
+    fs.writeFileSync(join(audioRoot, '02-chapter-two.mp3'), 'DONE-CH2'); // replayed as done
+    const fin = await import('../audio/finalize-chapter-write.js');
+    const spy = vi.mocked(fin.finalizeChapterAudioWrite);
+    spy.mockClear();
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1], review: REVIEW });
+    expect(res.status).toBe(200);
+    const ticks = parseTicks(res.text);
+    const ch1 = ticks.find((t) => t.type === 'chapter_complete' && t.chapterId === 1);
+    const ch2 = ticks.find((t) => t.type === 'chapter_complete' && t.chapterId === 2);
+    expect(ch1, `expected chapter_complete ch1, got ${res.text}`).toBeTruthy();
+    expect(ch2, `expected replayed chapter_complete ch2, got ${res.text}`).toBeTruthy();
+    expect(ch1!.reviewChapter).toBe(true);
+    expect(ch2).not.toHaveProperty('reviewChapter');
+    expect('review' in spy.mock.calls[0][0]).toBe(false);
+  });
+
+  it('the chapter_complete line carries no reviewChapter without review', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
+    const line = completeLine(res.text, 1);
+    expect(line, res.text).toBeTruthy();
+    expect(line).not.toContain('reviewChapter');
+  });
 });
