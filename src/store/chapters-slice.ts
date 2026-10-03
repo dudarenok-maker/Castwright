@@ -742,7 +742,15 @@ export const chaptersSlice = createSlice({
        contains the full chapter list, but only the subset's chapters
        have meaningful character maps. We update characters for chapters
        in `chapterIds` and leave the rest of the row (state/progress/
-       phase/etc.) untouched. */
+       phase/etc.) untouched.
+
+       #3440 — the response's sentences carry RAW attribution ids (the
+       same drift the rest of this slice resolves via `characterIdAliases`).
+       Canonicalising the speaker id here keeps the rebuilt row keyed the
+       same way `hydrateFromBookState` keys it; skipping this left a
+       re-analyzed chapter's row keyed raw while `aliasedSentences` in the
+       Generate view always rewrites to canonical, so the character's line
+       count and Fix-audio chapter list silently dropped that chapter. */
     mergeSubsetAnalysis: (
       s,
       a: PayloadAction<{ response: AnalyseResponse; chapterIds: number[] }>,
@@ -752,7 +760,8 @@ export const chaptersSlice = createSlice({
       const speakersByChapter: Record<number, Set<string>> = {};
       for (const sent of response.sentences ?? []) {
         if (!idSet.has(sent.chapterId)) continue;
-        (speakersByChapter[sent.chapterId] ??= new Set()).add(sent.characterId);
+        const canonical = s.characterIdAliases[sent.characterId] ?? sent.characterId;
+        (speakersByChapter[sent.chapterId] ??= new Set()).add(canonical);
       }
       for (const ch of s.chapters) {
         if (!idSet.has(ch.id)) continue;

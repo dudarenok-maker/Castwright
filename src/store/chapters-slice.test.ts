@@ -1220,6 +1220,31 @@ describe('chaptersSlice — characterIdAliases raw→canonical tick mapping (#34
     expect(bookB.characterIdAliases).toEqual({});
     expect(bookB.currentBookId).toBe('book-B');
   });
+
+  /* mergeSubsetAnalysis rebuilds a re-analyzed chapter's `characters` map
+     from the subset response's RAW sentence ids. The Generate view's
+     aliasedSentences memo (generation.tsx:804) always rewrites sentences to
+     their canonical id regardless of which key the chapter row uses, so a
+     row left keyed raw here would silently lose that character's line count
+     and drop out of the Fix-audio modal's candidate list after a re-analyze
+     or un-exclude, even though the pre-rework row was keyed canonical. */
+  it('mergeSubsetAnalysis canonicalises the raw speaker id, keeping the row keyed consistently with hydrateFromBookState', () => {
+    const state = chaptersSlice.reducer(baseState([]), bookState('book-A', driftAliases));
+    const next = chaptersSlice.reducer(
+      state,
+      chaptersActions.mergeSubsetAnalysis({
+        response: {
+          sentences: [
+            { id: 1, chapterId: 17, characterId: 'the-torment', text: 'a' },
+            { id: 2, chapterId: 17, characterId: 'narrator', text: 'b' },
+          ],
+        } as never,
+        chapterIds: [17],
+      }),
+    );
+    expect(next.chapters[0].characters).toEqual({ the_torment: 'queued', narrator: 'queued' });
+    expect('the-torment' in next.chapters[0].characters).toBe(false);
+  });
 });
 
 describe('chaptersSlice — misc reducers', () => {
