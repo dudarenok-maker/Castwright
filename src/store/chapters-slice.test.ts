@@ -1833,4 +1833,31 @@ describe('chaptersSlice — analysisGapById (#3435 decision F / O2)', () => {
     /* Clearing an absent entry is a no-op. */
     expect(chaptersSlice.reducer(baseState([]), chaptersActions.clearAnalysisGap(9)).analysisGapById ?? {}).toEqual({});
   });
+
+  /* #3435 final review I1 — a main `result` only lands once every
+     non-excluded chapter has a current take (the main route halts on the
+     first chapter failure), so the gaps it covers are stale the moment it
+     arrives. Pre-fix the Generate view kept "Analysis didn't finish" after a
+     Resume reached a result. */
+  it('a main analysis result clears the gaps of the chapters it carries', () => {
+    let st = chaptersSlice.reducer(baseState([]), chaptersActions.setAnalysisGap({ chapterId: 1, message: 'Gap 1.' }));
+    st = chaptersSlice.reducer(st, chaptersActions.setAnalysisGap({ chapterId: 2, message: 'Gap 2.' }));
+    st = chaptersSlice.reducer(st, chaptersActions.setAnalysisGap({ chapterId: 9, message: 'Not in the result.' }));
+    const next = chaptersSlice.reducer(
+      st,
+      chaptersActions.hydrateFromAnalysis({
+        bookId: 'b',
+        manuscriptId: 'm',
+        title: 'T',
+        phaseTimings: [],
+        characters: [],
+        chapters: [
+          { id: 1, title: 'Chapter 1', duration: '00:00', state: 'queued', progress: 0, characters: {} },
+          { id: 2, title: 'Chapter 2', duration: '00:00', state: 'queued', progress: 0, characters: {} },
+        ],
+        sentences: [],
+      } as never),
+    );
+    expect(next.analysisGapById).toEqual({ 9: { message: 'Not in the result.' } });
+  });
 });

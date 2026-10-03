@@ -250,6 +250,10 @@ export const chaptersSlice = createSlice({
          gating both have a truthful frame of reference the instant
          chapters land. */
       if (bookId) s.currentBookId = bookId;
+      /* #3435 — a main `result` lands only once every non-excluded chapter
+         has a current take (the main route halts on the first chapter
+         failure), so the gaps of the chapters it carries are stale. */
+      if (s.analysisGapById) for (const c of chapters) delete s.analysisGapById[c.id];
       /* Server emits `chapters[i].characters = {}` from analysis; the
          per-chapter speaker map is recoverable from sentences. Without
          this seeding the Generate view's expanded chapter row shows no
