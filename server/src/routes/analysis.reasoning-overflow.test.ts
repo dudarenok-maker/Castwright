@@ -1130,6 +1130,10 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     expect(r.events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['aborted']);
     expect(r.events.some((e) => e.kind === 'result')).toBe(false);
     expect(read(join(r.bookDir, '.audiobook', 'state.json'), 'utf8')).toBe(stateBefore);
+    /* #3435 — no stitch: the stop rejects at the dispatch, so the run never reaches the
+       Phase-2 window (the abort check before the persist would otherwise mask a dispatch
+       that resolved). */
+    expect(r.events.some((e) => e.kind === 'phase' && e.phaseId === 2)).toBe(false);
   }, 60_000);
 
   it('MG: with split phase models, a Phase-1 failure row AND its terminal error name the Phase-1 model, not the Phase-0 one', async () => {
