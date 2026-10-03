@@ -563,6 +563,8 @@ chapterSpliceRouter.post(
         durationSec: result.durationSec,
         segmentCount: result.segmentCount,
         hasPreviousAudio: true,
+        /* Plan 285 — present only when finalize was asked to record review state. */
+        ...(result.reviewRecorded === undefined ? {} : { reviewRecorded: result.reviewRecorded }),
       });
       res.end();
     } catch (err) {

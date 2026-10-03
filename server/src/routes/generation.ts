@@ -1858,6 +1858,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         audioQa,
         audioModelKey: renderedModelKey,
         audioEngines,
+        reviewRecorded,
       } = await finalizeChapterAudioWrite({
         bookId,
         bookDir,
@@ -2062,6 +2063,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         /* srv-27 — advisory QA verdict so the frontend can stamp a "Suspect"
            badge the moment the Done pill flips, without a state.json reload. */
         audioQa,
+        /* Plan 285 — present only when finalize was asked to record review state. */
+        ...(reviewRecorded === undefined ? {} : { reviewRecorded }),
       });
 
       /* srv-16 — server-authoritative completion. The chapter is rendered +
