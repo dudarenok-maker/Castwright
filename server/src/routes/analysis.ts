@@ -4800,16 +4800,23 @@ export async function runMainAnalyzerJob(
          lets us resume mid-Phase-0a after a crash / rate-limit / model
          swap by replaying the per-chapter outputs we already have. */
       const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
+      /* #3435 — over the non-excluded chapters, like the Phase-1 line: a
+         failed cast's `[]` marker is not a cached cast. */
+      const castFailed = new Set(castFailedChapterIds(cache, recordRef.chapterHints));
+      const activeCastHints = recordRef.chapterHints.filter((h) => !h.excluded);
+      const resumeCastCount = activeCastHints.filter(
+        (h) => Object.hasOwn(chapterCast, h.id) && !castFailed.has(h.id),
+      ).length;
       const cachedCastCount = Object.keys(chapterCast).length;
       const stage0Start = Date.now();
       log(
         0,
         `Detecting cast chapter-by-chapter across ${totalCastChapters} chapter${totalCastChapters === 1 ? '' : 's'} via ${analyzerLabel}…`,
       );
-      if (cachedCastCount > 0) {
+      if (resumeCastCount > 0) {
         log(
           0,
-          `Resuming — ${cachedCastCount} of ${totalCastChapters} chapter${cachedCastCount === 1 ? '' : 's'} already cached.`,
+          `Resuming — ${resumeCastCount} of ${activeCastHints.length} chapter${activeCastHints.length === 1 ? '' : 's'} already cached.`,
         );
       }
 

@@ -9922,6 +9922,30 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
     expect(resuming).toEqual(['Resuming — 1 of 2 chapters already cached.']);
   }, 60_000);
 
+  /* #3435 — the Phase-0 cast line counts the same way as the Phase-1 line: a
+     failed cast's `[]` marker and an excluded chapter are not cached casts,
+     and the noun follows the denominator. */
+  it('the Phase-0 "Resuming" line counts non-failed casts over non-excluded chapters', async () => {
+    const chapters: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORDED[2] },
+      { id: 3, body: WORDED[3], excluded: true },
+    ];
+    const book = makeBook('resuming-cast-count', chapters);
+    await saveAnalysisCache(book.manuscriptId, {
+      /* 1 has its cast; 2's cast failed (the [] marker + a cast record); 3 is excluded. */
+      chapterCast: { 1: roster(), 2: [], 3: roster() },
+      chapters: {},
+      failedChapterIds: [2],
+      failedChapterErrors: { '2': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'cast' } },
+    });
+    const r = await run(book);
+    const resuming = r.events
+      .filter((e) => e.kind === 'log' && e.phaseId === 0 && /^Resuming — /.test(String(e.message)))
+      .map((e) => String(e.message));
+    expect(resuming).toEqual(['Resuming — 1 of 2 chapters already cached.']);
+  }, 60_000);
+
   it("O1's state.json write goes through the verified book dir: a stale path now holding another book is not touched", async () => {
     const chapters: BookChapter[] = [{ id: 1, body: WORDED[1] }];
     const book = makeBook('o1-stale', chapters, { castConfirmed: true });
