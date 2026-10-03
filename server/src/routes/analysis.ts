@@ -59,6 +59,7 @@ import {
   type Stage2ChunkRunResult,
 } from '../analyzer/stage2-chunk.js';
 import {
+  hasAttributableContent,
   isDialogueCollapseBreach,
   sourceSpeechHalfCount,
   STAGE2_MIN_SPEECH_HALVES,
@@ -83,6 +84,7 @@ import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
 import { readUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
 import {
   clearAnalysisCache,
+  hasCurrentTake,
   loadAnalysisCache,
   saveAnalysisCache,
   type AnalysisCache,
@@ -1486,6 +1488,85 @@ export function promoteCastRecordToAttribution(
   if (record?.phase !== 'cast') return false;
   record.phase = 'attribution';
   return true;
+}
+
+/* #3435 (plan 285 spec 2.2) — put `chapterId` into, or take it out of, the
+   pending set P (`cache.pendingAttributionChapterIds`), mutating the cache in
+   place. A pending take is never deleted here: it stays in `cache.chapters`
+   until a later Phase-1 completion replaces it. */
+export function setPendingAttribution(
+  cache: { pendingAttributionChapterIds?: number[] },
+  chapterId: number,
+  pending: boolean,
+): void {
+  const current = cache.pendingAttributionChapterIds ?? [];
+  if (pending === current.includes(chapterId)) return;
+  cache.pendingAttributionChapterIds = pending
+    ? [...current, chapterId]
+    : current.filter((id) => id !== chapterId);
+}
+
+/* #3435 (plan 285 M0/M1, S0) — the rules both routes apply to the cache they
+   have just loaded, mutating it in place. Returns whether it changed (the
+   caller saves).
+   - M0: a failed word-free chapter (no attributable words) whose take is `[]`
+     and whose record is `attribution-incomplete` — the `noSentences` flag the
+     analyzer raised for a chapter with nothing to attribute — has that record
+     cleared.
+   - M1: while stage1 is absent, every non-excluded failed chapter that has an
+     own key, including `[]`, goes into P: the record is evidence its take is
+     bad, and the take was made without a final roster. Exported for unit
+     testing. */
+export function applyAnalysisLoadRules(
+  cache: AnalysisCache,
+  chapterHints: Array<{ id: number; body: string; excluded?: boolean }>,
+): boolean {
+  let changed = false;
+  for (const h of chapterHints) {
+    if (
+      cache.failedChapterIds?.includes(h.id) &&
+      cache.failedChapterErrors?.[String(h.id)]?.code === 'attribution-incomplete' &&
+      Object.hasOwn(cache.chapters, h.id) &&
+      cache.chapters[h.id].length === 0 &&
+      !hasAttributableContent(h.body)
+    ) {
+      clearFailedChapterId(cache, h.id);
+      changed = true;
+    }
+  }
+  if (!cache.stage1) {
+    for (const h of chapterHints) {
+      if (h.excluded || !cache.failedChapterIds?.includes(h.id)) continue;
+      if (!Object.hasOwn(cache.chapters, h.id)) continue;
+      if (cache.pendingAttributionChapterIds?.includes(h.id)) continue;
+      setPendingAttribution(cache, h.id, true);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/* #3435 (plan 285) — a word-free chapter (`!hasAttributableContent`) has
+   nothing to attribute: both routes replace the analyzer call with this
+   synthetic successful result, so every normal success step still runs and
+   the chapter is not flagged `noSentences`. Exported for unit testing. */
+export function wordFreeStage2Result(): Stage2ChunkRunResult {
+  return {
+    sentences: [],
+    coverage: {
+      ok: true,
+      coverageRatio: 1,
+      endingPresent: true,
+      duplicatedBlock: null,
+      narratedSpeech: null,
+      noSentences: false,
+      truncated: false,
+      excess: false,
+      markersLost: false,
+      issues: [],
+    },
+    chunkCount: 0,
+  };
 }
 
 /* #3435 — save the cache from INSIDE a per-chapter failure catch. That save can
@@ -4374,10 +4455,27 @@ export async function runMainAnalyzerJob(
            meaningless; drop the merge journal + dedup suggestions too. */
         await clearCastMerges(recordRef.bookDir);
         await clearSuggestions(recordRef.bookDir);
+        /* #3435 O1 — Start fresh un-confirms the book, as Re-parse does
+           (`applyReparse`, book-state.ts): the cast is gone, so a book still
+           marked confirmed would read "done" with nothing behind it. It reads
+           "Analysing" until this run persists and the user confirms again. */
+        const freshStatePath = stateJsonPath(recordRef.bookDir);
+        const freshState = await readJson<BookStateJson>(freshStatePath);
+        if (freshState?.castConfirmed) {
+          await writeStateJsonAtomic(freshStatePath, {
+            ...freshState,
+            castConfirmed: false,
+            updatedAt: new Date().toISOString(),
+            language: freshState.language ?? null,
+          });
+        }
       }
       log(0, 'Discarded cached progress — starting from scratch.');
     }
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
+    /* #3435 M0/M1 — heal word-free records; while stage1 is absent, a failed
+       chapter's take is pending. */
+    if (applyAnalysisLoadRules(cache, recordRef.chapterHints)) await saveAnalysisCache(manuscriptId, cache);
     const cachedChapters = cache.chapters ?? {};
     const cachedChapterCount = Object.keys(cachedChapters).length;
 
@@ -4743,12 +4841,14 @@ export async function runMainAnalyzerJob(
          user opted out of narrating) never run Phase 0a — saves Gemini
          tokens and stops the roster from picking up characters only
          named in a Dedication or Copyright page.
-         Chapters in failedChapterIds are re-queued on resume even though
-         chapterCast[id] is populated (with []) — without this carve-out
-         the failure marker would silently skip them forever, leaving the
-         user to either Start fresh or hit the per-chapter Retry button
-         one by one for every failed chapter. */
-      const failedSet = new Set(cache.failedChapterIds ?? []);
+         Chapters whose record is a CAST failure are re-queued on resume even
+         though chapterCast[id] is populated (with []) — without this
+         carve-out the failure marker would silently skip them forever,
+         leaving the user to either Start fresh or hit the per-chapter Retry
+         button one by one for every failed chapter. #3435 M3 — an
+         attribution record is not re-queued: the chapter has its cast, and
+         its take is pending (M1), so Phase 1 re-attributes it. */
+      const failedSet = new Set(castFailedChapterIds(cache, recordRef.chapterHints));
       const castTaskIndices: number[] = [];
       for (let i = 0; i < totalCastChapters; i++) {
         const ch = recordRef.chapterHints[i];
@@ -5537,7 +5637,8 @@ export async function runMainAnalyzerJob(
       let count = 0;
       for (let j = afterIndex + 1; j < record.chapterHints.length; j++) {
         const next = record.chapterHints[j];
-        if (cachedChapters[next.id]) continue;
+        /* #3435 — a pending take still has to run. */
+        if (hasCurrentTake(cache, next.id)) continue;
         chars += next.body.length;
         count += 1;
       }
@@ -5599,12 +5700,14 @@ export async function runMainAnalyzerJob(
     /* Replay cached chapters synchronously up front. Cheap, deterministic
        progress, and avoids racing the concurrent pool against the cache.
        Excluded chapters are skipped — they never had attribution run and
-       must not be counted as cached. */
+       must not be counted as cached. #3435 (plan 285) — a chapter replays iff
+       it has a current take: a `[]` take is done once attributed (decision
+       B), and a pending take (P) is re-attributed. */
     for (let i = 0; i < totalChapters; i++) {
       const ch = recordRef.chapterHints[i];
       if (ch.excluded) continue;
-      const cached = cachedChapters[ch.id];
-      if (cached && cached.length > 0) {
+      if (hasCurrentTake(cache, ch.id)) {
+        const cached = cachedChapters[ch.id];
         log(
           1,
           `Chapter ${i + 1}/${totalChapters} — ${ch.title}: cached (${cached.length.toLocaleString()} sentences), skipping.`,
@@ -5730,6 +5833,7 @@ export async function runMainAnalyzerJob(
        never a failure of chapter `i`. `isPoolAborted` is the pool-local flag.
        On 'run' it has taken the chapter body's liveWork token, in the same
        synchronous block as its last checks (A5 gap 1); the caller releases it. */
+    const dispatchedOnFinalRoster = new Map<number, boolean>();
     async function phase1Dispatch(i: number, isPoolAborted: () => boolean): Promise<'run' | 'skip'> {
       /* Plan 88 — back-pressure semaphore.
          In sequential mode this resolves once `markPhase0AllDone()`
@@ -5776,6 +5880,9 @@ export async function runMainAnalyzerJob(
           `Chapter ${i + 1}/${totalChapters} — held back ${humanSeconds(dispatchWaitMs)} to preserve ${resolvePhase1MinLagChapters()}-chapter roster lag.`,
         );
       }
+      /* #3435 M8c (decision H) — whether this chapter attributes against the
+         final roster. Only a rolling-roster take can be pending. */
+      dispatchedOnFinalRoster.set(i, phase1Stage1Ready);
       /* #3435 decision A — the chapter body's token, taken before this returns. */
       takeWork(job);
       return 'run';
@@ -5967,13 +6074,17 @@ export async function runMainAnalyzerJob(
          cap truncate mid-stream; `attributeChapterStage2` splits an over-budget
          chapter into sections (each guarded + adaptively re-split on
          truncation) so the call never exceeds the cap. A within-budget chapter
-         is exactly one guarded call (unchanged). */
+         is exactly one guarded call (unchanged).
+         #3435 — a word-free chapter makes no call: a synthetic successful
+         result stands in, and every success step below still runs. */
+      const wordFree = !hasAttributableContent(ch.body);
+      if (wordFree) log(1, `Chapter ${i + 1}/${totalChapters} — no words to attribute.`);
       const {
         sentences: stage2Sentences,
         coverage: coverageVerdict,
         chunkCount: stage2ChunkCount,
         structureReport: stage2StructureReport,
-      } = await attributeChapterStage2WithEval({
+      } = wordFree ? wordFreeStage2Result() : await attributeChapterStage2WithEval({
         analyzer: phase1Analyzer,
         manuscriptId,
         title: recordRef.title,
@@ -6105,6 +6216,19 @@ export async function runMainAnalyzerJob(
            earlier run recorded). A cast record is left for Phase 0a to clear. */
         send({ kind: 'chapter-resolved', chapterId: ch.id });
       }
+      /* #3435 M8/M8c/M9 — the take just made is current, unless it was made
+         against the rolling roster while the chapter's cast record stood
+         (decision H): then it is pending until it is re-attributed on the
+         final roster (M8d, or the next run). Either way it is a take written
+         after the last authoritative persist. */
+      setPendingAttribution(
+        cache,
+        ch.id,
+        dispatchedOnFinalRoster.get(i) === false &&
+          cache.failedChapterIds?.includes(ch.id) === true &&
+          cache.failedChapterErrors?.[String(ch.id)]?.phase === 'cast',
+      );
+      cache.takesPersisted = false;
       for (const s of stage2Sentences) s.chapterId = ch.id;
       sentencesByChapter.set(ch.id, stage2Sentences);
       if (stage2StructureReport) structureReports.push(stage2StructureReport);
@@ -6134,10 +6258,14 @@ export async function runMainAnalyzerJob(
             { manuscriptId: job.manuscriptId, candidateBookDir: liveBookDir(job), mode: 'drop' },
             () => {
               /* Rebuild the running narrative from the chapter map so order is
-                 always correct regardless of which chapter completes first. */
+                 always correct regardless of which chapter completes first.
+                 #3435 — a chapter not attributed this run falls back to its
+                 cached take, so a pending take stays in the edits (and so
+                 survives the edits rebuild) until it is replaced. */
               const running: SentenceOutput[] = [];
               for (const order of recordRef.chapterHints) {
-                const arr = sentencesByChapter.get(order.id);
+                if (order.excluded) continue;
+                const arr = sentencesByChapter.get(order.id) ?? cachedChapters[order.id];
                 if (arr) running.push(...arr);
               }
               return running;
@@ -6197,6 +6325,45 @@ export async function runMainAnalyzerJob(
       sendLiveTick();
     }
 
+    /* #3435 M10 — a chapter body threw (the caller has already set
+       `job.halting`, synchronously). Shared by the pool and the M8d pass. */
+    async function recordChapterBodyFailure(i: number, e: unknown): Promise<void> {
+      const failedId = recordRef.chapterHints[i].id;
+      /* #3084 P20/F7 — the chapters still running in the other workers
+         start no further escalation window, and are aborted when the run
+         ends (#3435 decision E). The caller has no `ch` of its own (unlike
+         `runChapterBody`, which this `i` belongs to) — re-derive it the same
+         way. */
+      noteReasoningOverflow(
+        job,
+        structureBudget,
+        e,
+        { id: failedId, title: recordRef.chapterHints[i].title },
+        1,
+      );
+      /* #3435 — record the chapter's failure (save, chapter-failed) BEFORE
+         the rethrow, so a failed re-attribution leaves no stale record (an
+         `attribution-collapse` flag on a chapter whose sentences were just
+         dropped) and the view hears about it. An abort is the user pausing,
+         not a failure of the chapter. */
+      if (!(e instanceof AnalysisAbortedError)) {
+        job.failingPhase ??= 1;
+        const classified = classifyAnalysisFailure(e, phase1AnalyzerLabel, {
+          chapter: { id: failedId, title: recordRef.chapterHints[i].title },
+        });
+        const attributionRecord = recordFailedChapter(cache, failedId, classified, 'attribution');
+        await saveCacheInFailureCatch(manuscriptId, cache, failedId);
+        send({
+          kind: 'chapter-failed',
+          chapterId: failedId,
+          message: attributionRecord.message,
+          code: attributionRecord.code,
+          remediation: attributionRecord.remediation,
+          phase: attributionRecord.phase,
+        });
+      }
+    }
+
     /* Plan 88 follow-up — wrap the Phase 1 worker pool in an async
        function so it can run concurrently with `runPhase0Pool` via
        Promise.all below. The pool's internal shape is unchanged; only
@@ -6238,40 +6405,7 @@ export async function runMainAnalyzerJob(
             job.halting = true;
             inFlight.delete(i);
             aborted = true;
-            const failedId = recordRef.chapterHints[i].id;
-            /* #3084 P20/F7 — the chapters still running in the other workers
-               start no further escalation window, and are aborted when the run
-               ends (#3435 decision E). `launchNext` has no `ch` of its own
-               (unlike `runChapterBody`, which this `i` belongs to) — re-derive
-               it the same way. */
-            noteReasoningOverflow(
-              job,
-              structureBudget,
-              e,
-              { id: failedId, title: recordRef.chapterHints[i].title },
-              1,
-            );
-            /* #3435 — record the chapter's failure (save, chapter-failed) BEFORE
-               the rethrow, so a failed re-attribution leaves no stale record (an
-               `attribution-collapse` flag on a chapter whose sentences were just
-               dropped) and the view hears about it. An abort is the user pausing,
-               not a failure of the chapter. */
-            if (!(e instanceof AnalysisAbortedError)) {
-              job.failingPhase ??= 1;
-              const classified = classifyAnalysisFailure(e, phase1AnalyzerLabel, {
-                chapter: { id: failedId, title: recordRef.chapterHints[i].title },
-              });
-              const attributionRecord = recordFailedChapter(cache, failedId, classified, 'attribution');
-              await saveCacheInFailureCatch(manuscriptId, cache, failedId);
-              send({
-                kind: 'chapter-failed',
-                chapterId: failedId,
-                message: attributionRecord.message,
-                code: attributionRecord.code,
-                remediation: attributionRecord.remediation,
-                phase: attributionRecord.phase,
-              });
-            }
+            await recordChapterBodyFailure(i, e);
             throw e;
           } finally {
             /* #3435 — the body's liveWork token, taken in phase1Dispatch. */
@@ -6317,6 +6451,35 @@ export async function runMainAnalyzerJob(
       });
       return;
     }
+
+    /* #3435 M8d — a pending take is never stitched. A chapter dispatched
+       before Phase 0b while its re-cast was still queued was attributed against
+       the rolling roster and put in P (M8c); its re-cast has since succeeded
+       and cleared the cast record, so nothing else in this run would
+       re-attribute it. Re-attribute every non-excluded chapter still in P, one
+       at a time, on the final roster (M8 then takes it out of P); a throw is
+       M10. */
+    for (let i = 0; i < totalChapters; i++) {
+      const ch = recordRef.chapterHints[i];
+      if (ch.excluded || !(cache.pendingAttributionChapterIds ?? []).includes(ch.id)) continue;
+      if (abortController.signal.aborted) {
+        throw new AnalysisAbortedError('Analysis aborted before re-attributing a pending chapter.');
+      }
+      dispatchedOnFinalRoster.set(i, true);
+      takeWork(job);
+      try {
+        await runChapterBody(i);
+      } catch (e) {
+        job.halting = true;
+        inFlight.delete(i);
+        await recordChapterBodyFailure(i, e);
+        throw e;
+      } finally {
+        releaseWork(job);
+      }
+    }
+    /* An escalation overflow inside the M8d pass, as after the join. */
+    throwIfReasoningOverflowed(job);
 
     /* Stitch the per-chapter results into narrative order. */
     for (const ch of record.chapterHints) {
@@ -6626,6 +6789,11 @@ export async function runMainAnalyzerJob(
          the wrap on `writeChecked` below). */
       let persistLockTimeout: unknown;
       let staleBookDirError: unknown;
+      /* #3435 (plan 285 M17/S14) — set only once THIS block's state.json write
+         has landed. The `try` completing is not enough: on attribution_drift
+         it completes with the cast.json/state.json writes skipped, and
+         `catch (persistErr)` swallows a failed write. */
+      let wroteStateJson = false;
       /* #2196 — resolve the SINGLE verified write target before ANY write.
          Identity-gated (full `.audiobook/state.json` check on liveBookDir(job),
          invalidate + re-hydrate on a miss — C2). Throwing BookDirUnresolvedError
@@ -6932,6 +7100,7 @@ export async function runMainAnalyzerJob(
               updatedAt: new Date().toISOString(),
             };
             await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
+            wroteStateJson = true;
           }
         }
       } catch (persistErr) {
@@ -6963,6 +7132,14 @@ export async function runMainAnalyzerJob(
       /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
          top-level catch (Task 6), which ends the job halted. */
       if (staleBookDirError !== undefined) throw staleBookDirError;
+      /* #3435 M17/S14 — the takes are persisted and the book has reached
+         Confirm (decision F); `confirmReached` is never cleared except with the
+         cache. */
+      if (wroteStateJson) {
+        cache.takesPersisted = true;
+        cache.confirmReached = true;
+        await saveAnalysisCache(manuscriptId, cache);
+      }
     }
 
     if (phase1DriftExceeded) {
@@ -6976,7 +7153,7 @@ export async function runMainAnalyzerJob(
       endJob(job, {
         kind: 'error',
         code: 'attribution_drift',
-        message: `Phase 1 demoted ${reconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round((100 * reconciled.demotedCount) / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute.`,
+        message: `Phase 1 demoted ${reconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round((100 * reconciled.demotedCount) / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute — or Start fresh to re-attribute every chapter.`,
       });
       return;
     }
@@ -7616,6 +7793,8 @@ export async function runSubsetAnalyzerJob(
       console.warn('[analysis-subset] failed to record character-id retirement(s) (dedup)', historyErr);
     }
     const cache: AnalysisCache = await loadAnalysisCache(manuscriptId);
+    /* #3435 S0 — the main route's M0/M1, book-wide. */
+    if (applyAnalysisLoadRules(cache, record.chapterHints)) await saveAnalysisCache(manuscriptId, cache);
     const chapterCast: Record<number, CharacterOutput[]> = cache.chapterCast ?? {};
     const cachedChapters = cache.chapters ?? {};
     /* The subset route serves two flows: (a) un-exclude an
@@ -8072,13 +8251,16 @@ export async function runSubsetAnalyzerJob(
       let subsetCoverageVerdict: Stage2CoverageVerdict;
       let subsetChunkCount: number;
       let subsetStructureReport: EngineReport | undefined;
+      /* #3435 — a word-free chapter makes no call (see the main route). */
+      const wordFree = !hasAttributableContent(ch.body);
+      if (wordFree) log(1, `Chapter ${ch.id} — no words to attribute.`);
       try {
         ({
           sentences: chapterSentences,
           coverage: subsetCoverageVerdict,
           chunkCount: subsetChunkCount,
           structureReport: subsetStructureReport,
-        } = await attributeChapterStage2WithEval({
+        } = wordFree ? wordFreeStage2Result() : await attributeChapterStage2WithEval({
           analyzer: phase1Analyzer,
           manuscriptId,
           title: record.title,
@@ -8237,6 +8419,11 @@ export async function runSubsetAnalyzerJob(
            clear. */
         send({ kind: 'chapter-resolved', chapterId: ch.id });
       }
+      /* #3435 S9/S10 — the subset attributes only on a final roster (stage1
+         existed), so the take is current; it is written after the last
+         authoritative persist. */
+      setPendingAttribution(cache, ch.id, false);
+      cache.takesPersisted = false;
       for (const s of chapterSentences) s.chapterId = ch.id;
       cachedChapters[ch.id] = chapterSentences;
       if (subsetStructureReport) subsetStructureReports.push(subsetStructureReport);
@@ -8521,6 +8708,11 @@ export async function runSubsetAnalyzerJob(
          and the authoritative cast.json write above it). */
       let persistLockTimeout: unknown;
       let staleBookDirError: unknown;
+      /* #3435 (plan 285 M17/S14) — set only once THIS block's state.json write
+         has landed. The `try` completing is not enough: on attribution_drift
+         it completes with the cast.json/state.json writes skipped, and
+         `catch (persistErr)` swallows a failed write. */
+      let wroteStateJson = false;
       /* #2196 — resolve the SINGLE verified write target before ANY write,
          mirroring the main job. Throwing BookDirUnresolvedError here skips
          every write in this block (no stale mkdir), which then propagates to
@@ -8738,6 +8930,7 @@ export async function runSubsetAnalyzerJob(
               updatedAt: new Date().toISOString(),
             };
             await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
+            wroteStateJson = true;
           }
         }
       } catch (persistErr) {
@@ -8761,13 +8954,21 @@ export async function runSubsetAnalyzerJob(
       /* #2196 — surface a mid-block BookDirUnresolvedError to the run's
          top-level catch (Task 6), which ends the job halted. Mirrors main. */
       if (staleBookDirError !== undefined) throw staleBookDirError;
+      /* #3435 M17/S14 — the takes are persisted and the book has reached
+         Confirm (decision F); `confirmReached` is never cleared except with the
+         cache. */
+      if (wroteStateJson) {
+        cache.takesPersisted = true;
+        cache.confirmReached = true;
+        await saveAnalysisCache(manuscriptId, cache);
+      }
     }
 
     if (subsetDriftExceeded) {
       endJob(job, {
         kind: 'error',
         code: 'attribution_drift',
-        message: `Phase 1 demoted ${subsetReconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round((100 * subsetReconciled.demotedCount) / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute.`,
+        message: `Phase 1 demoted ${subsetReconciled.demotedCount} of ${folded.sentences.length} sentences (${Math.round((100 * subsetReconciled.demotedCount) / folded.sentences.length)}%) to narrator — model attribution unreliable. Retry analysis to re-attribute — or Start fresh to re-attribute every chapter.`,
       });
       return;
     }

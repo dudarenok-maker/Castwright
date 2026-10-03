@@ -1102,6 +1102,93 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     expect(after.failedChapterErrors?.['1']).toBeUndefined();
   }, 60_000);
 
+  /* Ported from #3439 (9a063ea6) by name; seeds carry `phase` (plan 285 T5). */
+  const COLLAPSED = [{ id: 101, chapterId: 1, characterId: 'narrator', confidence: 0.9, text: BODIES[1] }];
+  /** No stage1: chapter 1 attribution-flagged (has its cast, cached collapsed
+      sentences), chapter 2 cast-failed (empty-array failure marker). */
+  const PE_SEED = {
+    chapters: { 1: COLLAPSED },
+    chapterCast: { 1: [novaCharacter()], 2: [] },
+    failedChapterIds: [1, 2],
+    failedChapterErrors: {
+      '1': { code: 'attribution-collapse', message: 'seeded', remediation: 'seeded', phase: 'attribution' },
+      '2': { code: 'analyzer-timeout', message: 'seeded', remediation: 'seeded', phase: 'cast' },
+    },
+  };
+
+  it('PE: with no stage1, an attribution-flagged chapter with a cast is not re-queued into cast detection but IS re-attributed; its record clears once that Phase 1 succeeds (owner decision, #3435)', async () => {
+    const { castCalls, stage2Calls, events, after } = await runMainOn('pe-resume', PE_SEED, async (_m, id) =>
+      stage2For(id),
+    );
+    expect(castCalls).toEqual([2]);
+    expect([...stage2Calls].sort()).toEqual([1, 2]);
+    expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId as number).sort()).toEqual([1, 2]);
+    expect(after.failedChapterIds ?? []).toEqual([]);
+    expect(after.chapters?.[1]?.[0]?.characterId).toBe('nova');
+    expect(after.pendingAttributionChapterIds ?? []).toEqual([]);
+  }, 60_000);
+
+  it('PE negative: if the re-attribution fails for the flagged chapter its record is kept and chapter-resolved is not sent for it', async () => {
+    const { events, after, stage2Calls } = await runMainOn('pe-resume-fail', PE_SEED, async (_m, id) => {
+      if (id === 1) throw new Error('Phase 1 fails for chapter 1');
+      return stage2For(id);
+    });
+    /* Control: the flagged chapter really was re-attributed, not replayed. */
+    expect(stage2Calls).toContain(1);
+    expect(events.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).not.toContain(1);
+    expect(after.failedChapterIds).toContain(1);
+  }, 60_000);
+
+  it("PD-main: a collapse-flagged chapter whose cast ALSO failed is re-cast; its cast record clears at Phase-0a success, it stays pending, and a Phase-1 throw re-records it as attribution", async () => {
+    const { castCalls, stage2Calls, events, after } = await runMainOn(
+      'pd-main',
+      {
+        chapters: { 1: COLLAPSED, 2: NOVA_2 },
+        chapterCast: { 1: [], 2: [novaCharacter()] },
+        failedChapterIds: [1],
+        failedChapterErrors: { '1': { code: 'analyzer-timeout', message: 'seeded', remediation: 'seeded', phase: 'cast' } },
+      },
+      async (_m, id) => {
+        if (id === 1) throw new Error('Phase 1 fails for chapter 1');
+        return stage2For(id);
+      },
+    );
+    /* Control: the chapter really was re-cast (Phase 0a succeeded) and attributed (and failed). */
+    expect(castCalls).toEqual([1]);
+    expect(stage2Calls).toContain(1);
+    const forOne = events
+      .filter((e) => (e.kind === 'chapter-resolved' || e.kind === 'chapter-failed') && e.chapterId === 1)
+      .map((e) => (e.kind === 'chapter-failed' ? `failed:${String(e.phase)}` : 'resolved'));
+    expect(forOne).toEqual(['resolved', 'failed:attribution']);
+    expect(after.failedChapterIds).toContain(1);
+    expect(after.failedChapterErrors?.['1']?.phase).toBe('attribution');
+    expect(after.pendingAttributionChapterIds).toContain(1);
+    /* A pending take is never deleted. */
+    expect(after.chapters?.[1]).toEqual(COLLAPSED);
+  }, 60_000);
+
+  it('a FINISHED book (stage1 on disk): a main run replays a flagged chapter cached sentences instead of re-attributing it', async () => {
+    const { stage2Calls, after } = await runMainOn(
+      'finished-replay',
+      {
+        chapters: { 1: COLLAPSED, 2: NOVA_2 },
+        chapterCast: { 1: [novaCharacter()], 2: [novaCharacter()] },
+        stage1: {
+          characters: [novaCharacter()],
+          chapters: [1, 2].map((id) => ({ id, title: CHAPTER_TITLES[id] })),
+        },
+        failedChapterIds: [1],
+        failedChapterErrors: {
+          '1': { code: 'attribution-collapse', message: 'seeded', remediation: 'seeded', phase: 'attribution' },
+        },
+      },
+      async (_m, id) => stage2For(id),
+    );
+    expect(stage2Calls).not.toContain(1);
+    expect(after.chapters?.[1]?.[0]?.characterId).toBe('narrator');
+    expect(after.failedChapterIds).toEqual([1]);
+  }, 60_000);
+
   it('MD: a Pause during the main Phase 1 records nothing (control)', async () => {
     const { AnalysisAbortedError } = await import('../analyzer/errors.js');
     const r = await runMainOn('md-pause', BOTH_CAST, () => Promise.reject(new AnalysisAbortedError('paused')));
@@ -1292,6 +1379,160 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     expect(events.find((e) => e.kind === 'chapter-failed')).toMatchObject({ chapterId: 1 });
     expect(events.filter((e) => e.kind === 'error' && /ENOSPC/.test(String(e.message)))).toEqual([]);
   }, 60_000);
+});
+
+/* #3435 review pass 3 — pipelined mode. Chapter i's Phase 1 dispatches once the
+   watermark (the highest Phase-0 index completed, NOT a contiguous prefix)
+   reaches i + minLag, and `phase0FailedCount` is only set after the Phase-0 pool
+   drains, so a chapter whose OWN Phase 0a failed is still attributed. Its Phase-1
+   success must not clear its cast-phase record: only a Phase-0a success does,
+   otherwise the resume never re-casts it and the book completes without that
+   chapter's characters. Plan 285 T5 (M8c): that take was made against the
+   rolling roster while the cast record stood, so it is pending, and the resume
+   re-attributes it. Ported by name from #3439 (9a063ea6). */
+describe('pipelined main route: a cast-phase failure record survives the same chapter\'s Phase 1 (#3435)', () => {
+  async function runCastFailurePipelined(label: string, opts: { delayFailureSave?: boolean } = {}) {
+    const seed = await seedBook(label, [1, 2, 3]);
+    const { loadAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+    const { runMainAnalyzerJob } = await import('./analysis.js');
+    const g = globalThis as Record<string, unknown>;
+    const stage2Calls: number[] = [];
+    let ch1Phase1Done = false;
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    const failSafe = setTimeout(() => openGate(), 20_000);
+    /* Opens once chapter 1's Phase 1 has returned, plus a beat for its post-call
+       bookkeeping (the clear) to run. */
+    const afterCh1Phase1 = async (): Promise<void> => {
+      while (!ch1Phase1Done) await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 300));
+    };
+    let failChapterOne = true;
+    const castCalls: number[] = [];
+    const phase0 = buildSelection(
+      stubAnalyzer({
+        async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
+          castCalls.push(chapterId);
+          if (chapterId === 1 && failChapterOne) throw new Error('cast model exploded');
+          if (chapterId === 3 && failChapterOne) await gate;
+          return { characters: [novaCharacter()] };
+        },
+      }),
+      'phase0-model',
+    );
+    g.__overflow_spend_test_phase1_selection = buildSelection(
+      stubAnalyzer({
+        async runStage2Chapter(_m: string, chapterId: number): Promise<Stage2ChapterOutput> {
+          stage2Calls.push(chapterId);
+          if (chapterId === 1 && failChapterOne) {
+            ch1Phase1Done = true;
+            void afterCh1Phase1().then(openGate);
+          }
+          return stage2For(chapterId);
+        },
+      }),
+      MODEL,
+    );
+    g.__overflow_spend_test_pipelined = true;
+    if (opts.delayFailureSave) {
+      /* Hold the Phase-0a catch's save for chapter 1 until its Phase 1 has finished,
+         so the two bookkeeping paths interleave the other way round. */
+      let held = false;
+      g.__overflow_spend_test_save_hook = async (c: {
+        failedChapterErrors?: Record<string, unknown>;
+        chapterCast?: Record<number, unknown[]>;
+      }) => {
+        if (!held && c.failedChapterErrors?.['1'] && c.chapterCast?.[1] && !c.chapterCast[1].length) {
+          held = true;
+          await afterCh1Phase1();
+        }
+      };
+    }
+    const originalMinLag = process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS;
+    process.env.ANALYZER_PHASE1_MIN_LAG_CHAPTERS = '0';
+    const events1 = captureEvents(seed.job);
+    try {
+      await runMainAnalyzerJob(seed.job, getManuscript(seed.manuscriptId)! as never, phase0, {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      const mid = await loadAnalysisCache(seed.manuscriptId);
+      const stage2Run1 = [...stage2Calls];
+      const castCallsRun1 = [...castCalls];
+
+      /* The resume (what the view's cast_incomplete auto-resume POSTs). */
+      failChapterOne = false;
+      delete g.__overflow_spend_test_save_hook;
+      castCalls.length = 0;
+      stage2Calls.length = 0;
+      /* A new job: run 1's endJob marked the seed job ended (#3435 decision E). */
+      const resumeJob = {
+        ...seed.job,
+        controller: new AbortController(),
+        subscribers: new Set(),
+        ended: false,
+        halting: false,
+        left: false,
+        liveWork: 0,
+      } as unknown as AnalysisJob;
+      const events2 = captureEvents(resumeJob);
+      await runMainAnalyzerJob(resumeJob, getManuscript(seed.manuscriptId)! as never, phase0, {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      const after = await loadAnalysisCache(seed.manuscriptId);
+      return { events1, events2, mid, after, stage2Run1, castCallsRun1, castCallsRun2: [...castCalls], stage2Run2: [...stage2Calls] };
+    } finally {
+      clearTimeout(failSafe);
+      openGate();
+      restoreEnv('ANALYZER_PHASE1_MIN_LAG_CHAPTERS', originalMinLag);
+      delete g.__overflow_spend_test_pipelined;
+      delete g.__overflow_spend_test_save_hook;
+      removeManuscript(seed.manuscriptId);
+      await clearAnalysisCache(seed.manuscriptId);
+    }
+  }
+
+  it('P-alpha: chapter 1\'s cast failure survives its own Phase 1; the resume re-casts and re-attributes it', async () => {
+    const r = await runCastFailurePipelined('p-alpha');
+    /* Control: chapter 1 really was attributed in run 1 while its cast had failed. */
+    expect(r.stage2Run1).toContain(1);
+    expect(r.events1.some((e) => e.kind === 'chapter-failed' && e.chapterId === 1)).toBe(true);
+    expect(r.events1.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).not.toContain(1);
+    expect(r.events1.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['cast_incomplete']);
+    expect(r.mid.failedChapterIds).toEqual([1]);
+    expect(r.mid.failedChapterErrors?.['1']?.phase).toBe('cast');
+    expect(r.mid.chapterCast?.[1]).toEqual([]);
+    /* M8c: the take was made against the rolling roster while the cast record stood. */
+    expect(r.mid.pendingAttributionChapterIds).toEqual([1]);
+
+    expect(r.castCallsRun2).toEqual([1]);
+    expect(r.stage2Run2).toContain(1);
+    expect(r.events2.filter((e) => e.kind === 'chapter-resolved').map((e) => e.chapterId)).toEqual([1]);
+    expect(r.after.failedChapterIds ?? []).toEqual([]);
+    expect(r.after.chapterCast?.[1]?.length).toBeGreaterThan(0);
+    expect(r.after.pendingAttributionChapterIds ?? []).toEqual([]);
+  }, 90_000);
+
+  it('the other interleaving: chapter 1\'s Phase 1 finishing while the Phase-0a catch\'s save is pending leaves record and events consistent', async () => {
+    const r = await runCastFailurePipelined('p-alpha-delayed', { delayFailureSave: true });
+    expect(r.stage2Run1).toContain(1);
+    const kinds = r.events1
+      .filter((e) => (e.kind === 'chapter-failed' || e.kind === 'chapter-resolved') && e.chapterId === 1)
+      .map((e) => e.kind);
+    expect(kinds).toEqual(['chapter-failed']);
+    expect(r.mid.failedChapterIds).toEqual([1]);
+    expect(r.mid.chapterCast?.[1]).toEqual([]);
+    expect(r.mid.pendingAttributionChapterIds).toEqual([1]);
+    expect(r.castCallsRun2).toEqual([1]);
+    expect(r.stage2Run2).toContain(1);
+    expect(r.after.failedChapterIds ?? []).toEqual([]);
+  }, 90_000);
 });
 
 /* #3435 (plan 285 T4) — the subset route records a Phase-1 (attribution)

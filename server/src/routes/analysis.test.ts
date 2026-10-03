@@ -55,7 +55,14 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
-import { clearAnalysisCache, saveAnalysisCache, loadAnalysisCache } from '../store/analysis-cache.js';
+import {
+  clearAnalysisCache,
+  saveAnalysisCache,
+  loadAnalysisCache,
+  hasCurrentTake,
+  analysisCompleteFor,
+  reachedConfirm,
+} from '../store/analysis-cache.js';
 import { putManuscript, removeManuscript, getManuscript, type ChapterHint } from '../store/manuscripts.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { loadCastIdHistory, retireCharacterId, castIdHistoryPath } from '../store/cast-id-history.js';
@@ -179,6 +186,42 @@ vi.mock('../workspace/scan.js', async () => {
         };
       }
       return actual.findBookByManuscriptId(manuscriptId);
+    },
+  };
+});
+
+/* Plan 285 T5 — a case sets `__p285_save_hook` to observe every cache save
+   (what the cache held at that moment). Pass-through otherwise. */
+vi.mock('../store/analysis-cache.js', async () => {
+  const actual = await vi.importActual<typeof import('../store/analysis-cache.js')>(
+    '../store/analysis-cache.js',
+  );
+  return {
+    ...actual,
+    saveAnalysisCache: async (...args: Parameters<typeof actual.saveAnalysisCache>) => {
+      const hook = (globalThis as Record<string, unknown>).__p285_save_hook as
+        | ((c: (typeof args)[1]) => void)
+        | undefined;
+      hook?.(structuredClone(args[1]));
+      return actual.saveAnalysisCache(...args);
+    },
+  };
+});
+
+/* Plan 285 T5 — a case sets this to make the analysis persist's state.json
+   write throw, so the persist block's `catch (persistErr)` swallows it.
+   Pass-through otherwise. */
+vi.mock('../workspace/state-migrate.js', async () => {
+  const actual = await vi.importActual<typeof import('../workspace/state-migrate.js')>(
+    '../workspace/state-migrate.js',
+  );
+  return {
+    ...actual,
+    writeStateJsonAtomic: async (...args: Parameters<typeof actual.writeStateJsonAtomic>) => {
+      if ((globalThis as Record<string, unknown>).__analysis_test_state_write_throws === true) {
+        throw new Error('EPERM: state.json write failed');
+      }
+      return actual.writeStateJsonAtomic(...args);
     },
   };
 });
@@ -9386,4 +9429,455 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
       }
     }
   }, 30_000);
+});
+
+/* Plan 285 T5 — "current take": the pending set P and its writers, the
+   takesPersisted / confirmReached flags, the word-free short-circuit and the
+   main replay, driven through the real main route. */
+describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
+  const WORDED: Record<number, string> = {
+    1: 'Mara opened the door and stepped out into the cold morning air.',
+    2: 'The harbour lay quiet under a low grey sky that promised rain.',
+    3: 'By noon the boats had come back in and the market was full.',
+    4: 'The ledger on the counter listed every debt the town still owed.',
+    5: 'Night fell slowly over the rooftops and the lamps came on one by one.',
+  };
+  const WORD_FREE = '* * *';
+  const roster = (): CharacterOutput[] => [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' }];
+  const takeOf = (id: number, text: string): SentenceOutput[] => [
+    { id: id * 100 + 1, chapterId: id, characterId: 'narrator', confidence: 0.9, text },
+  ];
+  const unused = () => Promise.reject(new Error('not used'));
+
+  interface BookChapter {
+    id: number;
+    body: string;
+    excluded?: boolean;
+  }
+  interface Book {
+    manuscriptId: string;
+    bookDir: string;
+    chapters: BookChapter[];
+  }
+  type SaveSnapshot = { chapters?: Record<number, unknown>; takesPersisted?: boolean; confirmReached?: boolean };
+
+  const made: Book[] = [];
+  afterEach(async () => {
+    const g = globalThis as Record<string, unknown>;
+    delete g.__analyzer_device_test_phase1_selection;
+    delete g.__analysis_test_state_write_throws;
+    delete g.__p285_save_hook;
+    for (const b of made.splice(0)) {
+      removeManuscript(b.manuscriptId);
+      await clearAnalysisCache(b.manuscriptId);
+      rmSync(b.bookDir, { recursive: true, force: true });
+    }
+  });
+
+  function makeBook(label: string, chapters: BookChapter[], state: Record<string, unknown> = {}): Book {
+    const manuscriptId = `test-p285-${label}-${Date.now()}-${Math.random()}`;
+    const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-p285-test-'));
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: `b_p285_${label}`,
+        manuscriptId,
+        title: `P285 ${label}`,
+        language: 'en',
+        author: 'Test Author',
+        series: 'Standalones',
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: false,
+        chapters: chapters.map((c) => ({
+          id: c.id,
+          title: `Chapter ${c.id}`,
+          slug: `0${c.id}-chapter-${c.id}`,
+          ...(c.excluded ? { excluded: true } : {}),
+        })),
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        ...state,
+      }),
+    );
+    putManuscript({
+      manuscriptId,
+      format: 'plaintext',
+      title: `P285 ${label}`,
+      wordCount: 100,
+      byteSize: 1000,
+      uploadedAt: new Date().toISOString(),
+      sourceText: chapters.map((c) => c.body).join('\n\n'),
+      chapterHints: chapters.map((c) => ({ id: c.id, title: `Chapter ${c.id}`, body: c.body, excluded: c.excluded })),
+      bookDir,
+    });
+    const book = { manuscriptId, bookDir, chapters };
+    made.push(book);
+    return book;
+  }
+
+  const stage1For = (chapters: BookChapter[]): Stage1Output => ({
+    characters: roster(),
+    chapters: chapters.map((c) => ({ id: c.id, title: `Chapter ${c.id}` })),
+  });
+
+  interface RunOpts {
+    fresh?: boolean;
+    /** Phase-1 result for chapter `id`; `n` is that chapter's call number this run (1-based). */
+    stage2?: (id: number, call: StageCall, n: number) => Promise<Stage2ChapterOutput>;
+    stage1?: (id: number) => Promise<Stage1ChapterOutput>;
+    saveHook?: (c: SaveSnapshot) => void;
+  }
+
+  async function run(book: Book, opts: RunOpts = {}) {
+    const stage2Calls: number[] = [];
+    const castCalls: number[] = [];
+    const perChapter = new Map<number, number>();
+    const body = (id: number) => book.chapters.find((c) => c.id === id)!.body;
+    const phase1: Analyzer = {
+      runStage1: unused,
+      runStage1Chapter: unused,
+      runStage2Chapter: async (_m, id, _p, call) => {
+        stage2Calls.push(id);
+        const n = (perChapter.get(id) ?? 0) + 1;
+        perChapter.set(id, n);
+        if (opts.stage2) return opts.stage2(id, call, n);
+        return { sentences: takeOf(id, body(id)) };
+      },
+      runEmotionChapter: unused,
+      runScriptReviewChapter: unused,
+      runStage3Chapter: unused,
+      runAttributionEscalation: async () => null,
+    };
+    const phase0: Analyzer = {
+      ...phase1,
+      runStage1Chapter: async (_m, id): Promise<Stage1ChapterOutput> => {
+        castCalls.push(id);
+        return opts.stage1 ? opts.stage1(id) : { characters: roster() };
+      },
+      runStage2Chapter: () => Promise.reject(new Error('Phase-0 analyzer does not run Phase-1 calls')),
+    };
+    const g = globalThis as Record<string, unknown>;
+    g.__analyzer_device_test_phase1_selection = {
+      analyzer: phase1,
+      engine: 'gemini',
+      model: 'm1',
+      fallbackModel: null,
+    } satisfies AnalyzerSelection;
+    if (opts.saveHook) g.__p285_save_hook = opts.saveHook;
+    const events: Array<{ kind: string; [k: string]: unknown }> = [];
+    const keepAlive = setInterval(() => {}, 1_000_000);
+    clearInterval(keepAlive);
+    const job = {
+      controller: new AbortController(),
+      subscribers: new Set([
+        { send: (p: unknown) => events.push(p as { kind: string }), res: { end: () => {} }, keepAlive },
+      ]),
+      manuscriptId: book.manuscriptId,
+      kind: 'main',
+      bookDir: book.bookDir,
+      engine: 'gemini',
+      replay: {
+        logs: [],
+        lastPhase: null,
+        lastEta: null,
+        lastCastUpdate: null,
+        failedByChapterId: new Map(),
+        lastSeriesPrior: null,
+        warnings: new Map(),
+      },
+      lastDiskWriteAt: 0,
+    } as unknown as AnalysisJob;
+    const originalRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    const originalWidth = process.env.ANALYZER_OLLAMA_CONCURRENCY;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    try {
+      await runMainAnalyzerJob(
+        job,
+        getManuscript(book.manuscriptId)! as never,
+        { analyzer: phase0, engine: 'gemini', model: 'm0', fallbackModel: null },
+        { requestedFresh: opts.fresh ?? false, allowStage1Shrink: true, requestedModel: undefined },
+      );
+    } finally {
+      delete g.__p285_save_hook;
+      if (originalRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
+      else process.env.STAGE2_COVERAGE_RETRIES = originalRetries;
+      if (originalWidth === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
+      else process.env.ANALYZER_OLLAMA_CONCURRENCY = originalWidth;
+    }
+    const after = await loadAnalysisCache(book.manuscriptId);
+    const state = JSON.parse(readFileSync(join(book.bookDir, '.audiobook', 'state.json'), 'utf8'));
+    return { events, stage2Calls, castCalls, after, state, job };
+  }
+
+  const endings = (events: Array<{ kind: string; code?: unknown }>) =>
+    events
+      .filter((e) => e.kind === 'result' || e.kind === 'error')
+      .map((e) => (e.kind === 'error' ? `error:${String(e.code)}` : 'result'));
+
+  it('M1: with no stage1, every failed chapter with a key — including [] — enters P at load', async () => {
+    const chapters: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORDED[2] },
+      { id: 3, body: WORDED[3] },
+      { id: 4, body: WORDED[4], excluded: true },
+      { id: 5, body: WORDED[5] },
+    ];
+    const book = makeBook('m1', chapters);
+    const attribution = { code: 'attribution-collapse', message: 'm', remediation: 'r', phase: 'attribution' as const };
+    await saveAnalysisCache(book.manuscriptId, {
+      chapterCast: { 1: roster(), 2: roster(), 4: roster(), 5: roster() },
+      chapters: { 1: takeOf(1, WORDED[1]), 2: [], 4: takeOf(4, WORDED[4]), 5: takeOf(5, WORDED[5]) },
+      failedChapterIds: [1, 2, 4],
+      failedChapterErrors: { '1': attribution, '2': attribution, '4': attribution },
+    });
+    /* Chapter 3's cast fails, so the run ends cast_incomplete before Phase 1:
+       what P holds afterwards is what the load put there. */
+    const r = await run(book, {
+      stage1: (id) => (id === 3 ? Promise.reject(new Error('cast down')) : Promise.resolve({ characters: roster() })),
+    });
+    expect(endings(r.events)).toEqual(['error:cast_incomplete']);
+    expect([...(r.after.pendingAttributionChapterIds ?? [])].sort()).toEqual([1, 2]);
+    /* A pending take is never deleted. */
+    expect(r.after.chapters[1]).toEqual(takeOf(1, WORDED[1]));
+    expect(r.after.chapters[2]).toEqual([]);
+  }, 60_000);
+
+  it('decision H: stage1 on disk, X = {cast record, no take}: a main Resume attributes X, sends result and persists; X is current; a second main run replays X without an analyzer call for it, and the library reads cast_pending', async () => {
+    const chapters: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORDED[2] },
+    ];
+    const book = makeBook('decision-h', chapters);
+    await saveAnalysisCache(book.manuscriptId, {
+      stage1: stage1For(chapters),
+      chapterCast: { 1: roster(), 2: [] },
+      chapters: { 1: takeOf(1, WORDED[1]) },
+      failedChapterIds: [2],
+      failedChapterErrors: { '2': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'cast' } },
+    });
+    const first = await run(book);
+    expect(first.stage2Calls).toEqual([2]);
+    expect(endings(first.events)).toEqual(['result']);
+    expect(hasCurrentTake(first.after, 2)).toBe(true);
+    expect(first.after.takesPersisted).toBe(true);
+
+    const second = await run(book);
+    expect(second.stage2Calls).toEqual([]);
+    expect(endings(second.events)).toEqual(['result']);
+    expect(hasCurrentTake(second.after, 2)).toBe(true);
+    /* The library's analysis rule (scan.ts): complete, so it reads cast_pending. */
+    expect(analysisCompleteFor(second.after, [1, 2])).toBe(true);
+    expect(JSON.parse(readFileSync(castJsonPath(book.bookDir), 'utf8')).characters.length).toBeGreaterThan(0);
+  }, 60_000);
+
+  it('decision B: a worded chapter whose attribution returns [] is replayed as done on the next main run, keeps its flagged row, and the run sends result', async () => {
+    const chapters: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORDED[2] },
+    ];
+    const book = makeBook('decision-b', chapters);
+    await saveAnalysisCache(book.manuscriptId, {
+      stage1: stage1For(chapters),
+      chapterCast: { 1: roster(), 2: roster() },
+      chapters: { 1: takeOf(1, WORDED[1]) },
+    });
+    const empty = async (id: number) => ({ sentences: id === 2 ? [] : takeOf(id, WORDED[id]) });
+    const first = await run(book, { stage2: empty });
+    expect(first.stage2Calls).toEqual([2]);
+    expect(first.after.failedChapterIds).toEqual([2]);
+
+    const second = await run(book, { stage2: empty });
+    expect(second.stage2Calls).toEqual([]);
+    expect(second.after.failedChapterIds).toEqual([2]);
+    expect(endings(second.events)).toEqual(['result']);
+  }, 60_000);
+
+  it("a pending chapter's take survives the main roll and a rebuild", async () => {
+    const chapters: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORDED[2] },
+    ];
+    const book = makeBook('pending-roll', chapters);
+    await saveAnalysisCache(book.manuscriptId, {
+      chapterCast: { 1: roster(), 2: roster() },
+      chapters: { 2: takeOf(2, WORDED[2]) },
+      failedChapterIds: [2],
+      failedChapterErrors: {
+        '2': { code: 'attribution-collapse', message: 'm', remediation: 'r', phase: 'attribution' },
+      },
+    });
+    /* Pool width 1: chapter 1 is attributed (and rolls the edits) first; chapter
+       2's re-attribution then throws, so its pending take is never replaced. */
+    const r = await run(book, {
+      stage2: async (id) => {
+        if (id === 2) throw new Error('Phase 1 fails for chapter 2');
+        return { sentences: takeOf(id, WORDED[id]) };
+      },
+    });
+    expect(r.stage2Calls).toEqual([1, 2]);
+    expect(r.after.pendingAttributionChapterIds).toEqual([2]);
+    const edits = JSON.parse(readFileSync(manuscriptEditsJsonPath(book.bookDir), 'utf8')) as {
+      sentences: SentenceOutput[];
+    };
+    expect(edits.sentences.filter((s) => s.chapterId === 2).map((s) => s.text)).toEqual([WORDED[2]]);
+
+    const { rebuildCacheFromEdits } = await import('../store/analysis-cache-rebuild.js');
+    await rebuildCacheFromEdits(book.manuscriptId, manuscriptEditsJsonPath(book.bookDir));
+    const rebuilt = await loadAnalysisCache(book.manuscriptId);
+    expect(rebuilt.chapters[2]?.map((s) => s.text)).toEqual([WORDED[2]]);
+    expect(rebuilt.pendingAttributionChapterIds).toEqual([2]);
+  }, 60_000);
+
+  it('word-free short-circuit: no analyzer call, no flag, every bookkeeping step runs', async () => {
+    const chapters: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORD_FREE },
+    ];
+    const book = makeBook('word-free', chapters);
+    const r = await run(book, { fresh: true });
+    expect(r.stage2Calls).toEqual([1]);
+    expect(r.events.filter((e) => e.kind === 'chapter-failed')).toEqual([]);
+    expect(r.after.failedChapterIds ?? []).toEqual([]);
+    expect(Object.hasOwn(r.after.chapters, 2)).toBe(true);
+    expect(r.after.chapters[2]).toEqual([]);
+    expect(r.after.stage2Durations?.[2]).toBeTypeOf('number');
+    expect(endings(r.events)).toEqual(['result']);
+    expect(r.after.takesPersisted).toBe(true);
+  }, 60_000);
+
+  it('M0 heals a legacy word-free attribution-incomplete record', async () => {
+    const chapters: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORD_FREE },
+    ];
+    const book = makeBook('m0-heal', chapters);
+    await saveAnalysisCache(book.manuscriptId, {
+      stage1: stage1For(chapters),
+      chapterCast: { 1: roster(), 2: roster() },
+      chapters: { 1: takeOf(1, WORDED[1]), 2: [] },
+      failedChapterIds: [2],
+      failedChapterErrors: { '2': { code: 'attribution-incomplete', message: 'm', remediation: 'r' } },
+    });
+    const r = await run(book);
+    expect(r.stage2Calls).toEqual([]);
+    expect(r.after.failedChapterIds ?? []).toEqual([]);
+    expect(r.after.failedChapterErrors?.['2']).toBeUndefined();
+    expect(endings(r.events)).toEqual(['result']);
+  }, 60_000);
+
+  describe('takesPersisted / confirmReached', () => {
+    const one: BookChapter[] = [{ id: 1, body: WORDED[1] }];
+
+    it('false / absent after a Phase-1 completion; both true after a persist block that wrote state.json', async () => {
+      const book = makeBook('flags-ok', one);
+      const seenAtTakeSave: Array<{ takesPersisted?: boolean; confirmReached?: boolean }> = [];
+      const r = await run(book, {
+        fresh: true,
+        saveHook: (c) => {
+          if (c.chapters?.[1]) seenAtTakeSave.push({ takesPersisted: c.takesPersisted, confirmReached: c.confirmReached });
+        },
+      });
+      expect(seenAtTakeSave[0]).toEqual({ takesPersisted: false, confirmReached: undefined });
+      expect(endings(r.events)).toEqual(['result']);
+      expect(r.after.takesPersisted).toBe(true);
+      expect(r.after.confirmReached).toBe(true);
+    }, 60_000);
+
+    it('still false after attribution_drift (its try completes with state.json skipped)', async () => {
+      const book = makeBook('flags-drift', one);
+      const r = await run(book, {
+        fresh: true,
+        /* attributionDriftExceeded judges only a take of 100+ sentences. */
+        stage2: async (id) => ({
+          sentences: Array.from({ length: 120 }, (_, k) => ({
+            id: id * 1000 + k + 1,
+            chapterId: id,
+            characterId: 'ghost',
+            confidence: 0.9,
+            text: `${WORDED[id]} (${k})`,
+          })),
+        }),
+      });
+      expect(endings(r.events)).toEqual(['error:attribution_drift']);
+      expect(r.after.takesPersisted).toBe(false);
+      expect(r.after.confirmReached).toBeUndefined();
+    }, 60_000);
+
+    it('still false after a post-join overflow', async () => {
+      const book = makeBook('flags-overflow', one);
+      const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+      const r = await run(book, {
+        fresh: true,
+        stage2: async (id, call) => {
+          call.onReasoningOverflow?.(new AnalyzerReasoningOverflowError('gemini', 'm1', 8100));
+          return { sentences: takeOf(id, WORDED[id]) };
+        },
+      });
+      expect(endings(r.events)).toEqual(['error:analyzer-reasoning-overflow']);
+      expect(r.after.takesPersisted).toBe(false);
+      expect(r.after.confirmReached).toBeUndefined();
+    }, 60_000);
+
+    it('still false after a persist block that swallowed the state.json error', async () => {
+      const book = makeBook('flags-swallowed', one);
+      await saveAnalysisCache(book.manuscriptId, { stage1: stage1For(one), chapterCast: { 1: roster() }, chapters: {} });
+      (globalThis as Record<string, unknown>).__analysis_test_state_write_throws = true;
+      const r = await run(book);
+      expect(endings(r.events)).toEqual(['result']);
+      expect(r.after.takesPersisted).toBe(false);
+      expect(r.after.confirmReached).toBeUndefined();
+    }, 60_000);
+  });
+
+  it('O1: Start fresh on a castConfirmed book writes castConfirmed:false; the library reads analysing until the new run persists and the book is confirmed again', async () => {
+    const chapters: BookChapter[] = [{ id: 1, body: WORDED[1] }];
+    const book = makeBook('o1', chapters, { castConfirmed: true });
+    let midRun: { castConfirmed?: boolean; complete: boolean; reached: boolean } | undefined;
+    const r = await run(book, {
+      fresh: true,
+      saveHook: (c) => {
+        if (midRun || !c.chapters?.[1]) return;
+        const s = JSON.parse(readFileSync(join(book.bookDir, '.audiobook', 'state.json'), 'utf8'));
+        const cache = { chapters: {}, ...c } as Parameters<typeof analysisCompleteFor>[0];
+        midRun = {
+          castConfirmed: s.castConfirmed,
+          complete: analysisCompleteFor(cache, [1]),
+          reached: reachedConfirm(s, cache),
+        };
+      },
+    });
+    /* While the new run is going the book reads analysing (scan.ts: !reachedConfirm && !complete). */
+    expect(midRun).toEqual({ castConfirmed: false, complete: false, reached: false });
+    expect(endings(r.events)).toEqual(['result']);
+    expect(r.state.castConfirmed).toBe(false);
+    expect(reachedConfirm(r.state, r.after)).toBe(true);
+  }, 60_000);
+
+  it('the ETA counts a pending chapter as remaining', async () => {
+    const chapters: BookChapter[] = [
+      { id: 1, body: WORDED[1] },
+      { id: 2, body: WORDED[2] },
+      { id: 3, body: WORDED[3] },
+    ];
+    const book = makeBook('eta', chapters);
+    await saveAnalysisCache(book.manuscriptId, {
+      chapterCast: { 1: roster(), 2: roster(), 3: roster() },
+      chapters: { 3: takeOf(3, WORDED[3]) },
+      failedChapterIds: [3],
+      failedChapterErrors: {
+        '3': { code: 'attribution-collapse', message: 'm', remediation: 'r', phase: 'attribution' },
+      },
+    });
+    const r = await run(book);
+    const paceLines = r.events
+      .filter((e) => e.kind === 'log' && /^Refined pace/.test(String(e.message)))
+      .map((e) => String(e.message));
+    /* After chapter 1 completes, chapter 2 (no take) and chapter 3 (pending) remain. */
+    expect(paceLines[0]).toMatch(/remaining over 2 chapters\.$/);
+  }, 60_000);
 });
