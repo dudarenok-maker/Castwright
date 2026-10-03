@@ -243,6 +243,16 @@ export function AnalysingView({
   const [remainingMs, setRemainingMs] = useState<number | null>(null);
   const [, setNow] = useState(Date.now());
   const completedRef = useRef(false);
+  /* False once the view unmounts. A per-chapter Retry has no abort signal, so
+     its promise chain can settle after the user left; it must not complete a
+     view that is gone (onComplete hydrates whichever book is open now). */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   /* The active analysis fetch's AbortController. Lifted out of the
      analysis effect so the Pause button (rendered in the header below)
      can abort it imperatively without waiting for the effect's normal
@@ -1148,7 +1158,7 @@ export function AnalysingView({
         /* #3435 (S14) — a subset `result` on a book that has not reached
            Confirm means the book is finished: route to Confirm exactly like a
            main run's result. A cast-confirmed book stays put (decision F). */
-        if (bookFacts?.castConfirmed !== true && !completedRef.current) {
+        if (bookFacts?.castConfirmed !== true && !completedRef.current && mountedRef.current) {
           completeRun(payload);
           return;
         }
@@ -1289,7 +1299,14 @@ export function AnalysingView({
         /* The Retry ran on its own (the main run is never running beside it,
            #3435). Clear the snapshot so the pill drops out; the cast_incomplete
            auto-resume effect handles its own next-step decisions. */
-        dispatch(analysisActions.clearActiveStream());
+        /* After unmount the snapshot may belong to another book now: clear it
+           only if it is still this Retry's. */
+        if (
+          mountedRef.current ||
+          store.getState().analysis.activeStream?.manuscriptId === manuscriptId
+        ) {
+          dispatch(analysisActions.clearActiveStream());
+        }
       });
   };
 

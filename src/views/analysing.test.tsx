@@ -1,7 +1,7 @@
 // Pairs with docs/features/archive/04-analysing-view-progress.md
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, act, fireEvent, waitFor, cleanup } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { uiSlice } from '../store/ui-slice';
@@ -2424,6 +2424,33 @@ describe('AnalysingView — failed-chapter retry', () => {
       expect(onComplete).toHaveBeenCalledWith(payload);
       expect(screen.queryByText('The analyzer timed out.')).not.toBeInTheDocument();
       expect(store.getState().analysis.activeStream).toBeNull();
+    });
+
+    /* PR #3505 review pass 2 — a Retry result that lands after the user left
+       this view must not complete it: onComplete hydrates whichever book is
+       open now, and the finally's clearActiveStream would drop another book's
+       analysis snapshot. */
+    it('a Retry `result` arriving after unmount never completes the view or clears another book\'s snapshot', async () => {
+      const { store, onComplete } = await mountAfterMainFailure(false);
+      cleanup();
+      const other = {
+        bookId: 'b2',
+        manuscriptId: 'm2',
+        engine: 'local',
+        phaseId: 0,
+        phaseLabel: 'Detecting characters',
+        phaseProgress: 0,
+        remainingMs: null,
+        lastTickAt: 1,
+        state: 'running' as const,
+      };
+      store.dispatch(analysisActions.setActiveStream(other as never));
+      await act(async () => {
+        resolveSubset?.({ characters: [] } as unknown as AnalyseResponse);
+      });
+      await settle();
+      expect(onComplete).not.toHaveBeenCalled();
+      expect(store.getState().analysis.activeStream?.manuscriptId).toBe('m2');
     });
 
     it('a Retry ending resume_required after a failed main run shows only the needs-action line, not the stale banner', async () => {
