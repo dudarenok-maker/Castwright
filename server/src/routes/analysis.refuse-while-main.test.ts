@@ -678,6 +678,34 @@ describe('every ending aborts in-flight work (#3435 decision E)', () => {
     expect(errorCodes(r.events)[0]).not.toBe('aborted');
   }, 60_000);
 
+  it('a Pause during Phase 0 whose cast calls ignore the abort and return ends aborted with no stage1 write', async () => {
+    /* The cast pool resolves normally after the Pause (nothing rejected, nothing set
+       halting or ended), so only the abort check after the cast join keeps Phase 0b
+       from writing stage1 and cast.json. */
+    const castRelease = gate();
+    const bothCasting = gate();
+    let casting = 0;
+    const r = await runMain('pause-phase0', {}, {
+      fresh: true,
+      phase0: {
+        runStage1Chapter: async () => {
+          if (++casting === 2) bothCasting.open();
+          await castRelease.promise;
+          return { characters: [novaCharacter()] };
+        },
+      },
+      during: async (job) => {
+        await bothCasting.promise;
+        job.controller.abort();
+        castRelease.open();
+      },
+    });
+    expect(r.castCalls.sort()).toEqual([1, 2]);
+    expect(errorCodes(r.events)).toEqual(['aborted']);
+    expect(r.stage1Saved).toBe(false);
+    expect(r.stage2Calls).toEqual([]);
+  }, 60_000);
+
   it('a parked Phase-1 worker woken by markPhase0ChapterComplete after the halt does not run', async () => {
     const castTwo = gate();
     const castTwoStarted = gate();
