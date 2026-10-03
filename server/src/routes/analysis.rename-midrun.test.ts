@@ -420,8 +420,9 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
          at newDir is therefore satisfied even with persistTerminalSnapshot
          deleted outright. The running snapshot writes state:'running'; only
          the TERMINAL one writes 'paused' (this run ends on the abort above,
-         which Phase-1 dispatch surfaces as AnalysisAbortedError since #3435,
-         so it pauses rather than halting). Asserting 'paused' is
+         which the post-cast-join abort check in runMainAnalyzerJob surfaces as
+         AnalysisAbortedError, since the abort lands while the Phase-0 cast call
+         is held on phase0Gate; so it pauses rather than halting). Asserting 'paused' is
          what separates "the terminal snapshot followed the rename" from "some
          earlier file rode along with it". */
       const after = readFileSync(analysisStateJsonPath(seed.newDir), 'utf8');
