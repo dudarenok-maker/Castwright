@@ -112,7 +112,9 @@ afterAll(() => {
   delete process.env.WORKSPACE_DIR;
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  const { withKeyLock } = await import('../workspace/file-lock.js');
+  vi.mocked(withKeyLock).mockClear();
   unlinkGate.match = null;
   busy.value = false;
   failRestore.value = false;
@@ -422,7 +424,16 @@ function parkUnlink(match: (p: string) => boolean) {
   unlinkGate.match = match;
   return { hit, release };
 }
-const settle = (ms = 100) => new Promise((r) => setTimeout(r, ms));
+/* Resolves once a SECOND op has called withKeyLock for a `revision-op:` key —
+   i.e. it has queued behind the parked first one (withKeyLock registers its
+   place synchronously on call). Deterministic: no sleep. */
+async function secondOpQueued() {
+  const { withKeyLock } = await import('../workspace/file-lock.js');
+  await vi.waitFor(() => {
+    const opCalls = vi.mocked(withKeyLock).mock.calls.filter(([k]) => String(k).startsWith('revision-op:'));
+    expect(opCalls.length).toBeGreaterThanOrEqual(2);
+  });
+}
 
 describe('accept / reject on one chapter are serialised (#3400)', () => {
   it('reject mid-restore, then accept: accept answers 404 after the reject lands; the restored take survives; one timeline entry', async () => {
@@ -433,7 +444,7 @@ describe('accept / reject on one chapter are serialised (#3400)', () => {
     const rejecting = reject('r1').then((r) => r);
     await gate.hit;
     const accepting = accept('r1').then((r) => r);
-    await settle();
+    await secondOpQueued();
     gate.release();
     const [rej, acc] = await Promise.all([rejecting, accepting]);
     expect(rej.status).toBe(200);
@@ -452,7 +463,7 @@ describe('accept / reject on one chapter are serialised (#3400)', () => {
     const accepting = accept('r1').then((r) => r);
     await gate.hit;
     const rejecting = reject('r1').then((r) => r);
-    await settle();
+    await secondOpQueued();
     gate.release();
     const [acc, rej] = await Promise.all([accepting, rejecting]);
     expect(acc.status).toBe(200);
@@ -470,12 +481,33 @@ describe('accept / reject on one chapter are serialised (#3400)', () => {
     const first = reject('r1').then((r) => r);
     await gate.hit;
     const second = reject('r1').then((r) => r);
-    await settle();
+    await secondOpQueued();
     gate.release();
     const [a, b] = await Promise.all([first, second]);
     expect([a.status, b.status]).toEqual([200, 200]);
     expect(readFileSync(live(), 'utf8')).toBe('PREV');
     expect(disk().timeline['1']).toMatchObject([{ id: 'r1', eventKind: 'rejected' }]);
+  });
+
+  it.each(['accept', 'reject'] as const)('%s: an entry recorded between the lock-free pre-read and begin re-runs the op under the chapter key', async (op) => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    seed([]); // the pre-read finds no pending entry …
+    const store = await import('../workspace/revisions-store.js');
+    const { withKeyLock } = await import('../workspace/file-lock.js');
+    const real = await vi.importActual<typeof import('../workspace/revisions-store.js')>(
+      '../workspace/revisions-store.js',
+    );
+    /* … but one lands before the unkeyed begin runs. */
+    vi.mocked(store.beginRevisionOp).mockImplementationOnce(async (dir, chapters, op, id) => {
+      await real.recordPending(dir, chapters, entry(1, 'r1') as Parameters<typeof real.recordPending>[2]);
+      return real.beginRevisionOp(dir, chapters, op, id);
+    });
+    const res = await (op === 'accept' ? accept('r1') : reject('r1'));
+    expect(res.status).toBe(200);
+    expect(res.body.timeline['1']).toMatchObject([{ id: 'r1', eventKind: op === 'accept' ? 'accepted' : 'rejected' }]);
+    const keys = vi.mocked(withKeyLock).mock.calls.map(([k]) => String(k));
+    expect(keys.filter((k) => k.startsWith('revision-op:') && k.endsWith(':1'))).toHaveLength(1);
   });
 
   it('ops on DIFFERENT chapters do not wait on each other', async () => {

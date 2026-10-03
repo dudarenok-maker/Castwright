@@ -643,8 +643,9 @@ Design rationale:
   `revision-ops` ×3, `cast-design` ×2 (both arms of its defensive outer),
   `revisions` ×2 (the single-book and bulk polls), `qa-report`, `voices`,
   `qwen-voice`, `voice-style`, `single-design`, `script-review`),
-  alongside the two merge routes' own explicit
-  `LOCK_CONTENTION_REQUEST_ERROR` branch; and
+  alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
+  merge routes and of the two legacy `…/audio/previous` routes in
+  `chapter-audio.ts` (`DELETE` and `…/restore`); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
   `detail` blob (that blob renders in the UI's collapsible). The raw error goes

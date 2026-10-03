@@ -37,6 +37,11 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
+vi.mock('../workspace/file-lock.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/file-lock.js')>();
+  return { ...real, withKeyLock: vi.fn(real.withKeyLock) };
+});
+
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
 const TITLE = 'Bonus Story';
@@ -587,6 +592,7 @@ describe('chapter-audio router', () => {
         writePreviousMp3();
         const fs = await import('node:fs');
         const prevBytes = fs.readFileSync(join(audioRoot, `${SLUG}.previous.mp3`));
+        vi.mocked((await import('../workspace/file-lock.js')).withKeyLock).mockClear();
         let entered!: () => void;
         let release!: () => void;
         const hit = new Promise<void>((r) => (entered = r));
@@ -600,12 +606,43 @@ describe('chapter-audio router', () => {
         const accepting = request(app)
           .delete(`/api/books/${bookId}/chapters/1/audio/previous`)
           .then((r) => r);
-        await new Promise((r) => setTimeout(r, 100));
+        /* Wait until the DELETE has queued behind the parked restore (withKeyLock
+           registers its place synchronously on call) — no sleep. */
+        const { withKeyLock } = await import('../workspace/file-lock.js');
+        await vi.waitFor(() => {
+          const opCalls = vi.mocked(withKeyLock).mock.calls.filter(([k]) => String(k).startsWith('revision-op:'));
+          expect(opCalls.length).toBeGreaterThanOrEqual(2);
+        });
         release();
         const [rest, acc] = await Promise.all([restoring, accepting]);
         expect(rest.status).toBe(204);
         expect(acc.status).toBe(404);
         expect(fs.readFileSync(join(audioRoot, `${SLUG}.mp3`)).equals(prevBytes)).toBe(true);
+      });
+
+      it.each([
+        ['DELETE previous (accept)', 'delete', `/audio/previous`],
+        ['POST previous/restore (reject)', 'post', `/audio/previous/restore`],
+      ] as const)('%s: a lock timeout answers the curated 500 (no key or path) and is logged', async (_n, verb, suffix) => {
+        resetAudio();
+        writeMp3();
+        writePreviousMp3();
+        const { withKeyLock, LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+          '../workspace/file-lock.js'
+        );
+        vi.mocked(withKeyLock).mockRejectedValueOnce(
+          new LockAcquisitionTimeoutError('revision-op:C:/SECRET-WORKSPACE/book:1', 10_000),
+        );
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+          const res = await request(app)[verb](`/api/books/${bookId}/chapters/1${suffix}`);
+          expect(res.status).toBe(500);
+          expect(res.body).toEqual({ message: LOCK_CONTENTION_REQUEST_ERROR });
+          expect(res.text).not.toContain('SECRET-WORKSPACE');
+          expect(errSpy).toHaveBeenCalled();
+        } finally {
+          errSpy.mockRestore();
+        }
       });
 
       it('409s when a generation is in flight for the book', async () => {

@@ -387,8 +387,12 @@ chapterAudioRouter.delete(
         acceptPreviousAudio(root, chapter.slug),
       );
     } catch (e) {
-      /* The lock key embeds the absolute book path — never echo it. */
-      if (isLockAcquisitionTimeout(e)) return res.status(500).json({ message: LOCK_CONTENTION_REQUEST_ERROR });
+      /* The lock key embeds the absolute book path — never echo it. The raw
+         error goes to the log. */
+      if (isLockAcquisitionTimeout(e)) {
+        console.error('[chapter-audio] accept (DELETE previous): lock timeout', e);
+        return res.status(500).json({ message: LOCK_CONTENTION_REQUEST_ERROR });
+      }
       throw e;
     }
     if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
@@ -421,7 +425,11 @@ chapterAudioRouter.post(
       outcome = await withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
         restorePreviousAudio(root, chapter.slug),
       );
-    } catch {
+    } catch (e) {
+      console.error('[chapter-audio] reject (restore previous) failed', e);
+      /* A lock timeout's message embeds the book path; the fixed body below
+         reveals none, but a timeout is named as contention like every site. */
+      if (isLockAcquisitionTimeout(e)) return res.status(500).json({ message: LOCK_CONTENTION_REQUEST_ERROR });
       return res.status(500).json({ message: 'Failed to restore previous audio.' });
     }
     if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
