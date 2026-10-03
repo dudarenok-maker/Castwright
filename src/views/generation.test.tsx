@@ -2891,6 +2891,102 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         expect(store.getState().chapters.analysisGapById?.[1]).toEqual({ message: 'It failed before.' });
       });
 
+      type Opts = {
+        onPhase?: (p: { phaseId: number; progress: number }) => void;
+        onChapterFailed?: (f: { chapterId: number; message: string }) => void;
+      };
+      /** A subset run that sends a Phase-`phase` frame, optionally flags the
+          target, then ends with `end` (a response, or an error to throw). */
+      const scripted =
+        (target: number, phase: 0 | 1, flag: string | null, end: unknown) =>
+        async (_m: string, _ids: number[], opts: Opts) => {
+          opts.onPhase?.({ phaseId: phase, progress: 1 });
+          if (flag) opts.onChapterFailed?.({ chapterId: target, message: flag });
+          if (end instanceof Error) throw end;
+          return end;
+        };
+      const s8 = () => new AnalysisError('Cast detection finished. Resume the analysis.', 'resume_required');
+      const s14 = () => new AnalysisError('Chapter re-analysed. Chapter 2 still needs attribution.', 'resume_required');
+      async function include(store: ReturnType<typeof makeIncludeStore>) {
+        renderInclude(store);
+        fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+      }
+      async function reanalyse(store: ReturnType<typeof makeIncludeStore>) {
+        renderInclude(store);
+        fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+        fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+      }
+      const gapOf = (store: ReturnType<typeof makeIncludeStore>, id: number) =>
+        store.getState().chapters.analysisGapById?.[id];
+
+      it('Include: resume_required with no Phase 1 frame (S8) keeps the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 3, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(3, 0, null, s8()));
+        await include(store);
+        await waitFor(() => expect(store.getState().analysis.activeStream).toMatchObject({ haltCode: 'resume_required' }));
+        expect(gapOf(store, 3)).toEqual({ message: 'It failed before.' });
+      });
+
+      it('Include: resume_required after a Phase 1 frame (S14) clears the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 3, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(3, 1, null, s14()));
+        await include(store);
+        await waitFor(() => expect(gapOf(store, 3)).toBeUndefined());
+      });
+
+      it('Include: S14 for a target the run flagged (chapter-failed) keeps the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 3, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(3, 1, 'Attribution collapsed.', s14()));
+        await include(store);
+        await waitFor(() => expect(store.getState().analysis.activeStream).toMatchObject({ haltCode: 'resume_required' }));
+        expect(gapOf(store, 3)).toEqual({ message: 'It failed before.' });
+      });
+
+      it('Re-analyse: S14 for a target the run flagged (chapter-failed) keeps the gap', async () => {
+        const store = makeIncludeStore();
+        store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(1, 1, 'Attribution collapsed.', s14()));
+        await reanalyse(store);
+        await waitFor(() => expect(store.getState().analysis.activeStream).toMatchObject({ haltCode: 'resume_required' }));
+        expect(gapOf(store, 1)).toEqual({ message: 'It failed before.' });
+      });
+
+      it('Re-analyse: a result for a target the run flagged (chapter-failed) leaves a gap with the flag', async () => {
+        const store = makeIncludeStore();
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(1, 1, 'Attribution collapsed.', subsetResponse));
+        await reanalyse(store);
+        await waitFor(() => expect(gapOf(store, 1)).toEqual({ message: 'Attribution collapsed.' }));
+      });
+
+      it('Include: a result for a target the run flagged (chapter-failed) leaves a gap with the flag', async () => {
+        const store = makeIncludeStore();
+        runAnalysisForChaptersSpy.mockImplementationOnce(scripted(3, 1, 'Attribution collapsed.', subsetResponse));
+        await include(store);
+        await waitFor(() => expect(gapOf(store, 3)).toEqual({ message: 'Attribution collapsed.' }));
+      });
+
+      it('Re-analyse: cast_incomplete after the target’s own cast failed sets the gap', async () => {
+        const store = makeIncludeStore();
+        runAnalysisForChaptersSpy.mockImplementationOnce(
+          scripted(1, 0, 'Cast detection failed for this chapter.', new AnalysisError('Phase 0 paused.', 'cast_incomplete')),
+        );
+        await reanalyse(store);
+        await waitFor(() => expect(gapOf(store, 1)).toEqual({ message: 'Cast detection failed for this chapter.' }));
+      });
+
+      it('Include: a failed include POST leaves the chapter excluded, with no gap', async () => {
+        const store = makeIncludeStore();
+        setChapterExcludedSpy.mockRejectedValueOnce(new Error('include failed'));
+        await include(store);
+        await screen.findByRole('button', { name: /Retry/i });
+        expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+        expect(store.getState().chapters.chapters.find((c) => c.id === 3)?.excluded).toBe(true);
+        expect(gapOf(store, 3)).toBeUndefined();
+      });
+
       it('resume_required after a Phase 1 frame (S14: the target was attributed) clears the gap', async () => {
         const store = makeIncludeStore();
         store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));

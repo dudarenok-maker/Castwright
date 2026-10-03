@@ -488,7 +488,10 @@ export function GenerationView({
        attributed: no Phase 1 frame) or S14 (the targets were attributed in
        Phase 1). Only S14 finished this chapter's analysis. */
     let sawPhase1 = false;
+    /* #3435 — the run flagged the target (a `chapter-failed` for it): the
+       server then holds a failure record for it, which is a gap. */
     let targetFailed = false;
+    let targetFailedMessage = '';
     try {
       await api.setChapterExcluded(bookId, chapterId, false);
       dispatch(chaptersActions.setChapterExcluded({ chapterId, excluded: false }));
@@ -546,6 +549,7 @@ export function GenerationView({
         onChapterFailed: ({ chapterId: failedId, message }) => {
           if (failedId === chapterId) {
             targetFailed = true;
+            targetFailedMessage = message;
             patchSubset(chapterId, { error: message });
           }
         },
@@ -558,8 +562,9 @@ export function GenerationView({
       dispatch(castActions.mergeCharacters(res.characters ?? []));
       dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
       dispatch(manuscriptActions.hydrateFromAnalysis(res));
-      /* #3435 — the chapter's analysis finished. */
-      dispatch(chaptersActions.clearAnalysisGap(chapterId));
+      /* #3435 — the chapter's analysis finished, unless the run flagged it. */
+      if (targetFailed) dispatch(chaptersActions.setAnalysisGap({ chapterId, message: targetFailedMessage }));
+      else dispatch(chaptersActions.clearAnalysisGap(chapterId));
 
       setSubsetByChapter((prev) => {
         const { [chapterId]: _, ...rest } = prev;
@@ -603,15 +608,11 @@ export function GenerationView({
       /* #3435 — whether the chapter is excluded again: a gap note belongs only
          on an included chapter. C1: only an include this click performed is
          rolled back (an excluded-before-click chapter has no audio to lose). */
-      const rolledBack = includedHere
-        ? await rollbackInclude(chapterId).then(
-            () => true,
-            (rollbackErr) => {
-              console.warn('[generation] include rollback failed', rollbackErr);
-              return false;
-            },
-          )
-        : false;
+      if (includedHere) {
+        await rollbackInclude(chapterId).catch((rollbackErr) => {
+          console.warn('[generation] include rollback failed', rollbackErr);
+        });
+      }
       if (isAbort) {
         /* Drop the snapshot on abort — the server-side job already ended. */
         dispatch(analysisActions.clearActiveStream());
@@ -641,11 +642,14 @@ export function GenerationView({
       dispatch(analysisActions.clearActiveStream());
       const message = (e as Error).message || 'Subset analysis failed.';
       const shrink = e instanceof AnalysisError && e.code === 'stage1_shrink_refused';
-      /* #3435 — the chapter's analysis did not finish. Only an included
-         chapter gets a gap note (a failed rollback left it included), and a
-         shrink is not a gap: its row offers "Accept smaller cast", which
-         re-does the include (the rollback ran). */
-      if (!rolledBack && !shrink) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+      /* #3435 — the chapter's analysis did not finish. Only a chapter that is
+         included now gets a gap note (a failed rollback left it included; a
+         failed include POST left it excluded), and a shrink is not a gap: its
+         row offers "Accept smaller cast", which re-does the include (the
+         rollback ran). */
+      const stillIncluded =
+        store.getState().chapters.chapters.find((c) => c.id === chapterId)?.excluded !== true;
+      if (stillIncluded && !shrink) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
       patchSubset(chapterId, { error: message, shrink });
     }
   }
@@ -762,7 +766,10 @@ export function GenerationView({
        attributed: no Phase 1 frame) or S14 (the targets were attributed in
        Phase 1). Only S14 finished this chapter's analysis. */
     let sawPhase1 = false;
+    /* #3435 — the run flagged the target (a `chapter-failed` for it): the
+       server then holds a failure record for it, which is a gap. */
     let targetFailed = false;
+    let targetFailedMessage = '';
     try {
       const res = await api.runAnalysisForChapters(manuscriptId, [chapterId], {
         signal: controller.signal,
@@ -814,6 +821,7 @@ export function GenerationView({
         onChapterFailed: ({ chapterId: failedId, message }) => {
           if (failedId === chapterId) {
             targetFailed = true;
+            targetFailedMessage = message;
             patchSubset(chapterId, { error: message });
           }
         },
@@ -821,8 +829,9 @@ export function GenerationView({
       dispatch(castActions.mergeCharacters(res.characters ?? []));
       dispatch(chaptersActions.mergeSubsetAnalysis({ response: res, chapterIds: [chapterId] }));
       dispatch(manuscriptActions.hydrateFromAnalysis(res));
-      /* #3435 — the chapter's analysis finished. */
-      dispatch(chaptersActions.clearAnalysisGap(chapterId));
+      /* #3435 — the chapter's analysis finished, unless the run flagged it. */
+      if (targetFailed) dispatch(chaptersActions.setAnalysisGap({ chapterId, message: targetFailedMessage }));
+      else dispatch(chaptersActions.clearAnalysisGap(chapterId));
       setSubsetByChapter((prev) => {
         const { [chapterId]: _, ...rest } = prev;
         return rest;
@@ -874,10 +883,13 @@ export function GenerationView({
       const message = (e as Error).message || 'Re-analysis failed.';
       const shrink = e instanceof AnalysisError && e.code === 'stage1_shrink_refused';
       /* #3435 — the chapter's analysis did not finish. A shrink is not a gap:
-         its row offers "Accept smaller cast" instead. Nor is `cast_incomplete`
-         (M3): Phase 1 never ran, so the chapter's existing take is untouched. */
+         its row offers "Accept smaller cast" instead. A `cast_incomplete` is a
+         gap only when the target's own cast failed (M3): otherwise Phase 1
+         never ran and the chapter's existing take is untouched. */
       const castIncomplete = e instanceof AnalysisError && e.code === 'cast_incomplete';
-      if (!shrink && !castIncomplete) dispatch(chaptersActions.setAnalysisGap({ chapterId, message }));
+      if (!shrink && (!castIncomplete || targetFailed)) {
+        dispatch(chaptersActions.setAnalysisGap({ chapterId, message: castIncomplete ? targetFailedMessage : message }));
+      }
       patchSubset(chapterId, { error: message, shrink });
     }
   }
