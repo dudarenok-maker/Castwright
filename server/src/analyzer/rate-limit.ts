@@ -20,6 +20,7 @@
    against outlier long chapters and burst-retry pathology. */
 
 import { AnalysisAbortedError } from './errors.js';
+import { inferEngineFromModelId } from './model-id.js';
 import { allKnobs } from '../config/registry.js';
 import { resolveKnob } from '../config/resolver.js';
 
@@ -33,6 +34,8 @@ interface ModelLimits {
 }
 
 const FALLBACK_LIMITS: ModelLimits = { rpm: 5, tpm: 100_000, rpd: 50 };
+
+const UNLIMITED: ModelLimits = { rpm: Infinity, tpm: Infinity, rpd: Infinity };
 
 /* Built-in limits per model id. Values pulled live from AI Studio on
    2026-05-16 — keep in lockstep with the table in
@@ -93,6 +96,11 @@ function overrideValue(envName: string): number | undefined {
 }
 
 export function resolveLimits(model: string): ModelLimits {
+  /* #3084 PR 3b — an OpenAI-compatible endpoint id is unlimited by default
+     (decision 5). PR 3c puts the per-model settings map in front of this. The
+     Gemini env / builtin chain below never sees an endpoint id, so a
+     GEMINI_{RPM,TPM,RPD}_<slug> env var cannot throttle an endpoint. */
+  if (inferEngineFromModelId(model) === 'openai') return UNLIMITED;
   const base = BUILTIN_LIMITS[model] ?? FALLBACK_LIMITS;
   const slug = envSlug(model);
   return {
@@ -370,3 +378,6 @@ export function computeTpmWait(s: ModelState, now: number, needed: number, cap: 
     one limiter across all GeminiAnalyzer instances is the whole point.
     Tests reach in via `_reset()`. */
 export const geminiRateLimiter = new GeminiRateLimiter();
+
+/** #3084 — the one model-keyed analyzer limiter (Gemini, endpoints, persona). */
+export const analyzerRateLimiter = geminiRateLimiter;
