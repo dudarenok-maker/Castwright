@@ -349,6 +349,35 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
 
+  /api/user/settings/dropped-endpoint-entries/acknowledge:
+    post:
+      summary: Acknowledge dropped analyzer endpoint entries
+      operationId: acknowledgeDroppedEndpointEntries
+      description: |
+        #3084 F5 — marks each named archiveId acknowledged; it stops appearing
+        in droppedEndpointEntries. An unknown or already-acknowledged id is
+        ignored, not refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [archiveIds]
+              properties:
+                archiveIds: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Malformed body (archiveIds is not an array of strings)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+
   /api/books/{bookId}/backups:
     get:
       summary: List a book's state.json auto-backup snapshots
@@ -5040,6 +5069,13 @@ components:
           readOnly: true
           additionalProperties: { $ref: '#/components/schemas/AnalyzerEndpointKeyStatus' }
           description: Per endpoint id — whether a key is saved and still bound to its base URL's origin. Keys are never returned.
+        droppedEndpointEntries:
+          type: array
+          readOnly: true
+          items: { $ref: '#/components/schemas/DroppedEndpointEntrySummary' }
+          description: |
+            #3084 F5 — every unacknowledged analyzer-endpoint entry dropped at
+            read time (Task 3b.6). Never a key or field value.
         generationWorkers:
           type: integer
           minimum: 1
@@ -5266,6 +5302,18 @@ components:
       properties:
         contextTokens: { type: integer }
         source: { type: string, enum: [llama.cpp /props, llama-swap /props] }
+
+    DroppedEndpointEntrySummary:
+      type: object
+      required: [kind, issues, droppedAt]
+      properties:
+        archiveId: { type: string, nullable: true, description: 'null while the archive append is still pending.' }
+        kind: { type: string, enum: [endpoint, key] }
+        endpointId: { type: string }
+        name: { type: string }
+        origin: { type: string }
+        issues: { type: array, items: { type: string }, description: '"path: code" strings, never a value.' }
+        droppedAt: { type: string, format: date-time }
 
     # --- Library ----------------------------------------------------
     LibraryResponse:

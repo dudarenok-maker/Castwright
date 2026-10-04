@@ -7040,6 +7040,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   analyzerKeepAliveByModel: {},
   analyzerEndpoints: [],
   analyzerEndpointKeyStatus: {},
+  droppedEndpointEntries: [],
 };
 
 async function realGetUserSettings(): Promise<UserSettings> {
@@ -7712,6 +7713,32 @@ async function mockPutAnalyzerEndpointKey(id: string, key: string | null): Promi
   if (key && key.trim().length > 0) mockEndpointKeyOrigins[id] = new URL(ep.baseUrl).origin;
   else delete mockEndpointKeyOrigins[id];
   return mockSettingsWithEndpoints(mockEndpoints());
+}
+
+/* #3084 F5 review, item 7 — mockEndpointFromInput refuses at save time (matching
+   the server), so the mock CRUD functions never populate
+   MOCK_USER_SETTINGS.droppedEndpointEntries themselves. PR 3d's own tests seed
+   it directly (its mock-mode UI tests need a dropped entry to show the banner
+   against), so this must actually filter, not no-op, or 3d's "Got it" test
+   would pass for the wrong reason (nothing to hide in the first place). */
+async function mockAcknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<UserSettings> {
+  await wait(50);
+  const acked = new Set(archiveIds);
+  /* `droppedEndpointEntries` is readOnly in the generated UserSettings (it is
+     response-only on the real server — the acknowledge route is the only
+     writer), so the mock mutates it through a mutable view, the same way
+     `configOverrides` is persisted above. */
+  const mutable = MOCK_USER_SETTINGS as { droppedEndpointEntries: UserSettings['droppedEndpointEntries'] };
+  mutable.droppedEndpointEntries = (MOCK_USER_SETTINGS.droppedEndpointEntries ?? []).filter(
+    (e) => !acked.has(e.archiveId ?? ''),
+  );
+  return mockSettingsWithEndpoints(mockEndpoints());
+}
+async function realAcknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<UserSettings> {
+  return analyzerEndpointRequest('/api/user/settings/dropped-endpoint-entries/acknowledge', {
+    method: 'POST',
+    body: JSON.stringify({ archiveIds }),
+  });
 }
 
 /** Test-only (#3084): seed mock settings the way a file saved before PR 3d would
@@ -10335,6 +10362,7 @@ const real = {
   updateAnalyzerEndpoint: realUpdateAnalyzerEndpoint,
   deleteAnalyzerEndpoint: realDeleteAnalyzerEndpoint,
   putAnalyzerEndpointKey: realPutAnalyzerEndpointKey,
+  acknowledgeDroppedEndpointEntries: realAcknowledgeDroppedEndpointEntries,
   getAppInfo: realGetAppInfo,
   getUpdateStatus: realGetUpdateStatus,
   checkCompanionApk: realCheckCompanionApk,
@@ -10651,6 +10679,7 @@ const mock = {
   updateAnalyzerEndpoint: mockUpdateAnalyzerEndpoint,
   deleteAnalyzerEndpoint: mockDeleteAnalyzerEndpoint,
   putAnalyzerEndpointKey: mockPutAnalyzerEndpointKey,
+  acknowledgeDroppedEndpointEntries: mockAcknowledgeDroppedEndpointEntries,
   getAppInfo: mockGetAppInfo,
   getUpdateStatus: mockGetUpdateStatus,
   checkCompanionApk: mockCheckCompanionApk,

@@ -92,4 +92,15 @@ describe('mock analyzer endpoint API', () => {
     await api.putUserSettings({ analyzerEndpoints: [] } as never);
     expect((await api.getUserSettings()).analyzerEndpoints).toEqual(before);
   });
+
+  it('mock acknowledgeDroppedEndpointEntries removes only the named entries (#3084 F5 review, item 7)', async () => {
+    _setMockUserSettingsForTest({
+      droppedEndpointEntries: [
+        { archiveId: 'ack-1', kind: 'endpoint', endpointId: 'a', issues: ['baseUrl: invalid_format'], droppedAt: new Date().toISOString() },
+        { archiveId: 'ack-2', kind: 'endpoint', endpointId: 'b', issues: ['baseUrl: invalid_format'], droppedAt: new Date().toISOString() },
+      ] as never,
+    });
+    const s = await api.acknowledgeDroppedEndpointEntries(['ack-1']);
+    expect(s.droppedEndpointEntries?.map((e) => e.archiveId)).toEqual(['ack-2']);
+  });
 });

@@ -215,6 +215,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/user/settings/dropped-endpoint-entries/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge dropped analyzer endpoint entries
+         * @description #3084 F5 — marks each named archiveId acknowledged; it stops appearing
+         *     in droppedEndpointEntries. An unknown or already-acknowledged id is
+         *     ignored, not refused.
+         */
+        post: operations["acknowledgeDroppedEndpointEntries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/backups": {
         parameters: {
             query?: never;
@@ -3570,6 +3592,11 @@ export interface components {
                 [key: string]: components["schemas"]["AnalyzerEndpointKeyStatus"];
             };
             /**
+             * @description #3084 F5 — every unacknowledged analyzer-endpoint entry dropped at
+             *     read time (Task 3b.6). Never a key or field value.
+             */
+            readonly droppedEndpointEntries?: components["schemas"]["DroppedEndpointEntrySummary"][];
+            /**
              * @description Number of chapters the generation queue synthesises concurrently
              *     (queue-worker concurrency). Default 1. Pulled from the flat queue
              *     across books; same-book chapters fan out within one stream via the
@@ -3763,6 +3790,19 @@ export interface components {
             contextTokens: number;
             /** @enum {string} */
             source: "llama.cpp /props" | "llama-swap /props";
+        };
+        DroppedEndpointEntrySummary: {
+            /** @description null while the archive append is still pending. */
+            archiveId?: string | null;
+            /** @enum {string} */
+            kind: "endpoint" | "key";
+            endpointId?: string;
+            name?: string;
+            origin?: string;
+            /** @description "path: code" strings, never a value. */
+            issues: string[];
+            /** Format: date-time */
+            droppedAt: string;
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];
@@ -6972,6 +7012,41 @@ export interface operations {
             };
             /** @description No endpoint with this id */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+        };
+    };
+    acknowledgeDroppedEndpointEntries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    archiveIds: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Updated settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Malformed body (archiveIds is not an array of strings) */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
