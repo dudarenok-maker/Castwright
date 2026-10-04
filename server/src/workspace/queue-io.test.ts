@@ -54,6 +54,14 @@ describe('queue-io.enqueue', () => {
     expect(f.entries.find((e) => e.id === 'e2')).not.toHaveProperty('fallbackConfirmed');
   });
 
+  it('plan 285 — carries an optional review onto the stored entry, and markInProgress keeps it', () => {
+    const review = { characterId: 'amy', triggeredBy: 'Amy voice change' };
+    const f = enqueue(emptyFile(), [{ ...sampleEntry('e1'), review }, sampleEntry('e2')]);
+    expect(f.entries.find((e) => e.id === 'e1')?.review).toEqual(review);
+    expect(f.entries.find((e) => e.id === 'e2')).not.toHaveProperty('review');
+    expect(markInProgress(f, 'e1').entries.find((e) => e.id === 'e1')?.review).toEqual(review);
+  });
+
   it('appends entries at the bottom and renumbers contiguously', () => {
     let f = emptyFile();
     f = enqueue(f, [sampleEntry('e1'), sampleEntry('e2')]);

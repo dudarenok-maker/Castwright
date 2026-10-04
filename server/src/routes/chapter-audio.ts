@@ -31,14 +31,15 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { existsSync } from 'node:fs';
-import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
-import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
+import { acceptPreviousAudio, restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';
 import { isGenerationActive } from './generation.js';
+import { withKeyLock, isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
+import { revisionOpLockKey } from '../workspace/revisions-store.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 /** Disk shape mirror of `ChapterPeaksFile` in `server/src/tts/mp3.ts`.
@@ -229,13 +230,6 @@ async function locateChapterAudio(
   return { audio, segPath, peaksPath, lufsPath, chapterId, chapterTitle: chapter.title };
 }
 
-/** Mirror of findChapterAudio but for the `.previous.mp3` sibling. */
-function findPreviousChapterAudio(audioRoot: string, slug: string): ChapterAudioFile | null {
-  const path = join(audioRoot, `${slug}.previous.mp3`);
-  if (!existsSync(path)) return null;
-  return { path, ext: 'mp3', mime: 'audio/mpeg', urlSuffix: 'audio.mp3' };
-}
-
 chapterAudioRouter.get(
   '/:bookId/chapters/:chapterId/audio',
   async (req: Request, res: Response) => {
@@ -385,11 +379,23 @@ chapterAudioRouter.delete(
     const chapter = located.state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
     const root = audioDir(located.bookDir);
-    const previous = findPreviousChapterAudio(root, chapter.slug);
-    if (!previous) return res.status(404).json({ message: 'No preserved previous audio.' });
-    /* Delete both files — segments.json absence on its own isn't a fault. */
-    await unlink(previous.path).catch(() => {});
-    await unlink(join(root, `${chapter.slug}.previous.segments.json`)).catch(() => {});
+    /* #3400: serialised against revision accept/reject on the same chapter
+       (the same audio functions, the same race). */
+    let outcome: 'deleted' | 'none';
+    try {
+      outcome = await withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
+        acceptPreviousAudio(root, chapter.slug),
+      );
+    } catch (e) {
+      /* The lock key embeds the absolute book path — never echo it. The raw
+         error goes to the log. */
+      if (isLockAcquisitionTimeout(e)) {
+        console.error('[chapter-audio] accept (DELETE previous): lock timeout', e);
+        return res.status(500).json({ message: LOCK_CONTENTION_REQUEST_ERROR });
+      }
+      throw e;
+    }
+    if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
     res.status(204).end();
   },
 );
@@ -414,28 +420,19 @@ chapterAudioRouter.post(
     const chapter = located.state.chapters.find((c) => c.id === chapterId);
     if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
     const root = audioDir(located.bookDir);
-    const previous = findPreviousChapterAudio(root, chapter.slug);
-    if (!previous) return res.status(404).json({ message: 'No preserved previous audio.' });
-
-    /* Delete the live render first so the previous → live rename doesn't
-     race a still-present current file. */
-    const currentLive = findChapterAudio(root, chapter.slug);
-    if (currentLive) await unlink(currentLive.path).catch(() => {});
-    const liveSegments = join(root, `${chapter.slug}.segments.json`);
-    if (existsSync(liveSegments)) await unlink(liveSegments).catch(() => {});
-
+    let outcome: 'restored' | 'none';
     try {
-      await renameWithRetry(previous.path, join(root, `${chapter.slug}.${previous.ext}`));
-    } catch (err) {
-      console.error(
-        `[chapter-audio] failed to restore previous audio for ${chapter.slug}: ${(err as Error).message}`,
+      outcome = await withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
+        restorePreviousAudio(root, chapter.slug),
       );
+    } catch (e) {
+      console.error('[chapter-audio] reject (restore previous) failed', e);
+      /* A lock timeout's message embeds the book path; the fixed body below
+         reveals none, but a timeout is named as contention like every site. */
+      if (isLockAcquisitionTimeout(e)) return res.status(500).json({ message: LOCK_CONTENTION_REQUEST_ERROR });
       return res.status(500).json({ message: 'Failed to restore previous audio.' });
     }
-    const previousSegments = join(root, `${chapter.slug}.previous.segments.json`);
-    if (existsSync(previousSegments)) {
-      await renameWithRetry(previousSegments, liveSegments).catch(() => {});
-    }
+    if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
     res.status(204).end();
   },
 );

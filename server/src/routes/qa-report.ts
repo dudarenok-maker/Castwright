@@ -11,6 +11,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { buildAudioQaReport } from '../audio/qa-report.js';
 import { computeRevisionsForBook } from './revisions.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { triggerScoring, isGenerationActive } from './generation.js';
 
 export const qaReportRouter = Router();
@@ -43,7 +44,7 @@ qaReportRouter.get('/:bookId/qa-report', async (req: Request, res: Response) => 
     });
   } catch (e) {
     console.error('[qa-report] GET failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to build QA report.' });
+    res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to build QA report.') });
   }
 });
 

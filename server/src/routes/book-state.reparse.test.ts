@@ -186,6 +186,69 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
     const logPath = join(bookDir, '.audiobook', 'change-log.json');
     expect(existsSync(logPath)).toBe(false);
   });
+
+  it('plan 285 — resets revisions.json to a NEW fileId and never deletes it', async () => {
+    const revisionsPath = join(bookDir, '.audiobook', 'revisions.json');
+    const OLD = '000000000000001-aaaaaaaa';
+    writeFileSync(
+      revisionsPath,
+      JSON.stringify({
+        schema: 1,
+        fileId: OLD,
+        rev: 7,
+        pending: [
+          { id: 'revision:1:1', chapterId: 1, characterId: 'eliza', playable: true, hasPreviousAudio: true, segments: [], origin: 'server' },
+        ],
+        dismissed: ['d1'],
+        acceptedSelections: {},
+        timeline: {},
+      }),
+    );
+    const res = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(res.status).toBe(200);
+    expect(existsSync(revisionsPath)).toBe(true);
+    const after = JSON.parse(readFileSync(revisionsPath, 'utf8'));
+    expect(after).toMatchObject({ schema: 1, rev: 0, pending: [], dismissed: [], acceptedSelections: {}, timeline: {} });
+    expect(after.fileId).not.toBe(OLD);
+    expect(after.fileId).toMatch(/^\d{15}-[0-9a-f]{8}$/);
+  });
+
+  it('plan 285 — refuses a NEWER-schema revisions.json BEFORE deleting anything', async () => {
+    const revisionsPath = join(bookDir, '.audiobook', 'revisions.json');
+    const castPath = join(bookDir, '.audiobook', 'cast.json');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const audioFile = join(bookDir, 'audio', '01-chapter-one.mp3');
+    mkdirSync(join(bookDir, 'audio'), { recursive: true });
+    writeFileSync(audioFile, 'LIVE');
+    writeFileSync(castPath, JSON.stringify({ characters: [{ id: 'eliza', name: 'Eliza' }] }));
+    writeFileSync(revisionsPath, JSON.stringify({ schema: 2, pending: [] }));
+    const stateBefore = readFileSync(statePath, 'utf8');
+
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/reparse`);
+
+      expect(res.status).toBe(500);
+      expect(res.body.error).toMatch(/schema=2/);
+      /* FIRST, deliberately: applyReparse writes state.json synchronously in
+         sequence (before its Promise.all), so this is the one check that is
+         deterministically red when the preflight is missing. The cast/audio
+         deletions run as Promise.all siblings and may still be in flight when
+         the 500 returns. */
+      expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
+      expect(existsSync(castPath)).toBe(true);
+      expect(readFileSync(audioFile, 'utf8')).toBe('LIVE');
+      expect(JSON.parse(readFileSync(revisionsPath, 'utf8'))).toEqual({ schema: 2, pending: [] });
+    } finally {
+      /* A failure above must not leak this newer-schema fixture into the
+         tests that follow (they reuse bookDir). Under a mutated route the
+         reparse's cast-arm (delete + carryover snapshot) can still be queued
+         on the cast lock after the 500 returns; drain that queue first. */
+      const { withCastLock } = await import('../workspace/cast-lock.js');
+      await withCastLock(bookDir, async () => undefined);
+      rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
+      rmSync(revisionsPath, { force: true });
+    }
+  });
 });
 
 describe('reparse handler — reuse/voice carryover (srv-13)', () => {
@@ -961,7 +1024,7 @@ describe('reparse handler — #2099 code-review finding 1: a corrupt cast.json n
     );
   });
 
-  it('completes the reparse and deletes both cast.json and revisions.json when cast.json is corrupt', async () => {
+  it('completes the reparse, deletes cast.json and RESETS revisions.json when cast.json is corrupt', async () => {
     const castPath = join(corruptBookDir, '.audiobook', 'cast.json');
     const revisionsPath = join(corruptBookDir, '.audiobook', 'revisions.json');
     // Truncated JSON — parses fine as a *file that exists* (existsSync true)
@@ -976,13 +1039,13 @@ describe('reparse handler — #2099 code-review finding 1: a corrupt cast.json n
     // cast.json degraded to the missing-file path: deleted, not left corrupt.
     expect(existsSync(castPath)).toBe(false);
     // Cleanup-completeness check, not evidence about the cast arm: the
-    // revisions arm's rm() is invoked synchronously while the Promise.all
-    // array literal is built, before the cast arm's first await, so
-    // revisions.json is gone either way — this passes whether or not the
-    // corrupt-read handling above is correct. It would catch a future
-    // Promise.allSettled reshape that stopped sibling arms from running to
-    // completion.
-    expect(existsSync(revisionsPath)).toBe(false);
+    // revisions arm (plan 285: a reset through the store under its own leaf
+    // lock) runs beside the cast arm in the same Promise.all. It would catch
+    // a future Promise.allSettled reshape that stopped sibling arms from
+    // running to completion.
+    const reset = JSON.parse(readFileSync(revisionsPath, 'utf8'));
+    expect(reset).toMatchObject({ schema: 1, rev: 0, pending: [], dismissed: [], acceptedSelections: {}, timeline: {} });
+    expect(reset.fileId).toMatch(/^\d{15}-[0-9a-f]{8}$/);
   });
 });
 

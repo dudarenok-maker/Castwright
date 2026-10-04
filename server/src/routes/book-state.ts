@@ -34,6 +34,7 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withKeyLock, requestFailureMessage } from '../workspace/file-lock.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { assertRevisionsResettable, resetRevisions } from '../workspace/revisions-store.js';
 import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
 import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile, type StatsPutBody } from '../workspace/listen-stats.js';
@@ -1142,11 +1143,13 @@ async function applyReparse(
        today. This arm's rm(cast.json) is unguarded (no existsSync check):
        the read and the delete decision now live inside the lock together, so
        there is no longer an out-of-lock existsSync to desync from the
-       in-lock reality — of the three sibling arms below, only the revisions
-       and audio arms keep an existsSync guard (they gate an already-
-       idempotent rm and acquire no lock, so no decision of theirs crosses a
-       lock boundary); clearAnalysisCache's rm is unguarded too, same as this
-       arm's.
+       in-lock reality — of the three sibling arms below, only the audio arm
+       keeps an existsSync guard (it gates an already-idempotent rm and
+       acquires no lock, so no decision of its crosses a lock boundary); the
+       revisions arm resets revisions.json through the store under the
+       per-book revisions leaf lock (plan 285), held beside this cast lock,
+       never nested in it; clearAnalysisCache's rm is unguarded too, same as
+       this arm's.
 
        Behaviour change vs. main: readJson's bare JSON.parse throws on a
        corrupt (not just missing) cast.json. On main that throw happened
@@ -1198,9 +1201,13 @@ async function applyReparse(
       await rm(castJsonPath(bookDir), { force: true });
     }),
     clearAnalysisCache(state.manuscriptId),
-    existsSync(revisionsJsonPath(bookDir))
-      ? rm(revisionsJsonPath(bookDir), { force: true })
-      : Promise.resolve(),
+    /* Plan 285 — RESET (new fileId, rev 0) through the store under its own
+       leaf lock, never delete: a deleted file would read back fileId:null,
+       which the PR 2 client cache treats as "older than any id". A corrupt
+       file is replaced (as the rm did); a newer-schema one was already
+       refused by the route's preflight. This arm sits BESIDE the
+       withCastLock arm, never inside it. */
+    resetRevisions(bookDir),
     existsSync(ad) ? rm(ad, { recursive: true, force: true }) : Promise.resolve(),
   ]);
 
@@ -1286,6 +1293,10 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir, state } = located;
 
+    /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
+       deleted or rewritten (applyReparse's state write + Promise.all). */
+    await assertRevisionsResettable(bookDir);
+
     const manuscriptPath = join(bookDir, safeSegment(state.manuscriptFile));
     if (!existsSync(manuscriptPath)) {
       return res
@@ -1367,6 +1378,10 @@ bookStateRouter.post(
       const located = await findBookByBookId(req.params.bookId);
       if (!located) return res.status(404).json({ error: 'Book not found.' });
       const { bookDir, state } = located;
+
+      /* Plan 285 — refuse a newer-schema revisions.json BEFORE this route
+         writes the new manuscript, unlinks the old one, or sets manuscriptFile. */
+      await assertRevisionsResettable(bookDir);
 
       const parsed = await parseManuscript({
         buffer: req.file.buffer,
