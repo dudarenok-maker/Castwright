@@ -1,4 +1,4 @@
-/* #3084 PR 3b — analyzer endpoint CRUD and the per-endpoint key write
+﻿/* #3084 PR 3b — analyzer endpoint CRUD and the per-endpoint key write
    (Task 3b.8 adds Detect to this router).
 
    Every write goes through mutateUserSettings, so each refusal (duplicate id,
@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { z } from 'zod';
-import { knownAnalyzerSecrets, mutateUserSettings, type UserSettings } from '../workspace/user-settings.js';
+import { knownAnalyzerSecrets, loadKnownAnalyzerSecrets, mutateUserSettings, readUserSettings, type UserSettings } from '../workspace/user-settings.js';
 import { redactKnownSecrets } from '../analyzer/redact.js';
 import {
   AnalyzerEndpointRefusal,
@@ -18,8 +18,11 @@ import {
   applyDelete,
   applyKey,
   applyUpdate,
+  keyOriginMatches,
   type EndpointState,
 } from '../workspace/analyzer-endpoints.js';
+import { ENDPOINT_ID_PATTERN } from '../analyzer/model-id.js';
+import { detectServedContext } from '../analyzer/endpoint-detect.js';
 import { envDerived } from './user-settings.js';
 
 export const analyzerEndpointsRouter = Router();
@@ -61,6 +64,57 @@ analyzerEndpointsRouter.post('/', async (req: Request, res: Response) => {
   } catch (err) {
     if (!sendRefusal(res, err)) fail(res, 'save the analyzer endpoint', err);
   }
+});
+
+const detectSchema = z.object({
+  baseUrl: z.string().url(),
+  model: z.string().trim().min(1).optional(),
+  apiKey: z.string().trim().min(1).optional(),
+  endpointId: z.string().regex(ENDPOINT_ID_PATTERN).optional(),
+  flavor: z.enum(['llama.cpp', 'llama-swap']),
+  allowModelLoad: z.boolean().optional(),
+});
+
+/* POST /api/analyzer/endpoints/detect-context — reads a user-run server's
+   served context size when the user clicks Detect. llama-swap's
+   /props?model= loads the model, so it needs an explicit allowModelLoad. */
+analyzerEndpointsRouter.post('/detect-context', async (req: Request, res: Response) => {
+  const parsed = detectSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid payload.', code: 'invalid', details: parsed.error.issues.map((i) => i.message) });
+  }
+  const body = parsed.data;
+  if (body.flavor === 'llama-swap' && !body.model) {
+    return res.status(400).json({ error: 'llama-swap needs the model name to report its context size.', code: 'model-required' });
+  }
+  if (body.flavor === 'llama-swap' && body.allowModelLoad !== true) {
+    return res.status(400).json({
+      error: 'Reading the context size from llama-swap may load the model. Confirm to continue.',
+      code: 'model-load-confirmation-required',
+    });
+  }
+  let apiKey = body.apiKey ?? null;
+  if (!apiKey && body.endpointId) {
+    const settings = await readUserSettings();
+    const stored = settings.analyzerEndpointKeys[body.endpointId];
+    if (stored && !keyOriginMatches(stored, body.baseUrl)) {
+      const name = settings.analyzerEndpoints.find((e) => e.id === body.endpointId)?.name ?? body.endpointId;
+      return res.status(400).json({
+        error: `The key saved for ${name} was entered for a different host — re-enter the key for ${name}.`,
+        code: 'auth',
+      });
+    }
+    apiKey = stored?.key ?? null;
+  }
+  const result = await detectServedContext({
+    baseUrl: body.baseUrl,
+    flavor: body.flavor,
+    model: body.model,
+    apiKey,
+    secrets: await loadKnownAnalyzerSecrets(),
+  });
+  if (result.ok) return res.json({ contextTokens: result.contextTokens, source: result.source });
+  return res.status(502).json({ error: result.error, code: 'detect-failed', upstreamStatus: result.upstreamStatus });
 });
 
 analyzerEndpointsRouter.put('/:endpointId', async (req: Request, res: Response) => {
