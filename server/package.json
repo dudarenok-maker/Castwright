@@ -18,7 +18,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@google/genai": "^2.22.0",
+    "@google/genai": "^2.26.0",
     "@lingo-reader/mobi-parser": "^0.4.6",
     "@types/yazl": "^3.3.1",
     "cookie": "^2.0.1",
@@ -27,30 +27,30 @@
     "express": "^5.1.0",
     "express-rate-limit": "^8.7.0",
     "franc": "^6.2.0",
-    "multer": "^2.3.0",
+    "multer": "^2.4.0",
     "nanoid": "^6.0.1",
     "pdf-parse": "^2.4.5",
-    "sharp": "^0.35.4",
-    "undici": "^8.10.2",
+    "sharp": "^0.35.5",
+    "undici": "^8.11.2",
     "yauzl": "^3.3.0",
     "yazl": "^3.3.1",
-    "zod": "^4.6.2"
+    "zod": "^4.6.5"
   },
   "overrides": {
     "adm-zip": ">=0.6.1"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
-    "@types/multer": "^2.2.0",
-    "@types/node": "^26.5.1",
+    "@types/multer": "^2.3.0",
+    "@types/node": "^26.6.4",
     "@types/picomatch": "^4.0.3",
     "@types/supertest": "^7.2.1",
     "@types/yauzl": "^3.3.0",
     "picomatch": "^4.0.7",
-    "std-env": "^4.2.0",
-    "supertest": "^7.2.2",
-    "tsx": "^4.23.13",
+    "std-env": "^4.3.0",
+    "supertest": "^7.3.0",
+    "tsx": "^4.23.15",
     "typescript": "^6.0.0",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.3"
   }
 }
