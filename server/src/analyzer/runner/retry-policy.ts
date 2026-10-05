@@ -1,7 +1,7 @@
 /* Per-transport validation-retry policy (#3084 wave 1). The stage runner owns
    the attempt loop; these objects hold every place the two pre-extraction
    runners differed, so each engine's behaviour is unchanged. */
-import { AnalysisAbortedError, LocalUnreachableError } from '../errors.js';
+import { AnalysisAbortedError, AnalyzerUnreachableError, LocalUnreachableError } from '../errors.js';
 import { resolveOllamaRetryTemperature, resolveOllamaTemperature } from '../ollama-settings.js';
 import { resolveGeminiTemperature } from '../transports/gemini-transport.js';
 import { buildRetryMessage, type ParseResult } from './parse.js';
@@ -57,4 +57,30 @@ export const GEMINI_RETRY_POLICY: ValidationRetryPolicy = {
   writesRawAttempts: false,
   warnsOnRepair: false,
   escalationRethrows: (err) => err instanceof AnalysisAbortedError,
+};
+
+/* #3084 PR 3b — OpenAI-compatible endpoints use Ollama's retry SHAPE
+   (ollama.ts:560-572): invalid JSON drops the assistant turn and raises the
+   temperature so the sampler can leave the failure path; a schema failure
+   replays the output with the field list. Endpoints carry no temperature
+   field, so the temperatures are these constants (= the Ollama knob defaults,
+   registry.ts:27 and :37). */
+export const OPENAI_DEFAULT_TEMPERATURE = 0.2;
+export const OPENAI_RETRY_TEMPERATURE = 0.6;
+
+export const OPENAI_RETRY_POLICY: ValidationRetryPolicy = {
+  name: 'openai',
+  initialTemperature: () => OPENAI_DEFAULT_TEMPERATURE,
+  buildRetry({ messages, firstRaw, failure }) {
+    if (failure.kind === 'invalid-json') {
+      return { messages, temperature: OPENAI_RETRY_TEMPERATURE };
+    }
+    return {
+      messages: [...messages, { role: 'assistant', content: firstRaw }, { role: 'user', content: buildRetryMessage(failure) }],
+      temperature: OPENAI_DEFAULT_TEMPERATURE,
+    };
+  },
+  writesRawAttempts: true,
+  warnsOnRepair: true,
+  escalationRethrows: (err) => err instanceof AnalysisAbortedError || err instanceof AnalyzerUnreachableError,
 };
