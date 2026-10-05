@@ -1009,7 +1009,7 @@ describe('analyzerSelectionErrorEvent (#3084 P23)', () => {
 
   it("selection's own missing-Gemini-key error classifies as auth and keeps what is missing as its detail (declared outcome change: phase 0 / subset sent it uncoded)", () => {
     const err = new Error(
-      'GEMINI_API_KEY is required when analyzer engine is Gemini. Set it from Account → Server configuration → Gemini API key, or in server/.env for CI / power users.',
+      'GEMINI_API_KEY is required when analyzer engine is Gemini. Set it in Admin → Model Manager → Gemini API key, or in server/.env for CI / power users.',
     );
     /* The `auth` signature's copy is generic ("check the Gemini API key"), so without the
        detail the event no longer says WHICH of the two auth cases this is. */
