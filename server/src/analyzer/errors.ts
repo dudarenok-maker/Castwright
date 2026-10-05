@@ -166,10 +166,22 @@ export class AnalyzerTimeoutError extends Error {
    AnalyzerTruncatedError. */
 export class AnalyzerReasoningOverflowError extends Error {
   readonly code = 'ANALYZER_REASONING_OVERFLOW';
+  /* #3084 F7 (Task 3b.1b) — the endpoint whose request overflowed. The runner
+     that raises this (wave 2's mapFinish) is transport-agnostic and has no
+     concept of an endpoint; only `OpenAIAnalyzer` holds one, so it is the layer
+     that sets this. Deliberately MUTABLE (not a `readonly` constructor field):
+     the escalation path reports the error through `StageCall.onReasoningOverflow`
+     and stores it, so `OpenAIAnalyzer` must be able to stamp the id onto the SAME
+     object after construction, before wave 2's route-level `throwIfReasoningOverflowed`
+     rethrows it outside the analyzer entirely. `opts` is purely additive: every
+     existing 3-arg call site (Ollama/Gemini paths, mapFinish) compiles and behaves
+     unchanged, and `endpointId` stays `undefined` for them. */
+  endpointId?: string;
   constructor(
     public readonly transport: TransportKind,
     public readonly model: string,
     public readonly reasoningTokens: number | undefined,
+    opts?: { endpointId?: string },
   ) {
     super(
       `${transport} ${model} used its whole output budget on reasoning` +
@@ -177,6 +189,7 @@ export class AnalyzerReasoningOverflowError extends Error {
         ' and returned no answer — splitting the chunk cannot shrink reasoning.',
     );
     this.name = 'AnalyzerReasoningOverflowError';
+    this.endpointId = opts?.endpointId;
   }
 }
 

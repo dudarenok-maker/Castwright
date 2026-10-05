@@ -5,6 +5,7 @@ import { readdir, rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
+import type { AnalyzerReasoningOverflowError } from './errors.js';
 
 process.env.GEMINI_RETRY_BACKOFFS_MS = '10,10';
 
@@ -197,5 +198,42 @@ describe('OpenAIAnalyzer (#3084 PR 3b)', () => {
     expect(err).toBeInstanceOf(errors.AnalyzerReasoningOverflowError);
     expect(err).not.toBeInstanceOf(errors.AnalyzerTruncatedError);
     expect(classifyAnalysisFailure(err, 'Endpoint lab (qwen3:30b)').code).toBe('analyzer-reasoning-overflow');
+  });
+
+  /* #3084 F7 (Task 3b.1b) — the runner raising the overflow has no endpoint; this class
+     stamps its own id. Both surfaces are real: a thrown first attempt, and an escalation
+     that REPORTS through onReasoningOverflow instead of throwing. */
+  const overflowReply = (_n: number, res: ServerResponse) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: { reasoning_content: 'thinking' }, finish_reason: null }] })}\n\n`);
+    res.write(`data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'length' }] })}\n\n`);
+    res.end('data: [DONE]\n\n');
+  };
+
+  it('a thrown reasoning overflow carries the endpoint id, and classification names it in the fixes (3b.1b)', async () => {
+    const url = await start(overflowReply);
+    const err = await new OpenAIAnalyzer({ endpoint: endpoint(url), apiKey: null, model: 'qwen3:30b' })
+      .runStage1Chapter(ID, 1, '# p', {})
+      .then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(errors.AnalyzerReasoningOverflowError);
+    expect((err as AnalyzerReasoningOverflowError).endpointId).toBe('lab');
+    const fixes = classifyAnalysisFailure(err, 'Endpoint lab (qwen3:30b)').fixes ?? [];
+    expect(fixes.some((f) => 'endpointField' in f && f.endpointField?.endpointId === 'lab')).toBe(true);
+  });
+
+  it('an escalation-path overflow is stamped with the endpoint id before it is reported onward (3b.1b)', async () => {
+    const url = await start(overflowReply);
+    const overflows: AnalyzerReasoningOverflowError[] = [];
+    const result = await new OpenAIAnalyzer({ endpoint: endpoint(url), apiKey: null, model: 'qwen3:30b' }).runAttributionEscalation(
+      ID,
+      1,
+      0,
+      '# p',
+      { onReasoningOverflow: (e) => overflows.push(e) },
+    );
+    expect(result).toBeNull();
+    expect(overflows).toHaveLength(1);
+    expect(overflows[0]).toBeInstanceOf(errors.AnalyzerReasoningOverflowError);
+    expect(overflows[0].endpointId).toBe('lab');
   });
 });

@@ -26,6 +26,7 @@ import type { CloneEngine } from '../tts/clone-engines.js';
 import { inferEngineFromModelId, type AnalysisEngine } from '../analyzer/model-id.js';
 import { analyzerEndpointSchema } from './analyzer-endpoints.js';
 import { registerKnownSecretsProvider } from '../analyzer/known-secrets-gate.js';
+import { registerAnalyzerEndpointsProvider } from '../analyzer/analyzer-endpoints-gate.js';
 
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that
@@ -1660,6 +1661,12 @@ export async function loadKnownAnalyzerSecrets(): Promise<string[]> {
    modules reach it through known-secrets-gate.ts without importing
    user-settings.ts. */
 registerKnownSecretsProvider({ known: knownAnalyzerSecrets, load: loadKnownAnalyzerSecrets });
+
+/* #3084 P23/A9 — the endpoints provider behind analyzer/analyzer-endpoints-gate.ts:
+   failure-taxonomy.ts's reasoning-overflow fixes name an endpoint by its saved name
+   without importing this module, exactly as the secrets provider above lets the
+   transports redact without importing it. */
+registerAnalyzerEndpointsProvider({ list: () => getCachedUserSettings().analyzerEndpoints });
 
 /** fs-1 — dedicated write path for upgrade bookkeeping fields. The general
     writeUserSettings() strips these (FORBIDDEN_KEYS), so the only sanctioned

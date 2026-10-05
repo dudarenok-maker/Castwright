@@ -42,6 +42,9 @@ import { redactKnownSecrets } from '../analyzer/redact.js';
 import { namesContextOrTokenLimit } from '../analyzer/limit-400-patterns.js';
 /* #3084 A9 — through the leaf gate, never an import of workspace/user-settings.ts. */
 import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
+/* #3084 P23/A9 — the saved endpoints, through the leaf gate too: the openai fix
+   names its endpoint by saved name without an import of workspace/user-settings.ts. */
+import { listAnalyzerEndpoints } from '../analyzer/analyzer-endpoints-gate.js';
 import { getCachedGeminiModelInfo } from '../analyzer/catalog/gemini-catalog.js';
 import { configValue } from '../config/resolver.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
@@ -559,10 +562,10 @@ export interface AnalysisFailureFix {
     branch's own pushes — is what keeps every wiki entry after every actionable
     one as 3b/5a/5b append their own entries, with no re-sort anywhere. */
 export function reasoningOverflowFixes(ctx: {
-  /** 'openai' returns [] until 3b. */
+  /** 'openai' with no endpointId returns []: there is no endpoint to name. */
   transport: TransportKind;
   model: string;
-  /** Unused in 2b; 3b starts passing it. */
+  /** The endpoint whose request overflowed (set by OpenAIAnalyzer; 3b). */
   endpointId?: string;
 }): AnalysisFailureFix[] {
   const fixes: AnalysisFailureFix[] = []; // actionable — settingKey or label-only
@@ -618,10 +621,19 @@ export function reasoningOverflowFixes(ctx: {
       label: 'Read: When a model thinks past its output limit',
       wikiPage: 'Analysis-and-the-Analyzer',
     });
-  } else {
-    /* 'openai' — 3b (Task 3b.1b) adds the endpoint branch, ending with the
-       endpoints page's own wiki-link entry (F3), not this one. */
-    return [];
+  } else if (ctx.transport === 'openai' && ctx.endpointId) {
+    /* #3084 F7 (Task 3b.1b) — the endpoint's own output and context caps, plus the
+       stage input fractions. Named by saved name, falling back to the id when the
+       endpoint was deleted after the failure. No wikiPage yet: the endpoints page
+       (F3) lands in PR 3d, which adds it with the page file. No reasoning or payload
+       rows: those are 5a and 5b. */
+    const name = listAnalyzerEndpoints().find((e) => e.id === ctx.endpointId)?.name ?? ctx.endpointId;
+    fixes.push(
+      { label: `Lower ${name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' } },
+      { label: `Lower ${name}'s context size`, endpointField: { endpointId: ctx.endpointId, field: 'contextTokens' } },
+      { label: 'Shrink Stage 1 chunks', settingKey: 'analyzer.stage1.localInputFraction' },
+      { label: 'Shrink Stage 2 chunks', settingKey: 'analyzer.stage2.localInputFraction' },
+    );
   }
 
   /* The thinking window (analyzer.gemini.thinkingIdleTimeoutMs) never appears
@@ -784,7 +796,7 @@ export function classifyAnalysisFailure(
       /* #3084 F7 — the structured fixes for this exact instance. `err` already
          carries both ctx fields with the ctx's own types, so this is called
          with no cast. */
-      fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model }),
+      fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId }),
     };
   }
   if (err instanceof AnalyzerTimeoutError) {
