@@ -575,6 +575,57 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
   });
 });
 
+describe("Layout — an upload never leaves the old book's id on its manuscript (#3435)", () => {
+  it('reopening the previous book after uploadComplete reads it from disk instead of treating it as loaded', async () => {
+    getBookStateMock.mockImplementation(async (bookId: string) => ({
+      state: { bookId, manuscriptId: 'm1', title: 'Book A', castConfirmed: false, chapters: [] },
+      cast: { characters: [{ id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' }] },
+      manuscript: null,
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    }));
+    const store = makeStore();
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'Book A' } as never,
+        sentences: null,
+      }),
+    );
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' }]));
+    store.dispatch(
+      manuscriptSlice.actions.uploadComplete({
+        bookId: 'b2',
+        manuscriptId: 'm2',
+        title: 'Book B',
+        format: 'plaintext',
+        wordCount: 10,
+        sourceText: '',
+      } as never),
+    );
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+    store.dispatch(uiActions.analysisComplete({ bookId: 'b1' }));
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+    await waitFor(() => {
+      const s = store.getState();
+      expect([s.manuscript.bookId, s.manuscript.manuscriptId]).toEqual(['b1', 'm1']);
+    });
+  });
+});
+
 /* #3395 pass 2, N1 — the reviewer's exact repro, through the real Layout
    mount effect + revisions-scope-middleware (not the plain `makeStore()`
    the rest of this file uses, which has no book-scope tracking wired in):

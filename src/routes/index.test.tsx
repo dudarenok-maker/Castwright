@@ -357,9 +357,12 @@ describe('AnalysingRoute manuscriptId derivation', () => {
        before useHydrateStage's useEffect dispatched its url-derived
        stage update that resets stage.manuscriptId to null for routes
        whose URL has no id in it. The isAnalyzerReady gate added in
-       2026-05 lets the probe round-trip first, so useHydrateStage's
-       clobber lands first and the fallback to manuscript.manuscriptId
-       now matters. In real usage both ids ARE the same — the upload
+       2026-05 lets the probe round-trip first, so that reset lands
+       first and the fallback to manuscript.manuscriptId now matters.
+       (The reset happens only under test: the hook compares against the
+       module-level app store, not this test's store, so it always sees a
+       difference. In the app the stage keeps its id � stageEqual ignores
+       manuscriptId.) In real usage both ids ARE the same — the upload
        seeds both — so we test the realistic shape here. The
        precedence-when-divergent question is captured as a follow-up
        TODO in docs/features/archive/00-stage-machine.md.) */
@@ -496,9 +499,9 @@ describe('AnalysingRoute — the manuscript id comes only from its own book', ()
   });
 
   it("control: a fresh upload's Start analyses the upload while the slices still name the previous book", async () => {
-    /* uploadComplete sets the manuscript id but leaves the previous book's
-       bookId on the slice; the stage manuscriptUploaded set names the new book,
-       so the route takes the id from there. */
+    /* uploadComplete sets the manuscript id and clears the slice's bookId (it
+       must not keep the previous book's); the stage manuscriptUploaded set
+       names the new book, so the route takes the id from there. */
     const store = makeStore();
     holdSlices(store, 'b2', 'm-other');
     store.dispatch(
@@ -511,7 +514,7 @@ describe('AnalysingRoute — the manuscript id comes only from its own book', ()
         sourceText: '',
       } as any),
     );
-    expect(store.getState().manuscript.bookId).toBe('b2');
+    expect(store.getState().manuscript.bookId).toBeNull();
     store.dispatch(uiActions.startNewBook());
     store.dispatch(uiActions.manuscriptUploaded({ bookId: 'b1', manuscriptId: 'm-upload' }));
 
