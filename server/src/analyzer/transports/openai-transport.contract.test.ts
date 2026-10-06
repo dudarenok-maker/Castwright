@@ -6,7 +6,7 @@
    is set BEFORE the dynamic imports below. */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { LookupFunction } from 'node:net';
+import { connect as netConnect, type LookupFunction } from 'node:net';
 import { inspect } from 'node:util';
 import { Agent } from 'undici';
 import type { AnalyzerEndpoint } from '../../workspace/analyzer-endpoints.js';
@@ -364,6 +364,31 @@ describe('OpenAITransport — aborts, incomplete streams, in-stream errors', () 
     });
     expect(await failure(transport(url).send(request()))).toBeInstanceOf(errors.AnalyzerStreamIncompleteError);
     expect(seen).toHaveLength(3);
+  });
+
+  it('a socket error carrying ECONNREFUSED AFTER headers arrive → never AnalyzerUnreachableError: the headers already proved the endpoint is up (P21, T4)', async () => {
+    /* The client socket is held in a closure so the server can destroy it AFTER the headers
+       have gone out, with a code the pre-header classifier treats as "unreachable". Only the
+       headersReceived guard in connectionLevel keeps this out of AnalyzerUnreachableError. */
+    let clientSocket: import('node:net').Socket | undefined;
+    const url = await start((_req, res) => {
+      sse(res);
+      res.write(chunk({ content: '{"a":' }));
+      setTimeout(() => clientSocket?.destroy(Object.assign(new Error('read ECONNREFUSED'), { code: 'ECONNREFUSED' })), 50);
+    });
+    const dropAfterHeaders = new Agent({
+      headersTimeout: 0,
+      bodyTimeout: 0,
+      connect: (opts, callback) => {
+        const socket = netConnect({ host: opts.hostname, port: Number(opts.port) });
+        clientSocket = socket;
+        socket.once('connect', () => callback(null, socket));
+      },
+    });
+    agents.push(dropAfterHeaders);
+    const err = await failure(transport(url, {}, null, dropAfterHeaders).send(request()));
+    expect(err).not.toBeInstanceOf(errors.AnalyzerUnreachableError);
+    expect(err).toBeInstanceOf(errors.AnalyzerStreamIncompleteError);
   });
 
   it('an in-stream error event → AnalyzerHttpError(0), not retried', async () => {

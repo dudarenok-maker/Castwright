@@ -422,4 +422,14 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     });
     expect(runEmotion).not.toHaveBeenCalled();
   });
+
+  it('a key-origin selection error (not an endpoint miss) is sent as a classified auth event on the open stream, never rethrown (#3084 P23)', async () => {
+    writeBook(SENTENCES);
+    const { AnalyzerKeyOriginError } = await import('../analyzer/errors.js');
+    emotionEngineState.selectError = new AnalyzerKeyOriginError('run-pick', 'Run Pick');
+    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    expect(res.status).toBe(200);
+    expect(parseSse(res.text).find((e) => e.kind === 'error')).toMatchObject({ kind: 'error', code: 'auth' });
+    expect(runEmotion).not.toHaveBeenCalled();
+  });
 });

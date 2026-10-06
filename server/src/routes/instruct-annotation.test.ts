@@ -430,4 +430,14 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
     });
     expect(runStage3).not.toHaveBeenCalled();
   });
+
+  it('a key-origin selection error (not an endpoint miss) is sent as a classified auth event on the open instruct stream, never rethrown (#3084 P23)', async () => {
+    writeBook(SENTENCES);
+    const { AnalyzerKeyOriginError } = await import('../analyzer/errors.js');
+    instructEngineState.selectError = new AnalyzerKeyOriginError('run-pick', 'Run Pick');
+    const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({});
+    expect(res.status).toBe(200);
+    expect(parseSse(res.text).find((e) => e.kind === 'error')).toMatchObject({ kind: 'error', code: 'auth' });
+    expect(runStage3).not.toHaveBeenCalled();
+  });
 });
