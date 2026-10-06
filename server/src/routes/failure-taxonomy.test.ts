@@ -1038,3 +1038,32 @@ describe('Gemini invalid / expired API key (#3084 PR 3b review 🟠1)', () => {
     expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('auth');
   });
 });
+
+describe('auth remediation names its own key (#3084 PR 3b review 🟠2)', () => {
+  it('a key-origin mismatch does not send the user to GEMINI_API_KEY', () => {
+    const r = classifyAnalysisFailure(new AnalyzerKeyOriginError('lab', 'Lab box'), 'Analyzer');
+    expect(r.code).toBe('auth');
+    expect(r.remediation).not.toContain('GEMINI_API_KEY');
+    expect(r.remediation).toContain('Lab box');
+  });
+
+  it.each([
+    ['ollama', "Ollama server's access settings"],
+    ['openai', "endpoint's API key"],
+    ['gemini', 'GEMINI_API_KEY'],
+  ] as const)('a %s 401 remediation names that transport\'s key setting', (transport, expected) => {
+    const r = classifyAnalysisFailure(new AnalyzerHttpError(transport, 401, 'nope', 'raw nope'), 'Model');
+    expect(r.code).toBe('auth');
+    expect(r.remediation).toContain(expected);
+    if (transport !== 'gemini') expect(r.remediation).not.toContain('GEMINI_API_KEY');
+  });
+
+  it("selection's missing-Gemini-key event keeps its own actionable sentence, not the TTS auth copy", () => {
+    const text =
+      'GEMINI_API_KEY is required when analyzer engine is Gemini. Set it in Admin → Model Manager → Gemini API key, or in server/.env for CI / power users.';
+    const ev = analyzerSelectionErrorEvent(new Error(text));
+    expect(ev.code).toBe('auth');
+    expect(ev.message).toBe(text);
+    expect(ev.message).not.toContain('TTS');
+  });
+});

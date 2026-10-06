@@ -528,8 +528,8 @@ function statusToFailureCode(status: number | undefined, message?: string, keyTe
   return 'unknown';
 }
 
-function withCopy(code: FailureCode, userMessage: string, detail?: string): AnalysisFailure {
-  return { code, userMessage, remediation: FAILURE_REMEDIATIONS[code].remediation, detail };
+function withCopy(code: FailureCode, userMessage: string, detail?: string, remediation?: string): AnalysisFailure {
+  return { code, userMessage, remediation: remediation ?? FAILURE_REMEDIATIONS[code].remediation, detail };
 }
 
 /* ── #3084 F7 — structured "how to fix" entries (wave 2b) ───────────────────
@@ -833,6 +833,8 @@ export function classifyAnalysisFailure(
     return withCopy(
       'auth',
       `The API key saved for ${err.endpointName} was entered for a different host, so it was not sent — re-enter the key for ${err.endpointName}.`,
+      undefined,
+      `Re-enter the API key for ${err.endpointName} — a saved key is only ever sent to the host it was entered for — then retry.`,
     );
   }
   if (err instanceof AnalyzerUnreachableError && err.transport === 'openai') {
@@ -853,6 +855,7 @@ export function classifyAnalysisFailure(
         'auth',
         `${modelLabel} refused the credentials (${err.httpStatus}) — check ${KEY_SETTING[err.transport]}.`,
         redactKnownSecrets(err.bodyExcerpt, knownAnalyzerSecrets()) || undefined,
+        `Check ${KEY_SETTING[err.transport]}, then retry the chapter.`,
       );
     }
     if (err.httpStatus === 400) return requestRejected(modelLabel, err.transport, err.bodyExcerpt);
@@ -975,12 +978,14 @@ export function analyzerSelectionErrorEvent(
      copy does not name what is missing; keep that as the detail the UI's collapsible shows.
      Every other detail comes from the classification itself. */
   const raw = err instanceof Error ? err.message : String(err);
-  const detail =
-    failure.detail ?? (failure.code === 'auth' && GEMINI_KEY_REQUIRED.test(raw) ? 'Gemini API key required' : undefined);
+  const missingKey = failure.code === 'auth' && GEMINI_KEY_REQUIRED.test(raw);
+  const detail = failure.detail ?? (missingKey ? 'Gemini API key required' : undefined);
   return {
     kind: 'error',
     code: failure.code,
-    message: failure.userMessage,
+    /* The signature's `auth` copy ("Gemini TTS authentication failed") is wrong here: no request was
+       sent, and it drops where the setting lives. Main's own sentence says both. */
+    message: missingKey ? raw : failure.userMessage,
     remediation: failure.remediation,
     ...(detail ? { detail } : {}),
   };
