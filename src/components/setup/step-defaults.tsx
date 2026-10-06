@@ -91,11 +91,23 @@ export function StepDefaults({ readiness: _readiness }: Props) {
   };
 
   const handleAnalysisModelChange = (next: string) => {
-    setAnalysisModel(next);
-    // Auto-derive the engine from the id shape (":"→local, else gemini) — matches
-    // getResolvedOllamaModel's heuristic. This is what routes generation.
+    // Auto-derive the engine from the shared id grammar — matches
+    // engineForModelId in model-id.ts (the server's inferEngineFromModelId).
+    // This is what routes generation. #3084 PR 3a — nothing can select an
+    // endpoint id yet (this picker only offers curated + local Ollama tags),
+    // and the server refuses an endpoint id in defaultAnalysisModel (400), so
+    // one (unreachable here today) is not saved at all: return before the
+    // local state update and the dispatch. Past the guard the engine is
+    // 'local' | 'gemini'.
     const engine = engineForModelId(next);
-    void dispatch(saveAccountSettings({ defaultAnalysisModel: next, analysisEngine: engine }));
+    if (engine === 'openai') return;
+    setAnalysisModel(next);
+    void dispatch(
+      saveAccountSettings({
+        defaultAnalysisModel: next,
+        analysisEngine: engine,
+      }),
+    );
   };
 
   const handleThemeChange = (next: ThemePreference) => {

@@ -18,6 +18,7 @@ import { ANALYSIS_STREAM_FAILED } from '../lib/analysis-stream-codes';
    generated OpenAPI schema by src/lib/api.ts, which is the frontend's single
    alias for it). Type-only: the slice stays free of api.ts at runtime. */
 import type { AnalysisFailureFix } from '../lib/api';
+import type { AnalysisEngine } from '../lib/model-id';
 
 /* Snapshot of the in-flight analyzer run. Set by the analysing view (or
    the analysis-stream middleware) on start; updated on every Phase/ETA/
@@ -35,7 +36,7 @@ export interface AnalysisStreamSnapshot {
       for GPU. Captured on the snapshot (not read from
       `ui.selectedModel`) so a user model-switch mid-stream cannot
       misclassify the running analysis. */
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   /** Server-resolved analyzer model id, carried from the `model` field on SSE
       phase events (the same source the analysing view's PhaseModelChip reads).
       Captured so the global Status popover can show WHICH model the run is on —

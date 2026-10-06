@@ -14,7 +14,10 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { makeScratchRepo } from '../lib/scratch-repo.mjs';
+import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 import {
   parseRegisterRows,
   isFrozenPath,
@@ -30,9 +33,68 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-register-citations.mjs');
 
-function runCli(args) {
-  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000, windowsHide: true });
+function runCli(args, cliPath = CLI_PATH) {
+  // The real CLI scans the real repo (ambient git env honoured); any other
+  // cliPath is a scratch-repo copy, where an inherited GIT_INDEX_FILE would be
+  // the real index.
+  return spawnSync(process.execPath, [cliPath, ...args], {
+    encoding: 'utf8',
+    timeout: 60000,
+    windowsHide: true,
+    env: cliPath === CLI_PATH ? process.env : scrubGitEnvForThrowawayRepo(),
+  });
 }
+
+// #3413 — the CLI mutation tests below used to rewrite the real tracked CLI /
+// docs files in place and restore them. Content came back identical but
+// ctime/ino moved, which verify-cache's stat-identity guard reads as "input
+// changed mid-step" and so never caches test:hooks. They now mutate a scratch
+// repo instead: the CLI resolves its corpus from its OWN location (REPO_ROOT =
+// `..` of the script, files from `git ls-files`), so a copy of the CLI plus the
+// docs/testing tree it scans, in a throwaway `git init`, behaves identically
+// without touching a real file. no-inplace-tracked-rewrite.test.mjs pins it.
+const REAL_REPO = join(HERE, '..', '..');
+const SANDBOX_SCRIPTS = [
+  'scripts/check-register-citations.mjs',
+  'scripts/git-env.mjs',
+  'scripts/lib/read-normalized.mjs',
+  'scripts/lib/is-main-module.mjs',
+  // the self-referential fixtures the exclusion mutation tests re-expose
+  'scripts/tests/check-onbox-register.test.mjs',
+  'scripts/tests/build-register-live-view.test.mjs',
+];
+
+function makeSandbox(parentDir) {
+  const { root, dispose } = makeScratchRepo(REAL_REPO, {
+    trackedDirs: ['docs/testing'],
+    files: SANDBOX_SCRIPTS,
+    parentDir,
+  });
+  return {
+    root,
+    cli: join(root, 'scripts', 'check-register-citations.mjs'),
+    sittingPlan: join(root, 'docs', 'testing', 'onbox-sitting-plan.md'),
+    dispose,
+  };
+}
+
+// #3413 regression: CI's Windows runner has an 8.3 short tmpdir
+// (`C:\Users\RUNNER~1\...`). The CLI turned its own file: URL into a path with
+// a raw `.pathname`, which keeps the `%7E` escape, so every sandbox run died
+// with ENOENT on a directory that did not exist. A `~` and a space in the
+// scratch parent dir reproduce that on any OS.
+test('CLI: a sandbox under a tmpdir with `~` and a space still runs the unmutated baseline clean', () => {
+  const parent = mkdtempSync(join(tmpdir(), 'RUNNER~1 sp-'));
+  const sandbox = makeSandbox(parent);
+  try {
+    const result = runCli([], sandbox.cli);
+    assert.equal(result.status, 0, `baseline CLI must exit 0 from the odd-path sandbox:\n${result.stdout}\n${result.stderr}`);
+    assert.doesNotMatch(result.stderr, /ENOENT/);
+  } finally {
+    sandbox.dispose();
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
 
 // A minimal but structurally real register: two groups, a run-sheet
 // cross-reference on one row, and a "Blocked" section whose heading reuses a
@@ -2841,8 +2903,8 @@ test('CLI: Check C\'s wrongId half is FATAL and runs whether or not --strict is 
 // 54/54 green, because the two tests above assert `status === 0` on a clean
 // tree (trivially true either way) and a regex against the checker's OWN
 // success-line copy — a template literal the mutation doesn't touch — never
-// against actual FAILING behaviour. This mutates the real script on disk to
-// prove the fix is load-bearing, same technique as the SELF_REFERENTIAL_PATHS
+// against actual FAILING behaviour. This mutates a scratch copy of the script
+// (makeSandbox, #3413) to prove the fix is load-bearing, same technique as the SELF_REFERENTIAL_PATHS
 // mutation test above: with `fatalSections` intact, a real wrong-ID heading
 // on the real tree exits 1 and names the defect; with the `Check C` entry
 // deleted from `fatalSections`, the same tree exits 0 with zero output
@@ -2894,8 +2956,7 @@ test('CLI mutation: deleting Check C from fatalSections un-gates a real wrong-ID
   // A non-frozen, non-register file to inject a synthetic wrong-ID heading
   // into — the shape this checker exists to catch, built from live register
   // data rather than quoting a specific row's own heading text.
-  const TARGET = join(HERE, '..', '..', 'docs', 'testing', 'onbox-sitting-plan.md');
-  const originalTarget = readFileSync(TARGET, 'utf8');
+  const originalTarget = readFileSync(join(REAL_REPO, 'docs', 'testing', 'onbox-sitting-plan.md'), 'utf8');
   const injected = `\n### ${wrongIdCandidate} · Synthetic finding-N/W pin (#${subject})\n`;
   const mutatedTarget = originalTarget + injected;
   assert.notEqual(mutatedTarget, originalTarget);
@@ -2911,11 +2972,12 @@ test('CLI mutation: deleting Check C from fatalSections un-gates a real wrong-ID
   const mutatedCli = originalCli.replace(fatalSectionsRegex, '');
   assert.notEqual(mutatedCli, originalCli);
 
+  const sandbox = makeSandbox();
   try {
-    writeFileSync(TARGET, mutatedTarget);
+    writeFileSync(sandbox.sittingPlan, mutatedTarget);
 
     // Baseline: with the checker unmutated, the wrong-ID heading is FATAL.
-    const baseline = runCli([]);
+    const baseline = runCli([], sandbox.cli);
     assert.equal(baseline.status, 1, 'a wrong-ID heading must fail the gate by default');
     assert.match(baseline.stderr, /existing row ID cited for the wrong subject/);
     assert.match(
@@ -2925,21 +2987,12 @@ test('CLI mutation: deleting Check C from fatalSections un-gates a real wrong-ID
 
     // Mutant: delete Check C from fatalSections — the defect class this PR
     // exists to catch must no longer be silently ungated.
-    writeFileSync(CLI_PATH, mutatedCli);
-    const mutant = runCli([]);
+    writeFileSync(sandbox.cli, mutatedCli);
+    const mutant = runCli([], sandbox.cli);
     assert.equal(mutant.status, 0, 'mutant should incorrectly pass once Check C is un-gated');
     assert.doesNotMatch(mutant.stderr, new RegExp(`cited ${wrongIdCandidate} for #${subject}`));
   } finally {
-    writeFileSync(TARGET, originalTarget);
-    writeFileSync(CLI_PATH, originalCli);
-    assert.equal(
-      Buffer.compare(Buffer.from(readFileSync(TARGET, 'utf8')), Buffer.from(originalTarget)),
-      0,
-    );
-    assert.equal(
-      Buffer.compare(Buffer.from(readFileSync(CLI_PATH, 'utf8')), Buffer.from(originalCli)),
-      0,
-    );
+    sandbox.dispose();
   }
 });
 
@@ -2975,8 +3028,7 @@ test('CLI: the real tree scan finds at least one binary file, and the success li
 // triggers a Check D finding, and asserts the exit code stays 0.
 
 test('CLI: with --strict, Check D finds title drift but does NOT fail the gate (finding 5)', () => {
-  const TEST_FILE = join(HERE, '..', '..', 'docs', 'testing', 'onbox-sitting-plan.md');
-  const original = readFileSync(TEST_FILE, 'utf8');
+  const original = readFileSync(join(REAL_REPO, 'docs', 'testing', 'onbox-sitting-plan.md'), 'utf8');
 
   // Find a real register row with a heading to mutate for the drift test.
   // We'll inject a heading that cites a real row ID but with completely
@@ -3002,9 +3054,10 @@ test('CLI: with --strict, Check D finds title drift but does NOT fail the gate (
   // anything else (it's a heading in the middle of prose, not a real row).
   const mutated = original + '\n\n' + driftHeading + '\n\nThis is test text.\n';
 
+  const sandbox = makeSandbox();
   try {
-    writeFileSync(TEST_FILE, mutated);
-    const result = runCli(['--strict']);
+    writeFileSync(sandbox.sittingPlan, mutated);
+    const result = runCli(['--strict'], sandbox.cli);
 
     // Exit code must be 0: Check D findings do not fail the gate, even with --strict.
     assert.equal(result.status, 0, 'Check D drift findings are advisory, should not fail');
@@ -3034,8 +3087,7 @@ test('CLI: with --strict, Check D finds title drift but does NOT fail the gate (
     // Verify the Check D section header is present in output.
     assert.match(result.stdout, /Check D.*heading title drift.*advisory/i);
   } finally {
-    writeFileSync(TEST_FILE, original);
-    assert.equal(readFileSync(TEST_FILE, 'utf8'), original, 'restore must be byte-identical');
+    sandbox.dispose();
   }
 });
 
@@ -3066,23 +3118,24 @@ test('CLI: the sibling check-onbox-register.mjs checker\'s test fixtures are exc
 // removing the path from SELF_REFERENTIAL_PATHS changed the CLI's output by
 // zero characters and this test passed regardless. Now that headings ARE a
 // Check A surface (see the "ANCHORED heading IS a citation" test above),
-// the exclusion is genuinely load-bearing — this mutates the real script on
-// disk, in-process, to prove it, then restores byte-for-byte.
+// the exclusion is genuinely load-bearing — this mutates a scratch copy of
+// the script (makeSandbox; the real tracked files are never written, #3413)
+// to prove it.
 test('CLI mutation: removing check-onbox-register.test.mjs from SELF_REFERENTIAL_PATHS makes it self-flag (proves the exclusion is load-bearing)', () => {
   const original = readFileSync(CLI_PATH, 'utf8');
   const needle = "  'scripts/tests/check-onbox-register.test.mjs',\n";
   assert.ok(original.includes(needle), 'fixture assumption: the exclusion entry must exist verbatim');
   const mutated = original.replace(needle, '');
   assert.notEqual(mutated, original);
+  const sandbox = makeSandbox();
   try {
-    writeFileSync(CLI_PATH, mutated);
-    const result = runCli([]);
+    writeFileSync(sandbox.cli, mutated);
+    const result = runCli([], sandbox.cli);
     assert.equal(result.status, 1, 'mutated CLI should now fail on its own self-referential fixtures');
     assert.match(result.stderr, /check-onbox-register\.test\.mjs.*cited F1/);
     assert.match(result.stderr, /check-onbox-register\.test\.mjs.*cited F2/);
   } finally {
-    writeFileSync(CLI_PATH, original);
-    assert.equal(readFileSync(CLI_PATH, 'utf8'), original, 'restore must be byte-identical');
+    sandbox.dispose();
   }
 });
 
@@ -3100,13 +3153,13 @@ test('CLI mutation: removing build-register-live-view.test.mjs from SELF_REFEREN
   assert.ok(original.includes(needle), 'fixture assumption: the exclusion entry must exist verbatim');
   const mutated = original.replace(needle, '');
   assert.notEqual(mutated, original);
+  const sandbox = makeSandbox();
   try {
-    writeFileSync(CLI_PATH, mutated);
-    const result = runCli([]);
+    writeFileSync(sandbox.cli, mutated);
+    const result = runCli([], sandbox.cli);
     assert.equal(result.status, 1, 'mutated CLI should now fail on its own self-referential fixtures');
     assert.match(result.stderr, /build-register-live-view\.test\.mjs.*cited A2/);
   } finally {
-    writeFileSync(CLI_PATH, original);
-    assert.equal(readFileSync(CLI_PATH, 'utf8'), original, 'restore must be byte-identical');
+    sandbox.dispose();
   }
 });

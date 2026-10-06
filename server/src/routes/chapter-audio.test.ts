@@ -13,6 +13,35 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
+/* #3400: one-shot gate so a test can park the live take's unlink mid-restore. */
+const { unlinkGate } = vi.hoisted(() => ({
+  unlinkGate: {
+    match: null as null | ((p: string) => boolean),
+    entered: null as null | (() => void),
+    release: null as null | Promise<void>,
+  },
+}));
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...real,
+    unlink: async (p: Parameters<typeof real.unlink>[0]) => {
+      if (unlinkGate.match?.(String(p))) {
+        const { entered, release } = unlinkGate;
+        unlinkGate.match = null;
+        entered?.();
+        await release;
+      }
+      return real.unlink(p);
+    },
+  };
+});
+
+vi.mock('../workspace/file-lock.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/file-lock.js')>();
+  return { ...real, withKeyLock: vi.fn(real.withKeyLock) };
+});
+
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
 const TITLE = 'Bonus Story';
@@ -557,6 +586,68 @@ describe('chapter-audio router', () => {
         expect(res.status).toBe(404);
       });
 
+      it('restore mid-unlink, then DELETE previous (accept): the DELETE waits and 404s; the restored take survives (#3400)', async () => {
+        resetAudio();
+        writeMp3();
+        writePreviousMp3();
+        const fs = await import('node:fs');
+        const prevBytes = fs.readFileSync(join(audioRoot, `${SLUG}.previous.mp3`));
+        vi.mocked((await import('../workspace/file-lock.js')).withKeyLock).mockClear();
+        let entered!: () => void;
+        let release!: () => void;
+        const hit = new Promise<void>((r) => (entered = r));
+        unlinkGate.release = new Promise<void>((r) => (release = r));
+        unlinkGate.entered = entered;
+        unlinkGate.match = (p) => p.endsWith(`${SLUG}.mp3`);
+        const restoring = request(app)
+          .post(`/api/books/${bookId}/chapters/1/audio/previous/restore`)
+          .then((r) => r);
+        await hit;
+        const accepting = request(app)
+          .delete(`/api/books/${bookId}/chapters/1/audio/previous`)
+          .then((r) => r);
+        /* Wait until the DELETE has queued behind the parked restore (withKeyLock
+           registers its place synchronously on call) — no sleep. */
+        const { withKeyLock } = await import('../workspace/file-lock.js');
+        try {
+          await vi.waitFor(() => {
+            const opCalls = vi.mocked(withKeyLock).mock.calls.filter(([k]) => String(k).startsWith('revision-op:'));
+            expect(opCalls.length).toBeGreaterThanOrEqual(2);
+          });
+        } finally {
+          release();
+        }
+        const [rest, acc] = await Promise.all([restoring, accepting]);
+        expect(rest.status).toBe(204);
+        expect(acc.status).toBe(404);
+        expect(fs.readFileSync(join(audioRoot, `${SLUG}.mp3`)).equals(prevBytes)).toBe(true);
+      });
+
+      it.each([
+        ['DELETE previous (accept)', 'delete', `/audio/previous`],
+        ['POST previous/restore (reject)', 'post', `/audio/previous/restore`],
+      ] as const)('%s: a lock timeout answers the curated 500 (no key or path) and is logged', async (_n, verb, suffix) => {
+        resetAudio();
+        writeMp3();
+        writePreviousMp3();
+        const { withKeyLock, LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+          '../workspace/file-lock.js'
+        );
+        vi.mocked(withKeyLock).mockRejectedValueOnce(
+          new LockAcquisitionTimeoutError('revision-op:C:/SECRET-WORKSPACE/book:1', 10_000),
+        );
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+          const res = await request(app)[verb](`/api/books/${bookId}/chapters/1${suffix}`);
+          expect(res.status).toBe(500);
+          expect(res.body).toEqual({ message: LOCK_CONTENTION_REQUEST_ERROR });
+          expect(res.text).not.toContain('SECRET-WORKSPACE');
+          expect(errSpy).toHaveBeenCalled();
+        } finally {
+          errSpy.mockRestore();
+        }
+      });
+
       it('409s when a generation is in flight for the book', async () => {
         /* Re-mock generation.js so isGenerationActive returns true for any
            bookId — we don't want to spin up a real generation here, just
@@ -583,6 +674,28 @@ describe('chapter-audio router', () => {
         /* .previous.mp3 must still be on disk — refused, not partially executed. */
         const fs = await import('node:fs');
         expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(true);
+
+        vi.doUnmock('./generation.js');
+        vi.resetModules();
+      });
+
+      it('409s (not 404) for an INVALID chapter id while a generation is in flight — the busy check runs first', async () => {
+        /* Plan 285 — pins today's ORDER: isGenerationActive is checked before
+           the chapter-id parse, so the extraction into audio/previous-audio.ts
+           must not move it. */
+        vi.resetModules();
+        vi.doMock('./generation.js', () => ({
+          generationRouter: undefined,
+          isGenerationActive: () => true,
+        }));
+        const { chapterAudioRouter: mockedRouter } = await import('./chapter-audio.js');
+        const mockedApp = express();
+        mockedApp.use('/api/books', mockedRouter);
+
+        const res = await request(mockedApp).post(
+          `/api/books/${bookId}/chapters/not-a-number/audio/previous/restore`,
+        );
+        expect(res.status).toBe(409);
 
         vi.doUnmock('./generation.js');
         vi.resetModules();

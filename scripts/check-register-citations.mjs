@@ -321,6 +321,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { scrubGitEnv } from './git-env.mjs';
 import { readNormalized } from './lib/read-normalized.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
@@ -2362,7 +2363,10 @@ function gitLsFiles() {
 }
 
 function fileURLToPathSafe(url) {
-  return url.pathname.replace(/^\/([A-Za-z]:)/, '$1');
+  // fileURLToPath, not a raw `.pathname`: the latter keeps percent-escapes, so
+  // a checkout under a path with `~` (Windows 8.3 short tmpdir, `RUNNER~1`) or a
+  // space reads/spawns against a directory that does not exist (#3413).
+  return fileURLToPath(url);
 }
 
 function readRepoFile(relPath) {

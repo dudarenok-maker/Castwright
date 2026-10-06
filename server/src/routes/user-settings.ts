@@ -24,6 +24,7 @@ import {
   getResolvedGenerationWorkers,
   getResolvedTtsModelKey,
   isUserSettingsFileCorrupt,
+  endpointModelIdRefusals,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import { configValue } from '../config/resolver.js';
@@ -127,6 +128,14 @@ userSettingsRouter.put('/', async (req: Request, res: Response) => {
       return res.status(400).json({
         error: `${offending.join(', ')} ${offending.length > 1 ? 'are' : 'is'} managed in Advanced Settings and cannot be set here.`,
       });
+    }
+    /* #3084 P23 — PR 3d narrows this refusal to analyzer.ollama.model only
+       (coordinator ruling); it does not delete it. Runs after the
+       retired-field check above: that one is unconditional (any value),
+       this one only fires for a value shaped like an endpoint id. */
+    const refusals = endpointModelIdRefusals(req.body);
+    if (refusals.length > 0) {
+      return res.status(400).json({ error: 'Invalid user settings.', issues: refusals });
     }
     const updated = await writeUserSettings(req.body);
     res.json(envDerived(updated));

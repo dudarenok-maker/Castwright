@@ -9,7 +9,7 @@
    call objects is typecheck-guaranteed; the analyzer's USE of `call.language`
    is covered in gemini.test.ts / ollama.test.ts. */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest';
 import type { BookStateJson } from '../workspace/scan.js';
 
 const findBookByManuscriptId = vi.fn();
@@ -22,6 +22,12 @@ function located(language?: string | null) {
   const state = { manuscriptId: 'm1', language } as unknown as BookStateJson;
   return { bookDir: '/x', author: 'A', series: 'S', title: 'T', state };
 }
+
+/* Warm the cold `./analysis.js` import once, with a generous budget, so the
+   first case doesn't pay it inside its own timeout (flaky under CPU load). */
+beforeAll(async () => {
+  await import('./analysis.js');
+}, 120_000);
 
 beforeEach(() => {
   findBookByManuscriptId.mockReset();

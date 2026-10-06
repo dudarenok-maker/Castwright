@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
+import { inferEngineFromModelId } from '../analyzer/model-id.js';
 import {
   resolveAnalyzerNumCtx,
   resolveAnalyzerNumGpu,
@@ -489,6 +490,13 @@ export async function warmOllamaModel(
 
 ollamaHealthRouter.post('/load', async (req: Request, res: Response) => {
   const requested = typeof req.body?.model === 'string' ? req.body.model.trim() : '';
+  /* #3084 — the body carries a selection id. An OpenAI-compatible endpoint id
+     contains ':' but is not an Ollama tag; never warm it on Ollama. */
+  if (requested && inferEngineFromModelId(requested) === 'openai') {
+    return res
+      .status(400)
+      .json({ status: 'error', error: `"${requested}" is not an Ollama model.`, kind: 'error' });
+  }
   const model = requested || getResolvedOllamaModel();
   const result = await warmOllamaModel(model);
   if (!result.ok) {

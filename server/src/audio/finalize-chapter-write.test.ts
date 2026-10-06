@@ -15,6 +15,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { measureLoudnessFile } from './measure-loudness.js';
 import { resolveLoudnormOptions } from '../tts/loudnorm.js';
+import { formatDuration } from './format-duration.js';
 
 const AUTHOR = 'Finalize Author';
 const SERIES = 'Standalones';
@@ -760,5 +761,114 @@ describe('finalizeChapterAudioWrite QA — three-shape fail-soft (plan 274 T2)',
     // would be vacuous.
     expect(sidecar.twoPass).toBe(true);
     expect(sidecar.normalizationType).toBeUndefined();
+  });
+});
+
+describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
+  const revisionsPath = () => join(bookDir, '.audiobook', 'revisions.json');
+  const readPending = () =>
+    existsSync(revisionsPath()) ? JSON.parse(readFileSync(revisionsPath(), 'utf8')).pending : undefined;
+  const REVIEW = { characterId: 'amy', triggeredBy: 'Amy voice change' };
+  const seedEntry = (chapterId: number, id: string) =>
+    writeFileSync(
+      revisionsPath(),
+      JSON.stringify({
+        schema: 1,
+        fileId: '000000000000001-aaaaaaaa',
+        rev: 1,
+        pending: [
+          { id, chapterId, characterId: 'amy', playable: true, hasPreviousAudio: true, segments: [], origin: 'server' },
+        ],
+      }),
+    );
+  const writePriorTake = () => writeFileSync(join(audioRoot, `${SLUG}.mp3`), 'PRIOR-TAKE');
+
+  afterEach(() => {
+    vi.doUnmock('../workspace/revisions-store.js');
+    vi.resetModules();
+  });
+
+  it('undefined: leaves revisions.json alone and the result carries no reviewRecorded', async () => {
+    writePriorTake();
+    const result = await finalizeChapterAudioWrite(baseInput());
+    expect(existsSync(revisionsPath())).toBe(false);
+    expect('reviewRecorded' in result).toBe(false);
+  });
+
+  it('object + preserved: upserts one server entry for the chapter', async () => {
+    writePriorTake();
+    const result = await finalizeChapterAudioWrite({ ...baseInput(), review: REVIEW });
+    expect(result.reviewRecorded).toBe(true);
+    const pending = readPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      chapterId: 1,
+      characterId: 'amy',
+      triggeredBy: 'Amy voice change',
+      oldDuration: '0:00',
+      newDuration: formatDuration(1.0),
+      playable: true,
+      hasPreviousAudio: true,
+      origin: 'server',
+      segments: [],
+    });
+    expect(pending[0].id).toMatch(/^revision:1:\d+$/);
+  });
+
+  it('object + first render (nothing preserved): drops any stale entry, records nothing', async () => {
+    seedEntry(1, 'revision:1:500');
+    const result = await finalizeChapterAudioWrite({ ...baseInput(), review: REVIEW });
+    expect(result.reviewRecorded).toBe(true);
+    expect(readPending()).toEqual([]);
+  });
+
+  it("null: drops the chapter's entry even when the prior take was preserved", async () => {
+    writePriorTake();
+    seedEntry(1, 'revision:1:500');
+    const result = await finalizeChapterAudioWrite({ ...baseInput(), review: null });
+    expect(result.reviewRecorded).toBe(true);
+    expect(readPending()).toEqual([]);
+  });
+
+  it('runs the store call AFTER the audio rename and the state.json write', async () => {
+    writePriorTake();
+    const seen: { duration?: string; audioExists?: boolean } = {};
+    vi.resetModules();
+    vi.doMock('../workspace/revisions-store.js', async (importOriginal) => {
+      const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+      return {
+        ...real,
+        recordPending: async (...args: Parameters<typeof real.recordPending>) => {
+          const st = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+          seen.duration = st.chapters[0].duration;
+          seen.audioExists = existsSync(join(audioRoot, `${SLUG}.mp3`));
+          return real.recordPending(...args);
+        },
+      };
+    });
+    const { finalizeChapterAudioWrite: finalizeMocked } = await import('./finalize-chapter-write.js');
+    await finalizeMocked({ ...baseInput(), review: REVIEW });
+    // The fixture duration is '0:00'; the stamped one is formatDuration(1.0) === '00:01'.
+    expect(seen).toEqual({ duration: '00:01', audioExists: true });
+  });
+
+  it('a store failure → reviewRecorded:false; the take still lands; no store text in the result', async () => {
+    writePriorTake();
+    vi.resetModules();
+    vi.doMock('../workspace/revisions-store.js', async (importOriginal) => {
+      const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+      const { LockAcquisitionTimeoutError } = await import('../workspace/file-lock.js');
+      return {
+        ...real,
+        recordPending: async () => {
+          throw new LockAcquisitionTimeoutError('revisions:C:/SECRET-WORKSPACE/book', 10_000);
+        },
+      };
+    });
+    const { finalizeChapterAudioWrite: finalizeMocked } = await import('./finalize-chapter-write.js');
+    const result = await finalizeMocked({ ...baseInput(), review: REVIEW });
+    expect(result.reviewRecorded).toBe(false);
+    expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('SECRET-WORKSPACE');
   });
 });

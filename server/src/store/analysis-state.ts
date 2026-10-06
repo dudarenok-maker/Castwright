@@ -28,6 +28,7 @@ import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { analysisStateJsonPath, analysisLastOutcomeJsonPath } from '../workspace/paths.js';
+import type { AnalysisEngine } from '../analyzer/model-id.js';
 
 /** Persistable shape — minimal subset of AnalysisStreamSnapshot.
     Anything ephemeral (heartbeats, log lines, in-flight ETA) is
@@ -49,7 +50,7 @@ export interface AnalysisStateFile {
       alive. Optional because legacy snapshots written before E1
       didn't capture it — guard defaults to "do not prompt" on
       undefined, which is conservative. */
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   /** Discriminator for the in-flight job's shape (plan 32 D1). `'main'`
       is the full-book sticky analysis run (the existing path); `'subset'`
       is a per-chapter retry (POST /:id/analysis/chapters). Optional /

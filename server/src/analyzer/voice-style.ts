@@ -34,6 +34,7 @@ import { stripCodeFences } from './gemini.js';
 import { readPrompt } from '../config/prompts.js';
 import { configValue } from '../config/resolver.js';
 import { generatePersonaViaOllama } from './ollama.js';
+import { inferEngineFromModelId } from './model-id.js';
 
 /** Load the voice-style system instruction, resolving through the prompt-fork
     loader so a user-edited fork in ~/.castwright/prompts/prompt.voiceStyle.md
@@ -64,10 +65,14 @@ export function resolvePersonaEngine(): 'local' | 'gemini' {
 }
 
 /** Ollama model for the local persona path. Blank ⇒ inherit the analyzer's
-    resolved local model (single source of truth, zero extra download). */
+    resolved local model (single source of truth, zero extra download). An
+    endpoint id (#3084 grammar) is not an Ollama tag, so it inherits too; a bare
+    colonless tag (`llama2`) is kept — Ollama resolves it to `:latest`. */
 export function resolvePersonaLocalModel(): string {
   const explicit = configValue<string>('analyzer.personaGeneration.localModel').trim();
-  return explicit.length > 0 ? explicit : getResolvedOllamaModel();
+  return explicit.length > 0 && inferEngineFromModelId(explicit) !== 'openai'
+    ? explicit
+    : getResolvedOllamaModel();
 }
 
 /* Tone metrics are 0–100. Translate the two that matter most for a voice

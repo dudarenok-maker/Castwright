@@ -147,6 +147,7 @@ vi.mock('../store/analysis-cache.js', () => {
 
 vi.mock('./ollama-health.js', () => ({
   detectOllamaDevice: async () => 'cuda',
+  unloadResidentOllama: vi.fn(async () => {}),
 }));
 
 vi.mock('../gpu/analyzer-device-state.js', () => ({

@@ -24,6 +24,7 @@ import {
   localRunModelIds,
   runModelsAllResident,
 } from '../lib/models';
+import type { AnalysisEngine } from '../lib/model-id';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, type ConnState } from '../components/analysing/phase-card';
@@ -405,8 +406,12 @@ export function AnalysingView({
   const isLocalAnalyzer = effectiveModelIds.some((id) => engineForModelId(id) === 'local');
   /* Engine tag captured into the cross-navigation snapshot (read by the
      reverse-local-analyzer guard). Mirror the effective-local derivation so a
-     cloud run is never mis-tagged 'local' and made to nag the TTS-start path. */
-  const effectiveEngine: 'local' | 'gemini' = isLocalAnalyzer ? 'local' : 'gemini';
+     cloud run is never mis-tagged 'local' and made to nag the TTS-start path.
+     Uses the shared id grammar so an endpoint run is tagged 'openai', not
+     the stale 'gemini' default. */
+  const effectiveEngine: AnalysisEngine = isLocalAnalyzer
+    ? 'local'
+    : engineForModelId(effectiveModelIds[0] ?? '');
   const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
   const [pendingAnalyzerPill, setPendingAnalyzerPill] = useState<ModelControlState | null>(null);
   const [analyzerProbeKey, setAnalyzerProbeKey] = useState(0);

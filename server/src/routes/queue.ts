@@ -46,6 +46,7 @@ import {
   type QueueScope,
 } from '../workspace/queue-io.js';
 import { resolveChapterEngineStamp } from '../workspace/queue-engine-stamp.js';
+import { parseReviewRequest, INVALID_REVIEW } from './review-request.js';
 
 export const queueRouter = Router();
 
@@ -81,6 +82,7 @@ interface EnqueueRequestEntry {
   modelKey?: unknown;
   addedAt?: unknown;
   fallbackConfirmed?: unknown;
+  review?: unknown;
 }
 
 queueRouter.post('/enqueue', async (req: Request, res: Response) => {
@@ -102,6 +104,13 @@ queueRouter.post('/enqueue', async (req: Request, res: Response) => {
         error: `entry "${r.id}": scope === "character" requires string characterId`,
       });
     }
+    /* Plan 285 — a malformed review 400s the batch (unlike modelKey, which is
+       silently dropped): dropping it would turn a review render into a plain
+       one, which PR 2 treats as "drop the chapter's pending entry". */
+    const review = parseReviewRequest(r.review);
+    if (review === INVALID_REVIEW) {
+      return res.status(400).json({ error: `entry "${r.id}": review must be { characterId, triggeredBy }` });
+    }
     inputs.push({
       id: r.id,
       bookId: r.bookId,
@@ -114,6 +123,7 @@ queueRouter.post('/enqueue', async (req: Request, res: Response) => {
       ...(isTtsModelKey(r.modelKey) ? { modelKey: r.modelKey } : {}),
       ...(isString(r.addedAt) ? { addedAt: r.addedAt } : {}),
       ...(r.fallbackConfirmed === true ? { fallbackConfirmed: true } : {}),
+      ...(review ? { review } : {}),
     });
   }
   /* Plan 108 Wave 3 — stamp each entry with the TTS engines its chapter needs
