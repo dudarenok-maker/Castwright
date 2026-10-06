@@ -183,7 +183,7 @@ async function applyRestructure(
   // sentences keyed by the new chapter ids. Earlier code wiped the
   // cache outright, which made every post-restructure Generate halt
   // with "No analysed sentences cached for this book."
-  // Plan 285 — 'replace': ids are renumbered, so prior keys cannot be kept.
+  // Plan 286 — 'replace': ids are renumbered, so prior keys cannot be kept.
   await rebuildCacheFromEdits(state.manuscriptId, editsPath, { mode: 'replace' }).catch((e) => {
     console.error('[chapters-restructure] cache rebuild failed', e);
   });

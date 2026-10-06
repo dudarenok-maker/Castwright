@@ -2635,10 +2635,10 @@ describe('book-state router — clonedElsewhereInSeries (#2006 Task 9)', () => {
   });
 });
 
-describe('book-state router — analysis.failedChapterErrors phase (plan 285 T1)', () => {
+describe('book-state router — analysis.failedChapterErrors phase (plan 286 T1)', () => {
   it('GET book-state returns phase on failedChapterErrors', async () => {
     const { saveAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
-    /* Seeded UNTAGGED (a pre-285 cache): the load-time normaliser must tag it. */
+    /* Seeded UNTAGGED (a pre-286 cache): the load-time normaliser must tag it. */
     await saveAnalysisCache('m_test', {
       chapters: {},
       chapterCast: { 1: [] },
@@ -2655,7 +2655,7 @@ describe('book-state router — analysis.failedChapterErrors phase (plan 285 T1)
   });
 });
 
-describe('book-state router — analysis completeness fields (plan 285 T6)', () => {
+describe('book-state router — analysis completeness fields (plan 286 T6)', () => {
   const statePath = () => join(bookDir, '.audiobook', 'state.json');
   let originalState: string;
   beforeEach(() => {

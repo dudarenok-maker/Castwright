@@ -17,7 +17,7 @@
    keeping them avoids dropping observed-rate samples that the analyzer
    uses on resume.
 
-   Plan 285 spec 2.2 — two modes. `'overlay'` (the default) lays the edits
+   Plan 286 spec 2.2 — two modes. `'overlay'` (the default) lays the edits
    over the prior chapters map instead of replacing it: the edits carry no
    `[]` take (a chapter with no sentences contributes no rows) and no excluded
    chapter, so replacing the map deleted those keys, and a chapter's own key is

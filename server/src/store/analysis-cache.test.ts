@@ -100,7 +100,7 @@ describe('normaliseFailureRecords (via loadAnalysisCache) — untagged legacy re
   });
 });
 
-describe('hasCurrentTake (plan 285 spec 2.2)', () => {
+describe('hasCurrentTake (plan 286 spec 2.2)', () => {
   const take = [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'A take.' }] as never;
   const cases: Array<[string, Partial<AnalysisCache>, boolean]> = [
     ['a non-empty take', { chapters: { 1: take } }, true],
@@ -116,7 +116,7 @@ describe('hasCurrentTake (plan 285 spec 2.2)', () => {
   });
 });
 
-describe('analysisCompleteFor (plan 285 spec 2.2)', () => {
+describe('analysisCompleteFor (plan 286 spec 2.2)', () => {
   const take = [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'A take.' }] as never;
   const stage1 = { characters: [], chapters: [] } as never;
   const done: Partial<AnalysisCache> = { stage1, chapters: { 1: take, 2: [] } };
@@ -135,7 +135,7 @@ describe('analysisCompleteFor (plan 285 spec 2.2)', () => {
   });
 });
 
-describe('reachedConfirm (plan 285 decision F)', () => {
+describe('reachedConfirm (plan 286 decision F)', () => {
   it('reads castConfirmed or confirmReached', async () => {
     const { reachedConfirm } = await import('./analysis-cache.js');
     expect(reachedConfirm({ castConfirmed: true }, { chapters: {} })).toBe(true);
@@ -145,7 +145,7 @@ describe('reachedConfirm (plan 285 decision F)', () => {
   });
 });
 
-describe('loadAnalysisCache keeps the plan-285 completeness fields', () => {
+describe('loadAnalysisCache keeps the plan-286 completeness fields', () => {
   it('round-trips pendingAttributionChapterIds, takesPersisted and confirmReached', async () => {
     const id = `m_flags_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     await saveAnalysisCache(id, {

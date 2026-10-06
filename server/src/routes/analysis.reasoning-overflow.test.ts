@@ -922,7 +922,7 @@ describe('nonStoryOverflowWarningMessage — advice follows the fixes list (#308
   });
 });
 
-/* #3435 (plan 285 T2) — the main route's Phase-1 (attribution) failure
+/* #3435 (plan 286 T2) — the main route's Phase-1 (attribution) failure
    bookkeeping, the dispatch split, the guarded failure-catch saves and the
    terminal label. Ported by name from #3439 (9a063ea6), adapted to the
    `phase` marker; `PA:` tests are not ported (decision D4). */
@@ -1106,7 +1106,7 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     expect(after.failedChapterErrors?.['1']).toBeUndefined();
   }, 60_000);
 
-  /* Ported from #3439 (9a063ea6) by name; seeds carry `phase` (plan 285 T5). */
+  /* Ported from #3439 (9a063ea6) by name; seeds carry `phase` (plan 286 T5). */
   const COLLAPSED = [{ id: 101, chapterId: 1, characterId: 'narrator', confidence: 0.9, text: BODIES[1] }];
   /** No stage1: chapter 1 attribution-flagged (has its cast, cached collapsed
       sentences), chapter 2 cast-failed (empty-array failure marker). */
@@ -1394,7 +1394,7 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
    drains, so a chapter whose OWN Phase 0a failed is still attributed. Its Phase-1
    success must not clear its cast-phase record: only a Phase-0a success does,
    otherwise the resume never re-casts it and the book completes without that
-   chapter's characters. Plan 285 T5 (M8c): that take was made against the
+   chapter's characters. Plan 286 T5 (M8c): that take was made against the
    rolling roster while the cast record stood, so it is pending, and the resume
    re-attributes it. Ported by name from #3439 (9a063ea6). */
 describe('pipelined main route: a cast-phase failure record survives the same chapter\'s Phase 1 (#3435)', () => {
@@ -1542,7 +1542,7 @@ describe('pipelined main route: a cast-phase failure record survives the same ch
   }, 90_000);
 });
 
-/* #3435 (plan 285 T4) — the subset route records a Phase-1 (attribution)
+/* #3435 (plan 286 T4) — the subset route records a Phase-1 (attribution)
    failure, its Phase-1 gate counts only CAST failures, a soft stop ends via
    endJob (so the halted snapshot lands), and a cast failure fixed by Phase 0
    waits for its Phase 1 before it clears. Ported by name from #3439

@@ -65,7 +65,7 @@ const TITLE_LED_MANUSCRIPT_ID = 'm_title_led';
 const DIVERGENT_MANUSCRIPT_ID = 'm_divergent';
 /* #3362 🟠B — one cast character spelled two ways across a chapter's segments. */
 const MIXED_SPELLING_MANUSCRIPT_ID = 'm_mixed_spelling';
-/* Plan 285 T5 — the real, disk-backed cache, so the edits rebuild is observable. */
+/* Plan 286 T5 — the real, disk-backed cache, so the edits rebuild is observable. */
 const REBUILD_MANUSCRIPT_ID = 'm_splice_rebuild';
 vi.mock('../store/analysis-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
@@ -351,7 +351,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
   });
 });
 
-describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — the edits rebuild keeps an excluded take (plan 285)', () => {
+describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — the edits rebuild keeps an excluded take (plan 286)', () => {
   it("a re-record keeps an excluded chapter's cached take (the route passes state.json's excluded ids)", async () => {
     const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await vi.importActual<
       typeof import('../store/analysis-cache.js')

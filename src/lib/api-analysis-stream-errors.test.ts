@@ -112,7 +112,7 @@ describe('realRunAnalysisForChapters — the same two codes on the subset route'
   });
 });
 
-describe('chapter-failed frames — phase reaches onChapterFailed (plan 285 T1)', () => {
+describe('chapter-failed frames — phase reaches onChapterFailed (plan 286 T1)', () => {
   /* Both readers copy the frame's fields into the callback argument one by
      one, so a new field is dropped unless each parser names it. */
   const FAILED_FRAME = JSON.stringify({

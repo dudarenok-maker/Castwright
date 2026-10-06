@@ -567,10 +567,10 @@ setup rather than repeatedly loading and evicting models.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-04 (#3435, plan 285), 57 → 59.** Rows **B103** (abort
+> **Last change: 2026-10-04 (#3435, plan 286), 57 → 59.** Rows **B103** (abort
 > and drain on a local Ollama analyzer: a stopped main run releases the model
 > before a chapter Retry starts) and **B104** (a Resume on a cast-confirmed book
-> keeps every designed voice) added from plan 285's "On-box acceptance owed".
+> keeps every designed voice) added from plan 286's "On-box acceptance owed".
 > Group B 3 → 5. `next-id` bumped B103 → B105 in the same change.
 >
 > **Prior change: 2026-10-03 (#3414), 56 → 57.** Added **A112** — the
@@ -5983,7 +5983,7 @@ For at least two short-context tags, also record `num_ctx` sent (32768) against 
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §3](3084-openai-analyzer-onbox-acceptance.md). Clears when §3's three `Result:` lines are filled.
 
-### B103 · Abort and drain on a local Ollama analyzer — a stopped main run releases the model before a chapter Retry starts ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [285](../features/285-analysis-failure-phase-markers.md)) · **local Ollama, a pipelined main run; no TTS engine**
+### B103 · Abort and drain on a local Ollama analyzer — a stopped main run releases the model before a chapter Retry starts ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [286](../features/286-analysis-failure-phase-markers.md)) · **local Ollama, a pipelined main run; no TTS engine**
 
 Every analysis ending (Pause, an error, an overflow, a quota stop) now aborts the run's in-flight model calls, and Retry / Re-analyse / Include are refused with a 409 until the stopped run has drained. Mock mode has no server, so none of that is visible there. Run it twice on a book big enough to be in Phase 1 for a while:
 
@@ -5992,13 +5992,13 @@ Every analysis ending (Pause, an error, an overflow, a quota stop) now aborts th
 
 In both, observe in the server log `[analysis] main run drained manuscript=<id>` **before** `[analysis-subset] start manuscript=<id>`, no cache or edits write from the main job after the drained line, no `drain deadline exceeded` line, and `ollama ps` showing the model released after the drain. Note each drain's duration.
 
-Criteria: [plan 285 "On-box acceptance owed"](../features/285-analysis-failure-phase-markers.md) item 1 and the walkthroughs under it. Clears when both runs are recorded with their drain durations.
+Criteria: [plan 286 "On-box acceptance owed"](../features/286-analysis-failure-phase-markers.md) item 1 and the walkthroughs under it. Clears when both runs are recorded with their drain durations.
 
-### B104 · A Resume on a cast-confirmed book with designed voices leaves every designed voice intact ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [285](../features/285-analysis-failure-phase-markers.md)) · **local Ollama; a real book with a confirmed cast and at least one designed voice**
+### B104 · A Resume on a cast-confirmed book with designed voices leaves every designed voice intact ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [286](../features/286-analysis-failure-phase-markers.md)) · **local Ollama; a real book with a confirmed cast and at least one designed voice**
 
-The 2026-07-14 voice-strip incident class (invariant 6). Plan 285 changed what a stopped run persists and what a Resume re-merges, so a real confirmed cast is the only honest test that a Resume does not strip a designed voice. Take a confirmed book with at least one designed voice, note its `cast.json` voice fields (`designModel`, `instruct`, `baseModel`, the `.pt` reference), Pause a Resume part-way, Resume it to the end, then diff `cast.json`. Every designed voice field must be byte-identical.
+The 2026-07-14 voice-strip incident class (invariant 6). Plan 286 changed what a stopped run persists and what a Resume re-merges, so a real confirmed cast is the only honest test that a Resume does not strip a designed voice. Take a confirmed book with at least one designed voice, note its `cast.json` voice fields (`designModel`, `instruct`, `baseModel`, the `.pt` reference), Pause a Resume part-way, Resume it to the end, then diff `cast.json`. Every designed voice field must be byte-identical.
 
-Criteria: [plan 285 "On-box acceptance owed"](../features/285-analysis-failure-phase-markers.md) item 2. Clears when the diff is recorded as empty for the designed voices.
+Criteria: [plan 286 "On-box acceptance owed"](../features/286-analysis-failure-phase-markers.md) item 2. Clears when the diff is recorded as empty for the designed voices.
 
 ---
 

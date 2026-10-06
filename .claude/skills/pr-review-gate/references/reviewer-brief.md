@@ -196,7 +196,7 @@ recite:
 22. **Test cleanup that deletes a directory the code under test is still
     writing to fire-and-forget** — the test passes its assertions, then the
     teardown races the detached writes and fails intermittently. The
-    plan-285 `afterEach` in `server/src/routes/analysis.test.ts` `rmSync`'d
+    plan-286 `afterEach` in `server/src/routes/analysis.test.ts` `rmSync`'d
     the book dir while `endJob`'s detached `persistTerminalSnapshot` write was
     still landing (ENOTEMPTY, 1 run in 3); fixed by awaiting the recorded
     `withVerifiedBookDir` promises. That covers the snapshot write only; the

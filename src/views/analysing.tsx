@@ -118,8 +118,8 @@ function describeRemaining(remainingMs: number, wordCount?: number): string {
   return `${words}~${mins} minutes remaining at the current pace. This is a long one.`;
 }
 
-/* One row of the failed-chapter panel. `phase` is which step failed (plan 285):
-   a pre-285 server sends none, and a row with no phase reads as a cast failure. */
+/* One row of the failed-chapter panel. `phase` is which step failed (plan 286):
+   a pre-286 server sends none, and a row with no phase reads as a cast failure. */
 interface FailedChapterRow {
   chapterId: number;
   message: string;
@@ -956,7 +956,7 @@ export function AnalysingView({
               };
             }
             /* No stored record: the legacy placeholder. Its phase is unknown, so
-               it reads as a cast row (what every row was before plan 285). */
+               it reads as a cast row (what every row was before plan 286). */
             return {
               chapterId: id,
               message: 'Analysis failed on a previous attempt. Retry to try again.',

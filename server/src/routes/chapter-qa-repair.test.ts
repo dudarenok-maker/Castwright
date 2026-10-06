@@ -226,7 +226,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (dry-run scan)', () 
   });
 });
 
-describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (repair) — the edits rebuild keeps an excluded take (plan 285)', () => {
+describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (repair) — the edits rebuild keeps an excluded take (plan 286)', () => {
   it("a repair keeps an excluded chapter's cached take (the route passes state.json's excluded ids)", async () => {
     const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await vi.importActual<
       typeof import('../store/analysis-cache.js')

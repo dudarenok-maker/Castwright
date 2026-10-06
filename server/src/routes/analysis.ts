@@ -1407,7 +1407,7 @@ function titleList(titles: string[]): string {
 }
 
 /* #3435 S8 — a subset run on a book with no stage1 finished cast detection,
-   but the main run still has to attribute the book (plan 285 §3.2). */
+   but the main run still has to attribute the book (plan 286 §3.2). */
 export function resumeRequiredAfterCastMessage(titles: string[]): string {
   return `Cast detection for ${titleList(titles)} is done. The rest of the book still needs attribution — resume the analysis to finish.`;
 }
@@ -1451,7 +1451,7 @@ export function clearFailedChapterId(
    cache state: the id keeps driving the Retry list; the record carries the
    structured code/message/remediation for the post-reload display. Returns the
    EFFECTIVE record — callers send `chapter-failed` with it. Cast dominates
-   (plan 285 spec 2.1): an attribution write onto a chapter whose record is
+   (plan 286 spec 2.1): an attribution write onto a chapter whose record is
    already `'cast'` is a no-op, so a chapter that never got its cast cannot be
    relabelled as an attribution failure. */
 export function recordFailedChapter(
@@ -1479,7 +1479,7 @@ export function recordFailedChapter(
   return record;
 }
 
-/* #3435 (plan 285 spec 2.1) — the non-excluded chapters whose failure record is
+/* #3435 (plan 286 spec 2.1) — the non-excluded chapters whose failure record is
    a CAST failure. This, not `failedChapterIds`, is what the subset route's
    Phase-1 gate counts: an attribution record does not stop another chapter's
    Re-analyse, and an excluded chapter's record never does. Exported for unit
@@ -1510,7 +1510,7 @@ export function promoteCastRecordToAttribution(
   return true;
 }
 
-/* #3435 (plan 285 spec 2.2) — put `chapterId` into, or take it out of, the
+/* #3435 (plan 286 spec 2.2) — put `chapterId` into, or take it out of, the
    pending set P (`cache.pendingAttributionChapterIds`), mutating the cache in
    place. A pending take is never deleted here: it stays in `cache.chapters`
    until a later Phase-1 completion replaces it. */
@@ -1526,7 +1526,7 @@ export function setPendingAttribution(
     : current.filter((id) => id !== chapterId);
 }
 
-/* #3435 (plan 285 M0/M1, S0) — the rules both routes apply to the cache they
+/* #3435 (plan 286 M0/M1, S0) — the rules both routes apply to the cache they
    have just loaded, mutating it in place. Returns whether it changed (the
    caller saves).
    - M0: a failed word-free chapter (no attributable words) whose take is `[]`
@@ -1566,7 +1566,7 @@ export function applyAnalysisLoadRules(
   return changed;
 }
 
-/* #3435 (plan 285) — a word-free chapter (`!hasAttributableContent`) has
+/* #3435 (plan 286) — a word-free chapter (`!hasAttributableContent`) has
    nothing to attribute: both routes replace the analyzer call with this
    synthetic successful result, so every normal success step still runs and
    the chapter is not flagged `noSentences`. Exported for unit testing. */
@@ -5766,7 +5766,7 @@ export async function runMainAnalyzerJob(
     /* Replay cached chapters synchronously up front. Cheap, deterministic
        progress, and avoids racing the concurrent pool against the cache.
        Excluded chapters are skipped — they never had attribution run and
-       must not be counted as cached. #3435 (plan 285) — a chapter replays iff
+       must not be counted as cached. #3435 (plan 286) — a chapter replays iff
        it has a current take: a `[]` take is done once attributed (decision
        B), and a pending take (P) is re-attributed. */
     for (let i = 0; i < totalChapters; i++) {
@@ -6860,7 +6860,7 @@ export async function runMainAnalyzerJob(
          the wrap on `writeChecked` below). */
       let persistLockTimeout: unknown;
       let staleBookDirError: unknown;
-      /* #3435 (plan 285 M17/S14) — set only once THIS block's state.json write
+      /* #3435 (plan 286 M17/S14) — set only once THIS block's state.json write
          has landed. The `try` completing is not enough: on attribution_drift
          it completes with the cast.json/state.json writes skipped, and
          `catch (persistErr)` swallows a failed write. */
@@ -8840,7 +8840,7 @@ export async function runSubsetAnalyzerJob(
          and the authoritative cast.json write above it). */
       let persistLockTimeout: unknown;
       let staleBookDirError: unknown;
-      /* #3435 (plan 285 M17/S14) — set only once THIS block's state.json write
+      /* #3435 (plan 286 M17/S14) — set only once THIS block's state.json write
          has landed. The `try` completing is not enough: on attribution_drift
          it completes with the cast.json/state.json writes skipped, and
          `catch (persistErr)` swallows a failed write. */

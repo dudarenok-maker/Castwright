@@ -792,7 +792,7 @@ async function scanBook(
      every chapter is actually analysed; that's the signal the resume
      button needs to be honest about what's still pending.
 
-     Plan 285 spec 2.2 — "analysed" is `analysisCompleteFor` (a final roster,
+     Plan 286 spec 2.2 — "analysed" is `analysisCompleteFor` (a final roster,
      a current take per chapter, takes persisted), not an own-key count. It
      gates only a book that has never reached Confirm (`reachedConfirm`,
      decision F): a confirmed or generated book is never demoted by it. */

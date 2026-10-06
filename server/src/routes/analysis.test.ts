@@ -228,7 +228,7 @@ vi.mock('../workspace/scan.js', async () => {
   };
 });
 
-/* Plan 285 T5 — a case sets `__p285_save_hook` to observe every cache save
+/* Plan 286 T5 — a case sets `__p286_save_hook` to observe every cache save
    (what the cache held at that moment). Pass-through otherwise. */
 vi.mock('../store/analysis-cache.js', async () => {
   const actual = await vi.importActual<typeof import('../store/analysis-cache.js')>(
@@ -237,7 +237,7 @@ vi.mock('../store/analysis-cache.js', async () => {
   return {
     ...actual,
     saveAnalysisCache: async (...args: Parameters<typeof actual.saveAnalysisCache>) => {
-      const hook = (globalThis as Record<string, unknown>).__p285_save_hook as
+      const hook = (globalThis as Record<string, unknown>).__p286_save_hook as
         | ((c: (typeof args)[1]) => void)
         | undefined;
       hook?.(structuredClone(args[1]));
@@ -246,7 +246,7 @@ vi.mock('../store/analysis-cache.js', async () => {
   };
 });
 
-/* Plan 285 T5 — a case sets this to make the analysis persist's state.json
+/* Plan 286 T5 — a case sets this to make the analysis persist's state.json
    write throw, so the persist block's `catch (persistErr)` swallows it.
    Pass-through otherwise. */
 vi.mock('../workspace/state-migrate.js', async () => {
@@ -1539,7 +1539,7 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
   });
 });
 
-/* #3435 (plan 285 spec 2.1) — the phase-aware readers of the failure record
+/* #3435 (plan 286 spec 2.1) — the phase-aware readers of the failure record
    that need no pending set. */
 describe('castFailedChapterIds / promoteCastRecordToAttribution', () => {
   const rec = (phase: 'cast' | 'attribution') => ({ code: 'x', message: 'm', remediation: 'r', phase });
@@ -4982,7 +4982,7 @@ describe('runSubsetAnalyzerJob — re-reports a coverage failure instead of sile
   );
 });
 
-describe('runMainAnalyzerJob — chapter-failed frames carry phase (plan 285 T1)', () => {
+describe('runMainAnalyzerJob — chapter-failed frames carry phase (plan 286 T1)', () => {
   const BODY = 'This is a perfectly ordinary paragraph of narration with no dialogue at all.';
   const roster = (): CharacterOutput[] => [
     { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
@@ -9478,10 +9478,10 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
   }, 30_000);
 });
 
-/* Plan 285 T5 — "current take": the pending set P and its writers, the
+/* Plan 286 T5 — "current take": the pending set P and its writers, the
    takesPersisted / confirmReached flags, the word-free short-circuit and the
    main replay, driven through the real main route. */
-describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
+describe('runMainAnalyzerJob — current takes (plan 286 T5)', () => {
   const WORDED: Record<number, string> = {
     1: 'Mara opened the door and stepped out into the cold morning air.',
     2: 'The harbour lay quiet under a low grey sky that promised rain.',
@@ -9513,7 +9513,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
     const g = globalThis as Record<string, unknown>;
     delete g.__analyzer_device_test_phase1_selection;
     delete g.__analysis_test_state_write_throws;
-    delete g.__p285_save_hook;
+    delete g.__p286_save_hook;
     await settleDetachedWrites();
     for (const b of made.splice(0)) {
       removeManuscript(b.manuscriptId);
@@ -9523,15 +9523,15 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
   });
 
   function makeBook(label: string, chapters: BookChapter[], state: Record<string, unknown> = {}): Book {
-    const manuscriptId = `test-p285-${label}-${Date.now()}-${Math.random()}`;
-    const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-p285-test-'));
+    const manuscriptId = `test-p286-${label}-${Date.now()}-${Math.random()}`;
+    const bookDir = mkdtempSync(join(tmpdir(), 'audiobook-p286-test-'));
     mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
     writeFileSync(
       join(bookDir, '.audiobook', 'state.json'),
       JSON.stringify({
-        bookId: `b_p285_${label}`,
+        bookId: `b_p286_${label}`,
         manuscriptId,
-        title: `P285 ${label}`,
+        title: `P286 ${label}`,
         language: 'en',
         author: 'Test Author',
         series: 'Standalones',
@@ -9554,7 +9554,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
     putManuscript({
       manuscriptId,
       format: 'plaintext',
-      title: `P285 ${label}`,
+      title: `P286 ${label}`,
       wordCount: 100,
       byteSize: 1000,
       uploadedAt: new Date().toISOString(),
@@ -9615,7 +9615,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
       model: 'm1',
       fallbackModel: null,
     } satisfies AnalyzerSelection;
-    if (opts.saveHook) g.__p285_save_hook = opts.saveHook;
+    if (opts.saveHook) g.__p286_save_hook = opts.saveHook;
     const events: Array<{ kind: string; [k: string]: unknown }> = [];
     const keepAlive = setInterval(() => {}, 1);
     clearInterval(keepAlive);
@@ -9651,7 +9651,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
         { requestedFresh: opts.fresh ?? false, allowStage1Shrink: true, requestedModel: undefined },
       );
     } finally {
-      delete g.__p285_save_hook;
+      delete g.__p286_save_hook;
       if (originalRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
       else process.env.STAGE2_COVERAGE_RETRIES = originalRetries;
       if (originalWidth === undefined) delete process.env.ANALYZER_OLLAMA_CONCURRENCY;
@@ -10076,7 +10076,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
       const record = getManuscript(book.manuscriptId)!;
       if (opts.saveHook) {
         const hook = opts.saveHook;
-        g.__p285_save_hook = (c: SaveSnapshot) => hook(c, { job, record });
+        g.__p286_save_hook = (c: SaveSnapshot) => hook(c, { job, record });
       }
       try {
         await runSubsetAnalyzerJob(
@@ -10088,7 +10088,7 @@ describe('runMainAnalyzerJob — current takes (plan 285 T5)', () => {
           false,
         );
       } finally {
-        delete g.__p285_save_hook;
+        delete g.__p286_save_hook;
         if (originalRetries === undefined) delete process.env.STAGE2_COVERAGE_RETRIES;
         else process.env.STAGE2_COVERAGE_RETRIES = originalRetries;
       }
