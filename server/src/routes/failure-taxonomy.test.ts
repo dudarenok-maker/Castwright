@@ -794,6 +794,20 @@ describe('classifyAnalysisFailure — wave-3 analyzer codes (#3084 PR 3b)', () =
     },
   );
 
+  it("an endpoint's bad-key 400 (Google OpenAI-compat body) is auth, naming the endpoint's key", () => {
+    const body =
+      '[{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID","domain":"googleapis.com"}]}}]';
+    const r = classifyAnalysisFailure(new AnalyzerHttpError('openai', 400, body, 'HTTP 400'), 'Lab box');
+    expect(r.code).toBe('auth');
+    expect(r.remediation).toBe("Check the endpoint's API key, then retry the chapter.");
+  });
+
+  it("an endpoint's ordinary shape 400 stays analyzer-request-rejected", () => {
+    const body = '{"error":{"message":"Invalid value for response_format","type":"invalid_request_error"}}';
+    const r = classifyAnalysisFailure(new AnalyzerHttpError('openai', 400, body, 'HTTP 400'), 'Lab box');
+    expect(r.code).toBe('analyzer-request-rejected');
+  });
+
   it('a Gemini ApiError 400 envelope → analyzer-request-rejected with the provider message, keeping the status/details detail block', () => {
     const err = new ApiError({
       status: 400,

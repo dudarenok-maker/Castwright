@@ -917,7 +917,12 @@ export function classifyAnalysisFailure(
     };
   }
   if (err instanceof AnalyzerHttpError) {
-    if (err.httpStatus === 401 || err.httpStatus === 403) {
+    /* Google's OpenAI-compatible endpoint answers a bad key with a 400 (API_KEY_INVALID), the same
+       credentials problem statusToFailureCode maps for a direct Gemini call. Endpoints only: an
+       Ollama 400 body has no key concept, so it keeps main's request-rejected handling. */
+    const endpointKeyRejected =
+      err.httpStatus === 400 && err.transport === 'openai' && GEMINI_KEY_REJECTED.test(err.bodyExcerpt);
+    if (err.httpStatus === 401 || err.httpStatus === 403 || endpointKeyRejected) {
       return withCopy(
         'auth',
         `${modelLabel} refused the credentials (${err.httpStatus}) — check ${KEY_SETTING[err.transport]}.`,
