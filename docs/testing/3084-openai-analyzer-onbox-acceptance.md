@@ -188,3 +188,31 @@ Large context — Result:
 Short-context tags — Result:
 
 Run by / date / SHA:
+
+## 4. Ollama structured-output modes — register row B103
+
+Book: *The Coalfall Commission* chapter one (`server/src/__fixtures__/the-coalfall-commission.md`).
+
+Prerequisites: a real Ollama daemon with `qwen3.5:4b` pulled; no TTS engine resident.
+
+1. Default (`schema`): analyse chapter one. Note the validation retries (count `*.attempt1.raw.txt` files).
+   Result:
+2. Set `analyzer.ollama.structuredOutput` = `json`. Re-analyse chapter one. Confirm the inbox request had `format: "json"`. Note retries and outcome.
+   Result:
+3. Set it to `off`. Re-analyse. Confirm the request had no `format` key. Note retries and outcome.
+   Result:
+4. Restore `schema`.
+
+Run by / date / SHA:
+
+## 5. Gemini `schema` mode — register row E112
+
+Book: as §4. Prerequisites: a Gemini API key; no local analyzer needed.
+
+1. Set `analyzer.gemini.structuredOutput` = `schema`. Analyse chapter one on `gemma-4-31b-it`. Record: HTTP 400 or accepted; the debug "schema adapter dropped" list; first-attempt conformance.
+   Result:
+2. Repeat on `gemini-3.5-flash-lite`.
+   Result:
+3. Restore `json`.
+
+Run by / date / SHA:
