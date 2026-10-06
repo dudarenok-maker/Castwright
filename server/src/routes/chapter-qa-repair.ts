@@ -445,7 +445,8 @@ chapterQaRepairRouter.post(
          valid, and an engine change is already caught by the voice-name mismatch
          above. After this filter a filtered-out character behaves exactly like "no
          centroid" at every downstream `centroids?.[charId]` site. in-book rows are
-         always kept (rebuilt fresh every pass, self-healing). */
+         kept; they are rebuilt only when the book is rescored, so after a voice
+         change with no re-render they still reflect the old voice (#3517). */
       const centroids: Record<string, CharacterCentroid> | null =
         readCentroidsMap &&
         Object.fromEntries(

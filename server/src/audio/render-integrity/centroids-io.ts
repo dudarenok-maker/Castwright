@@ -115,8 +115,9 @@ export async function readCentroids(
  *  (chapter-qa-repair.ts) derives these from the CURRENT cast via
  *  pickVoiceForEngine — NOT from the previous render's snapshot, whose
  *  `resolvedVoiceName` is stale after a voice reassignment with no re-render in
- *  between (#3449). in-book rows are rebuilt fresh every pass, so they self-heal
- *  and stay usable. An 'audition' row is usable ONLY when it recorded a voice
+ *  between (#3449). in-book rows are kept; they are rebuilt only when the book is
+ *  rescored, so after a voice change with no re-render they still reflect the
+ *  old voice (#3517). An 'audition' row is usable ONLY when it recorded a voice
  *  identity AND that identity matches the character's current resolved voice/model
  *  — otherwise it is a stale reference (possibly for a voice the character no
  *  longer is) and must not be scored against. A null/absent current (no resolved
