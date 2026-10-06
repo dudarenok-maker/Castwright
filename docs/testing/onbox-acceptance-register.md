@@ -5762,7 +5762,7 @@ for the sleep-prevention leg specifically; the other two legs are
 platform-general. *Criteria:* the three observations above; issue #3406 and
 PR #3404's manifest-guard section for the exact defect each leg closes.
 
-### A112 · The qa-repair repair pass stops judging a new take against a reassigned character's stale audition centroid ([Castwright#3414](https://github.com/dudarenok-maker/Castwright/issues/3414)) · **a real sidecar with a real speaker-embedding (ECAPA) model, a Qwen or Coqui character (scoreBook skips Kokoro), Auto-fix voice mismatches switched on, a book with at least two already-rendered chapters**
+### A112 · The qa-repair repair pass stops judging a new take against a reassigned character's stale audition centroid ([Castwright#3414](https://github.com/dudarenok-maker/Castwright/issues/3414)) · **a real sidecar with a real speaker-embedding (ECAPA) model, a Qwen or Coqui character (scoreBook skips Kokoro), Render-integrity QA (voice match) and Auto-fix voice mismatches both switched on, a book with at least two already-rendered chapters**
 
 `chapter-qa-repair.ts`'s centroid filter derived its comparison voice from
 the chapter's last full-render snapshot (`snap?.resolvedVoiceName`) rather
@@ -5785,6 +5785,20 @@ embedder. Neither test touches a real sidecar or a real ECAPA model.
 - **two** already-rendered chapters (call them X and Y), each with a line of
   that character carrying a `voice-mismatch` / `fixable: true` row in its
   `<slug>.render-integrity.json`;
+- the character's `auditionVoice.voiceName` in that same centroids row equals
+  the character's snapshot voice in **both** X and Y. `scoreBook` takes the
+  audition voice from the character's FIRST chapter in book order
+  (`aggregate.ts`), so after an earlier partial re-render (or a voice change)
+  the two can differ — and the control then correctly drops the reference,
+  which would misread as a Fail. If they differ, re-render so they match
+  before starting;
+- **Render-integrity QA (voice match)** (`qa.speaker.enabled`, env
+  `SEG_SPK_ENABLED`) switched **on** *before the chapters are rendered* — it
+  defaults off, and it is what makes `scoreBook` run at all, writing the
+  centroids and verdict files (`generation.ts` returns early while off).
+  Scoring runs from chapter completion (and the resume path), so turn it on
+  first and then render, rather than expecting files for already-finished
+  chapters;
 - **Auto-fix voice mismatches** (`qa.speaker.autoRepair`, env
   `SEG_SPK_AUTO_REPAIR`) switched **on** — it defaults off, and while off the
   route never merges a verdict-file row into its candidates, so nothing below
@@ -5794,6 +5808,18 @@ embedder. Neither test touches a real sidecar or a real ECAPA model.
   segment also lands a line in `stillSuspect` without re-rendering it, which
   would masquerade as the failure the control guards.
 
+**Getting a book into that state.** A `fixable: true` row needs a *severe*
+voice-mismatch on a stochastic engine (`aggregate.ts`), and an
+`audition`-referenced (thin) character with severe misfires in two separate
+chapters is rare in a healthy book. Nothing in the app manufactures one. Either
+hunt: with Render-integrity QA on, render a book and inspect each
+`<slug>.render-integrity.json` for `fixable: true` rows of a character whose
+centroids row says `referenceKind: "audition"`; or set one up deliberately —
+a thin character (few lines, so the centroid falls back to audition) whose
+voice or engine settings you vary between renders so some lines come out in a
+clearly different voice. This may take several attempts; if no such character
+turns up, record the row as not yet runnable rather than as passed.
+
 **How to trigger it.** The route is
 `POST /api/books/<bookId>/chapters/<chapterId>/audio-qa-repair` (an SSE
 stream). Its UI trigger is the Listen view's chapter-row button "Re-record the
@@ -5802,9 +5828,15 @@ re-record modal and posts to `…/splice` instead. That button renders only when
 the chapter's `audioQa.status` is `suspect`, which is derived from signal QA
 (`finalize-chapter-write.ts`), not from voice-match verdicts — so for an
 acoustic-only chapter it usually will not appear. Then send the request
-directly: `curl -N -X POST -H "Content-Type: application/json" -d
-'{"dryRun":false}' https://<host>/api/books/<bookId>/chapters/<chapterId>/audio-qa-repair`
-(omitting `dryRun` runs a read-only scan). Read every observation from the
+directly: `curl.exe -N -X POST -H "Content-Type: application/json" -d
+'{"dryRun":false}' http://localhost:8080/api/books/<bookId>/chapters/<chapterId>/audio-qa-repair`
+(omitting `dryRun` runs a read-only scan). Use `curl.exe`, not `curl`: in
+Windows PowerShell 5.1 `curl` is an alias for `Invoke-WebRequest` and rejects
+these flags (and PowerShell's quoting may need the JSON body written as
+`'{\"dryRun\":false}'`). `http://localhost:8080` is the default `npm start`
+address, and loopback requests bypass the LAN token (`server/src/lan-auth.ts`);
+only in LAN HTTPS mode with a `LAN_AUTH_TOKEN` set, from another device, use
+`https://<host>:<port>` and present the token. Read every observation from the
 stream's `data:` frames — in the curl output, or in the browser devtools
 Network tab (that request → EventStream/Response) when the button was used.
 
