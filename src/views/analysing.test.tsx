@@ -125,8 +125,21 @@ function renderView() {
       account: accountSlice.reducer,
       bookMeta: bookMetaSlice.reducer,
       notifications: notificationsSlice.reducer,
+      manuscript: manuscriptSlice.reducer,
     },
   });
+  /* The cast slice holds m1: the open book (store/open-book.ts). */
+  store.dispatch(
+    manuscriptSlice.actions.uploadComplete({
+      manuscriptId: 'm1',
+      title: 'm1',
+      format: 'plaintext',
+      wordCount: 0,
+      byteSize: 0,
+      uploadedAt: new Date(0).toISOString(),
+      sourceText: '',
+    }),
+  );
   return {
     store,
     ...render(
@@ -2554,6 +2567,28 @@ describe('AnalysingView — failed-chapter retry', () => {
       const { store } = await mountAfterMainFailure(false, { withManuscript: true });
       act(() => {
         capturedSubsetCall!.opts!.onCastUpdate!({ characters: [villain] as Character[] });
+      });
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['a-villain']);
+    });
+
+    /* The main run's own cast updates follow the same rule: the view instance
+       may still be live (not yet cleaned up) while the slices already hold
+       another book. */
+    it('a main run cast update while the slices hold another book never writes into that book\'s cast', async () => {
+      const { store } = await mountAfterMainFailure(false, { withManuscript: true });
+      store.dispatch(uiActions.openBook({ id: 'b2', status: 'analysing', manuscriptId: 'm2' }));
+      store.dispatch(manuscriptSlice.actions.uploadComplete(upload('m2')));
+      store.dispatch(castSlice.actions.setCharacters([hero] as Character[]));
+      act(() => {
+        capturedOpts!.onCastUpdate!({ characters: [villain] as Character[] });
+      });
+      expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['b-hero']);
+    });
+
+    it('control: a main run cast update while its book is open replaces the live roster', async () => {
+      const { store } = await mountAfterMainFailure(false, { withManuscript: true });
+      act(() => {
+        capturedOpts!.onCastUpdate!({ characters: [villain] as Character[] });
       });
       expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['a-villain']);
     });

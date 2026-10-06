@@ -717,8 +717,11 @@ export function AnalysingView({
                cast view (and Phase 0 live preview below) mirror the server's
                already-deduped, verifier-pruned roster exactly — no stale
                same-name dups or verifier-dropped names lingering. Replay-safe
-               — snapshots upsert by id, preserving locked voices on survivors. */
-            dispatch(castActions.replaceLiveRoster(characters));
+               — snapshots upsert by id, preserving locked voices on survivors.
+               Only while the cast slice still holds this book (open-book.ts). */
+            if (selectIsOpenBook(store.getState(), { manuscriptId })) {
+              dispatch(castActions.replaceLiveRoster(characters));
+            }
           },
           onChapterFailed: ({ chapterId, message, code, remediation, phase }) => {
             if (cancelled) return;
