@@ -16,7 +16,7 @@
 
 import type { AppDispatch, RootState } from './index';
 import { queueActions, type QueueEntry, type QueueScope } from './queue-slice';
-import type { TtsModelKey } from '../lib/types';
+import type { TtsModelKey, ReviewRequest } from '../lib/types';
 import { notificationsActions } from './notifications-slice';
 import { chaptersActions } from './chapters-slice';
 import { mockQueueRequest } from '../mocks/mock-queue';
@@ -54,6 +54,9 @@ export interface EnqueueInput {
   /** fe-46 — set on every fresh entry from a "Proceed anyway" run so the
       per-chapter `awaiting_fallback_confirm` gate doesn't re-prompt for it. */
   fallbackConfirmed?: boolean;
+  /** Plan 285 — the A/B review intent; rides the persisted entry into the
+      generation request. Nothing sets it until PR 2. */
+  review?: ReviewRequest;
 }
 
 interface QueueSnapshotResponse {

@@ -7,20 +7,30 @@
      - Tone-metric delta thresholds: < 25 → nothing; 25-39 → moderate; ≥ 40 → severe.
      - Dismissed-id filter: an id present in revisions.json#dismissed never
        surfaces in the response, even when the underlying signal still holds.
-   - Persisted pending echo (#3376 part 1): revisions.json#pending is
-     surfaced verbatim by both the single-book route and the bulk
-     GET /api/revisions; a non-array value falls back to [].
+   - Pending read through the store (plan 285): revisions.json#pending is
+     normalised by workspace/revisions-store.ts (stale legacy entries
+     dropped) and surfaced by both the single-book route (whole
+     RevisionsState + drift, even with an empty cast) and the bulk
+     GET /api/revisions ({ pending, drift }); a non-array value falls back
+     to []; a corrupt file 500s (raw parse error); a lock timeout 500s with the curated contention message.
 
 
    Workspace tempdir + supertest pattern matches book-state.reparse.test.ts. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { retireCharacterId } from '../store/cast-id-history.js';
+
+/* Plan 285 — passthrough spy on the store read so a test can inject a lock
+   timeout and pin the curated 500. */
+vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+  return { ...real, readRevisions: vi.fn(real.readRevisions) };
+});
 
 const AUTHOR = 'Drift Test';
 const SERIES = 'Standalones';
@@ -61,14 +71,27 @@ interface CharacterSnapshot {
   attributes?: string[];
 }
 
+/* Plan 285 — the poll now answers RevisionsState + drift. */
+const emptyPoll = () => ({
+  bookId,
+  fileId: null,
+  rev: 0,
+  pending: [],
+  dismissed: [],
+  acceptedSelections: {},
+  timeline: {},
+  drift: [],
+});
+
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-revisions-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ revisionsRouter, revisionsBulkRouter }, { makeBookId }] = await Promise.all([
-    import('./revisions.js'),
-    import('../workspace/paths.js'),
-  ]);
+  /* Sequential, not `Promise.all` — this file carries a hoisted async-factory
+     `vi.mock` (revisions-store.js, plan 285), which a `Promise.all` of dynamic
+     imports races (#2083). */
+  const { revisionsRouter, revisionsBulkRouter } = await import('./revisions.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -169,7 +192,7 @@ describe('GET /api/books/:bookId/revisions — basic shape', () => {
   it('returns empty pending + drift when there is no cast yet', async () => {
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ pending: [], drift: [] });
+    expect(res.body).toEqual(emptyPoll());
   });
 
   it('returns empty drift when no segments files exist', async () => {
@@ -181,7 +204,7 @@ describe('GET /api/books/:bookId/revisions — basic shape', () => {
     );
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ pending: [], drift: [] });
+    expect(res.body).toEqual(emptyPoll());
   });
 
   it('returns empty drift when current cast matches every snapshot exactly', async () => {
@@ -536,51 +559,81 @@ describe('GET /api/books/:bookId/revisions — dismissed filter', () => {
     expect(factors).toEqual(['gender']);
   });
 });
-describe('GET /api/books/:bookId/revisions — persisted pending echo (#3376 part 1)', () => {
-  /* The regen flow persists a `pending` array in revisions.json. Both the
-     single-book route and the bulk route must surface it verbatim instead of
-     the old hardcoded []. Mirrors the dismissed guard: a non-array value
-     falls back to []. */
-  function seedPending(pending: unknown): void {
-    writeFileSync(join(bookDir, '.audiobook', 'revisions.json'), JSON.stringify({ pending }));
-  }
+describe('GET /api/books/:bookId/revisions — pending read through the store (plan 285)', () => {
+  const revisionsPath = () => join(bookDir, '.audiobook', 'revisions.json');
+  const serverEntry = {
+    id: 'revision:1:1000',
+    chapterId: 1,
+    characterId: 'eliza',
+    playable: true,
+    hasPreviousAudio: true,
+    segments: [],
+    origin: 'server',
+  };
+  /* A legacy entry on a chapter with no slug in state.json — normalisation
+     drops it (no .previous can exist). */
+  const staleLegacy = { id: 'rev-stale', chapterId: 2, characterId: 'x', segments: [] };
+  const matchingCast = () =>
+    seed({ snapshots: { eliza: { voiceId: 'v1' } }, cast: [{ id: 'eliza', voiceId: 'v1' }] });
 
-  it('echoes the persisted pending array verbatim, alongside drift', async () => {
-    seed({
-      snapshots: { eliza: { voiceId: 'old' } },
-      cast: [{ id: 'eliza', voiceId: 'new' }],
-    });
-    const pending = [{ id: 'rev-1', chapterId: 1, characterId: 'x', segments: [] }];
-    seedPending(pending);
+  it('returns pending even when the cast is EMPTY (D8)', async () => {
+    writeFileSync(revisionsPath(), JSON.stringify({ schema: 1, fileId: 'f-1', rev: 2, pending: [serverEntry] }));
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.status).toBe(200);
-    expect(res.body.pending).toEqual(pending);
-    const factors = (res.body.drift as DriftEventOut[]).map((d) => d.factor);
-    expect(factors).toEqual(['voice']);
+    expect(res.body).toMatchObject({ bookId, fileId: 'f-1', rev: 2, pending: [serverEntry], drift: [] });
+  });
+
+  it('surfaces a legacy entry only while its .previous.mp3 exists', async () => {
+    seed({ snapshots: { eliza: { voiceId: 'old' } }, cast: [{ id: 'eliza', voiceId: 'new' }] });
+    const legacy = { id: 'rev-1', chapterId: 1, characterId: 'x', segments: [] };
+    writeFileSync(revisionsPath(), JSON.stringify({ pending: [legacy] }));
+    let res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.body.pending).toEqual([]);
+    writeFileSync(join(audioRoot, '01-chapter-one.previous.mp3'), 'PREV');
+    res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.body.pending).toEqual([{ ...legacy, playable: true, hasPreviousAudio: true }]);
+    expect((res.body.drift as DriftEventOut[]).map((d) => d.factor)).toEqual(['voice']);
   });
 
   it('falls back to [] when persisted pending is not an array', async () => {
-    seed({
-      snapshots: { eliza: { voiceId: 'v1' } },
-      cast: [{ id: 'eliza', voiceId: 'v1' }],
-    });
-    seedPending('garbage');
+    matchingCast();
+    writeFileSync(revisionsPath(), JSON.stringify({ pending: 'garbage' }));
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.status).toBe(200);
     expect(res.body.pending).toEqual([]);
     expect(res.body.drift).toEqual([]);
   });
 
-  it('bulk GET /api/revisions echoes persisted pending per book', async () => {
-    seed({
-      snapshots: { eliza: { voiceId: 'old' } },
-      cast: [{ id: 'eliza', voiceId: 'new' }],
-    });
-    const pending = [{ id: 'rev-1', chapterId: 1, characterId: 'x', segments: [] }];
-    seedPending(pending);
+  it('a corrupt revisions.json answers 500, as on main', async () => {
+    matchingCast();
+    writeFileSync(revisionsPath(), '{"pending": [');
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.status).toBe(500);
+  });
+
+  it('bulk GET /api/revisions answers exactly { pending, drift } per book, pending normalised', async () => {
+    matchingCast();
+    writeFileSync(
+      revisionsPath(),
+      JSON.stringify({ schema: 1, fileId: 'f-1', rev: 2, pending: [serverEntry, staleLegacy] }),
+    );
     const res = await request(app).get(`/api/revisions?bookIds=${bookId}`);
     expect(res.status).toBe(200);
-    expect(res.body.byBookId[bookId].pending).toEqual(pending);
+    expect(res.body.byBookId[bookId]).toEqual({ pending: [serverEntry], drift: [] });
+  });
+
+  it('a lock timeout under either poll answers the curated 500 (no lock-key path)', async () => {
+    const store = await import('../workspace/revisions-store.js');
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const err = () => new LockAcquisitionTimeoutError('revisions:C:/SECRET-WORKSPACE/book', 10_000);
+    vi.mocked(store.readRevisions).mockRejectedValueOnce(err());
+    const single = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(single.status).toBe(500);
+    expect(single.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    vi.mocked(store.readRevisions).mockRejectedValueOnce(err());
+    const bulk = await request(app).get(`/api/revisions?bookIds=${bookId}`);
+    expect(bulk.status).toBe(500);
+    expect(bulk.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
   });
 });
 

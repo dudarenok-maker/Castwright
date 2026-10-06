@@ -276,6 +276,8 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
                tell the worker so it doesn't re-park on the same undesigned
                voices. */
             ...(e.fallbackConfirmed ? { fallbackConfirmed: true } : {}),
+            /* Plan 285 — carry the entry's A/B review intent to the server. */
+            ...(e.review ? { review: e.review } : {}),
           },
         );
       }

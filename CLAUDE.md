@@ -583,7 +583,14 @@ Design rationale:
   derived from it — wrapping only the write buys nothing at all; (3) two or
   more books → `withCastLocks`, never nested `withCastLock`s; (4) global lock
   order is **`design` → `library-voice` → `cast`** — never acquire an earlier
-  class while holding a later one, or two requests deadlock. Since #2260 that
+  class while holding a later one, or two requests deadlock. The per-book
+  `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
+  outside that order: nothing but revisions.json is written under it and no
+  other lock is taken while it is held. Accept/reject (and the legacy
+  `…/audio/previous` routes) additionally serialise per chapter on a
+  `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
+  its order is **`revision-op` → `revisions`** — never take `revision-op`
+  while holding `revisions`. Since #2260 that
   no longer hangs forever: `withKeyLock` bounds each acquisition at 10s and
   throws a `LockAcquisitionTimeoutError`
   (`server/src/workspace/file-lock.ts`) naming the key and both rules. It is a
@@ -602,13 +609,18 @@ Design rationale:
   journals, which are lineage and must stay best-effort. Swallowing at an
   identity site would report success with `cast.json` written and the
   retirement lost; swallowing at an authoritative write reported success with
-  `cast.json` and `state.json` never written at all. FOUR handlers swallow it
+  `cast.json` and `state.json` never written at all. FIVE handlers swallow it
   deliberately: `reconcileRejectEdgesOnDisk`
   (`server/src/routes/analysis.ts`), which runs after every retirement has
   landed and writes only cosmetic `notLinkedTo` edges the next persist
-  re-heals; and the three interim cast.json snapshots (per-chapter, stage-1,
+  re-heals; the three interim cast.json snapshots (per-chapter, stage-1,
   subset), which a final write in the same run clobbers, so a timeout there
-  diverges nothing (#2292). A NINTH site fails loud in a different shape and is
+  diverges nothing (#2292); and `applyReview`
+  (`server/src/audio/finalize-chapter-write.ts`, plan 285), whose A/B
+  review record on the per-book revisions lock is best-effort with respect
+  to a render that has already landed — it logs in full and surfaces only
+  `reviewRecorded: false`, never the lock key. A NINTH site fails loud in a
+  different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
   because its leftover is not something a user can rely on anything else
@@ -629,10 +641,13 @@ Design rationale:
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
   and leaves every other body verbatim — `git grep requestFailureMessage`
-  enumerates all thirteen sites (`book-state` ×4, `voice-library` ×3, `voices`,
-  `qwen-voice`, `voice-style`, `single-design`, `script-review`, `cast-design`'s
-  defensive outer), alongside the two merge routes' own explicit
-  `LOCK_CONTENTION_REQUEST_ERROR` branch; and
+  enumerates all twenty sites (`book-state` ×4, `voice-library` ×3,
+  `revision-ops` ×3, `cast-design` ×2 (both arms of its defensive outer),
+  `revisions` ×2 (the single-book and bulk polls), `qa-report`, `voices`,
+  `qwen-voice`, `voice-style`, `single-design`, `script-review`),
+  alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
+  merge routes and of the two legacy `…/audio/previous` routes in
+  `chapter-audio.ts` (`DELETE` and `…/restore`); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
   `detail` blob (that blob renders in the UI's collapsible). The raw error goes

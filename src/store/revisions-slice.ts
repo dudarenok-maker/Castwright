@@ -306,9 +306,10 @@ export const revisionsSlice = createSlice({
        write that hasn't reached disk yet — reverting an in-flight accept/
        reject or losing a revision enqueued after the poll's own snapshot
        was taken (#3376 round 2). Also DON'T touch dismissed or
-       acceptedSelections — the server response (RevisionsResponse)
-       doesn't include either, and overwriting with empty would lose state
-       until the next disk hydrate.
+       acceptedSelections. Since plan 285 the single-book poll does carry
+       both (the bulk poll still doesn't), but until PR 2's cutover this
+       slice still owns them: adopting the poll's copy would revert a
+       local dismiss/accept still inside its persistence debounce.
 
        Multi-book aware: when the caller stamps `bookId` onto the payload,
        only that book's drift entries are replaced — events from other
