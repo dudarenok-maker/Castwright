@@ -232,6 +232,28 @@ recite:
     guard, state the rule it enforces in terms of what the user sees; if the
     guard is about component lifetime, find the route param change that keeps
     the instance and the remount that starts a new one, and test both.
+25. **A guard that checks which book the screen shows, while the write lands
+    in slices — or on disk — that still hold the previous book for one state
+    read** — PR #3505 gate pass 4: `AnalysingRoute`'s `onComplete` routed by
+    `ui.stage` but loaded the payload into the cast/chapters/manuscript slices
+    that still held another book (`src/routes/index.tsx`), and the Generate
+    gate refused on the stage alone, dropping a result its own slices should
+    take; fixed by deciding late writes by which book the slices hold
+    (`selectIsOpenBook`, `src/store/open-book.ts`, which compares
+    `manuscript.manuscriptId`). Pass 5: Confirm's auto voice-match effect
+    (`src/components/layout.tsx`) fired on `confirm/A` with the previous
+    book's cast before A's read landed, and its `applyVoiceMatches` is
+    persisted to the book the stage names, so B's cast was written to A's
+    cast.json; fixed by waiting until `manuscript.bookId === bookId`. The
+    background and manual emotion detection (`runProsodyPasses` `canApply`,
+    `src/store/prosody-thunk.ts`) had the same shape (#3435, PR #3505 gate
+    passes 4-5). The general class is tracked as design issue #3519 (no
+    explicit loaded-book identity on the slices). Checkable: for every async
+    write into a book-scoped slice or a persisted action, name (a) which book
+    the screen shows, (b) which book the slices hold, (c) which book the
+    persistence middleware will save to — and test with the stage and the
+    slices moved independently, including with the real persistence
+    middleware so a disk write to the wrong book is visible.
 
 ### Keeping the catalogue current
 
