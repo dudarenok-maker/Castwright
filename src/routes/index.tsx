@@ -598,9 +598,9 @@ export function AnalysingRoute() {
      #3435 (PR #3505 review pass 4) — each source counts only when it names
      THIS route's book. On a direct A -> B switch the stage still names A for a
      render and the slices hold A until B's read lands; read unchecked, B's view
-     adopted A's running run and POSTed it. uploadComplete can leave the
-     previous book's bookId on the slice, but a fresh upload's stage names its
-     own book, so the stage covers it. */
+     adopted A's running run and POSTed it. A fresh upload clears the slice's
+     bookId (uploadComplete), so the slice names no book until its read lands,
+     and the stage, which names the upload's own book, covers it. */
   const manuscriptId =
     stage.kind === 'analysing'
       ? ((stage.bookId === bookId ? stage.manuscriptId : null) ??
