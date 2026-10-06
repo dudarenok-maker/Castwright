@@ -1082,7 +1082,13 @@ export function Layout() {
      the new `bookId` / `characterId` fields the override flow depends
      on. The ref guard then stops re-firing on every subsequent cast
      mutation (Phase 0a snapshots, applyVoiceMatches itself, profile
-     edits). */
+     edits). The `manuscript.bookId` check closes the same race one level
+     up: until the per-book read lands, the slices can still hold ANOTHER
+     book's cast (a skipped analysis result, a library open after viewing
+     book B), and applyVoiceMatches is a persisted action — it would PUT
+     that cast to this book's cast.json. Returning before the ref is set
+     leaves the once-guard unspent, so the real match runs once the slices
+     hold this book. */
   const voiceMatchFiredFor = useRef<string | null>(null);
   useEffect(() => {
     if (stageKind !== 'confirm') {
@@ -1096,6 +1102,7 @@ export function Layout() {
     }
     if (!bookId) return;
     if (characters.length === 0) return;
+    if (manuscript.bookId !== bookId) return;
     if (voiceMatchFiredFor.current === bookId) return;
     voiceMatchFiredFor.current = bookId;
     let cancelled = false;
@@ -1106,7 +1113,7 @@ export function Layout() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageKind, bookId, characters.length]);
+  }, [stageKind, bookId, characters.length, manuscript.bookId]);
 
   /* Revisions + drift poll — active book on a 30 s tick (existing behavior).
      Plan 83 layered a 120 s background fan-out across non-active books past
