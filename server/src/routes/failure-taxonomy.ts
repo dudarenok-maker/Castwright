@@ -1041,7 +1041,7 @@ export function analyzerSelectionErrorEvent(
   return {
     kind: 'error',
     code: failure.code,
-    /* The signature's generic `auth` copy ("A service refused its credentials") is wrong here: no
+    /* The signature's generic `auth` copy ("Authentication failed — a service refused its credentials") is wrong here: no
        request was sent, and it does not say where the setting lives. Main's own sentence says both,
        and the remediation below names the same two homes. */
     message: missingKey ? raw : failure.userMessage,
