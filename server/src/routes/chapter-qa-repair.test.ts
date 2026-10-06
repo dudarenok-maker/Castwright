@@ -1080,8 +1080,11 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
           { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
           { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
         ],
-        /* The character's CURRENT identity from this render's snapshot — the
-           voice is 'castor-alden-B', the model it now resolves to. */
+        /* The snapshot shows 'castor-alden-B', what was actually rendered on the
+           previous generation. Per #3449, the CURRENT voice (for repair re-render)
+           is derived from the cast, not from this snapshot. The bare cast (no
+           override) resolves to a catalog voice that differs from the centroid's
+           stamped 'castor-alden-A', which is what makes the row unusable here. */
         characterSnapshots: {
           castor: { voiceEngine: 'kokoro', resolvedVoiceName: 'castor-alden-B', modelKey: 'kokoro-v1' },
         },
