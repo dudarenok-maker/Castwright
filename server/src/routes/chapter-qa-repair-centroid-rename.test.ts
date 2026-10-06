@@ -14,6 +14,7 @@ import { embedSegment } from '../tts/embed-client.js';
 let synthesiseChapter: any;
 
 const PINNED_MAX_RERECORDS = 2;
+let cacheMairinId = 'mairin';
 vi.mock('../config/resolver.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../config/resolver.js')>();
   return {
@@ -41,7 +42,7 @@ vi.mock('../store/analysis-cache.js', () => ({
   loadAnalysisCache: vi.fn(async () => ({
     chapters: { 1: [
       { id: 10, chapterId: 1, characterId: 'hero', text: 'Hero sentence.' },
-      { id: 20, chapterId: 1, characterId: 'mairin', text: 'Mairin sentence.' },
+      { id: 20, chapterId: 1, characterId: cacheMairinId, text: 'Mairin sentence.' },
     ] },
   })),
 }));
@@ -79,7 +80,11 @@ let workspaceRoot: string, audioRoot: string, bookDir: string, bookId: string, a
 const parseSse = (b: string) => b.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)));
 const unitVec = () => { const v = new Array<number>(192).fill(0); v[0] = 1; return v; };
 
-async function scaffold(seg1Silent: boolean) {
+// drift=true: the render-time key is the underscore spelling 'mairin_oakes' of the cast id
+// 'mairin-oakes', with NO cast-id-history entry (resolveRowCharId passes a legacy raw id through).
+async function scaffold(seg1Silent: boolean, drift = false) {
+  const key = drift ? 'mairin_oakes' : 'mairin';
+  cacheMairinId = key;
   const { encodePcmToAudio } = await import('../tts/mp3.js');
   const pcm = Buffer.concat([tone(2.0, 12000), seg1Silent ? Buffer.alloc(2 * SR * 2) : tone(2.0, 12000)]);
   writeFileSync(join(audioRoot, `${SLUG}.mp3`), await encodePcmToAudio(pcm, SR, { format: 'mp3', quality: 2 }));
@@ -88,23 +93,23 @@ async function scaffold(seg1Silent: boolean) {
     synthesizedAt: new Date().toISOString(),
     segments: [
       { groupIndex: 0, characterId: 'hero', sentenceIds: [10], startSec: 0, endSec: 2.0 },
-      { groupIndex: 1, characterId: 'mairin', resolvedCharacterId: 'mairin', sentenceIds: [20], startSec: 2.0, endSec: 4.0 },
+      { groupIndex: 1, characterId: key, resolvedCharacterId: key, sentenceIds: [20], startSec: 2.0, endSec: 4.0 },
     ],
     characterSnapshots: {
       hero: { voiceEngine: 'kokoro', resolvedVoiceName: 'hero-voice', modelKey: 'kokoro-v1' },
-      mairin: { voiceEngine: 'kokoro', resolvedVoiceName: 'mairin-voice', modelKey: 'kokoro-v1' },
+      [key]: { voiceEngine: 'kokoro', resolvedVoiceName: 'mairin-voice', modelKey: 'kokoro-v1' },
     },
   }));
   const row = (characterId: string, sid: number, segmentIndex: number) => ({ characterId, sentenceIds: [sid], verdict: 'voice-mismatch', cosine: 0.3, severity: 'severe', fixable: true, expectedEngine: 'kokoro', renderedEngine: 'kokoro', referenceKind: 'audition', windowed: false, segmentIndex });
-  writeFileSync(join(audioRoot, `${SLUG}.render-integrity.json`), JSON.stringify([row('hero', 10, 0), row('mairin', 20, 1)]));
+  writeFileSync(join(audioRoot, `${SLUG}.render-integrity.json`), JSON.stringify([row('hero', 10, 0), row(key, 20, 1)]));
   const cent = (characterId: string, voiceName: string) => ({ characterId, centroid: unitVec(), cleanMean: 0.7, pSevere: 0.45, pBand: 0.6, referenceKind: 'audition', bandMethod: 'synthetic-sigma', auditionVoice: { voiceName, modelKey: 'kokoro-v1' } });
-  writeFileSync(join(audioRoot, 'render-integrity.centroids.json'), JSON.stringify({ hero: cent('hero', 'hero-voice'), mairin: cent('mairin', 'mairin-voice') }));
+  writeFileSync(join(audioRoot, 'render-integrity.centroids.json'), JSON.stringify({ hero: cent('hero', 'hero-voice'), [key]: cent(key, 'mairin-voice') }));
   // AFTER the render: mairin renamed to mairin-oakes (voice unchanged).
   writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters: [
     { id: 'hero', name: 'Hero', gender: 'male', attributes: [], ttsEngine: 'kokoro', overrideTtsVoices: { kokoro: { name: 'hero-voice' } } },
     { id: 'mairin-oakes', name: 'Mairin Oakes', gender: 'female', attributes: [], ttsEngine: 'kokoro', overrideTtsVoices: { kokoro: { name: 'mairin-voice' } } },
   ] }));
-  writeFileSync(join(bookDir, '.audiobook', 'cast-id-history.json'), JSON.stringify({ schema: 1, supersededBy: { mairin: 'mairin-oakes' } }));
+  writeFileSync(join(bookDir, '.audiobook', 'cast-id-history.json'), JSON.stringify({ schema: 1, supersededBy: drift ? {} : { mairin: 'mairin-oakes' } }));
 }
 
 beforeAll(async () => {
@@ -152,5 +157,15 @@ describe('#3414 qa-repair audition centroid — renamed character, unchanged voi
     expect(done, res.text).toBeTruthy();
     expect(done.repaired as number[]).not.toContain(1);
     expect(done.stillSuspect as number[]).toContain(1);
+  });
+
+  it('DRIFT-spelled key (mairin_oakes vs cast mairin-oakes), NO history entry: still resolved via the cast resolver, not a history-only lookup', async () => {
+    await scaffold(false, true);
+    embedCosine = 'low';
+    vi.mocked(embedSegment).mockClear(); vi.mocked(synthesiseChapter).mockClear();
+    const res = await request(app).post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio-qa-repair`).send({ dryRun: false, modelKey: 'kokoro-v1' });
+    const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
+    expect(done, res.text).toBeTruthy();
+    expect(vi.mocked(synthesiseChapter).mock.calls.length).toBe(2 * PINNED_MAX_RERECORDS);
   });
 });
