@@ -522,6 +522,57 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       expect(s.revisions.bookId).toBe('b1');
     });
   });
+
+  /* #3435 (PR #3505 review pass 4, P4c) — a result for book A skipped
+     because the slices held book B leaves them B's, ids and all
+     (routes/index.tsx AnalysingRoute). Confirm for A must then read A from
+     disk rather than take B's slices as A's. */
+  it("Confirm for a book whose result was skipped reads it from disk while the slices still hold another book", async () => {
+    getBookStateMock.mockImplementation(async (bookId: string) => ({
+      state: {
+        bookId,
+        manuscriptId: bookId === 'b1' ? 'm1' : 'm2',
+        title: bookId === 'b1' ? 'Book A' : 'Book B',
+        castConfirmed: false,
+        chapters: [],
+      },
+      cast: { characters: [{ id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' }] },
+      manuscript: null,
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    }));
+    const store = makeStore();
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b2', manuscriptId: 'm2', title: 'Book B' } as never,
+        sentences: null,
+      }),
+    );
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'peach' }]));
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+    store.dispatch(uiActions.analysisComplete({ bookId: 'b1' }));
+    expect(store.getState().ui.stage).toMatchObject({ kind: 'confirm', bookId: 'b1' });
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+    await waitFor(() => {
+      const s = store.getState();
+      expect([s.manuscript.bookId, s.manuscript.manuscriptId, s.manuscript.title]).toEqual(['b1', 'm1', 'Book A']);
+      expect(s.cast.characters.map((c) => c.id)).toEqual(['a-villain']);
+    });
+  });
 });
 
 /* #3395 pass 2, N1 — the reviewer's exact repro, through the real Layout

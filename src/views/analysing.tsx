@@ -1073,13 +1073,15 @@ export function AnalysingView({
        settle after the user left, came back through the pill (a new view
        instance), or switched this instance to another book. What decides is
        what the app shows at that moment, read from the store: this book's
-       analysing stage, or not. onComplete hydrates whichever book is open. */
+       analysing stage, or not. That decides only whether to route to Confirm;
+       onComplete loads the result only into slices that hold this book
+       (store/open-book.ts). */
     const bookOnScreen = () => {
       const stage = store.getState().ui.stage;
       return stage.kind === 'analysing' && stageNamesBook(stage, { bookId, manuscriptId }) === true;
     };
-    /* The cast slice holds whichever book is open: a live roster lands in it
-       only while that is still this book (see store/open-book.ts). */
+    /* The cast slice holds one book: a live roster lands in it only while
+       that is still this book (see store/open-book.ts). */
     const isOpenBook = () => selectIsOpenBook(store.getState(), { bookId, manuscriptId });
     /* The snapshot may be another book's by now: touch it only if it is still
        this Retry's. */

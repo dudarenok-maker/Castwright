@@ -21,6 +21,7 @@ import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
@@ -583,6 +584,7 @@ export function AnalysingRoute() {
   useHydrateStage({ kind: 'analysing', bookId, manuscriptId: null }, [bookId]);
 
   const dispatch = useAppDispatch();
+  const reduxStore = useStore<RootState>();
   const stage = useAppSelector((s) => s.ui.stage);
   const manuscript = useAppSelector((s) => s.manuscript);
   const library = useAppSelector((s) => s.library);
@@ -609,13 +611,22 @@ export function AnalysingRoute() {
       wordCount={manuscript.wordCount}
       model={ui.selectedModel}
       onComplete={(payload) => {
-        dispatch(castActions.hydrateFromAnalysis(payload));
-        /* hydrateFromAnalysis atomically pins the chapters slice to
-           payload.bookId via its currentBookId reducer field, so the
-           cross-book tick guard in applyGenerationTick has a truthful
-           frame the instant chapter rows land. */
-        dispatch(chaptersActions.hydrateFromAnalysis(payload));
-        dispatch(manuscriptActions.hydrateFromAnalysis(payload));
+        /* #3435 (PR #3505 review pass 4) — load the result only into slices
+           that hold this book (store/open-book.ts). The stage names the book
+           before its read lands, so on a quick return the slices can still
+           hold another one; loading into them would mix the two books and
+           stamp this book's id on the other's manuscript, so the layout would
+           never read this one. Skipped, the slices keep the other book's id
+           and the layout reads this one from disk on the way to Confirm. */
+        if (selectIsOpenBook(reduxStore.getState(), payload)) {
+          dispatch(castActions.hydrateFromAnalysis(payload));
+          /* hydrateFromAnalysis atomically pins the chapters slice to
+             payload.bookId via its currentBookId reducer field, so the
+             cross-book tick guard in applyGenerationTick has a truthful
+             frame the instant chapter rows land. */
+          dispatch(chaptersActions.hydrateFromAnalysis(payload));
+          dispatch(manuscriptActions.hydrateFromAnalysis(payload));
+        }
         dispatch(uiActions.analysisComplete({ bookId: payload.bookId }));
         /* NOTE: designed voices the carryover restored into cast.json but the
            analysis payload omits are re-read on the confirm screen itself

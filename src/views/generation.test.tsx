@@ -3364,6 +3364,25 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       expect(s.chapters.analysisGapById?.[1]).toBeUndefined();
       expect(s.analysis.activeStream).toBeNull();
     });
+
+    /* PR #3505 review pass 4 (P4a) — the stage names a new book at once; the
+       slices move only when that book's read lands. Until then they still
+       hold A, and the layout will not reload A on the way back, so the
+       result must land in them. */
+    it('a Re-analyse result after the stage moved to book B but before B\'s read landed applies to A', async () => {
+      const store = makeIncludeStore();
+      store.dispatch(chaptersSlice.actions.setAnalysisGap({ chapterId: 1, message: 'It failed before.' }));
+      const { run, view } = await startReanalyse(store);
+      view.unmount();
+      store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'generating' }));
+      await act(async () => run.resolve(subsetResponse));
+      await flush();
+      const s = store.getState();
+      expect(s.manuscript.manuscriptId).toBe('m1');
+      expect(s.cast.characters.map((c) => c.id)).toContain('wren');
+      expect(s.manuscript.sentences.some((x) => x.id === 51)).toBe(true);
+      expect(s.chapters.analysisGapById?.[1]).toBeUndefined();
+    });
   });
 });
 

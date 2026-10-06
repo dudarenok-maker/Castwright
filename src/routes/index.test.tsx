@@ -53,6 +53,7 @@ const getWorkspaceInfoMock = vi.fn();
 const completeSetupMock = vi.fn();
 const setChapterExcludedMock = vi.fn();
 const runAnalysisForChaptersMock = vi.fn();
+let analyseResult: unknown = undefined;
 
 /* #3195 R2 — SetupRoute's onFinish is what the "corruptSettingsFile sync"
    test below exercises; the five-step wizard behind SetupView is pinned by
@@ -81,9 +82,10 @@ vi.mock('../lib/api', () => ({
     runAnalysisForChapters: (...a: unknown[]) => runAnalysisForChaptersMock(...a),
     analyseManuscript: (manuscriptId: string, opts: unknown) => {
       analyseMock(manuscriptId, opts);
-      /* Never resolves — keeps the AnalysingView effect parked in its
-         loading state without flushing a setState after the test asserts. */
-      return new Promise(() => {});
+      /* Never resolves by default — keeps the AnalysingView effect parked in
+         its loading state without flushing a setState after the test asserts.
+         A test that needs the run's `result` sets analyseResult. */
+      return analyseResult ? Promise.resolve(analyseResult) : new Promise(() => {});
     },
     getWorkspaceChangelog: () => workspaceChangelogMock(),
     reparseBook: (bookId: string) => reparseBookMock(bookId),
@@ -225,6 +227,7 @@ function renderAtAnalysing(store: ReturnType<typeof makeStore>) {
 
 beforeEach(() => {
   analyseMock.mockClear();
+  analyseResult = undefined;
   workspaceChangelogMock.mockReset();
   reparseBookMock.mockReset();
   getLibraryMock.mockReset();
@@ -1390,5 +1393,79 @@ describe('AnalysingRoute — local state is per book (#3435)', () => {
     await waitFor(() =>
       expect(screen.queryByText(/Analysis failed on a previous attempt/i)).toBeNull(),
     );
+  });
+});
+
+/* #3435 (PR #3505 review pass 4, P4c) — the stage names a book at once; the
+   cast, chapters and manuscript slices hold a book only once its read lands.
+   A `result` for book A that arrives on A's analysing stage while the slices
+   still hold book B must not be loaded into them: they would mix the two
+   books, and the layout (which keys its "already loaded" check on
+   manuscript.bookId) would then never reload A. */
+describe('AnalysingRoute — a result loads only into the slices of its own book', () => {
+  const hero = { id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'peach' } as Character;
+  const villain = { id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' } as Character;
+  const chapterA = { id: 1, title: 'A one', slug: '01', duration: '0:00', characters: {} } as unknown as Chapter;
+  const payloadA = {
+    bookId: 'b1',
+    manuscriptId: 'm1',
+    title: 'Book A',
+    phaseTimings: [],
+    characters: [villain],
+    chapters: [chapterA],
+    sentences: [{ id: 1, chapterId: 1, characterId: 'a-villain', text: 'A speaks.' }],
+    libraryMatches: [],
+  };
+
+  function hold(store: ReturnType<typeof makeStore>, book: { bookId: string; manuscriptId: string; title: string }, who: Character, text: string) {
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: book as any,
+        sentences: [{ id: 1, chapterId: 1, characterId: who.id, text }] as any,
+      }),
+    );
+    store.dispatch(castActions.hydrateCharacters([who]));
+    store.dispatch(chaptersActions.setChapters([{ ...chapterA, title: `${book.title} one` }]));
+    store.dispatch(chaptersActions.setCurrentBookId(book.bookId));
+  }
+
+  async function finishRun(store: ReturnType<typeof makeStore>) {
+    analyseResult = payloadA;
+    renderAtAnalysing(store);
+    fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+    await waitFor(() => expect(store.getState().ui.stage).toMatchObject({ kind: 'confirm', bookId: 'b1' }));
+  }
+
+  it("A's result while the slices still hold book B leaves them B's whole, so A reloads from disk", async () => {
+    const store = makeStore();
+    hold(store, { bookId: 'b2', manuscriptId: 'm2', title: 'Book B' }, hero, 'B speaks.');
+    /* Back on A's analysing stage (the Retrying pill) before A's read lands. */
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+    await finishRun(store);
+    const s = store.getState();
+    /* Never one book's bookId over another's manuscriptId: manuscript.bookId
+       still names B, which is what sends the layout to read A from disk. */
+    expect({ bookId: s.manuscript.bookId, manuscriptId: s.manuscript.manuscriptId, title: s.manuscript.title }).toEqual({
+      bookId: 'b2',
+      manuscriptId: 'm2',
+      title: 'Book B',
+    });
+    expect(s.manuscript.sentences.map((x: { text: string }) => x.text)).toEqual(['B speaks.']);
+    expect(s.cast.characters.map((c: Character) => c.id)).toEqual(['b-hero']);
+    expect(s.chapters.currentBookId).toBe('b2');
+    expect(s.chapters.chapters.map((c: Chapter) => c.title)).toEqual(['Book B one']);
+  });
+
+  it("control: A's result while the slices hold A loads into them", async () => {
+    const store = makeStore();
+    hold(store, { bookId: 'b1', manuscriptId: 'm1', title: 'Book A' }, hero, 'Old A.');
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+    await finishRun(store);
+    const s = store.getState();
+    expect(s.manuscript.bookId).toBe('b1');
+    expect(s.manuscript.manuscriptId).toBe('m1');
+    expect(s.cast.characters.map((c: Character) => c.id)).toEqual(['a-villain']);
+    expect(s.chapters.currentBookId).toBe('b1');
+    expect(s.chapters.chapters.map((c: Chapter) => c.title)).toEqual(['A one']);
   });
 });

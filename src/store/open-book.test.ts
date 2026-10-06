@@ -22,6 +22,9 @@ describe('stageNamesBook', () => {
   });
 });
 
+/* #3435 (PR #3505 review pass 4) — the slices decide, not the stage: the
+   stage moves to a new book at once, the slices only when that book's read
+   lands. */
 describe('selectIsOpenBook', () => {
   it('true while the stage shows the book and the slices hold it', () => {
     expect(selectIsOpenBook(state({ kind: 'ready', bookId: 'b1' }, 'm1'), A)).toBe(true);
@@ -29,10 +32,11 @@ describe('selectIsOpenBook', () => {
   it('true on a stage with no book while the slices still hold it (the library)', () => {
     expect(selectIsOpenBook(state({ kind: 'books' }, 'm1'), A)).toBe(true);
   });
-  it('false once the stage names another book, even before its hydrate lands', () => {
-    expect(selectIsOpenBook(state({ kind: 'ready', bookId: 'b2' }, 'm1'), A)).toBe(false);
+  it('true once the stage names another book whose read has not landed: the slices still hold this one', () => {
+    expect(selectIsOpenBook(state({ kind: 'ready', bookId: 'b2' }, 'm1'), A)).toBe(true);
   });
-  it('false once the slices hold another book', () => {
+  it('false once the slices hold another book, even while the stage shows this one', () => {
     expect(selectIsOpenBook(state({ kind: 'books' }, 'm2'), A)).toBe(false);
+    expect(selectIsOpenBook(state({ kind: 'analysing', bookId: 'b1', manuscriptId: 'm1' }, 'm2'), A)).toBe(false);
   });
 });
