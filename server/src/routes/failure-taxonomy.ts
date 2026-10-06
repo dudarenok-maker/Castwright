@@ -373,6 +373,12 @@ function trimRaw(raw: string): string {
   return raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
 }
 
+const GEMINI_TTS_AUTH_COPY = {
+  userMessage: 'Gemini TTS authentication failed — the Gemini API key is missing, or Gemini did not accept it.',
+  remediation:
+    'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry.',
+};
+
 function scanSignatures(
   err: unknown,
   sources: ReadonlySet<FailureSource>,
@@ -387,7 +393,11 @@ function scanSignatures(
   for (const sig of FAILURE_SIGNATURES) {
     if (!sources.has(sig.source)) continue;
     if ((sig.matchName != null && sig.matchName === ctx.name) || sig.match(raw, ctx)) {
-      const copy = FAILURE_REMEDIATIONS[sig.code];
+      /* The static `auth` copy is neutral because it can come from any source. A Gemini TTS failure
+         (a 401/403, or selectTtsProvider's missing-key error, where nothing was sent) gets copy that
+         names the one key it can be about. */
+      const copy =
+        sig.code === 'auth' && engine === 'gemini' ? GEMINI_TTS_AUTH_COPY : FAILURE_REMEDIATIONS[sig.code];
       return {
         code: sig.code,
         userMessage: copy.userMessage,

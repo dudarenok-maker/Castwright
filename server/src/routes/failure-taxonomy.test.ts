@@ -1217,3 +1217,34 @@ describe('Gemini key advice says the env var wins and needs a restart (#3084 PR 
     expect(FAILURE_REMEDIATIONS.auth.remediation).toContain('restart the server after changing it');
   });
 });
+
+describe('auth copy is true for TTS (#3084 PR 3b review pass 3 🟡1)', () => {
+  const MISSING_KEY =
+    'Gemini TTS selected but no API key is configured. Set it in Admin → Model Manager → Gemini API key, or add it to server/.env for CI / power users.';
+  const KEY_ADVICE =
+    'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry.';
+
+  it('a Gemini TTS missing-key error gets Gemini-named copy that does not claim a refusal', () => {
+    const out = classifyFailure(new Error(MISSING_KEY), 'gemini');
+    expect(out.code).toBe('auth');
+    expect(out.userMessage).toBe(
+      'Gemini TTS authentication failed — the Gemini API key is missing, or Gemini did not accept it.',
+    );
+    expect(out.remediation).toBe(KEY_ADVICE);
+  });
+
+  it('a Gemini TTS 403 gets the same Gemini-named copy', () => {
+    const out = classifyFailure(Object.assign(new Error('forbidden'), { status: 403 }), 'gemini');
+    expect(out.userMessage).toMatch(/^Gemini TTS authentication failed/);
+    expect(out.remediation).toBe(KEY_ADVICE);
+  });
+
+  it('the engine-less fallback keeps "authentication" but neither says "refused" nor points at "the message"', () => {
+    const out = classifyFailure(Object.assign(new Error('forbidden'), { status: 403 }));
+    expect(out.userMessage).toMatch(/authentication/i);
+    for (const text of [out.userMessage, out.remediation]) {
+      expect(text).not.toMatch(/refused/i);
+      expect(text).not.toMatch(/named in the message/i);
+    }
+  });
+});
