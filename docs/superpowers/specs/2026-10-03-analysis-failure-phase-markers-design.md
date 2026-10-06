@@ -8,7 +8,7 @@
 - #3437: related (§2.5).
 - Follow-ups to file (plan T7): restructure does not remap chapter-keyed analysis state; a better home for included chapters with no narratable text (decision C).
 
-**Plan:** `docs/features/285-analysis-failure-phase-markers.md`.
+**Plan:** `docs/features/287-analysis-failure-phase-markers.md`.
 **Supersedes:** PR #3439 (head 9a063ea6). Its tests are ported by probe name. None of its commits is cherry-picked, and no code that exists only on #3439 is assumed (§8, plan "Ported code").
 
 **On citations — read this first.**
