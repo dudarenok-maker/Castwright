@@ -718,6 +718,15 @@ const ENDPOINT_UNREACHABLE_REMEDIATION =
   "Check that the endpoint's server is running and that its base URL in Settings is right, then " +
   'retry. Castwright switches to Gemini only when a Gemini key is saved and cloud fallback is on.';
 
+/* A Gemini key problem (an ApiError, or the 400 whose wording names the key) points at both places
+   the key can live; the static `auth` text names server/.env only. Anything else keeps the static copy. */
+function geminiAuthRemediation(err: unknown, code: FailureCode): string | undefined {
+  if (code !== 'auth') return undefined;
+  const status = (err as { status?: number })?.status;
+  if (!(err instanceof ApiError) && status !== 400) return undefined;
+  return `Check ${KEY_SETTING.gemini}, then retry the chapter.`;
+}
+
 function requestRejected(
   modelLabel: string,
   transport: TransportKind | undefined,
@@ -994,6 +1003,7 @@ export function classifyAnalysisFailure(
       code,
       `${modelLabel} returned ${parsed.code ?? status ?? '???'}${statusSuffix}: ${trimmed}`,
       formatErrorDetail(parsed, raw),
+      geminiAuthRemediation(err, code),
     );
   }
   if (status) {
@@ -1001,7 +1011,7 @@ export function classifyAnalysisFailure(
     if (code === 'analyzer-request-rejected') {
       return requestRejected(modelLabel, err instanceof ApiError ? 'gemini' : undefined, raw);
     }
-    return withCopy(code, `${modelLabel} returned ${status}: ${raw}`);
+    return withCopy(code, `${modelLabel} returned ${status}: ${raw}`, undefined, geminiAuthRemediation(err, code));
   }
   /* Not an API envelope — give the signature table a chance (catches the
      connection-refused / fetch-failed family) before the unknown fallback. */
@@ -1034,7 +1044,7 @@ export function analyzerSelectionErrorEvent(
     /* The signature's `auth` copy ("Gemini TTS authentication failed") is wrong here: no request was
        sent, and it drops where the setting lives. Main's own sentence says both. */
     message: missingKey ? raw : failure.userMessage,
-    remediation: failure.remediation,
+    remediation: missingKey ? `Check ${KEY_SETTING.gemini}, then retry the chapter.` : failure.remediation,
     ...(detail ? { detail } : {}),
   };
 }

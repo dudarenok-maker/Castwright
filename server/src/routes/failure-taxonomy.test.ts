@@ -1097,6 +1097,29 @@ describe('a Gemini 400 that is not about the request shape (#3084 PR 3b review p
   });
 });
 
+describe('Gemini auth remediation names both key homes (#3084 PR 3b review pass 2 🟡)', () => {
+  it('the key-rejection 400 points at Settings as well as .env', () => {
+    const err = new ApiError({
+      status: 400,
+      message:
+        'got status: 400 Bad Request. {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}',
+    });
+    const r = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(r.code).toBe('auth');
+    expect(r.remediation).toBe('Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env), then retry the chapter.');
+  });
+
+  it("selection's missing-key event carries a remediation that agrees with its message", () => {
+    const ev = analyzerSelectionErrorEvent(
+      new Error(
+        'GEMINI_API_KEY is required when analyzer engine is Gemini. Set it in Admin → Model Manager → Gemini API key, or in server/.env for CI / power users.',
+      ),
+    );
+    expect(ev.remediation).toContain('Settings');
+    expect(ev.remediation).not.toMatch(/^Verify GEMINI_API_KEY in server\/\.env/);
+  });
+});
+
 describe('auth remediation names its own key (#3084 PR 3b review 🟠2)', () => {
   it('a key-origin mismatch does not send the user to GEMINI_API_KEY', () => {
     const r = classifyAnalysisFailure(new AnalyzerKeyOriginError('lab', 'Lab box'), 'Analyzer');
