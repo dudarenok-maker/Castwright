@@ -14,6 +14,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { geminiRateLimiter } from './rate-limit.js';
+import { registerKnownSecretsProvider } from './known-secrets-gate.js';
 import type { CastCharacter } from '../tts/synthesise-chapter.js';
 import {
   resolveVoiceStyleModel,
@@ -24,7 +25,8 @@ import {
 
 const generateContent = vi.fn();
 
-vi.mock('@google/genai', () => ({
+vi.mock('@google/genai', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@google/genai')>()),
   GoogleGenAI: class {
     models = { generateContent };
   },
@@ -355,5 +357,30 @@ describe('generateVoiceStylePersona dispatch', () => {
     generateContent.mockResolvedValue({ text: 'A persona.' });
     await generateVoiceStylePersona(CHAR);
     expect(acquire).toHaveBeenCalled();
+  });
+});
+
+describe('generateVoiceStylePersona gemini branch redaction (#3084 P22)', () => {
+  const SECRET = 'AIzaSy-persona-echo-secret-1';
+  afterEach(() => {
+    registerKnownSecretsProvider({ known: () => [], load: async () => [] });
+  });
+
+  it('an error whose message echoes a saved secret reaches the caller redacted, as the Ollama persona path does', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'gemini';
+    registerKnownSecretsProvider({ known: () => [SECRET], load: async () => [SECRET] });
+    vi.spyOn(geminiRateLimiter, 'acquire').mockResolvedValue(undefined as any);
+    generateContent.mockRejectedValue(new Error(`upstream said key ${SECRET} is invalid`));
+    const err = await generateVoiceStylePersona(CHAR).then(() => null, (e: unknown) => e);
+    expect((err as Error).message).toBe('upstream said key [redacted] is invalid');
+    expect(`${(err as Error).stack}`).not.toContain(SECRET);
+  });
+
+  it('an error with no secret in it is rethrown as the same object', async () => {
+    process.env.PERSONA_GEN_ENGINE = 'gemini';
+    vi.spyOn(geminiRateLimiter, 'acquire').mockResolvedValue(undefined as any);
+    const upstream = new Error('quota exceeded');
+    generateContent.mockRejectedValue(upstream);
+    await expect(generateVoiceStylePersona(CHAR)).rejects.toBe(upstream);
   });
 });

@@ -56,7 +56,7 @@ export function appendBounded(buf: string, text: string, max = MAX_RESPONSE_BYTE
    an ApiError stays an ApiError with its status, so the taxonomy's envelope parse and
    the retry classifier read it exactly as before. An error with no secret is returned
    as the same object. */
-function redactGeminiError(err: unknown, secrets: readonly string[]): unknown {
+export function redactGeminiError(err: unknown, secrets: readonly string[]): unknown {
   if (!(err instanceof Error)) return err;
   const message = redactKnownSecrets(err.message, secrets);
   if (message === err.message) return err;

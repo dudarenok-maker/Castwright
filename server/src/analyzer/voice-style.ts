@@ -28,6 +28,8 @@
 import { GoogleGenAI } from '@google/genai';
 import { buildHintFromCast, type CastCharacter } from '../tts/synthesise-chapter.js';
 import { getResolvedGeminiApiKey } from '../workspace/user-settings.js';
+import { loadKnownAnalyzerSecrets } from './known-secrets-gate.js';
+import { redactGeminiError } from './transports/gemini-transport.js';
 import { getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { geminiRateLimiter } from './rate-limit.js';
 import { stripCodeFences } from './gemini.js';
@@ -219,10 +221,17 @@ async function generateViaGemini(character: CastCharacter): Promise<string> {
   await geminiRateLimiter.acquire(model, estTokens);
 
   const client = new GoogleGenAI({ apiKey });
-  const response = await client.models.generateContent({
-    model,
-    contents: prompt,
-  });
+  let response;
+  try {
+    response = await client.models.generateContent({
+      model,
+      contents: prompt,
+    });
+  } catch (err) {
+    /* #3084 P22 — a saved secret an upstream error echoes never reaches the
+       caller; with no secret the same error object is rethrown. */
+    throw redactGeminiError(err, await loadKnownAnalyzerSecrets());
+  }
 
   const persona = cleanPersona(response.text ?? '');
   if (!persona) {
