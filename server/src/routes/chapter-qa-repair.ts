@@ -427,28 +427,30 @@ chapterQaRepairRouter.post(
          centroids alongside aggregate.ts's gate. An 'audition' row is usable to
          score a re-render ONLY when it recorded the voice identity the character
          NOW resolves to. Derive that CURRENT voice from the cast the SAME way
-         `synthesiseChapter` routes a character —
+         `synthesiseChapter` routes a character (the centroid key, a render-time
+         id, is resolved through `castResolver` — #2040 — never a raw cast-id
+         lookup) —
          pickVoiceForEngine(resolveCharacterEngine(c, engine), toVoiceLike(c),
          buildHintFromCast(c)) — NOT from the previous render's snapshot. The
          snapshot's `resolvedVoiceName` is deliberately the voice ACTUALLY SENT on
          the last render (#1972 — not re-derived from the cast), so after a voice
          reassignment with no re-render in between it still names the OLD voice and
          would wrongly keep a centroid that no longer matches the voice this repair
-         is about to re-render under (#3449). A character with no current cast entry
-         (retired/renamed between scoring and this repair) has no current voice →
-         auditionCentroidUsableForCurrent returns false (conservative drop), exactly
-         like the snapshot-absent case before. The model key is left on the
+         is about to re-render under (#3449). A character retired/renamed between
+         scoring and this repair resolves through cast-id history to its live row
+         and is judged on that row's current voice; only an id with NO live row at
+         all has no current voice → auditionCentroidUsableForCurrent returns false
+         (conservative drop). The model key is left on the
          snapshot/segFile fallback (unchanged): a same-engine reassignment leaves it
          valid, and an engine change is already caught by the voice-name mismatch
          above. After this filter a filtered-out character behaves exactly like "no
          centroid" at every downstream `centroids?.[charId]` site. in-book rows are
          always kept (rebuilt fresh every pass, self-healing). */
-      const castById = new Map(cast.characters.map((c) => [c.id, c] as const));
       const centroids: Record<string, CharacterCentroid> | null =
         readCentroidsMap &&
         Object.fromEntries(
           Object.entries(readCentroidsMap).filter(([charId, row]) => {
-            const current = castById.get(charId);
+            const current = castResolver.resolve(charId)?.character;
             const currentVoiceName = current
               ? pickVoiceForEngine(
                   resolveCharacterEngine(current, engine),
