@@ -1064,6 +1064,39 @@ describe('Gemini invalid / expired API key (#3084 PR 3b review 🟠1)', () => {
   });
 });
 
+describe('a Gemini 400 that is not about the request shape (#3084 PR 3b review pass 2 🟠)', () => {
+  it.each([
+    'User location is not supported for the API use.',
+    'Gemini API free tier is not available in your country. Please enable billing on your project in Google AI Studio.',
+  ])('a FAILED_PRECONDITION 400 (%s) is main\'s unknown, never request-rejected', (message) => {
+    const err = new ApiError({
+      status: 400,
+      message: `got status: 400 Bad Request. {"error":{"code":400,"message":"${message}","status":"FAILED_PRECONDITION"}}`,
+    });
+    const r = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(r.code).toBe('unknown');
+    expect(r.remediation).toBe(FAILURE_REMEDIATIONS.unknown.remediation);
+    expect(r.remediation).not.toContain('analyzer.gemini.structuredOutput');
+  });
+
+  it('an INVALID_ARGUMENT shape error is still request-rejected', () => {
+    const err = new ApiError({
+      status: 400,
+      message:
+        'got status: 400 Bad Request. {"error":{"code":400,"message":"Invalid JSON payload received.","status":"INVALID_ARGUMENT"}}',
+    });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('analyzer-request-rejected');
+  });
+
+  it('an envelope with no status field keeps the request-rejected mapping', () => {
+    const err = new ApiError({
+      status: 400,
+      message: 'got status: 400 Bad Request. {"error":{"code":400,"message":"bad field"}}',
+    });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('analyzer-request-rejected');
+  });
+});
+
 describe('auth remediation names its own key (#3084 PR 3b review 🟠2)', () => {
   it('a key-origin mismatch does not send the user to GEMINI_API_KEY', () => {
     const r = classifyAnalysisFailure(new AnalyzerKeyOriginError('lab', 'Lab box'), 'Analyzer');

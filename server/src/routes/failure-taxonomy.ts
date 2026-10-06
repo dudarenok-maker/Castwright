@@ -512,8 +512,14 @@ const GEMINI_KEY_REJECTED = /\bAPI_KEY_(?:INVALID|EXPIRED)\b|\bAPI key(?: \S{1,8
 
 /* classifyStatus, ported from analysis.ts — now emits FailureCode per the
    spec-A2 mapping (rate_limit→analyzer-rate-limit, daily_quota→analyzer-daily-quota,
-   unavailable/internal→analyzer-unreachable, invalid_key→auth, bad_request→unknown). */
-function statusToFailureCode(status: number | undefined, message?: string, keyText: string | undefined = message): FailureCode {
+   unavailable/internal→analyzer-unreachable, invalid_key→auth; a 400 → analyzer-request-rejected
+   only when it is about the request's shape, see below). */
+function statusToFailureCode(
+  status: number | undefined,
+  message?: string,
+  keyText: string | undefined = message,
+  envelopeStatus?: string,
+): FailureCode {
   if (!status) return 'unknown';
   if (status === 429) {
     /* Same per_day marker as the analyzer-daily-quota signature, but applied to the parsed envelope MESSAGE
@@ -526,9 +532,16 @@ function statusToFailureCode(status: number | undefined, message?: string, keyTe
   if (status === 503 || status === 500) return 'analyzer-unreachable';
   if (status === 401 || status === 403) return 'auth';
   /* #3084 PR 3b review — Gemini answers a bad or expired key with a 400 whose envelope
-     reason is API_KEY_INVALID / API_KEY_EXPIRED. That is a credentials problem (main's
-     signature scan read it as `auth`), not a request-shape one. */
-  if (status === 400) return keyText && GEMINI_KEY_REJECTED.test(keyText) ? 'auth' : 'analyzer-request-rejected';
+     reason is API_KEY_INVALID / API_KEY_EXPIRED. That is a credentials problem (main
+     returned `unknown` for it), not a request-shape one. */
+  if (status === 400) {
+    if (keyText && GEMINI_KEY_REJECTED.test(keyText)) return 'auth';
+    /* A 400 is request-rejected only when it is about the request's shape: Gemini marks those
+       INVALID_ARGUMENT. Any other envelope status (FAILED_PRECONDITION for an unsupported
+       region or a free tier that is not available, …) names no setting this code's copy points
+       at, so it keeps main's `unknown`. A bare 400 (no envelope status) keeps the mapping. */
+    return !envelopeStatus || envelopeStatus === 'INVALID_ARGUMENT' ? 'analyzer-request-rejected' : 'unknown';
+  }
   return 'unknown';
 }
 
@@ -960,7 +973,7 @@ export function classifyAnalysisFailure(
 
   const parsed = tryParseApiError(raw);
   if (parsed) {
-    const code = statusToFailureCode(parsed.code ?? status, parsed.message, raw);
+    const code = statusToFailureCode(parsed.code ?? status, parsed.message, raw, parsed.status);
     if (code === 'analyzer-request-rejected') {
       return requestRejected(
         modelLabel,
