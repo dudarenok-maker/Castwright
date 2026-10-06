@@ -1018,3 +1018,23 @@ describe('analyzerSelectionErrorEvent (#3084 P23)', () => {
 });
 
 
+
+describe('Gemini invalid / expired API key (#3084 PR 3b review 🟠1)', () => {
+  it.each([
+    ['API_KEY_INVALID', 'API key not valid. Please pass a valid API key.'],
+    ['API_KEY_EXPIRED', 'API key expired. Please renew the API key.'],
+  ] as const)('a 400 envelope with reason %s classifies as auth, never analyzer-request-rejected', (reason, message) => {
+    const err = new ApiError({
+      status: 400,
+      message: `got status: 400 Bad Request. {"error":{"code":400,"message":"${message}","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"${reason}"}]}}`,
+    });
+    const r = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(r.code).toBe('auth');
+    expect(r.userMessage).toContain(message);
+  });
+
+  it('a bare-status 400 whose message names an API key classifies as auth', () => {
+    const err = Object.assign(new Error('API key not valid. Please pass a valid API key.'), { status: 400 });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('auth');
+  });
+});

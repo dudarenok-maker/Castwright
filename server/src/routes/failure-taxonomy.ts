@@ -509,7 +509,7 @@ export function tryParseApiError(
 /* classifyStatus, ported from analysis.ts — now emits FailureCode per the
    spec-A2 mapping (rate_limit→analyzer-rate-limit, daily_quota→analyzer-daily-quota,
    unavailable/internal→analyzer-unreachable, invalid_key→auth, bad_request→unknown). */
-function statusToFailureCode(status: number | undefined, message?: string): FailureCode {
+function statusToFailureCode(status: number | undefined, message?: string, keyText: string | undefined = message): FailureCode {
   if (!status) return 'unknown';
   if (status === 429) {
     /* Same per_day marker as the analyzer-daily-quota signature, but applied to the parsed envelope MESSAGE
@@ -521,7 +521,10 @@ function statusToFailureCode(status: number | undefined, message?: string): Fail
   }
   if (status === 503 || status === 500) return 'analyzer-unreachable';
   if (status === 401 || status === 403) return 'auth';
-  if (status === 400) return 'analyzer-request-rejected';
+  /* #3084 PR 3b review — Gemini answers a bad or expired key with a 400 whose envelope
+     reason is API_KEY_INVALID / API_KEY_EXPIRED. That is a credentials problem (main's
+     signature scan read it as `auth`), not a request-shape one. */
+  if (status === 400) return keyText && /API[_ ]?KEY/i.test(keyText) ? 'auth' : 'analyzer-request-rejected';
   return 'unknown';
 }
 
@@ -919,7 +922,7 @@ export function classifyAnalysisFailure(
 
   const parsed = tryParseApiError(raw);
   if (parsed) {
-    const code = statusToFailureCode(parsed.code ?? status, parsed.message);
+    const code = statusToFailureCode(parsed.code ?? status, parsed.message, raw);
     if (code === 'analyzer-request-rejected') {
       return requestRejected(
         modelLabel,
