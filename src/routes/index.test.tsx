@@ -543,6 +543,46 @@ describe('AnalysingRoute — the manuscript id comes only from its own book', ()
     fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
     await waitFor(() => expect(analyseMock).toHaveBeenCalledWith('m-upload', expect.any(Object)));
   });
+
+  function uploadFresh(store: ReturnType<typeof makeStore>, stageBookId: string) {
+    store.dispatch(
+      manuscriptActions.uploadComplete({
+        bookId: 'b1',
+        manuscriptId: 'm-upload',
+        title: 'Uploaded Title',
+        format: 'plaintext',
+        wordCount: 12345,
+        sourceText: '',
+      } as any),
+    );
+    store.dispatch(uiActions.startNewBook());
+    store.dispatch(uiActions.manuscriptUploaded({ bookId: stageBookId, manuscriptId: 'm-upload' }));
+  }
+
+  it('a fresh upload shows its own title and size before the book-state read lands', async () => {
+    const store = makeStore();
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-upload', title: 'Library Title' })]);
+    uploadFresh(store, 'b1');
+
+    renderAtAnalysing(store);
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b1', manuscriptId: 'm-upload' }));
+
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Uploaded Title');
+    expect(screen.getByText(/12,345/)).toBeInTheDocument();
+  });
+
+  it("control: an unattributed slice is not used when the stage names a different book", async () => {
+    const store = makeStore();
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-own', title: 'Own Title' })]);
+    uploadFresh(store, 'b9');
+
+    renderAtAnalysing(store);
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b9', manuscriptId: 'm-upload' }));
+
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Own Title');
+    expect(screen.queryByText(/Uploaded Title/)).toBeNull();
+    expect(screen.queryByText(/12,345/)).toBeNull();
+  });
 });
 
 /* #3084 F7 — AdvancedRoute is the FIRST route in this file whose stage

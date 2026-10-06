@@ -592,7 +592,15 @@ export function AnalysingRoute() {
   const activeBook = library.books.find((b) => b.bookId === bookId);
   /* #3435 — title and word count come from the slice only while it names this
      book; mid-switch it still holds the previous one. */
-  const ownManuscript = manuscript.bookId === bookId;
+  const ownManuscript =
+    manuscript.bookId === bookId ||
+    /* A fresh upload clears the slice's bookId (uploadComplete) until its read
+       lands; the stage names the upload's own book and manuscript id. */
+    (manuscript.bookId == null &&
+      stage.kind === 'analysing' &&
+      stage.bookId === bookId &&
+      stage.manuscriptId != null &&
+      stage.manuscriptId === manuscript.manuscriptId);
   /* Stage.manuscriptId is set when the user goes through Upload → Analyse, but
      it's null on page refresh, deep links, or confirm→reanalyse — none of
      those carry the id through ui.stage. Layout's book-state hydration always
