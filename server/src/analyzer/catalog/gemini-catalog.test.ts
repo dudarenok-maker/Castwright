@@ -134,6 +134,19 @@ describe('warmGeminiCatalog', () => {
     expect(getCachedGeminiModelInfo('gemini-3.6-flash')).toBeUndefined();
   });
 
+  it('redacts a key holding a quote or backslash in its JSON-escaped spelling too, as [redacted]', async () => {
+    const KEY = 'AIzaSy-esc"aped\\secret-1';
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const body = JSON.stringify({ error: { message: `bad key ${KEY}` } });
+    const client = { models: { list: vi.fn(async () => { throw new Error(body); }) } } as unknown as GeminiModelsClient;
+    await warmGeminiCatalog(KEY, { client });
+    const line = String(warn.mock.calls[0][0]);
+    expect(line).not.toContain(KEY);
+    expect(line).not.toContain(JSON.stringify(KEY).slice(1, -1));
+    expect(line).not.toContain('esc"aped');
+    expect(line).toContain('[redacted]');
+  });
+
   it('backs off listing for a minute after a failure (no request per stage call during an outage)', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const list = vi.fn(async () => { throw new Error('offline'); });
