@@ -112,21 +112,22 @@ export async function readCentroids(
 
 /** #1969 sibling — is a persisted centroid usable to score a character given the
  *  character's CURRENT resolved voice name + model key. The caller
- *  (chapter-qa-repair.ts) derives these from the CURRENT cast via
- *  pickVoiceForEngine — NOT from the previous render's snapshot, whose
- *  `resolvedVoiceName` is stale after a voice reassignment with no re-render in
- *  between (#3449). in-book rows are kept; they are rebuilt only when the book is
- *  rescored, so after a voice change with no re-render they still reflect the
- *  old voice (#3517). An 'audition' row is usable ONLY when it recorded a voice
- *  identity AND that identity matches the character's current resolved voice/model
- *  — otherwise it is a stale reference (possibly for a voice the character no
- *  longer is) and must not be scored against. A null/absent current (no resolved
- *  voice to compare) is never trusted.
+ *  (chapter-qa-repair.ts) derives the voice name from the CURRENT cast via
+ *  pickVoiceForEngine, but the model key from the snapshot/segFile (NOT the current
+ *  cast). Voice name staleness after a reassignment with no re-render is caught here
+ *  (#3449); in-book rows are kept and rebuilt only when rescored, so after a voice
+ *  change with no re-render they reflect the old voice (#3517). An 'audition' row is
+ *  usable ONLY when it recorded a voice identity AND that identity matches the
+ *  character's current resolved voice/model — otherwise it is a stale reference
+ *  (possibly for a voice the character no longer is) and must not be scored against.
+ *  A null/absent current (no resolved voice to compare) is never trusted.
  *  NOTE: this is the repair seam's intentionally CONSERVATIVE subset — it compares
- *  only the voice name + model key (the reassignment signal reliably derivable at
- *  repair time). The authoritative scoring gate (`matchesCurrentVoice` in aggregate.ts)
- *  additionally enforces strict language/cloned equality on the next `scoreBook` pass,
- *  which supersedes any residual language-only staleness between a repair and that pass. */
+ *  only the voice name + model key. Voice-name changes are caught reliably; same-engine
+ *  voice reassignments are caught by voice-name mismatch; Qwen tier changes are NOT
+ *  caught here (known gap per #3518). The authoritative scoring gate (`matchesCurrentVoice`
+ *  in aggregate.ts) additionally enforces strict language/cloned equality on the next
+ *  `scoreBook` pass, which supersedes any residual language-only staleness between a
+ *  repair and that pass. */
 export function auditionCentroidUsableForCurrent(
   row: CharacterCentroid,
   currentVoiceName: string | undefined,
