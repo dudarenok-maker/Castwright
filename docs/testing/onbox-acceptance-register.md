@@ -570,8 +570,11 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > **Last change: 2026-10-03 (#3414), 56 → 57.** Added **A112** — the
 > qa-repair centroid filter now drops an audition centroid whose recorded
 > voice differs from the character's CURRENT cast voice (rather than keying
-> off the chapter's last-render snapshot), so the line stays flagged instead
-> of being judged against the old voice; in-book rows are unchanged (#3517); the regression suite (#3449, #3460) covers the logic branch
+> off the chapter's last-render snapshot), so an acoustic-only flagged line
+> lands in `stillSuspect` without being re-rendered instead of being judged
+> against the old voice (a line also flagged by signal QA/ASR is still
+> re-rendered and can be accepted on signal QA alone); in-book rows are
+> unchanged (#3517); the regression suite (#3449, #3460) covers the logic branch
 > against a mocked embedder, but nothing has yet proven the repair's
 > accept/reject decision against a real sidecar's ECAPA embedding on real
 > hardware. Group A 33 → 34. `next-id` bumped A112 → A113 in the same
@@ -5759,7 +5762,7 @@ for the sleep-prevention leg specifically; the other two legs are
 platform-general. *Criteria:* the three observations above; issue #3406 and
 PR #3404's manifest-guard section for the exact defect each leg closes.
 
-### A112 · The qa-repair repair pass stops judging a new take against a reassigned character's stale audition centroid ([Castwright#3414](https://github.com/dudarenok-maker/Castwright/issues/3414)) · **a real sidecar with a real speaker-embedding (ECAPA) model, a Qwen or Coqui character (scoreBook skips Kokoro), a book with at least one already-rendered chapter**
+### A112 · The qa-repair repair pass stops judging a new take against a reassigned character's stale audition centroid ([Castwright#3414](https://github.com/dudarenok-maker/Castwright/issues/3414)) · **a real sidecar with a real speaker-embedding (ECAPA) model, a Qwen or Coqui character (scoreBook skips Kokoro), Auto-fix voice mismatches switched on, a book with at least two already-rendered chapters**
 
 `chapter-qa-repair.ts`'s centroid filter derived its comparison voice from
 the chapter's last full-render snapshot (`snap?.resolvedVoiceName`) rather
@@ -5772,31 +5775,68 @@ off the live cast entry), and the regression suite (`#3449`, `#3460`)
 exercises both the stale-drop and the kept/gate paths against a mocked
 embedder. Neither test touches a real sidecar or a real ECAPA model.
 
-**What to observe, concretely** (needs a **Qwen or Coqui** character —
-`scoreBook` skips Kokoro characters, `render-integrity/aggregate.ts`, so a
-Kokoro character produces no verdict and observes nothing; the character must
-also have a persisted `audition` centroid and a fixable voice-mismatch verdict
-on a flagged line). Read the result from the `POST .../qa-repair` response
-(`repaired` / `stillSuspect` arrays, browser devtools Network tab) — the UI
-does not render `stillSuspect` directly:
+**What to observe, concretely.** Preconditions, all required:
 
-- **Control (unchanged voice).** Run Fix audio on that chapter without
-  touching the character's voice. The flagged line is re-rendered and
-  voice-checked against the audition centroid (it appears in `repaired`, or in
-  `stillSuspect` only if the new take genuinely fails the check). This is the
-  part only hardware can prove: the real `pickVoiceForEngine` output must equal
-  the real stamped `auditionVoice.voiceName`, otherwise the centroid is wrongly
-  dropped and the line is never voice-checked.
-- **Reassign, no re-render.** Change that character's voice, do NOT re-render
-  the chapter, then run Fix audio again. The line lands in `stillSuspect`
-  and is not re-rendered or accepted against the old voice (the stale
-  `audition` centroid is dropped, not reused). An inconclusive verdict here is
-  the designed outcome, not a regression. Known limit: an in-book centroid is
-  still judged against the old voice (#3517) — do not expect it to switch.
+- a **Qwen or Coqui** character (`scoreBook` skips Kokoro characters,
+  `render-integrity/aggregate.ts`, so a Kokoro character produces no verdict
+  and observes nothing) whose row in
+  `<bookDir>/audio/render-integrity.centroids.json` has
+  `referenceKind: "audition"`;
+- **two** already-rendered chapters (call them X and Y), each with a line of
+  that character carrying a `voice-mismatch` / `fixable: true` row in its
+  `<slug>.render-integrity.json`;
+- **Auto-fix voice mismatches** (`qa.speaker.autoRepair`, env
+  `SEG_SPK_AUTO_REPAIR`) switched **on** — it defaults off, and while off the
+  route never merges a verdict-file row into its candidates, so nothing below
+  can be observed;
+- that character's engine ready (for Qwen: installed and loaded) and no
+  analysis edits since the render — an unavailable Qwen engine or a diverged
+  segment also lands a line in `stillSuspect` without re-rendering it, which
+  would masquerade as the failure the control guards.
+
+**How to trigger it.** The route is
+`POST /api/books/<bookId>/chapters/<chapterId>/audio-qa-repair` (an SSE
+stream). Its UI trigger is the Listen view's chapter-row button "Re-record the
+flagged lines in this chapter" — **not** Fix audio, which is the per-character
+re-record modal and posts to `…/splice` instead. That button renders only when
+the chapter's `audioQa.status` is `suspect`, which is derived from signal QA
+(`finalize-chapter-write.ts`), not from voice-match verdicts — so for an
+acoustic-only chapter it usually will not appear. Then send the request
+directly: `curl -N -X POST -H "Content-Type: application/json" -d
+'{"dryRun":false}' https://<host>/api/books/<bookId>/chapters/<chapterId>/audio-qa-repair`
+(omitting `dryRun` runs a read-only scan). Read every observation from the
+stream's `data:` frames — in the curl output, or in the browser devtools
+Network tab (that request → EventStream/Response) when the button was used.
+
+- **Pick the line.** In the `qa_scan` frame, the chosen line's entry in
+  `flagged` must show `acousticOnly: true`. A line also flagged by signal QA
+  or ASR (a union candidate, `acoustic: true` without `acousticOnly`) is
+  re-rendered and can be accepted on signal QA alone, so it proves nothing
+  about the centroid filter in either step.
+- **Control (unchanged voice), chapter X.** Run the repair on X without
+  touching the character's voice. **Pass:** the stream carries at least one
+  `progress` frame with that line's `segmentIndex` — it was re-rendered and
+  voice-checked against the audition centroid — whether `qa_repair_complete`
+  then lists it in `repaired` or (a genuinely poor new take) in
+  `stillSuspect`. **Fail:** no `progress` frame for that `segmentIndex` and
+  the line in `stillSuspect` — the centroid was wrongly dropped. This is the
+  part only hardware can prove: the real `pickVoiceForEngine` output must
+  equal the real stamped `auditionVoice.voiceName`.
+- **Reassign, no re-render, chapter Y.** Change that character's voice
+  (keep the same engine and tier), do NOT re-render anything, then run the
+  repair on **Y** — not X: an accepted take on X rewrites its verdict row to
+  `voice-match` / `fixable: false`, so re-running X would give `flagged: []`.
+  Centroids are book-wide, so the reassignment applies to Y's line too.
+  **Pass:** that line (`acousticOnly: true` in `qa_scan`) gets **no**
+  `progress` frame and appears in `qa_repair_complete`'s `stillSuspect` — the
+  stale `audition` centroid was dropped, not reused. An inconclusive verdict
+  here is the designed outcome, not a regression. Known limit: an in-book
+  centroid is still judged against the old voice (#3517) — do not expect it to
+  switch.
 
 *Needs:* a real GPU box with the speech sidecar and a real ECAPA
 speaker-embedding model running (the mocked unit tests cover the logic branch
-but never the real embedding path). *Criteria:* the observation above; issue
+but never the real embedding path). *Criteria:* the observations above; issue
 #3414 and the mutation-tested regression split (#3449 stale-drop, #3460
 kept-and-gates) for the exact defect this closes.
 
