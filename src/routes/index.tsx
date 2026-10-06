@@ -590,6 +590,9 @@ export function AnalysingRoute() {
   const library = useAppSelector((s) => s.library);
   const ui = useAppSelector((s) => s.ui);
   const activeBook = library.books.find((b) => b.bookId === bookId);
+  /* #3435 — title and word count come from the slice only while it names this
+     book; mid-switch it still holds the previous one. */
+  const ownManuscript = manuscript.bookId === bookId;
   /* Stage.manuscriptId is set when the user goes through Upload → Analyse, but
      it's null on page refresh, deep links, or confirm→reanalyse — none of
      those carry the id through ui.stage. Layout's book-state hydration always
@@ -616,8 +619,8 @@ export function AnalysingRoute() {
       key={bookId}
       manuscriptId={manuscriptId}
       bookId={bookId || null}
-      title={manuscript.title || activeBook?.title || null}
-      wordCount={manuscript.wordCount}
+      title={(ownManuscript ? manuscript.title : null) || activeBook?.title || null}
+      wordCount={ownManuscript ? manuscript.wordCount : undefined}
       model={ui.selectedModel}
       onComplete={(payload) => {
         /* #3435 (PR #3505 review pass 4) — load the result only into slices

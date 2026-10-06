@@ -492,6 +492,17 @@ describe('AnalysingRoute — the manuscript id comes only from its own book', ()
     expect(analyseMock).toHaveBeenCalledWith('m-own', expect.any(Object));
   });
 
+  it("shows its own book's title, never the other book's the slices hold", async () => {
+    const store = makeStore();
+    holdSlices(store, 'b2', 'm-other');
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-own', title: 'Own Title' })]);
+
+    renderAtAnalysing(store);
+
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Own Title');
+    expect(screen.queryByText(/Book b2/)).toBeNull();
+  });
+
   it("a refresh with no stage id or library entry never analyses the other book the slices hold", async () => {
     const store = makeStore();
     holdSlices(store, 'b2', 'm-other');
