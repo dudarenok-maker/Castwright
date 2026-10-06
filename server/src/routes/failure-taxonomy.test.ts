@@ -1081,3 +1081,27 @@ describe('analyzer-timeout remediation (#3084 PR 3b review 🟠4)', () => {
     expect(FAILURE_REMEDIATIONS['analyzer-timeout'].remediation).not.toContain('reasoning level');
   });
 });
+
+describe('analyzer-invalid-output remediation (#3084 PR 3b review 🟡1)', () => {
+  const classify = (transport: 'ollama' | 'gemini' | 'openai', mode: 'schema' | 'json' | 'off') =>
+    classifyAnalysisFailure(new AnalyzerInvalidOutputError(transport, 'm', '1-ch1', 'invalid-json — x', mode), 'Model');
+
+  it('never tells a run already in "schema" mode to switch to "schema"', () => {
+    expect(classify('ollama', 'schema').remediation).not.toMatch(/set Structured output to "schema"/);
+    expect(classify('ollama', 'schema').remediation).toContain('already "schema"');
+  });
+
+  it('never steers Gemini to "schema" (E112 has not shown it accepts it)', () => {
+    expect(classify('gemini', 'json').remediation).not.toContain('"schema"');
+    expect(classify('gemini', 'off').remediation).not.toContain('"schema"');
+  });
+
+  it('suggests "schema" to an Ollama or endpoint run that is on "json"', () => {
+    expect(classify('ollama', 'json').remediation).toContain('"schema"');
+    expect(classify('openai', 'json').remediation).toContain('"schema"');
+  });
+
+  it('the static Help copy is mode-neutral', () => {
+    expect(FAILURE_REMEDIATIONS['analyzer-invalid-output'].remediation).not.toContain('"schema"');
+  });
+});

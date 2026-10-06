@@ -728,6 +728,26 @@ const INVALID_OUTPUT_HINT: Record<AnalyzerInvalidOutputError['structuredOutputMo
   off: 'structured output was off — "json" or "schema" usually prevents this',
 };
 
+/* The advice follows the run's own mode. Gemini is never steered to "schema": whether it
+   accepts that mode is still owed on-box acceptance (E112). */
+function invalidOutputRemediation(
+  transport: TransportKind,
+  mode: AnalyzerInvalidOutputError['structuredOutputMode'],
+): string {
+  const lead = 'Retry the chapter. If it keeps failing, ';
+  if (mode === 'schema') {
+    return `${lead}Structured output is already "schema" for this run, so pick a stronger model or one this server enforces it for.`;
+  }
+  if (transport === 'gemini') {
+    return mode === 'off'
+      ? `${lead}set Gemini structured output to "json", or pick a stronger model.`
+      : `${lead}pick a stronger model.`;
+  }
+  return mode === 'off'
+    ? `${lead}set Structured output to "json" or "schema" for this engine or endpoint, or pick a stronger model.`
+    : `${lead}set Structured output to "schema" for this engine or endpoint, or pick a stronger model.`;
+}
+
 /** Run-level analysis classifier — the unified replacement for analysis.ts's
     describeError(). Typed-error checks and the Google-envelope/status parsing
     are PORTED VERBATIM (same precedence, same message construction: model
@@ -915,6 +935,7 @@ export function classifyAnalysisFailure(
       'analyzer-invalid-output',
       `${modelLabel} returned output that failed validation twice (${INVALID_OUTPUT_HINT[err.structuredOutputMode]}).`,
       redactKnownSecrets(err.detail, knownAnalyzerSecrets()),
+      invalidOutputRemediation(err.transport, err.structuredOutputMode),
     );
   }
   /* #3084 P22 — every branch below that shows raw provider text (the envelope,

@@ -291,7 +291,7 @@ export const FAILURE_REMEDIATIONS = {
     userMessage:
       "The analyzer's reply did not match the expected structure, even after an automatic retry.",
     remediation:
-      'Retry the chapter. If it keeps failing, set Structured output to "schema" for this engine or ' +
+      'Retry the chapter. If it keeps failing, check the Structured output setting for this engine or ' +
       'endpoint, or pick a stronger model.',
   },
   'analyzer-endpoint-missing': {
