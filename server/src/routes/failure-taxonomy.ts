@@ -927,7 +927,7 @@ export function classifyAnalysisFailure(
   if (err instanceof AnalyzerEndpointMissingError) {
     return withCopy(
       'analyzer-endpoint-missing',
-      `${err.message} Add it in Settings or pick another model.`,
+      `${err.message} Pick another model.`,
     );
   }
   if (err instanceof AnalyzerInvalidOutputError) {

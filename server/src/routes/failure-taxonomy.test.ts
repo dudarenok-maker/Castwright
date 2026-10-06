@@ -986,7 +986,7 @@ describe('analyzerSelectionErrorEvent (#3084 P23)', () => {
       'AnalyzerEndpointMissingError',
       new AnalyzerEndpointMissingError('gone', 'env'),
       'analyzer-endpoint-missing',
-      'Analyzer endpoint "gone" (from ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL) is not configured. Add it in Settings or pick another model.',
+      'Analyzer endpoint "gone" (from ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL) cannot be used for analysis yet. Pick another model.',
     ],
     [
       'AnalyzerKeyOriginError',
@@ -1103,5 +1103,17 @@ describe('analyzer-invalid-output remediation (#3084 PR 3b review 🟡1)', () =>
 
   it('the static Help copy is mode-neutral', () => {
     expect(FAILURE_REMEDIATIONS['analyzer-invalid-output'].remediation).not.toContain('"schema"');
+  });
+});
+
+describe('analyzer-endpoint-missing copy is true today (#3084 PR 3b review 🟡2)', () => {
+  it('does not promise a Settings UI or claim a possibly-saved endpoint is unconfigured', () => {
+    const live = classifyAnalysisFailure(new AnalyzerEndpointMissingError('gone', 'settings'), 'Analyzer');
+    const help = FAILURE_REMEDIATIONS['analyzer-endpoint-missing'];
+    for (const text of [live.userMessage, live.remediation, help.userMessage, help.remediation]) {
+      expect(text).not.toMatch(/Settings/);
+      expect(text).not.toMatch(/not configured/);
+    }
+    expect(live.userMessage).toContain('"gone"');
   });
 });

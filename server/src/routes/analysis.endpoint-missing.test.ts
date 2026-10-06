@@ -88,7 +88,7 @@ describe('analysis selection call sites report analyzer-endpoint-missing (#3084 
       expect(res.status).toBe(200);
       const error = parseSse(res.text).find((e) => e.kind === 'error');
       expect(error).toMatchObject({ kind: 'error', code: 'analyzer-endpoint-missing' });
-      expect(String(error?.message)).toContain('Analyzer endpoint "gone" (from this run\'s model pick) is not configured.');
+      expect(String(error?.message)).toContain('Analyzer endpoint "gone" (from this run\'s model pick) cannot be used for analysis yet.');
     } finally {
       removeManuscript(id);
     }

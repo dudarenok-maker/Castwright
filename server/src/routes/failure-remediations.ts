@@ -295,9 +295,9 @@ export const FAILURE_REMEDIATIONS = {
       'endpoint, or pick a stronger model.',
   },
   'analyzer-endpoint-missing': {
-    userMessage: 'The run names an analyzer endpoint that is not configured.',
+    userMessage: 'The run names an analyzer endpoint that cannot be used for analysis yet.',
     remediation:
-      'Add the endpoint in Settings, or pick a different model for this run. If the model came from ' +
+      'Pick a different model for this run. If the model came from ' +
       'ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL in server/.env, fix or clear that value.',
   },
   unknown: {
