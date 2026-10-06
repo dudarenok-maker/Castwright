@@ -1,4 +1,4 @@
-﻿/* GET / PUT /api/user/settings
+/* GET / PUT /api/user/settings
 
    The frontend's Account view round-trips through here. GET returns the
    on-disk user-settings.json merged with env-derived read-only fields

@@ -1,4 +1,4 @@
-﻿/* #3084 PR 3b — analyzer endpoint CRUD and the per-endpoint key write
+/* #3084 PR 3b — analyzer endpoint CRUD and the per-endpoint key write
    (Task 3b.8 adds Detect to this router).
 
    Every write goes through mutateUserSettings, so each refusal (duplicate id,

@@ -1,4 +1,4 @@
-﻿/* On-demand served-context detection for a user-run llama.cpp / llama-swap
+/* On-demand served-context detection for a user-run llama.cpp / llama-swap
    server (#3084 decision 3b). Called ONLY when the user clicks Detect — nothing
    probes an endpoint automatically. Reads `default_generation_settings.n_ctx`
    (llama.cpp per-slot served context), never `n_ctx_train`. A local-machine

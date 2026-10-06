@@ -1,4 +1,4 @@
-﻿/* Single source of truth for user-level account defaults + non-secret env
+/* Single source of truth for user-level account defaults + non-secret env
    overrides. Persisted to a single per-user file shared across every git
    checkout (see resolveUserSettingsPath / plan 122).
 
