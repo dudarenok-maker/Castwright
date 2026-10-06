@@ -62,6 +62,8 @@ vi.mock('./prosody-thunk', async (importOriginal) => {
 
 const getBookStateMock = vi.fn();
 const putBookStateMock = vi.fn();
+const detectEmotionsMock = vi.fn();
+const detectInstructMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -75,6 +77,8 @@ vi.mock('../lib/api', async (importOriginal) => {
       getUserSettings: vi.fn(async () => ({})),
       getBookState: (...args: unknown[]) => getBookStateMock(...args),
       putBookState: (...args: unknown[]) => putBookStateMock(...args),
+      detectEmotions: (...args: unknown[]) => detectEmotionsMock(...args),
+      detectInstruct: (...args: unknown[]) => detectInstructMock(...args),
       getAnalysisState: vi.fn(async () => null),
       getActiveAnalyses: vi.fn(async () => ({ snapshots: [] })),
       pollRevisions: vi.fn(async () => ({ pending: [], drift: [] })),
@@ -133,11 +137,14 @@ vi.mock('../routes/prefetch', () => ({
 import { Layout } from '../components/layout';
 import { uiActions } from './ui-slice';
 import { api } from '../lib/api';
+import { persistenceMiddleware } from './persistence-middleware';
 
 /* ── Store factory ─────────────────────────────────────────────────────── */
 
-function makeStore() {
+function makeStore(withPersistence = false) {
   return configureStore({
+    middleware: (getDefault) =>
+      withPersistence ? getDefault().concat(persistenceMiddleware) : getDefault(),
     reducer: {
       ui: uiSlice.reducer,
       account: accountSlice.reducer,
@@ -249,7 +256,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     /* Default: getBookState returns a non-opted-out, non-annotated state. */
     getBookStateMock.mockResolvedValue(defaultStateResponse('b1'));
     /* Default: runProsodyPasses succeeds with no failures. */
-    runProsodyPassesMock.mockResolvedValue({ totalAnnotations: 0, totalChapters: 0, failed: 0 });
+    runProsodyPassesMock.mockResolvedValue({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 });
     putBookStateMock.mockResolvedValue({});
   });
 
@@ -464,7 +471,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
   it('does NOT write putBookState when failed > 0 and the book is re-eligible on the next transition', async () => {
     const store = makeStore();
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
-    runProsodyPassesMock.mockResolvedValueOnce({ totalAnnotations: 5, totalChapters: 2, failed: 1 });
+    runProsodyPassesMock.mockResolvedValueOnce({ totalAnnotations: 5, totalChapters: 2, failed: 1, skipped: 0 });
 
     renderLayout(store);
 
@@ -490,7 +497,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     /* Simulate a second appearance: book transitions through a non-complete
        status and back to complete. This changes completeKey, retriggering
        the effect. Since the partial run removed b1 from considered, it fires again. */
-    runProsodyPassesMock.mockResolvedValueOnce({ totalAnnotations: 5, totalChapters: 2, failed: 0 });
+    runProsodyPassesMock.mockResolvedValueOnce({ totalAnnotations: 5, totalChapters: 2, failed: 0, skipped: 0 });
 
     await act(async () => {
       /* Step through not_analysed → cast_pending to change completeKey twice:
@@ -521,7 +528,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
   it('calls putBookState with prosodyAnnotated:true when failed === 0', async () => {
     const store = makeStore();
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
-    runProsodyPassesMock.mockResolvedValue({ totalAnnotations: 10, totalChapters: 3, failed: 0 });
+    runProsodyPassesMock.mockResolvedValue({ totalAnnotations: 10, totalChapters: 3, failed: 0, skipped: 0 });
 
     renderLayout(store);
 
@@ -575,7 +582,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     /* A subsequent status change should fire again (book was removed from considered).
        Cycle through a non-complete status to retrigger the effect with a new completeKey. */
-    runProsodyPassesMock.mockResolvedValueOnce({ totalAnnotations: 0, totalChapters: 0, failed: 0 });
+    runProsodyPassesMock.mockResolvedValueOnce({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 });
 
     await act(async () => {
       store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'not_analysed')));
@@ -668,7 +675,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     const [_bookId, opts] = runProsodyPassesMock.mock.calls[0] as [string, Record<string, unknown>];
     /* Task 14: onProgress is now passed for the global prosody pill. */
-    expect(Object.keys(opts).sort()).toEqual(['dispatch', 'onProgress'].sort());
+    expect(Object.keys(opts).sort()).toEqual(['canApply', 'dispatch', 'onProgress'].sort());
     expect(opts.signal).toBeUndefined();
     expect(typeof opts.onProgress).toBe('function');
   });
@@ -688,7 +695,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
     /* Hold runProsodyPasses open (don't let it resolve) so the `finally` clear
        doesn't wipe activeStreams before we inspect it — mirrors production
        timing, where onProgress ticks arrive WHILE the pass is still running. */
-    let resolvePass!: (v: { totalAnnotations: number; totalChapters: number; failed: number }) => void;
+    let resolvePass!: (v: { totalAnnotations: number; totalChapters: number; failed: number; skipped: number }) => void;
     runProsodyPassesMock.mockImplementationOnce(
       (_id: string, opts: { onProgress?: (fraction: number, detail?: Record<string, unknown>) => void }) =>
         new Promise((resolve) => {
@@ -731,8 +738,164 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     /* Let the pass finish so the effect's finally/cleanup runs cleanly. */
     await act(async () => {
-      resolvePass({ totalAnnotations: 0, totalChapters: 5, failed: 0 });
+      resolvePass({ totalAnnotations: 0, totalChapters: 5, failed: 0, skipped: 0 });
       await new Promise((r) => setTimeout(r, 20));
     });
+  });
+});
+
+/* #3435 (PR #3505 review pass 5) — the detected emotions of a background
+   book only land in that book. The run outlives the book on screen: it starts
+   when a book finishes analysing, wherever the user is, and the server never
+   writes these annotations itself — the frontend applies them to the
+   manuscript slice and the persistence middleware saves that slice into the
+   book the stage names. Runs the REAL thunk and the REAL middleware. */
+describe('Layout — prosody auto-trigger writes only into its own book (#3435)', () => {
+  const sentence = (chapterId: number, id: number) =>
+    ({ chapterId, id, text: 'Hello.', characterId: 'narrator' }) as never;
+
+  function stateFor(bookId: string) {
+    const base = defaultStateResponse(bookId);
+    return { ...base, manuscriptEdits: { sentences: [sentence(1, 1)], mergedAwayKeys: [] } };
+  }
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const actual = await vi.importActual<typeof import('./prosody-thunk')>('./prosody-thunk');
+    runProsodyPassesMock.mockImplementation((...args: unknown[]) =>
+      (actual.runProsodyPasses as (...a: unknown[]) => unknown)(...args),
+    );
+    getBookStateMock.mockImplementation(async (id: string) => stateFor(id));
+    putBookStateMock.mockResolvedValue({});
+    detectEmotionsMock.mockImplementation(
+      async (_id: string, opts: { onAnnotation?: (e: unknown) => void }) => {
+        opts.onAnnotation?.({ chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'angry' }] });
+        return { totalAnnotations: 1, annotatedChapters: 1 };
+      },
+    );
+    detectInstructMock.mockImplementation(
+      async (_id: string, opts: { onAnnotation?: (e: unknown) => void }) => {
+        opts.onAnnotation?.({ chapterId: 1, annotations: [{ sentenceId: 1, instruct: 'whispered' }] });
+        return { totalAnnotations: 1, annotatedChapters: 1 };
+      },
+    );
+  });
+
+  /* Opens `openId` (stage + slices, through the layout's own read), then
+     lets `finishedId` finish analysing so the auto-trigger runs for it. */
+  async function runFor(openId: string, finishedId: string) {
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: openId, status: 'voices_pending' }));
+    renderLayout(store);
+    await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe(`mns_${openId}`));
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook(finishedId, 'cast_pending')));
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    await waitFor(() => expect(detectInstructMock).toHaveBeenCalledWith(finishedId, expect.anything()));
+    /* Past the persistence debounce, so any manuscript PUT has gone out. */
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 700));
+    });
+    return store;
+  }
+
+  const manuscriptPuts = () =>
+    putBookStateMock.mock.calls.filter((c) => (c[1] as { slice: string }).slice === 'manuscript');
+  const watermarkPuts = (id: string) =>
+    putBookStateMock.mock.calls.filter(
+      (c) => c[0] === id && (c[1] as { patch: { prosodyAnnotated?: boolean } }).patch?.prosodyAnnotated,
+    );
+
+  it("a background book's emotions never land in the open book, and it is not marked annotated", async () => {
+    const store = await runFor('b2', 'b1');
+
+    const s = store.getState().manuscript.sentences.find((x) => x.chapterId === 1 && x.id === 1);
+    expect(s?.emotion).toBeUndefined();
+    expect(s?.instruct).toBeUndefined();
+    expect(manuscriptPuts()).toEqual([]);
+    expect(watermarkPuts('b1')).toEqual([]);
+  });
+
+  it("the open book's own emotions land in it and persist to it once, and it is marked annotated", async () => {
+    const store = await runFor('b1', 'b1');
+
+    const s = store.getState().manuscript.sentences.find((x) => x.chapterId === 1 && x.id === 1);
+    expect(s?.emotion).toBe('angry');
+    const puts = manuscriptPuts();
+    expect(puts).toHaveLength(1);
+    expect(puts[0][0]).toBe('b1');
+    expect(JSON.stringify(puts[0][1])).toContain('"emotion":"angry"');
+    expect(watermarkPuts('b1')).toHaveLength(1);
+  });
+
+  it("the open book's slices are skipped while the stage already names another book (its read not landed)", async () => {
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'voices_pending' }));
+    renderLayout(store);
+    await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b1'));
+    /* b2's read never lands: the stage names b2, the slices still hold b1. */
+    getBookStateMock.mockImplementation((id: string) =>
+      id === 'b2' ? new Promise(() => {}) : Promise.resolve(stateFor(id)),
+    );
+    await act(async () => {
+      store.dispatch(uiActions.openBook({ id: 'b2', status: 'voices_pending' }));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(store.getState().manuscript.manuscriptId).toBe('mns_b1');
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    await waitFor(() => expect(detectInstructMock).toHaveBeenCalledWith('b1', expect.anything()));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 700));
+    });
+
+    expect(manuscriptPuts()).toEqual([]);
+    expect(watermarkPuts('b1')).toEqual([]);
+  });
+
+  it("the stage naming the book is not enough while its read has not landed (the slices hold another book)", async () => {
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b2', status: 'voices_pending' }));
+    renderLayout(store);
+    await act(async () => {
+      store.dispatch(librarySlice.actions.hydrate(libResponse([])));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b2'));
+    /* The layout's read of b1 never lands: the stage names b1, the slices
+       still hold b2. (The auto-trigger's own later read of b1 does.) */
+    let b1Reads = 0;
+    getBookStateMock.mockImplementation((id: string) =>
+      id === 'b1' && b1Reads++ === 0 ? new Promise(() => {}) : Promise.resolve(stateFor(id)),
+    );
+    await act(async () => {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'voices_pending' }));
+      await new Promise((r) => setTimeout(r, 20));
+    });
+    expect(store.getState().manuscript.manuscriptId).toBe('mns_b2');
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+      await new Promise((r) => setTimeout(r, 50));
+    });
+    await waitFor(() => expect(detectInstructMock).toHaveBeenCalledWith('b1', expect.anything()));
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 700));
+    });
+
+    const s = store.getState().manuscript.sentences.find((x) => x.chapterId === 1 && x.id === 1);
+    expect(s?.emotion).toBeUndefined();
+    expect(manuscriptPuts()).toEqual([]);
+    expect(watermarkPuts('b1')).toEqual([]);
   });
 });

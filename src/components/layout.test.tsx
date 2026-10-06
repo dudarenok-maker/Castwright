@@ -174,7 +174,7 @@ vi.mock('../routes/prefetch', () => ({
 }));
 
 vi.mock('../store/prosody-thunk', () => ({
-  runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0 })),
+  runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
 }));
 
 import { Layout } from './layout';

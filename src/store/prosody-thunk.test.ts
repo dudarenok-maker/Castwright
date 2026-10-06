@@ -88,6 +88,32 @@ describe('runProsodyPasses', () => {
     );
   });
 
+  /* #3435 — an annotation for a book that is no longer the open one is
+     counted, not written into the slices that now hold another book. */
+  it('skips and counts annotations from both passes while canApply returns false', async () => {
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onAnnotation?.({ chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'angry' }] });
+        return { totalAnnotations: 1, annotatedChapters: 1 };
+      },
+    );
+    vi.mocked(api.detectInstruct).mockImplementation(
+      async (_bookId: string, opts: DetectInstructOpts = {}) => {
+        opts.onAnnotation?.({ chapterId: 1, annotations: [{ sentenceId: 1, instruct: 'gasp' }] });
+        return { totalAnnotations: 1, annotatedChapters: 1 };
+      },
+    );
+
+    const dispatch = vi.fn();
+    const skipping = await runProsodyPasses(bookId, { dispatch, canApply: () => false });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(skipping.skipped).toBe(2);
+
+    const applying = await runProsodyPasses(bookId, { dispatch, canApply: () => true });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(applying.skipped).toBe(0);
+  });
+
   it('increments failed when detectEmotions reports a chapter-failed', async () => {
     vi.mocked(api.detectEmotions).mockImplementation(
       async (_bookId: string, opts: DetectEmotionsOpts = {}) => {

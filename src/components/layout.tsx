@@ -24,6 +24,7 @@ import {
   scopeDriftGroupsByBook,
 } from '../store/revisions-slice';
 import { flushBookPersistence } from '../store/persistence-middleware';
+import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions, findSeriesBookIds } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
@@ -1239,15 +1240,28 @@ export function Layout() {
           if (st.state.prosodyAnnotated) return;               // watermark → no-op
           dispatch(prosodyActions.setActive({ bookId: id, progress: 0, label: 'Detecting emotions' }));
           pillActive = true;
-          const { failed } = await runProsodyPasses(id, {
+          /* #3435 — the run outlives the book on screen, and the server never
+             writes these annotations: they land in the manuscript slice, which
+             holds ONE book and is saved into the book the stage names. Apply
+             them only while the slices hold this book (store/open-book.ts) AND
+             the stage names it — the stage moves before the next book's read
+             lands, and a write in that window would be saved into the next
+             book. A skipped annotation leaves the book un-marked, like a
+             partial failure, so a later run fills it (fill-only). */
+          const book = { bookId: id, manuscriptId: st.state.manuscriptId };
+          const { failed, skipped } = await runProsodyPasses(id, {
             dispatch,
             onProgress: (f, d) =>
               dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(id, f, d))),
+            canApply: () => {
+              const s = store.getState();
+              return selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true;
+            },
           });
-          if (failed === 0) {
+          if (failed === 0 && skipped === 0) {
             await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
           } else {
-            prosodyConsidered.current.delete(id); // partial → allow fill-only re-run
+            prosodyConsidered.current.delete(id); // partial / skipped → allow fill-only re-run
           }
         } catch {
           prosodyConsidered.current.delete(id); // transient error → retry on next transition
