@@ -361,7 +361,7 @@ describe('AnalysingRoute manuscriptId derivation', () => {
        first and the fallback to manuscript.manuscriptId now matters.
        (The reset happens only under test: the hook compares against the
        module-level app store, not this test's store, so it always sees a
-       difference. In the app the stage keeps its id � stageEqual ignores
+       difference. In the app the stage keeps its id � stageEqual ignores
        manuscriptId.) In real usage both ids ARE the same — the upload
        seeds both — so we test the realistic shape here. The
        precedence-when-divergent question is captured as a follow-up
@@ -466,6 +466,11 @@ describe('AnalysingRoute — the manuscript id comes only from its own book', ()
     analyseMock.mockClear();
 
     fireEvent.click(screen.getByText('go-b2'));
+    /* useHydrateStage compares against the app's own store, so under test it
+       resets the stage on the switch; in the app the stage keeps naming A for
+       a render (stageEqual ignores manuscriptId). Put A's stage back so the
+       route's stage-side id check is what is under test. */
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b1', manuscriptId: 'mA' }));
     await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b2'));
     /* B's read lands: the slices now hold B. */
     holdSlices(store, 'b2', 'mB');
