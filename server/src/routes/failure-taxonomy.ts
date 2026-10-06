@@ -730,7 +730,7 @@ const ENDPOINT_UNREACHABLE_REMEDIATION =
   'retry. Castwright switches to Gemini only when a Gemini key is saved and cloud fallback is on.';
 
 /* A Gemini key problem (an ApiError, or the 400 whose wording names the key) points at both places
-   the key can live; the static `auth` text names server/.env only. Anything else keeps the static copy. */
+   the key can live; the static `auth` text is neutral across every source. Anything else keeps the static copy. */
 function geminiAuthRemediation(err: unknown, code: FailureCode): string | undefined {
   if (code !== 'auth') return undefined;
   const status = (err as { status?: number })?.status;
@@ -1052,8 +1052,8 @@ export function analyzerSelectionErrorEvent(
   return {
     kind: 'error',
     code: failure.code,
-    /* The signature's generic `auth` copy ("Authentication failed — a service refused its credentials") is wrong here: no
-       request was sent, and it does not say where the setting lives. Main's own sentence says both,
+    /* The signature's generic `auth` copy ("Authentication failed — an API key or access setting is missing, wrong or expired")
+       does not say which key is missing or where the setting lives. Main's own sentence says both,
        and the remediation below names the same two homes. */
     message: missingKey ? raw : failure.userMessage,
     remediation: missingKey ? `Check ${KEY_SETTING.gemini}, then retry the chapter.` : failure.remediation,
