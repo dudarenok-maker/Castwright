@@ -25,7 +25,7 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { tourSlice } from '../store/tour-slice';
-import { analysisSlice } from '../store/analysis-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
 import { router as appRouter } from './index';
 import {
@@ -394,6 +394,135 @@ describe('AnalysingRoute manuscriptId derivation', () => {
 
     expect(screen.getByText(/No manuscript loaded/i)).toBeInTheDocument();
     expect(analyseMock).not.toHaveBeenCalled();
+  });
+});
+
+/* #3435 (PR #3505 review pass 4) — the route takes a manuscript id only from
+   a source that names its own book. The stage names a book before the slices
+   hold it, and on a direct switch the stage still names the previous book for
+   one render, so neither may be read without checking the book it names. */
+describe('AnalysingRoute — the manuscript id comes only from its own book', () => {
+  function holdSlices(store: ReturnType<typeof makeStore>, bookId: string, manuscriptId: string) {
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: { bookId, manuscriptId, title: `Book ${bookId}` } as any,
+        sentences: null,
+        wordCount: 100,
+        format: 'plaintext',
+      }),
+    );
+  }
+  function libraryOf(store: ReturnType<typeof makeStore>, books: LibraryBook[]) {
+    store.dispatch(
+      libraryActions.hydrate({
+        authors: [{ name: 'Della Renwick', series: [{ name: 'Standalones', books }] }],
+      }),
+    );
+  }
+
+  it("P4b: a direct switch from A's running Analysing view to B's never POSTs A's run from B, nor starts B", async () => {
+    getBookStateMock.mockResolvedValue({ state: { chapters: [], castConfirmed: false } });
+    const store = makeStore();
+    libraryOf(store, [
+      makeBook({ bookId: 'b1', manuscriptId: 'mA' }),
+      makeBook({ bookId: 'b2', manuscriptId: 'mB', title: 'Book B' }),
+    ]);
+    holdSlices(store, 'b1', 'mA');
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'mA' }));
+    store.dispatch(
+      analysisActions.setActiveStream({
+        bookId: 'b1',
+        manuscriptId: 'mA',
+        phaseId: 1,
+        phaseLabel: 'Parsing and attribution',
+        phaseProgress: 0.3,
+        remainingMs: null,
+        lastTickAt: Date.now(),
+        state: 'running',
+        kind: 'main',
+      }),
+    );
+    function GoTo() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate('/books/b2/analysing')}>go-b2</button>;
+    }
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/analysing']}>
+          <GoTo />
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route path="/books/:bookId/analysing" element={<AnalysingRoute />} />
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+    /* Control: A's own view re-attaches to A's running run without a click. */
+    await waitFor(() => expect(analyseMock).toHaveBeenCalledWith('mA', expect.any(Object)));
+    analyseMock.mockClear();
+
+    fireEvent.click(screen.getByText('go-b2'));
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b2'));
+    /* B's read lands: the slices now hold B. */
+    holdSlices(store, 'b2', 'mB');
+    await new Promise((r) => setTimeout(r, 100));
+    /* B has no running snapshot, so B's view waits for a click. */
+    expect(analyseMock.mock.calls.map((c) => c[0])).toEqual([]);
+    expect(await screen.findByRole('button', { name: /start analysis/i })).toBeInTheDocument();
+  });
+
+  it('a refresh with no stage id while the slices hold another book starts its own manuscript', async () => {
+    const store = makeStore();
+    holdSlices(store, 'b2', 'm-other');
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-own' })]);
+
+    renderAtAnalysing(store);
+
+    fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+    await waitFor(() => expect(analyseMock).toHaveBeenCalledTimes(1));
+    expect(analyseMock).toHaveBeenCalledWith('m-own', expect.any(Object));
+  });
+
+  it("a refresh with no stage id or library entry never analyses the other book the slices hold", async () => {
+    const store = makeStore();
+    holdSlices(store, 'b2', 'm-other');
+
+    renderAtAnalysing(store);
+
+    expect(await screen.findByText(/No manuscript loaded/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /start analysis/i })).toBeNull();
+    expect(analyseMock).not.toHaveBeenCalled();
+  });
+
+  it("control: a fresh upload's Start analyses the upload while the slices still name the previous book", async () => {
+    /* uploadComplete sets the manuscript id but leaves the previous book's
+       bookId on the slice; the stage manuscriptUploaded set names the new book,
+       so the route takes the id from there. */
+    const store = makeStore();
+    holdSlices(store, 'b2', 'm-other');
+    store.dispatch(
+      manuscriptActions.uploadComplete({
+        bookId: 'b1',
+        manuscriptId: 'm-upload',
+        title: 'New',
+        format: 'plaintext',
+        wordCount: 100,
+        sourceText: '',
+      } as any),
+    );
+    expect(store.getState().manuscript.bookId).toBe('b2');
+    store.dispatch(uiActions.startNewBook());
+    store.dispatch(uiActions.manuscriptUploaded({ bookId: 'b1', manuscriptId: 'm-upload' }));
+
+    renderAtAnalysing(store);
+    /* useHydrateStage compares against the app's own store, not this one, so
+       under test it always resets the stage's id on mount; in the app the
+       stage keeps it (stageEqual ignores manuscriptId). Put it back. */
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b1', manuscriptId: 'm-upload' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+    await waitFor(() => expect(analyseMock).toHaveBeenCalledWith('m-upload', expect.any(Object)));
   });
 });
 
@@ -1432,7 +1561,11 @@ describe('AnalysingRoute — a result loads only into the slices of its own book
   async function finishRun(store: ReturnType<typeof makeStore>) {
     analyseResult = payloadA;
     renderAtAnalysing(store);
+    /* useHydrateStage resets the stage's id under test (it compares against
+       the app's own store); in the app openBook's id survives. Put it back. */
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b1', manuscriptId: 'm1' }));
     fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+    await waitFor(() => expect(analyseMock).toHaveBeenCalledWith('m1', expect.any(Object)));
     await waitFor(() => expect(store.getState().ui.stage).toMatchObject({ kind: 'confirm', bookId: 'b1' }));
   }
 

@@ -594,10 +594,19 @@ export function AnalysingRoute() {
      it's null on page refresh, deep links, or confirm→reanalyse — none of
      those carry the id through ui.stage. Layout's book-state hydration always
      repopulates manuscript.manuscriptId from disk, so prefer that (and fall
-     back to the library entry for the brief window before disk hydrate lands). */
+     back to the library entry for the brief window before disk hydrate lands).
+     #3435 (PR #3505 review pass 4) — each source counts only when it names
+     THIS route's book. On a direct A -> B switch the stage still names A for a
+     render and the slices hold A until B's read lands; read unchecked, B's view
+     adopted A's running run and POSTed it. uploadComplete can leave the
+     previous book's bookId on the slice, but a fresh upload's stage names its
+     own book, so the stage covers it. */
   const manuscriptId =
     stage.kind === 'analysing'
-      ? (stage.manuscriptId ?? manuscript.manuscriptId ?? activeBook?.manuscriptId ?? null)
+      ? ((stage.bookId === bookId ? stage.manuscriptId : null) ??
+        (manuscript.bookId === bookId ? manuscript.manuscriptId : null) ??
+        activeBook?.manuscriptId ??
+        null)
       : null;
 
   return (
