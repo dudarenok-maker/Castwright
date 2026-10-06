@@ -568,9 +568,10 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 161's A/B audition check, now **A11**.
 
 > **Last change: 2026-10-03 (#3414), 56 → 57.** Added **A112** — the
-> qa-repair centroid filter now compares a flagged line's new take against
-> the character's CURRENT voice rather than the chapter's last-render
-> snapshot; the regression suite (#3449, #3460) covers the logic branch
+> qa-repair centroid filter now drops an audition centroid whose recorded
+> voice differs from the character's CURRENT cast voice (rather than keying
+> off the chapter's last-render snapshot), so the line stays flagged instead
+> of being judged against the old voice; in-book rows are unchanged (#3517); the regression suite (#3449, #3460) covers the logic branch
 > against a mocked embedder, but nothing has yet proven the repair's
 > accept/reject decision against a real sidecar's ECAPA embedding on real
 > hardware. Group A 33 → 34. `next-id` bumped A112 → A113 in the same
@@ -5758,7 +5759,7 @@ for the sleep-prevention leg specifically; the other two legs are
 platform-general. *Criteria:* the three observations above; issue #3406 and
 PR #3404's manifest-guard section for the exact defect each leg closes.
 
-### A112 · The qa-repair repair pass judges a new take against the CURRENT voice, not a stale render snapshot ([Castwright#3414](https://github.com/dudarenok-maker/Castwright/issues/3414)) · **a real sidecar with a real speaker-embedding (ECAPA) model, a book with at least one already-rendered chapter**
+### A112 · The qa-repair repair pass stops judging a new take against a reassigned character's stale audition centroid ([Castwright#3414](https://github.com/dudarenok-maker/Castwright/issues/3414)) · **a real sidecar with a real speaker-embedding (ECAPA) model, a Qwen or Coqui character (scoreBook skips Kokoro), a book with at least one already-rendered chapter**
 
 `chapter-qa-repair.ts`'s centroid filter derived its comparison voice from
 the chapter's last full-render snapshot (`snap?.resolvedVoiceName`) rather
@@ -5771,19 +5772,27 @@ off the live cast entry), and the regression suite (`#3449`, `#3460`)
 exercises both the stale-drop and the kept/gate paths against a mocked
 embedder. Neither test touches a real sidecar or a real ECAPA model.
 
-**What to observe, concretely:**
+**What to observe, concretely** (needs a **Qwen or Coqui** character —
+`scoreBook` skips Kokoro characters, `render-integrity/aggregate.ts`, so a
+Kokoro character produces no verdict and observes nothing; the character must
+also have a persisted `audition` centroid and a fixable voice-mismatch verdict
+on a flagged line). Read the result from the `POST .../qa-repair` response
+(`repaired` / `stillSuspect` arrays, browser devtools Network tab) — the UI
+does not render `stillSuspect` directly:
 
-- Render a chapter, then change one of its characters' voice assignment,
-  then run Fix audio / qa-repair's "Scan & repair" against that chapter on
-  a real sidecar. Confirm the repair's accept/reject decision for that
-  character's flagged lines is judged against the embedding of the
-  character's *new* voice, not the voice the chapter was originally
-  rendered in — e.g. by checking the repair accepts a take that matches the
-  new voice but would have been rejected against the old one (or vice
-  versa).
-- Confirm no crash or inconclusive-verdict regression when the reassigned
-  character has no prior audition centroid for the new voice at all (cold
-  start).
+- **Control (unchanged voice).** Run Fix audio on that chapter without
+  touching the character's voice. The flagged line is re-rendered and
+  voice-checked against the audition centroid (it appears in `repaired`, or in
+  `stillSuspect` only if the new take genuinely fails the check). This is the
+  part only hardware can prove: the real `pickVoiceForEngine` output must equal
+  the real stamped `auditionVoice.voiceName`, otherwise the centroid is wrongly
+  dropped and the line is never voice-checked.
+- **Reassign, no re-render.** Change that character's voice, do NOT re-render
+  the chapter, then run Fix audio again. The line lands in `stillSuspect`
+  and is not re-rendered or accepted against the old voice (the stale
+  `audition` centroid is dropped, not reused). An inconclusive verdict here is
+  the designed outcome, not a regression. Known limit: an in-book centroid is
+  still judged against the old voice (#3517) — do not expect it to switch.
 
 *Needs:* a real GPU box with the speech sidecar and a real ECAPA
 speaker-embedding model running (the mocked unit tests cover the logic branch
