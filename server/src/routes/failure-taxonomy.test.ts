@@ -878,6 +878,17 @@ describe('classifyAnalysisFailure — wave-3 analyzer codes (#3084 PR 3b)', () =
     expect(r.code).toBe('analyzer-invalid-output');
     expect(r.userMessage).toContain(hint);
   });
+
+  it.each(['json', 'off'] as const)('a Gemini run in mode %s is never steered to "schema" in the user message', (mode) => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerInvalidOutputError('gemini', 'gemini-3.5-flash-lite', '1-ch1', 'invalid-json — Unexpected token', mode),
+      'Gemini (gemini-3.5-flash-lite)',
+    );
+    expect(r.code).toBe('analyzer-invalid-output');
+    expect(r.userMessage).toContain(`structured output was ${mode === 'json' ? '"json"' : 'off'}`);
+    expect(r.userMessage).not.toMatch(/schema/i);
+    expect(r.remediation).not.toMatch(/schema/i);
+  });
 });
 
 describe('classifyAnalysisFailure — unreachable and endpoint final errors (#3084 PR 3b)', () => {

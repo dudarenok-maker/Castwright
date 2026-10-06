@@ -726,11 +726,21 @@ function requestRejected(
   };
 }
 
-const INVALID_OUTPUT_HINT: Record<AnalyzerInvalidOutputError['structuredOutputMode'], string> = {
-  schema: 'structured output was "schema"; this model or server may not enforce it',
-  json: 'structured output was "json" — "schema" constrains the structure as well as the syntax',
-  off: 'structured output was off — "json" or "schema" usually prevents this',
-};
+/* Gemini is never steered to "schema" here either (see invalidOutputRemediation). */
+function invalidOutputHint(
+  transport: TransportKind,
+  mode: AnalyzerInvalidOutputError['structuredOutputMode'],
+): string {
+  if (mode === 'schema') return 'structured output was "schema"; this model or server may not enforce it';
+  if (mode === 'json') {
+    return transport === 'gemini'
+      ? 'structured output was "json"'
+      : 'structured output was "json" — "schema" constrains the structure as well as the syntax';
+  }
+  return transport === 'gemini'
+    ? 'structured output was off — "json" usually prevents this'
+    : 'structured output was off — "json" or "schema" usually prevents this';
+}
 
 /* The advice follows the run's own mode. Gemini is never steered to "schema": whether it
    accepts that mode is still owed on-box acceptance (E112). */
@@ -937,7 +947,7 @@ export function classifyAnalysisFailure(
   if (err instanceof AnalyzerInvalidOutputError) {
     return withCopy(
       'analyzer-invalid-output',
-      `${modelLabel} returned output that failed validation twice (${INVALID_OUTPUT_HINT[err.structuredOutputMode]}).`,
+      `${modelLabel} returned output that failed validation twice (${invalidOutputHint(err.transport, err.structuredOutputMode)}).`,
       redactKnownSecrets(err.detail, knownAnalyzerSecrets()),
       invalidOutputRemediation(err.transport, err.structuredOutputMode),
     );
