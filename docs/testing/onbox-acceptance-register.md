@@ -567,7 +567,7 @@ setup rather than repeatedly loading and evicting models.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-06 (#3084 wave 3b, PR 3b), 57 → 59.** Rows **B103**
+> **Last change: 2026-10-06 (#3084 wave 3b, PR 3b), 57 → 59.** Rows **B105**
 > (Ollama `format` modes on a real model: `json`, then `off`, against `schema`)
 > and **E112** (Gemini `schema` mode, `responseJsonSchema` accepted or rejected
 > on a real key) added from #3084 PR 3b's run sheet
@@ -5881,7 +5881,7 @@ kept-and-gates) for the exact defect this closes.
 
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B104 -->
+<!-- next-id: B106 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -5983,7 +5983,7 @@ For at least two short-context tags, also record `num_ctx` sent (32768) against 
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §3](3084-openai-analyzer-onbox-acceptance.md). Clears when §3's three `Result:` lines are filled.
 
-### B103 · Ollama structured-output modes on a real model (#3084 PR 3b) · **local Ollama; `qwen3.5:4b`**
+### B105 · Ollama structured-output modes on a real model (#3084 PR 3b) · **local Ollama; `qwen3.5:4b`**
 
 With `analyzer.ollama.structuredOutput` set to `json`, then `off`, analyse one real chapter each on `qwen3.5:4b`. Observe:
 - in `server/handoff/inbox/…` and the debug log, the request carried `format: "json"`, then no `format` key;

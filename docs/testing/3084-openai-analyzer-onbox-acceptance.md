@@ -189,7 +189,7 @@ Short-context tags — Result:
 
 Run by / date / SHA:
 
-## 4. Ollama structured-output modes — register row B103
+## 4. Ollama structured-output modes — register row B105
 
 Book: *The Coalfall Commission* chapter one (`server/src/__fixtures__/the-coalfall-commission.md`).
 
