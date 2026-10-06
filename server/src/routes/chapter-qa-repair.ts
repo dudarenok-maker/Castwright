@@ -441,9 +441,10 @@ chapterQaRepairRouter.post(
          and is judged on that row's current voice; only an id with NO live row at
          all has no current voice → auditionCentroidUsableForCurrent returns false
          (conservative drop). The model key is left on the
-         snapshot/segFile fallback (unchanged): a same-engine reassignment leaves it
-         valid, and an engine change is already caught by the voice-name mismatch
-         above. After this filter a filtered-out character behaves exactly like "no
+         snapshot/segFile fallback (unchanged): a same-engine voice reassignment leaves it
+         valid and an engine change is caught by the voice-name mismatch above —
+         except a Qwen tier change (per-character elevation or a repair at a different
+         tier), which keeps the old tier's centroid; known gap, #3518. After this filter a filtered-out character behaves exactly like "no
          centroid" at every downstream `centroids?.[charId]` site. in-book rows are
          kept; they are rebuilt only when the book is rescored, so after a voice
          change with no re-render they still reflect the old voice (#3517). */
