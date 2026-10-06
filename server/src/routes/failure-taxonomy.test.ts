@@ -1117,8 +1117,22 @@ describe('Gemini auth remediation names both key homes (#3084 PR 3b review pass 
         'GEMINI_API_KEY is required when analyzer engine is Gemini. Set it in Admin → Model Manager → Gemini API key, or in server/.env for CI / power users.',
       ),
     );
-    expect(ev.remediation).toContain('Settings');
-    expect(ev.remediation).not.toMatch(/^Verify GEMINI_API_KEY in server\/\.env/);
+    expect(ev.remediation).toBe(
+      'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry the chapter.',
+    );
+  });
+
+  it('a Gemini ApiError 401 envelope gets the Gemini key remediation (declared outcome 8)', () => {
+    const err = new ApiError({
+      status: 401,
+      message:
+        'got status: 401 Unauthorized. {"error":{"code":401,"message":"Request had invalid authentication credentials.","status":"UNAUTHENTICATED"}}',
+    });
+    const r = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(r.code).toBe('auth');
+    expect(r.remediation).toBe(
+      'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry the chapter.',
+    );
   });
 });
 
