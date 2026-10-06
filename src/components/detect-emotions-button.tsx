@@ -12,7 +12,9 @@
    prosodyAnnotated watermark (that stays the layout.tsx auto-trigger's job). */
 
 import { useEffect, useRef, useState } from 'react';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
 import { DetectEmotionsError, DetectInstructError } from '../lib/api';
 import {
   runProsodyPasses,
@@ -29,6 +31,7 @@ type Phase = 'idle' | 'confirm' | 'running';
 
 export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean }) {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const stage = useAppSelector(
     (s) => s.ui?.stage as { bookId?: string; currentChapterId?: number | null } | undefined,
   );
@@ -78,11 +81,21 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
     const controller = new AbortController();
     abortRef.current = controller;
     dispatch(prosodyActions.setActive({ bookId, progress: 0, label: 'Detecting emotions' }));
+    /* #3435 — the run is not aborted when the user leaves the book, and the
+       server never writes these annotations: they land in the manuscript slice,
+       which holds ONE book and is saved into the book the stage names. Bind the
+       gate to the book at click time and apply only while the slices hold it
+       AND the stage names it (same gate as the layout's auto-trigger). */
+    const book = { bookId, manuscriptId: store.getState().manuscript.manuscriptId as string };
     try {
-      const { totalAnnotations, totalChapters } = await runProsodyPasses(bookId, {
+      const { totalAnnotations, totalChapters, skipped } = await runProsodyPasses(bookId, {
         dispatch,
         signal: controller.signal,
         chapterId: scope.chapterId,
+        canApply: () => {
+          const s = store.getState();
+          return selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true;
+        },
         onProgress: (fraction, d) => {
           setProgress(fraction);
           setDetail(d);
@@ -93,7 +106,9 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
       });
       const lines = `${totalAnnotations} line${totalAnnotations === 1 ? '' : 's'}`;
       setStatus(
-        scope.chapterId != null
+        skipped > 0
+          ? 'Some lines were not saved because you left this book — run it again to fill them.'
+          : scope.chapterId != null
           ? `Tagged ${lines} in this chapter.`
           : `Tagged ${lines} across ${totalChapters} chapter${totalChapters === 1 ? '' : 's'}.`,
       );

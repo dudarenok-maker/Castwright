@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { configureStore } from '@reduxjs/toolkit';
+import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { manuscriptSlice } from '../store/manuscript-slice';
@@ -86,6 +86,93 @@ describe('fs-33 — DetectEmotionsButton', () => {
     expect(detectEmotions).toHaveBeenCalledWith('b1', expect.anything());
     expect(detectInstruct).toHaveBeenCalledWith('b1', expect.anything());
     await waitFor(() => expect(screen.getByTestId('detect-emotions-done')).toBeTruthy());
+  });
+
+  describe('#3435 — a run only lands in its own book', () => {
+    /* The run outlives the book on screen. A root reducer wrapper stands in for
+       the layout's navigation: it swaps the stage and the manuscript slice to
+       book Y (the persistence middleware saves that slice into the book the
+       stage names, so a write into it is a write into Y's files). */
+    function makeSwitchableStore() {
+      const combined = combineReducers({
+        manuscript: manuscriptSlice.reducer,
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        prosody: prosodySlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+      });
+      const yState = {
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          manuscriptId: 'mY',
+          sentences: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'Y line' } as never],
+        },
+        stage: { kind: 'ready', bookId: 'bY', view: 'manuscript', currentChapterId: 1 } as never,
+      };
+      const rootReducer = (state: ReturnType<typeof combined> | undefined, action: any) => {
+        if (action.type === 'test/switchToY') {
+          const base = combined(state, { type: 'noop' });
+          return { ...base, manuscript: yState.manuscript, ui: { ...base.ui, stage: yState.stage } };
+        }
+        return combined(state, action);
+      };
+      return configureStore({
+        reducer: rootReducer as never,
+        preloadedState: {
+          manuscript: {
+            ...manuscriptSlice.getInitialState(),
+            manuscriptId: 'mX',
+            sentences: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'X line' } as never],
+          },
+          ui: {
+            ...uiSlice.getInitialState(),
+            stage: { kind: 'ready', bookId: 'bX', view: 'manuscript', currentChapterId: 1 } as never,
+          },
+        } as never,
+      }) as unknown as ReturnType<typeof makeStore>;
+    }
+
+    function deferredRun() {
+      let resolveEmotions!: () => void;
+      detectEmotions.mockImplementation((_id: string, opts?: any) => {
+        if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
+        return new Promise((resolve) => {
+          resolveEmotions = () => {
+            opts.onAnnotation({ chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'angry' }] });
+            resolve({ annotatedChapters: 1, totalAnnotations: 1 });
+          };
+        });
+      });
+      detectInstruct.mockResolvedValue({ annotatedChapters: 0, totalAnnotations: 0 });
+      return () => resolveEmotions();
+    }
+
+    it('drops annotations that resolve after the user moved to another book', async () => {
+      const resolve = deferredRun();
+      const store = makeSwitchableStore();
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
+
+      store.dispatch({ type: 'test/switchToY' });
+      resolve();
+
+      await waitFor(() => expect(store.getState().prosody.activeStreams['bX']).toBeUndefined());
+      expect(store.getState().manuscript.sentences[0].emotion).toBeUndefined();
+      expect(store.getState().manuscript.sentences[0].text).toBe('Y line');
+    });
+
+    it('control: staying on the book applies the annotations', async () => {
+      const resolve = deferredRun();
+      const store = makeSwitchableStore();
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
+
+      resolve();
+
+      await waitFor(() => expect(store.getState().manuscript.sentences[0].emotion).toBe('angry'));
+    });
   });
 
   it('confirm dialog mentions that text will change (natural reactions)', () => {
