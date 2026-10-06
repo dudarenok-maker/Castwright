@@ -506,6 +506,10 @@ export function tryParseApiError(
   return null;
 }
 
+/* Only Gemini's key-rejection signals — the envelope reasons and the "API key [<redacted key>] not
+   valid / expired" wording. A bare mention of an `api_key` request field is a request-shape error. */
+const GEMINI_KEY_REJECTED = /\bAPI_KEY_(?:INVALID|EXPIRED)\b|\bAPI key(?: \S{1,80})? (?:not valid|expired)\b/i;
+
 /* classifyStatus, ported from analysis.ts — now emits FailureCode per the
    spec-A2 mapping (rate_limit→analyzer-rate-limit, daily_quota→analyzer-daily-quota,
    unavailable/internal→analyzer-unreachable, invalid_key→auth, bad_request→unknown). */
@@ -524,7 +528,7 @@ function statusToFailureCode(status: number | undefined, message?: string, keyTe
   /* #3084 PR 3b review — Gemini answers a bad or expired key with a 400 whose envelope
      reason is API_KEY_INVALID / API_KEY_EXPIRED. That is a credentials problem (main's
      signature scan read it as `auth`), not a request-shape one. */
-  if (status === 400) return keyText && /API[_ ]?KEY/i.test(keyText) ? 'auth' : 'analyzer-request-rejected';
+  if (status === 400) return keyText && GEMINI_KEY_REJECTED.test(keyText) ? 'auth' : 'analyzer-request-rejected';
   return 'unknown';
 }
 

@@ -1037,6 +1037,20 @@ describe('Gemini invalid / expired API key (#3084 PR 3b review 🟠1)', () => {
     const err = Object.assign(new Error('API key not valid. Please pass a valid API key.'), { status: 400 });
     expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('auth');
   });
+
+  it('a 400 that only names an api_key request field stays analyzer-request-rejected', () => {
+    const err = new ApiError({
+      status: 400,
+      message:
+        'got status: 400 Bad Request. {"error":{"code":400,"message":"Invalid JSON payload received. Unknown name \\"api_key\\": Cannot find field.","status":"INVALID_ARGUMENT"}}',
+    });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('analyzer-request-rejected');
+  });
+
+  it('a 400 whose key was redacted out of the wording still classifies as auth', () => {
+    const err = Object.assign(new Error('API key [redacted] not valid. Please pass a valid API key.'), { status: 400 });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('auth');
+  });
 });
 
 describe('auth remediation names its own key (#3084 PR 3b review 🟠2)', () => {
