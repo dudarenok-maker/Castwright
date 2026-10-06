@@ -160,7 +160,8 @@ export const FAILURE_REMEDIATIONS = {
     userMessage: 'Authentication failed — a service refused its credentials (the API key or access setting is missing, wrong or expired).',
     remediation:
       'Check the key for the service named in the message, then retry: the Gemini API key (Settings, or ' +
-      "GEMINI_API_KEY in server/.env), the Ollama server's access settings, or the endpoint's API key.",
+      'GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), ' +
+      "the Ollama server's access settings, or the endpoint's API key.",
   },
   'xtts-speaker-desync': {
     userMessage:

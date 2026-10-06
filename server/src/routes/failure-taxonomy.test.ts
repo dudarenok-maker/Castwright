@@ -1106,7 +1106,9 @@ describe('Gemini auth remediation names both key homes (#3084 PR 3b review pass 
     });
     const r = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
     expect(r.code).toBe('auth');
-    expect(r.remediation).toBe('Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env), then retry the chapter.');
+    expect(r.remediation).toBe(
+      'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry the chapter.',
+    );
   });
 
   it("selection's missing-key event carries a remediation that agrees with its message", () => {
@@ -1196,5 +1198,22 @@ describe('analyzer-endpoint-missing copy is true today (#3084 PR 3b review 🟡2
       expect(text).not.toMatch(/not configured/);
     }
     expect(live.userMessage).toContain('"gone"');
+  });
+});
+
+describe('Gemini key advice says the env var wins and needs a restart (#3084 PR 3b review pass 3 🟡2)', () => {
+  it('the key-rejection 400 remediation', () => {
+    const err = new ApiError({
+      status: 400,
+      message:
+        'got status: 400 Bad Request. {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}',
+    });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').remediation).toBe(
+      'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry the chapter.',
+    );
+  });
+
+  it('the static auth remediation keeps the restart', () => {
+    expect(FAILURE_REMEDIATIONS.auth.remediation).toContain('restart the server after changing it');
   });
 });

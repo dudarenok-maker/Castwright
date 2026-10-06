@@ -696,7 +696,8 @@ const REQUEST_SHAPING_SETTINGS: Record<TransportKind, string[]> = {
 
 const KEY_SETTING: Record<TransportKind, string> = {
   ollama: "the Ollama server's access settings",
-  gemini: 'the Gemini API key (Settings, or GEMINI_API_KEY in server/.env)',
+  gemini:
+    'the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it)',
   openai: "the endpoint's API key",
 };
 
