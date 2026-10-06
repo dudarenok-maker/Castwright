@@ -37,13 +37,21 @@ function enotfoundAgent(): Agent {
   return agent;
 }
 
-/* A daemon that accepts the TCP connection then closes the socket before the
-   first body byte, producing a stream-incomplete error from the real transport. */
+/* A reachable daemon that answers /api/chat with 200 headers, then closes the socket
+   before the first body byte (ollama.ts:758-761 → classifyConnectError). */
 async function resetBeforeFirstByteUrl(): Promise<string> {
-  const server = createHttpServer((_req, res) => {
-    res.writeHead(200, { 'content-type': 'application/x-ndjson' });
-    res.flushHeaders();
-    setTimeout(() => res.destroy(), 20);
+  const server = createHttpServer((req, res) => {
+    if (req.url !== '/api/chat') {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{"error":"not found"}');
+      return;
+    }
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(200, { 'content-type': 'application/x-ndjson' });
+      res.flushHeaders();
+      setTimeout(() => res.destroy(), 20);
+    });
   });
   servers.push(server);
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
