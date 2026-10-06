@@ -23,6 +23,15 @@
  *      both requests block until one of them hits `withKeyLock`'s acquisition
  *      timeout.
  *
+ *      The per-book REVISIONS lock (`revisions:<abs bookDir>`,
+ *      revisions-store.ts, plan 285) is a LEAF outside this order: its holder
+ *      writes only revisions.json and acquires no other lock, so it can never
+ *      be one half of a cycle. Never take any lock while holding it.
+ *      Accept/reject (and the legacy `…/audio/previous` routes) additionally
+ *      serialise per chapter on a `revision-op:<bookDir>:<chapterId>` key held
+ *      across the whole audio step; its order is `revision-op` -> `revisions`
+ *      — never take `revision-op` while holding `revisions`.
+ *
  * SINCE #2260 THIS MUTEX HAS A TIMEOUT (file-lock.ts): each acquisition is
  * bounded at 10s and throws `LockAcquisitionTimeoutError`, naming the key and
  * pointing at rules 1 and 4. That replaces the permanent, diagnostic-free hang

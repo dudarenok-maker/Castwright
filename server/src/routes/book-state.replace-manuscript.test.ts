@@ -139,4 +139,40 @@ describe('replace-manuscript handler', () => {
     const res = await request(app).post(`/api/books/${bookId}/replace-manuscript`);
     expect(res.status).toBe(400);
   });
+
+  it('plan 285 — replace resets revisions.json to a NEW fileId and never deletes it', async () => {
+    const revisionsPath = join(bookDir, '.audiobook', 'revisions.json');
+    const OLD = '000000000000001-aaaaaaaa';
+    writeFileSync(
+      revisionsPath,
+      JSON.stringify({
+        schema: 1,
+        fileId: OLD,
+        rev: 7,
+        pending: [
+          { id: 'revision:1:1', chapterId: 1, characterId: 'wren', playable: true, hasPreviousAudio: true, segments: [], origin: 'server' },
+        ],
+      }),
+    );
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
+    expect(res.status).toBe(200);
+    expect(existsSync(revisionsPath)).toBe(true);
+    const after = JSON.parse(readFileSync(revisionsPath, 'utf8'));
+    expect(after).toMatchObject({ schema: 1, rev: 0, pending: [] });
+    expect(after.fileId).not.toBe(OLD);
+  });
+
+  it('plan 285 — replace refuses a NEWER-schema revisions.json BEFORE touching the manuscript or cast', async () => {
+    const revisionsPath = join(bookDir, '.audiobook', 'revisions.json');
+    writeFileSync(revisionsPath, JSON.stringify({ schema: 2, pending: [] }));
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/schema=2/);
+    expect(readFileSync(join(bookDir, 'manuscript.md'), 'utf8')).toBe(ORIGINAL_BODY);
+    expect(existsSync(join(bookDir, '.audiobook', 'cast.json'))).toBe(true);
+  });
 });

@@ -8,6 +8,8 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { makeScratchRepo } from '../lib/scratch-repo.mjs';
+import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 import {
   checkRegisterRowCitations,
   extractCitations,
@@ -19,8 +21,38 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-register-row-citations.mjs');
 
-function runCli(args) {
-  return spawnSync(process.execPath, [CLI_PATH, ...args], { encoding: 'utf8', timeout: 60000, windowsHide: true });
+function runCli(args, cliPath = CLI_PATH) {
+  // The real CLI scans the real repo (ambient git env honoured); any other
+  // cliPath is a scratch-repo copy, where an inherited GIT_INDEX_FILE would be
+  // the real index.
+  return spawnSync(process.execPath, [cliPath, ...args], {
+    encoding: 'utf8',
+    timeout: 60000,
+    windowsHide: true,
+    env: cliPath === CLI_PATH ? process.env : scrubGitEnvForThrowawayRepo(),
+  });
+}
+
+// #3413 — the CLI mutation tests below mutate a scratch copy of the CLI, never
+// the real tracked file: an in-place rewrite + restore moves ctime/ino and
+// makes verify-cache's stat-identity guard refuse to cache test:hooks. The CLI
+// scans docs/testing/ + docs/features/ (SCAN_PREFIXES) and imports its three
+// sibling modules, so that is all the copy needs.
+// no-inplace-tracked-rewrite.test.mjs pins it.
+const REAL_REPO = join(HERE, '..', '..');
+function makeSandbox() {
+  const { root, dispose } = makeScratchRepo(REAL_REPO, {
+    trackedDirs: ['docs/testing', 'docs/features'],
+    files: [
+      'scripts/check-register-row-citations.mjs',
+      'scripts/check-onbox-register.mjs',
+      'scripts/publish-token.mjs',
+      'scripts/git-env.mjs',
+      'scripts/lib/read-normalized.mjs',
+      'scripts/lib/is-main-module.mjs',
+    ],
+  });
+  return { cli: join(root, 'scripts', 'check-register-row-citations.mjs'), dispose };
 }
 
 // A minimal register carrying two real rows: A1 and E1. Every fixture below
@@ -646,20 +678,16 @@ test('CLI mutation: if scannedFiles() returns empty, the check would find zero c
   );
   assert.notEqual(mutated, original, 'mutation should have changed the file');
 
+  const sandbox = makeSandbox();
   try {
-    writeFileSync(CLI_PATH, mutated);
-    const mutantResult = runCli([]);
+    writeFileSync(sandbox.cli, mutated);
+    const mutantResult = runCli([], sandbox.cli);
     // With zero files scanned, we should get zero citations reported
     assert.match(mutantResult.stdout, /0 citation\(s\)/);
     // The mutation should be detectable by checking that citation count dropped
     assert.notEqual(mutantResult.stdout, baseline.stdout);
   } finally {
-    writeFileSync(CLI_PATH, original);
-    assert.equal(
-      Buffer.compare(Buffer.from(readFileSync(CLI_PATH, 'utf8')), Buffer.from(original)),
-      0,
-      'file should be restored to original'
-    );
+    sandbox.dispose();
   }
 });
 
@@ -687,9 +715,10 @@ test('CLI mutation: if SCAN_PREFIXES drops docs/features/**, the check would mis
   );
   assert.notEqual(mutated, original, 'mutation should have changed SCAN_PREFIXES');
 
+  const sandbox = makeSandbox();
   try {
-    writeFileSync(CLI_PATH, mutated);
-    const mutantResult = runCli([]);
+    writeFileSync(sandbox.cli, mutated);
+    const mutantResult = runCli([], sandbox.cli);
     // With docs/features/** excluded, the scan should find fewer citations.
     // Parse the mutant's citation count and assert it is strictly LOWER than baseline.
     const mutantMatch = mutantResult.stdout.match(/(\d+) citation\(s\)/);
@@ -700,12 +729,7 @@ test('CLI mutation: if SCAN_PREFIXES drops docs/features/**, the check would mis
       `expected mutation to reduce citations from ${baselineCitationCount} to less, but got ${mutantCitationCount}`
     );
   } finally {
-    writeFileSync(CLI_PATH, original);
-    assert.equal(
-      Buffer.compare(Buffer.from(readFileSync(CLI_PATH, 'utf8')), Buffer.from(original)),
-      0,
-      'file should be restored to original'
-    );
+    sandbox.dispose();
   }
 });
 
@@ -721,18 +745,14 @@ test('CLI mutation: if REGISTER_PATH points at a nonexistent file, the check wou
   );
   assert.notEqual(mutated, original, 'mutation should have changed REGISTER_PATH');
 
+  const sandbox = makeSandbox();
   try {
-    writeFileSync(CLI_PATH, mutated);
-    const mutantResult = runCli([]);
+    writeFileSync(sandbox.cli, mutated);
+    const mutantResult = runCli([], sandbox.cli);
     // Mutating REGISTER_PATH to a nonexistent file should cause the checker to error
     assert.notEqual(mutantResult.status, 0, 'should fail when register file does not exist');
   } finally {
-    writeFileSync(CLI_PATH, original);
-    assert.equal(
-      Buffer.compare(Buffer.from(readFileSync(CLI_PATH, 'utf8')), Buffer.from(original)),
-      0,
-      'file should be restored to original'
-    );
+    sandbox.dispose();
   }
 });
 

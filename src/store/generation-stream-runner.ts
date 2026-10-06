@@ -33,6 +33,7 @@ import { notificationsActions } from './notifications-slice';
 import { retryQueueEntry } from './queue-thunks';
 import type { ActiveStreamSnapshot, ChaptersState } from './chapters-slice';
 import type { GenerationTick, TtsModelKey } from '../lib/types';
+import type { ReviewRequest } from '../lib/types';
 
 /** What the stream should render. Mirrors the old `chapters.pendingRegen`
     shape (`{ chapterIds, force }`) so the same-book reconcile path can pass
@@ -58,6 +59,8 @@ export interface StreamOpenOpts {
       confirmed for Qwen→Kokoro fallback. Threaded to the server so the worker
       renders straight through instead of re-parking the chapter. */
   fallbackConfirmed?: boolean;
+  /** Plan 285 — the entry's A/B review intent, forwarded to the server. */
+  review?: ReviewRequest;
 }
 
 /** Composite handle key — `${bookId}::${chapterId}` (or `${bookId}::*` when
@@ -319,6 +322,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
       force: spec?.force,
       ...(opts.queueEntryId ? { queueEntryId: opts.queueEntryId } : {}),
       ...(opts.fallbackConfirmed ? { fallbackConfirmed: true } : {}),
+      ...(opts.review ? { review: opts.review } : {}),
       /* The mock implementation reads live chapter state via this callback;
          the real fetch-based stream ignores it. Either way we close over the
          store, not over any view's props, so generation continues after the

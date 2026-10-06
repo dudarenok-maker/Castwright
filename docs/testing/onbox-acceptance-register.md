@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 33 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 5 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,16 +563,30 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**58 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**59 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-04 (#3435, plan 285), 56 → 58.** Rows **B103** (abort
+> **Last change: 2026-10-04 (#3435, plan 285), 57 → 59.** Rows **B103** (abort
 > and drain on a local Ollama analyzer: a stopped main run releases the model
 > before a chapter Retry starts) and **B104** (a Resume on a cast-confirmed book
 > keeps every designed voice) added from plan 285's "On-box acceptance owed".
 > Group B 3 → 5. `next-id` bumped B103 → B105 in the same change.
-
+>
+> **Prior change: 2026-10-03 (#3414), 56 → 57.** Added **A112** — the
+> qa-repair centroid filter now drops an audition centroid whose recorded
+> voice differs from the character's CURRENT cast voice (rather than keying
+> off the chapter's last-render snapshot), so an acoustic-only flagged line
+> lands in `stillSuspect` without being re-rendered instead of being judged
+> against the old voice (a line also flagged by signal QA/ASR is still
+> re-rendered and can be accepted on signal QA alone); in-book rows are
+> unchanged (#3517); the regression suite (#3449, #3460) covers the logic branch
+> against a mocked embedder, but nothing has yet proven the repair's
+> accept/reject decision against a real sidecar's ECAPA embedding on real
+> hardware. Group A 33 → 34. `next-id` bumped A112 → A113 in the same
+> change.
+>
+>
 > **Prior change: 2026-09-27 (#3084 wave 2b), 53 → 56.** Rows **B102** (capacity
 > recalibration — the measurement owed before any capacity default changes),
 > **E110** (Gemini thinking-window timing on real chapters — a measurement
@@ -1596,7 +1610,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A112 -->
+<!-- next-id: A113 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -5754,6 +5768,116 @@ is the next release cut, per CLAUDE.md's release-notes-gate step), Windows
 for the sleep-prevention leg specifically; the other two legs are
 platform-general. *Criteria:* the three observations above; issue #3406 and
 PR #3404's manifest-guard section for the exact defect each leg closes.
+
+### A112 · The qa-repair repair pass stops judging a new take against a reassigned character's stale audition centroid ([Castwright#3414](https://github.com/dudarenok-maker/Castwright/issues/3414)) · **a real sidecar with a real speaker-embedding (ECAPA) model, a Qwen or Coqui character (scoreBook skips Kokoro), Render-integrity QA (voice match) and Auto-fix voice mismatches both switched on, a book with at least two already-rendered chapters**
+
+`chapter-qa-repair.ts`'s centroid filter derived its comparison voice from
+the chapter's last full-render snapshot (`snap?.resolvedVoiceName`) rather
+than the cast's live voice, so a character reassigned to a new voice since
+that render still had their *old* voice's audition centroid treated as
+usable — silently judging a repair against the wrong reference. The fix
+derives the comparison voice the same way the re-render itself does
+(`pickVoiceForEngine(resolveCharacterEngine(current, engine), ...)`, keyed
+off the live cast entry), and the regression suite (`#3449`, `#3460`)
+exercises both the stale-drop and the kept/gate paths against a mocked
+embedder. Neither test touches a real sidecar or a real ECAPA model.
+
+**What to observe, concretely.** Preconditions, all required:
+
+- a **Qwen or Coqui** character (`scoreBook` skips Kokoro characters,
+  `render-integrity/aggregate.ts`, so a Kokoro character produces no verdict
+  and observes nothing) whose row in
+  `<bookDir>/audio/render-integrity.centroids.json` has
+  `referenceKind: "audition"`;
+- **two** already-rendered chapters (call them X and Y), each with a line of
+  that character carrying a `voice-mismatch` / `fixable: true` row in its
+  `<slug>.render-integrity.json`;
+- the character's `auditionVoice.voiceName` in that same centroids row equals
+  the character's snapshot voice in **both** X and Y. `scoreBook` takes the
+  audition voice from the character's FIRST chapter in book order
+  (`aggregate.ts`), so after an earlier partial re-render (or a voice change)
+  the two can differ — and the control then correctly drops the reference,
+  which would misread as a Fail. If they differ, re-render so they match
+  before starting;
+- **Render-integrity QA (voice match)** (`qa.speaker.enabled`, env
+  `SEG_SPK_ENABLED`) switched **on** *before the chapters are rendered* — it
+  defaults off, and it is what makes `scoreBook` run at all, writing the
+  centroids and verdict files (`generation.ts` returns early while off).
+  Scoring runs from chapter completion (and the resume path), so turn it on
+  first and then render, rather than expecting files for already-finished
+  chapters;
+- **Auto-fix voice mismatches** (`qa.speaker.autoRepair`, env
+  `SEG_SPK_AUTO_REPAIR`) switched **on** — it defaults off, and while off the
+  route never merges a verdict-file row into its candidates, so nothing below
+  can be observed;
+- that character's engine ready (for Qwen: installed and loaded) and no
+  analysis edits since the render — an unavailable Qwen engine or a diverged
+  segment also lands a line in `stillSuspect` without re-rendering it, which
+  would masquerade as the failure the control guards.
+
+**Getting a book into that state.** A `fixable: true` row needs a *severe*
+voice-mismatch on a stochastic engine (`aggregate.ts`), and an
+`audition`-referenced (thin) character with severe misfires in two separate
+chapters is rare in a healthy book. Nothing in the app manufactures one. Either
+hunt: with Render-integrity QA on, render a book and inspect each
+`<slug>.render-integrity.json` for `fixable: true` rows of a character whose
+centroids row says `referenceKind: "audition"`; or set one up deliberately —
+a thin character (few lines, so the centroid falls back to audition) whose
+voice or engine settings you vary between renders so some lines come out in a
+clearly different voice. This may take several attempts; if no such character
+turns up, record the row as not yet runnable rather than as passed.
+
+**How to trigger it.** The route is
+`POST /api/books/<bookId>/chapters/<chapterId>/audio-qa-repair` (an SSE
+stream). Its UI trigger is the Listen view's chapter-row button "Re-record the
+flagged lines in this chapter" — **not** Fix audio, which is the per-character
+re-record modal and posts to `…/splice` instead. That button renders only when
+the chapter's `audioQa.status` is `suspect`, which is derived from signal QA
+(`finalize-chapter-write.ts`), not from voice-match verdicts — so for an
+acoustic-only chapter it usually will not appear. Then send the request
+directly: `curl.exe -N -X POST -H "Content-Type: application/json" -d
+'{"dryRun":false}' http://localhost:8080/api/books/<bookId>/chapters/<chapterId>/audio-qa-repair`
+(omitting `dryRun` runs a read-only scan). Use `curl.exe`, not `curl`: in
+Windows PowerShell 5.1 `curl` is an alias for `Invoke-WebRequest` and rejects
+these flags (and PowerShell's quoting may need the JSON body written as
+`'{\"dryRun\":false}'`). `http://localhost:8080` is the default `npm start`
+address, and loopback requests bypass the LAN token (`server/src/lan-auth.ts`);
+only in LAN HTTPS mode with a `LAN_AUTH_TOKEN` set, from another device, use
+`https://<host>:<port>` and present the token. Read every observation from the
+stream's `data:` frames — in the curl output, or in the browser devtools
+Network tab (that request → EventStream/Response) when the button was used.
+
+- **Pick the line.** In the `qa_scan` frame, the chosen line's entry in
+  `flagged` must show `acousticOnly: true`. A line also flagged by signal QA
+  or ASR (a union candidate, `acoustic: true` without `acousticOnly`) is
+  re-rendered and can be accepted on signal QA alone, so it proves nothing
+  about the centroid filter in either step.
+- **Control (unchanged voice), chapter X.** Run the repair on X without
+  touching the character's voice. **Pass:** the stream carries at least one
+  `progress` frame with that line's `segmentIndex` — it was re-rendered and
+  voice-checked against the audition centroid — whether `qa_repair_complete`
+  then lists it in `repaired` or (a genuinely poor new take) in
+  `stillSuspect`. **Fail:** no `progress` frame for that `segmentIndex` and
+  the line in `stillSuspect` — the centroid was wrongly dropped. This is the
+  part only hardware can prove: the real `pickVoiceForEngine` output must
+  equal the real stamped `auditionVoice.voiceName`.
+- **Reassign, no re-render, chapter Y.** Change that character's voice
+  (keep the same engine and tier), do NOT re-render anything, then run the
+  repair on **Y** — not X: an accepted take on X rewrites its verdict row to
+  `voice-match` / `fixable: false`, so re-running X would give `flagged: []`.
+  Centroids are book-wide, so the reassignment applies to Y's line too.
+  **Pass:** that line (`acousticOnly: true` in `qa_scan`) gets **no**
+  `progress` frame and appears in `qa_repair_complete`'s `stillSuspect` — the
+  stale `audition` centroid was dropped, not reused. An inconclusive verdict
+  here is the designed outcome, not a regression. Known limit: an in-book
+  centroid is still judged against the old voice (#3517) — do not expect it to
+  switch.
+
+*Needs:* a real GPU box with the speech sidecar and a real ECAPA
+speaker-embedding model running (the mocked unit tests cover the logic branch
+but never the real embedding path). *Criteria:* the observations above; issue
+#3414 and the mutation-tested regression split (#3449 stale-drop, #3460
+kept-and-gates) for the exact defect this closes.
 
 ## Group B — local Ollama analyzer only
 
