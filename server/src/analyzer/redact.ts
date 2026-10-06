@@ -8,9 +8,12 @@ export function redactKnownSecrets(
   text: string,
   secrets: ReadonlyArray<string | null | undefined>,
 ): string {
-  const usable = [
-    ...new Set(secrets.filter((s): s is string => typeof s === 'string' && s.length >= 8)),
-  ].sort((a, b) => b.length - a.length);
+  const raw = secrets.filter((s): s is string => typeof s === 'string' && s.length >= 8);
+  /* A key holding `"` or `\` also appears in its JSON-escaped spelling once an error body
+     is stringified, so that spelling is redacted too (it differs only for those keys). */
+  const usable = [...new Set([...raw, ...raw.map((s) => JSON.stringify(s).slice(1, -1))])].sort(
+    (a, b) => b.length - a.length,
+  );
   let out = text;
   for (const secret of usable) out = out.split(secret).join(REDACTED);
   return out;

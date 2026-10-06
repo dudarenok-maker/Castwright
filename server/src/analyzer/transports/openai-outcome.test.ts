@@ -143,6 +143,15 @@ describe('classifyOpenAIOutcome — order (#3084 decision 1c)', () => {
     expect((out as Error & { cause?: unknown }).cause).toBeUndefined();
   });
 
+  it('4b. a 400 body echoing a key that holds a quote or backslash is redacted in its JSON-escaped spelling too (P22)', () => {
+    for (const key of ['sk-abc"defgh12345', 'sk-abc\\defgh12345']) {
+      const err = new APIError(400, { message: `invalid key ${key} supplied` }, 'bad request', new Headers());
+      const out = classifyOpenAIOutcome(err, ctx({ secrets: [key] }));
+      expect((out as AnalyzerHttpError).bodyExcerpt).not.toContain('defgh12345');
+      expect((out as AnalyzerHttpError).bodyExcerpt).toContain('invalid key [redacted] supplied');
+    }
+  });
+
   it('5. an in-stream error event (no status) becomes AnalyzerHttpError(0)', () => {
     const err = new APIError(undefined, { message: 'context exceeded' }, 'context exceeded', undefined);
     const out = classifyOpenAIOutcome(err, ctx({ headersReceived: true }));

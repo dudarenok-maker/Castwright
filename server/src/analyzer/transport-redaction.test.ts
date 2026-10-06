@@ -161,6 +161,26 @@ describe('Gemini transport redaction (#3084 P22)', () => {
     }
   });
 
+  it('an ApiError whose JSON envelope echoes a key holding a quote or backslash is redacted in its escaped spelling', async () => {
+    const KEY = 'AIzaSy-esc"aped\\secret-1';
+    const key = KEY;
+    _setUserSettingsCacheForTest({ geminiApiKey: key });
+    const upstream = new ApiError({
+      status: 400,
+      message: `got status: 400 Bad Request. ${JSON.stringify({ error: { code: 400, message: `API key ${key} not valid`, status: 'INVALID_ARGUMENT' } })}`,
+    });
+    const err = await new GeminiTransport({ apiKey: 'unused-by-a-stub-client', model: 'gemini-3.5-flash-lite', client: rejectingClient(upstream) })
+      .send(geminiRequest)
+      .then(() => null, (e: unknown) => e);
+    const classified = classifyAnalysisFailure(err, 'Gemini');
+    for (const s of [...surfaces(err), classified.userMessage, classified.detail ?? '', ...lines]) {
+      expect(s).not.toContain('esc"aped');
+      /* both spellings of each special character: raw and JSON-escaped */
+      expect(s).not.toContain(JSON.stringify(KEY).slice(1, -1));
+      expect(s).not.toContain(KEY);
+    }
+  });
+
   it('an error with no secret in it is rethrown as the same object, so every existing outcome is unchanged', async () => {
     const upstream = new ApiError({
       status: 400,
