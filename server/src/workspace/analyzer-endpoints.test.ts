@@ -123,6 +123,15 @@ describe('create / update / delete / key decisions', () => {
       expect(JSON.stringify([badBase, badUnload])).not.toContain(url);
     },
   );
+  it("refuses `http:lab/v1` (no //), the shape the server's own message rules out (#3525 review pass 2)", () => {
+    const r = refusal(() => applyCreate(empty, { ...base, baseUrl: 'http:lab/v1' }));
+    expect(r).toMatchObject({ status: 400, refusal: 'invalid' });
+    expect(r.issues).toEqual([{ path: ['baseUrl'], message: 'Base URL must start with http:// or https://.' }]);
+  });
+  it.each(['HTTP://LAB:8080/v1', 'Https://lab/v1'])('accepts the mixed-case scheme %s and stores it as typed', (url) => {
+    const next = applyCreate(empty, { ...base, baseUrl: url });
+    expect(next.analyzerEndpoints[0].baseUrl).toBe(url);
+  });
   it('friendlyEndpointIssueMessage falls back to the raw zod message for a path/code this map does not cover', () => {
     const issue = { code: 'custom', path: ['extraParams'], message: 'made up for this test' } as unknown as Parameters<typeof friendlyEndpointIssueMessage>[1];
     expect(friendlyEndpointIssueMessage('extraParams', issue)).toBe('made up for this test');

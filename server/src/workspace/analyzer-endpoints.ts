@@ -15,11 +15,16 @@ export const REASONING_STYLES = ['reasoning_effort', 'enable_thinking', 'not_con
 /* #3525 review — an endpoint is reached over HTTP(S) only. `z.string().url()`
    alone accepts ftp:, file:, javascript:, ws: and mailto:; the opaque ones have
    origin "null", so key binding compared "null" === "null", and every request to
-   an ftp:/ws: base URL read as "unreachable". Exported for the Detect route. */
+   an ftp:/ws: base URL read as "unreachable". The raw string must also open with
+   `http://` or `https://` (any case — openapi.yaml spells that as a [Hh][Tt]… pattern),
+   which refuses `http:lab/v1`, a URL that parses but is not what the refusal text asks
+   for. Exported for the Detect route. */
 export const httpUrlSchema = z
   .string()
   .url()
-  .refine((u) => !URL.canParse(u) || /^https?:$/.test(new URL(u).protocol), { message: 'must use http: or https:' });
+  .refine((u) => !URL.canParse(u) || (/^https?:$/.test(new URL(u).protocol) && /^https?:\/\//i.test(u)), {
+    message: 'must use http: or https:',
+  });
 
 export const analyzerEndpointSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]{1,40}$/),

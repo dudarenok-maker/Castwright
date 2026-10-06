@@ -76,6 +76,17 @@ describe('POST /api/analyzer/endpoints/detect-context (#3084 PR 3b)', () => {
     expect(res.body.code).toBe('invalid');
   });
 
+  it('refuses `http:lab/v1` (no //) with 400, and accepts an upper-case scheme (#3525 review pass 2)', async () => {
+    const refused = await request(app).post('/api/analyzer/endpoints/detect-context').send({ baseUrl: 'http:lab/v1', flavor: 'llama.cpp' });
+    expect(refused.status).toBe(400);
+    expect(refused.body.code).toBe('invalid');
+    const origin = await upstream();
+    const ok = await request(app)
+      .post('/api/analyzer/endpoints/detect-context')
+      .send({ baseUrl: `${origin.replace('http', 'HTTP')}/v1`, flavor: 'llama.cpp' });
+    expect(ok.status).toBe(200);
+  });
+
   it('llama-swap without allowModelLoad is refused and never contacts the server', async () => {
     const origin = await upstream();
     const res = await request(app)

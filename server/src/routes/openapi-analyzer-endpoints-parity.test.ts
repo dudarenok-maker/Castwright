@@ -59,6 +59,15 @@ describe('openapi.yaml analyzer-endpoint contract', () => {
     expect(patchProperty('analyzerEndpointKeyStatus')).toMatch(/\n {10}readOnly: true\n/);
   });
 
+  it('every endpoint URL field carries the case-insensitive http(s) pattern the server accepts (#3525 review pass 2)', () => {
+    /* httpUrlSchema tests the scheme case-insensitively (HTTP://LAB/v1 is stored as typed), and JSON
+       Schema patterns have no flags, so the contract spells the case-folding out. */
+    const urlLines = yaml.split('\n').filter((l) => /^\s+(?:baseUrl|unloadUrl): \{ type: string, format: uri/.test(l));
+    expect(urlLines).toHaveLength(5);
+    for (const line of urlLines) expect(line).toContain("pattern: '^[Hh][Tt][Tt][Pp][Ss]?://'");
+    expect(yaml).not.toContain("pattern: '^https?://'");
+  });
+
   it('the /key route documents its 400 body as the {error, code, issues} refusal', () => {
     const put = slice(pathBlock('/api/analyzer/endpoints/{endpointId}/key'), /\n {4}put:\n/, /$/);
     expect(response(put, '400')).toContain("$ref: '#/components/schemas/AnalyzerEndpointRefusal'");
