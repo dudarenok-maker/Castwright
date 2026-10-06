@@ -61,18 +61,29 @@ describe('mock analyzer endpoint API', () => {
   it('refuses to delete an endpoint that a saved setting or a model-id override references, as the server does, then deletes it once unreferenced', async () => {
     await api.createAnalyzerEndpoint(input('m-ref'));
     _setMockUserSettingsForTest({
-      analyzerPhase0Model: 'openai:m-ref::qwen3',
+      defaultAnalysisModel: 'openai:m-ref::qwen3',
       configOverrides: { 'analyzer.phase1.model': 'openai:m-ref::m', 'analyzer.phase0.model': 'openai:m-ref2::m' },
     });
     const r = await refusal(api.deleteAnalyzerEndpoint('m-ref'));
     expect(r.code).toBe('referenced');
     expect(r.issues).toEqual([
-      { path: [], message: 'Account setting "analyzerPhase0Model"' },
+      { path: [], message: 'Account setting "defaultAnalysisModel"' },
       { path: [], message: 'Advanced setting "analyzer.phase1.model"' },
     ]);
-    _setMockUserSettingsForTest({ analyzerPhase0Model: null, configOverrides: {} });
+    _setMockUserSettingsForTest({ defaultAnalysisModel: '', configOverrides: {} });
     const s = await api.deleteAnalyzerEndpoint('m-ref');
     expect(s.analyzerEndpoints?.some((e) => e.id === 'm-ref')).toBe(false);
+  });
+
+  it('allows deleting an endpoint named only by the read-only effective analyzerPhase0Model/analyzerPhase1Model fields, as the server does (A5; #3525 review)', async () => {
+    await api.createAnalyzerEndpoint(input('m-effective'));
+    _setMockUserSettingsForTest({
+      analyzerPhase0Model: 'openai:m-effective::qwen3',
+      analyzerPhase1Model: 'openai:m-effective::qwen3',
+    } as Parameters<typeof _setMockUserSettingsForTest>[0]);
+    const s = await api.deleteAnalyzerEndpoint('m-effective');
+    expect(s.analyzerEndpoints?.some((e) => e.id === 'm-effective')).toBe(false);
+    _setMockUserSettingsForTest({ analyzerPhase0Model: null, analyzerPhase1Model: null } as Parameters<typeof _setMockUserSettingsForTest>[0]);
   });
 
   it('until PRs 5a/5b, refuses a non-default reasoning level and a non-empty payload, as the server does', async () => {

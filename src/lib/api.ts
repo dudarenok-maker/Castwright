@@ -7674,13 +7674,14 @@ async function mockDeleteAnalyzerEndpoint(id: string): Promise<UserSettings> {
   await wait(50);
   mockEndpointOrThrow(id);
   /* The server's references, labels and grammar (findEndpointReferences in
-     server/src/workspace/analyzer-endpoints.ts): the three model-id account
-     fields, then the three model-id overrides. `configOverrides` is server-side
+     server/src/workspace/analyzer-endpoints.ts): the model-id account field
+     (defaultAnalysisModel — the phase models are config overrides only, #3084
+     A5), then the three model-id overrides. `configOverrides` is server-side
      only in OpenAPI, so the mock reads it structurally. */
   const names = (v: unknown) => typeof v === 'string' && parseEndpointModelId(v.trim())?.endpointId === id;
   const overrides = (MOCK_USER_SETTINGS as { configOverrides?: Record<string, unknown> }).configOverrides ?? {};
   const refs = [
-    ...(['defaultAnalysisModel', 'analyzerPhase0Model', 'analyzerPhase1Model'] as const)
+    ...(['defaultAnalysisModel'] as const)
       .filter((f) => names(MOCK_USER_SETTINGS[f]))
       .map((f) => `Account setting "${f}"`),
     ...(['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.personaGeneration.engine'] as const)

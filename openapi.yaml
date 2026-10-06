@@ -242,6 +242,10 @@ paths:
                 properties:
                   error: { type: string }
                   code: { type: string, enum: [invalid, model-required, model-load-confirmation-required, auth] }
+                  details:
+                    type: array
+                    items: { type: string }
+                    description: 'Present when `code` is `invalid` — one message per failed field, never a value.'
         '502':
           description: The server could not be reached or did not report n_ctx
           content:
@@ -293,9 +297,10 @@ paths:
       operationId: deleteAnalyzerEndpoint
       description: |
         #3084 — refused with 409 while a saved setting references the endpoint
-        (defaultAnalysisModel, analyzerPhase0Model, analyzerPhase1Model, or the
-        analyzer.phase0.model / analyzer.phase1.model /
-        analyzer.personaGeneration.engine overrides); `issues` lists them.
+        (defaultAnalysisModel, or the analyzer.phase0.model /
+        analyzer.phase1.model / analyzer.personaGeneration.engine overrides);
+        `issues` lists them. The read-only effective `analyzerPhase0Model` /
+        `analyzerPhase1Model` response fields are not references.
       responses:
         '200':
           description: Updated settings
@@ -342,7 +347,10 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/UserSettings' }
         '400':
-          description: Malformed body
+          description: Malformed body, or a key with a control character (`code` is `invalid`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
         '404':
           description: No endpoint with this id
           content:
@@ -5332,6 +5340,7 @@ components:
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
         analyzerEndpoints:
           type: array
+          readOnly: true
           items: { $ref: '#/components/schemas/AnalyzerEndpoint' }
           description: |
             #3084 — named OpenAI-compatible analyzer endpoints. Written only by

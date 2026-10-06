@@ -181,9 +181,10 @@ export interface paths {
         /**
          * Delete an analyzer endpoint and its key
          * @description #3084 — refused with 409 while a saved setting references the endpoint
-         *     (defaultAnalysisModel, analyzerPhase0Model, analyzerPhase1Model, or the
-         *     analyzer.phase0.model / analyzer.phase1.model /
-         *     analyzer.personaGeneration.engine overrides); `issues` lists them.
+         *     (defaultAnalysisModel, or the analyzer.phase0.model /
+         *     analyzer.phase1.model / analyzer.personaGeneration.engine overrides);
+         *     `issues` lists them. The read-only effective `analyzerPhase0Model` /
+         *     `analyzerPhase1Model` response fields are not references.
          */
         delete: operations["deleteAnalyzerEndpoint"];
         options?: never;
@@ -3764,7 +3765,7 @@ export interface components {
              * @description #3084 — named OpenAI-compatible analyzer endpoints. Written only by
              *     the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
              */
-            analyzerEndpoints?: components["schemas"]["AnalyzerEndpoint"][];
+            readonly analyzerEndpoints?: components["schemas"]["AnalyzerEndpoint"][];
             /** @description Per endpoint id — whether a key is saved and still bound to its base URL's origin. Keys are never returned. */
             readonly analyzerEndpointKeyStatus?: {
                 [key: string]: components["schemas"]["AnalyzerEndpointKeyStatus"];
@@ -7019,6 +7020,8 @@ export interface operations {
                         error: string;
                         /** @enum {string} */
                         code: "invalid" | "model-required" | "model-load-confirmation-required" | "auth";
+                        /** @description Present when `code` is `invalid` — one message per failed field, never a value. */
+                        details?: string[];
                     };
                 };
             };
@@ -7148,12 +7151,14 @@ export interface operations {
                     "application/json": components["schemas"]["UserSettings"];
                 };
             };
-            /** @description Malformed body */
+            /** @description Malformed body, or a key with a control character (`code` is `invalid`) */
             400: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
             };
             /** @description No endpoint with this id */
             404: {
