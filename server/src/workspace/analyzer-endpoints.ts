@@ -51,7 +51,7 @@ export interface EndpointState {
 
 /** The saved-settings slice findEndpointReferences reads. UserSettings is assignable.
     #3084 divergence A5 (re-pin to 80be2f1d) — `analyzerPhase0Model` / `analyzerPhase1Model`
-    are GONE from the schema on `main`: `migrateLegacyAnalyzerModelFields`
+    are GONE from stored settings on `main` (still read-only effective values on the response): `migrateLegacyAnalyzerModelFields`
     (`user-settings.ts:115-171` at 80be2f1d) moves any saved phase model into
     `configOverrides['analyzer.phase{0,1}.model']` at read time, and the schema
     never re-adds the two fields. An earlier draft of this task (written
