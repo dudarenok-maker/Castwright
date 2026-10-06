@@ -121,9 +121,11 @@ export const FAILURE_REMEDIATIONS = {
       'The analyzer request was stopped because it ran past a time limit without finishing, instead of ' +
       'being left to hang.',
     remediation:
-      "Retry the chapter. If it recurs, raise the time limit of the engine that timed out — 'Gemini request " +
-      "ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) for Gemini, or the endpoint's request time limit for an " +
-      "OpenAI-compatible endpoint — lower the model's reasoning level, or switch to a faster analyzer model.",
+      "Retry the chapter. If it recurs: when a thinking Gemini model stayed silent before answering, raise " +
+      "'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most " +
+      "290000 ms, below the 300 s network timeout); when a request ran too long overall, raise 'Gemini request " +
+      "ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) in Advanced Settings, or the endpoint's request time limit " +
+      'for an OpenAI-compatible endpoint. Or switch to a faster analyzer model.',
   },
   'analyzer-daily-quota': {
     userMessage: "The analyzer's free-tier daily quota is exhausted.",

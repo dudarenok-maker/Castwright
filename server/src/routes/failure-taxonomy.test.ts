@@ -1067,3 +1067,17 @@ describe('auth remediation names its own key (#3084 PR 3b review 🟠2)', () => 
     expect(ev.message).not.toContain('TTS');
   });
 });
+
+describe('analyzer-timeout remediation (#3084 PR 3b review 🟠4)', () => {
+  it("a thinking-idle timeout's remediation names the same control its message names, plus the request ceiling", () => {
+    const r = classifyAnalysisFailure(new AnalyzerTimeoutError('gemini', 'gemini-3.6-flash', 121_000, 'thinking-idle'), 'Gemini 3.6 Flash');
+    expect(r.userMessage).toContain("'Gemini thinking idle timeout'");
+    expect(r.remediation).toContain("'Gemini thinking idle timeout'");
+    expect(r.remediation).toContain('analyzer.gemini.thinkingIdleTimeoutMs');
+    expect(r.remediation).toContain("'Gemini request ceiling'");
+  });
+
+  it("promises no reasoning-level control before wave 5", () => {
+    expect(FAILURE_REMEDIATIONS['analyzer-timeout'].remediation).not.toContain('reasoning level');
+  });
+});
