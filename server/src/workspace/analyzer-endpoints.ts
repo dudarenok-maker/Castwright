@@ -12,12 +12,21 @@ import { AnalyzerKeyOriginError } from '../analyzer/errors.js';
 
 export const REASONING_STYLES = ['reasoning_effort', 'enable_thinking', 'not_controllable'] as const;
 
+/* #3525 review — an endpoint is reached over HTTP(S) only. `z.string().url()`
+   alone accepts ftp:, file:, javascript:, ws: and mailto:; the opaque ones have
+   origin "null", so key binding compared "null" === "null", and every request to
+   an ftp:/ws: base URL read as "unreachable". Exported for the Detect route. */
+export const httpUrlSchema = z
+  .string()
+  .url()
+  .refine((u) => !URL.canParse(u) || /^https?:$/.test(new URL(u).protocol), { message: 'must use http: or https:' });
+
 export const analyzerEndpointSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]{1,40}$/),
   name: z.string().trim().min(1).max(80),
-  baseUrl: z.string().url(),
+  baseUrl: httpUrlSchema,
   gpu: z.string().regex(/^(none|any|[a-z]+:\d+)$/),
-  unloadUrl: z.string().url().optional(),
+  unloadUrl: httpUrlSchema.optional(),
   concurrency: z.number().int().min(1).max(16).default(1),
   requestCeilingMs: z.number().int().min(60_000).max(14_400_000).default(1_800_000),
   structuredOutput: z.enum(['schema', 'json', 'off']).default('schema'),
@@ -150,6 +159,12 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
     3d's UI test can assert against the real server string instead of
     re-deriving it by hand. */
 export function friendlyEndpointIssueMessage(path: string, issue: z.ZodIssue): string {
+  if (path === 'baseUrl' && issue.code === 'custom') {
+    return 'Base URL must start with http:// or https://.';
+  }
+  if (path === 'unloadUrl' && issue.code === 'custom') {
+    return 'Unload URL must start with http:// or https://.';
+  }
   if (path === 'baseUrl' && issue.code === 'invalid_format') {
     return 'Base URL must be a valid URL, e.g. http://127.0.0.1:8080/v1.';
   }

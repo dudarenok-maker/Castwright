@@ -56,6 +56,13 @@ describe('POST /api/analyzer/endpoints', () => {
     expect(res.body.analyzerEndpoints[0].gpu).toBe('none');
   });
 
+  it('refuses an ftp: base URL with 400 naming baseUrl (#3525 review)', async () => {
+    const res = await request(app).post('/api/analyzer/endpoints').send({ ...lab, baseUrl: 'ftp://lab/v1' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid');
+    expect(res.body.issues.some((i: { path: string[] }) => i.path.join('.') === 'baseUrl')).toBe(true);
+  });
+
   it('refuses a missing context size with 400 naming contextTokens (F5: {error, issues})', async () => {
     const noContext = { id: lab.id, name: lab.name, baseUrl: lab.baseUrl };
     const res = await request(app).post('/api/analyzer/endpoints').send(noContext);

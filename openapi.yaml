@@ -5364,12 +5364,12 @@ components:
       properties:
         id: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
         name: { type: string, minLength: 1, maxLength: 80 }
-        baseUrl: { type: string, format: uri }
+        baseUrl: { type: string, format: uri, pattern: '^https?://' }
         gpu:
           type: string
           pattern: '^(none|any|[a-z]+:\d+)$'
           description: '`none`, `any`, or a device key such as `cuda:0`.'
-        unloadUrl: { type: string, format: uri, description: 'Same origin as baseUrl; may contain `{model}`.' }
+        unloadUrl: { type: string, format: uri, pattern: '^https?://', description: 'Same origin as baseUrl; may contain `{model}`.' }
         concurrency: { type: integer, minimum: 1, maximum: 16 }
         requestCeilingMs: { type: integer, minimum: 60000, maximum: 14400000 }
         structuredOutput: { type: string, enum: [schema, json, 'off'] }
@@ -5387,9 +5387,9 @@ components:
       properties:
         id: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
         name: { type: string, minLength: 1, maxLength: 80 }
-        baseUrl: { type: string, format: uri }
+        baseUrl: { type: string, format: uri, pattern: '^https?://' }
         gpu: { type: string, pattern: '^(none|any|[a-z]+:\d+)$' }
-        unloadUrl: { type: string, format: uri }
+        unloadUrl: { type: string, format: uri, pattern: '^https?://' }
         concurrency: { type: integer, minimum: 1, maximum: 16 }
         requestCeilingMs: { type: integer, minimum: 60000, maximum: 14400000 }
         structuredOutput: { type: string, enum: [schema, json, 'off'] }
@@ -5427,7 +5427,7 @@ components:
       type: object
       required: [baseUrl, flavor]
       properties:
-        baseUrl: { type: string, format: uri }
+        baseUrl: { type: string, format: uri, pattern: '^https?://' }
         model: { type: string }
         apiKey: { type: string }
         endpointId: { type: string, pattern: '^[a-z0-9-]{1,40}$' }

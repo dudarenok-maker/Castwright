@@ -18,6 +18,7 @@ import {
   applyDelete,
   applyKey,
   applyUpdate,
+  httpUrlSchema,
   keyOriginMatches,
   type EndpointState,
 } from '../workspace/analyzer-endpoints.js';
@@ -67,7 +68,7 @@ analyzerEndpointsRouter.post('/', async (req: Request, res: Response) => {
 });
 
 const detectSchema = z.object({
-  baseUrl: z.string().url(),
+  baseUrl: httpUrlSchema,
   model: z.string().trim().min(1).optional(),
   apiKey: z.string().trim().min(1).optional(),
   endpointId: z.string().regex(ENDPOINT_ID_PATTERN).optional(),

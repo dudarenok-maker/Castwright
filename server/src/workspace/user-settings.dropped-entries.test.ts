@@ -59,6 +59,28 @@ describe('listDroppedEndpointEntries / acknowledgeDroppedEndpointEntries (#3084 
     });
   });
 
+  it('drops and archives a stored endpoint whose base URL has a non-http(s) scheme, keeping the valid one (#3525 review)', async () => {
+    writeFileSync(
+      USER_SETTINGS_PATH,
+      JSON.stringify({
+        analyzerEndpoints: [
+          { id: 'ftp-box', name: 'FTP', baseUrl: 'ftp://lab/v1', gpu: 'any', contextTokens: 4096 },
+          { id: 'good', name: 'Good', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 4096 },
+        ],
+      }),
+    );
+    _resetUserSettingsCache();
+    await quietly(async () => {
+      const settings = await readUserSettings();
+      expect(settings.analyzerEndpoints.map((e) => e.id)).toEqual(['good']);
+      const dropped = await listDroppedEndpointEntries();
+      expect(dropped).toHaveLength(1);
+      expect(dropped[0]).toMatchObject({ kind: 'endpoint', endpointId: 'ftp-box' });
+      expect(dropped[0].issues.some((c) => c.startsWith('baseUrl:'))).toBe(true);
+      expect(readFileSync(ARCHIVE, 'utf8')).toContain('ftp-box');
+    });
+  });
+
   it('lists a dropped key entry with the origin only, never the key, and asserts its issues', async () => {
     writeFileSync(USER_SETTINGS_PATH, JSON.stringify({ analyzerEndpointKeys: { lab: { origin: 99, key: 'sk-listed-secret-1' } } }));
     _resetUserSettingsCache();

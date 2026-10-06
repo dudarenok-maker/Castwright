@@ -111,6 +111,18 @@ describe('create / update / delete / key decisions', () => {
     /* No-echo, still: the submitted values never appear anywhere in the refusal. */
     expect(JSON.stringify([badUrl, bigCeiling])).not.toMatch(/not a url|99000000|99_000_000/);
   });
+  it.each(['ftp://lab/v1', 'file:///etc/passwd', 'javascript:alert(1)', 'ws://lab/v1', 'mailto:a@b.c'])(
+    'refuses a %s base URL and unload URL at save, naming the field and never the value (#3525 review)',
+    (url) => {
+      const badBase = refusal(() => applyCreate(empty, { ...base, baseUrl: url }));
+      expect(badBase).toMatchObject({ status: 400, refusal: 'invalid' });
+      expect(badBase.issues).toEqual([{ path: ['baseUrl'], message: 'Base URL must start with http:// or https://.' }]);
+      const badUnload = refusal(() => applyCreate(empty, { ...base, unloadUrl: url }));
+      expect(badUnload).toMatchObject({ status: 400, refusal: 'invalid' });
+      expect(badUnload.issues.some((i) => i.path.join('.') === 'unloadUrl')).toBe(true);
+      expect(JSON.stringify([badBase, badUnload])).not.toContain(url);
+    },
+  );
   it('friendlyEndpointIssueMessage falls back to the raw zod message for a path/code this map does not cover', () => {
     const issue = { code: 'custom', path: ['extraParams'], message: 'made up for this test' } as unknown as Parameters<typeof friendlyEndpointIssueMessage>[1];
     expect(friendlyEndpointIssueMessage('extraParams', issue)).toBe('made up for this test');

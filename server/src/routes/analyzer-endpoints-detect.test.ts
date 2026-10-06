@@ -70,6 +70,12 @@ describe('POST /api/analyzer/endpoints/detect-context (#3084 PR 3b)', () => {
     expect(res.body).toEqual({ contextTokens: 16384, source: 'llama.cpp /props' });
   });
 
+  it('refuses a non-http(s) base URL with 400 and never contacts anything (#3525 review)', async () => {
+    const res = await request(app).post('/api/analyzer/endpoints/detect-context').send({ baseUrl: 'ftp://lab/v1', flavor: 'llama.cpp' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('invalid');
+  });
+
   it('llama-swap without allowModelLoad is refused and never contacts the server', async () => {
     const origin = await upstream();
     const res = await request(app)
