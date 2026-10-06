@@ -88,6 +88,18 @@ describe('mutateUserSettings (#3084 PR 3b)', () => {
     expect(knownAnalyzerSecrets()).toContain('sk-endpoint-secret-1');
   });
 
+  it('knownAnalyzerSecrets includes an env-only GEMINI_API_KEY, with no key saved in settings (#3525 review)', async () => {
+    const prior = process.env.GEMINI_API_KEY;
+    process.env.GEMINI_API_KEY = '  AIza-env-only-secret-1  ';
+    try {
+      await readUserSettings(); // no saved Gemini key: the env value is the only source
+      expect(knownAnalyzerSecrets()).toContain('AIza-env-only-secret-1');
+    } finally {
+      if (prior === undefined) delete process.env.GEMINI_API_KEY;
+      else process.env.GEMINI_API_KEY = prior;
+    }
+  });
+
   it('loadKnownAnalyzerSecrets reads settings when the cache is cold (the boot read is not awaited)', async () => {
     writeFileSync(
       USER_SETTINGS_PATH,
