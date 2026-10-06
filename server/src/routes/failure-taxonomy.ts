@@ -1041,8 +1041,9 @@ export function analyzerSelectionErrorEvent(
   return {
     kind: 'error',
     code: failure.code,
-    /* The signature's `auth` copy ("Gemini TTS authentication failed") is wrong here: no request was
-       sent, and it drops where the setting lives. Main's own sentence says both. */
+    /* The signature's generic `auth` copy ("A service refused its credentials") is wrong here: no
+       request was sent, and it does not say where the setting lives. Main's own sentence says both,
+       and the remediation below names the same two homes. */
     message: missingKey ? raw : failure.userMessage,
     remediation: missingKey ? `Check ${KEY_SETTING.gemini}, then retry the chapter.` : failure.remediation,
     ...(detail ? { detail } : {}),

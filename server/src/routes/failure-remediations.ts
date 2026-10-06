@@ -157,9 +157,10 @@ export const FAILURE_REMEDIATIONS = {
       'this check active at all.',
   },
   auth: {
-    userMessage: 'Gemini TTS authentication failed — check GEMINI_API_KEY.',
+    userMessage: 'A service refused its credentials — the API key or access setting is missing, wrong or expired.',
     remediation:
-      'Verify GEMINI_API_KEY in server/.env is set and valid, restart the server, then retry.',
+      'Check the key for the service named in the message, then retry: the Gemini API key (Settings, or ' +
+      "GEMINI_API_KEY in server/.env), the Ollama server's access settings, or the endpoint's API key.",
   },
   'xtts-speaker-desync': {
     userMessage:
