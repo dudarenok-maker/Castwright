@@ -155,7 +155,8 @@ describe('Gemini transport redaction (#3084 P22)', () => {
     /* A line the code under test wrote: logGenerateFailed (W1 Task 1.9). */
     expect(lines.some((l) => l.startsWith('[gemini] generate failed'))).toBe(true);
     const classified = classifyAnalysisFailure(err, 'Gemini');
-    expect(classified.code).toBe('analyzer-request-rejected');
+    /* "API key … not valid" is Gemini's invalid-key envelope, so it classifies as auth. */
+    expect(classified.code).toBe('auth');
     for (const s of [...surfaces(err), classified.userMessage, classified.detail ?? '', ...lines]) {
       expect(s).not.toContain(SECRET);
     }
