@@ -136,6 +136,8 @@ vi.mock('../routes/prefetch', () => ({
 
 import { Layout } from '../components/layout';
 import { uiActions } from './ui-slice';
+import { queueActions } from './queue-slice';
+import { selectAnalysisBusyForBook } from './analysis-substage-selectors';
 import { api } from '../lib/api';
 import { persistenceMiddleware } from './persistence-middleware';
 
@@ -1105,10 +1107,11 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     expect(detectEmotionsMock).not.toHaveBeenCalled();
   });
 
-  it('no loop: a run started on open that skips everything is not re-run during the same visit', async () => {
+  it('cannot apply: an open book whose slices hold another manuscriptId than its read is never run', async () => {
     /* The slices hold the book under another manuscriptId than its book-state
-       read reports (the mock app's uploaded book does this), so the gate skips
-       every annotation even though the book is open. */
+       read reports (the mock app's uploaded book does this), so the gate would
+       skip every annotation: the run is not started at all — no pill, no busy
+       window, and nothing to loop on. */
     libBooks = [makeBook('b1', 'cast_pending')];
     let reads = 0;
     getBookStateMock.mockImplementation(async (id: string) => {
@@ -1116,13 +1119,93 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
       return reads++ === 0 ? st : { ...st, state: { ...st.state, manuscriptId: 'mns_other' } };
     });
     const store = makeStore(true);
+    const seen: string[] = [];
+    store.subscribe(() => {
+      if (store.getState().prosody.activeStreams.b1) seen.push('b1');
+    });
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     renderAnyPath(store);
-    await waitFor(() => expect(detectInstructMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(reads).toBeGreaterThanOrEqual(2));
     await settle(300);
 
-    expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+    expect(seen).toEqual([]);
     expect(watermarkPuts('b1')).toEqual([]);
+  });
+
+  /* #3435 (PR #3505 CI) — the open re-run is background work: it never blocks
+     or delays what the user does on the book. */
+  const queued = (bookId: string) =>
+    queueActions.setSnapshot({
+      entries: [
+        { id: 'q1', bookId, chapterId: 1, scope: 'this', addedAt: '', status: 'queued', order: 0 } as never,
+      ],
+      paused: true,
+    });
+
+  async function openWithHeldRun() {
+    let release!: () => void;
+    detectEmotionsMock.mockImplementation(async (_id: string, opts: Opts) => {
+      await new Promise<void>((r) => (release = r));
+      emit(opts, [ch1, ch2]);
+      return { totalAnnotations: 2, annotatedChapters: 2 };
+    });
+    libBooks = [makeBook('b1', 'cast_pending')];
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
+    return { store, release: () => release() };
+  }
+
+  it('background: the open re-run shows its pill but never makes the book busy', async () => {
+    const { store, release } = await openWithHeldRun();
+    expect(store.getState().prosody.activeStreams.b1).toMatchObject({ background: true });
+    expect(selectAnalysisBusyForBook(store.getState() as never, 'b1')).toBe(false);
+    await act(async () => release());
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+  });
+
+  it('yields: generation work queued for the book mid-run ends the run at once; nothing more lands, the book stays un-marked', async () => {
+    const { store, release } = await openWithHeldRun();
+    await act(async () => {
+      store.dispatch(queued('b1'));
+    });
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+    await act(async () => release());
+    await settle(300);
+    expect(emotionOf(store, 1)).toBeUndefined();
+    expect(watermarkPuts('b1')).toEqual([]);
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(1); // not restarted this visit
+  });
+
+  it('yields: a manual run that takes the book mid-run keeps its own pill', async () => {
+    const { store, release } = await openWithHeldRun();
+    await act(async () => {
+      store.dispatch(prosodyActions.setActive({ bookId: 'b1', progress: 0, label: 'Manual' }));
+    });
+    await act(async () => release());
+    await settle(300);
+    expect(store.getState().prosody.activeStreams.b1).toMatchObject({ label: 'Manual' });
+    expect(emotionOf(store, 1)).toBeUndefined(); // the background run applied nothing
+    expect(watermarkPuts('b1')).toEqual([]);
+  });
+
+  it('waits: an open book with generation work queued is not run until that work is gone', async () => {
+    libBooks = [makeBook('b1', 'cast_pending')];
+    const store = makeStore(true);
+    store.dispatch(queued('b1'));
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b1'));
+    await settle(200);
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      store.dispatch(queueActions.setSnapshot({ entries: [], paused: true }));
+    });
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
   });
 
   it('no double run: reopening the book and a library transition while its run is in flight start nothing new', async () => {

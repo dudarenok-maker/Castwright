@@ -105,7 +105,7 @@ import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
 import { runProsodyPasses, buildProsodyProgressPayload } from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
-import { selectAnalysisSubstage } from '../store/analysis-substage-selectors';
+import { selectAnalysisSubstage, selectBookHasForegroundWork } from '../store/analysis-substage-selectors';
 import { shouldAutoTriggerProsody } from '../store/should-auto-trigger-prosody';
 import { ToastStack } from './toast-stack';
 import { TourOverlay } from './tour/tour-overlay';
@@ -1217,7 +1217,27 @@ export function Layout() {
   const prosodyOpenHandled = useRef<string | null>(null);
   const prosodyOpenDeferred = useRef<string | null>(null);
   const [prosodyRerunTick, setProsodyRerunTick] = useState(0);
-  const runAutoProsody = (id: string) => {
+  /* #3435 (PR #3505 CI) — the open trigger's run is BACKGROUND work: its pill
+     shows, but it never makes the book busy (analysis-substage-selectors), so
+     Generate / Resume / Design / Detect and the queue stay open while it runs.
+     It yields instead: the moment the user starts work of their own on the
+     book (selectBookHasForegroundWork) it is aborted and its pill cleared; the
+     watermark stays unset, so the book is run again the next time it is
+     opened. The run in flight, if any. */
+  const prosodyBackground = useRef<{ id: string; ctrl: AbortController } | null>(null);
+  useEffect(
+    () =>
+      store.subscribe(() => {
+        const bg = prosodyBackground.current;
+        if (!bg || bg.ctrl.signal.aborted) return;
+        const s = store.getState();
+        if (!selectBookHasForegroundWork(s, bg.id)) return;
+        bg.ctrl.abort();
+        if (s.prosody.activeStreams[bg.id]?.background) dispatch(prosodyActions.clear({ bookId: bg.id }));
+      }),
+    [store, dispatch],
+  );
+  const runAutoProsody = (id: string, { background = false }: { background?: boolean } = {}) => {
     if (prosodyInFlight.current.has(id)) return; // already running here
     if (!shouldAutoTriggerProsody(store.getState(), id)) return; // already running here / cross-tab
     prosodyInFlight.current.add(id);
@@ -1225,11 +1245,37 @@ export function Layout() {
       // Detached: not tied to effect cleanup — survives a book-switch.
       let pillActive = false;
       let skippedWork = false;
+      let ctrl: AbortController | null = null;
       try {
         const st = await api.getBookState(id);
         if (!st || st.state.prosodyEnabled === false) return; // authoritative opt-out
         if (st.state.prosodyAnnotated) return;               // watermark → no-op
-        dispatch(prosodyActions.setActive({ bookId: id, progress: 0, label: 'Detecting emotions' }));
+        const book = { bookId: id, manuscriptId: st.state.manuscriptId };
+        const isOpen = () => {
+          const s = store.getState();
+          return selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true;
+        };
+        if (background) {
+          /* Never start a run that could apply nothing (the slices hold the
+             book under another manuscriptId than its read reports, or it is no
+             longer open), nor one the user's own work would end at once — the
+             open trigger looks again when that work is gone. */
+          if (!isOpen()) return;
+          if (selectBookHasForegroundWork(store.getState(), id)) {
+            if (prosodyOpenHandled.current === id) prosodyOpenHandled.current = null;
+            return;
+          }
+          ctrl = new AbortController();
+          prosodyBackground.current = { id, ctrl };
+        }
+        dispatch(
+          prosodyActions.setActive({
+            bookId: id,
+            progress: 0,
+            label: 'Detecting emotions',
+            ...(background ? { background: true } : {}),
+          }),
+        );
         pillActive = true;
         /* #3435 — the run outlives the book on screen, and the server never
            writes these annotations: they land in the manuscript slice, which
@@ -1240,18 +1286,21 @@ export function Layout() {
            book. A skipped annotation leaves the book un-marked, like a
            partial failure, and the open trigger below runs it again
            (fill-only) the next time the book is open — at once, if it is
-           open again by the time this run ends. */
-        const book = { bookId: id, manuscriptId: st.state.manuscriptId };
+           open again by the time this run ends. A background run that yielded
+           applies nothing more and leaves the book un-marked. */
+        const signal = ctrl?.signal;
         const { failed, skipped } = await runProsodyPasses(id, {
           dispatch,
-          onProgress: (f, d) =>
-            dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(id, f, d))),
-          canApply: () => {
-            const s = store.getState();
-            return selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true;
+          ...(signal ? { signal } : {}),
+          onProgress: (f, d) => {
+            if (!signal?.aborted)
+              dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(id, f, d)));
           },
+          canApply: () => !signal?.aborted && isOpen(),
         });
-        if (failed === 0 && skipped === 0) {
+        if (signal?.aborted) {
+          prosodyConsidered.current.delete(id); // yielded → run again on the next open
+        } else if (failed === 0 && skipped === 0) {
           await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
         } else {
           prosodyConsidered.current.delete(id); // partial / skipped → allow fill-only re-run
@@ -1260,7 +1309,12 @@ export function Layout() {
       } catch {
         prosodyConsidered.current.delete(id); // transient error → retry on next transition
       } finally {
-        if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
+        if (ctrl) {
+          // Only its own pill: a manual run may have taken the book's entry.
+          if (prosodyBackground.current?.ctrl === ctrl) prosodyBackground.current = null;
+          if (pillActive && store.getState().prosody.activeStreams[id]?.background)
+            dispatch(prosodyActions.clear({ bookId: id }));
+        } else if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
         prosodyInFlight.current.delete(id);
         /* The open trigger left this visit to this run: re-arm it so the
            skipped work is filled now, while the book is open. Only then — a
@@ -1325,7 +1379,10 @@ export function Layout() {
       ? bookId
       : null;
   const openProsodyBusy = useAppSelector((s) =>
-    openProsodyBookId ? !shouldAutoTriggerProsody(s, openProsodyBookId) : false,
+    openProsodyBookId
+      ? !shouldAutoTriggerProsody(s, openProsodyBookId) ||
+        selectBookHasForegroundWork(s, openProsodyBookId)
+      : false,
   );
   useEffect(() => {
     const id = openProsodyBookId;
@@ -1341,9 +1398,9 @@ export function Layout() {
       prosodyOpenDeferred.current = id;
       return;
     }
-    if (openProsodyBusy) return; // a manual run or a review — looked at again when it ends
+    if (openProsodyBusy) return; // the user's own work on the book — looked at again when it ends
     prosodyOpenHandled.current = id;
-    runAutoProsody(id);
+    runAutoProsody(id, { background: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openProsodyBookId, completeKey, openProsodyBusy, prosodyRerunTick]);
 

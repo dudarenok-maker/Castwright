@@ -4,6 +4,8 @@ import {
   selectReviewRunningForBook,
   selectAnalysisBusyForBook,
   selectAnalysisSubstage,
+  selectBookHasForegroundWork,
+  analysisBusyMessage,
 } from './analysis-substage-selectors';
 import type { RootState } from './index';
 
@@ -19,6 +21,51 @@ describe('analysis-substage selectors', () => {
     expect(selectAnalysisBusyForBook(s, 'b1')).toBe(true);
     expect(selectAnalysisBusyForBook(s, 'b2')).toBe(true);
     expect(selectAnalysisBusyForBook(s, 'b3')).toBe(false);
+  });
+
+  it('#3435 — a background prosody run (the open-book re-run) never makes its book busy', () => {
+    const s = mk({ b1: { progress: 10, label: 'Detecting emotions', background: true } as never }, {});
+    expect(selectProsodyRunningForBook(s, 'b1')).toBe(false);
+    expect(selectAnalysisBusyForBook(s, 'b1')).toBe(false);
+    expect(analysisBusyMessage(s, 'b1')).toBeNull();
+    // ...but it still shows in the pill.
+    expect(selectAnalysisSubstage(s)).toMatchObject({ kind: 'prosody', percent: 10 });
+  });
+
+  it('#3435 — foreground work: anything the user started on the book', () => {
+    const base = mk({}, {}) as unknown as Record<string, unknown>;
+    const st = (over: Record<string, unknown>) => ({ ...base, ...over }) as unknown as RootState;
+    expect(selectBookHasForegroundWork(st({}), 'b1')).toBe(false);
+    // a background prosody run of its own is not foreground work
+    expect(
+      selectBookHasForegroundWork(
+        st({ prosody: { activeStreams: { b1: { progress: 0, label: 'x', background: true } } } }),
+        'b1',
+      ),
+    ).toBe(false);
+    expect(
+      selectBookHasForegroundWork(st({ prosody: { activeStreams: { b1: { progress: 0, label: 'x' } } } }), 'b1'),
+    ).toBe(true);
+    expect(
+      selectBookHasForegroundWork(st({ scriptReview: { activeStreams: { b1: { progress: 0, label: 'x' } } } }), 'b1'),
+    ).toBe(true);
+    const entry = (bookId: string, status: string) => ({ id: 'q', bookId, chapterId: 1, status });
+    expect(selectBookHasForegroundWork(st({ queue: { entries: [entry('b1', 'queued')] } }), 'b1')).toBe(true);
+    expect(selectBookHasForegroundWork(st({ queue: { entries: [entry('b1', 'in_progress')] } }), 'b1')).toBe(true);
+    expect(selectBookHasForegroundWork(st({ queue: { entries: [entry('b1', 'done')] } }), 'b1')).toBe(false);
+    expect(selectBookHasForegroundWork(st({ queue: { entries: [entry('b2', 'queued')] } }), 'b1')).toBe(false);
+    expect(
+      selectBookHasForegroundWork(st({ chapters: { activeStreams: { 'b1::1': { bookId: 'b1' } } } }), 'b1'),
+    ).toBe(true);
+    expect(
+      selectBookHasForegroundWork(st({ chapters: { activeStreams: { 'b2::1': { bookId: 'b2' } } } }), 'b1'),
+    ).toBe(false);
+    expect(
+      selectBookHasForegroundWork(st({ castDesign: { active: { bookId: 'b1', state: 'running' } } }), 'b1'),
+    ).toBe(true);
+    expect(
+      selectBookHasForegroundWork(st({ castDesign: { active: { bookId: 'b1', state: 'done' } } }), 'b1'),
+    ).toBe(false);
   });
 
   it('selectAnalysisSubstage prefers prosody, then lowest bookId', () => {
