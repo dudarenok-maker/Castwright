@@ -981,7 +981,7 @@ paths:
         '404': { description: Book not found }
         '413': { description: Upload exceeds 10 MB }
         '415': { description: 'The declared content type is not `image/jpeg` or `image/png`, or the upload content is neither a PNG nor a JPEG (checked by its leading bytes; a valid PNG or JPEG with the other label is accepted)' }
-        '502': { description: PNG → JPEG transcode failed }
+        '502': { description: 'PNG → JPEG transcode failed, or the JPEG could not be decoded' }
 
   /api/books/{bookId}/cover/framing:
     patch:

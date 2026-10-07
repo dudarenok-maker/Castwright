@@ -7614,7 +7614,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description PNG → JPEG transcode failed */
+            /** @description PNG → JPEG transcode failed, or the JPEG could not be decoded */
             502: {
                 headers: {
                     [name: string]: unknown;
