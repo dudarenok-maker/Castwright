@@ -99,8 +99,10 @@ export async function writeUploadedCover(
   } else {
     // Keep the original bytes (no re-encode), but a bare FF D8 FF prefix is not
     // enough: decode it so non-image bytes are never stored as the cover.
+    // failOn 'none' keeps a damaged-but-real JPEG (e.g. missing only its EOI
+    // marker) accepted, as it was before the decode check and as PNG is.
     try {
-      await sharp(buffer).raw().toBuffer();
+      await sharp(buffer, { failOn: 'none' }).raw().toBuffer();
     } catch (e) {
       throw new UploadError('transcode_failed', `JPEG decode failed: ${(e as Error).message}`);
     }

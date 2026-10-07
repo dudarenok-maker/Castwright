@@ -268,6 +268,36 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
     expect(res.body.kind).toBe('invalid_mime');
   });
 
+  it('415s on a real PNG and a real JPEG labelled image/gif', async () => {
+    const sharp = (await import('sharp')).default;
+    const create = { width: 4, height: 4, channels: 3 as const, background: '#336699' };
+    for (const bytes of [
+      await sharp({ create }).png().toBuffer(),
+      await sharp({ create }).jpeg().toBuffer(),
+    ]) {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cover/upload`)
+        .attach('image', bytes, { filename: 'x.gif', contentType: 'image/gif' });
+      expect(res.status).toBe(415);
+      expect(res.body.kind).toBe('invalid_mime');
+    }
+  });
+
+  it('415s on a real PNG and a real JPEG with an empty content type', async () => {
+    const sharp = (await import('sharp')).default;
+    const create = { width: 4, height: 4, channels: 3 as const, background: '#336699' };
+    for (const bytes of [
+      await sharp({ create }).png().toBuffer(),
+      await sharp({ create }).jpeg().toBuffer(),
+    ]) {
+      const res = await request(app)
+        .post(`/api/books/${bookId}/cover/upload`)
+        .attach('image', bytes, { filename: 'cover', contentType: '' });
+      expect(res.status).toBe(415);
+      expect(res.body.kind).toBe('invalid_mime');
+    }
+  });
+
   // cover.jpg is shared across this describe's tests, so compare bytes rather than existence.
   const coverOnDisk = () => {
     const p = join(bookDir, '.audiobook', 'cover.jpg');
@@ -327,6 +357,21 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
     const written = coverOnDisk()!;
     expect(written[0]).toBe(0xff);
     expect(written[1]).toBe(0xd8);
+  });
+
+  it('200s and stores a real JPEG missing only its end-of-image marker, byte-identical', async () => {
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const cut = jpeg.subarray(0, jpeg.length - 2);
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover/upload`)
+      .attach('image', cut, { filename: 'x.jpg', contentType: 'image/jpeg' });
+    expect(res.status).toBe(200);
+    expect(Buffer.compare(coverOnDisk()!, cut)).toBe(0);
   });
 
   it('502s on JPEG-signature bytes that do not decode and writes nothing', async () => {

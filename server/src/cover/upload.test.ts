@@ -120,6 +120,22 @@ describe('validateUpload', () => {
     }
   });
 
+  /* The label allowlist is still part of the contract: real image bytes do not
+     rescue a label outside it (the sniff alone would accept these). */
+  it('refuses a real PNG and a real JPEG labelled image/gif', async () => {
+    expect(kindOf(await makePng(), 'image/gif')).toBe('invalid_mime');
+    expect(kindOf(await makeJpeg(), 'image/gif')).toBe('invalid_mime');
+  });
+
+  it('refuses a real PNG and a real JPEG with no or empty MIME type', async () => {
+    const png = await makePng();
+    const jpeg = await makeJpeg();
+    expect(kindOf(png, undefined as unknown as string)).toBe('invalid_mime');
+    expect(kindOf(jpeg, undefined as unknown as string)).toBe('invalid_mime');
+    expect(kindOf(png, '')).toBe('invalid_mime');
+    expect(kindOf(jpeg, '')).toBe('invalid_mime');
+  });
+
   it('accepts JPEG and PNG MIME types', () => {
     expect(ACCEPTED_MIME_TYPES).toContain('image/jpeg');
     expect(ACCEPTED_MIME_TYPES).toContain('image/png');
@@ -198,6 +214,16 @@ describe('writeUploadedCover', () => {
       await writeUploadedCover(jpeg, 'image/jpeg', dest);
       expect(Buffer.compare(readFileSync(dest), jpeg)).toBe(0);
     }
+  });
+
+  it('keeps a real JPEG missing only its end-of-image marker byte-for-byte', async () => {
+    const jpeg = await makeJpeg();
+    expect([...jpeg.subarray(jpeg.length - 2)]).toEqual([0xff, 0xd9]);
+    const cut = jpeg.subarray(0, jpeg.length - 2);
+    const dest = join(bookDir, '.audiobook', 'cover.jpg');
+    const result = await writeUploadedCover(cut, 'image/jpeg', dest);
+    expect(result.bytes).toBe(cut.length);
+    expect(Buffer.compare(readFileSync(dest), cut)).toBe(0);
   });
 
   it('refuses JPEG-signature bytes that do not decode and writes nothing', async () => {
