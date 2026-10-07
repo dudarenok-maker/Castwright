@@ -361,7 +361,7 @@ describe('AnalysingRoute manuscriptId derivation', () => {
        first and the fallback to manuscript.manuscriptId now matters.
        (The reset happens only under test: the hook compares against the
        module-level app store, not this test's store, so it always sees a
-       difference. In the app the stage keeps its id � stageEqual ignores
+       difference. In the app the stage keeps its id — stageEqual ignores
        manuscriptId.) In real usage both ids ARE the same — the upload
        seeds both — so we test the realistic shape here. The
        precedence-when-divergent question is captured as a follow-up
