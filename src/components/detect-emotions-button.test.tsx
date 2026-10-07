@@ -242,6 +242,43 @@ describe('fs-33 — DetectEmotionsButton', () => {
       expect(detectEmotions).not.toHaveBeenCalled();
     });
 
+    /* The gate has two halves, and each must hold on its own: the stage moves
+       before the next book's read lands (slices still hold X), and the slices
+       can hold another book while the stage names X (a read landing late). */
+    it('gate, stage half: the slices still hold the book but the stage names another — skipped', async () => {
+      const resolve = deferredRun();
+      const store = makeSwitchableStore();
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
+
+      store.dispatch(uiSlice.actions.openBook({ id: 'bY', status: 'voices_pending' }));
+      resolve();
+
+      await waitFor(() => expect(store.getState().prosody.activeStreams['bX']).toBeUndefined());
+      expect(store.getState().manuscript.manuscriptId).toBe('mX');
+      expect(store.getState().manuscript.sentences[0].emotion).toBeUndefined();
+    });
+
+    it('gate, slices half: the stage names the book but the slices hold another — skipped', async () => {
+      const resolve = deferredRun();
+      const store = makeSwitchableStore();
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
+
+      store.dispatch(manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'bY', manuscriptId: 'mY', title: 'Y' } as never,
+        sentences: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'Y line' } as never],
+      }));
+      resolve();
+
+      await waitFor(() => expect(store.getState().prosody.activeStreams['bX']).toBeUndefined());
+      expect((store.getState().ui.stage as { bookId?: string }).bookId).toBe('bX');
+      expect(store.getState().manuscript.sentences[0].text).toBe('Y line');
+      expect(store.getState().manuscript.sentences[0].emotion).toBeUndefined();
+    });
+
     it('control: a run that skipped nothing does not touch the watermark or toast', async () => {
       const resolve = deferredRun();
       const store = makeSwitchableStore();
