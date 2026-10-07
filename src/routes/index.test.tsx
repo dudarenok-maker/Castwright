@@ -583,6 +583,22 @@ describe('AnalysingRoute — the manuscript id comes only from its own book', ()
     expect(screen.queryByText(/Uploaded Title/)).toBeNull();
     expect(screen.queryByText(/12,345/)).toBeNull();
   });
+
+  it("an unattributed upload slice is not used when the stage names the same book with a different manuscript", async () => {
+    /* Upload N, then open X from the Library while it is analysing, before N's
+       read lands: the slice still holds N's (bookId-less) upload and the stage
+       names X's analysis, so X's view must not show N's title or size. */
+    const store = makeStore();
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-x', title: 'Own Title' })]);
+    uploadFresh(store, 'b1');
+
+    renderAtAnalysing(store);
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b1', manuscriptId: 'm-x' }));
+
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Own Title');
+    expect(screen.queryByText(/Uploaded Title/)).toBeNull();
+    expect(screen.queryByText(/12,345/)).toBeNull();
+  });
 });
 
 /* #3084 F7 — AdvancedRoute is the FIRST route in this file whose stage
