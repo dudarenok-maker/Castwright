@@ -221,7 +221,12 @@ comparison, see the edge list above). The merge step that closes this, run
    published ahead of you. When `origin/main` also lacks it, the row was a
    deliberate discharge (by this change or an already-merged one), not a race,
    and is not reported: discharging a row always makes the still-live page look
-   "ahead" of your working copy in this exact shape, and that is expected.
+   "ahead" of your working copy in this exact shape, and that is expected —
+   **but only if its number is below `origin/main`'s own `next-id` for that
+   group** (#3529). A discharged row was allocated on `main`; one at or above
+   `main`'s marker was added by another unmerged lane and FAILS: publish the
+   union or coordinate with that lane. A row ID you share with the live page
+   under a different title also FAILS — renumber yours.
    **The command fetches `origin/main` itself, fresh, every run — you do not
    need to `git fetch` by hand first.** It then reads `FETCH_HEAD`, deliberately
    NOT the local `origin/main` ref: `git fetch origin main` only guarantees it
@@ -386,8 +391,9 @@ comparison, see the edge list above). The merge step that closes this, run
    **Known limitation:** a row that's live and still genuinely owed but was
    never actually merged into `main` at all (e.g. published straight from a
    branch that never merged, or from a PR later reverted) is not
-   distinguishable from a deliberate discharge — it silently reads as
-   discharged rather than being flagged. Accepted trade-off, not an
+   distinguishable from a deliberate discharge when its number is below
+   `main`'s `next-id` — it silently reads as discharged rather than being
+   flagged (at or above the marker it IS flagged, #3529). Accepted trade-off, not an
    oversight; see `checkLiveView`'s own header comment in
    `scripts/check-onbox-register.mjs` (#2199 review round 3, A3).
 

@@ -323,6 +323,35 @@ function hashRowContent(plainText) {
   return createHash('sha256').update(plainText).digest('hex');
 }
 
+// #3529: row ID -> normalised title (the `<span class="iname">` in each
+// `<details class="item">` summary), read the same way
+// `parseLiveViewRowBodies` reads rows. Normalised with `htmlCellText` (tags
+// and whitespace) plus the handful of entities a hand-authored page uses, so
+// only a genuinely different title compares unequal. Rows whose ID is not a
+// plain `<Letter><N>` (Blocked/Unconfirmed use `—`) are skipped, as there.
+const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+function rowTitleKey(html) {
+  return htmlCellText(html)
+    .replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (m, dec, hex, name) => {
+      if (dec) return String.fromCodePoint(Number(dec));
+      if (hex) return String.fromCodePoint(parseInt(hex, 16));
+      return HTML_ENTITIES[name.toLowerCase()] ?? m;
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+export function parseLiveViewRowTitles(liveViewHtml) {
+  const titles = new Map();
+  for (const block of liveViewHtml.split(/<details\b[^>]*\bclass="item"[^>]*>/).slice(1)) {
+    const idMatch = block.match(/<span class="num">([^<]*)<\/span>/);
+    const nameMatch = block.match(/<span class="iname">([\s\S]*?)<\/span>/);
+    if (!idMatch || !nameMatch) continue;
+    const id = idMatch[1].trim();
+    if (/^[A-Z]\d+$/.test(id)) titles.set(id, rowTitleKey(nameMatch[1]));
+  }
+  return titles;
+}
+
 // Runs all checks and returns a list of human-readable error strings — empty
 // when the register is internally coherent.
 export function checkRegister(text) {
@@ -775,7 +804,21 @@ function resolveBaselineGroups(baselineText) {
   if (!baselineGlanceSection) return null;
   const { groups: baselineTableGroups } = parseGlanceTable(baselineGlanceSection.body);
   const { groups: baselineBodyGroups } = parseBodyGroups(baselineSections);
-  return { tableLetters: new Set(baselineTableGroups.keys()), bodyGroups: baselineBodyGroups };
+  // #3529: origin/main's own next-id marker per group — a row allocated on
+  // main sits strictly below it, so a live-only row at or above it was
+  // allocated by a lane that has not merged. `checkRegister` already vouched
+  // that every group has a marker.
+  const nextIds = new Map();
+  for (const section of baselineSections) {
+    const titleMatch = section.title.match(/^Group ([A-Z])\b/);
+    if (!titleMatch) continue;
+    nextIds.set(titleMatch[1], parseNextIdMarker(section.body, titleMatch[1]));
+  }
+  return {
+    tableLetters: new Set(baselineTableGroups.keys()),
+    bodyGroups: baselineBodyGroups,
+    nextIds,
+  };
 }
 
 // The single-error array `checkLiveView` returns when `extraOnly` can't
@@ -835,6 +878,14 @@ export const EXTRACTION_ERROR_PREFIX = 'extraction-error: ';
 // operator can reconcile manually if needed, but an ordinary multi-step publish
 // must not hard-fail.
 export const THREE_WAY_CONTENT_WARNING_PREFIX = 'three-way-warning: ';
+
+// #3529: two failure classes the structural BEHIND remedy ("merge the rows
+// named above") is wrong for, so the CLI routes them to their own buckets —
+// same reason as the prefixes above. A row-ID collision's fix is to RENUMBER
+// your row; an unmerged lane's live-only row's fix is to publish the union or
+// coordinate with that lane — neither is "merge it in".
+export const ROW_ID_COLLISION_ERROR_PREFIX = 'row-id-collision: ';
+export const UNMERGED_LANE_ROW_ERROR_PREFIX = 'unmerged-lane-row: ';
 
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
@@ -977,6 +1028,7 @@ export function checkLiveView(
   // itself, not fewer.
   let baselineTableLetters = null;
   let baselineBodyGroups = null;
+  let baselineNextIds = null;
   if (direction === 'extraOnly') {
     const baseline = resolveBaselineGroups(baselineText);
     if (!baseline) {
@@ -995,6 +1047,7 @@ export function checkLiveView(
     }
     baselineTableLetters = baseline.tableLetters;
     baselineBodyGroups = baseline.bodyGroups;
+    baselineNextIds = baseline.nextIds;
   }
 
   // The owed total, as the summary strip states it.
@@ -1168,6 +1221,14 @@ export function checkLiveView(
         if (dischargingSet.has(id)) consumedDischargingIds.add(id);
       }
     }
+    // #3529: "origin/main lacks it" alone is NOT proof of a discharge — a row
+    // an UNMERGED lane added has the same shape. A discharged row was
+    // allocated on main, so its number sits below main's group `next-id`; one
+    // at or above it was allocated by a lane that has not merged. (Only rows
+    // with numeric IDs reach here: Blocked/Unconfirmed rows use `—` and are
+    // never in `rowIds`, so their handling is unchanged.) A named
+    // `--discharging` id still suppresses it.
+    const unmergedExtra = [];
     const staleExtra =
       direction === 'extraOnly'
         ? extra.filter((id) => {
@@ -1175,7 +1236,17 @@ export function checkLiveView(
             if (!idMatch) return true; // shouldn't happen — rowIds is pre-filtered to this shape
             const [, idLetter, idNumber] = idMatch;
             const baselineNumbers = baselineBodyGroups.get(idLetter) ?? [];
-            if (!baselineNumbers.includes(Number(idNumber))) return false;
+            if (!baselineNumbers.includes(Number(idNumber))) {
+              const mainNextId = baselineNextIds.get(idLetter);
+              if (
+                mainNextId != null &&
+                Number(idNumber) >= mainNextId &&
+                !dischargingSet.has(id)
+              ) {
+                unmergedExtra.push(id);
+              }
+              return false;
+            }
             // #2272: a named id suppresses exactly this BEHIND verdict — the
             // baseline (pre-merge origin/main) hasn't caught up yet because
             // this run is BEFORE merge, not because the row is a genuine
@@ -1188,6 +1259,11 @@ export function checkLiveView(
         direction === 'extraOnly'
           ? `The live page's Group ${letter} section has ${staleExtra.length === 1 ? 'row' : 'rows'} ${staleExtra.join(', ')} that this register does not yet have — the register is BEHIND what is already published. Merge ${staleExtra.length === 1 ? 'it' : 'them'} in before publishing.`
           : `Live view's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's Group ${letter} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
+      );
+    }
+    for (const id of unmergedExtra) {
+      errors.push(
+        `${UNMERGED_LANE_ROW_ERROR_PREFIX}${id}: the live page's Group ${letter} section has row ${id}, which origin/main lacks and which sits at or above origin/main's next-id (${letter}${baselineNextIds.get(letter)}) — another unmerged lane has published it. Publishing this register would drop it. Publish the union of both lanes' rows, or coordinate with that lane first. (Name it via --discharging ${id} only if you deliberately discharged it.)`,
       );
     }
     if (section.rowIds.length !== found.size) {
@@ -1325,6 +1401,29 @@ export function checkLiveView(
     const taggedPublishedErrors = publishedErrors.map((e) => `${EXTRACTION_ERROR_PREFIX}[published] ${e.substring(EXTRACTION_ERROR_PREFIX.length)}`);
     const taggedBaselineErrors = baselineErrors.map((e) => `${EXTRACTION_ERROR_PREFIX}[baseline] ${e.substring(EXTRACTION_ERROR_PREFIX.length)}`);
     errors.push(...taggedTrackedErrors, ...taggedPublishedErrors, ...taggedBaselineErrors);
+    // #3529: same ID, genuinely different title, and origin/main has no such
+    // row — two lanes each allocated it, so the by-ID comparison would call
+    // them equal. A row origin/main DOES have is an ordinary edit, left to the
+    // content-drift hashing below.
+    const trackedTitles = parseLiveViewRowTitles(stripHtmlComments(trackedLiveViewHtml));
+    const publishedTitles = parseLiveViewRowTitles(liveViewHtml);
+    for (const [id, trackedTitle] of trackedTitles) {
+      const publishedTitle = publishedTitles.get(id);
+      if (publishedTitle === undefined || publishedTitle === trackedTitle) continue;
+      const [, idLetter, idNumber] = id.match(/^([A-Z])(\d+)$/);
+      if ((baselineBodyGroups.get(idLetter) ?? []).includes(Number(idNumber))) continue;
+      const mineNext = parseNextIdMarker(
+        sections.find((s) => s.title.startsWith(`Group ${idLetter}`))?.body ?? '',
+        idLetter,
+      );
+      const liveMax = Math.max(
+        ...(lvSections.get(idLetter)?.rowIds ?? []).map((r) => Number(r.slice(1))),
+      );
+      const target = Math.max(mineNext ?? 0, liveMax + 1);
+      errors.push(
+        `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${trackedTitle}" but the live page's ${id} is "${publishedTitle}" — two lanes allocated the same ID. Renumber your row to ${idLetter}${target} (the higher of your next-id and the live page's highest ID + 1), then re-run.`,
+      );
+    }
     for (const [id, trackedBody] of trackedRowBodies) {
       const publishedBody = publishedRowBodies.get(id);
       if (publishedBody === undefined) continue;
@@ -2031,6 +2130,12 @@ function runCheckOnboxRegisterCli() {
     // pending-publish (edit, publish, edit again before merge) looks like a
     // 3-way disagreement to hash-only comparison, but is ordinarily not a
     // conflict — the operator can investigate manually if needed.
+    const collisionErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX));
+    const unmergedLaneErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(UNMERGED_LANE_ROW_ERROR_PREFIX));
     const threeWayWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX));
@@ -2039,6 +2144,8 @@ function runCheckOnboxRegisterCli() {
       : publishedErrors.filter(
           (e) =>
             !e.startsWith(DISCHARGE_NAME_ERROR_PREFIX) &&
+            !e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX) &&
+            !e.startsWith(UNMERGED_LANE_ROW_ERROR_PREFIX) &&
             !e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX) &&
             !e.startsWith(EXTRACTION_ERROR_PREFIX) &&
             !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX),
@@ -2057,6 +2164,25 @@ function runCheckOnboxRegisterCli() {
         console.error(
           'Fix the --discharging value(s) named above — each error explains why that ID ' +
             "didn't match — then re-run this command against the SAME saved copy from step 1.",
+        );
+      }
+      if (collisionErrors.length > 0) {
+        publishedFailed =
+          report(
+            `${publishedPath} (the currently-PUBLISHED page) carries a row ID that ${LIVE_VIEW} ` +
+              'also uses for a different row',
+            collisionErrors,
+          ) || publishedFailed;
+        console.error('Do not publish. Renumber your row as each error above says.');
+      }
+      if (unmergedLaneErrors.length > 0) {
+        publishedFailed =
+          report(
+            `${publishedPath} (the currently-PUBLISHED page) has rows from another unmerged lane`,
+            unmergedLaneErrors,
+          ) || publishedFailed;
+        console.error(
+          "Do not publish: it would drop that lane's rows. Publish the union, or coordinate with that lane.",
         );
       }
       if (contentDriftErrors.length > 0) {

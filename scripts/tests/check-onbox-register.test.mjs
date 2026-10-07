@@ -16,6 +16,8 @@ import {
   ROW_CONTENT_DRIFT_ERROR_PREFIX,
   EXTRACTION_ERROR_PREFIX,
   THREE_WAY_CONTENT_WARNING_PREFIX,
+  ROW_ID_COLLISION_ERROR_PREFIX,
+  UNMERGED_LANE_ROW_ERROR_PREFIX,
   stripHtmlComments,
   htmlCellText,
   ALLOCATION_FLOOR,
@@ -1772,11 +1774,11 @@ test("#2272: dischargingIds has no effect on the default direction:'both' compar
 // `buildLiveView`/`buildSingleGroupLiveView` above deliberately skip it,
 // which is also why none of the tests using them exercise this check at
 // all).
-function buildRowContentLiveView(rows) {
+function buildRowContentLiveView(rows, letter = 'A') {
   const detailsBlocks = rows
     .map(
-      ({ id, body, risk }) => `    <details class="item">
-      <summary><span class="num">${id}</span><span class="iname">t</span><span class="risk">${risk ?? 'default'}</span></summary>
+      ({ id, body, risk, title }) => `    <details class="item">
+      <summary><span class="num">${id}</span><span class="iname">${title ?? 't'}</span><span class="risk">${risk ?? 'default'}</span></summary>
       <div class="body">
         <p>${body}</p>
       </div>
@@ -1792,12 +1794,12 @@ function buildRowContentLiveView(rows) {
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>Setup A</td><td>${rows.length}</td></tr>
+      <tr><td><a href="#g${letter.toLowerCase()}">${letter}</a></td><td>Setup ${letter}</td><td>${rows.length}</td></tr>
     </tbody>
   </table>
 
-  <section class="group" id="ga">
-    <h3 class="gtitle"><span class="gtag">A</span> Setup A <span class="gcount">${rows.length} rows</span></h3>
+  <section class="group" id="g${letter.toLowerCase()}">
+    <h3 class="gtitle"><span class="gtag">${letter}</span> Setup ${letter} <span class="gcount">${rows.length} rows</span></h3>
 ${detailsBlocks}
   </section>
 `;
@@ -2874,7 +2876,15 @@ test('--against-published exits 0 when the saved copy LAGS the register (the nor
 test('--against-published exits 0 when a live-page row is absent from BOTH the register and its (hermetic) baseline (a discharge, #2199)', () => {
   const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
   const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
-  withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+  // #3529: a discharged row was allocated on main, so main's own next-id sits
+  // ABOVE it. Bump the baseline's Group B marker past `newId` to model that;
+  // without the bump the row reads as an unmerged lane's (next test).
+  const nextIdRegex = /^(<!--\s*next-id:\s*B)(\d+)(\s*-->\s*\r?)$/m;
+  const dischargedBaseline = REAL_REGISTER_TEXT.replace(
+    nextIdRegex,
+    (_, pre, n, post) => `${pre}${Math.max(Number(n), lastB + 2)}${post}`,
+  );
+  withHermeticBaseline(mutated, dischargedBaseline, (publishedPath, baselinePath) => {
     const r = runCli(['--against-published', publishedPath], {
       ONBOX_TEST_BASELINE_FILE: baselinePath,
     });
@@ -2885,6 +2895,24 @@ test('--against-published exits 0 when a live-page row is absent from BOTH the r
         `stderr: ${r.stderr}`,
     );
     assert.match(r.stdout, /check:onbox-register: OK/);
+  });
+});
+
+// #3529: the same shape with main's marker NOT past the row — a row an
+// unmerged lane added — must fail, via its own bucket and remedy.
+test('--against-published exits 1 for a live-only row at or above the baseline next-id (an unmerged lane, #3529)', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
+  const nextIdB = parseNextIdMarker(REAL_REGISTER_TEXT, 'B');
+  assert.ok(nextIdB <= lastB + 1, 'fixture setup: the real next-id must not already cover the renamed row');
+  withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+    });
+    assert.equal(r.status, 1, `stdout: ${r.stdout}, stderr: ${r.stderr}`);
+    assert.ok(r.stderr.includes(newId), r.stderr);
+    assert.match(r.stderr, /unmerged lane/);
+    assert.ok(!r.stderr.includes('Merge the rows named above'), 'must not get the BEHIND remedy');
   });
 });
 
@@ -3863,4 +3891,163 @@ test('every Import-Module command quoted in docs/testing is executable as writte
   assert.equal(importPathIsExecutable('.\\scripts\\lib\\x.psm1'), true);
   assert.equal(importPathIsExecutable('./scripts/lib/x.psm1'), true);
   assert.equal(importPathIsExecutable('Pester'), true);
+});
+
+// ---------------------------------------------------------------------------
+// #3529: two ways `--against-published` passed a publish that would have
+// broken another lane's rows (the 2026-10-07 PR #3525 / #3505 incident).
+//
+//  1. A row-ID COLLISION: both sides carry B103, allocated independently by two
+//     unmerged lanes, with different titles. Matching by ID alone called them
+//     equal.
+//  2. An UNMERGED LANE'S live-only row: #2199 reads "live has it, origin/main
+//     lacks it" as a discharge, but a row an unmerged PR ADDED has the same
+//     shape. A discharged row was allocated on main, so its number sits below
+//     main's group `next-id`; an unmerged lane's sits at or above it.
+//
+// Fixtures are minimal and synthetic: Group B, main's marker at B103.
+// ---------------------------------------------------------------------------
+
+const MAIN_B = () => buildSingleGroupRegister('B', [101, 102], 103);
+const MINE_TITLE = 'Ollama structured-output modes on a real model';
+const THEIRS_TITLE = 'Abort and drain on a local Ollama analyzer';
+
+function collisionOptions({ trackedRows, publishedRows, working, baseline, extra = {} }) {
+  return [
+    working ?? buildSingleGroupRegister('B', [101, 102, 103], 104),
+    buildRowContentLiveView(publishedRows, 'B'),
+    {
+      direction: 'extraOnly',
+      baselineText: baseline ?? MAIN_B(),
+      trackedLiveViewHtml: buildRowContentLiveView(trackedRows, 'B'),
+      ...extra,
+    },
+  ];
+}
+
+const baseRows = [
+  { id: 'B101', body: 'x' },
+  { id: 'B102', body: 'x' },
+];
+
+test('#3529: the same row ID under a different title is a collision, naming the ID, both titles and the renumber target', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      trackedRows: [...baseRows, { id: 'B103', body: 'mine', title: MINE_TITLE }],
+      publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+    }),
+  );
+  const collision = errors.filter((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX));
+  assert.equal(collision.length, 1, JSON.stringify(errors));
+  assert.match(collision[0], /B103/);
+  assert.ok(collision[0].includes(MINE_TITLE) && collision[0].includes(THEIRS_TITLE));
+  // higher of the register's own next-id (B104) and the live page's highest + 1 (B104)
+  assert.match(collision[0], /B104/);
+});
+
+test('#3529: the renumber target is the live page highest ID + 1 when that exceeds the register next-id', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      trackedRows: [...baseRows, { id: 'B103', body: 'mine', title: MINE_TITLE }],
+      publishedRows: [
+        ...baseRows,
+        { id: 'B103', body: 'theirs', title: THEIRS_TITLE },
+        { id: 'B108', body: 'theirs', title: 'other' },
+      ],
+    }),
+  );
+  const collision = errors.find((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX));
+  assert.ok(collision, JSON.stringify(errors));
+  assert.match(collision, /B109/);
+});
+
+test('#3529: the same row ID with the same title passes (no collision)', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      trackedRows: [...baseRows, { id: 'B103', body: 'mine', title: MINE_TITLE }],
+      publishedRows: [...baseRows, { id: 'B103', body: 'mine', title: MINE_TITLE }],
+    }),
+  );
+  assert.ok(!errors.some((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX)), JSON.stringify(errors));
+});
+
+test('#3529: whitespace, markup and entity differences in a title are not a collision', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      trackedRows: [...baseRows, { id: 'B103', body: 'a', title: 'Ollama structured output &amp; modes' }],
+      publishedRows: [
+        ...baseRows,
+        { id: 'B103', body: 'b', title: 'Ollama  <code>structured</code>&nbsp;output & modes' },
+      ],
+    }),
+  );
+  assert.ok(!errors.some((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX)), JSON.stringify(errors));
+});
+
+test('#3529: a retitled row that origin/main already has is content drift territory, not a collision', () => {
+  const baseline = buildSingleGroupRegister('B', [101, 102, 103], 104);
+  const errors = checkLiveView(
+    ...collisionOptions({
+      baseline,
+      trackedRows: [...baseRows, { id: 'B103', body: 'mine', title: 'reworded title' }],
+      publishedRows: [...baseRows, { id: 'B103', body: 'mine', title: 'original title' }],
+    }),
+  );
+  assert.ok(!errors.some((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX)), JSON.stringify(errors));
+});
+
+test('#3529: a live-only row at or above main next-id is another unmerged lane, not a discharge', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      working: buildSingleGroupRegister('B', [101, 102], 103),
+      trackedRows: baseRows,
+      publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+    }),
+  );
+  const unmerged = errors.filter((e) => e.startsWith(UNMERGED_LANE_ROW_ERROR_PREFIX));
+  assert.equal(unmerged.length, 1, JSON.stringify(errors));
+  assert.match(unmerged[0], /unmerged lane/);
+  assert.match(unmerged[0], /B103/);
+  assert.match(unmerged[0], /union/);
+});
+
+test('#3529: a live-only row below main next-id is a discharge and still passes (#2199)', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      baseline: buildSingleGroupRegister('B', [101, 102], 104),
+      working: buildSingleGroupRegister('B', [101, 102], 104),
+      trackedRows: baseRows,
+      publishedRows: [...baseRows, { id: 'B103', body: 'discharged', title: 'gone' }],
+    }),
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('#3529: --discharging still overrides the unmerged-lane verdict (#2272)', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      working: buildSingleGroupRegister('B', [101, 102], 103),
+      trackedRows: baseRows,
+      publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+      extra: { dischargingIds: ['B103'] },
+    }),
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('#3529: the real incident — colliding B103 and a live-only B104 — fails on both counts', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      trackedRows: [...baseRows, { id: 'B103', body: 'mine', title: MINE_TITLE }],
+      publishedRows: [
+        ...baseRows,
+        { id: 'B103', body: 'theirs', title: THEIRS_TITLE },
+        { id: 'B104', body: 'theirs', title: 'second row from the unmerged lane' },
+      ],
+    }),
+  );
+  assert.equal(errors.filter((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX)).length, 1);
+  const unmerged = errors.filter((e) => e.startsWith(UNMERGED_LANE_ROW_ERROR_PREFIX));
+  assert.equal(unmerged.length, 1);
+  assert.match(unmerged[0], /B104/);
 });
