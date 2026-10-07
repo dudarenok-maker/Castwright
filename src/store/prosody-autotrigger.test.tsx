@@ -1105,6 +1105,26 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     expect(detectEmotionsMock).not.toHaveBeenCalled();
   });
 
+  it('no loop: a run started on open that skips everything is not re-run during the same visit', async () => {
+    /* The slices hold the book under another manuscriptId than its book-state
+       read reports (the mock app's uploaded book does this), so the gate skips
+       every annotation even though the book is open. */
+    libBooks = [makeBook('b1', 'cast_pending')];
+    let reads = 0;
+    getBookStateMock.mockImplementation(async (id: string) => {
+      const st = stateFor(id);
+      return reads++ === 0 ? st : { ...st, state: { ...st.state, manuscriptId: 'mns_other' } };
+    });
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(detectInstructMock).toHaveBeenCalledTimes(1));
+    await settle(300);
+
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
+    expect(watermarkPuts('b1')).toEqual([]);
+  });
+
   it('no double run: reopening the book and a library transition while its run is in flight start nothing new', async () => {
     let release!: () => void;
     detectEmotionsMock.mockImplementation(async (_id: string, opts: Opts) => {

@@ -1212,8 +1212,10 @@ export function Layout() {
      second, concurrent run for one book. */
   const prosodyInFlight = useRef<Set<string>>(new Set());
   /* #3435 — the open book the open trigger has already run during this visit
-     (or left to a run already in flight), and a tick that re-arms it. */
+     (or left to a run already in flight), the book it left to an in-flight
+     run, and a tick that re-arms it. */
   const prosodyOpenHandled = useRef<string | null>(null);
+  const prosodyOpenDeferred = useRef<string | null>(null);
   const [prosodyRerunTick, setProsodyRerunTick] = useState(0);
   const runAutoProsody = (id: string) => {
     if (prosodyInFlight.current.has(id)) return; // already running here
@@ -1261,10 +1263,16 @@ export function Layout() {
         if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
         prosodyInFlight.current.delete(id);
         /* The open trigger left this visit to this run: re-arm it so the
-           skipped work is filled now, while the book is open. */
-        if (skippedWork && prosodyOpenHandled.current === id) {
-          prosodyOpenHandled.current = null;
-          setProsodyRerunTick((n) => n + 1);
+           skipped work is filled now, while the book is open. Only then — a
+           run the open trigger started itself that still skipped work (the
+           slices hold the book under another manuscriptId than its read
+           reports) would skip again, so re-arming it would loop. */
+        if (prosodyOpenDeferred.current === id) {
+          prosodyOpenDeferred.current = null;
+          if (skippedWork && prosodyOpenHandled.current === id) {
+            prosodyOpenHandled.current = null;
+            setProsodyRerunTick((n) => n + 1);
+          }
         }
       }
     })();
@@ -1323,12 +1331,14 @@ export function Layout() {
     const id = openProsodyBookId;
     if (!id) {
       prosodyOpenHandled.current = null;
+      prosodyOpenDeferred.current = null;
       return;
     }
     if (prosodyOpenHandled.current === id) return;
     if (!completeIds.includes(id)) return;
     if (prosodyInFlight.current.has(id)) {
       prosodyOpenHandled.current = id; // that run covers this visit (re-arms if it skipped work)
+      prosodyOpenDeferred.current = id;
       return;
     }
     if (openProsodyBusy) return; // a manual run or a review — looked at again when it ends
