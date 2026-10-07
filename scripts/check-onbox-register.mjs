@@ -352,6 +352,43 @@ export function parseLiveViewRowTitles(liveViewHtml) {
   return titles;
 }
 
+// #3529: row ID -> its whole `<details class="item">…</details>` block, raw
+// except for line endings — the unit `--publishing` compares byte-for-byte
+// against the live page, so a union file carries another lane's row exactly
+// as that lane published it.
+export function parseLiveViewRowBlocks(liveViewHtml) {
+  const blocks = new Map();
+  for (const m of liveViewHtml.matchAll(/<details\b[^>]*\bclass="item"[^>]*>[\s\S]*?<\/details>/g)) {
+    const idMatch = m[0].match(/<span class="num">([^<]*)<\/span>/);
+    if (!idMatch) continue;
+    const id = idMatch[1].trim();
+    if (/^[A-Z]\d+$/.test(id)) blocks.set(id, m[0].replace(/\r\n/g, '\n'));
+  }
+  return blocks;
+}
+
+// #3529: every `<Letter><N>` row ID a live-view file carries, anywhere in it.
+function liveViewRowIdSet(liveViewHtml) {
+  const ids = new Set();
+  for (const m of stripHtmlComments(liveViewHtml).matchAll(/<span class="num">([^<]*)<\/span>/g)) {
+    const id = m[1].trim();
+    if (/^[A-Z]\d+$/.test(id)) ids.add(id);
+  }
+  return ids;
+}
+
+// #3529: row ID -> the rest of its `### <Letter><N> …` register heading,
+// whitespace-collapsed. Register-to-register only, so both sides share one
+// markdown convention and no HTML normalisation is needed.
+export function parseRegisterRowTitles(registerText) {
+  const titles = new Map();
+  const { text } = stripFences(registerText);
+  for (const m of text.matchAll(/^### ([A-Z]\d+)(?=\s|\r?$)([^\r\n]*)\r?$/gm)) {
+    titles.set(m[1], m[2].replace(/\s+/g, ' ').trim());
+  }
+  return titles;
+}
+
 // Runs all checks and returns a list of human-readable error strings — empty
 // when the register is internally coherent.
 export function checkRegister(text) {
@@ -804,10 +841,12 @@ function resolveBaselineGroups(baselineText) {
   if (!baselineGlanceSection) return null;
   const { groups: baselineTableGroups } = parseGlanceTable(baselineGlanceSection.body);
   const { groups: baselineBodyGroups } = parseBodyGroups(baselineSections);
-  // #3529: origin/main's own next-id marker per group — a row allocated on
-  // main sits strictly below it, so a live-only row at or above it was
-  // allocated by a lane that has not merged. `checkRegister` already vouched
-  // that every group has a marker.
+  // #3529: origin/main's own next-id marker per group — an allocation surface
+  // a collision's renumber target must clear (allocate-once), NOT a provenance
+  // signal: an open lane's rows drop below it as soon as another lane minting
+  // in the same group merges first. `checkRegister` already vouched that
+  // every group has a marker. `rowTitles` feeds the merged-lane collision
+  // check (same ID on main and here, absent at the merge-base).
   const nextIds = new Map();
   for (const section of baselineSections) {
     const titleMatch = section.title.match(/^Group ([A-Z])\b/);
@@ -818,6 +857,7 @@ function resolveBaselineGroups(baselineText) {
     tableLetters: new Set(baselineTableGroups.keys()),
     bodyGroups: baselineBodyGroups,
     nextIds,
+    rowTitles: parseRegisterRowTitles(baselineText),
   };
 }
 
@@ -879,13 +919,18 @@ export const EXTRACTION_ERROR_PREFIX = 'extraction-error: ';
 // must not hard-fail.
 export const THREE_WAY_CONTENT_WARNING_PREFIX = 'three-way-warning: ';
 
-// #3529: two failure classes the structural BEHIND remedy ("merge the rows
+// #3529: four failure classes the structural BEHIND remedy ("merge the rows
 // named above") is wrong for, so the CLI routes them to their own buckets —
 // same reason as the prefixes above. A row-ID collision's fix is to RENUMBER
-// your row; an unmerged lane's live-only row's fix is to publish the union or
-// coordinate with that lane — neither is "merge it in".
+// your row; an unmerged lane's live-only row's fix is to publish a file that
+// carries it (`--publishing`) or coordinate with that lane; an unknown
+// provenance's fix is to fetch the publishing branch or confirm it by hand;
+// a `--publishing` file whose copy of a row differs from the live block's
+// fix is to copy that block verbatim. None of them is "merge it in".
 export const ROW_ID_COLLISION_ERROR_PREFIX = 'row-id-collision: ';
 export const UNMERGED_LANE_ROW_ERROR_PREFIX = 'unmerged-lane-row: ';
+export const UNKNOWN_PROVENANCE_ERROR_PREFIX = 'unknown-provenance: ';
+export const PUBLISHING_FILE_ERROR_PREFIX = 'publishing-file: ';
 
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
@@ -932,22 +977,44 @@ export const UNMERGED_LANE_ROW_ERROR_PREFIX = 'unmerged-lane-row: ';
 //     "baseline lacks it too", which would let a discharge-shaped bug pass
 //     unnoticed for the same reason a real competing-lane row would.
 //
-//     Residual limitation, deliberately not fixed here (#2199 review round
-//     3, A3): a row that is LIVE and still genuinely OWED but never actually
-//     landed on `origin/main` at all — e.g. published straight from a
-//     branch that never merged, or from a PR that was later reverted — now
-//     reads as "discharged" too, identically to a row someone legitimately
-//     removed: both are "absent from origin/main, absent from the working
-//     register". The `'both'`-mode message this replaces already names this
-//     exact cause ("A row published from an unmerged branch ... is the
-//     usual cause"); `extraOnly` has no way left to distinguish "removed on
-//     purpose" from "never merged in the first place", because the ONLY
-//     signal it has is origin/main's content, and both cases agree on what
-//     that says. This is an intentional narrowing of the guard's envelope,
-//     not an oversight: the alternative — treating any row absent from
-//     origin/main as suspect — is the exact false positive #2199 exists to
-//     fix, just with the roles of "register" and "origin/main" swapped. See
-//     the register's own "Live view" step 3 for the operator-facing note.
+//     #3529: "origin/main lacks it" alone does NOT prove a discharge — a row
+//     an UNMERGED lane published has the same shape (#2199 review round 3,
+//     A3, accepted that as a residual; the 2026-10-07 #3525/#3505 incident
+//     showed it is the common case, not an edge). Content cannot separate
+//     them, so `options.publishedProvenance` supplies PROVENANCE instead: the
+//     commit that stamped the live page's `data-publish-id`, resolved by the
+//     CLI layer (`resolvePublishedProvenance`) as one of
+//       - 'merged'   — that commit is reachable from origin/main;
+//       - 'own'      — it is in this branch's HEAD history, not main's;
+//       - 'unmerged' — it exists only on another branch;
+//       - 'unknown'  — no history this checkout has contains it (or the
+//                      page carries no token, or the lookup failed).
+//     plus `stampedRowIds`, the rows the live view AT that commit carried.
+//     A live-only row origin/main lacks is then silent only when the page is
+//     a merged or own publish AND that commit carried the row (a discharge,
+//     or your own row you since dropped). Every other such row belongs to a
+//     lane that has not merged — the whole page for 'unmerged', and a row a
+//     union publish carried in on top of its own commit for 'merged'/'own' —
+//     and fails as `unmerged-lane-row`. 'unknown' fails closed, but only when
+//     a verdict actually depends on it. An earlier draft of #3529 used
+//     origin/main's `next-id` instead ("below it ⇒ discharged"); it failed
+//     open as soon as another lane minting in the same group merged first,
+//     and never saw a brand-new group letter at all (PR #3532 review pass 1).
+//     A caller that passes no provenance gets 'unknown'.
+//
+//     #3529: `options.publishingHtml` is the file actually about to be
+//     published, when it is not the tracked live view — a union carrying
+//     another lane's rows. A row that would otherwise fail as BEHIND or
+//     `unmerged-lane-row` passes when that file carries the live page's block
+//     for it byte-for-byte (line endings aside); a different copy fails as
+//     `publishing-file`. Rows the check already treats as discharges are not
+//     consulted against it.
+//
+//     #3529: `options.mergeBaseText` is the register at merge-base(HEAD,
+//     origin/main). A row ID origin/main and this register BOTH carry under
+//     different titles, which the merge-base lacks, was minted independently
+//     by two lanes and the other merged first — a `row-id-collision`. `null`
+//     (unresolvable) fails closed; `undefined` skips that one check.
 //
 //     #2272: `options.dischargingIds` closes a narrower gap the baseline
 //     above cannot — it can only recognise a discharge that has ALREADY
@@ -995,7 +1062,16 @@ export const UNMERGED_LANE_ROW_ERROR_PREFIX = 'unmerged-lane-row: ';
 export function checkLiveView(
   markdownText,
   rawLiveViewHtml,
-  { direction = 'both', baselineText, dischargingIds = [], trackedLiveViewHtml, baselineLiveViewText } = {},
+  {
+    direction = 'both',
+    baselineText,
+    dischargingIds = [],
+    trackedLiveViewHtml,
+    baselineLiveViewText,
+    publishedProvenance,
+    publishingHtml,
+    mergeBaseText,
+  } = {},
 ) {
   const errors = [];
   const dischargingSet = new Set(dischargingIds);
@@ -1029,6 +1105,7 @@ export function checkLiveView(
   let baselineTableLetters = null;
   let baselineBodyGroups = null;
   let baselineNextIds = null;
+  let baselineRowTitles = null;
   if (direction === 'extraOnly') {
     const baseline = resolveBaselineGroups(baselineText);
     if (!baseline) {
@@ -1048,7 +1125,75 @@ export function checkLiveView(
     baselineTableLetters = baseline.tableLetters;
     baselineBodyGroups = baseline.bodyGroups;
     baselineNextIds = baseline.nextIds;
+    baselineRowTitles = baseline.rowTitles;
   }
+
+  // #3529: provenance of the published page — see the header comment.
+  const provenance = publishedProvenance ?? {
+    kind: 'unknown',
+    nonce: null,
+    reason: 'no provenance was supplied for the published page',
+  };
+  const stampedRowIds = new Set(provenance.stampedRowIds ?? []);
+  const isOwnRow = (id) =>
+    (provenance.kind === 'merged' || provenance.kind === 'own') && stampedRowIds.has(id);
+  // Rows whose verdict needed a provenance this run does not have; reported
+  // once, at the end.
+  const unknownProvenanceIds = [];
+  const publishingBlocks =
+    typeof publishingHtml === 'string'
+      ? parseLiveViewRowBlocks(stripHtmlComments(publishingHtml))
+      : null;
+  const publishedBlocks = publishingBlocks ? parseLiveViewRowBlocks(liveViewHtml) : null;
+  // A row that would fail because publishing drops it passes when the file
+  // being published carries the live block verbatim ('carried'). A different
+  // copy is its own failure, reported here ('differs'); none at all leaves
+  // the original verdict standing ('absent').
+  // Memoised: the whole-group checks consult the same row from both the
+  // glance table and the section list, and a 'differs' is reported once.
+  const publishingVerdicts = new Map();
+  const publishingCarries = (id) => {
+    if (publishingVerdicts.has(id)) return publishingVerdicts.get(id);
+    const block = publishingBlocks?.get(id);
+    let verdict = 'carried';
+    if (block === undefined) verdict = 'absent';
+    else if (block !== publishedBlocks.get(id)) {
+      verdict = 'differs';
+      errors.push(
+        `${PUBLISHING_FILE_ERROR_PREFIX}${id}: the file passed to --publishing carries row ${id}, but its block differs from the live page's. Copy the live page's <details> block for ${id} into that file verbatim (another lane's row is that lane's to edit), then re-run.`,
+      );
+    }
+    publishingVerdicts.set(id, verdict);
+    return verdict;
+  };
+  const stillDropped = (id) => publishingCarries(id) === 'absent';
+  // A colliding row's new ID must clear every allocation surface: this
+  // register's next-id, the live page's highest ID, and origin/main's next-id
+  // (an ID main minted and since dropped is still spent — allocate-once).
+  const renumberAdvice = (letter) => {
+    const mineNext = parseNextIdMarker(
+      sections.find((s) => s.title.startsWith(`Group ${letter}`))?.body ?? '',
+      letter,
+    );
+    const liveNumbers = (lvSections.get(letter)?.rowIds ?? []).map((r) => Number(r.slice(1)));
+    const liveNext = liveNumbers.length > 0 ? Math.max(...liveNumbers) + 1 : 0;
+    const target = Math.max(mineNext ?? 0, liveNext, baselineNextIds?.get(letter) ?? 0);
+    return `Renumber your row to ${letter}${target} (the highest of your next-id, the live page's highest ID + 1 and origin/main's next-id), then re-run.`;
+  };
+  const provenanceText = () => {
+    const where = `publish id "${provenance.nonce}"${provenance.commit ? `, stamped in ${String(provenance.commit).slice(0, 12)}` : ''}`;
+    return provenance.kind === 'unmerged'
+      ? `The page was published from a branch origin/main has not merged (${where}), so the row is that lane's.`
+      : `The page's own publish (${where}) did not commit that row, so a union publish carried it for another lane that has not merged.`;
+  };
+  const unmergedLaneError = (id, letter) =>
+    `${UNMERGED_LANE_ROW_ERROR_PREFIX}${id}: the live page's Group ${letter} section has row ${id}, which origin/main lacks. ${provenanceText()} Publishing a file without it drops it: publish a file that carries that row's live block verbatim and name it with --publishing <file>, or coordinate with that lane first.`;
+  // A live-only row origin/main lacks: 'yours' (silent), 'foreign' (another
+  // unmerged lane's) or 'unknown'.
+  const classifyUnbaselined = (id) => {
+    if (provenance.kind === 'unknown') return 'unknown';
+    return isOwnRow(id) ? 'yours' : 'foreign';
+  };
 
   // The owed total, as the summary strip states it.
   const owedMatch = liveViewHtml.match(/<div class="n owed">(\d+)<\/div>/);
@@ -1123,7 +1268,9 @@ export function checkLiveView(
             // unnamed IDs, not just "add the group back".
             const liveRowIds = lvSections.get(letter)?.rowIds ?? [];
             const namedIds = liveRowIds.filter((id) => dischargingSet.has(id));
-            const unnamedIds = liveRowIds.filter((id) => !dischargingSet.has(id));
+            // #3529: a row the --publishing file carries verbatim is not
+            // dropped by this publish.
+            const unnamedIds = liveRowIds.filter((id) => !dischargingSet.has(id) && stillDropped(id));
             // Every named id genuinely IS live-only for this letter, whether
             // it ends up fully discharging the group or not — consumed
             // unconditionally so a partial match isn't ALSO reported as an
@@ -1222,12 +1369,12 @@ export function checkLiveView(
       }
     }
     // #3529: "origin/main lacks it" alone is NOT proof of a discharge — a row
-    // an UNMERGED lane added has the same shape. A discharged row was
-    // allocated on main, so its number sits below main's group `next-id`; one
-    // at or above it was allocated by a lane that has not merged. (Only rows
-    // with numeric IDs reach here: Blocked/Unconfirmed rows use `—` and are
-    // never in `rowIds`, so their handling is unchanged.) A named
-    // `--discharging` id still suppresses it.
+    // an UNMERGED lane added has the same shape. Provenance decides (see the
+    // header comment): only a row the page's own merged/own publish committed
+    // is silent. (Only rows with numeric IDs reach here: Blocked/Unconfirmed
+    // rows use `—` and are never in `rowIds`, so their handling is
+    // unchanged.) `--discharging` does NOT suppress another lane's row: it
+    // names rows THIS change discharged, and those are already silent.
     const unmergedExtra = [];
     const staleExtra =
       direction === 'extraOnly'
@@ -1237,13 +1384,10 @@ export function checkLiveView(
             const [, idLetter, idNumber] = idMatch;
             const baselineNumbers = baselineBodyGroups.get(idLetter) ?? [];
             if (!baselineNumbers.includes(Number(idNumber))) {
-              const mainNextId = baselineNextIds.get(idLetter);
-              if (
-                mainNextId != null &&
-                Number(idNumber) >= mainNextId &&
-                !dischargingSet.has(id)
-              ) {
-                unmergedExtra.push(id);
+              const verdict = classifyUnbaselined(id);
+              if (verdict !== 'yours' && stillDropped(id)) {
+                if (verdict === 'foreign') unmergedExtra.push(id);
+                else unknownProvenanceIds.push(id);
               }
               return false;
             }
@@ -1251,7 +1395,7 @@ export function checkLiveView(
             // baseline (pre-merge origin/main) hasn't caught up yet because
             // this run is BEFORE merge, not because the row is a genuine
             // competing-lane addition.
-            return !dischargingSet.has(id);
+            return !dischargingSet.has(id) && stillDropped(id);
           })
         : extra;
     if (staleExtra.length > 0) {
@@ -1261,11 +1405,7 @@ export function checkLiveView(
           : `Live view's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's Group ${letter} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
       );
     }
-    for (const id of unmergedExtra) {
-      errors.push(
-        `${UNMERGED_LANE_ROW_ERROR_PREFIX}${id}: the live page's Group ${letter} section has row ${id}, which origin/main lacks and which sits at or above origin/main's next-id (${letter}${baselineNextIds.get(letter)}) — another unmerged lane has published it. Publishing this register would drop it. Publish the union of both lanes' rows, or coordinate with that lane first. (Name it via --discharging ${id} only if you deliberately discharged it.)`,
-      );
-    }
+    for (const id of unmergedExtra) errors.push(unmergedLaneError(id, letter));
     if (section.rowIds.length !== found.size) {
       const seen = new Set();
       const dupes = [...new Set(section.rowIds.filter((id) => seen.has(id) || !seen.add(id)))];
@@ -1284,7 +1424,8 @@ export function checkLiveView(
           // the per-row `extra` logic above.
           const liveRowIds = lvSections.get(letter)?.rowIds ?? [];
           const namedIds = liveRowIds.filter((id) => dischargingSet.has(id));
-          const unnamedIds = liveRowIds.filter((id) => !dischargingSet.has(id));
+          // #3529: a row the --publishing file carries verbatim is not dropped.
+          const unnamedIds = liveRowIds.filter((id) => !dischargingSet.has(id) && stillDropped(id));
           // Every named id genuinely IS live-only for this letter, whether it
           // ends up fully discharging the group or not — consumed
           // unconditionally so a partial match isn't ALSO reported as an
@@ -1305,6 +1446,17 @@ export function checkLiveView(
             errors.push(
               `The live page has a Group ${letter} section that this register's body does not — the register is BEHIND what is already published. Add the section before publishing.`,
             );
+          }
+        } else {
+          // #3529: a group origin/main has never had — a brand-new letter.
+          // Its rows are classified one by one, exactly like a live-only row
+          // in a group both sides have: nothing here is keyed on a marker.
+          for (const id of lvSections.get(letter)?.rowIds ?? []) {
+            if (dischargingSet.has(id)) consumedDischargingIds.add(id);
+            const verdict = classifyUnbaselined(id);
+            if (verdict === 'yours' || !stillDropped(id)) continue;
+            if (verdict === 'foreign') errors.push(unmergedLaneError(id, letter));
+            else unknownProvenanceIds.push(id);
           }
         }
         continue;
@@ -1403,8 +1555,9 @@ export function checkLiveView(
     errors.push(...taggedTrackedErrors, ...taggedPublishedErrors, ...taggedBaselineErrors);
     // #3529: same ID, genuinely different title, and origin/main has no such
     // row — two lanes each allocated it, so the by-ID comparison would call
-    // them equal. A row origin/main DOES have is an ordinary edit, left to the
-    // content-drift hashing below.
+    // them equal. Not when the live page is this lane's OWN earlier publish
+    // and its commit carried the row: that is a retitle. A row origin/main
+    // DOES have is the merge-base check's business (after this block).
     const trackedTitles = parseLiveViewRowTitles(stripHtmlComments(trackedLiveViewHtml));
     const publishedTitles = parseLiveViewRowTitles(liveViewHtml);
     for (const [id, trackedTitle] of trackedTitles) {
@@ -1412,16 +1565,13 @@ export function checkLiveView(
       if (publishedTitle === undefined || publishedTitle === trackedTitle) continue;
       const [, idLetter, idNumber] = id.match(/^([A-Z])(\d+)$/);
       if ((baselineBodyGroups.get(idLetter) ?? []).includes(Number(idNumber))) continue;
-      const mineNext = parseNextIdMarker(
-        sections.find((s) => s.title.startsWith(`Group ${idLetter}`))?.body ?? '',
-        idLetter,
-      );
-      const liveMax = Math.max(
-        ...(lvSections.get(idLetter)?.rowIds ?? []).map((r) => Number(r.slice(1))),
-      );
-      const target = Math.max(mineNext ?? 0, liveMax + 1);
+      if (provenance.kind === 'own' && stampedRowIds.has(id)) continue;
+      if (provenance.kind === 'unknown') {
+        unknownProvenanceIds.push(id);
+        continue;
+      }
       errors.push(
-        `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${trackedTitle}" but the live page's ${id} is "${publishedTitle}" — two lanes allocated the same ID. Renumber your row to ${idLetter}${target} (the higher of your next-id and the live page's highest ID + 1), then re-run.`,
+        `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${trackedTitle}" but the live page's ${id} is "${publishedTitle}" — two lanes allocated the same ID. ${renumberAdvice(idLetter)}`,
       );
     }
     for (const [id, trackedBody] of trackedRowBodies) {
@@ -1476,6 +1626,33 @@ export function checkLiveView(
           `${THREE_WAY_CONTENT_WARNING_PREFIX}${id}: content differs in three-way comparison (local vs published vs origin/main) — this is usually an ordinary multi-step edit before merging, not investigated further; if this row's content seems wrong, check manually`,
         );
       }
+    }
+  }
+
+  if (direction === 'extraOnly') {
+    // #3529 (review pass 1): a collision with a lane that has ALREADY merged.
+    // origin/main has the row, so the checks above treat it as main's; but if
+    // the merge-base this branch forked from lacks it while this register
+    // carries it under another title, both lanes minted it independently.
+    if (mergeBaseText === null) {
+      errors.push(
+        `${UNKNOWN_PROVENANCE_ERROR_PREFIX}the register at merge-base(HEAD, origin/main) could not be read, so a row ID this branch and an already-merged lane both minted cannot be detected. Check that HEAD and origin/main share history (an unshallowed clone), then re-run. Do not publish until this passes.`,
+      );
+    } else if (typeof mergeBaseText === 'string') {
+      const mergeBaseIds = new Set(parseRegisterRowTitles(mergeBaseText).keys());
+      for (const [id, mineTitle] of parseRegisterRowTitles(markdownText)) {
+        const mainTitle = baselineRowTitles.get(id);
+        if (mainTitle === undefined || mainTitle === mineTitle || mergeBaseIds.has(id)) continue;
+        errors.push(
+          `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${mineTitle}" but origin/main's ${id} is "${mainTitle}", and the merge-base your branch forked from has no ${id} — two lanes allocated the same ID and the other merged first. ${renumberAdvice(id[0])}`,
+        );
+      }
+    }
+    if (unknownProvenanceIds.length > 0) {
+      const ids = [...new Set(unknownProvenanceIds)];
+      errors.push(
+        `${UNKNOWN_PROVENANCE_ERROR_PREFIX}cannot tell who published the live page — ${provenance.reason}${provenance.nonce ? ` (publish id "${provenance.nonce}")` : ''} — so whether ${ids.join(', ')} ${ids.length === 1 ? 'is' : 'are'} yours, discharged, or another unmerged lane's cannot be decided. Fetch every branch (git fetch origin '+refs/heads/*:refs/remotes/origin/*') and re-run, or confirm the page's provenance by hand. Do not publish until this passes.`,
+      );
     }
   }
 
@@ -1610,7 +1787,99 @@ export function resolveBaselineTexts(
     registerText: registerResult.stdout,
     liveViewText: liveViewResult.stdout,
     failedStep: null,
+    // #3529: the frozen SHA, so provenance and the merge-base are resolved
+    // against the same commit the baseline texts came from.
+    fetchedSha,
   };
+}
+
+// #3529: the newest commit in `ref`'s history whose live view carries
+// `data-publish-id="<nonce>"`, with that file's text. The pickaxe flags are
+// `nonceInHistory`'s (scripts/publish-token.mjs), for the same three reasons
+// its header gives — `--full-history`, the anchored `-S`, and
+// `--diff-merges=first-parent` — plus `-s`, without which that last flag
+// streams a full patch. Pickaxe lists the commits that CHANGED the anchor's
+// count, so the commit that later re-stamped it away is listed too; reading
+// each candidate's file and keeping the first that still carries the anchor
+// picks the stamping commit. `{ failed: true }` when git itself failed, so a
+// failed lookup is never read as "not found".
+function findStampingCommit(repoRoot, liveViewPath, nonce, ref, gitRunner) {
+  const anchored = `data-publish-id="${nonce}"`;
+  const log = gitRunner(
+    ['log', '--format=%H', '-s', '--full-history', '--diff-merges=first-parent', '-S', anchored, ref, '--', liveViewPath],
+    repoRoot,
+  );
+  if (log.error || log.status !== 0 || typeof log.stdout !== 'string') return { failed: true };
+  for (const sha of log.stdout.split(/\s+/).filter(Boolean)) {
+    const show = gitRunner(['show', `${sha}:${liveViewPath}`], repoRoot);
+    if (show.error || show.status !== 0 || typeof show.stdout !== 'string') continue;
+    if (show.stdout.includes(anchored)) return { sha, html: show.stdout };
+  }
+  return { sha: null };
+}
+
+// #3529: who published the live page — the provenance `checkLiveView`'s
+// `options.publishedProvenance` consumes (see that function's header for what
+// each kind means and why content alone cannot answer this). Searched in
+// order: origin/main (`mainRef`, the frozen FETCH_HEAD SHA), then HEAD, then
+// every ref this checkout has (`--all` — deliberately, unlike
+// `nonceInHistory`: the question here is "which branch stamped it", and a
+// fetched-but-unmerged lane is exactly the answer being looked for). A nonce
+// in none of them, a page with no token, and a failed lookup are all
+// 'unknown' — never a default to any other kind.
+export function resolvePublishedProvenance(
+  repoRoot,
+  liveViewPath,
+  publishedHtml,
+  mainRef,
+  gitRunner = runGitCommand,
+) {
+  const token = parsePublishToken(publishedHtml);
+  if (token === null) {
+    return { kind: 'unknown', nonce: null, reason: 'the live page carries no publish token' };
+  }
+  if (token.malformed) {
+    return { kind: 'unknown', nonce: null, reason: `the live page's publish token is malformed: ${token.malformed}` };
+  }
+  const { nonce } = token;
+  const lookupFailed = (ref) => ({
+    kind: 'unknown',
+    nonce,
+    reason: `could not search ${ref}'s history for the page's publish id (a git call failed)`,
+  });
+  for (const [kind, ref, label] of [
+    ['merged', mainRef, 'origin/main'],
+    ['own', 'HEAD', 'HEAD'],
+  ]) {
+    const found = findStampingCommit(repoRoot, liveViewPath, nonce, ref, gitRunner);
+    if (found.failed) return lookupFailed(label);
+    if (found.sha) {
+      return { kind, nonce, commit: found.sha, stampedRowIds: liveViewRowIdSet(found.html) };
+    }
+  }
+  const anywhere = findStampingCommit(repoRoot, liveViewPath, nonce, '--all', gitRunner);
+  if (anywhere.failed) return lookupFailed('every branch');
+  if (anywhere.sha) return { kind: 'unmerged', nonce, commit: anywhere.sha };
+  return {
+    kind: 'unknown',
+    nonce,
+    reason: 'its publish id is not in any git history this checkout has (an unfetched branch, or a hand-published page)',
+  };
+}
+
+// #3529: the register at merge-base(HEAD, `mainRef`), for the merged-lane
+// collision check. '' when the register did not exist there yet (no rows);
+// null when git could not answer, which `checkLiveView` fails closed on.
+export function resolveMergeBaseRegister(repoRoot, registerPath, mainRef, gitRunner = runGitCommand) {
+  const mergeBase = gitRunner(['merge-base', 'HEAD', mainRef], repoRoot);
+  if (mergeBase.error || mergeBase.status !== 0 || typeof mergeBase.stdout !== 'string') return null;
+  const show = gitRunner(['show', `${mergeBase.stdout.trim()}:${registerPath}`], repoRoot);
+  if (show.error) return null;
+  if (show.status !== 0) {
+    const stderr = typeof show.stderr === 'string' ? show.stderr : '';
+    return stderr.includes('does not exist in') || stderr.includes('exists on disk, but not in') ? '' : null;
+  }
+  return typeof show.stdout === 'string' ? show.stdout : null;
 }
 
 // #3116: reads the live view AT an arbitrary ref (the PR base, in CI) for
@@ -1771,10 +2040,12 @@ function runCheckOnboxRegisterCli() {
     // Refuse explicitly rather than silently ignoring them.
     const againstPublishedIdx = process.argv.indexOf('--against-published');
     const dischargingIdx = process.argv.indexOf('--discharging');
-    if (againstPublishedIdx !== -1 || dischargingIdx !== -1) {
+    const publishingIdx = process.argv.indexOf('--publishing');
+    if (againstPublishedIdx !== -1 || dischargingIdx !== -1 || publishingIdx !== -1) {
       const conflicting = [];
       if (againstPublishedIdx !== -1) conflicting.push('--against-published');
       if (dischargingIdx !== -1) conflicting.push('--discharging');
+      if (publishingIdx !== -1) conflicting.push('--publishing');
       console.error(
         `--stamped-since cannot be combined with ${conflicting.join(' and ')}. ` +
           `--stamped-since is for CI (checks if content moved without a stamp); ` +
@@ -1923,6 +2194,40 @@ function runCheckOnboxRegisterCli() {
           'commas — pass at least one, e.g. --discharging E10 or --discharging E10,E11.',
       );
       throw new CliExitError(1);
+    }
+  }
+
+  // --publishing <file> (#3529): the file actually about to be published, when
+  // it is not the tracked live view — a union carrying another lane's rows.
+  // Same single-value, only-with-`--against-published` contract as
+  // --discharging above.
+  const publishingIdx = process.argv.indexOf('--publishing');
+  let publishingHtml;
+  if (publishingIdx !== -1) {
+    if (process.argv.lastIndexOf('--publishing') !== publishingIdx) {
+      console.error('--publishing was passed more than once — pass exactly one file.');
+      throw new CliExitError(1);
+    }
+    if (againstPublishedIdx === -1) {
+      console.error(
+        '--publishing only makes sense alongside --against-published — it names the file you ' +
+          'are about to publish, so it is compared against the page currently live.',
+      );
+      throw new CliExitError(1);
+    }
+    const publishingPath = process.argv[publishingIdx + 1];
+    if (!publishingPath) {
+      console.error('--publishing requires a value: the path of the file you are about to publish.');
+      throw new CliExitError(1);
+    }
+    try {
+      publishingHtml = readFileSync(resolve(publishingPath), 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'EISDIR' || err.code === 'EACCES') {
+        console.error(`Cannot read --publishing ${publishingPath} (${err.code}) — pass a readable file path.`);
+        throw new CliExitError(1);
+      }
+      throw err;
     }
   }
 
@@ -2078,12 +2383,45 @@ function runCheckOnboxRegisterCli() {
     const trackedLiveViewHtml = trackedLiveViewFileOverride
       ? readFileSync(resolve(trackedLiveViewFileOverride), 'utf8')
       : read(LIVE_VIEW);
+    // #3529: who published the live page, and the register at the merge-base
+    // — see `checkLiveView`'s header. Resolved against the SAME frozen SHA the
+    // baseline texts came from. TEST-ONLY override, mirroring the ones above:
+    // `ONBOX_TEST_PUBLISHED_PROVENANCE` (merged | own | unmerged | unknown)
+    // replaces the git lookup, with the published page's own rows standing in
+    // for the stamping commit's; under `ONBOX_TEST_BASELINE_FILE` (no git
+    // SHA to search) it defaults to 'merged', #2199's original reading, and
+    // the merge-base check is skipped.
+    const provenanceOverride =
+      process.env.ONBOX_TEST_PUBLISHED_PROVENANCE ?? (baselineFileOverride ? 'merged' : undefined);
+    if (process.env.ONBOX_TEST_PUBLISHED_PROVENANCE) {
+      console.error(
+        `WARNING: published-page provenance injected from ONBOX_TEST_PUBLISHED_PROVENANCE=${provenanceOverride}; ` +
+          'this is NOT a real git lookup and must never be used to gate a publish.',
+      );
+    }
+    let publishedProvenance;
+    let mergeBaseText;
+    if (provenanceOverride) {
+      const token = parsePublishToken(publishedHtml);
+      publishedProvenance = {
+        kind: provenanceOverride,
+        nonce: token && !token.malformed ? token.nonce : null,
+        reason: 'injected by ONBOX_TEST_PUBLISHED_PROVENANCE',
+        stampedRowIds: liveViewRowIdSet(publishedHtml),
+      };
+    } else if (baseline.fetchedSha) {
+      publishedProvenance = resolvePublishedProvenance(repoRoot, LIVE_VIEW, publishedHtml, baseline.fetchedSha);
+      mergeBaseText = resolveMergeBaseRegister(repoRoot, REGISTER, baseline.fetchedSha);
+    }
     const publishedErrors = checkLiveView(text, publishedHtml, {
       direction: 'extraOnly',
       baselineText: baseline.registerText,
       dischargingIds,
       trackedLiveViewHtml,
       baselineLiveViewText: baseline.liveViewText,
+      publishedProvenance,
+      publishingHtml,
+      mergeBaseText,
     });
     // The fail-closed "cannot verify" case (#2199) does not mean the
     // register IS behind (that's unknown), so it gets its own label rather
@@ -2136,6 +2474,12 @@ function runCheckOnboxRegisterCli() {
     const unmergedLaneErrors = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(UNMERGED_LANE_ROW_ERROR_PREFIX));
+    const unknownProvenanceErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(UNKNOWN_PROVENANCE_ERROR_PREFIX));
+    const publishingFileErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(PUBLISHING_FILE_ERROR_PREFIX));
     const threeWayWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX));
@@ -2146,6 +2490,8 @@ function runCheckOnboxRegisterCli() {
             !e.startsWith(DISCHARGE_NAME_ERROR_PREFIX) &&
             !e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX) &&
             !e.startsWith(UNMERGED_LANE_ROW_ERROR_PREFIX) &&
+            !e.startsWith(UNKNOWN_PROVENANCE_ERROR_PREFIX) &&
+            !e.startsWith(PUBLISHING_FILE_ERROR_PREFIX) &&
             !e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX) &&
             !e.startsWith(EXTRACTION_ERROR_PREFIX) &&
             !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX),
@@ -2169,8 +2515,8 @@ function runCheckOnboxRegisterCli() {
       if (collisionErrors.length > 0) {
         publishedFailed =
           report(
-            `${publishedPath} (the currently-PUBLISHED page) carries a row ID that ${LIVE_VIEW} ` +
-              'also uses for a different row',
+            `Another lane (on ${publishedPath} or already on origin/main) uses a row ID that ` +
+              `${LIVE_VIEW} also uses for a different row`,
             collisionErrors,
           ) || publishedFailed;
         console.error('Do not publish. Renumber your row as each error above says.');
@@ -2182,8 +2528,21 @@ function runCheckOnboxRegisterCli() {
             unmergedLaneErrors,
           ) || publishedFailed;
         console.error(
-          "Do not publish: it would drop that lane's rows. Publish the union, or coordinate with that lane.",
+          "Do not publish this file: it would drop that lane's rows. Publish a file that carries " +
+            'each row named above verbatim and pass it via --publishing <file>, or coordinate with ' +
+            'that lane first.',
         );
+      }
+      if (publishingFileErrors.length > 0) {
+        publishedFailed =
+          report('The --publishing file does not carry the live page\'s rows verbatim', publishingFileErrors) ||
+          publishedFailed;
+        console.error('Do not publish. Copy each named row block from the live page into that file unchanged.');
+      }
+      if (unknownProvenanceErrors.length > 0) {
+        publishedFailed =
+          report(`Who published ${publishedPath} could not be established`, unknownProvenanceErrors) ||
+          publishedFailed;
       }
       if (contentDriftErrors.length > 0) {
         publishedFailed =

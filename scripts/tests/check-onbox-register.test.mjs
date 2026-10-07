@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -18,12 +18,18 @@ import {
   THREE_WAY_CONTENT_WARNING_PREFIX,
   ROW_ID_COLLISION_ERROR_PREFIX,
   UNMERGED_LANE_ROW_ERROR_PREFIX,
+  UNKNOWN_PROVENANCE_ERROR_PREFIX,
+  PUBLISHING_FILE_ERROR_PREFIX,
+  DISCHARGE_NAME_ERROR_PREFIX,
+  resolvePublishedProvenance,
+  resolveMergeBaseRegister,
   stripHtmlComments,
   htmlCellText,
   ALLOCATION_FLOOR,
   parseNextIdMarker,
 } from '../check-onbox-register.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
+import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-onbox-register.mjs');
@@ -1459,6 +1465,8 @@ test('#2199: a discharge + renumber passes when origin/main also lacks the disch
   const errors = checkLiveView(workingRegister, liveView, {
     direction: 'extraOnly',
     baselineText: baselineRegister,
+    // #3529: a discharge is a row the page's own merged publish committed.
+    publishedProvenance: { kind: 'merged', nonce: 'main0x1', stampedRowIds: ['C1', 'C2', 'C3'] },
   });
   assert.deepEqual(errors, []);
 });
@@ -2271,6 +2279,7 @@ test('resolveBaselineTexts: fetch, then rev-parse FETCH_HEAD, then show <sha> fo
     registerText: 'FAKE REGISTER TEXT',
     liveViewText: 'FAKE LIVEVIEW TEXT',
     failedStep: null,
+    fetchedSha: 'deadbeefcafe',
   });
 });
 
@@ -2876,17 +2885,11 @@ test('--against-published exits 0 when the saved copy LAGS the register (the nor
 test('--against-published exits 0 when a live-page row is absent from BOTH the register and its (hermetic) baseline (a discharge, #2199)', () => {
   const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
   const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
-  // #3529: a discharged row was allocated on main, so main's own next-id sits
-  // ABOVE it. Bump the baseline's Group B marker past `newId` to model that;
-  // without the bump the row reads as an unmerged lane's (next test).
-  const nextIdRegex = /^(<!--\s*next-id:\s*B)(\d+)(\s*-->\s*\r?)$/m;
-  const dischargedBaseline = REAL_REGISTER_TEXT.replace(
-    nextIdRegex,
-    (_, pre, n, post) => `${pre}${Math.max(Number(n), lastB + 2)}${post}`,
-  );
-  withHermeticBaseline(mutated, dischargedBaseline, (publishedPath, baselinePath) => {
+  withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
     const r = runCli(['--against-published', publishedPath], {
       ONBOX_TEST_BASELINE_FILE: baselinePath,
+      // #3529: a discharge is a row the page's own MERGED publish carried.
+      ONBOX_TEST_PUBLISHED_PROVENANCE: 'merged',
     });
     assert.equal(
       r.status,
@@ -2898,22 +2901,123 @@ test('--against-published exits 0 when a live-page row is absent from BOTH the r
   });
 });
 
-// #3529: the same shape with main's marker NOT past the row — a row an
-// unmerged lane added — must fail, via its own bucket and remedy.
-test('--against-published exits 1 for a live-only row at or above the baseline next-id (an unmerged lane, #3529)', () => {
+// #3529: the same shape on a page an UNMERGED lane published — that lane's
+// row, not a discharge — must fail, via its own bucket and remedy.
+test('--against-published exits 1 for a live-only row on a page an unmerged lane published (#3529)', () => {
   const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
   const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
-  const nextIdB = parseNextIdMarker(REAL_REGISTER_TEXT, 'B');
-  assert.ok(nextIdB <= lastB + 1, 'fixture setup: the real next-id must not already cover the renamed row');
   withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
     const r = runCli(['--against-published', publishedPath], {
       ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged',
     });
     assert.equal(r.status, 1, `stdout: ${r.stdout}, stderr: ${r.stderr}`);
-    assert.ok(r.stderr.includes(newId), r.stderr);
-    assert.match(r.stderr, /unmerged lane/);
+    assert.ok(r.stderr.includes(`unmerged-lane-row: ${newId}:`), r.stderr);
+    assert.match(
+      r.stderr,
+      /WARNING: published-page provenance injected from ONBOX_TEST_PUBLISHED_PROVENANCE=unmerged/,
+    );
+    assert.ok(r.stderr.includes('--publishing'), 'names the union path');
     assert.ok(!r.stderr.includes('Merge the rows named above'), 'must not get the BEHIND remedy');
   });
+});
+
+// #3529 (review pass 1, 🟡2): the collision class reaches its OWN bucket and
+// remedy through the CLI, never the BEHIND "merge the rows" remedy. Two lanes
+// each minted the next Group B ID with different titles.
+test('--against-published routes a row-ID collision to its own bucket and remedy (#3529)', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
+  const retitle = (html, title) =>
+    html.replace(
+      new RegExp(`(<span class="num">${newId}</span>\\s*<span class="iname">)[\\s\\S]*?(</span>)`),
+      `$1${title}$2`,
+    );
+  const tracked = retitle(mutated, 'Mine, a row this lane minted');
+  const published = retitle(mutated, 'Theirs, a row another lane minted');
+  assert.notEqual(tracked, mutated, 'fixture setup: the iname must have matched');
+  withHermeticBaseline(published, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const trackedPath = join(dirname(publishedPath), 'tracked.html');
+    writeFileSync(trackedPath, tracked, 'utf8');
+    const r = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_TRACKED_LIVEVIEW_FILE: trackedPath,
+      ONBOX_TEST_PUBLISHED_PROVENANCE: 'merged',
+    });
+    assert.equal(r.status, 1, `stdout: ${r.stdout}, stderr: ${r.stderr}`);
+    assert.ok(r.stderr.includes(`row-id-collision: ${newId}:`), r.stderr);
+    assert.ok(r.stderr.includes('Renumber your row as each error above says'), r.stderr);
+    assert.ok(!r.stderr.includes('Merge the rows named above'), 'must not get the BEHIND remedy');
+    assert.ok(!/BEHIND what is already live/.test(r.stderr), 'must not be reported in the BEHIND bucket');
+  });
+});
+
+// #3529 (review pass 1, 🟠 no green path): `--publishing <file>` is the
+// union path — the file about to be published carries the other lane's row.
+test('--against-published --publishing a union file goes green; without it the same run fails (#3529)', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const { mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
+  // The union: the tracked page (row lastB) PLUS the other lane's row
+  // (lastB + 1), its block copied verbatim from the live page.
+  const blockOf = (html, id) =>
+    html.match(
+      new RegExp(
+        `<details\\b[^>]*class="item"[^>]*>\\s*<summary><span class="num">${id}</span>[\\s\\S]*?</details>`,
+      ),
+    )[0];
+  const theirs = blockOf(mutated, `B${lastB + 1}`);
+  const mine = blockOf(REAL_LIVE_VIEW_HTML, `B${lastB}`);
+  const union = REAL_LIVE_VIEW_HTML.replace(mine, `${mine}\n    ${theirs}`);
+  assert.notEqual(union, REAL_LIVE_VIEW_HTML, 'fixture setup: the union must differ');
+  withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const unionPath = join(dirname(publishedPath), 'union.html');
+    writeFileSync(unionPath, union, 'utf8');
+    const env = { ONBOX_TEST_BASELINE_FILE: baselinePath, ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged' };
+    const without = runCli(['--against-published', publishedPath], env);
+    assert.equal(without.status, 1, without.stderr);
+    const withUnion = runCli(['--against-published', publishedPath, '--publishing', unionPath], env);
+    assert.equal(withUnion.status, 0, `stdout: ${withUnion.stdout}, stderr: ${withUnion.stderr}`);
+    assert.match(withUnion.stdout, /check:onbox-register: OK/);
+  });
+});
+
+// #3529: the other two new classes reach their own buckets too, never the
+// BEHIND "merge the rows" remedy.
+test('--against-published routes unknown-provenance and publishing-file errors to their own buckets (#3529)', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
+  withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const unknown = runCli(['--against-published', publishedPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_PUBLISHED_PROVENANCE: 'unknown',
+    });
+    assert.equal(unknown.status, 1, unknown.stderr);
+    assert.match(unknown.stderr, /could not be established:\s+- unknown-provenance: /);
+    assert.ok(unknown.stderr.includes(newId), unknown.stderr);
+    assert.ok(!/BEHIND what is already live/.test(unknown.stderr), unknown.stderr);
+
+    // A union whose copy of the other lane's row was edited.
+    const block = mutated.match(
+      new RegExp(`<details\\b[^>]*class="item"[^>]*>\\s*<summary><span class="num">${newId}</span>[\\s\\S]*?</details>`),
+    )[0];
+    const edited = mutated.replace(block, block.replace('<div class="body">', '<div class="body"><p>edited</p>'));
+    assert.notEqual(edited, mutated, 'fixture setup: the body must have matched');
+    const unionPath = join(dirname(publishedPath), 'union.html');
+    writeFileSync(unionPath, edited, 'utf8');
+    const differs = runCli(['--against-published', publishedPath, '--publishing', unionPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged',
+    });
+    assert.equal(differs.status, 1, differs.stderr);
+    assert.match(differs.stderr, /does not carry the live page's rows verbatim:\s+- publishing-file: /);
+    assert.ok(!/BEHIND what is already live/.test(differs.stderr), differs.stderr);
+  });
+});
+
+test('--publishing without --against-published is refused (#3529)', () => {
+  const r = runCli(['--publishing', 'x.html']);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--publishing only makes sense alongside --against-published/);
 });
 
 // #2199 review round 3 (A6): the test this replaced (the pre-#2199 "AHEAD"
@@ -3894,16 +3998,19 @@ test('every Import-Module command quoted in docs/testing is executable as writte
 });
 
 // ---------------------------------------------------------------------------
-// #3529: two ways `--against-published` passed a publish that would have
-// broken another lane's rows (the 2026-10-07 PR #3525 / #3505 incident).
+// #3529: ways `--against-published` passed a publish that would have broken
+// another lane's rows (the 2026-10-07 PR #3525 / #3505 incident), and how the
+// check now tells them apart.
 //
-//  1. A row-ID COLLISION: both sides carry B103, allocated independently by two
-//     unmerged lanes, with different titles. Matching by ID alone called them
-//     equal.
+//  1. A row-ID COLLISION: two lanes each allocated B103, with different
+//     titles. Matching by ID alone called them equal.
 //  2. An UNMERGED LANE'S live-only row: #2199 reads "live has it, origin/main
 //     lacks it" as a discharge, but a row an unmerged PR ADDED has the same
-//     shape. A discharged row was allocated on main, so its number sits below
-//     main's group `next-id`; an unmerged lane's sits at or above it.
+//     shape. What separates them is PROVENANCE: which commit stamped the live
+//     page's `data-publish-id`, and whether origin/main (or your own HEAD)
+//     contains it — `publishedProvenance` below, resolved from real git by
+//     `resolvePublishedProvenance` (covered against throwaway repos further
+//     down).
 //
 // Fixtures are minimal and synthetic: Group B, main's marker at B103.
 // ---------------------------------------------------------------------------
@@ -3911,6 +4018,12 @@ test('every Import-Module command quoted in docs/testing is executable as writte
 const MAIN_B = () => buildSingleGroupRegister('B', [101, 102], 103);
 const MINE_TITLE = 'Ollama structured-output modes on a real model';
 const THEIRS_TITLE = 'Abort and drain on a local Ollama analyzer';
+
+// A page published by a branch origin/main has not merged.
+const UNMERGED = { kind: 'unmerged', nonce: 'lane0x1', commit: 'abc1234' };
+// A merged / own publish whose committed live view carried exactly `ids`.
+const merged = (ids) => ({ kind: 'merged', nonce: 'main0x1', commit: 'def5678', stampedRowIds: ids });
+const own = (ids) => ({ kind: 'own', nonce: 'mine0x1', commit: 'aaa9999', stampedRowIds: ids });
 
 function collisionOptions({ trackedRows, publishedRows, working, baseline, extra = {} }) {
   return [
@@ -3920,6 +4033,7 @@ function collisionOptions({ trackedRows, publishedRows, working, baseline, extra
       direction: 'extraOnly',
       baselineText: baseline ?? MAIN_B(),
       trackedLiveViewHtml: buildRowContentLiveView(trackedRows, 'B'),
+      publishedProvenance: UNMERGED,
       ...extra,
     },
   ];
@@ -3930,6 +4044,8 @@ const baseRows = [
   { id: 'B102', body: 'x' },
 ];
 
+const ofPrefix = (errors, prefix) => errors.filter((e) => e.startsWith(prefix));
+
 test('#3529: the same row ID under a different title is a collision, naming the ID, both titles and the renumber target', () => {
   const errors = checkLiveView(
     ...collisionOptions({
@@ -3937,11 +4053,12 @@ test('#3529: the same row ID under a different title is a collision, naming the 
       publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
     }),
   );
-  const collision = errors.filter((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX));
+  const collision = ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX);
   assert.equal(collision.length, 1, JSON.stringify(errors));
   assert.match(collision[0], /B103/);
   assert.ok(collision[0].includes(MINE_TITLE) && collision[0].includes(THEIRS_TITLE));
-  // higher of the register's own next-id (B104) and the live page's highest + 1 (B104)
+  // highest of the register's own next-id (B104), the live page's highest + 1
+  // (B104) and origin/main's next-id (B103)
   assert.match(collision[0], /B104/);
 });
 
@@ -3961,6 +4078,21 @@ test('#3529: the renumber target is the live page highest ID + 1 when that excee
   assert.match(collision, /B109/);
 });
 
+// Review pass 1, 🟡1: main's own marker is a third allocation surface. main
+// minted B103-B105 (none survive there), so B104 is already spent.
+test('#3529: the renumber target respects origin/main next-id (allocate-once)', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      baseline: buildSingleGroupRegister('B', [101, 102], 106),
+      trackedRows: [...baseRows, { id: 'B103', body: 'mine', title: MINE_TITLE }],
+      publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+    }),
+  );
+  const collision = errors.find((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX));
+  assert.ok(collision, JSON.stringify(errors));
+  assert.match(collision, /Renumber your row to B106\b/);
+});
+
 test('#3529: the same row ID with the same title passes (no collision)', () => {
   const errors = checkLiveView(
     ...collisionOptions({
@@ -3968,7 +4100,7 @@ test('#3529: the same row ID with the same title passes (no collision)', () => {
       publishedRows: [...baseRows, { id: 'B103', body: 'mine', title: MINE_TITLE }],
     }),
   );
-  assert.ok(!errors.some((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX)), JSON.stringify(errors));
+  assert.equal(ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX).length, 0, JSON.stringify(errors));
 });
 
 test('#3529: whitespace, markup and entity differences in a title are not a collision', () => {
@@ -3977,14 +4109,14 @@ test('#3529: whitespace, markup and entity differences in a title are not a coll
       trackedRows: [...baseRows, { id: 'B103', body: 'a', title: 'Ollama structured output &amp; modes' }],
       publishedRows: [
         ...baseRows,
-        { id: 'B103', body: 'b', title: 'Ollama  <code>structured</code>&nbsp;output & modes' },
+        { id: 'B103', body: 'b', title: 'Ollama  <code>structured</code>&nbsp; output & modes' },
       ],
     }),
   );
-  assert.ok(!errors.some((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX)), JSON.stringify(errors));
+  assert.equal(ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX).length, 0, JSON.stringify(errors));
 });
 
-test('#3529: a retitled row that origin/main already has is content drift territory, not a collision', () => {
+test('#3529: a retitled row origin/main already has, with no merge-base evidence, is not a tracked-vs-live collision', () => {
   const baseline = buildSingleGroupRegister('B', [101, 102, 103], 104);
   const errors = checkLiveView(
     ...collisionOptions({
@@ -3993,10 +4125,41 @@ test('#3529: a retitled row that origin/main already has is content drift territ
       publishedRows: [...baseRows, { id: 'B103', body: 'mine', title: 'original title' }],
     }),
   );
-  assert.ok(!errors.some((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX)), JSON.stringify(errors));
+  assert.equal(ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX).length, 0, JSON.stringify(errors));
 });
 
-test('#3529: a live-only row at or above main next-id is another unmerged lane, not a discharge', () => {
+// Review pass 1, 🟠 (own retitle): this lane minted B103 "Old title",
+// published it, then a review round retitled it. The live page is this lane's
+// own earlier publish, so the title change is a retitle.
+test('#3529: own earlier publish — a same-ID title change is a retitle, not a collision', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      trackedRows: [...baseRows, { id: 'B103', body: 'v2', title: 'New title' }],
+      publishedRows: [...baseRows, { id: 'B103', body: 'v1', title: 'Old title' }],
+      extra: { publishedProvenance: own(['B101', 'B102', 'B103']) },
+    }),
+  );
+  assert.deepEqual(
+    errors.filter((e) => !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX)),
+    [],
+  );
+});
+
+// ...and the row the operator renumbered away from is still their own row,
+// never "another unmerged lane's".
+test('#3529: own earlier publish — a row this lane later dropped is its own, not another lane', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      working: buildSingleGroupRegister('B', [101, 102, 104], 105),
+      trackedRows: [...baseRows, { id: 'B104', body: 'v2', title: 'New title' }],
+      publishedRows: [...baseRows, { id: 'B103', body: 'v1', title: 'Old title' }],
+      extra: { publishedProvenance: own(['B101', 'B102', 'B103']) },
+    }),
+  );
+  assert.deepEqual(errors, []);
+});
+
+test('#3529: a live-only row origin/main lacks, on a page an unmerged lane published, is that lane’s row', () => {
   const errors = checkLiveView(
     ...collisionOptions({
       working: buildSingleGroupRegister('B', [101, 102], 103),
@@ -4004,26 +4167,94 @@ test('#3529: a live-only row at or above main next-id is another unmerged lane, 
       publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
     }),
   );
-  const unmerged = errors.filter((e) => e.startsWith(UNMERGED_LANE_ROW_ERROR_PREFIX));
+  const unmerged = ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX);
   assert.equal(unmerged.length, 1, JSON.stringify(errors));
-  assert.match(unmerged[0], /unmerged lane/);
   assert.match(unmerged[0], /B103/);
-  assert.match(unmerged[0], /union/);
+  assert.match(unmerged[0], /lane0x1/, 'names the publish id');
+  assert.match(unmerged[0], /--publishing/);
+  assert.ok(!/--discharging/.test(unmerged[0]), 'must never steer the operator to --discharging');
 });
 
-test('#3529: a live-only row below main next-id is a discharge and still passes (#2199)', () => {
+// Review pass 1, 🔴: the old next-id rule went silent here. #3525 merged
+// first (main = B101,B102,B105, next-id B106) and had published the UNION:
+// its own rows plus #3505's B103/B104. A later lane with no Group B change now
+// publishes against that union page.
+test('#3529: overtaken lane — rows a merged union publish carried for an unmerged lane still fail', () => {
+  const mainAfter3525 = buildSingleGroupRegister('B', [101, 102, 105], 106);
+  const mine = [...baseRows, { id: 'B105', body: '3525', title: '3525 row' }];
+  const errors = checkLiveView(
+    mainAfter3525,
+    buildRowContentLiveView(
+      [
+        ...baseRows,
+        { id: 'B103', body: '3505a', title: '3505 row a' },
+        { id: 'B104', body: '3505b', title: '3505 row b' },
+        { id: 'B105', body: '3525', title: '3525 row' },
+      ],
+      'B',
+    ),
+    {
+      direction: 'extraOnly',
+      baselineText: mainAfter3525,
+      trackedLiveViewHtml: buildRowContentLiveView(mine, 'B'),
+      baselineLiveViewText: buildRowContentLiveView(mine, 'B'),
+      // #3525's stamp commit is on main now; its committed live view carried
+      // only #3525's rows — B103/B104 rode in on the union publish.
+      publishedProvenance: merged(['B101', 'B102', 'B105']),
+    },
+  );
+  const unmerged = ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX);
+  assert.deepEqual(
+    unmerged.map((e) => e.match(/^unmerged-lane-row: (B\d+):/)?.[1]),
+    ['B103', 'B104'],
+    JSON.stringify(errors),
+  );
+});
+
+test('#3529: a merged publish whose committed live view carried the row — a genuine discharge (#2199)', () => {
   const errors = checkLiveView(
     ...collisionOptions({
       baseline: buildSingleGroupRegister('B', [101, 102], 104),
       working: buildSingleGroupRegister('B', [101, 102], 104),
       trackedRows: baseRows,
       publishedRows: [...baseRows, { id: 'B103', body: 'discharged', title: 'gone' }],
+      extra: { publishedProvenance: merged(['B101', 'B102', 'B103']) },
     }),
   );
   assert.deepEqual(errors, []);
 });
 
-test('#3529: --discharging still overrides the unmerged-lane verdict (#2272)', () => {
+// Review pass 1, 🔴 (second entry point): a brand-new group letter has no
+// marker on main; the provenance rule is not keyed on one.
+test('#3529: a whole new group an unmerged lane published fails per row', () => {
+  const live = buildMultiGroupLiveView(3, [
+    { letter: 'B', glanceCount: 2, headerCount: 2, rowIds: ['B101', 'B102'] },
+    { letter: 'I', glanceCount: 1, headerCount: 1, rowIds: ['I101'] },
+  ]);
+  const errors = checkLiveView(MAIN_B(), live, {
+    direction: 'extraOnly',
+    baselineText: MAIN_B(),
+    publishedProvenance: UNMERGED,
+  });
+  const unmerged = ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX);
+  assert.equal(unmerged.length, 1, JSON.stringify(errors));
+  assert.match(unmerged[0], /^unmerged-lane-row: I101:/);
+});
+
+test('#3529: a whole group discharged on a merged publish stays silent', () => {
+  const live = buildMultiGroupLiveView(3, [
+    { letter: 'B', glanceCount: 2, headerCount: 2, rowIds: ['B101', 'B102'] },
+    { letter: 'I', glanceCount: 1, headerCount: 1, rowIds: ['I101'] },
+  ]);
+  const errors = checkLiveView(MAIN_B(), live, {
+    direction: 'extraOnly',
+    baselineText: MAIN_B(),
+    publishedProvenance: merged(['B101', 'B102', 'I101']),
+  });
+  assert.deepEqual(errors, []);
+});
+
+test('#3529: --discharging does NOT suppress another lane’s row (it names only rows THIS change discharged)', () => {
   const errors = checkLiveView(
     ...collisionOptions({
       working: buildSingleGroupRegister('B', [101, 102], 103),
@@ -4032,7 +4263,137 @@ test('#3529: --discharging still overrides the unmerged-lane verdict (#2272)', (
       extra: { dischargingIds: ['B103'] },
     }),
   );
+  assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, JSON.stringify(errors));
+  assert.equal(ofPrefix(errors, DISCHARGE_NAME_ERROR_PREFIX).length, 0, 'the name is consumed, not also reported');
+});
+
+test('#3529: an untraceable publish id fails closed, naming the nonce and the fetch', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      working: buildSingleGroupRegister('B', [101, 102], 103),
+      trackedRows: baseRows,
+      publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+      extra: {
+        publishedProvenance: { kind: 'unknown', nonce: 'ghost0x1', reason: 'not found in any git history this checkout has' },
+      },
+    }),
+  );
+  const unknown = ofPrefix(errors, UNKNOWN_PROVENANCE_ERROR_PREFIX);
+  assert.equal(unknown.length, 1, JSON.stringify(errors));
+  assert.match(unknown[0], /ghost0x1/);
+  assert.match(unknown[0], /B103/);
+  assert.ok(unknown[0].includes("git fetch origin '+refs/heads/*:refs/remotes/origin/*'"), unknown[0]);
+  assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 0);
+});
+
+test('#3529: an untraceable publish id is not an error when no verdict depends on it', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      working: buildSingleGroupRegister('B', [101, 102], 103),
+      trackedRows: baseRows,
+      publishedRows: baseRows,
+      extra: { publishedProvenance: { kind: 'unknown', nonce: 'ghost0x1', reason: 'x' } },
+    }),
+  );
   assert.deepEqual(errors, []);
+});
+
+test('#3529: an extraOnly run with no provenance at all fails closed', () => {
+  const errors = checkLiveView(
+    buildSingleGroupRegister('B', [101, 102], 103),
+    buildRowContentLiveView([...baseRows, { id: 'B103', body: 'theirs' }], 'B'),
+    { direction: 'extraOnly', baselineText: MAIN_B() },
+  );
+  assert.equal(ofPrefix(errors, UNKNOWN_PROVENANCE_ERROR_PREFIX).length, 1, JSON.stringify(errors));
+});
+
+// Review pass 1, 🟠 (no green path): the union publish carries the other
+// lane's rows; `publishingHtml` is that file.
+test('#3529: --publishing a union file that carries the other lane’s rows byte-for-byte goes green', () => {
+  const theirs = [
+    { id: 'B103', body: 'theirs a', title: THEIRS_TITLE },
+    { id: 'B104', body: 'theirs b', title: 'second row from the unmerged lane' },
+  ];
+  const mine = [...baseRows, { id: 'B105', body: 'mine', title: MINE_TITLE }];
+  const [working, published, options] = collisionOptions({
+    working: buildSingleGroupRegister('B', [101, 102, 105], 106),
+    trackedRows: mine,
+    publishedRows: [...baseRows, ...theirs],
+  });
+  assert.equal(ofPrefix(checkLiveView(working, published, options), UNMERGED_LANE_ROW_ERROR_PREFIX).length, 2);
+  const union = buildRowContentLiveView([...baseRows, ...theirs, mine[2]], 'B');
+  assert.deepEqual(checkLiveView(working, published, { ...options, publishingHtml: union }), []);
+});
+
+test('#3529: --publishing a file whose copy of the other lane’s row differs from the live block fails', () => {
+  const theirs = [{ id: 'B103', body: 'theirs a', title: THEIRS_TITLE }];
+  const [working, published, options] = collisionOptions({
+    working: buildSingleGroupRegister('B', [101, 102], 103),
+    trackedRows: baseRows,
+    publishedRows: [...baseRows, ...theirs],
+  });
+  const union = buildRowContentLiveView([...baseRows, { ...theirs[0], body: 'edited copy' }], 'B');
+  const errors = checkLiveView(working, published, { ...options, publishingHtml: union });
+  const mismatch = ofPrefix(errors, PUBLISHING_FILE_ERROR_PREFIX);
+  assert.equal(mismatch.length, 1, JSON.stringify(errors));
+  assert.match(mismatch[0], /B103/);
+});
+
+test('#3529: --publishing a file that lacks the other lane’s row still fails', () => {
+  const [working, published, options] = collisionOptions({
+    working: buildSingleGroupRegister('B', [101, 102], 103),
+    trackedRows: baseRows,
+    publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+  });
+  const errors = checkLiveView(working, published, {
+    ...options,
+    publishingHtml: buildRowContentLiveView(baseRows, 'B'),
+  });
+  assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, JSON.stringify(errors));
+});
+
+// Review pass 1, 🟠 (merged-lane collision): lane X minted B103 "Theirs" and
+// merged; this lane branched earlier, minted its own B103 "Mine" and has not
+// rebased. main has B103, you have B103, the merge-base has none: both lanes
+// minted it.
+test('#3529: a collision with a lane that already merged fails via the merge-base', () => {
+  const mainWithTheirs = buildRowContentLiveView([...baseRows, { id: 'B103', body: 'theirs', title: 'Theirs' }], 'B');
+  const mainRegister = buildSingleGroupRegister('B', [101, 102, 103], 104).replace('### B103 · thing 103', '### B103 · Theirs');
+  const mineRegister = buildSingleGroupRegister('B', [101, 102, 103], 104).replace('### B103 · thing 103', '### B103 · Mine');
+  const errors = checkLiveView(mineRegister, mainWithTheirs, {
+    direction: 'extraOnly',
+    baselineText: mainRegister,
+    trackedLiveViewHtml: buildRowContentLiveView([...baseRows, { id: 'B103', body: 'mine', title: 'Mine' }], 'B'),
+    baselineLiveViewText: mainWithTheirs,
+    publishedProvenance: merged(['B101', 'B102', 'B103']),
+    mergeBaseText: MAIN_B(),
+  });
+  const collision = ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX);
+  assert.equal(collision.length, 1, JSON.stringify(errors));
+  assert.match(collision[0], /^row-id-collision: B103:/);
+  assert.match(collision[0], /Renumber your row to B104\b/);
+  // Same shape, but this lane rebased onto main (merge-base has B103): no
+  // collision, it is main's own row.
+  const rebased = checkLiveView(mineRegister, mainWithTheirs, {
+    direction: 'extraOnly',
+    baselineText: mainRegister,
+    trackedLiveViewHtml: buildRowContentLiveView([...baseRows, { id: 'B103', body: 'mine', title: 'Mine' }], 'B'),
+    baselineLiveViewText: mainWithTheirs,
+    publishedProvenance: merged(['B101', 'B102', 'B103']),
+    mergeBaseText: mainRegister,
+  });
+  assert.equal(ofPrefix(rebased, ROW_ID_COLLISION_ERROR_PREFIX).length, 0, JSON.stringify(rebased));
+});
+
+test('#3529: an unresolvable merge-base fails closed rather than skipping the merged-lane collision check', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      trackedRows: baseRows,
+      publishedRows: baseRows,
+      extra: { mergeBaseText: null },
+    }),
+  );
+  assert.equal(ofPrefix(errors, UNKNOWN_PROVENANCE_ERROR_PREFIX).length, 1, JSON.stringify(errors));
 });
 
 test('#3529: the real incident — colliding B103 and a live-only B104 — fails on both counts', () => {
@@ -4046,8 +4407,146 @@ test('#3529: the real incident — colliding B103 and a live-only B104 — fails
       ],
     }),
   );
-  assert.equal(errors.filter((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX)).length, 1);
-  const unmerged = errors.filter((e) => e.startsWith(UNMERGED_LANE_ROW_ERROR_PREFIX));
+  assert.equal(ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX).length, 1);
+  const unmerged = ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX);
   assert.equal(unmerged.length, 1);
   assert.match(unmerged[0], /B104/);
+});
+
+// ---------------------------------------------------------------------------
+// #3529: `resolvePublishedProvenance` / `resolveMergeBaseRegister` against
+// REAL git. Throwaway repositories, every spawn through
+// `scrubGitEnvForThrowawayRepo` — see publish-token-git.test.mjs's header for
+// why `cwd` alone does not isolate a git call. Self-contained (no network, no
+// dependence on this checkout's depth), so they run the same on CI.
+// ---------------------------------------------------------------------------
+
+const PROV_LIVE = 'docs/testing/onbox-acceptance-register-live-view.html';
+const PROV_REGISTER = 'docs/testing/onbox-acceptance-register.md';
+const provEnv = () => scrubGitEnvForThrowawayRepo();
+const provRunner = (args, cwd) => {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: provEnv(), windowsHide: true });
+  return { status: r.status, stdout: r.stdout, stderr: r.stderr, error: r.error };
+};
+const provGit = (repo, ...args) => {
+  const r = spawnSync('git', args, { cwd: repo, encoding: 'utf8', env: provEnv(), windowsHide: true });
+  assert.equal(r.status, 0, `git ${args.join(' ')}: ${r.stderr}`);
+  return r.stdout.trim();
+};
+function provPage(nonce, rowIds) {
+  const token = nonce ? `<div hidden data-published-as="1" data-publish-id="${nonce}"></div>\n` : '';
+  return `${token}${rowIds.map((id) => `<span class="num">${id}</span>`).join('\n')}\n`;
+}
+function provCommit(repo, nonce, rowIds, registerText) {
+  mkdirSync(join(repo, 'docs', 'testing'), { recursive: true });
+  writeFileSync(join(repo, PROV_LIVE), provPage(nonce, rowIds));
+  if (registerText !== undefined) writeFileSync(join(repo, PROV_REGISTER), registerText);
+  provGit(repo, 'add', '-A');
+  provGit(repo, 'commit', '-qm', `stamp ${nonce}`);
+  return provGit(repo, 'rev-parse', 'HEAD');
+}
+// main: nonce main0001 (B101,B102). lane-x: lane0001 (adds B103), unmerged.
+// mine (checked out): mine0001 (adds B104). A later main commit re-stamps.
+function withProvenanceRepo(fn) {
+  const repo = mkdtempSync(join(tmpdir(), 'onbox-provenance-'));
+  try {
+    provGit(repo, 'init', '-q', '-b', 'main');
+    provGit(repo, 'config', 'user.email', 'test@example.com');
+    provGit(repo, 'config', 'user.name', 'Test');
+    provGit(repo, 'config', 'commit.gpgsign', 'false');
+    provCommit(repo, 'main0001', ['B101', 'B102'], 'REGISTER AT FORK\n');
+    provGit(repo, 'switch', '-q', '-c', 'lane-x');
+    provCommit(repo, 'lane0001', ['B101', 'B102', 'B103']);
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'mine');
+    provCommit(repo, 'mine0001', ['B101', 'B102', 'B104']);
+    provGit(repo, 'switch', '-q', 'main');
+    const mainSha = provCommit(repo, 'main0002', ['B101'], 'REGISTER ON MAIN\n');
+    provGit(repo, 'switch', '-q', 'mine');
+    return fn(repo, mainSha);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+}
+
+test('#3529 git: the env scrub isolates the provenance throwaway repo (self-check)', () => {
+  withProvenanceRepo((repo) => {
+    // Had the scrub failed, these commits would have landed in (and this log
+    // would read) the real repository instead of the four fixture commits.
+    assert.equal(provGit(repo, 'rev-list', '--all', '--count'), '4');
+    assert.equal(provGit(repo, 'branch', '--show-current'), 'mine');
+  });
+});
+
+test('#3529 git: a page stamped on main is a merged publish, with the rows its committed live view carried', () => {
+  withProvenanceRepo((repo, mainSha) => {
+    const p = resolvePublishedProvenance(repo, PROV_LIVE, provPage('main0001', ['B101', 'B102', 'B999']), mainSha, provRunner);
+    assert.equal(p.kind, 'merged');
+    assert.equal(p.nonce, 'main0001');
+    assert.deepEqual([...p.stampedRowIds].sort(), ['B101', 'B102'], 'rows from the COMMIT, not the page');
+  });
+});
+
+test('#3529 git: a page stamped only in HEAD is your own earlier publish', () => {
+  withProvenanceRepo((repo, mainSha) => {
+    const p = resolvePublishedProvenance(repo, PROV_LIVE, provPage('mine0001', ['B101']), mainSha, provRunner);
+    assert.equal(p.kind, 'own');
+    assert.deepEqual([...p.stampedRowIds].sort(), ['B101', 'B102', 'B104']);
+  });
+});
+
+test('#3529 git: a page stamped on another unmerged branch is an unmerged lane', () => {
+  withProvenanceRepo((repo, mainSha) => {
+    const p = resolvePublishedProvenance(repo, PROV_LIVE, provPage('lane0001', ['B103']), mainSha, provRunner);
+    assert.equal(p.kind, 'unmerged');
+    assert.equal(p.nonce, 'lane0001');
+    assert.match(p.commit, /^[0-9a-f]{40}$/);
+  });
+});
+
+test('#3529 git: once that lane merges, the same page reads as merged', () => {
+  withProvenanceRepo((repo) => {
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'merge', '-q', '--no-edit', '-X', 'theirs', 'lane-x');
+    const mainSha = provGit(repo, 'rev-parse', 'HEAD');
+    provGit(repo, 'switch', '-q', 'mine');
+    const p = resolvePublishedProvenance(repo, PROV_LIVE, provPage('lane0001', ['B103']), mainSha, provRunner);
+    assert.equal(p.kind, 'merged');
+    assert.deepEqual([...p.stampedRowIds].sort(), ['B101', 'B102', 'B103']);
+  });
+});
+
+test('#3529 git: a nonce in no history at all is unknown, never a default', () => {
+  withProvenanceRepo((repo, mainSha) => {
+    const p = resolvePublishedProvenance(repo, PROV_LIVE, provPage('ghost0001', ['B101']), mainSha, provRunner);
+    assert.equal(p.kind, 'unknown');
+    assert.equal(p.nonce, 'ghost0001');
+    const none = resolvePublishedProvenance(repo, PROV_LIVE, provPage(null, ['B101']), mainSha, provRunner);
+    assert.equal(none.kind, 'unknown');
+    assert.equal(none.nonce, null);
+  });
+});
+
+test('#3529 git: a failed lookup is unknown, not "not found"', () => {
+  const failing = () => ({ status: 128, stdout: '', stderr: 'fatal', error: undefined });
+  const p = resolvePublishedProvenance('/nowhere', PROV_LIVE, provPage('main0001', []), 'abc', failing);
+  assert.equal(p.kind, 'unknown');
+  assert.match(p.reason, /could not search/);
+  // Only the origin/main search fails: reading that as "not on main" would
+  // fall through to the other searches and misreport a merged page.
+  withProvenanceRepo((repo, mainSha) => {
+    const mainOnlyFails = (args, cwd) =>
+      args.includes(mainSha) ? { status: 128, stdout: '', stderr: 'fatal' } : provRunner(args, cwd);
+    const q = resolvePublishedProvenance(repo, PROV_LIVE, provPage('mine0001', []), mainSha, mainOnlyFails);
+    assert.equal(q.kind, 'unknown', JSON.stringify(q));
+    assert.match(q.reason, /origin\/main/);
+  });
+});
+
+test('#3529 git: resolveMergeBaseRegister reads the register at merge-base(HEAD, main)', () => {
+  withProvenanceRepo((repo, mainSha) => {
+    assert.equal(resolveMergeBaseRegister(repo, PROV_REGISTER, mainSha, provRunner), 'REGISTER AT FORK\n');
+    assert.equal(resolveMergeBaseRegister(repo, 'docs/absent.md', mainSha, provRunner), '');
+    assert.equal(resolveMergeBaseRegister(repo, PROV_REGISTER, 'not-a-ref', provRunner), null);
+  });
 });
