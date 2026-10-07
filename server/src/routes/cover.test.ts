@@ -268,6 +268,52 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
     expect(res.body.kind).toBe('invalid_mime');
   });
 
+  // cover.jpg is shared across this describe's tests, so compare bytes rather than existence.
+  const coverOnDisk = () => {
+    const p = join(bookDir, '.audiobook', 'cover.jpg');
+    return existsSync(p) ? readFileSync(p) : null;
+  };
+
+  /* #3533: the declared Content-Type is client-controlled; magic bytes decide. */
+  it('415s on SVG bytes labelled image/png and writes nothing', async () => {
+    const before = coverOnDisk();
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover/upload`)
+      .attach('image', svg, { filename: 'x.png', contentType: 'image/png' });
+    expect(res.status).toBe(415);
+    expect(res.body.kind).toBe('invalid_mime');
+    expect(coverOnDisk()).toEqual(before);
+  });
+
+  it('415s on HTML bytes labelled image/jpeg and writes nothing', async () => {
+    const before = coverOnDisk();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover/upload`)
+      .attach('image', Buffer.from('<html><script>1</script></html>'), {
+        filename: 'x.jpg',
+        contentType: 'image/jpeg',
+      });
+    expect(res.status).toBe(415);
+    expect(res.body.kind).toBe('invalid_mime');
+    expect(coverOnDisk()).toEqual(before);
+  });
+
+  it('415s on a real JPEG labelled image/png', async () => {
+    const before = coverOnDisk();
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cover/upload`)
+      .attach('image', jpeg, { filename: 'x.png', contentType: 'image/png' });
+    expect(res.status).toBe(415);
+    expect(coverOnDisk()).toEqual(before);
+  });
+
   /* Plan 105 — multer 2.x MulterError paths. multer 2.x preserves the
      1.x `.code` strings (LIMIT_FILE_SIZE / LIMIT_UNEXPECTED_FILE) and
      still raises a `multer.MulterError` instance, which the route's

@@ -123,8 +123,41 @@ describe('validateUpload', () => {
   it('accepts JPEG and PNG MIME types', () => {
     expect(ACCEPTED_MIME_TYPES).toContain('image/jpeg');
     expect(ACCEPTED_MIME_TYPES).toContain('image/png');
-    expect(() => validateUpload(Buffer.from('xx'), 'image/jpeg')).not.toThrow();
-    expect(() => validateUpload(Buffer.from('xx'), 'image/png')).not.toThrow();
+  });
+
+  /* #3533: the declared MIME is client-controlled; the bytes decide. */
+  it('accepts a real JPEG and a real PNG whose bytes match the declared type', async () => {
+    const jpeg = await makeJpeg();
+    const png = await makePng();
+    expect(() => validateUpload(jpeg, 'image/jpeg')).not.toThrow();
+    expect(() => validateUpload(png, 'image/png')).not.toThrow();
+  });
+
+  function kindOf(buf: Buffer, mime: string): string | undefined {
+    try {
+      validateUpload(buf, mime);
+    } catch (e) {
+      return (e as UploadError).kind;
+    }
+    return undefined;
+  }
+
+  it('refuses SVG bytes labelled image/png', () => {
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>');
+    expect(kindOf(svg, 'image/png')).toBe('invalid_mime');
+  });
+
+  it('refuses HTML bytes labelled image/jpeg', () => {
+    expect(kindOf(Buffer.from('<html><script>1</script></html>'), 'image/jpeg')).toBe(
+      'invalid_mime',
+    );
+  });
+
+  it('refuses a JPEG labelled image/png and a PNG labelled image/jpeg', async () => {
+    const jpeg = await makeJpeg();
+    const png = await makePng();
+    expect(kindOf(jpeg, 'image/png')).toBe('invalid_mime');
+    expect(kindOf(png, 'image/jpeg')).toBe('invalid_mime');
   });
 });
 

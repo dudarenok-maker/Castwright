@@ -1,6 +1,7 @@
 /* Local-disk cover upload pipeline (plan 40).
 
-   - validateUpload(buffer, mimeType): throws UploadError on size/MIME.
+   - validateUpload(buffer, mimeType): throws UploadError on size/MIME,
+     including a MIME label that disagrees with the magic bytes.
    - writeUploadedCover(buffer, mimeType, destPath): transcodes PNG→JPEG
      via sharp (q=85), writes atomically (tmp + rename) — same pattern
      as `downloadCover` in openlibrary.ts.
@@ -60,6 +61,20 @@ export function validateUpload(
   if (!mimeType || !(ACCEPTED_MIME_TYPES as readonly string[]).includes(mimeType)) {
     throw new UploadError('invalid_mime', `Unsupported MIME type: ${mimeType ?? 'unknown'}`);
   }
+  // The declared type is client-controlled and sharp picks its loader from the
+  // bytes, so the bytes must agree with the label before anything decodes them (#3533).
+  if (sniffMime(buffer) !== mimeType) {
+    throw new UploadError('invalid_mime', `Upload content does not match MIME type: ${mimeType}`);
+  }
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const JPEG_SIGNATURE = Buffer.from([0xff, 0xd8, 0xff]);
+
+function sniffMime(buffer: Buffer): UploadMimeType | undefined {
+  if (buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return 'image/png';
+  if (buffer.subarray(0, JPEG_SIGNATURE.length).equals(JPEG_SIGNATURE)) return 'image/jpeg';
+  return undefined;
 }
 
 export async function writeUploadedCover(
