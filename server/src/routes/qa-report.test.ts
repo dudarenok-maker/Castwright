@@ -213,4 +213,18 @@ describe('POST /:bookId/resume-scoring', () => {
     const res = await request(app).post('/api/books/does-not-exist/resume-scoring');
     expect(res.status).toBe(404);
   });
+
+  it('a lock timeout answers the curated 500 (no lock-key path)', async () => {
+    const { LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const res = await request(app).post('/api/books/LOCK_TRIGGER/resume-scoring');
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    expect(res.text).not.toContain('SECRET-WORKSPACE');
+  });
+
+  it('a non-lock failure keeps its own message', async () => {
+    const res = await request(app).post('/api/books/THROW_TRIGGER/resume-scoring');
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'disk read failed' });
+  });
 });

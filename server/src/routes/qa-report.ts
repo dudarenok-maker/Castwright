@@ -70,6 +70,6 @@ qaReportRouter.post('/:bookId/resume-scoring', async (req: Request, res: Respons
     res.status(202).json({ started: true });
   } catch (e) {
     console.error('[qa-report] POST resume-scoring failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to resume scoring.' });
+    res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to resume scoring.') });
   }
 });

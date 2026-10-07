@@ -641,9 +641,9 @@ Design rationale:
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
   and leaves every other body verbatim — `git grep requestFailureMessage`
-  enumerates all twenty sites (`book-state` ×4, `voice-library` ×3,
+  enumerates all twenty-one sites (`book-state` ×4, `voice-library` ×3,
   `revision-ops` ×3, `cast-design` ×2 (both arms of its defensive outer),
-  `revisions` ×2 (the single-book and bulk polls), `qa-report`, `voices`,
+  `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET and `resume-scoring`), `voices`,
   `qwen-voice`, `voice-style`, `single-design`, `script-review`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
   merge routes and of the two legacy `…/audio/previous` routes in
