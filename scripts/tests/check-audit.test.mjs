@@ -6,9 +6,10 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   isGateSeverity,
   collectAdvisoryIds,
@@ -17,6 +18,8 @@ import {
   loadWaivers,
   parseAuditOutput,
 } from '../check-audit.mjs';
+
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 test('isGateSeverity: only high and critical count', () => {
   assert.equal(isGateSeverity('high'), true);
@@ -402,4 +405,76 @@ test('committed audit-waivers.json: validates through loadWaivers and no entry i
   for (const w of waivers) {
     assert.equal(isExpired(w), false, `${w.ghsaId}|${w.package} is expired (${w.expiry})`);
   }
+});
+test('committed audit-waivers.json: the file exists (loadWaivers returns [] for a missing one)', () => {
+  assert.equal(existsSync(join(REPO_ROOT, 'audit-waivers.json')), true);
+  assert.notEqual(loadWaivers().length, 0);
+});
+
+// GHSA-vfj7-8cjw-p6xm is waived for braces/micromatch/fast-glob on the premise
+// that they are reachable ONLY through the root devDependency fast-glob. The
+// matcher carries a source package up the `via` chain, so the waiver would
+// silently cover any NEW dependent of braces - including a server runtime dep,
+// since audit-waivers.json is shared with `audit:server`. Pin the premise.
+const WAIVED_CHAIN = ['braces', 'micromatch', 'fast-glob'];
+
+function depNames(entry) {
+  return Object.keys({
+    ...entry.dependencies,
+    ...entry.optionalDependencies,
+    ...entry.peerDependencies,
+    ...entry.devDependencies,
+  });
+}
+
+function pkgName(path) {
+  return path.slice(path.lastIndexOf('node_modules/') + 'node_modules/'.length);
+}
+
+function dependentsOf(lock, name) {
+  return Object.entries(lock.packages)
+    .filter(([, entry]) => depNames(entry).includes(name))
+    .map(([path]) => (path === '' ? '<root>' : pkgName(path)));
+}
+
+function waiverPremiseViolations(rootLock, serverLock) {
+  const out = [];
+  const allowed = { braces: ['micromatch'], micromatch: ['fast-glob'], 'fast-glob': ['<root>'] };
+  for (const name of WAIVED_CHAIN) {
+    for (const dep of dependentsOf(rootLock, name)) {
+      if (!allowed[name].includes(dep)) out.push(`root lock: ${dep} depends on ${name}`);
+    }
+  }
+  for (const path of Object.keys(serverLock.packages)) {
+    if (WAIVED_CHAIN.includes(pkgName(path))) out.push(`server lock contains ${path}`);
+  }
+  return out;
+}
+
+const PREMISE_MSG =
+  'the GHSA-vfj7-8cjw-p6xm waiver\'s reachability argument (braces <- micromatch <- fast-glob <- root devDependency only, nothing in server) must be re-checked';
+
+test('waiver premise: committed lockfiles still match the braces/micromatch/fast-glob reachability argument', () => {
+  const rootLock = JSON.parse(readFileSync(join(REPO_ROOT, 'package-lock.json'), 'utf8'));
+  const serverLock = JSON.parse(readFileSync(join(REPO_ROOT, 'server', 'package-lock.json'), 'utf8'));
+  const violations = waiverPremiseViolations(rootLock, serverLock);
+  assert.deepEqual(violations, [], `${PREMISE_MSG}: ${violations.join('; ')}`);
+});
+
+test('waiver premise: a new dependent of braces, or a server copy, is flagged', () => {
+  const rootLock = {
+    packages: {
+      '': { devDependencies: { 'fast-glob': '^3' } },
+      'node_modules/fast-glob': { dependencies: { micromatch: '^4' } },
+      'node_modules/micromatch': { dependencies: { braces: '^3' } },
+      'node_modules/braces': {},
+    },
+  };
+  assert.deepEqual(waiverPremiseViolations(rootLock, { packages: {} }), []);
+  const extra = { ...rootLock, packages: { ...rootLock.packages, 'node_modules/newdep': { dependencies: { braces: '^3' } } } };
+  assert.deepEqual(waiverPremiseViolations(extra, { packages: {} }), ['root lock: newdep depends on braces']);
+  assert.deepEqual(
+    waiverPremiseViolations(rootLock, { packages: { 'node_modules/x/node_modules/micromatch': {} } }),
+    ['server lock contains node_modules/x/node_modules/micromatch'],
+  );
 });
