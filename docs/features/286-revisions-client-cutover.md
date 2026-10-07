@@ -6,13 +6,13 @@ owner: null
 
 # 286 — revisions.json server-owned, PR 2: the client cutover (#3400, #3397)
 
-> Status: draft (revision 4 — assumption-checker passes 1, 2 and 3 folded, plus the operator decisions of 2026-10-06 and 2026-10-07, including OD28 and OD29; 31 tasks). PR 2 of 2. PR 1 (plan [285](285-revisions-server-ops.md), PR #3504, merged `ce142a3c`) landed the server half dark. This plan switches the client over and turns the server switches on.
+> Status: draft (revision 4 — assumption-checker passes 1, 2 and 3 folded, plus the operator decisions of 2026-10-06 and 2026-10-07, including OD28 and OD29; 32 tasks). PR 2 of 2. PR 1 (plan [285](285-revisions-server-ops.md), PR #3504, merged `ce142a3c`) landed the server half dark. This plan switches the client over and turns the server switches on.
 >
 > Key files:
 > - Client, new: `src/store/revisions-thunks.ts`, `src/store/preview-thunks.ts`, `src/store/revision-player-middleware.ts`, `src/mocks/mock-revisions.ts`, `src/lib/revision-op-failure.ts`, `src/lib/build-preview-stub.ts` (renamed from `build-pending-revision.ts`).
 > - Client, modified: `src/store/revisions-slice.ts`, `src/store/ui-slice.ts`, `src/store/chapters-slice.ts`, `src/store/splice-slice.ts`, `src/store/splice-runner-middleware.ts`, `src/store/generation-stream-runner.ts`, `src/store/generation-stream-middleware.ts`, `src/store/persistence-middleware.ts`, `src/store/index.ts`, `src/components/layout.tsx`, `src/components/revision-timeline-modal.tsx`, `src/views/revision-diff.tsx`, `src/lib/use-ab-playback.ts`, `src/lib/api.ts`, `src/lib/types.ts`, `src/routes/index.tsx`, `src/main.tsx`, `src/data/revisions.ts`.
 > - Client, deleted: `src/store/revisions-scope-middleware.ts` (+ its test).
-> - Server, modified: `server/src/routes/chapter-audio.ts`, `server/src/routes/revisions.ts`, `server/src/routes/revision-ops.ts`, `server/src/routes/qa-report.ts` (both handlers), `server/src/routes/book-state.ts` (GET, PUT, and `applyReparse`'s revisions reset), `server/src/routes/chapter-splice.ts`, `server/src/routes/chapter-qa-repair.ts`, `server/src/routes/generation.ts`, `server/src/routes/chapters-restructure.ts`, `server/src/workspace/restructure.ts`, `server/src/workspace/revisions-store.ts`, `server/src/workspace/cast-lock.ts` (comment), `server/src/audio/previous-audio.ts` (comment).
+> - Server, modified: `server/src/routes/chapter-audio.ts`, `server/src/routes/revisions.ts`, `server/src/routes/revision-ops.ts`, `server/src/routes/qa-report.ts` (both handlers), `server/src/routes/book-state.ts` (GET, PUT, and `applyReparse`'s revisions reset), `server/src/routes/chapter-splice.ts`, `server/src/routes/chapter-qa-repair.ts`, `server/src/routes/generation.ts`, `server/src/routes/chapters-restructure.ts`, `server/src/workspace/restructure.ts`, `server/src/workspace/revisions-store.ts`, `server/src/workspace/cast-lock.ts` (comment), `server/src/audio/previous-audio.ts` (comment), `server/src/audio/finalize-chapter-write.ts` (`reviewOutcome`, Task 7), `CLAUDE.md` (swallow-list sentence, Task 7).
 > - Contract: `openapi.yaml`, `src/lib/api-types.ts` (generated).
 > - e2e: new `e2e/revision-ops.spec.ts`, new `e2e/revisions-book-switch.spec.ts`, new `e2e/profile-regen-preview-recorded.spec.ts`; modified `e2e/profile-regen-preview.spec.ts`, `e2e/character-splice.spec.ts`, `e2e/marketing/scenes.ts`.
 >
@@ -20,13 +20,13 @@ owner: null
 >
 > OpenAPI operations:
 > - New: `POST /api/books/{bookId}/chapters/{chapterId}/audio/previous/restore-unrecorded`.
-> - Changed: `GET /api/revisions` (gains `errors`), `GET /api/books/{bookId}/state` (`revisions` normalised, gains `revisionsError`), the `Revision` schema (gains `recovered`, OD20), `PUT /api/books/{bookId}/state` (`slice:'revisions'` → 400), `DELETE …/audio/previous` and `POST …/audio/previous/restore` (→ 410).
+> - Changed: `GET /api/revisions` (gains `errors`), `GET /api/books/{bookId}/state` (`revisions` normalised, gains `revisionsError`), the `Revision` schema (gains `recovered`, OD20), `PUT /api/books/{bookId}/state` (`slice:'revisions'` → 400), `DELETE …/audio/previous` and `POST …/audio/previous/restore` (→ 410); the `splice_complete` / `qa_repair_complete` frames and `GenerationTick` replace `reviewRecorded` with `reviewOutcome` (new `ReviewOutcome` schema, Task 7).
 > - First client callers: `POST …/revisions/{revisionId}/accept`, `…/reject`, `POST …/drift/{driftId}/dismiss`.
 
 ## Benefit / Rationale
 
 - **User:**
-  - A Fix-audio or preview take that finishes while you are on another book (or the Library) shows up as a normal, playable A/B prompt when you come back (#3397: no more stuck "Rendering…" rows). A preview is no longer lost by finishing elsewhere or by closing its player: it re-opens when you return to its book, and the Status popover re-opens it too (OD27, OD28). The one deliberate exception is a recorded preview that was resolved while you were away (another tab, or a newer render). It is dropped with a "This preview was resolved elsewhere" notice instead of being offered again (OD29). One known gap is owed to the operator: a preview of a chapter that had **no audio yet** reports `reviewRecorded: true` too, so if it finishes while you are elsewhere it gets the same notice (OD29, "Code contradiction"). Takes already stuck "Rendering…" from before the update become reviewable again while the take kept before the chapter's last render is still on disk, labelled **Recovered from before the update** so the user knows the pairing may not be the one they started (OD20).
+  - A Fix-audio or preview take that finishes while you are on another book (or the Library) shows up as a normal, playable A/B prompt when you come back (#3397: no more stuck "Rendering…" rows). A preview is no longer lost by finishing elsewhere or by closing its player: it re-opens when you return to its book, and the Status popover re-opens it too (OD27, OD28). The one deliberate exception is a preview whose take the server recorded and that was resolved while you were away (another tab, or a newer render). It is dropped with a "This preview was resolved elsewhere" notice instead of being offered again (OD29). The server now says which happened, so a preview of a chapter that had no audio yet still re-opens (Task 7). Takes already stuck "Rendering…" from before the update become reviewable again while the take kept before the chapter's last render is still on disk, labelled **Recovered from before the update** so the user knows the pairing may not be the one they started (OD20).
   - Accept and Reject only change the Revision History once the audio step actually succeeded (D1). A refused Reject no longer says "rejected".
   - A preview opens the player on the take that preview produced, so Approve always runs the preview's fan-out (D6). (The Status popover still opens the first pending take — OD15.)
   - One broken book no longer freezes the background drift badges of every other book (D9), and an unreadable review-history file is reported once instead of silently hiding every pending take (OD2).
@@ -42,22 +42,23 @@ owner: null
   - `revisions.adoptSeq` + `hydrate({ requestSeq })`: the hydrate sequence guard.
   - `chapters/previewChapterComplete` (a `createAction`, no reducer).
   - `splice.inFlightChapters`.
-  - `ui.previewRegen.completed` (`{ reviewRecorded?, stubFallback }`). OD27/OD28: it is set on **every** completion of the preview, so a finished preview stays re-openable on arrival at its book. OD29: `stubFallback` says whether a recorded completion that finds no server entry may still fall back to a stub.
+  - `ui.previewRegen.completed` (`{ reviewOutcome?, stubFallback }`). OD27/OD28: it is set on **every** completion of the preview, so a finished preview stays re-openable on arrival at its book. `stubFallback` says whether a recorded completion whose refetch failed twice may still open a stub (OD23).
+  - `reviewOutcome: 'recorded' | 'none' | 'failed'` on finalize's result and the three completion ticks (Task 7, replacing plan 285's `reviewRecorded` boolean). OD29 keys on it.
   - `selectActivePreviewStub` (ui slice). The preview stub is shown, and counted in the Status popover, only on its own book (OD28).
   - `Revision.recovered` (OD20: server-stamped on a recovered legacy stuck entry; the player labels it).
   - `src/mocks/mock-revisions.ts` + `window.__mockRevisions` + `window.__mockSpliceDelayMs`.
-- **Invariants preserved:** OpenAPI stays the type source (the hand-written `BookStateResponse.revisions` is realigned to it, Task 16); every field added to an existing schema stays optional; the cast-lock rules (the revisions lock stays a leaf; `revision-op` → `revisions`); RTK Immer reducers; the discriminated `ui.stage`.
-- **Migration:** none on disk. Legacy (origin-less) entries are normalised on read; they are shown to the user and accept/reject correctly (PR 1 commit `7d39752e`). A legacy `playable:false` entry whose `.previous.mp3` still exists is now surfaced as playable with `recovered: true` (read-only normalisation change, Task 6), so the #3397 "stuck" takes are recoverable and labelled as such (Task 15). The next unrelated store write persists the normalised entry (`playable: true, recovered: true`) — see Reversibility 9.
+- **Invariants preserved:** OpenAPI stays the type source (the hand-written `BookStateResponse.revisions` is realigned to it, Task 17); every field added to an existing schema stays optional; the cast-lock rules (the revisions lock stays a leaf; `revision-op` → `revisions`); RTK Immer reducers; the discriminated `ui.stage`.
+- **Migration:** none on disk. Legacy (origin-less) entries are normalised on read; they are shown to the user and accept/reject correctly (PR 1 commit `7d39752e`). A legacy `playable:false` entry whose `.previous.mp3` still exists is now surfaced as playable with `recovered: true` (read-only normalisation change, Task 6), so the #3397 "stuck" takes are recoverable and labelled as such (Task 16). The next unrelated store write persists the normalised entry (`playable: true, recovered: true`) — see Reversibility 9.
 - **Reversibility:** revert the PR. See "Reversibility / observable changes" at the end.
 
 ## Invariants to preserve
 
-1. **No `PUT /state` with `slice:'revisions'` is ever sent.** `StateSlice` (`src/lib/types.ts`) does not include `'revisions'`; `persistence-middleware.ts` has no `revisions/*` rule. Pinned by `src/store/persistence-middleware.revisions-never-put.test.ts` (Tasks 24, 25).
-2. **The revisions cache only adopts a payload in order.** Different book → adopt. Same book: a newer `fileId` adopts, an older one is ignored (`null` is oldest), equal `fileId` ignores a lower `rev`. `hydrate` additionally adopts on any `fileId` difference — **unless** an op/poll adopted **changed** state after that hydrate's request started (the sequence guard; a no-op adoption — same book, `fileId` and `rev` — neither bumps `adoptSeq` nor drops an in-flight hydrate). Pinned in `revisions-slice.cache.test.ts` (Task 11) and `layout.test.tsx` (Task 17).
-3. **Callers dispatch `applyPoll` / `applyServerState` only for the active book**, read at dispatch time. Pinned in the thunk tests (Task 13).
+1. **No `PUT /state` with `slice:'revisions'` is ever sent.** `StateSlice` (`src/lib/types.ts`) does not include `'revisions'`; `persistence-middleware.ts` has no `revisions/*` rule. Pinned by `src/store/persistence-middleware.revisions-never-put.test.ts` (Tasks 25, 26).
+2. **The revisions cache only adopts a payload in order.** Different book → adopt. Same book: a newer `fileId` adopts, an older one is ignored (`null` is oldest), equal `fileId` ignores a lower `rev`. `hydrate` additionally adopts on any `fileId` difference — **unless** an op/poll adopted **changed** state after that hydrate's request started (the sequence guard; a no-op adoption — same book, `fileId` and `rev` — neither bumps `adoptSeq` nor drops an in-flight hydrate). Pinned in `revisions-slice.cache.test.ts` (Task 12) and `layout.test.tsx` (Task 18).
+3. **Callers dispatch `applyPoll` / `applyServerState` only for the active book**, read at dispatch time. Pinned in the thunk tests (Task 14).
 4. **Selectors return empty for a non-active book** (`selectActivePending`, `selectActiveTimeline`, `selectActiveAcceptedSelections`).
 5. **Preview side effects (fan-out, change-log entry) run only after the accept succeeded**, and the fan-out targets `previewRegen.bookId`.
-6. **The preview stub never lives in the revisions cache** — only in `ui.previewRegen.stub` — and is routed by `ui.openRevision.kind`, never by id or by a missing `origin`. It is shown (and counted in the Status popover) only while its book is the active one (`selectActivePreviewStub`, Task 12). Navigating away hides it and never clears it (OD28).
+6. **The preview stub never lives in the revisions cache** — only in `ui.previewRegen.stub` — and is routed by `ui.openRevision.kind`, never by id or by a missing `origin`. It is shown (and counted in the Status popover) only while its book is the active one (`selectActivePreviewStub`, Task 13). Navigating away hides it and never clears it (OD28).
 7. **The A/B player releases both `<audio>` elements before any op is sent, and re-attaches them on the next play** (Windows file handles; a refused op leaves the player usable).
 8. **Server: no revisions-store error text reaches a client body, on the routes listed here.** Each answers a fixed sentence (or `UnsupportedSchemaError`'s own path-free "upgrade the server" sentence); the raw error goes to the log. Scope, exhaustively: `revision-ops.ts` ×3, `revisions.ts` ×2 (+ the bulk per-book `errors`), `qa-report.ts` ×2 (the GET, and `resume-scoring` — not a store path, curated by OD26), `restore-unrecorded`'s unreadable-file 500, `GET /state`'s `revisionsError`, the reparse / replace-manuscript revisions reset (Task 4 — only that arm; their other failures keep today's text), and the restructure drop (swallowed). Every path-freedom test drives a **mocked rejection whose message embeds an absolute path** (EPERM-style), never an `EISDIR` fixture: `EISDIR: illegal operation on a directory, read` carries no path, so asserting its absence proves nothing. The client's "unexpected" toast is a fixed sentence too; the OD2 toast shows the server's `revisionsError`, which this invariant makes path-free.
 9. **Server: `restore-unrecorded` never writes revisions.json**, and takes the per-chapter `revision-op` key around the audio step.
@@ -67,16 +68,16 @@ owner: null
 
 ### Automated coverage
 
-- **Slice cache + sequence guard** (`src/store/revisions-slice.cache.test.ts`, Task 11; `revisions-slice.test.ts` poll cases, Task 18).
-- **API, real** (`src/lib/api-revision-ops.test.ts`, Task 8) and **mock** (`src/mocks/mock-revisions.test.ts`, Task 7; `src/lib/api.mock-revisions.test.ts`, created in Task 9 and extended in Task 10); **mock/real signature parity** (`api-types.revisions-contract.test.ts`, Task 8).
-- **Thunks** (`src/store/revisions-thunks.test.ts`, Task 13; `src/store/preview-thunks.test.ts`, Task 14).
-- **Player watcher** (`src/store/revision-player-middleware.test.ts`, Task 20).
-- **Revision-diff view** (`src/views/revision-diff.test.tsx`, Task 15 — including the OD20 "Recovered from before the update" label).
-- **Layout** (`src/components/layout.test.tsx`, Tasks 17, 18, 21); **routes** (`src/routes/index.test.tsx`, Task 25: delete / reparse / replace forget the cache).
-- **Splice runner** (`splice-runner-middleware.test.ts`, Task 19); **generation runner + middleware** (`generation-stream-runner.test.ts`, `generation-stream-middleware.test.ts`, Task 23 — including the re-open on arrival (OD27), every completion marked and nothing stranded (OD28), the recorded-but-gone drop (OD29), and the A8 chapter wait); **player watcher** also covers the stub's book scope and a server entry superseding the stub (Task 20).
-- **No revisions PUT** (`persistence-middleware.revisions-never-put.test.ts`, Tasks 24–25).
-- **Server:** `chapter-audio.test.ts` (Tasks 1, 28), `revisions.test.ts` (Tasks 2, 3), `revision-ops.test.ts` (Tasks 3, 6), `qa-report.test.ts` (Task 3, both handlers), `book-state.reparse.test.ts` + `book-state.replace-manuscript.test.ts` (Task 4), `book-state.hydrate.test.ts` (Tasks 5, 28), `revisions-store.test.ts` (Tasks 1, 6, 27), `chapter-splice.test.ts`, `chapter-qa-repair.test.ts`, `generation.test.ts` via `test:slow` (Task 26), `restructure.test.ts` + `chapters-restructure.test.ts` via `test:slow` (Task 27).
-- **Playwright** (mock mode): `e2e/revision-ops.spec.ts` (accept / reject / dismiss through the UI), `e2e/revisions-book-switch.spec.ts` (#3397), `e2e/profile-regen-preview-recorded.spec.ts` (a preview with a recorded server entry), Task 29; `profile-regen-preview.spec.ts` without its workaround (Task 23); `character-splice.spec.ts` waits for the refetch (Task 19).
+- **Slice cache + sequence guard** (`src/store/revisions-slice.cache.test.ts`, Task 12; `revisions-slice.test.ts` poll cases, Task 19).
+- **API, real** (`src/lib/api-revision-ops.test.ts`, Task 9) and **mock** (`src/mocks/mock-revisions.test.ts`, Task 8; `src/lib/api.mock-revisions.test.ts`, created in Task 10 and extended in Task 11); **mock/real signature parity** (`api-types.revisions-contract.test.ts`, Task 9).
+- **Thunks** (`src/store/revisions-thunks.test.ts`, Task 14; `src/store/preview-thunks.test.ts`, Task 15).
+- **Player watcher** (`src/store/revision-player-middleware.test.ts`, Task 21).
+- **Revision-diff view** (`src/views/revision-diff.test.tsx`, Task 16 — including the OD20 "Recovered from before the update" label).
+- **Layout** (`src/components/layout.test.tsx`, Tasks 18, 19, 22); **routes** (`src/routes/index.test.tsx`, Task 26: delete / reparse / replace forget the cache).
+- **Splice runner** (`splice-runner-middleware.test.ts`, Task 20); **generation runner + middleware** (`generation-stream-runner.test.ts`, `generation-stream-middleware.test.ts`, Task 24 — including the re-open on arrival (OD27), every completion marked and nothing stranded (OD28), the recorded-but-gone drop (OD29), and the A8 chapter wait); **player watcher** also covers the stub's book scope and a server entry superseding the stub (Task 21).
+- **No revisions PUT** (`persistence-middleware.revisions-never-put.test.ts`, Tasks 25–26).
+- **Server:** `finalize-chapter-write.test.ts` (Task 7: one test per review outcome), `chapter-audio.test.ts` (Tasks 1, 29), `revisions.test.ts` (Tasks 2, 3), `revision-ops.test.ts` (Tasks 3, 6), `qa-report.test.ts` (Task 3, both handlers), `book-state.reparse.test.ts` + `book-state.replace-manuscript.test.ts` (Task 4), `book-state.hydrate.test.ts` (Tasks 5, 29), `revisions-store.test.ts` (Tasks 1, 6, 28), `chapter-splice.test.ts`, `chapter-qa-repair.test.ts`, `generation.test.ts` via `test:slow` (Task 27), `restructure.test.ts` + `chapters-restructure.test.ts` via `test:slow` (Task 28).
+- **Playwright** (mock mode): `e2e/revision-ops.spec.ts` (accept / reject / dismiss through the UI), `e2e/revisions-book-switch.spec.ts` (#3397), `e2e/profile-regen-preview-recorded.spec.ts` (a preview with a recorded server entry), Task 30; `profile-regen-preview.spec.ts` without its workaround (Task 24); `character-splice.spec.ts` waits for the refetch (Task 20).
 
 ### Manual acceptance walkthrough
 
@@ -85,10 +86,10 @@ Mock mode (`npm run dev:mock`):
 2. **Commit selection** → the player closes, the Status pill shows no pending revisions, and **Revision history** lists "Accepted revision" for chapter 3.
 3. Reload. From the console: `window.__mockRevisions.seed('sb', { state: { pending: [{ id: 'rev1', chapterId: 3, characterId: 'eliza', segments: [], playable: true, hasPreviousAudio: true, origin: 'server' }] }, previousChapterIds: [3], liveChapterIds: [3] })`. Reopen the player → **Reject draft** → closes; history shows "Rejected revision".
 4. Open **Carrick's Compass** cast, mark chapters rendered (as `character-splice.spec.ts` does), set `window.__mockSpliceDelayMs = 3000`, **Fix audio**, go to Solway Bay before it finishes, then back to Carrick's Compass → the Status pill shows the new take, and it is playable.
-5. From the console, give Carrick's Compass chapter 1 live audio so the preview render is recorded: `window.__mockRevisions.seed('cc', { liveChapterIds: [1] })`. Start a **profile-regen preview**, go to Solway Bay before it finishes → a "Preview ready in Carrick's Compass" toast; go back → the preview player opens by itself on the recorded take (OD27). Without that seed, chapter 1 is a first render: it reports `reviewRecorded: true` with no entry, so on return the preview is dropped with "This preview was resolved elsewhere". That is the OD29 code-contradiction gap, not a walkthrough failure.
-6. Reload, which resets the mock store, so chapter 1 has no audio again. Open Carrick's Compass, start a preview, and stay on the book until its stub player opens (first render: no recorded entry). Close it with the back arrow → the player hides. Status pill → **1 revision pending · Open** → the same preview player opens again (OD28). Go to Solway Bay and back → it opens by itself again.
+5. On Carrick's Compass, start a **profile-regen preview** and go to Solway Bay before it finishes. A "Preview ready in Carrick's Compass" toast appears. Go back, and the preview player opens by itself (OD27). Chapter 1 has no audio in the mock store, so the render is a first render (`reviewOutcome: 'none'`) and the player is the stub, with the A card reading "Original audio not preserved". To exercise the recorded path instead, run `window.__mockRevisions.seed('cc', { liveChapterIds: [1] })` first: going back then opens the recorded server entry.
+6. Reload, which resets the mock store. Open Carrick's Compass, start a preview, and stay on the book until its stub player opens. Close it with the back arrow → the player hides. Status pill → **1 revision pending · Open** → the same preview player opens again (OD28). Go to Solway Bay and back → it opens by itself again.
 
-Real backend: owed as on-box acceptance — a **new** register row (Task 30) plus the existing A9 steps that #3397 changes.
+Real backend: owed as on-box acceptance — a **new** register row (Task 31) plus the existing A9 steps that #3397 changes.
 
 ## Out of scope
 
@@ -99,7 +100,7 @@ Real backend: owed as on-box acceptance — a **new** register row (Task 30) plu
 
 ## Ship notes
 
-(Filled in when PR 2 merges — see Task 30.)
+(Filled in when PR 2 merges — see Task 31.)
 
 ---
 
@@ -133,26 +134,26 @@ Real backend: owed as on-box acceptance — a **new** register row (Task 30) plu
   - e2e: `npm --prefix <wt> run test:e2e -- e2e/<spec>.spec.ts`
 - **On a lane that kills a command after 30 s** (a Cline lane), launch every test, typecheck and `openapi:types` command through **plan 285's detach recipe** (285 → Global Constraints → "Lanes and long commands"), unchanged except for `<wt>`, including its Green rule and contention rule. On the `claude` lane run them in the foreground with a 600 s timeout.
 - **Every red-first run and every mutation run appends `--retry=0`.** Both vitest configs set `retry: 1`.
-- **No task runs a full battery** (`npm run test`, `test:server`, `test:all`, `verify`, `build`, whole-tree lint). Each task runs its own files plus `typecheck`. Task 31 runs the broader check; cloud `verify.yml` is the authoritative gate.
+- **No task runs a full battery** (`npm run test`, `test:server`, `test:all`, `verify`, `build`, whole-tree lint). Each task runs its own files plus `typecheck`. Task 32 runs the broader check; cloud `verify.yml` is the authoritative gate.
 
 ### Ordering rule
 
 Every task's commit leaves `npm run typecheck` and that task's tests green, and does not break a test elsewhere:
-- New reducers/functions are **added** before callers switch to them; old ones are **deleted** only after the last caller is gone (Tasks 24–25).
+- New reducers/functions are **added** before callers switch to them; old ones are **deleted** only after the last caller is gone (Tasks 25–26).
 - A task that changes behaviour some other test pins (a layout test, an e2e spec) updates that test **in the same task**, and names it.
-- **The preview path is migrated in this order** so `e2e/profile-regen-preview.spec.ts` stays green at every commit: the stub thunks exist (Task 14) → the watcher exists (Task 20) → the layout routes both kinds, and the old completion trigger opens the stub as `kind:'preview-stub'` (Task 21) → the new trigger replaces it (Task 23).
-- Server switches (Tasks 26–28) come after the client stops using the old paths.
-- **Known transitional window (Tasks 18–20):** from Task 18 the polls adopt server pending, but until Task 21 the old generation middleware still enqueues the preview stub **into** `revisions.pending`. A 30 s active poll landing between the preview's completion and its Approve therefore adopts server state and wipes the stub (no user exposure: every task merges together in one PR). `e2e/profile-regen-preview.spec.ts` finishes inside one poll period, so it stays green — and Tasks 18, 19 and 20 each run it with `--repeat-each=3` in their Green step to prove that. A red there in those tasks is this window, not a flake: report it; the fix is to pull Task 21's transitional generation-middleware edit forward, not to retry.
+- **The preview path is migrated in this order** so `e2e/profile-regen-preview.spec.ts` stays green at every commit: the stub thunks exist (Task 15) → the watcher exists (Task 21) → the layout routes both kinds, and the old completion trigger opens the stub as `kind:'preview-stub'` (Task 22) → the new trigger replaces it (Task 24).
+- Server switches (Tasks 27–29) come after the client stops using the old paths.
+- **Known transitional window (Tasks 19–21):** from Task 19 the polls adopt server pending, but until Task 22 the old generation middleware still enqueues the preview stub **into** `revisions.pending`. A 30 s active poll landing between the preview's completion and its Approve therefore adopts server state and wipes the stub (no user exposure: every task merges together in one PR). `e2e/profile-regen-preview.spec.ts` finishes inside one poll period, so it stays green — and Tasks 19, 20 and 21 each run it with `--repeat-each=3` in their Green step to prove that. A red there in those tasks is this window, not a flake: report it; the fix is to pull Task 22's transitional generation-middleware edit forward, not to retry.
 
 ### What PR 1 actually shipped (read before any task)
 
 - **Per-chapter serialisation.** Accept/reject run inside `withKeyLock(revisionOpLockKey(bookDir, chapterId))` (`revision-op:<resolved bookDir>:<chapterId>`), with the `revisions` leaf lock taken inside for steps 1 and 3. Lock order `revision-op` → `revisions`.
 - **Legacy entries commit.** `commitRevisionOp` looks its entry up in the stored view first (`stored.pending.find(...) ?? file.pending.find(...)`, `revisions-store.ts:387-389`).
-- **Legacy-route lock curation.** The legacy `DELETE …/audio/previous` and `POST …/audio/previous/restore` answer `LOCK_CONTENTION_REQUEST_ERROR` on a lock timeout. Task 28 retires both routes (410), so those branches go.
+- **Legacy-route lock curation.** The legacy `DELETE …/audio/previous` and `POST …/audio/previous/restore` answer `LOCK_CONTENTION_REQUEST_ERROR` on a lock timeout. Task 29 retires both routes (410), so those branches go.
 - **Error body shape.** Coded errors: `{ error: <code>, message, state? }` (`RevisionOpError`, `openapi.yaml:7168`). Unexpected 500s: `{ error: <message> }` with no `message` field. **Before Task 3** that message can be raw `(e as Error).message` — Task 3 fixes it.
 - **Finalize.** `applyReview` (`finalize-chapter-write.ts:773`) already implements the tri-state; PR 2 only changes what callers pass.
 - **Client plumbing.** `review` already rides `EnqueueInput` → queue entry → `StreamOpenOpts` → `StreamArgs` → POST body (PR 1 Task 11). The mock queue is `src/mocks/mock-queue.ts`.
-- **CLAUDE.md `requestFailureMessage` count — re-derive, never copy.** CLAUDE.md states the **call-site** count; `git -C <wt> grep -c "requestFailureMessage(" -- 'server/src/**/*.ts' ':!*.test.ts'` sums to call sites **+ 1** (the definition in `workspace/file-lock.ts`). Measured on `de0da822` (after #3527): grep sum **22**, CLAUDE.md "twenty-one sites" (`qa-report` ×2 = the GET and `resume-scoring`). **This plan's delta is 0**: Tasks 1 and 2 add fixed sentences at lock-free sites with **no** helper (a lock timeout cannot originate there), and Tasks 3–4 change only the fallback *argument* at existing sites. So at rebase time the implementer re-runs the grep and re-reads CLAUDE.md's sentence, and they must still agree as "grep sum − 1 = stated count"; if they disagree, another PR moved one of them — reconcile CLAUDE.md to the grep, never to a number written in this plan. The CLAUDE.md lines this plan does change are named per task: the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch list (Task 1 adds `restore-unrecorded`; Task 28 removes the two legacy routes), the `revision-op` serialisation sentence (Task 28), and the swallow list FIVE → SIX (Task 27).
+- **CLAUDE.md `requestFailureMessage` count — re-derive, never copy.** CLAUDE.md states the **call-site** count; `git -C <wt> grep -c "requestFailureMessage(" -- 'server/src/**/*.ts' ':!*.test.ts'` sums to call sites **+ 1** (the definition in `workspace/file-lock.ts`). Measured on `de0da822` (after #3527): grep sum **22**, CLAUDE.md "twenty-one sites" (`qa-report` ×2 = the GET and `resume-scoring`). **This plan's delta is 0**: Tasks 1 and 2 add fixed sentences at lock-free sites with **no** helper (a lock timeout cannot originate there), and Tasks 3–4 change only the fallback *argument* at existing sites. So at rebase time the implementer re-runs the grep and re-reads CLAUDE.md's sentence, and they must still agree as "grep sum − 1 = stated count"; if they disagree, another PR moved one of them — reconcile CLAUDE.md to the grep, never to a number written in this plan. The CLAUDE.md lines this plan does change are named per task: the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch list (Task 1 adds `restore-unrecorded`; Task 29 removes the two legacy routes), the `revision-op` serialisation sentence (Task 29), and the swallow list FIVE → SIX (Task 28).
 
 ### Error codes the client handles
 
@@ -193,11 +194,11 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ## Review Focus
 
-1. **Coming back to a book after a take finished elsewhere (#3397).** The browser outcome is pinned by `e2e/revisions-book-switch.spec.ts` (Task 29), whose mutation cuts the client's adoption of server state (`applyPoll` never adopts and the hydrate passes `state: null`) while the mock store still records. The specific mechanism — every reopen re-reads revisions — is pinned by the layout unit test "reopening a book always re-hydrates revisions" (Task 17). (The active poll also fetches immediately on reopen of a `ready` book, so the e2e alone cannot isolate the rehydrate.)
-2. **Two tabs on one take.** Tab 1 accepts; tab 2's poll removes the entry its player shows. The player must close, and a preview tied to that chapter must clear with one "resolved elsewhere" toast. Pinned in `revision-player-middleware.test.ts` (Task 20).
-3. **A legacy on-disk entry** (no `origin`, id `revision:3:eliza` or `splice-…`) opens as a server entry and accept/reject go through the route. Pinned in `revisions-thunks.test.ts` (Task 13) and the layout player test (Task 21); a stuck legacy `playable:false` take is recoverable (Task 6) and shows the **Recovered from before the update** label (Task 15).
-4. **Many books / one broken book in the background poll.** More than 50 analysed books, or one failing book, must not stop drift for the others. Pinned in the layout poll tests (Task 18) and `revisions.test.ts` (Task 2).
-5. **A slow book-open read racing the user's first op on a legacy book** (`fileId:null`): the stale snapshot must not erase the entry the op just recorded. Pinned in `revisions-slice.cache.test.ts` and the layout race test (Tasks 11, 17).
+1. **Coming back to a book after a take finished elsewhere (#3397).** The browser outcome is pinned by `e2e/revisions-book-switch.spec.ts` (Task 30), whose mutation cuts the client's adoption of server state (`applyPoll` never adopts and the hydrate passes `state: null`) while the mock store still records. The specific mechanism — every reopen re-reads revisions — is pinned by the layout unit test "reopening a book always re-hydrates revisions" (Task 18). (The active poll also fetches immediately on reopen of a `ready` book, so the e2e alone cannot isolate the rehydrate.)
+2. **Two tabs on one take.** Tab 1 accepts; tab 2's poll removes the entry its player shows. The player must close, and a preview tied to that chapter must clear with one "resolved elsewhere" toast. Pinned in `revision-player-middleware.test.ts` (Task 21).
+3. **A legacy on-disk entry** (no `origin`, id `revision:3:eliza` or `splice-…`) opens as a server entry and accept/reject go through the route. Pinned in `revisions-thunks.test.ts` (Task 14) and the layout player test (Task 22); a stuck legacy `playable:false` take is recoverable (Task 6) and shows the **Recovered from before the update** label (Task 16).
+4. **Many books / one broken book in the background poll.** More than 50 analysed books, or one failing book, must not stop drift for the others. Pinned in the layout poll tests (Task 19) and `revisions.test.ts` (Task 2).
+5. **A slow book-open read racing the user's first op on a legacy book** (`fileId:null`): the stale snapshot must not erase the entry the op just recorded. Pinned in `revisions-slice.cache.test.ts` and the layout race test (Tasks 12, 18).
 
 ---
 
@@ -356,7 +357,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 - [ ] **Step 3: Implement the route** in `chapter-audio.ts`, directly after the `…/audio/previous/restore` handler. Add `hasPendingForChapter` to the `revisions-store.js` import. **No `requestFailureMessage`**: the first catch guards a lock-free read (a lock timeout cannot reach it), so it answers a plain fixed sentence; the only lock on this route is the `revision-op` key, curated by the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch.
   ```ts
   /* Plan 286 (#3400 PR 2) — restore `.previous` for a preview whose A/B review
-     was never recorded (finalize answered reviewRecorded:false). Keeps the
+     was never recorded (finalize answered reviewOutcome:'failed'). Keeps the
      restore route's order: busy 409 first, then the chapter parse and lookups.
      Refuses with has_revision when a pending entry exists for the chapter (that
      one must go through the recorded reject). Never writes revisions.json.
@@ -412,7 +413,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       operationId: restorePreviousUnrecorded
       description: |
         Used only by the A/B preview stub when finalize answered
-        `reviewRecorded: false`. Busy check first, then the chapter lookups.
+        `reviewOutcome: 'failed'` (its take was preserved but no entry was recorded). Busy check first, then the chapter lookups.
         409 `has_revision` when revisions.json holds a pending entry for the
         chapter (read lock-free — a guard, not a fence). Never writes
         revisions.json. Serialised per chapter with accept/reject.
@@ -577,7 +578,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 **Character:** mechanical.
 
-**Why:** `revision-ops.ts` (accept `~:113`, reject `~:172`, dismiss `~:185`), `revisions.ts` (`~:238`, `~:271`) and `qa-report.ts` (GET `~:47`, `resume-scoring` `~:73`) pass `(e as Error).message || '…'` to `requestFailureMessage`, which keeps any non-lock message verbatim. A filesystem error (`EPERM`, `EBUSY`) embeds the absolute workspace path, and from Task 13 on the client would show it in a toast. Same defect class at all seven sites, so all seven are fixed here. `resume-scoring` is not a store path, but OD26 (operator, 2026-10-07) curates it in the same round: fixed sentences for **both** qa-report handlers, the raw error logged.
+**Why:** `revision-ops.ts` (accept `~:113`, reject `~:172`, dismiss `~:185`), `revisions.ts` (`~:238`, `~:271`) and `qa-report.ts` (GET `~:47`, `resume-scoring` `~:73`) pass `(e as Error).message || '…'` to `requestFailureMessage`, which keeps any non-lock message verbatim. A filesystem error (`EPERM`, `EBUSY`) embeds the absolute workspace path, and from Task 14 on the client would show it in a toast. Same defect class at all seven sites, so all seven are fixed here. `resume-scoring` is not a store path, but OD26 (operator, 2026-10-07) curates it in the same round: fixed sentences for **both** qa-report handlers, the raw error logged.
 
 **Files:**
 - Modify: `server/src/workspace/revisions-store.ts` (add `revisionsFailureText`), `server/src/routes/revision-ops.ts`, `server/src/routes/revisions.ts`, `server/src/routes/qa-report.ts` (both handlers).
@@ -837,7 +838,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 - Test: `server/src/routes/book-state.hydrate.test.ts`.
 
 **Interfaces:**
-- Produces: `GET /state` → `revisions: RevisionsState | null`, and `revisionsError?: string`. `RevisionsState` here includes `bookId`, `fileId`, `rev`, normalised `pending`, `dismissed`, `acceptedSelections`, `timeline`; never `drift` or `schema`. When the store throws: `revisions: null` and `revisionsError: revisionsFailureText(e, "This book's A/B review history couldn't be read, so its pending reviews aren't shown.")` (Task 3's helper — so a newer-schema file serves `UnsupportedSchemaError`'s own path-free "upgrade the server" sentence, and anything else the fixed sentence); the book still opens; the raw error is logged. The sentence is user copy: the client toasts it verbatim (OD2, Task 17). A missing file is **not** an error (empty state).
+- Produces: `GET /state` → `revisions: RevisionsState | null`, and `revisionsError?: string`. `RevisionsState` here includes `bookId`, `fileId`, `rev`, normalised `pending`, `dismissed`, `acceptedSelections`, `timeline`; never `drift` or `schema`. When the store throws: `revisions: null` and `revisionsError: revisionsFailureText(e, "This book's A/B review history couldn't be read, so its pending reviews aren't shown.")` (Task 3's helper — so a newer-schema file serves `UnsupportedSchemaError`'s own path-free "upgrade the server" sentence, and anything else the fixed sentence); the book still opens; the raw error is logged. The sentence is user copy: the client toasts it verbatim (OD2, Task 18). A missing file is **not** an error (empty state).
 
 - [ ] **Step 1: Failing tests** in `book-state.hydrate.test.ts` (add `vi` to its imports). The file has no mocks today; add a hoisted passthrough so a test can inject a path-bearing rejection:
   ```ts
@@ -921,7 +922,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     revisionsError = revisionsFailureText(e, "This book's A/B review history couldn't be read, so its pending reviews aren't shown.");
   }
   ```
-  and in `res.json({ … revisions: revs, … })` add `...(revisionsError ? { revisionsError } : {}),`. Import `readRevisions`, `toRevisionsState`, `revisionsFailureText`, `type RevisionsState`. Leave `revisionsJsonPath` imported (the PUT still uses it until Task 28).
+  and in `res.json({ … revisions: revs, … })` add `...(revisionsError ? { revisionsError } : {}),`. Import `readRevisions`, `toRevisionsState`, `revisionsFailureText`, `type RevisionsState`. Leave `revisionsJsonPath` imported (the PUT still uses it until Task 29).
 
 - [ ] **Step 3: OpenAPI.** Replace `BookStateResponse.revisions`'s inline object with:
   ```yaml
@@ -933,7 +934,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
           type: string
           description: Plan 286 — present only when revisions.json could not be read. A fixed, path-free user-facing sentence (or, for a newer-schema file, the server's own "upgrade the server" sentence); the client toasts it verbatim.
   ```
-  Regenerate. In `api-types.revisions-contract.test.ts`, the PR 1 assertion on `BookStateResponse.revisions.schema` (`expectTypeOf<NonNullable<S['BookStateResponse']['revisions']>['schema']>()…`) no longer holds — replace it with `expectTypeOf<NonNullable<S['BookStateResponse']['revisions']>>().toEqualTypeOf<S['RevisionsState']>();` and `expectTypeOf<S['BookStateResponse']['revisionsError']>().toEqualTypeOf<string | undefined>();`. (The hand-written client `BookStateResponse` in `src/lib/types.ts` is realigned in Task 16, before the layout consumes it in Task 17.)
+  Regenerate. In `api-types.revisions-contract.test.ts`, the PR 1 assertion on `BookStateResponse.revisions.schema` (`expectTypeOf<NonNullable<S['BookStateResponse']['revisions']>['schema']>()…`) no longer holds — replace it with `expectTypeOf<NonNullable<S['BookStateResponse']['revisions']>>().toEqualTypeOf<S['RevisionsState']>();` and `expectTypeOf<S['BookStateResponse']['revisionsError']>().toEqualTypeOf<string | undefined>();`. (The hand-written client `BookStateResponse` in `src/lib/types.ts` is realigned in Task 17, before the layout consumes it in Task 18.)
 
 - [ ] **Step 4: Green.** `book-state.hydrate.test.ts`, `npm --prefix <wt> run test -- src/lib/api-types.revisions-contract.test.ts`, `typecheck`.
 
@@ -951,7 +952,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 **Character:** mechanical.
 
-**Why:** a legacy `playable:false` entry is a take the old client enqueued and never flipped (#3397 "stuck"). Today `normaliseRevisions` drops it unconditionally (`revisions-store.ts:130-133`), so the take kept before the chapter's last render is unreachable from the UI. OD20 (revised 2026-10-07): keep it recoverable while `.previous.mp3` exists — read-only, as before — **and label it distinctly**, because the pairing may not be the one the stuck entry describes: every render preserves `.previous` (`finalize-chapter-write.ts:714`, `preserveExistingAsPrevious`), and a failed splice leaves its `playable:false` entry behind (`splice-runner-middleware.ts:67-79` enqueues it before the stream; `:146` only counts the failure). So a later render can have replaced `.previous` with an unrelated older take. The label's carrier is a **server-side flag**, `recovered: true`, on the normalised entry (in the store type, `openapi.yaml`'s `Revision`, and the generated client type); the client renders it in Task 15. Nothing is written on read.
+**Why:** a legacy `playable:false` entry is a take the old client enqueued and never flipped (#3397 "stuck"). Today `normaliseRevisions` drops it unconditionally (`revisions-store.ts:130-133`), so the take kept before the chapter's last render is unreachable from the UI. OD20 (revised 2026-10-07): keep it recoverable while `.previous.mp3` exists — read-only, as before — **and label it distinctly**, because the pairing may not be the one the stuck entry describes: every render preserves `.previous` (`finalize-chapter-write.ts:714`, `preserveExistingAsPrevious`), and a failed splice leaves its `playable:false` entry behind (`splice-runner-middleware.ts:67-79` enqueues it before the stream; `:146` only counts the failure). So a later render can have replaced `.previous` with an unrelated older take. The label's carrier is a **server-side flag**, `recovered: true`, on the normalised entry (in the store type, `openapi.yaml`'s `Revision`, and the generated client type); the client renders it in Task 16. Nothing is written on read.
 
 **Files:**
 - Modify: `server/src/workspace/revisions-store.ts` (`StoredRevision` gains `recovered?: true`; `normaliseRevisions` and its doc comment).
@@ -1068,7 +1069,132 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 7: Mock revisions store (`src/mocks/mock-revisions.ts`)
+### Task 7: Server — finalize reports a three-way review outcome (OD29)
+
+**Character:** mechanical (one field renamed across its producer, three routes, the contract and two hand-written types).
+
+**Why:** `applyReview` (`finalize-chapter-write.ts:773-805`) answers `true` both when it recorded an entry and when it dropped the chapter's entry because nothing was preserved (a first render, or `review: null`). It answers `false` when the store call failed. A client that lands on a book after a preview finished elsewhere therefore cannot tell "recorded, then resolved elsewhere" from "a first render, nothing to review". That is the distinction OD29 keys its drop-vs-stub decision on.
+
+The field has no client consumer before PR 2: the first ones are Tasks 11, 20 and 24. It is replaced outright, not extended. The `boolean` stays ambiguous, so it would invite the same misreading.
+
+**Files:**
+- Modify: `server/src/audio/finalize-chapter-write.ts`:
+  - `applyReview` returns `Promise<ReviewOutcome | undefined>`;
+  - the result type's `reviewRecorded?: boolean` (`~:180-182`, with its doc comment) becomes `reviewOutcome?: ReviewOutcome`;
+  - the call site and spread at `~:756` and `~:764` change to match.
+- Modify: `server/src/routes/chapter-splice.ts` (`~:567`), `server/src/routes/chapter-qa-repair.ts` (`~:906`) and `server/src/routes/generation.ts` (destructure `~:1890`, tick spread `~:2096`): thread `reviewOutcome` instead of `reviewRecorded`.
+- Modify: `openapi.yaml`:
+  - add a `ReviewOutcome` component schema;
+  - in the `splice_complete` inline schema (`~:1878`), the `qa_repair_complete` inline schema (`~:1977`) and `GenerationTick` (`~:6056`), replace the `reviewRecorded` property with `reviewOutcome: { $ref: '#/components/schemas/ReviewOutcome' }`;
+  - then run `openapi:types`.
+- Modify: `src/lib/api.ts`. In the hand-written `splice_complete` tick (`~:669`) and `qa_repair_complete` tick (`~:714`), replace `reviewRecorded?: boolean` with `reviewOutcome?: ReviewOutcome`. Add `import type { components } from './api-types'` if missing, and `type ReviewOutcome = components['schemas']['ReviewOutcome'];`.
+- Modify: `CLAUDE.md`, the swallow-list sentence about `applyReview` (`~:620`, "surfaces only `reviewRecorded: false`"). It becomes "surfaces only `reviewOutcome: 'failed'`". This is a chore: the sentence turns false in this commit.
+- Modify: `docs/features/285-revisions-server-ops.md`. Append to its "Superseded by later commits" note: "plan 286 Task 7 replaced `reviewRecorded` (boolean) with `reviewOutcome: 'recorded' | 'none' | 'failed'` on finalize's result and the three completion ticks."
+- Test: `server/src/audio/finalize-chapter-write.test.ts`, `server/src/routes/chapter-splice.test.ts`, `server/src/routes/chapter-qa-repair.test.ts`, `server/src/routes/generation.test.ts` (**slow pool**), `src/lib/api-types.revisions-contract.test.ts`.
+
+**Interfaces:**
+- `export type ReviewOutcome = 'recorded' | 'none' | 'failed';` (in `finalize-chapter-write.ts`). The three values:
+  - **`'recorded'`** — `review` was an object, the prior take was preserved, and `recordPending` landed. The chapter has a server entry.
+  - **`'none'`** — the drop landed and there is nothing to review: either `review` was an object but nothing was preserved (a first render), or `review` was `null`. The chapter has no entry.
+  - **`'failed'`** — the store call threw. The error is logged in full and the new take is live. This is the old `false`, and the lock-timeout swallow is unchanged.
+- The field is absent when `review` was `undefined`, as `reviewRecorded` was.
+- OpenAPI:
+  ```yaml
+      ReviewOutcome:
+        type: string
+        enum: [recorded, none, failed]
+        description: >-
+          Plan 286 (OD29) — what finalize did with A/B review state, on a
+          completion frame only when it was asked to: `recorded` (a pending
+          entry now exists for the chapter), `none` (nothing to review — a
+          first render, or a render without review; any entry for the chapter
+          was dropped), `failed` (the store call failed; the new take is live
+          without its review entry). Replaces plan 285's `reviewRecorded`.
+  ```
+
+- [ ] **Step 1: Failing tests** — flip every existing `reviewRecorded` assertion to the new field. **One test per outcome**, plus the two "none" variants:
+  ```ts
+  // finalize-chapter-write.test.ts — in the file's plan-285 review-state describe (~:770-875)
+  // 'undefined: leaves revisions.json alone and the result carries no reviewRecorded' → rename '… carries no reviewOutcome':
+  expect('reviewOutcome' in result).toBe(false);
+  // 'object + preserved: upserts one server entry for the chapter':
+  expect(result.reviewOutcome).toBe('recorded');
+  // 'object + first render (nothing preserved): drops any stale entry, records nothing':
+  expect(result.reviewOutcome).toBe('none');
+  // "null: drops the chapter's entry even when the prior take was preserved":
+  expect(result.reviewOutcome).toBe('none');
+  // 'a store failure → reviewRecorded:false; …' → rename 'a store failure → reviewOutcome:failed; …':
+  expect(result.reviewOutcome).toBe('failed');
+  ```
+  ```ts
+  // chapter-splice.test.ts (~:281, ~:301), chapter-qa-repair.test.ts (~:440), generation.test.ts (~:2369, ~:2390; and
+  // the ~:121 header comment): in each threading test the forced finalize result becomes
+  //   spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewOutcome: 'failed' as const }));
+  // and its assertion
+  //   expect(done!.reviewOutcome).toBe('failed');
+  // Rename "threads reviewRecorded onto …" → "threads reviewOutcome onto …" in each title. In the two "carries no
+  // reviewRecorded when finalize returns none" tests, rename the same way and assert
+  //   expect(line).not.toContain('reviewOutcome');
+  // and add, beside it, the line that proves the old name is gone from the wire:
+  //   expect(line).not.toContain('reviewRecorded');
+  ```
+  ```ts
+  // api-types.revisions-contract.test.ts — replace the two reviewRecorded type assertions (~:62, ~:75-81):
+  expectTypeOf<S['GenerationTick']['reviewOutcome']>().toEqualTypeOf<'recorded' | 'none' | 'failed' | undefined>();
+  it('the hand-written splice / qa-repair completion ticks carry an optional reviewOutcome', () => {
+    expectTypeOf<Extract<SpliceTick, { type: 'splice_complete' }>['reviewOutcome']>().toEqualTypeOf<'recorded' | 'none' | 'failed' | undefined>();
+    expectTypeOf<Extract<QaRepairTick, { type: 'qa_repair_complete' }>['reviewOutcome']>().toEqualTypeOf<'recorded' | 'none' | 'failed' | undefined>();
+  });
+  ```
+  Run:
+  - `npm --prefix <wt>/server run test -- src/audio/finalize-chapter-write.test.ts src/routes/chapter-splice.test.ts src/routes/chapter-qa-repair.test.ts --retry=0`
+  - `npm --prefix <wt>/server run test:slow -- src/routes/generation.test.ts -t "reviewOutcome" --reporter=verbose --retry=0` (check that both renamed titles appear)
+
+  → FAIL (`reviewOutcome` is `undefined` everywhere). Then `npm --prefix <wt> run typecheck` → FAIL (the contract test names a property that does not exist yet).
+
+- [ ] **Step 2: Implement.** `applyReview`:
+  ```ts
+  /** Plan 285 — best-effort with respect to the render … (keep the existing doc
+      comment, replacing "surfaces ONLY as `false`" with "surfaces ONLY as
+      `'failed'`"). Plan 286 (OD29) — three outcomes, so a client can tell a
+      recorded entry from "nothing to review". */
+  async function applyReview(
+    input: FinalizeChapterAudioInput,
+    preserved: boolean,
+    prev: BookStateJson | null,
+  ): Promise<ReviewOutcome | undefined> {
+    if (input.review === undefined) return undefined;
+    const { bookDir, chapter } = input;
+    const chapters: ChapterRef[] = prev?.chapters ?? [{ id: chapter.id, slug: chapter.slug }];
+    try {
+      if (input.review !== null && preserved) {
+        await recordPending(bookDir, chapters, { /* …unchanged entry… */ });
+        return 'recorded';
+      }
+      await dropPendingForChapter(bookDir, chapters, chapter.id);
+      return 'none';
+    } catch (err) {
+      console.error(/* …unchanged… */, err);
+      return 'failed';
+    }
+  }
+  ```
+  The result type: `/** Plan 285/286 — absent when `review` was undefined; see ReviewOutcome. */ reviewOutcome?: ReviewOutcome;`. Change the call site to `const reviewOutcome = await applyReview(…)` and the spread to `...(reviewOutcome === undefined ? {} : { reviewOutcome })`. Thread the same spread in the three routes. Then the OpenAPI, the `api.ts` types, `CLAUDE.md` and the plan 285 note, per Files.
+  Check: `git -C <wt> grep -n "reviewRecorded" -- server/src src openapi.yaml CLAUDE.md ':!src/lib/api-types.ts'` → no hits (`api-types.ts` is regenerated; confirm it has none either).
+
+- [ ] **Step 3: Green.** The three fast files and the slow `generation.test.ts` (same commands without `--retry=0`); `npm --prefix <wt> run test -- src/lib/api-types.revisions-contract.test.ts`; `typecheck`.
+
+- [ ] **Step 4: Mutations.**
+  1. **Collapse `'none'` into `'recorded'`** (the drop branch returns `'recorded'`) → red: `object + first render (nothing preserved)…` and `null: drops the chapter's entry…` (both get `'recorded'`). This is exactly the ambiguity OD29 needs gone.
+  2. Collapse `'none'` into `'failed'` (the drop branch returns `'failed'`) → red: the same two tests.
+  3. Return `'none'` from the `catch` → red: `a store failure → reviewOutcome:failed…`.
+  4. In `chapter-splice.ts`, thread the old name (`reviewRecorded: result.reviewOutcome`) → red: the splice threading test (`done!.reviewOutcome` is `undefined`).
+
+- [ ] **Step 5: Commit.** `refactor(server,openapi): report finalize's A/B review outcome as recorded / none / failed (#3400)`.
+
+---
+
+### Task 8: Mock revisions store (`src/mocks/mock-revisions.ts`)
 
 **Character:** judgment (mirrors the server store's rules; pure module).
 
@@ -1092,7 +1218,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   export function mockRestoreUnrecorded(bookId: string, chapterId: number): 'restored' | 'none'; // throws has_revision
   export function mockRecordRender(bookId: string, chapterId: number, review: { characterId: string; triggeredBy: string; oldDuration?: string; newDuration?: string } | null, opts?: { assumeLive?: boolean }): boolean;
   ```
-- `RevisionOpFailure` comes from `src/lib/revision-op-failure.ts`, created **in this task** (it is needed here first; Task 8 reuses it):
+- `RevisionOpFailure` comes from `src/lib/revision-op-failure.ts`, created **in this task** (it is needed here first; Task 9 reuses it):
   ```ts
   /* Plan 286 — the one error type every revisions op throws (real and mock),
      so the thunks branch on `code` only. Outside api.ts so the mocks can
@@ -1337,7 +1463,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 8: Client API — real and mock op functions, and mock/real parity
+### Task 9: Client API — real and mock op functions, and mock/real parity
 
 **Character:** mechanical.
 
@@ -1348,7 +1474,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 - Test: create `src/lib/api-revision-ops.test.ts`; extend `src/lib/api-types.revisions-contract.test.ts`.
 
 **Interfaces:**
-- Consumes: Task 7's `RevisionOpFailure`, `revisionOpFailureFrom`, mock store.
+- Consumes: Task 8's `RevisionOpFailure`, `revisionOpFailureFrom`, mock store.
 - Produces (both `real` and `mock`):
   - `acceptRevision(args: { bookId: string; revisionId: string; selection?: Record<number, 'A' | 'B'> }): Promise<RevisionsState>`
   - `rejectRevision(args: { bookId: string; revisionId: string }): Promise<RevisionsState>`
@@ -1419,7 +1545,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     expectTypeOf<Pick<__MockApi, K>>().toEqualTypeOf<Pick<__RealApi, K>>();
   });
   ```
-  (Task 9 widens `K` to the read functions it reshapes.)
+  (Task 10 widens `K` to the read functions it reshapes.)
 
   Run: `npm --prefix <wt> run test -- src/lib/api-revision-ops.test.ts --retry=0` → FAIL (`api.acceptRevision is not a function`); `typecheck` → FAIL (`__MockApi` not exported).
 
@@ -1470,7 +1596,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 9: Mock API reads — per-book poll (D7), dismissed filter, previous audio, `getBookState` overlay
+### Task 10: Mock API reads — per-book poll (D7), dismissed filter, previous audio, `getBookState` overlay
 
 **Character:** judgment (several mock functions in a 10k-line file).
 
@@ -1545,7 +1671,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 10: Mock renders record pending; `window.__mockRevisions`; splice delay hook
+### Task 11: Mock renders record pending; `window.__mockRevisions`; splice delay hook
 
 **Character:** judgment.
 
@@ -1555,8 +1681,8 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 - Test: extend `src/lib/api.mock-revisions.test.ts`.
 
 **Interfaces:**
-- `mockStreamSplice({ bookId, chapterId, mode, characterId, onTick })`: per-step delay `(window as { __mockSpliceDelayMs?: number }).__mockSpliceDelayMs ?? 80`. Before `splice_complete`: `mockRecordRender(bookId, chapterId, { characterId, triggeredBy }, { assumeLive: true })` with `triggeredBy = \`${mode === 'remix' ? 'Loudness fix' : 'Re-record'} (${firstName})\``, `firstName` = first word of the mock cast's `name` for `characterId` (`MOCK_BOOK_STATES.get(bookId)?.cast?.characters`), falling back to `characterId`. `splice_complete` carries `reviewRecorded: true`.
-- `mockStreamGeneration`: destructure `bookId`, `chapterIds`, `review` from `StreamArgs`. `const reviewChapterId = review && chapterIds?.length === 1 ? chapterIds[0] : null;`. On each `chapter_complete` for `active.id`: if `active.id === reviewChapterId`, call `mockRecordRender(bookId, active.id, { ...review, oldDuration: active.duration, newDuration: active.duration })` and add `reviewChapter: true, reviewRecorded: true` to the tick (finalize reports `true` whenever its record **or** drop landed); otherwise `mockRecordRender(bookId, active.id, null)`.
+- `mockStreamSplice({ bookId, chapterId, mode, characterId, onTick })`: per-step delay `(window as { __mockSpliceDelayMs?: number }).__mockSpliceDelayMs ?? 80`. Before `splice_complete`: `mockRecordRender(bookId, chapterId, { characterId, triggeredBy }, { assumeLive: true })` with `triggeredBy = \`${mode === 'remix' ? 'Loudness fix' : 'Re-record'} (${firstName})\``, `firstName` = first word of the mock cast's `name` for `characterId` (`MOCK_BOOK_STATES.get(bookId)?.cast?.characters`), falling back to `characterId`. `splice_complete` carries `reviewOutcome: 'recorded'` (a splice always has audio).
+- `mockStreamGeneration`: destructure `bookId`, `chapterIds`, `review` from `StreamArgs`. `const reviewChapterId = review && chapterIds?.length === 1 ? chapterIds[0] : null;`. On each `chapter_complete` for `active.id`: if `active.id === reviewChapterId`, call `mockRecordRender(bookId, active.id, { ...review, oldDuration: active.duration, newDuration: active.duration })` and add `reviewChapter: true, reviewOutcome: recorded ? 'recorded' : 'none'` to the tick, where `recorded` is `mockRecordRender`'s return. This mirrors Task 7: `'none'` is a first render, which records nothing; otherwise `mockRecordRender(bookId, active.id, null)`.
 - `window.__mockRevisions = { seed: seedMockRevisions, get: getMockRevisions, reset: resetMockRevisions }`.
 - Test-only exports: `_mockStreamSplice`, `_mockStreamGeneration`.
 
@@ -1565,10 +1691,10 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   describe('mock renders record pending (plan 286)', () => {
     afterEach(() => vi.useRealTimers());
 
-    it('a splice records a server entry for the chapter and reports reviewRecorded', async () => {
-      const ticks: Array<{ type: string; reviewRecorded?: boolean }> = [];
+    it('a splice records a server entry for the chapter and reports reviewOutcome recorded', async () => {
+      const ticks: Array<{ type: string; reviewOutcome?: string }> = [];
       await _mockStreamSplice({ bookId: 'cc', chapterId: 2, mode: 'remix', characterId: 'eliza_cc', gainDb: 3, onTick: (t) => ticks.push(t) } as never);
-      expect(ticks.at(-1)).toMatchObject({ type: 'splice_complete', reviewRecorded: true });
+      expect(ticks.at(-1)).toMatchObject({ type: 'splice_complete', reviewOutcome: 'recorded' });
       const p = getMockRevisions('cc').pending;
       expect(p).toHaveLength(1);
       expect(p[0]).toMatchObject({ chapterId: 2, origin: 'server', triggeredBy: expect.stringMatching(/^Loudness fix \(/) });
@@ -1588,7 +1714,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       const stop = _mockStreamGeneration(genArgs(true, (t) => ticks.push(t)) as never);
       await vi.advanceTimersByTimeAsync(1300);
       stop();
-      expect(ticks.find((t) => t.type === 'chapter_complete')).toMatchObject({ chapterId: 1, reviewChapter: true, reviewRecorded: true });
+      expect(ticks.find((t) => t.type === 'chapter_complete')).toMatchObject({ chapterId: 1, reviewChapter: true, reviewOutcome: 'recorded' });
       expect(getMockRevisions('cc').pending).toHaveLength(1);
     });
 
@@ -1598,7 +1724,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       const stop = _mockStreamGeneration(genArgs(true, (t) => ticks.push(t)) as never);
       await vi.advanceTimersByTimeAsync(1300);
       stop();
-      expect(ticks.find((t) => t.type === 'chapter_complete')).toMatchObject({ reviewChapter: true });
+      expect(ticks.find((t) => t.type === 'chapter_complete')).toMatchObject({ reviewChapter: true, reviewOutcome: 'none' });
       expect(getMockRevisions('cc').pending).toEqual([]);
     });
 
@@ -1641,7 +1767,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 11: Revisions slice — the ordered cache, selectors, and the hydrate sequence guard (additive)
+### Task 12: Revisions slice — the ordered cache, selectors, and the hydrate sequence guard (additive)
 
 **Character:** judgment (the ordering rule is the heart of the PR).
 
@@ -1656,15 +1782,15 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   - `hydrate(payload: { bookId: string; state: Partial<RevisionsState> | null; requestSeq?: number })`:
     1. **Sequence guard** (operator decision): if `payload.bookId === s.bookId` and `requestSeq !== undefined` and `requestSeq < s.adoptSeq`, an op or poll adopted newer state after this read started → drop the payload (only `loaded = true`).
     2. Otherwise adopt when `bookId` differs **or** `(state?.fileId ?? null) !== s.fileId`; else only when `(state?.rev ?? 0) >= s.rev`.
-    3. `loaded = true`. **Transitional:** set `s.hydratedFor = bookId` (deleted with the field in Task 25) so the old persistence gate keeps working until then.
+    3. `loaded = true`. **Transitional:** set `s.hydratedFor = bookId` (deleted with the field in Task 26) so the old persistence gate keeps working until then.
   - `applyServerState(payload: RevisionsState)`: ordered adopt.
   - `applyDismiss(payload: { driftId: string; state?: RevisionsState })`: always removes the event from `drift`; applies `state` through the ordered rule when given.
   - `forgetBook(payload: string)`: if `s.bookId === payload`, resets `bookId`, `fileId`, `rev` and the four per-book fields.
   - **Ordered adopt:** different `bookId` → adopt; same book → `compareFileIds(incoming, cached)`: `> 0` adopt, `< 0` ignore, `0` adopt iff `incoming.rev >= cached.rev`.
   - *Adopt* sets `bookId`, `fileId`, `rev`, `pending`, `dismissed`, `acceptedSelections`, `timeline` (via `normaliseTimelineKeys`) and increments `adoptSeq` **only if** `(bookId, fileId, rev)` differs from what the cache held. Never touches `drift` or `loaded`.
 - Produces (selectors): `selectActivePending`, `selectActiveTimeline`, `selectActiveAcceptedSelections` over `{ revisions: RevisionsState; ui: { stage: unknown } }`.
-- `bookScopeChanged` (alive until Task 25) also resets `fileId = null; rev = 0`.
-- `applyPoll` is **not** changed here (Task 18).
+- `bookScopeChanged` (alive until Task 26) also resets `fileId = null; rev = 0`.
+- `applyPoll` is **not** changed here (Task 19).
 
 - [ ] **Step 1: Failing tests** — `src/store/revisions-slice.cache.test.ts`:
   ```ts
@@ -1817,7 +1943,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     });
   });
 
-  describe('bookScopeChanged (transitional, deleted in Task 25)', () => {
+  describe('bookScopeChanged (transitional, deleted in Task 26)', () => {
     it('resets fileId and rev', () => {
       let s = reduce(init(), a.applyServerState(st({ bookId: 'A', fileId: F1, rev: 2 })));
       s = reduce(s, a.bookScopeChanged('B'));
@@ -1872,7 +1998,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     hydrate: (s, a: PayloadAction<{ bookId: string; state: Partial<WireRevisionsState> | null; requestSeq?: number }>) => {
       const { bookId, requestSeq } = a.payload;
       s.loaded = true;
-      /* Transitional (Task 25 deletes the field): keeps the old persistence gate open. */
+      /* Transitional (Task 26 deletes the field): keeps the old persistence gate open. */
       s.hydratedFor = bookId;
       if (bookId === s.bookId && requestSeq !== undefined && requestSeq < s.adoptSeq) return;
       const p: IncomingRevisions = { ...(a.payload.state ?? {}), bookId };
@@ -1909,7 +2035,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     ```
   - `bookScopeChanged`: add `s.fileId = null; s.rev = 0;`.
 
-- [ ] **Step 3: Green.** The new file, `revisions-slice.test.ts` (add `fileId: null, rev: 0, adoptSeq: 0` to the initial-state expectation), `typecheck` — any test that hand-builds a full `RevisionsState` needs `fileId: null, rev: 0, adoptSeq: 0`: at least `src/components/revision-timeline-modal.test.tsx`'s `makeStore` `preloadedState` (Task 21 later replaces that helper); `splice-runner-middleware.test.ts` spreads `getInitialState()` and is fine. Fix every one `typecheck` lists.
+- [ ] **Step 3: Green.** The new file, `revisions-slice.test.ts` (add `fileId: null, rev: 0, adoptSeq: 0` to the initial-state expectation), `typecheck` — any test that hand-builds a full `RevisionsState` needs `fileId: null, rev: 0, adoptSeq: 0`: at least `src/components/revision-timeline-modal.test.tsx`'s `makeStore` `preloadedState` (Task 22 later replaces that helper); `splice-runner-middleware.test.ts` spreads `getInitialState()` and is fine. Fix every one `typecheck` lists.
 
 - [ ] **Step 4: Mutations.**
   1. In `compareFileIds`, swap the two `null` branches → red: `null is older than any id…`.
@@ -1923,14 +2049,14 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 12: UI slice — `openRevision`, `revisionOpInFlight`, `PreviewRegenCtx.bookId`/`stub`; `previewChapterComplete`
+### Task 13: UI slice — `openRevision`, `revisionOpInFlight`, `PreviewRegenCtx.bookId`/`stub`; `previewChapterComplete`
 
 **Character:** mechanical.
 
 **Files:**
 - Modify: `src/store/ui-slice.ts`; `src/components/layout.tsx` (the `uiActions.setPreviewRegen({ characterId, previewChapterId, … })` call in the regenerate-character `onConfirm`, `~:2067`, gains `bookId`).
 - Modify: `src/store/chapters-slice.ts` (export `previewChapterComplete`).
-- Tests: `src/store/ui-slice.test.ts`, `src/store/persist-config.test.ts` (or wherever `UI_PERSIST_WHITELIST` is asserted), every test building a `PreviewRegenCtx` (`grep -rln "previewChapterId:" src e2e` → `generation-stream-middleware.test.ts` at least), and every test that hand-builds a **full `UiState`** — `src/components/theme-toggle.test.tsx` (`uiPreloaded: UiState`, `~:26`), `src/lib/use-theme.test.tsx` (`~:36`), `src/store/ui-slice.test.ts` (`baseState`, `~:10`): the two new required fields break their `typecheck` here, so each gains `openRevision: null, revisionOpInFlight: false` in this task (their `showRevisionPlayer: false` line stays until Task 22).
+- Tests: `src/store/ui-slice.test.ts`, `src/store/persist-config.test.ts` (or wherever `UI_PERSIST_WHITELIST` is asserted), every test building a `PreviewRegenCtx` (`grep -rln "previewChapterId:" src e2e` → `generation-stream-middleware.test.ts` at least), and every test that hand-builds a **full `UiState`** — `src/components/theme-toggle.test.tsx` (`uiPreloaded: UiState`, `~:26`), `src/lib/use-theme.test.tsx` (`~:36`), `src/store/ui-slice.test.ts` (`baseState`, `~:10`): the two new required fields break their `typecheck` here, so each gains `openRevision: null, revisionOpInFlight: false` in this task (their `showRevisionPlayer: false` line stays until Task 23).
 
 **Interfaces:**
 - Produces:
@@ -1945,13 +2071,14 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   /** OD27/OD28 — set on EVERY completion of this preview's chapter (on its
       book or elsewhere), so a finished preview whose player was closed, never
       opened, or failed to build stays re-openable: arriving at `bookId` re-runs
-      the open path (Task 23). `reviewRecorded` is finalize's answer.
-      `stubFallback` (OD29) says whether a recorded completion whose server
-      entry is gone may still fall back to a stub: true only when the completion
-      was seen on its own book (a first render, which records nothing), false
-      when it finished elsewhere or once a server entry for the chapter has been
-      seen (Task 20). */
-  completed?: { reviewRecorded?: boolean; stubFallback: boolean };
+      the open path (Task 24). `reviewOutcome` is finalize's answer (Task 7):
+      'none' and 'failed' open a stub, and 'recorded' opens the server entry or
+      is dropped as resolved elsewhere when it is gone (OD29). `stubFallback`
+      (OD23) says whether a 'recorded' completion whose refetch failed twice
+      may still open a stub: true only when the completion was seen on its own
+      book; false when it finished elsewhere, or once a server entry for the
+      chapter has been seen (Task 21). */
+  completed?: { reviewOutcome?: ReviewOutcome; stubFallback: boolean };
   // actions
   setOpenRevision(payload: OpenRevision | null); setRevisionOpInFlight(payload: boolean);
   // selector (OD28, pass 3 #1) — the stub, only while its book is the active one
@@ -1961,8 +2088,8 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     return pv?.stub && pv.bookId === active ? pv.stub : undefined;
   };
   ```
-- Produces (`chapters-slice.ts`): `export const previewChapterComplete = createAction<{ bookId: string; chapterId: number; reviewRecorded?: boolean }>('chapters/previewChapterComplete');` (no reducer, OD21).
-- `showRevisionPlayer` stays until Task 22 (Task 21 stops using it; Task 22 deletes it).
+- Produces (`chapters-slice.ts`): `export const previewChapterComplete = createAction<{ bookId: string; chapterId: number; reviewOutcome?: ReviewOutcome }>('chapters/previewChapterComplete');` (no reducer, OD21). `ReviewOutcome` is `components['schemas']['ReviewOutcome']` from `src/lib/api-types.ts` (Task 7).
+- `showRevisionPlayer` stays until Task 23 (Task 22 stops using it; Task 23 deletes it).
 
 - [ ] **Step 1: Failing tests.** `ui-slice.test.ts`:
   ```ts
@@ -2010,7 +2137,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 13: Revisions thunks — confirm, then apply
+### Task 14: Revisions thunks — confirm, then apply
 
 **Character:** judgment.
 
@@ -2122,8 +2249,8 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       const store = makeStore();
       await store.dispatch(rejectRevisionOp({ bookId: 'A', revisionId: 'r1', chapterId: 3 }));
       expect(apiMock.pollRevisions).toHaveBeenCalledWith({ bookId: 'A' });
-      /* Task 18 adds: expect(store.getState().revisions.rev).toBe(4) — applyPoll
-         only adopts server state from Task 18 on. */
+      /* Task 19 adds: expect(store.getState().revisions.rev).toBe(4) — applyPoll
+         only adopts server state from Task 19 on. */
     });
     it.each([
       ['chapter_busy', 'This chapter is busy — try again when it finishes'],
@@ -2324,7 +2451,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 14: Preview thunks — start, approve side effects, unrecorded reject
+### Task 15: Preview thunks — start, approve side effects, unrecorded reject
 
 **Character:** judgment.
 
@@ -2339,7 +2466,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   export function approvePreviewSideEffects(preview: PreviewRegenCtx): (d, g) => Promise<void>;
   export function restoreUnrecordedPreview(preview: PreviewRegenCtx): (d, g) => Promise<void>;
   ```
-  - `startPreviewRegen` is today's inline preview branch of layout's regenerate-character `onConfirm` (`layout.tsx ~:2057-2083`), moved: `setPreviewRegen({ bookId, characterId, previewChapterId, remainingChapterIds, reason, note })`, then `enqueueQueueEntries([{ id: \`regen-preview-${bookId}-${characterId}-${previewChapterId}-${rand}\`, bookId, chapterId: previewChapterId, scope: 'this', review: { characterId, triggeredBy: \`${characterName} voice change\` } }])` (OD14). Layout switches to it in Task 21.
+  - `startPreviewRegen` is today's inline preview branch of layout's regenerate-character `onConfirm` (`layout.tsx ~:2057-2083`), moved: `setPreviewRegen({ bookId, characterId, previewChapterId, remainingChapterIds, reason, note })`, then `enqueueQueueEntries([{ id: \`regen-preview-${bookId}-${characterId}-${previewChapterId}-${rand}\`, bookId, chapterId: previewChapterId, scope: 'this', review: { characterId, triggeredBy: \`${characterName} voice change\` } }])` (OD14). Layout switches to it in Task 22.
   - `approvePreviewSideEffects(preview)`: `setPreviewRegen(null)`; append `buildCharacterRegenEvent({ character, chapterIds: [preview.previewChapterId, ...preview.remainingChapterIds], reason, note })` (character from `cast.characters`; skip the event if absent, as today); if `remainingChapterIds.length > 0`, `enqueueQueueEntries(...)` with ids `regen-rest-${preview.bookId}-…` and `bookId: preview.bookId`, then `changeView('generate')` **only if** the active book is `preview.bookId`. (Today's inline block `layout.tsx ~:2505-2534`, with `bookId` → `preview.bookId`.)
   - `restoreUnrecordedPreview(preview)`: `!preview.stub?.hasPreviousAudio` → `setPreviewRegen(null)` + `setOpenRevision(null)`, no request. Else set in-flight, `api.restorePreviousUnrecorded({ bookId: preview.bookId, chapterId: preview.previewChapterId })`: resolved (`'restored'` or `'none'`) → close both; `has_revision` → warn toast (has revision copy), keep open; `chapter_busy` → warn toast busy, keep open; anything else → error toast restore-failed, keep open. In-flight cleared in `finally`.
 
@@ -2539,7 +2666,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 15: `RevisionDiffPlayer` — `busy`, `rendering`, Keep new take, release + re-attach, the OD20 recovered label
+### Task 16: `RevisionDiffPlayer` — `busy`, `rendering`, Keep new take, release + re-attach, the OD20 recovered label
 
 **Character:** mechanical.
 
@@ -2663,15 +2790,15 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 16: Types — realign the hand-written `BookStateResponse.revisions` to the generated type
+### Task 17: Types — realign the hand-written `BookStateResponse.revisions` to the generated type
 
 **Character:** mechanical.
 
 **Why:** the hand-written `BookStateResponse.revisions` (`src/lib/types.ts ~:438-446`) lacks `bookId`/`fileId`/`rev`/`timeline` and has no `revisionsError`, while Task 5 changed the wire shape (CLAUDE.md: OpenAPI is the type source). Split out of the layout task so that task's diff is only behaviour.
 
 **Files:**
-- Modify: `src/lib/types.ts` — `revisions: RevisionsState | null;` (the `RevisionsState` alias Task 7 added) and `revisionsError?: string;` with a one-line doc each; the inline object and its `acceptedSelections` doc comment (which cites `revisionsActions.acceptRevision`) go with it.
-- Modify: whatever fixture `typecheck` then flags (the `MOCK_BOOK_STATES` builders and `src/mocks/marketing/hollow-tide.ts` already use `revisions: null`; `buildSolwayBayMockState`'s `revisions: { pending: … }` was removed in Task 9).
+- Modify: `src/lib/types.ts` — `revisions: RevisionsState | null;` (the `RevisionsState` alias Task 8 added) and `revisionsError?: string;` with a one-line doc each; the inline object and its `acceptedSelections` doc comment (which cites `revisionsActions.acceptRevision`) go with it.
+- Modify: whatever fixture `typecheck` then flags (the `MOCK_BOOK_STATES` builders and `src/mocks/marketing/hollow-tide.ts` already use `revisions: null`; `buildSolwayBayMockState`'s `revisions: { pending: … }` was removed in Task 10).
 - Test: `src/lib/api-types.revisions-contract.test.ts`.
 
 - [ ] **Step 1: Failing test** (import `type BookStateResponse` from `./types`):
@@ -2683,7 +2810,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   ```
   Run: `npm --prefix <wt> run typecheck` → FAIL at this test (the inline shape is not `RevisionsState`; `revisionsError` does not exist).
 
-- [ ] **Step 2: Implement** per Files. The layout's `revisionsActions.hydrateFromBookState({ bookId, ...(res.revisions ?? {}) })` keeps compiling (a spread is not excess-property-checked) and is replaced in Task 17.
+- [ ] **Step 2: Implement** per Files. The layout's `revisionsActions.hydrateFromBookState({ bookId, ...(res.revisions ?? {}) })` keeps compiling (a spread is not excess-property-checked) and is replaced in Task 18.
 
 - [ ] **Step 3: Green.** `npm --prefix <wt> run test -- src/lib/api-types.revisions-contract.test.ts src/lib/api.mock-state.test.ts src/components/layout.test.tsx` (behaviour unchanged), `typecheck`.
 
@@ -2694,16 +2821,16 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 17: Layout — book-open hydrate, rehydrate on reopen, sequence guard, OD2 toast
+### Task 18: Layout — book-open hydrate, rehydrate on reopen, sequence guard, OD2 toast
 
 **Character:** judgment (layout.tsx is 2.6k lines; its test file 2.7k).
 
 **Files:**
-- Modify: `src/components/layout.tsx` — the per-book hydration effect (`useEffect(() => { if (!bookId) return; … }, [bookId, stageKind])`, `~:758-1041`), the `revisionsHydratedFor` selector (`~:202`), and the `pending` selector (`~:195`: `useAppSelector((s) => s.revisions.pending)` → `useAppSelector(selectActivePending)` — moved here from Task 21, because this task's "book B never shows A's pending" assertion is on the rendered UI, which reads that selector).
+- Modify: `src/components/layout.tsx` — the per-book hydration effect (`useEffect(() => { if (!bookId) return; … }, [bookId, stageKind])`, `~:758-1041`), the `revisionsHydratedFor` selector (`~:202`), and the `pending` selector (`~:195`: `useAppSelector((s) => s.revisions.pending)` → `useAppSelector(selectActivePending)` — moved here from Task 22, because this task's "book B never shows A's pending" assertion is on the rendered UI, which reads that selector).
 - Test: `src/components/layout.test.tsx`.
 
 **Interfaces:**
-- Consumes: `revisionsActions.hydrate` + `adoptSeq` (Task 11), `GET /state` (Task 5).
+- Consumes: `revisionsActions.hydrate` + `adoptSeq` (Task 12), `GET /state` (Task 5).
 - Behaviour:
   - Every hydrate read captures `const requestSeq = store.getState().revisions.adoptSeq;` **immediately before** `api.getBookState(bookId)`, and dispatches `revisionsActions.hydrate({ bookId, state: res?.revisions ?? null, requestSeq })` where `hydrateFromBookState` is dispatched today (both the `res === null` branch and the full-load branch).
   - **Reopen:** when `manuscriptReady`, the effect re-reads revisions (today's revisions-only path) **once per arrival at the book** — tracked by a ref `revisionsReadFor`, set to `bookId` **only when a read lands** (the not-cancelled branch that dispatches `hydrate`, in both the full-load and revisions-only paths) and **cleared on every `bookId` change** (pass 3, A7 — not only when `bookId` becomes falsy: a read for book B that is cancelled before it lands would otherwise leave the ref holding A, so a return to A short-circuits on A's old read) — so a stage change within the same book (confirm → ready) does not issue another `GET /state` (gap 2), while a read the effect's cleanup **cancelled** before it landed (`cancelled = true`) leaves the ref unset and the next run re-issues it rather than short-circuiting on a read that never arrived. A→B→A re-reads, because leaving A cleared the ref, whether or not B's read ever landed.
@@ -2893,7 +3020,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   ```
   (Import `_resetRevisionsErrorToastedForTests` from `./layout`, and `notificationsActions`, `uiActions`, `revisionsActions`, `within` as the file needs.)
 
-  **Delete in this task** (they pin #3395 machinery removed here): the rest of `describe('Layout — per-book hydration: revisions branch (plan 27)')` that asserts `hydrateFromBookState` payloads, all of `describe('Layout — revisions persist only after the book is hydrated (#3395 pass 3, R1/R1b/R2)')` (`~:621-1276`) except "the failed-read notice is dismissed when the user moves on to another book" (full-load path — keep, adapting its fixture to `bookStateFor`), and `describe('Layout — revisions.bookId scope tracking through real navigation (#3395 pass 2, N1)')` (`~:534-620`, replaced by the selector test above). List each deleted test in the commit body with what replaces it (Task 11 cache tests, Task 13 thunk tests, or "machinery deleted, behaviour moved server-side"). `makeStoreWithScope` stays until Task 25 if any remaining test uses it.
+  **Delete in this task** (they pin #3395 machinery removed here): the rest of `describe('Layout — per-book hydration: revisions branch (plan 27)')` that asserts `hydrateFromBookState` payloads, all of `describe('Layout — revisions persist only after the book is hydrated (#3395 pass 3, R1/R1b/R2)')` (`~:621-1276`) except "the failed-read notice is dismissed when the user moves on to another book" (full-load path — keep, adapting its fixture to `bookStateFor`), and `describe('Layout — revisions.bookId scope tracking through real navigation (#3395 pass 2, N1)')` (`~:534-620`, replaced by the selector test above). List each deleted test in the commit body with what replaces it (Task 12 cache tests, Task 14 thunk tests, or "machinery deleted, behaviour moved server-side"). `makeStoreWithScope` stays until Task 26 if any remaining test uses it.
 
   Run → FAIL on the new tests, including `book B never shows book A's pending in the rendered UI` (the layout still reads the raw `s.revisions.pending`, which holds bA's entry the instant the stage names bB — it replaces the deleted #3395 N1 layout test). One passes already and is a regression guard: `a stage change within the same book … does not re-read` (today's `hydratedFor` short-circuit also skips it); mutation 2 is its red evidence.
 
@@ -2935,7 +3062,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 18: Layout — polls adopt server state (D9), dismiss via the thunk
+### Task 19: Layout — polls adopt server state (D9), dismiss via the thunk
 
 **Character:** judgment.
 
@@ -2946,7 +3073,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 **Interfaces:**
 - `applyPoll(payload: RevisionsResponse & { bookId: string })`: merges drift for `bookId`, then ordered adopt, then `loaded = true`. `bookId` becomes required.
 - Active poll: `.then((res) => { if (!cancelled && (store.getState().ui.stage as { bookId?: string }).bookId === bookId) dispatch(revisionsActions.applyPoll({ ...res, bookId })); }).catch((err) => console.warn('[revisions] active poll failed:', (err as Error).message))`.
-- Bulk poll: chunks of ≤50 (`BULK_POLL_MAX = 50`, the server's cap); each chunk has its own `.catch`; `res.errors` entries and chunk failures go through `warnOnce` (module-level `Set`, with a test-only `export function _resetRevisionPollWarningsForTests(): void` that clears it — same reason as Task 17's OD2 set: a module-level set otherwise leaks across tests and across vitest's `retry: 1` re-run), console only (OD24).
+- Bulk poll: chunks of ≤50 (`BULK_POLL_MAX = 50`, the server's cap); each chunk has its own `.catch`; `res.errors` entries and chunk failures go through `warnOnce` (module-level `Set`, with a test-only `export function _resetRevisionPollWarningsForTests(): void` that clears it — same reason as Task 18's OD2 set: a module-level set otherwise leaks across tests and across vitest's `retry: 1` re-run), console only (OD24).
 - `onDismiss={(eventId) => void dispatch(dismissDriftOp(eventId))}`.
 
 - [ ] **Step 1: Failing tests.**
@@ -2966,7 +3093,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     });
   });
   ```
-  Fix the `multi-book drift` `applyPoll` cases that omit `bookId` (pass one). In `revisions-thunks.test.ts`, add to `revision_not_found without a state refetches the active book`: `expect(store.getState().revisions.rev).toBe(4);` (deferred from Task 13).
+  Fix the `multi-book drift` `applyPoll` cases that omit `bookId` (pass one). In `revisions-thunks.test.ts`, add to `revision_not_found without a state refetches the active book`: `expect(store.getState().revisions.rev).toBe(4);` (deferred from Task 14).
 
   (b) `layout.test.tsx`: replace the body of `describe('Layout — active book poll never overwrites client-owned pending (#3376 round 2)')` with a renamed describe `'Layout — revisions polls (plan 286)'` holding:
   ```ts
@@ -3096,7 +3223,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   };
   ```
 
-- [ ] **Step 3: Green.** `revisions-slice.test.ts`, `revisions-slice.cache.test.ts`, `revisions-thunks.test.ts`, `layout.test.tsx`, `src/modals/drift-report.test.tsx`, `typecheck`; e2e `drift-report-multibook.spec.ts revision-diff.spec.ts character-splice.spec.ts`; and `npm --prefix <wt> run test:e2e -- e2e/profile-regen-preview.spec.ts --repeat-each=3` (Global Constraints → "Known transitional window": from this task a poll can adopt over the in-cache preview stub until Task 21).
+- [ ] **Step 3: Green.** `revisions-slice.test.ts`, `revisions-slice.cache.test.ts`, `revisions-thunks.test.ts`, `layout.test.tsx`, `src/modals/drift-report.test.tsx`, `typecheck`; e2e `drift-report-multibook.spec.ts revision-diff.spec.ts character-splice.spec.ts`; and `npm --prefix <wt> run test:e2e -- e2e/profile-regen-preview.spec.ts --repeat-each=3` (Global Constraints → "Known transitional window": from this task a poll can adopt over the in-cache preview stub until Task 22).
 - [ ] **Step 4: Mutations.**
   1. Remove the bulk `.catch` → red: `D9 — a failing bulk poll is caught`.
   2. Set `BULK_POLL_MAX = 200` → red: `…in chunks of at most 50` (one call of 120 — which the server would 400).
@@ -3107,7 +3234,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 19: Splice runner — refetch instead of writing; `inFlightChapters`
+### Task 20: Splice runner — refetch instead of writing; `inFlightChapters`
 
 **Character:** judgment.
 
@@ -3117,7 +3244,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 **Interfaces:**
 - `splice-slice`: `inFlightChapters: Array<{ bookId: string; chapterId: number }>` (initial `[]`); `chapterStarted({ bookId, chapterId })` (adds if absent), `chapterSettled({ bookId, chapterId })` (removes); `export const selectChapterRendering = (s: { splice: SpliceState }, bookId: string, chapterId: number): boolean`.
-- Runner: `chapterStarted` before `api.streamSplice`, `chapterSettled` in a `finally` around it. Remove both `revisionsActions` dispatches and the import. On `splice_complete`: `void dispatch(refetchActiveRevisions(req.bookId))` (the thunk skips a non-active book); if `ev.reviewRecorded === false`, warn toast `The new take is live, but its A/B review couldn't be saved` (dedupe `splice-review-unsaved-<bookId>`). `markChapterAudioUpdated` unchanged. Rewrite the header comment.
+- Runner: `chapterStarted` before `api.streamSplice`, `chapterSettled` in a `finally` around it. Remove both `revisionsActions` dispatches and the import. On `splice_complete`: `void dispatch(refetchActiveRevisions(req.bookId))` (the thunk skips a non-active book); if `ev.reviewOutcome === 'failed'`, warn toast `The new take is live, but its A/B review couldn't be saved` (dedupe `splice-review-unsaved-<bookId>`). `markChapterAudioUpdated` unchanged. Rewrite the header comment.
 
 - [ ] **Step 1: Failing tests.** In `splice-runner-middleware.test.ts`, add `pollRevisionsSpy` to the hoisted mock and the `api` mock (`api: { streamSplice: streamSpliceSpy, putBookState: putBookStateSpy, pollRevisions: pollRevisionsSpy }`), reset it in `beforeEach` with `pollRevisionsSpy.mockReset().mockResolvedValue({ drift: [] })`. Add an action recorder: a module-level `const dispatched: string[] = [];`, cleared in `beforeEach` (`dispatched.length = 0`), and a recorder appended to `makeStore`'s middleware chain — `getDefault().concat(revisionsScopeMiddleware, persistenceMiddleware, spliceRunnerMiddleware(), () => (next) => (a) => { dispatched.push((a as { type: string }).type); return next(a); })`. (The cache can't prove "never writes pending" on its own: the refetch's `applyPoll` adopts the mocked empty server state and would wipe a stray client enqueue before any assertion runs.) Replace the test `'runs one splice per chapter, enqueues + flips pending revisions, refreshes audio, counts results'` with:
   ```ts
@@ -3163,9 +3290,9 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     expect(store.getState().splice.batches.b3).toMatchObject({ succeeded: 1, failed: 1, status: 'done' });
     expect(store.getState().splice.inFlightChapters).toEqual([]); // chapter 2 failed and still settled
   });
-  it('plan 286 — reviewRecorded:false toasts once', async () => {
+  it("plan 286 — reviewOutcome:'failed' toasts once", async () => {
     streamSpliceSpy.mockImplementation(async (args: SpliceArgs) => {
-      args.onTick({ type: 'splice_complete', chapterId: args.chapterId, characterId: args.characterId, mode: args.mode, durationSec: 222, segmentCount: 1, hasPreviousAudio: true, reviewRecorded: false } as SpliceTick);
+      args.onTick({ type: 'splice_complete', chapterId: args.chapterId, characterId: args.characterId, mode: args.mode, durationSec: 222, segmentCount: 1, hasPreviousAudio: true, reviewOutcome: 'failed' } as SpliceTick);
     });
     const store = makeStore();
     store.dispatch(spliceActions.startBatch({ id: 'b4', bookId: 'bk1', characterId: 'castor', characterName: 'Castor', mode: 'remix', gainDb: 6, chapterIds: [1, 2] }));
@@ -3173,7 +3300,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     expect(store.getState().notifications.toasts.filter((t) => t.message === "The new take is live, but its A/B review couldn't be saved")).toHaveLength(1);
   });
   ```
-  Delete or adapt every other test in the file that asserts `revisions.pending` changes from the runner (`grep -n "revisions.pending\|markRevisionPlayable\|enqueuePending" src/store/splice-runner-middleware.test.ts`); list them in the commit body. (`flush()` is the file's existing helper. `revisionsScopeMiddleware` stays in this file's `makeStore` until Task 25 deletes the module.)
+  Delete or adapt every other test in the file that asserts `revisions.pending` changes from the runner (`grep -n "revisions.pending\|markRevisionPlayable\|enqueuePending" src/store/splice-runner-middleware.test.ts`); list them in the commit body. (`flush()` is the file's existing helper. `revisionsScopeMiddleware` stays in this file's `makeStore` until Task 26 deletes the module.)
 
   **e2e** `character-splice.spec.ts` — replace the one-shot `pendingCount` read with:
   ```ts
@@ -3194,7 +3321,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 20: Player watcher middleware
+### Task 21: Player watcher middleware
 
 **Character:** judgment (three rules that interlock: a server entry resolved elsewhere, the stub's book scope, and a server entry superseding the stub).
 
@@ -3210,10 +3337,10 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
      The order matters: dropping the stub first would let rule 2 hide the stub player before it could be switched.
 
-     This closes the gap where a doubly-failed refetch (Task 23) opened a stub, a later poll adopted the server entry for the same chapter, and stub Approve then fanned out without ever accepting that entry. From then on Approve/Reject go through the recorded entry (Task 21's server-kind handlers). `stubFallback: false` makes a later disappearance of that entry read as "resolved elsewhere" (OD29) rather than a reason to rebuild the stub.
-  2. **The stub is shown only on its own book (pass 3 #1; OD28).** If `openRevision.kind === 'preview-stub'` and `selectActivePreviewStub` (Task 12) is `undefined`, dispatch `setOpenRevision(null)`. The trigger is the user navigating to another book, or the preview having been cleared. This **hides** the player and never clears `previewRegen`: the preview stays re-openable from the Status popover (Task 21) and on the next arrival at its book (Task 23).
+     This closes the gap where a doubly-failed refetch (Task 24) opened a stub, a later poll adopted the server entry for the same chapter, and stub Approve then fanned out without ever accepting that entry. From then on Approve/Reject go through the recorded entry (Task 22's server-kind handlers). `stubFallback: false` means a later arrival whose refetch fails twice keeps the marker instead of rebuilding a stub over a take the server did record (OD23). A later refetch that succeeds and finds the entry gone drops it as resolved elsewhere, whatever `stubFallback` says (OD29).
+  2. **The stub is shown only on its own book (pass 3 #1; OD28).** If `openRevision.kind === 'preview-stub'` and `selectActivePreviewStub` (Task 13) is `undefined`, dispatch `setOpenRevision(null)`. The trigger is the user navigating to another book, or the preview having been cleared. This **hides** the player and never clears `previewRegen`: the preview stays re-openable from the Status popover (Task 22) and on the next arrival at its book (Task 24).
   3. **A server entry resolved elsewhere (D6, unchanged).** If `openRevision.kind === 'server'`, `!ui.revisionOpInFlight`, and the entry is not in `selectActivePending`, dispatch `setOpenRevision(null)`. Additionally, if `ui.previewRegen` is for the active book with `previewChapterId === openRevision.chapterId` (OD10), dispatch `setPreviewRegen(null)` and an info toast `This preview was resolved elsewhere` (dedupe `preview-resolved-elsewhere`).
-- Until Task 21, neither `openRevision` nor `previewRegen.stub` is ever set, so the middleware is inert in the app.
+- Until Task 22, neither `openRevision` nor `previewRegen.stub` is ever set, so the middleware is inert in the app.
 
 - [ ] **Step 1: Failing tests** — `src/store/revision-player-middleware.test.ts`:
   ```ts
@@ -3234,7 +3361,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   }
   const preview = (ch: number) => ({ bookId: 'A', characterId: 'c', previewChapterId: ch, remainingChapterIds: [], reason: '', note: '' });
   /* Chapter 7 has no cache entry in makeStore, so rule 1 stays quiet until a test adds one. */
-  const stubPreview = (completed?: { reviewRecorded?: boolean; stubFallback: boolean }) => ({
+  const stubPreview = (completed?: { reviewOutcome?: 'recorded' | 'none' | 'failed'; stubFallback: boolean }) => ({
     ...preview(7), stub: { id: 'revision:7:c', chapterId: 7, characterId: 'c', segments: [] }, ...(completed ? { completed } : {}),
   });
   const toastMessages = (s: ReturnType<typeof makeStore>) => s.getState().notifications.toasts.map((t) => t.message);
@@ -3285,36 +3412,36 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     });
     it('OD28 — navigating to another book hides an open stub player but keeps the preview', () => {
       const store = makeStore();
-      store.dispatch(uiActions.setPreviewRegen(stubPreview({ reviewRecorded: false, stubFallback: true })));
+      store.dispatch(uiActions.setPreviewRegen(stubPreview({ reviewOutcome: 'none', stubFallback: true })));
       store.dispatch(uiActions.setOpenRevision({ kind: 'preview-stub' }));
       store.dispatch(uiActions.openBook({ id: 'B', status: 'complete' } as never));
       expect(store.getState().ui.openRevision).toBeNull();
       expect(store.getState().ui.previewRegen?.stub?.id).toBe('revision:7:c');
-      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewRecorded: false, stubFallback: true });
+      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
       expect(toastMessages(store)).toEqual([]);
     });
     it('#11 — a cache entry for the preview chapter supersedes an open stub: the player switches to it', () => {
       const store = makeStore();
-      store.dispatch(uiActions.setPreviewRegen(stubPreview({ reviewRecorded: true, stubFallback: true })));
+      store.dispatch(uiActions.setPreviewRegen(stubPreview({ reviewOutcome: 'recorded', stubFallback: true })));
       store.dispatch(uiActions.setOpenRevision({ kind: 'preview-stub' }));
       store.dispatch(revisionsActions.applyPoll({ ...state(2, [['r1', 3], ['r2', 5], ['r9', 7]]), drift: [] }));
       expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'r9', chapterId: 7 });
       expect(store.getState().ui.previewRegen?.previewChapterId).toBe(7); // the preview survives: Approve still fans out
       expect(store.getState().ui.previewRegen?.stub).toBeUndefined();
-      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewRecorded: true, stubFallback: false });
+      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'recorded', stubFallback: false });
       expect(toastMessages(store)).toEqual([]);
     });
     it('#11 — with the player closed, the entry still replaces the stub marker', () => {
       const store = makeStore();
-      store.dispatch(uiActions.setPreviewRegen(stubPreview({ reviewRecorded: true, stubFallback: true })));
+      store.dispatch(uiActions.setPreviewRegen(stubPreview({ reviewOutcome: 'recorded', stubFallback: true })));
       store.dispatch(revisionsActions.applyPoll({ ...state(2, [['r1', 3], ['r2', 5], ['r9', 7]]), drift: [] }));
       expect(store.getState().ui.openRevision).toBeNull();
       expect(store.getState().ui.previewRegen?.stub).toBeUndefined();
-      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewRecorded: true, stubFallback: false });
+      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'recorded', stubFallback: false });
     });
   });
   ```
-  (`applyPoll` adopts server state since Task 18.) Run → FAIL (module missing).
+  (`applyPoll` adopts server state since Task 19.) Run → FAIL (module missing).
 
 - [ ] **Step 2: Implement:**
   ```ts
@@ -3391,19 +3518,19 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 21: Layout — the A/B player routes `server` and `preview-stub` entries
+### Task 22: Layout — the A/B player routes `server` and `preview-stub` entries
 
 **Character:** judgment.
 
 **Files:**
-- Modify: `src/components/layout.tsx` — `statusDetail`'s `pendingRevisionsCount` and `onOpenRevisions` (`~:1730-1731`), the regenerate-character preview branch (`~:2057-2083` → `startPreviewRegen`), the player block (`~:2474-2568`), and two new top-level hooks (see Interfaces). (The `pending` selector already moved to `selectActivePending` in Task 17.)
+- Modify: `src/components/layout.tsx` — `statusDetail`'s `pendingRevisionsCount` and `onOpenRevisions` (`~:1730-1731`), the regenerate-character preview branch (`~:2057-2083` → `startPreviewRegen`), the player block (`~:2474-2568`), and two new top-level hooks (see Interfaces). (The `pending` selector already moved to `selectActivePending` in Task 18.)
 - Modify: `src/components/revision-timeline-modal.tsx` (`useAppSelector((s) => s.revisions.timeline)` → `useAppSelector(selectActiveTimeline)`).
-- Modify: `src/store/generation-stream-middleware.ts` — **transitional** (Task 23 replaces it): in its `revisions/markRevisionPlayable` block, stop `enqueuePending`ing the stub; instead dispatch `uiActions.setPreviewRegen({ ...preview, stub: buildPendingRevisionStub({ chapter, character, playable: true }) })` and `uiActions.setOpenRevision({ kind: 'preview-stub' })`. So the existing preview e2e opens the stub through the stub handlers below, and Approve fans out via `approvePreviewSideEffects`.
-- Tests: `layout.test.tsx`, `src/components/revision-timeline-modal.test.tsx`, and `src/store/generation-stream-middleware.test.ts` (its two `showRevisionPlayer` assertions at `~:444`/`~:455` pin behaviour this task changes, so they move here; the other `showRevisionPlayer` references — pure field deletions — are Task 22's).
-- `showRevisionPlayer` / `setShowRevisionPlayer` **stay in `ui-slice.ts` in this task** (unused by the layout after it); Task 22 deletes them.
+- Modify: `src/store/generation-stream-middleware.ts` — **transitional** (Task 24 replaces it): in its `revisions/markRevisionPlayable` block, stop `enqueuePending`ing the stub; instead dispatch `uiActions.setPreviewRegen({ ...preview, stub: buildPendingRevisionStub({ chapter, character, playable: true }) })` and `uiActions.setOpenRevision({ kind: 'preview-stub' })`. So the existing preview e2e opens the stub through the stub handlers below, and Approve fans out via `approvePreviewSideEffects`.
+- Tests: `layout.test.tsx`, `src/components/revision-timeline-modal.test.tsx`, and `src/store/generation-stream-middleware.test.ts` (its two `showRevisionPlayer` assertions at `~:444`/`~:455` pin behaviour this task changes, so they move here; the other `showRevisionPlayer` references — pure field deletions — are Task 23's).
+- `showRevisionPlayer` / `setShowRevisionPlayer` **stay in `ui-slice.ts` in this task** (unused by the layout after it); Task 23 deletes them.
 
 **Interfaces:**
-- `pending` is `useAppSelector(selectActivePending)` since Task 17.
+- `pending` is `useAppSelector(selectActivePending)` since Task 18.
 - **Hooks at the component's top level, never inside the conditional player render** (the player block `~:2474` is a `{cond && <RevisionDiffPlayer …/>}` expression; a hook inside it would change the hook order whenever it mounts — React's rules of hooks). Declare, beside the other `useAppSelector` calls near `~:195`:
   ```ts
   const openRevision = useAppSelector((s) => s.ui.openRevision);
@@ -3429,7 +3556,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 - Preview start: replace the inline `setPreviewRegen` + `enqueueQueueEntries` with `void dispatch(startPreviewRegen({ bookId, characterId, characterName: regenCharacter?.name ?? characterId, chapterIds, reason, note }))`.
 
 - [ ] **Step 1: Failing tests.**
-  (a) `layout.test.tsx` — add `acceptRevision`, `rejectRevision`, `restorePreviousUnrecorded`, `getChapterAudioPrevious` to the file's `vi.mock('../lib/api')` factory as `(...a) => acceptRevisionMock(...a)` etc. (declare the `vi.fn()`s beside `getBookStateMock`). The file's `makeStore()` (`~:193`) installs **no** middleware, so the player watcher (Task 20) — the thing that would fire a "resolved elsewhere" toast — is absent from every layout test, and a no-toast assertion there is vacuous. Give it an optional parameter, leaving every existing caller unchanged: `function makeStore(extraMiddleware: Middleware[] = [])` with `middleware: (getDefault) => getDefault().concat(...extraMiddleware)` (import `type Middleware` from `@reduxjs/toolkit` and `revisionPlayerMiddleware` from `../store/revision-player-middleware`). Then:
+  (a) `layout.test.tsx` — add `acceptRevision`, `rejectRevision`, `restorePreviousUnrecorded`, `getChapterAudioPrevious` to the file's `vi.mock('../lib/api')` factory as `(...a) => acceptRevisionMock(...a)` etc. (declare the `vi.fn()`s beside `getBookStateMock`). The file's `makeStore()` (`~:193`) installs **no** middleware, so the player watcher (Task 21) — the thing that would fire a "resolved elsewhere" toast — is absent from every layout test, and a no-toast assertion there is vacuous. Give it an optional parameter, leaving every existing caller unchanged: `function makeStore(extraMiddleware: Middleware[] = [])` with `middleware: (getDefault) => getDefault().concat(...extraMiddleware)` (import `type Middleware` from `@reduxjs/toolkit` and `revisionPlayerMiddleware` from `../store/revision-player-middleware`). Then:
   ```ts
   describe('Layout — A/B player routing (plan 286)', () => {
     const entry = (id: string, ch: number, triggeredBy: string, extra = {}) => ({ id, chapterId: ch, characterId: 'eliza', triggeredBy, segments: [], playable: true, hasPreviousAudio: true, ...extra });
@@ -3544,7 +3671,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       await waitFor(() => expect(store.getState().ui.previewRegen).toBeNull());
     });
     it('#1 — a preview stub for another book never renders, even with openRevision set', async () => {
-      /* No watcher here: this pins the layout's own gate, not the watcher's hide rule (Task 20). */
+      /* No watcher here: this pins the layout's own gate, not the watcher's hide rule (Task 21). */
       const store = await mounted([], []);
       act(() => {
         store.dispatch(uiActions.setPreviewRegen({ bookId: 'b2', characterId: 'eliza', previewChapterId: 3, remainingChapterIds: [], reason: 'voice', note: '',
@@ -3560,7 +3687,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       act(() => {
         store.dispatch(accountSlice.actions.setDefaultTtsModelKey('kokoro-v1')); // the Status pill renders deterministically
         store.dispatch(uiActions.setPreviewRegen({ bookId: 'b1', characterId: 'eliza', previewChapterId: 3, remainingChapterIds: [], reason: 'voice', note: '',
-          stub: entry('revision:3:eliza', 3, 'Eliza voice change', { hasPreviousAudio: true }), completed: { reviewRecorded: false, stubFallback: true } }));
+          stub: entry('revision:3:eliza', 3, 'Eliza voice change', { hasPreviousAudio: true }), completed: { reviewOutcome: 'none', stubFallback: true } }));
         store.dispatch(uiActions.setOpenRevision({ kind: 'preview-stub' }));
       });
       await screen.findByTestId('revision-diff-player');
@@ -3586,7 +3713,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     return store;
   }
   ```
-  (this also drops its hand-built `preloadedState`, which would otherwise need `hydratedFor`/`windowActions` until Task 25), then add:
+  (this also drops its hand-built `preloadedState`, which would otherwise need `hydratedFor`/`windowActions` until Task 26), then add:
   ```ts
   it('plan 286 — shows the empty state for a cached book that is not the active book', () => {
     const store = makeStore({ 3: [{ id: 't', chapterId: 3, eventKind: 'accepted', timestamp: '2026-01-01T00:00:00Z', status: 'active' }] }, 'X', 'Y');
@@ -3612,16 +3739,16 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 22: UI slice — delete `showRevisionPlayer` (mechanical follow-on to Task 21)
+### Task 23: UI slice — delete `showRevisionPlayer` (mechanical follow-on to Task 22)
 
 **Character:** mechanical.
 
-**Why:** Task 21 made `ui.openRevision` the only thing that opens the A/B player, leaving `showRevisionPlayer` / `setShowRevisionPlayer` unused. Their deletion touches four unrelated test files, so it is split out of Task 21 to keep that diff behavioural.
+**Why:** Task 22 made `ui.openRevision` the only thing that opens the A/B player, leaving `showRevisionPlayer` / `setShowRevisionPlayer` unused. Their deletion touches four unrelated test files, so it is split out of Task 22 to keep that diff behavioural.
 
 **Files:**
 - Modify: `src/store/ui-slice.ts` — delete the `showRevisionPlayer` field (with its doc comment), its initial value, and the `setShowRevisionPlayer` reducer.
-- Tests (from `git -C <wt> grep -n showRevisionPlayer -- src e2e`; the `generation-stream-middleware.test.ts` assertions already moved in Task 21):
-  - `src/components/theme-toggle.test.tsx` (`~:35`), `src/lib/use-theme.test.tsx` (`~:36`), `src/store/ui-slice.test.ts` (`baseState`, `~:20`): delete the `showRevisionPlayer: false,` line from each hand-built `UiState` (they already carry `openRevision`/`revisionOpInFlight` since Task 12).
+- Tests (from `git -C <wt> grep -n showRevisionPlayer -- src e2e`; the `generation-stream-middleware.test.ts` assertions already moved in Task 22):
+  - `src/components/theme-toggle.test.tsx` (`~:35`), `src/lib/use-theme.test.tsx` (`~:36`), `src/store/ui-slice.test.ts` (`baseState`, `~:20`): delete the `showRevisionPlayer: false,` line from each hand-built `UiState` (they already carry `openRevision`/`revisionOpInFlight` since Task 13).
   - `src/store/persist-config.test.ts` (`~:48`): delete the `'showRevisionPlayer'` entry from `transientKeys` (typed `keyof` the initial state, so it stops compiling once the field is gone).
 
 - [ ] **Step 1: Failing test** — in `ui-slice.test.ts`:
@@ -3645,29 +3772,29 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 23: Generation preview — `previewChapterComplete`, refetch-or-stub, re-open on arrival (OD27, OD28, OD29)
+### Task 24: Generation preview — `previewChapterComplete`, refetch-or-stub, re-open on arrival (OD27, OD28, OD29)
 
 **Character:** judgment.
 
 **Files:**
 - Modify: `src/store/generation-stream-runner.ts` (`chapter_complete` branch of `handleTickFor`, `~:401-419`; `StreamRunnerStore.getState` type `~:85-88`).
-- Modify: `src/store/generation-stream-middleware.ts` (replace Task 21's transitional `revisions/markRevisionPlayable` block).
+- Modify: `src/store/generation-stream-middleware.ts` (replace Task 22's transitional `revisions/markRevisionPlayable` block).
 - Rename: `src/lib/build-pending-revision.ts` → `src/lib/build-preview-stub.ts` (`buildPendingRevisionStub` → `buildPreviewStub`); correct the stale docstring (`hasPreviousAudio` comes from the metadata check now, `:8-12`, `:49-51`).
-- Modify: `e2e/profile-regen-preview.spec.ts` (remove the `rejectAllPending` workaround and its comment — the phantom revision is gone since Task 9).
-- Modify: `e2e/marketing/scenes.ts` `generating-revision-diff` scene (`~:1041-1091`) — **moved here from Task 25**: this task removes the generation middleware's `revisions/markRevisionPlayable` block, which is what that scene's `markRevisionPlayable` dispatch (`~:1087`) relies on to open the player, so the scene breaks in this commit, not later. Delete its `rejectAllPending` dispatch (`~:1060`) and replace the `markRevisionPlayable` dispatch with, after the existing `chapters/applyGenerationTick` dispatch:
+- Modify: `e2e/profile-regen-preview.spec.ts` (remove the `rejectAllPending` workaround and its comment — the phantom revision is gone since Task 10).
+- Modify: `e2e/marketing/scenes.ts` `generating-revision-diff` scene (`~:1041-1091`) — **moved here from Task 26**: this task removes the generation middleware's `revisions/markRevisionPlayable` block, which is what that scene's `markRevisionPlayable` dispatch (`~:1087`) relies on to open the player, so the scene breaks in this commit, not later. Delete its `rejectAllPending` dispatch (`~:1060`) and replace the `markRevisionPlayable` dispatch with, after the existing `chapters/applyGenerationTick` dispatch:
   ```ts
   (window as unknown as { __mockRevisions?: { seed: (b: string, s: unknown) => void } }).__mockRevisions?.seed('hollow-tide-2', { previousChapterIds: [chapterId], liveChapterIds: [chapterId] });
-  s?.dispatch({ type: 'chapters/previewChapterComplete', payload: { bookId: 'hollow-tide-2', chapterId, reviewRecorded: false } });
+  s?.dispatch({ type: 'chapters/previewChapterComplete', payload: { bookId: 'hollow-tide-2', chapterId, reviewOutcome: 'failed' } });
   ```
-  Seeding `previousChapterIds` makes the stub's metadata check succeed, so the A card shows the preserved take, not "Original audio not preserved". Rewrite the scene's comments (`~:1012`, `~:1037` name `revisions/markRevisionPlayable`): the stream is dead under `DEMO_CAPTURE`, so the scene stands in for the completion tick with `previewChapterComplete` (stub path).
+  `'failed'` (a preserved take, no recorded entry) takes the stub path without a refetch. Seeding `previousChapterIds` makes the stub's metadata check succeed, so the A card shows the preserved take, not "Original audio not preserved". Rewrite the scene's comments (`~:1012`, `~:1037` name `revisions/markRevisionPlayable`): the stream is dead under `DEMO_CAPTURE`, so the scene stands in for the completion tick with `previewChapterComplete` (stub path).
 - Tests: `generation-stream-runner.test.ts`, `generation-stream-middleware.test.ts`, and the builder's test if one exists (rename with it).
 
 **Interfaces:**
-- Runner: on `chapter_complete` with `ev.reviewChapter === true`, `dispatch(previewChapterComplete({ bookId, chapterId: ev.chapterId, reviewRecorded: ev.reviewRecorded }))` for **any** book. Remove the `markRevisionPlayable` dispatch and the `revisions` member of `StreamRunnerStore`'s state type. (OD12: no refetch on a plain `chapter_complete`.)
+- Runner: on `chapter_complete` with `ev.reviewChapter === true`, `dispatch(previewChapterComplete({ bookId, chapterId: ev.chapterId, reviewOutcome: ev.reviewOutcome }))` for **any** book. Remove the `markRevisionPlayable` dispatch and the `revisions` member of `StreamRunnerStore`'s state type. (OD12: no refetch on a plain `chapter_complete`.)
 - `buildPreviewStub({ chapter, character, hasPreviousAudio, triggeredBy? }): Revision` — `playable: true`, id `revision:<ch>:<char>`, no `origin`.
 - Middleware on `previewChapterComplete.match(action)` (after `next(action)`). Let `mine` be "`ui.previewRegen` is this preview" (its `bookId` and `previewChapterId` match the payload) and `onBook` be "the active book is the payload's `bookId`".
   1. `onBook && mine` → `armedFor = bookId`, **before** step 2. Step 2's dispatch re-enters this middleware, and that re-entry's fire check (below) opens the preview in the same pass, provided three things hold: the book's chapters are in (`chapters.currentBookId === bookId`, A8: chapter ids repeat across books), no player is open, and the preview is finished. Otherwise it stays armed and fires as soon as all three hold. Arming first means exactly one fire. If step 1 armed after step 2, an arm left over from an arrival would fire in the re-entry, step 1 would re-arm, and the outer pass would fire a second `openPreview`. This replaces pass 2's direct `void openPreview(...)` call, which read whatever book's chapters happened to be loaded.
-  2. **OD28 — mark EVERY completion of this preview finished**, on its book or elsewhere: if `mine`, dispatch `setPreviewRegen({ ...preview, completed: { reviewRecorded, stubFallback: onBook } })`. A completion seen on its own book that finds no server entry is a first render: finalize records nothing when nothing was preserved, yet still answers `reviewRecorded: true` (`finalize-chapter-write.ts ~:779-798`). So it may fall back to a stub (`stubFallback: true`). A completion that happened elsewhere may not (OD29).
+  2. **OD28 — mark EVERY completion of this preview finished**, on its book or elsewhere: if `mine`, dispatch `setPreviewRegen({ ...preview, completed: { reviewOutcome, stubFallback: onBook } })`. `reviewOutcome` is the server's own word on what happened (Task 7). `stubFallback` matters only for a `'recorded'` completion whose refetch fails twice. Seen on its book, that still opens a stub, as the spec's OD23 requires. Finished elsewhere, the marker is kept for the next arrival instead.
   3. `!onBook` → info toast `Preview ready in ‹title›` (title from `library` books, fallback `bookId`), dedupe `preview-ready-<bookId>`. Stop.
   4. `onBook && !mine` (e.g. after a reload, which drops `previewRegen`) → nothing opens, exactly as today's `markRevisionPlayable` handler does without a matching `previewRegen`. A recorded take reaches the Status popover with the next poll (OD12).
 - `openPreview` (the only path that opens a preview; every early return leaves `completed` set, so the preview stays re-openable — OD28):
@@ -3678,11 +3805,15 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     getState: () => StreamableRootState,
     p: { bookId: string; chapterId: number; completed: PreviewRegenCtx['completed'] },
   ) {
-    const reviewRecorded = p.completed?.reviewRecorded;
+    const reviewOutcome = p.completed?.reviewOutcome;
     const stubFallback = p.completed?.stubFallback ?? false;
     const isThisPreview = (s: StreamableRootState) =>
       s.ui.previewRegen?.bookId === p.bookId && s.ui.previewRegen.previewChapterId === p.chapterId;
-    if (reviewRecorded !== false) {
+    /* OD29 (Task 7) — 'none' (a first render: nothing to review) and 'failed'
+       (preserved, but no entry recorded) have no server entry to look for: the
+       stub is the legitimate player, so no refetch. Only 'recorded' (or an
+       absent outcome) looks for the entry. */
+    if (reviewOutcome !== 'none' && reviewOutcome !== 'failed') {
       let r = await dispatch(refetchActiveRevisions(p.bookId));
       if (r === 'failed') { await new Promise((res) => setTimeout(res, PREVIEW_REFETCH_RETRY_MS)); r = await dispatch(refetchActiveRevisions(p.bookId)); }
       /* OD28 — the user left the book during the refetch ('skipped', or 'ok'
@@ -3693,19 +3824,19 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       if (r === 'ok') {
         const entry = selectActivePending(getState()).find((e) => e.chapterId === p.chapterId);
         if (entry) { dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: entry.id, chapterId: entry.chapterId })); return; }
-      }
-      if (!stubFallback) {
-        if (r === 'ok' && isThisPreview(getState())) {
-          /* OD29 — recorded, finished elsewhere (or its entry was already seen,
-             Task 20), and the server no longer has it: resolved elsewhere. Never
-             a stub: its Reject (restore-unrecorded) could put the preview take
-             back over a newer render, which dropped the entry
-             (finalize-chapter-write.ts ~:798). */
+        if (isThisPreview(getState())) {
+          /* OD29 — the server recorded an entry and no longer has it: resolved
+             elsewhere (another tab, or a newer render dropped it). Never a stub:
+             its Reject (restore-unrecorded) could put the preview take back over
+             that newer render (finalize-chapter-write.ts ~:798). */
           dispatch(uiActions.setPreviewRegen(null));
           dispatch(notificationsActions.pushToast({ kind: 'info', message: 'This preview was resolved elsewhere', dedupeKey: 'preview-resolved-elsewhere' }));
-        } else if (r === 'failed') {
-          console.warn('[preview] could not confirm the recorded take; it re-opens on the next visit to the book');
         }
+        return;
+      }
+      /* r === 'failed' twice (OD23). */
+      if (!stubFallback) {
+        console.warn('[preview] could not confirm the recorded take; it re-opens on the next visit to the book');
         return;
       }
     }
@@ -3748,7 +3879,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     void openPreview(dispatch, getState, { bookId: pv.bookId, chapterId: pv.previewChapterId, completed: pv.completed });
   }
   ```
-  An unfinished preview armed on arrival fires once its completion lands (step 1 re-arms anyway). A blocked fire (a player open, chapters not in) stays armed and fires when the blocker clears. `completed` stays on the context, so every later arrival re-opens it until Approve / Reject clears `previewRegen` — or until OD29 drops it, or Task 20's watcher swaps its stub for a server entry. Leaving the book disarms it; the next arrival re-arms.
+  An unfinished preview armed on arrival fires once its completion lands (step 1 re-arms anyway). A blocked fire (a player open, chapters not in) stays armed and fires when the blocker clears. `completed` stays on the context, so every later arrival re-opens it until Approve / Reject clears `previewRegen` — or until OD29 drops it, or Task 21's watcher swaps its stub for a server entry. Leaving the book disarms it; the next arrival re-arms.
 - Remove `revisionsActions` and the old builder import from the middleware; update its header comment item 3.
 
 - [ ] **Step 1: Failing tests.**
@@ -3768,10 +3899,10 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       store.dispatch(chaptersSlice.actions.setCurrentBookId('viewed'));
       runner.open('other', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
       runner.open('other', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
-      onTickFor('other', 1)({ type: 'chapter_complete', chapterId: 1, reviewChapter: true, reviewRecorded: true } as GenerationTick);
+      onTickFor('other', 1)({ type: 'chapter_complete', chapterId: 1, reviewChapter: true, reviewOutcome: 'recorded' } as GenerationTick);
       onTickFor('other', 2)({ type: 'chapter_complete', chapterId: 2 } as GenerationTick);
       const previews = types.filter((t) => t.type === 'chapters/previewChapterComplete');
-      expect(previews.map((t) => t.payload)).toEqual([{ bookId: 'other', chapterId: 1, reviewRecorded: true }]);
+      expect(previews.map((t) => t.payload)).toEqual([{ bookId: 'other', chapterId: 1, reviewOutcome: 'recorded' }]);
     });
     it('never dispatches revisions/markRevisionPlayable', () => {
       const { store, runner, types } = recordingRunner();
@@ -3782,7 +3913,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     });
   });
   ```
-  (b) `generation-stream-middleware.test.ts` — add `notifications`, `library` reducers to `makeStore`, `pollRevisions` and `getChapterAudioPrevious` to its `vi.mock('../lib/api')` factory (`pollRevisionsMock`, `getChapterAudioPreviousMock` declared with `vi.hoisted`), and replace the two Task 21-adapted `markRevisionPlayable` tests with:
+  (b) `generation-stream-middleware.test.ts` — add `notifications`, `library` reducers to `makeStore`, `pollRevisions` and `getChapterAudioPrevious` to its `vi.mock('../lib/api')` factory (`pollRevisionsMock`, `getChapterAudioPreviousMock` declared with `vi.hoisted`), and replace the two Task 22-adapted `markRevisionPlayable` tests with:
   ```ts
   describe('plan 286 — previewChapterComplete', () => {
     const F = '000000000000001-a';
@@ -3804,7 +3935,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     it('active book + recorded entry → refetch, then open that server entry', async () => {
       const { store } = makeStore(); seedPreview(store);
       pollRevisionsMock.mockResolvedValueOnce(recorded());
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: true }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
       await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'revision:3:1700', chapterId: 3 }));
       expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
     });
@@ -3813,33 +3944,43 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
       store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival arms; the preview has not finished
       pollRevisionsMock.mockResolvedValue(recorded());
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: true }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
       await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'revision:3:1700', chapterId: 3 }));
       await tick();
       expect(pollRevisionsMock).toHaveBeenCalledTimes(1);
     });
-    it('reviewRecorded:false → no refetch; previous metadata decides the stub', async () => {
+    it("'failed' (preserved, unrecorded) → no refetch; previous metadata decides the stub", async () => {
       const { store } = makeStore(); seedPreview(store);
       getChapterAudioPreviousMock.mockResolvedValueOnce({ url: 'blob:a', durationSec: 1, peaks: [], sampleRate: 1, segments: [] });
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: false }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'failed' }));
       await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
       expect(pollRevisionsMock).not.toHaveBeenCalled();
       expect(store.getState().ui.previewRegen?.stub).toMatchObject({ chapterId: 3, hasPreviousAudio: true, playable: true });
     });
-    it('a recorded completion seen on its own book with no entry → stub (a first render records nothing)', async () => {
+    it("'none' (a first render) → no refetch, a stub with no kept take", async () => {
+      const { store } = makeStore(); seedPreview(store);
+      getChapterAudioPreviousMock.mockResolvedValueOnce(null);
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+      await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+      expect(pollRevisionsMock).not.toHaveBeenCalled();
+      expect(store.getState().ui.previewRegen?.stub?.hasPreviousAudio).toBe(false);
+      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
+    });
+    it("OD29 — 'recorded' on its own book, but the refetch finds no entry → dropped as resolved elsewhere, never a stub", async () => {
       const { store } = makeStore(); seedPreview(store);
       pollRevisionsMock.mockResolvedValueOnce(empty());
-      getChapterAudioPreviousMock.mockResolvedValueOnce(null);
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: true }));
-      await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
-      expect(store.getState().ui.previewRegen?.stub?.hasPreviousAudio).toBe(false);
-      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewRecorded: true, stubFallback: true });
+      getChapterAudioPreviousMock.mockResolvedValue(null); // a stub, if one were (wrongly) built, would open cleanly
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+      await vi.waitFor(() => expect(store.getState().ui.previewRegen).toBeNull());
+      expect(store.getState().ui.openRevision).toBeNull();
+      expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
+      expect(toasts(store)).toEqual(['This preview was resolved elsewhere']);
     });
     it('a failed refetch does not open a stub straight away; the retry succeeding opens the entry', async () => {
       vi.useFakeTimers();
       const { store } = makeStore(); seedPreview(store);
       pollRevisionsMock.mockRejectedValueOnce(new Error('x')).mockResolvedValueOnce(recorded());
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: true }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
       await vi.advanceTimersByTimeAsync(0);
       expect(store.getState().ui.openRevision).toBeNull();
       await vi.advanceTimersByTimeAsync(1000);
@@ -3850,7 +3991,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       const { store } = makeStore(); seedPreview(store);
       pollRevisionsMock.mockRejectedValueOnce(new Error('x')).mockRejectedValueOnce(new Error('y'));
       getChapterAudioPreviousMock.mockResolvedValueOnce(null);
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: true }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
       await vi.advanceTimersByTimeAsync(0);
       expect(store.getState().ui.openRevision).toBeNull();
       await vi.advanceTimersByTimeAsync(1000);
@@ -3860,13 +4001,13 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     it('a previous-metadata GET that throws → stub with hasPreviousAudio:false', async () => {
       const { store } = makeStore(); seedPreview(store);
       getChapterAudioPreviousMock.mockRejectedValueOnce(new Error('500'));
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: false }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'failed' }));
       await vi.waitFor(() => expect(store.getState().ui.previewRegen?.stub?.hasPreviousAudio).toBe(false));
     });
     it('a non-active book → "Preview ready in ‹title›" toast and nothing opens', async () => {
       const { store } = makeStore(); seedPreview(store);
       store.dispatch(librarySlice.actions.hydrate({ authors: [{ name: 'A', series: [{ name: 'S', books: [{ bookId: 'other', title: 'Other Book' }] }] }] } as never));
-      store.dispatch(previewChapterComplete({ bookId: 'other', chapterId: 3, reviewRecorded: true }));
+      store.dispatch(previewChapterComplete({ bookId: 'other', chapterId: 3, reviewOutcome: 'recorded' }));
       expect(toasts(store)).toEqual(['Preview ready in Other Book']);
       expect(store.getState().ui.openRevision).toBeNull();
       expect(pollRevisionsMock).not.toHaveBeenCalled();
@@ -3874,26 +4015,26 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     it('OD27 — a non-active completion marks the matching preview finished', async () => {
       const { store } = makeStore(); seedPreview(store);
       store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: false }));
-      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewRecorded: false, stubFallback: false });
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: false });
       expect(store.getState().ui.openRevision).toBeNull();
     });
     it('OD28 — an active completion marks the preview finished too, so after a close the next arrival re-opens it', async () => {
       const { store } = makeStore(); seedPreview(store);
       getChapterAudioPreviousMock.mockResolvedValue(null);
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: false }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
       await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
-      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewRecorded: false, stubFallback: true });
+      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
       store.dispatch(uiSlice.actions.setOpenRevision(null)); // the player's close
       store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
       store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival
       await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
       expect(getChapterAudioPreviousMock).toHaveBeenCalledTimes(2);
     });
-    it('OD27 — arriving back at the preview book re-opens it (stub path, no recorded entry)', async () => {
+    it("OD27 — arriving back at the preview book re-opens a first render ('none') as a stub — never dropped", async () => {
       const { store } = makeStore(); seedPreview(store); // chapters.currentBookId is already 'b1'
       store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: false }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
       getChapterAudioPreviousMock.mockResolvedValueOnce(null);
       store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival
       await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
@@ -3902,16 +4043,16 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     it('OD27 — arriving back opens the recorded server entry when there is one', async () => {
       const { store } = makeStore(); seedPreview(store);
       store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: true }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
       expect(pollRevisionsMock).not.toHaveBeenCalled(); // not on completion elsewhere
       pollRevisionsMock.mockResolvedValueOnce(recorded());
       store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
       await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'revision:3:1700', chapterId: 3 }));
     });
-    it('OD29 — arriving back after a recorded completion elsewhere, with no entry now, drops the preview with one notice', async () => {
+    it("OD29 — arriving back after a 'recorded' completion elsewhere, with no entry now, drops the preview with one notice", async () => {
       const { store } = makeStore(); seedPreview(store);
       store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: true }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
       pollRevisionsMock.mockResolvedValueOnce(empty());
       getChapterAudioPreviousMock.mockResolvedValue(null); // a stub, if one were (wrongly) built, would open cleanly
       store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
@@ -3923,7 +4064,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     it('OD28/OD29 — leaving the book while the arrival refetch is in flight leaves the preview re-openable', async () => {
       const { store } = makeStore(); seedPreview(store);
       store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: true }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
       let release!: (v: unknown) => void;
       pollRevisionsMock.mockReturnValueOnce(new Promise((r) => (release = r)));
       store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival: the refetch starts
@@ -3931,7 +4072,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' })); // leave before it lands
       release(empty());
       await tick();
-      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewRecorded: true, stubFallback: false });
+      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'recorded', stubFallback: false });
       expect(toasts(store)).not.toContain('This preview was resolved elsewhere');
     });
     it("OD27 — the re-open waits for the arriving book's chapters", async () => {
@@ -3939,7 +4080,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
       store.dispatch(chaptersSlice.actions.setCurrentBookId('b2'));
       store.dispatch(chaptersSlice.actions.setChapters([ch(9, { state: 'done', duration: '01:00' })])); // b2's chapters
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: false }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
       getChapterAudioPreviousMock.mockResolvedValue(null);
       store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival; chapters still b2's
       await tick();
@@ -3955,11 +4096,11 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       store.dispatch(chaptersSlice.actions.setCurrentBookId('b2'));
       store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '09:00' })])); // ANOTHER book's chapter 3
       getChapterAudioPreviousMock.mockResolvedValue(null);
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: false }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
       await tick();
       expect(store.getState().ui.openRevision).toBeNull();
       expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
-      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewRecorded: false, stubFallback: true });
+      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
       store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '05:00' })]));
       store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
       await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
@@ -3978,7 +4119,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       const { store } = makeStore(); seedPreview(store);
       store.dispatch(uiSlice.actions.setOpenRevision({ kind: 'server', revisionId: 'r-x', chapterId: 5 }));
       getChapterAudioPreviousMock.mockResolvedValue(null);
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: false }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
       await tick();
       expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'r-x', chapterId: 5 });
       expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
@@ -3990,14 +4131,14 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
       store.dispatch(castSlice.actions.hydrateCharacters([]));
       getChapterAudioPreviousMock.mockResolvedValue(null);
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: false }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
       await vi.waitFor(() => expect(getChapterAudioPreviousMock).toHaveBeenCalled());
       await tick();
       const warned = warn.mock.calls.length; // read before mockRestore, which clears mock.calls in vitest 5
       warn.mockRestore();
       expect(warned).toBeGreaterThan(0);
       expect(store.getState().ui.openRevision).toBeNull();
-      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewRecorded: false, stubFallback: true });
+      expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
       store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'marlow', name: 'Marlow' } as never]));
       store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
       store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
@@ -4006,7 +4147,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     it('the stub never enters the revisions cache and survives a poll', async () => {
       const { store } = makeStore(); seedPreview(store);
       getChapterAudioPreviousMock.mockResolvedValueOnce(null);
-      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewRecorded: false }));
+      store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
       await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
       /* Asserted BEFORE the poll: a stub dispatched into the cache (mutation 4)
          would be wiped by the rev-9 poll's adoption below, masking it. */
@@ -4021,32 +4162,36 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   (Confirm `librarySlice.actions.hydrate`'s payload shape against `LibraryResponse` and the selector the middleware uses for titles; adapt the literal.)
   Run → FAIL.
 
-- [ ] **Step 2: Implement** per Interfaces; delete Task 21's transitional block.
+- [ ] **Step 2: Implement** per Interfaces; delete Task 22's transitional block.
 - [ ] **Step 3: Green.** Runner + middleware tests, `typecheck`, e2e `profile-regen-preview.spec.ts` (`cc` chapter 1 has no live audio in the mock store → the render records nothing → refetch finds no entry → stub with `hasPreviousAudio:false` → Approve fans out via the stub path; Reject drops the preview without a request); `npx --prefix <wt> eslint e2e/marketing/scenes.ts`. (The marketing scene runs only under the marketing harness — `.env.marketing`; if this lane cannot run that capture, say so in the report rather than claiming it green.)
 - [ ] **Step 4: Mutations.** Each was traced against the test it names. Pass 3 found that pass 2's mutations 4 and 8 could not go red; both are restructured here.
   1. Remove the retry (open the stub on the first failure) → red: `a failed refetch does not open a stub straight away…`.
-  2. Set `hasPreviousAudio: true` unconditionally in `buildPreviewStub`'s call → red: `a recorded completion seen on its own book with no entry → stub…` (`hasPreviousAudio` is `true`).
+  2. Set `hasPreviousAudio: true` unconditionally in `buildPreviewStub`'s call → red: `'none' (a first render) → no refetch, a stub with no kept take` (`hasPreviousAudio` is `true`).
   3. Gate the runner dispatch on `sliceMatchesHandle` → red: `dispatches previewChapterComplete only for reviewChapter, for any book`.
   4. Dispatch the stub into the cache (`revisionsActions.applyServerState` with the stub added) → red: `the stub never enters the revisions cache…`, at the assertion **before** the poll. The rev-9 poll would adopt the empty state and wipe the injected stub, which is why pass 2's after-poll assertion alone could not go red.
-  5. Drop step 2's `setPreviewRegen({ …completed })` for a non-active completion (mark only when `onBook`) → red: `OD27 — a non-active completion marks the matching preview finished` and `OD27 — arriving back at the preview book re-opens it`.
-  6. Never arm on arrival (delete the `if (activeBefore !== activeAfter) armedFor = …` line) → red: `OD27 — arriving back …` (both), `OD29 — arriving back after a recorded completion elsewhere…`, and `OD28 — an active completion marks the preview finished too…` (its second, arrival-driven open).
+  5. Drop step 2's `setPreviewRegen({ …completed })` for a non-active completion (mark only when `onBook`) → red: `OD27 — a non-active completion marks the matching preview finished` and `OD27 — arriving back at the preview book re-opens a first render ('none') as a stub…`.
+  6. Never arm on arrival (delete the `if (activeBefore !== activeAfter) armedFor = …` line) → red: `OD27 — arriving back …` (both), `OD29 — arriving back after a 'recorded' completion elsewhere…`, and `OD28 — an active completion marks the preview finished too…` (its second, arrival-driven open).
   7. Drop `after.chapters.currentBookId === armedFor` from the fire condition → red:
      - `A8 — an active completion waits for its own book's chapters`. It fires at once, and `openPreview`'s own A8 guard (`currentBookId === p.bookId`) finds no b1 rows. It takes the "cannot be built yet" return and consumes the arm, so nothing opens when b1's rows land: the final `waitFor` times out.
      - `OD27 — the re-open waits for the arriving book's chapters` (the arm fires on arrival, finds no chapter 3 among b2's rows, takes the "cannot be built yet" return, and is consumed, so nothing opens when b1's rows land).
-  8. Drop `&& pv.completed !== undefined` from the fire condition → red: `OD27 — no re-open on arrival without a finished preview`. An unfinished preview armed on arrival now fires: `openPreview` sees `reviewRecorded` `undefined` and refetches, so `pollRevisionsMock` is called. Arming no longer tests `completed`, so nothing masks this; pass 2 tested it in both places.
+  8. Drop `&& pv.completed !== undefined` from the fire condition → red: `OD27 — no re-open on arrival without a finished preview`. An unfinished preview armed on arrival now fires: `openPreview` sees `reviewOutcome` `undefined`, which is neither `'none'` nor `'failed'`, and refetches, so `pollRevisionsMock` is called. Arming no longer tests `completed`, so nothing masks this; pass 2 tested it in both places.
   9. Drop `after.ui.openRevision === null` from the fire condition → red: `OD28 — never opens over a player the user has open…` (the stub replaces `r-x`, and `getChapterAudioPrevious` is called).
   10. Mark `completed` only for a non-active completion (step 2's `if (mine)` → `if (mine && !onBook)`) → red: `OD28 — an active completion marks the preview finished too…`. Its first `waitFor` times out, because without `completed` the fire check never opens the active completion.
   11. In `openPreview`'s `!chapter || !character` branch, clear the preview (`dispatch(uiActions.setPreviewRegen(null))`) before returning → red: `OD28 — a stub that cannot be built yet … leaves the preview re-openable` (`completed` is gone, and the later arrival opens nothing).
-  12. Never drop on OD29 (replace `if (!stubFallback)` with `if (false)`) → red: `OD29 — arriving back after a recorded completion elsewhere…` (a stub opens, so `previewRegen` is never `null`).
-  13. Stamp `stubFallback: false` on every completion → red: `a recorded completion seen on its own book with no entry → stub…` (the preview is dropped as resolved elsewhere instead) and `a doubly-failed refetch still opens the stub`.
+  12. Never drop on OD29: delete the `if (isThisPreview(getState())) { … }` drop block inside `if (r === 'ok')`, together with that branch's `return`, so a `'recorded'` refetch with no entry falls through → red:
+      - `OD29 — 'recorded' on its own book, but the refetch finds no entry…` (`stubFallback` is `true`, so a stub opens);
+      - `OD29 — arriving back after a 'recorded' completion elsewhere…` (it warns and keeps the preview, so `previewRegen` is never `null`).
+  13. Stamp `stubFallback: false` on every completion → red: `a doubly-failed refetch still opens the stub` (it warns instead) and `'none' (a first render) → …` (at its `completed` assertion).
   14. Delete `|| activeBookId(getState()) !== p.bookId` after the refetch → red: `OD28/OD29 — leaving the book while the arrival refetch is in flight…`. The unapplied `'ok'` reads b2's empty cache, so OD29 drops the preview and toasts.
   15. Move step 1 (`armedFor = bookId`) after step 2's dispatch → red: `a completion on the book while an arrival arm is pending opens it once`. Step 2's re-entry fires on the arrival's arm, step 1 then re-arms, and the outer pass fires again, so `pollRevisionsMock` is called twice.
+  16. **Collapse `'none'` into `'recorded'` on the client** (drop `reviewOutcome !== 'none' &&` from the refetch condition) → red: `'none' (a first render) → no refetch…` (`pollRevisionsMock` is called and the empty refetch drops the preview) and `OD27 — arriving back at the preview book re-opens a first render ('none')…` (dropped, never re-opened). This is the client-side twin of Task 7's mutation 1.
+  17. Treat `'failed'` like `'recorded'` (drop `&& reviewOutcome !== 'failed'`) → red: `'failed' (preserved, unrecorded) → no refetch…` (`pollRevisionsMock` is called).
   (No mutation targets `openPreview`'s own `currentBookId === p.bookId` guard. The fire gate (mutation 7) is the tested seam. That guard only covers the window after the refetch's `await`, when the active book is unchanged but the chapter rows could still differ, and no unit test reaches that window. It is defensive, and removing it changes no test.)
 - [ ] **Step 5: Commit.** `fix(frontend,e2e): open a recorded preview entry or a stub, and re-open a preview on return (#3397)`.
 
 ---
 
-### Task 24: Persistence — no revisions PUT, ever
+### Task 25: Persistence — no revisions PUT, ever
 
 **Character:** mechanical.
 
@@ -4056,7 +4201,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 - Test: create `src/store/persistence-middleware.revisions-never-put.test.ts`; trim `persistence-middleware.test.ts` (delete its revisions-rule tests; list them in the commit body).
 - Issue chore: post a comment on #3421 ("plan 286 removes every client revisions write, so the revisions half of this issue is moot; the re-send-vs-surface question remains for the other slices").
 
-- [ ] **Step 1: Failing test** — the new file. The gate refuses a revisions write unless `revisions.bookId` and `revisions.hydratedFor` both equal the book, so the test **hydrates first** (Task 11's transitional `hydrate` sets both); without that the test would pass before the fix and prove nothing.
+- [ ] **Step 1: Failing test** — the new file. The gate refuses a revisions write unless `revisions.bookId` and `revisions.hydratedFor` both equal the book, so the test **hydrates first** (Task 12's transitional `hydrate` sets both); without that the test would pass before the fix and prove nothing.
   ```ts
   /* Plan 286 — the client never PUTs revisions.json (invariant 1). Drives the
      revisions actions through a store with the real persistence middleware,
@@ -4113,7 +4258,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 25: Delete #3395's guard machinery and the dead revisions API
+### Task 26: Delete #3395's guard machinery and the dead revisions API
 
 **Character:** mechanical (large but deletion-only).
 
@@ -4122,7 +4267,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 - Delete: `src/store/revisions-scope-middleware.ts`, `src/store/revisions-scope-middleware.test.ts`; remove its import and `.concat` entry from `src/store/index.ts`, and from `layout.test.tsx` (`makeStoreWithScope`) and `splice-runner-middleware.test.ts`.
 - Modify: `src/routes/index.tsx` — `onDeleteBook` (`~:155`), `onReplaceManuscript` (`~:196`) and `onReparseBook` (`~:252`): each `bookWiped(b.bookId)` → `revisionsActions.forgetBook(b.bookId)`, and rewrite the comment sentence beside the replace/reparse ones (`~:191`): the server reset the file to a new `fileId`; forgetting the cache here means the next read adopts it as a different book, without depending on the `manuscriptActions.reset()` beside it forcing a full reload. (A no-op when the cache holds another book — `forgetBook` checks.)
 - Modify: `src/lib/api.ts` — delete `acceptChapterRevision`/`rejectChapterRevision` (real + mock) and `mockAcceptChapterRevision`/`mockRejectChapterRevision`.
-- (`src/lib/types.ts`'s `acceptedSelections` doc comment went with the inline type in Task 16; `e2e/marketing/scenes.ts` was fixed in Task 23.)
+- (`src/lib/types.ts`'s `acceptedSelections` doc comment went with the inline type in Task 17; `e2e/marketing/scenes.ts` was fixed in Task 24.)
 - Tests: `revisions-slice.test.ts` (delete tests of deleted reducers; list in commit body), `routes/index.test.tsx`, `persistence-middleware.revisions-never-put.test.ts` (replace the old-action case with the exhaustive one below), `generation-stream-middleware.test.ts` (drop any remaining `markRevisionPlayable` case).
 
 - [ ] **Step 1: Failing tests.**
@@ -4221,13 +4366,13 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 26: Server — finalize callers pass `review` / `null`
+### Task 27: Server — finalize callers pass `review` / `null`
 
 **Character:** judgment (three routes; generation suite is slow-pool).
 
 **Files:**
 - Modify: `server/src/routes/chapter-splice.ts` (`finalizeChapterAudioWrite({` call `~:526`), `server/src/routes/chapter-qa-repair.ts` (`~:766`), `server/src/routes/generation.ts` (`~:1891`; the `RunningJob.review` comment `~:387-389`).
-- Tests: `chapter-splice.test.ts` (`plan 285 — passes no \`review\` to finalize (PR 1 dark)…` `~:281`), `chapter-qa-repair.test.ts` (`~:440`), `generation.test.ts` (`passes no \`review\` to finalize…` `~:2369`; `reviewChapter:true only on the chapter rendered with review — … finalize still gets no review` `~:2414`).
+- Tests: `chapter-splice.test.ts` (`plan 285 — passes no \`review\` to finalize (PR 1 dark)…` `~:281`, its threading assertion already renamed to `reviewOutcome` by Task 7), `chapter-qa-repair.test.ts` (`~:440`), `generation.test.ts` (`passes no \`review\` to finalize…` `~:2369`; `reviewChapter:true only on the chapter rendered with review — … finalize still gets no review` `~:2414`).
 
 **Interfaces:**
 - Splice: `chapter-splice.ts` has no cast resolver today. Import `buildCastResolver` from `../store/cast-resolve.js` and, after `castIdHistory` is loaded (`~:229`), compute `const reviewName = buildCastResolver(cast.characters, castIdHistory).resolve(characterId)?.character.name ?? characterId;` (resolves superseded ids, OD13). Pass `review: { characterId, triggeredBy: spliceTriggeredBy(mode, reviewName) }`. Export `spliceTriggeredBy(mode: 'remix' | 'rerecord', name: string): string` = `` `${mode === 'remix' ? 'Loudness fix' : 'Re-record'} (${name.split(' ')[0] || name})` ``.
@@ -4237,16 +4382,16 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 - [ ] **Step 1: Failing tests** — flip the three dark-state tests:
   ```ts
   // chapter-splice.test.ts — replace the 'plan 285 — passes no `review`…' test
-  it('plan 286 — passes the splice review to finalize and threads reviewRecorded onto splice_complete', async () => {
+  it('plan 286 — passes the splice review to finalize and threads reviewOutcome onto splice_complete', async () => {
     const fin = await import('../audio/finalize-chapter-write.js');
     const real = (await vi.importActual<typeof import('../audio/finalize-chapter-write.js')>('../audio/finalize-chapter-write.js')).finalizeChapterAudioWrite;
     const spy = vi.mocked(fin.finalizeChapterAudioWrite);
     spy.mockClear();
-    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewRecorded: false }));
+    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewOutcome: 'failed' as const }));
     const res = await request(app).post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`).send({ mode: 'remix', characterId: 'castor', gainDb: 3 });
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0][0].review).toEqual({ characterId: 'castor', triggeredBy: 'Loudness fix (Castor)' });
-    expect(parseSse(res.text).find((e) => e.type === 'splice_complete')!.reviewRecorded).toBe(false);
+    expect(parseSse(res.text).find((e) => e.type === 'splice_complete')!.reviewOutcome).toBe('failed');
   });
   it('plan 286 — spliceTriggeredBy uses the first name', () => {
     expect(spliceTriggeredBy('remix', 'Eliza Carrick')).toBe('Loudness fix (Eliza)');
@@ -4255,13 +4400,13 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
   ```
   ```ts
   // chapter-qa-repair.test.ts — in the existing 'plan 285 — passes no `review`…' test, rename to
-  // 'plan 286 — passes review:null to finalize and threads reviewRecorded onto qa_repair_complete' and replace
+  // 'plan 286 — passes review:null to finalize and threads reviewOutcome onto qa_repair_complete' and replace
   //   expect('review' in spy.mock.calls[0][0]).toBe(false);
   // with
   expect(spy.mock.calls[0][0].review).toBeNull();
   ```
   ```ts
-  // generation.test.ts — rename 'passes no `review` to finalize and threads reviewRecorded…' to
+  // generation.test.ts — rename 'passes no `review` to finalize and threads reviewOutcome…' (Task 7's title) to
   // 'plan 286 — passes review:null to finalize without review…' and replace its `'review' in …` assertion with:
   expect(spy.mock.calls[0][0].review).toBeNull();
   // and in 'reviewChapter:true only on the chapter rendered with review — never a replay — and finalize still gets no review',
@@ -4282,7 +4427,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 27: Server — restructure drops stale pending entries
+### Task 28: Server — restructure drops stale pending entries
 
 **Character:** judgment.
 
@@ -4390,7 +4535,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 28: Server — close the raw PUT (400) and the legacy audio routes (410)
+### Task 29: Server — close the raw PUT (400) and the legacy audio routes (410)
 
 **Character:** mechanical.
 
@@ -4435,7 +4580,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 29: e2e — accept / reject / dismiss, the #3397 book switch, a recorded preview
+### Task 30: e2e — accept / reject / dismiss, the #3397 book switch, a recorded preview
 
 **Character:** judgment (Playwright timing).
 
@@ -4572,23 +4717,23 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
     expect(timeline['1'].map((t) => t.eventKind)).toEqual(['accepted']);
   });
   ```
-  (`openPreviewPlayerRecorded` and `hasElizaRegenLog` are copies of the original spec's helpers plus the seed line. The change-log event is only appended after `acceptRevisionOp` resolved `ok` — Task 21 — so "accepted is recorded" is established before the change-log poll can succeed.)
+  (`openPreviewPlayerRecorded` and `hasElizaRegenLog` are copies of the original spec's helpers plus the seed line. The change-log event is only appended after `acceptRevisionOp` resolved `ok` — Task 22 — so "accepted is recorded" is established before the change-log poll can succeed.)
 
 - [ ] **Step 2: Run** `npm --prefix <wt> run test:e2e -- e2e/revision-ops.spec.ts e2e/revisions-book-switch.spec.ts e2e/profile-regen-preview-recorded.spec.ts e2e/profile-regen-preview.spec.ts`. Expected PASS. Run the book-switch spec with `--repeat-each=3`.
 - [ ] **Step 3: Mutations** (each must make the named spec red; restore after each):
   1. **Client-side**, leaving the mock store's recording intact: in `revisions-slice.ts` make `applyPoll` merge drift only (skip its `adopt`), **and** in `layout.tsx` dispatch `revisionsActions.hydrate({ bookId, state: null, requestSeq })` at both hydrate sites → `revisions-book-switch.spec.ts` red at `expect(open).toBeVisible` after returning to `cc` (the spec's `__mockRevisions.get('cc')` poll still passes — the mock server recorded the take — but no client path adopts it, so the Status popover offers no revisions). Both halves are needed: either alone leaves the other path to adopt the entry. (A server-side cut such as skipping `mockRecordRender` would also go red, but it tests the mock, not the client cutover.)
-  2. In `src/store/preview-thunks.ts` `startPreviewRegen`, drop `review` → `profile-regen-preview-recorded.spec.ts` red at `openPreviewPlayerRecorded`'s player-visible wait (timeout): without `review` the mock render neither records an entry nor stamps `reviewChapter` on `chapter_complete` (Task 10: `reviewChapterId` is `null`), so the runner never dispatches `previewChapterComplete` and no player opens — it is **not** a stub opening in its place.
+  2. In `src/store/preview-thunks.ts` `startPreviewRegen`, drop `review` → `profile-regen-preview-recorded.spec.ts` red at `openPreviewPlayerRecorded`'s player-visible wait (timeout): without `review` the mock render neither records an entry nor stamps `reviewChapter` on `chapter_complete` (Task 11: `reviewChapterId` is `null`), so the runner never dispatches `previewChapterComplete` and no player opens — it is **not** a stub opening in its place.
   3. In `mockPollRevisions`, remove the dismissed filter → `revision-ops.spec.ts` "Dismissing a drift group…" red at the post-poll assertion.
 - [ ] **Step 4: Commit.** `test(e2e): cover server-owned accept/reject/dismiss, the book-switch take and a recorded preview (#3397)`.
 
 ---
 
-### Task 30: Bookkeeping — release notes, on-box register, plan status, addenda to plans 20, 114 and 176
+### Task 31: Bookkeeping — release notes, on-box register, plan status, addenda to plans 20, 114 and 176
 
 **Character:** mechanical (docs), **except the live-view publish, which is COORDINATOR-ONLY**: it needs the Artifact tool (publishing to the URL in the register's header), which a dispatched lane does not have. The lane edits the files and stops; the coordinator runs the publish procedure (last bullet of Files).
 
 **Files and content:**
-- `docs/release-notes-next.md` — one technical entry (PR-refed): client cutover (no client revisions writes; per-op routes; cache ordered by `fileId`/`rev` with a hydrate sequence guard); #3397; D1/D6/D7/D9; OD20 (legacy stuck takes recoverable while `.previous.mp3` exists, flagged `recovered: true` and labelled "Recovered from before the update"; the A side is the take kept before the chapter's last render, which may predate the stuck take); OD2 (`revisionsError` + one toast); OD26 (`qa-report` GET and `resume-scoring` 500s answer fixed sentences); OD27 (a preview that finished on another book re-opens on return); OD28 (closing a preview player only hides it — the Status popover and the next arrival re-open it; the stub shows only on its own book); OD29 (a recorded preview whose entry is gone on return is dropped with "This preview was resolved elsewhere" — including, as a known gap, a preview of a chapter that had no audio yet); reparse / replace no longer echo the revisions reset's fs error; `restore-unrecorded`; bulk `errors`; fixed 500 sentences for revisions store failures; `GET /state` normalised; `PUT slice:'revisions'` → 400; legacy routes → 410; restructure drop; finalize callers live; incidental fixes (bulk chunking at 50, active-poll catch).
+- `docs/release-notes-next.md` — one technical entry (PR-refed): client cutover (no client revisions writes; per-op routes; cache ordered by `fileId`/`rev` with a hydrate sequence guard); #3397; D1/D6/D7/D9; OD20 (legacy stuck takes recoverable while `.previous.mp3` exists, flagged `recovered: true` and labelled "Recovered from before the update"; the A side is the take kept before the chapter's last render, which may predate the stuck take); OD2 (`revisionsError` + one toast); OD26 (`qa-report` GET and `resume-scoring` 500s answer fixed sentences); OD27 (a preview that finished on another book re-opens on return); OD28 (closing a preview player only hides it — the Status popover and the next arrival re-open it; the stub shows only on its own book); OD29 (a recorded preview whose entry is gone on return is dropped with "This preview was resolved elsewhere"; finalize and the three completion ticks report `reviewOutcome: 'recorded' | 'none' | 'failed'` in place of `reviewRecorded`, Task 7); reparse / replace no longer echo the revisions reset's fs error; `restore-unrecorded`; bulk `errors`; fixed 500 sentences for revisions store failures; `GET /state` normalised; `PUT slice:'revisions'` → 400; legacy routes → 410; restructure drop; finalize callers live; incidental fixes (bulk chunking at 50, active-poll catch).
 - `RELEASE_NOTES.md` — brand-voice lines in the in-progress version: takes that finish while you're on another book wait for you as normal A/B reviews; a preview that finishes while you're elsewhere opens when you come back, and closing a preview no longer loses it — reopen it from the Status pill; takes stuck on "Rendering…" from before the update become reviewable again, marked "Recovered from before the update", when the take kept before that chapter's last render is still on disk (never call it "the original": it may be an older take); accept/reject only count once the audio change actually happened.
 - `docs/testing/onbox-acceptance-register.md` — **mint a new Group A row** (allocate from Group A's `<!-- next-id: A… -->` marker and bump it in the same commit; A9 is the plan-176 splice row and stays, only its "known gap (#3397…)" sentences are replaced by a pointer to the new row). The new row: "Revisions server ownership (plan 286, #3400/#3397)", hardware: GPU box, real sidecar, a real rendered book. Observe:
   1. splice a character → switch books → return: the A/B prompt is there and playable;
@@ -4613,7 +4758,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 ---
 
-### Task 31: Verify, review gate, PR
+### Task 32: Verify, review gate, PR
 
 **Character:** coordinator (`claude` lane).
 
@@ -4622,7 +4767,7 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 - [ ] `npm --prefix <wt> run test:e2e -- e2e/revision-ops.spec.ts e2e/revisions-book-switch.spec.ts e2e/profile-regen-preview-recorded.spec.ts e2e/revision-diff.spec.ts e2e/profile-regen-preview.spec.ts e2e/character-splice.spec.ts e2e/drift-report-multibook.spec.ts`
 - [ ] `npm --prefix <wt>/server run test:slow -- src/routes/generation.test.ts src/routes/book-state.test.ts src/routes/chapters-restructure.test.ts`
 - [ ] `npm --prefix <wt> run check:cycles`
-- [ ] `git -C <wt> grep -n "markRevisionPlayable\|enqueuePending\|hydrateFromBookState.*revisions\|hydratedFor\|bookWiped\|acceptChapterRevision\|rejectChapterRevision\|revisionsPatch\|showRevisionPlayer" -- src e2e server/src ':!src/lib/api-types.ts'` → no hits. (`src/lib/api-types.ts` is excluded because it is generated and keeps the two legacy operations, `acceptChapterRevision` / `rejectChapterRevision`, as `deprecated` 410 entries per Task 28.)
+- [ ] `git -C <wt> grep -n "markRevisionPlayable\|enqueuePending\|hydrateFromBookState.*revisions\|hydratedFor\|bookWiped\|acceptChapterRevision\|rejectChapterRevision\|revisionsPatch\|showRevisionPlayer" -- src e2e server/src ':!src/lib/api-types.ts'` → no hits. (`src/lib/api-types.ts` is excluded because it is generated and keeps the two legacy operations, `acceptChapterRevision` / `rejectChapterRevision`, as `deprecated` 410 entries per Task 29.)
 - [ ] Push; open the PR (title `fix(frontend,server): revisions.json client cutover to server ownership (#3400)`; body: Summary, Test plan, `Closes #3400`, `Closes #3397`, "Also fixed, found in passing" from Incidental findings, the register row).
 - [ ] Run the `pr-review-gate` skill (multi-scope → depth `high`).
 
@@ -4632,23 +4777,23 @@ Each task header says **mechanical** or **judgment**. The operator assigns lanes
 
 | Finding | Where | Disposition |
 |---|---|---|
-| The background bulk poll sends every analysed book in one request; the server rejects more than 50 with 400, so a library with 51+ analysed books never updates background drift. | `layout.tsx` bulk effect vs `routes/revisions.ts` `bookIds.length > 50` | Fixed in Task 18 (chunks of 50). |
-| The active-book poll (`layout.tsx ~:1116`) also has no `.catch`. | `layout.tsx` | Fixed in Task 18. |
+| The background bulk poll sends every analysed book in one request; the server rejects more than 50 with 400, so a library with 51+ analysed books never updates background drift. | `layout.tsx` bulk effect vs `routes/revisions.ts` `bookIds.length > 50` | Fixed in Task 19 (chunks of 50). |
+| The active-book poll (`layout.tsx ~:1116`) also has no `.catch`. | `layout.tsx` | Fixed in Task 19. |
 | Six revisions 500 handlers echo raw store error text (fs errors carry absolute paths), and `qa-report`'s `resume-scoring` echoes its raw error too. | `revision-ops.ts`, `revisions.ts`, `qa-report.ts` (both handlers) | Fixed in Task 3 (OD26 decided `resume-scoring`). |
 | Reparse and replace-manuscript echo `resetRevisions`'s raw fs error (PR 1 added that store write to `applyReparse`). | `book-state.ts` `applyReparse` | Fixed in Task 4 (only the revisions arm; parser messages keep their text). |
-| `rolledBack` (and its persistence rule) is never dispatched anywhere in `src/` — dead code. | `revisions-slice.ts`, `persistence-middleware.ts` | Deleted in Tasks 24–25. |
-| The hand-written `BookStateResponse.revisions` (`src/lib/types.ts:430-445`) lacks `bookId`/`fileId`/`rev`/`timeline`. | `types.ts` | Realigned to the generated type in Task 16. |
+| `rolledBack` (and its persistence rule) is never dispatched anywhere in `src/` — dead code. | `revisions-slice.ts`, `persistence-middleware.ts` | Deleted in Tasks 25–26. |
+| The hand-written `BookStateResponse.revisions` (`src/lib/types.ts:430-445`) lacks `bookId`/`fileId`/`rev`/`timeline`. | `types.ts` | Realigned to the generated type in Task 17. |
 | Two plans share the number 285. | `docs/features/` | **Not fixed here.** Draft PR #3516 renumbers `285-analysis-failure-phase-markers.md` → 287; it is held until PR #3505 merges. No clash with 286. |
-| Three tests hand-build a full `UiState`, so Task 12's two new required fields break `typecheck` there — not only the `PreviewRegenCtx` literals the earlier draft listed. | `theme-toggle.test.tsx`, `use-theme.test.tsx`, `ui-slice.test.ts` | Fixed in Task 12. |
-| Module-level once-per-session sets (`revisionsErrorToasted`, the poll `warnOnce` set) leak across tests and across vitest's `retry: 1` re-run. | `layout.tsx` | Test-only reset exports, called in each describe's `beforeEach` (Tasks 17, 18). |
-| Four server test files load their routers with a `Promise.all` of dynamic imports while carrying (or, after this plan, gaining) a hoisted async-factory `vi.mock`. That race can bind the real, unmocked export (#2083). `chapter-audio.test.ts` already had two such mocks, so the race there predates this plan. | `chapter-audio.test.ts ~:63`, `book-state.replace-manuscript.test.ts ~:30`, `book-state.hydrate.test.ts ~:45`, `chapters-restructure.test.ts ~:132` | Fixed in the task that adds each file's mock (Tasks 1, 4, 5, 27): converted to sequential awaits with the `revisions.test.ts:90-94` comment. |
+| Three tests hand-build a full `UiState`, so Task 13's two new required fields break `typecheck` there — not only the `PreviewRegenCtx` literals the earlier draft listed. | `theme-toggle.test.tsx`, `use-theme.test.tsx`, `ui-slice.test.ts` | Fixed in Task 13. |
+| Module-level once-per-session sets (`revisionsErrorToasted`, the poll `warnOnce` set) leak across tests and across vitest's `retry: 1` re-run. | `layout.tsx` | Test-only reset exports, called in each describe's `beforeEach` (Tasks 18, 19). |
+| Four server test files load their routers with a `Promise.all` of dynamic imports while carrying (or, after this plan, gaining) a hoisted async-factory `vi.mock`. That race can bind the real, unmocked export (#2083). `chapter-audio.test.ts` already had two such mocks, so the race there predates this plan. | `chapter-audio.test.ts ~:63`, `book-state.replace-manuscript.test.ts ~:30`, `book-state.hydrate.test.ts ~:45`, `chapters-restructure.test.ts ~:132` | Fixed in the task that adds each file's mock (Tasks 1, 4, 5, 28): converted to sequential awaits with the `revisions.test.ts:90-94` comment. |
 
 ## Open decisions
 
 The operator decided three on 2026-10-06 (OD2, OD20's first form, the hydrate race) and five more on 2026-10-07 (OD20 revised, OD26, OD27, and, after assumption-checker pass 3, OD28 and OD29), all recorded as **DECIDED**. The rest carry the default this plan uses.
 
-1. **OD1 — Source of the reopen re-hydrate.** (a) `getBookState` (today's call, now normalised); (b) `api.pollRevisions`. **Default (a).** Cost: one `GET /state` per *arrival at a book* — not per stage change, which Task 17 scopes out (`revisionsReadFor`). For a `ready` book the active poll also fetches immediately on arrival, so the two overlap; the rehydrate is what covers `analysing`/`confirm` stages, where the poll does not run.
-2. **OD2 — Unreadable `revisions.json` on `GET /state`. DECIDED (2026-10-06): toast once.** `GET /state` returns `revisions: null` and a path-free `revisionsError` (Task 5: the fixed user sentence, or — through `revisionsFailureText` — a newer-schema file's own "upgrade the server" sentence); the book opens; the client toasts that sentence verbatim, once per book per session (Tasks 5, 17). (The polls are console-only — Task 18, OD24 — so this toast is the user-visible signal.)
+1. **OD1 — Source of the reopen re-hydrate.** (a) `getBookState` (today's call, now normalised); (b) `api.pollRevisions`. **Default (a).** Cost: one `GET /state` per *arrival at a book* — not per stage change, which Task 18 scopes out (`revisionsReadFor`). For a `ready` book the active poll also fetches immediately on arrival, so the two overlap; the rehydrate is what covers `analysing`/`confirm` stages, where the poll does not run.
+2. **OD2 — Unreadable `revisions.json` on `GET /state`. DECIDED (2026-10-06): toast once.** `GET /state` returns `revisions: null` and a path-free `revisionsError` (Task 5: the fixed user sentence, or — through `revisionsFailureText` — a newer-schema file's own "upgrade the server" sentence); the book opens; the client toasts that sentence verbatim, once per book per session (Tasks 5, 18). (The polls are console-only — Task 19, OD24 — so this toast is the user-visible signal.)
 3. **OD3 — The hydrate retry loop.** Spec: "the revisions retry loop goes". The loop also retries the full book load. **Default:** keep it for the full-load path only.
 4. **OD4 — `restore-unrecorded` serialisation.** **Default:** take the `revision-op` key (same race class as accept/reject).
 5. **OD5 — Bulk per-book error text.** **Default:** a fixed path-free sentence.
@@ -4656,17 +4801,17 @@ The operator decided three on 2026-10-06 (OD2, OD20's first form, the hydrate ra
 7. **OD7 — Mock "had audio".** **Default:** a `liveChapterIds` set (seeded `sb` = all chapters; grown by every mock render); a splice always counts as having audio.
 8. **OD8 — `__mockRevisions` surface.** Spec: `seed(bookId, {state, previousChapterIds})`, `get`. Plan adds `liveChapterIds` and `reset`; splice delay via `window.__mockSpliceDelayMs`.
 9. **OD9 — Mock reject never answers `chapter_busy`.** Busy is covered by unit tests. Alternative: read the mock queue for an in-progress entry.
-10. **OD10 — Preview clearing scope.** Spec: if the shown entry disappears "and `previewRegen` is set", clear it. **Default:** clear only a preview for that book and chapter — both in the watcher (Task 20) and in the thunks' gone/not-found branch (Task 13).
+10. **OD10 — Preview clearing scope.** Spec: if the shown entry disappears "and `previewRegen` is set", clear it. **Default:** clear only a preview for that book and chapter — both in the watcher (Task 21) and in the thunks' gone/not-found branch (Task 14).
 11. **OD11 — "Keep new take".** **Default:** review mode only, replacing "Commit selection" when A is unavailable; Reject disabled then.
 12. **OD12 — Plain `chapter_complete` with a cached entry for that chapter.** **Default:** no extra refetch; the next poll or a `revision_not_found` repairs it.
 13. **OD13 — Splice `triggeredBy`.** **Default:** `Loudness fix (<first name>)` / `Re-record (<first name>)`, name resolved through the cast resolver, falling back to the character id.
 14. **OD14 — Preview `review.triggeredBy`.** **Default:** `<name> voice change`.
-15. **OD15 — Status popover target.** **Default:** `pending[0]` (it only knows a count). D6 is about the preview path, not this button. **Amended by OD28:** when the active book has a preview stub, the popover counts it and opens it first (Task 21).
+15. **OD15 — Status popover target.** **Default:** `pending[0]` (it only knows a count). D6 is about the preview path, not this button. **Amended by OD28:** when the active book has a preview stub, the popover counts it and opens it first (Task 22).
 16. **OD16 — A vanished entry with no preview.** **Default:** close silently.
 17. **OD17 — On-box acceptance.** **Default (revised):** a **new Group A row** (A9 is the plan-176 splice row; no row covers the preview path, plan 114 or #3400). A9's #3397 gap text is replaced with a pointer.
 18. **OD18 — Plan status after merge.** **Default:** 285 and 286 both `active` with Ship notes until the new row is accepted.
 19. **OD19 — Dismiss failure.** **Default:** keep the event and toast.
-20. **OD20 — Legacy stuck entries. DECIDED (2026-10-07, revising 2026-10-06's "keep stuck entries recoverable"): keep them recoverable AND label them distinctly.** Read-only normalisation (Task 6): a legacy `playable:false` entry whose `.previous.mp3` exists is surfaced as playable with a server-side flag `recovered: true` (store type, `openapi.yaml` `Revision.recovered`, generated client type); the player shows **Recovered from before the update** and describes A as "the take kept before this chapter's last render" — never "the original" (Task 15; also the Benefit, release notes and register step 8 wording, Task 30). The carrier is the server flag rather than a client derivation because the client cannot tell a stuck legacy entry from any other origin-less one once normalisation has set `playable: true`.
+20. **OD20 — Legacy stuck entries. DECIDED (2026-10-07, revising 2026-10-06's "keep stuck entries recoverable"): keep them recoverable AND label them distinctly.** Read-only normalisation (Task 6): a legacy `playable:false` entry whose `.previous.mp3` exists is surfaced as playable with a server-side flag `recovered: true` (store type, `openapi.yaml` `Revision.recovered`, generated client type); the player shows **Recovered from before the update** and describes A as "the take kept before this chapter's last render" — never "the original" (Task 16; also the Benefit, release notes and register step 8 wording, Task 31). The carrier is the server flag rather than a client derivation because the client cannot tell a stuck legacy entry from any other origin-less one once normalisation has set `playable: true`.
     - **Why "never the original" (the false-premise residual, accepted):** every render preserves `.previous` (`finalize-chapter-write.ts:714`, `preserveExistingAsPrevious`), and a failed splice leaves its `playable:false` entry behind (`splice-runner-middleware.ts:67-79` enqueues it before the stream; `:146` only counts the failure). So any render after the stuck one — before this update, which never dropped entries — can have replaced `.previous` with an unrelated older take: the pair the user reviews may not be the pair the entry describes. The label says so; Reject still restores whatever take was kept.
     - **Persistence:** the next unrelated store write (any accept / reject / dismiss / record on that book) persists the normalised view, so the entry lands on disk as `playable: true, recovered: true`; the flag keeps the label alive across that write (Task 6 test). Reversibility 9.
     - **Residual still accepted:** legacy ids (`revision:<ch>:<char>`, `splice-<book>-<ch>-<char>`) are not per-recording, so a stale tab could act on a different legacy take with the same id.
@@ -4674,33 +4819,30 @@ The operator decided three on 2026-10-06 (OD2, OD20's first form, the hydrate ra
 22. **OD22 — `forgetBook` leaves that book's drift.** Spec literal; pre-existing linger until reload.
 23. **OD23 — Preview refetch retry.** **Default:** one retry after 1000 ms.
 24. **OD24 — Bulk/active poll failures in the UI.** **Default:** console only (once per book / per message per session).
-25. **Hydrate race. DECIDED (2026-10-06): sequence guard** (`adoptSeq` / `requestSeq`, Tasks 11, 17). A hydrate whose read started before the latest op/poll adoption that **changed** `(bookId, fileId, rev)` is dropped; the next poll repairs anything it carried. An equal-version (no-op) adoption does not bump `adoptSeq` (assumption-checker pass 2), so a routine poll at the same `rev` cannot make an in-flight hydrate look stale.
+25. **Hydrate race. DECIDED (2026-10-06): sequence guard** (`adoptSeq` / `requestSeq`, Tasks 12, 18). A hydrate whose read started before the latest op/poll adoption that **changed** `(bookId, fileId, rev)` is dropped; the next poll repairs anything it carried. An equal-version (no-op) adoption does not bump `adoptSeq` (assumption-checker pass 2), so a routine poll at the same `rev` cannot make an in-flight hydrate look stale.
 26. **OD26 — `qa-report` 500 text. DECIDED (2026-10-07): fixed sentences for both handlers.** Task 3 curates the GET (`qa-report.ts ~:47`, via `revisionsFailureText`) and `resume-scoring` (`~:73`, a plain fixed sentence — not a store path) and logs the raw error; it flips #3527's `a non-lock failure keeps its own message` test and `qa-report.test.ts`'s `returns 500 when the underlying lookup throws` (`~:150`, `'disk read failed'`). Supersedes the earlier "flag for a follow-up" disposition.
-27. **OD27 — A preview that finished with no recorded entry while the user was elsewhere. DECIDED (2026-10-07): re-open on arrival.** The completion marks the preview finished (`previewRegen.completed`). When the user next arrives at `previewRegen.bookId` with no player open, the middleware runs the same `openPreview` refetch-or-stub path, once that book's chapters have loaded (Task 23). Each later arrival re-opens it until Approve / Reject clears the preview. **Amended by OD28 and OD29 (2026-10-07):**
+27. **OD27 — A preview that finished with no recorded entry while the user was elsewhere. DECIDED (2026-10-07): re-open on arrival.** The completion marks the preview finished (`previewRegen.completed`). When the user next arrives at `previewRegen.bookId` with no player open, the middleware runs the same `openPreview` refetch-or-stub path, once that book's chapters have loaded (Task 24). Each later arrival re-opens it until Approve / Reject clears the preview. **Amended by OD28 and OD29 (2026-10-07):**
     - `completed` is now set on **every** completion, not only the non-active one (OD28).
     - The arrival path drops a *recorded* preview whose entry is gone, rather than re-opening a stub (OD29).
     - The original text said only the non-active branch marks the preview. That is superseded.
 28. **OD28 — Closing a stub player. DECIDED (2026-10-07): keep it re-openable.** Closing (back arrow / X) only hides the player (`setOpenRevision(null)`); `previewRegen` and its stub stay. Concretely:
-    - **Status popover.** The stub is counted and opened from the Status popover without entering the cache: Invariant 6, `selectActivePreviewStub`, Tasks 12 and 21. OD15 is amended so the stub comes first.
-    - **Every completion is marked.** `previewRegen.completed` is set on **every** completion, including the active-book one. So an arrival at the book re-opens a preview whose player was closed, never opened, or could not be built (Task 23).
+    - **Status popover.** The stub is counted and opened from the Status popover without entering the cache: Invariant 6, `selectActivePreviewStub`, Tasks 13 and 22. OD15 is amended so the stub comes first.
+    - **Every completion is marked.** `previewRegen.completed` is set on **every** completion, including the active-book one. So an arrival at the book re-opens a preview whose player was closed, never opened, or could not be built (Task 24).
     - **No silent strand.** `openPreview`'s early returns no longer strand it:
       - the user left the book mid-refetch → returns with the marker kept;
       - the chapter or character is not loaded → `console.warn`, marker kept;
       - the preview was resolved or replaced meanwhile → nothing left to open.
-    - **Book scope (pass 3 #1).** The stub is shown only on its own book. Navigating away hides it and never clears it (Task 20 rule 2; Task 21's `shownRevision`).
-    - **A server entry wins (pass 3 #11).** When a server entry for the preview chapter reaches the cache, it supersedes the stub (Task 20 rule 1).
+    - **Book scope (pass 3 #1).** The stub is shown only on its own book. Navigating away hides it and never clears it (Task 21 rule 2; Task 22's `shownRevision`).
+    - **A server entry wins (pass 3 #11).** When a server entry for the preview chapter reaches the cache, it supersedes the stub (Task 21 rule 1).
     - Approve / Reject still resolve it.
-29. **OD29 — A recorded preview whose server entry is gone on a delayed arrival. DECIDED (2026-10-07): treat as resolved, drop it.** When the completion said `reviewRecorded: true` and the arrival refetch finds no entry:
-    - **Drop, never stub.** `openPreview` clears `previewRegen` and toasts `This preview was resolved elsewhere`, the existing copy (Task 23). It does **not** open a stub: the stub's Reject (`restore-unrecorded`) could put the preview take back over a newer render, which dropped the entry (`finalize-chapter-write.ts ~:798`).
-    - **The discriminator.** Telling "delayed arrival" from "seen on its book" is `previewRegen.completed.stubFallback`. It is `false` when the completion happened elsewhere, and set `false` again once a server entry for the chapter has been seen (Task 20 rule 1). It is `true` only for a completion seen on its own book.
-    - **Where the stub fallback stays.** It stays for an unrecorded preview (`reviewRecorded: false`) and for a completion seen on its own book: a first render, below, and the doubly-failed refetch (OD23).
-    - **Leaving mid-refetch.** If the user leaves the book while the arrival refetch is in flight, nothing is dropped, because the refetch was not applied.
-    - **Code contradiction, owed to the operator.** OD29 says the stub fallback stays for an unrecorded preview, "`reviewRecorded: false` / first render". A first render does **not** answer `false`:
-      - **Server.** `applyReview` (`finalize-chapter-write.ts:773-798`) calls `dropPendingForChapter` when `review !== null` but nothing was preserved, and returns `true`. A preview of a chapter with no audio yet therefore reports `reviewRecorded: true` with no entry.
-      - **Mock.** `mockStreamGeneration` (Task 10) does the same.
-      - **What the client can tell.** It cannot tell that first render from "recorded, then resolved elsewhere".
-      - **What this plan does.** On the book itself, that case still gets its stub (`stubFallback: true`), so `e2e/profile-regen-preview.spec.ts` stays green. **Finished while the user was elsewhere**, it is dropped with the "resolved elsewhere" notice. That is OD27's own motivating case, so the Benefit names it as the one known gap, and walkthrough step 5 seeds live audio to avoid it.
-      - **Candidate resolutions for the operator.** (a) Accept the gap. (b) Have the server answer a distinct value for a review render that recorded nothing; that is a PR 1 contract change. (c) Discriminate on `.previous` at arrival, OD29's own danger condition: a stub only when no preserved take exists, which also re-offers a preview that was accepted or rejected elsewhere. (d) Record at preview start whether the chapter had audio, a client inference.
+29. **OD29 — A recorded preview whose server entry is gone. DECIDED (2026-10-07): treat as resolved, drop it, and the server reports the outcome (option (b)).** Two decisions, both dated 2026-10-07.
+    - **Drop, never stub.** When the completion said the server **recorded** an entry and the refetch finds none, `openPreview` clears `previewRegen` and toasts `This preview was resolved elsewhere`, the existing copy (Task 24). It does **not** open a stub: the stub's Reject (`restore-unrecorded`) could put the preview take back over a newer render, which dropped the entry (`finalize-chapter-write.ts ~:798`). This holds on arrival and on the book itself, since in both cases the entry existed and is gone.
+    - **The server says which outcome happened.** PR 1's `reviewRecorded: true` meant both "recorded an entry" and "nothing to review". A first render, or `review: null`, drops the chapter's entry and answered `true` too (`applyReview`, `finalize-chapter-write.ts:773-805`). So on a delayed arrival the client could not tell a first render from a resolved preview. The operator chose option (b), the server reporting it. Task 7 replaces the boolean with `reviewOutcome: 'recorded' | 'none' | 'failed'` on finalize's result and on the three completion ticks (contract `ReviewOutcome`), and the mock does the same (Task 11). PR 1 shipped the field dark, so the breaking rename is safe.
+    - **The client keys on that signal (Task 24):**
+      - `'recorded'` → refetch. If the entry is there, open it. If it is gone, drop with the toast. If the refetch fails twice, open a stub when the completion was seen on its own book (`stubFallback`, OD23); otherwise keep the marker for the next arrival.
+      - `'none'` (a first render: nothing to review) → the stub is the legitimate player, with no refetch, and it re-opens on every arrival per OD28.
+      - `'failed'` (the take was preserved, but no entry was recorded) → the stub, whose Reject calls `restore-unrecorded`.
+    - Rejected alternatives: (a) accept a gap where a first-render preview finishing elsewhere would be dropped; (c) discriminate on `.previous`; (d) infer "first render" on the client at preview start.
 
 ## Spec points that PR 1's merged code (or the code on `main`) contradicts
 
@@ -4712,11 +4854,11 @@ The operator decided three on 2026-10-06 (OD2, OD20's first form, the hydrate ra
 - §4 is silent on `GET /state` with an unreadable file (OD2, now decided).
 - §4's `hydrate` rule ("a different `fileId` adopts, null included") is unsafe on its own for a legacy book: a read started before the first op returns `fileId:null` after the op minted one, and would erase the new entry. The sequence guard closes it.
 - §1/§2 "keep legacy `playable:true` entries only" left #3397's stuck takes unrecoverable; OD20 widens it. And once stuck entries are kept, §1's plain "keep the LAST entry per chapter" lets a failed splice shadow a playable take; Task 6 adds the #5 rule.
-- OD29's wording, not the spec, is what the code contradicts. Spec §4 (`:342`) correctly files a first render under "a refetch that succeeded and has no entry". OD29 pairs "first render" with `reviewRecorded: false`, but finalize answers `true` after dropping the chapter's entry when nothing was preserved (`finalize-chapter-write.ts:773-798`). So on a delayed arrival a first render looks exactly like a resolved-elsewhere preview. See OD29, "Code contradiction".
+- PR 1's `reviewRecorded` boolean answered `true` for both "recorded an entry" and "nothing to review" (a first render). Spec §4 (`:342`) papered over that with a refetch, but on a delayed arrival the refetch cannot tell those apart from "recorded, then resolved elsewhere". Task 7 replaces it with `reviewOutcome` (OD29).
 - D9 misses the 50-book cap and the active poll's missing `.catch`.
 - PR 1's "unexpected 500 keeps the error's own message" (plan 285 Reversibility 3) conflicts with the client toasting it; Task 3 curates.
-- The CLAUDE.md lines PR 2 makes false are not in the spec's Delivery: the swallow list (FIVE → SIX, Task 27) and the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch list (Task 1 adds `restore-unrecorded`; Task 28 removes the two legacy routes), plus the `revision-op` serialisation sentence (Task 28). The `requestFailureMessage` count is **unchanged** (delta 0 — Global Constraints); an earlier draft of this plan raised it at two lock-free sites, which was a misuse of the seam.
-- "PR 2 about 7 children" — at the 30–45-minute task size it is 31 dispatches (30 lane tasks plus the coordinator's Task 31; Task 30's live-view publish is coordinator-only).
+- The CLAUDE.md lines PR 2 makes false are not in the spec's Delivery: the swallow list (FIVE → SIX, Task 28) and the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch list (Task 1 adds `restore-unrecorded`; Task 29 removes the two legacy routes), plus the `revision-op` serialisation sentence (Task 29). The `requestFailureMessage` count is **unchanged** (delta 0 — Global Constraints); an earlier draft of this plan raised it at two lock-free sites, which was a misuse of the seam.
+- "PR 2 about 7 children" — at the 30–45-minute task size it is 32 dispatches (31 lane tasks plus the coordinator's Task 32; Task 31's live-view publish is coordinator-only).
 
 ## Reversibility / observable changes
 
@@ -4733,5 +4875,6 @@ Revert the PR. Everything PR 2 changes that a user, an old client or an operator
 9. **Legacy pending entries are visible and actionable**, including stuck `playable:false` ones whose `.previous.mp3` exists, flagged `recovered: true` and labelled "Recovered from before the update" (OD20). Reading writes nothing, but **the next unrelated store write on that book persists the entry as `playable: true, recovered: true`**, so after a revert the old client sees it as an ordinary playable take (the label is gone; its A side may still be an older take than the entry describes).
 10. **Mock mode:** the seeded `sb` revision is the only pending revision in the mock workspace; mock previous audio exists only where a mock render preserved it; dismissed drift stays dismissed.
 11. **Client:** deleting, re-parsing or replacing a book's manuscript forgets that book's revisions cache; a preview that finished on another book re-opens when the user returns to it (OD27); closing a preview player only hides it, and the Status popover counts and re-opens it (OD28); a recorded preview whose entry is gone on return is dropped with a notice (OD29).
+12. **`reviewRecorded` → `reviewOutcome`** on finalize's result and on the `splice_complete`, `qa_repair_complete` and generation `chapter_complete` SSE frames (Task 7). PR 1 shipped the boolean dark, with no client consumer, so only an out-of-tree SSE reader would notice; a revert restores the boolean.
 
 A revert restores the client writer while leaving PR 1's store in place; entries the server recorded during PR 2's lifetime (`origin:'server'`) are read by the old client's hydrate as ordinary pending entries.
