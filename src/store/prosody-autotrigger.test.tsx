@@ -1509,4 +1509,68 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     expect(emotionOf(store, 1)).toBeUndefined();
     expect(watermarkPuts('b1')).toEqual([]);
   });
+
+  /* #3435 (PR #3505 review pass 7) — the open trigger's two wait guards. */
+  it('waits: a manual run that takes the book while the re-run waits on its read is not overwritten; the re-run follows it', async () => {
+    libBooks = [makeBook('b1', 'cast_pending')];
+    marks.set('b1', false);
+    /* The layout's own read lands; the open trigger's read is held. */
+    let reads = 0;
+    const held: Array<() => void> = [];
+    getBookStateMock.mockImplementation((id: string) =>
+      reads++ === 0
+        ? Promise.resolve(stateFor(id))
+        : new Promise((r) => held.push(() => r(stateFor(id)))),
+    );
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(reads).toBe(2));
+
+    await act(async () => {
+      store.dispatch(prosodyActions.setActive({ bookId: 'b1', progress: 0, label: 'Manual' }));
+    });
+    await act(async () => held.forEach((release) => release()));
+    await settle(200);
+    expect(store.getState().prosody.activeStreams.b1).toMatchObject({ label: 'Manual' });
+    expect(store.getState().prosody.activeStreams.b1?.background).toBeFalsy();
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+
+    /* The manual run ends: the open trigger looks again, this visit. */
+    getBookStateMock.mockImplementation(async (id: string) => stateFor(id));
+    await act(async () => {
+      store.dispatch(prosodyActions.clear({ bookId: 'b1' }));
+    });
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits: the re-run starts only once the slices hold the book, so a fast read cannot miss the visit', async () => {
+    libBooks = [makeBook('b1', 'cast_pending'), makeBook('b2', 'cast_pending')];
+    marks.set('b1', false);
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b2', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b2'));
+    await settle(50);
+
+    /* b1's first read (the layout's) is held; every later one lands at once. */
+    let b1Reads = 0;
+    let releaseLayoutRead!: () => void;
+    getBookStateMock.mockImplementation((id: string) =>
+      id === 'b1' && b1Reads++ === 0
+        ? new Promise((r) => (releaseLayoutRead = () => r(stateFor(id))))
+        : Promise.resolve(stateFor(id)),
+    );
+    await act(async () => {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    });
+    await settle(100);
+    expect(store.getState().manuscript.manuscriptId).toBe('mns_b2');
+
+    await act(async () => releaseLayoutRead());
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b1'));
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+    expect(detectEmotionsMock).toHaveBeenCalledWith('b1', expect.anything());
+  });
 });
