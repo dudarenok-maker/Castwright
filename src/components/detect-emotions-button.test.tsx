@@ -32,6 +32,7 @@ function makeStore() {
     preloadedState: {
       manuscript: {
         ...manuscriptSlice.getInitialState(),
+        bookId: 'b1',
         sentences: [
           { id: 1, chapterId: 1, characterId: 'wren', text: 'Get down!' } as never,
         ],
@@ -108,6 +109,7 @@ describe('fs-33 — DetectEmotionsButton', () => {
       const yState = {
         manuscript: {
           ...manuscriptSlice.getInitialState(),
+          bookId: 'bY',
           manuscriptId: 'mY',
           sentences: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'Y line' } as never],
         },
@@ -125,6 +127,7 @@ describe('fs-33 — DetectEmotionsButton', () => {
         preloadedState: {
           manuscript: {
             ...manuscriptSlice.getInitialState(),
+            bookId: 'bX',
             manuscriptId: 'mX',
             sentences: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'X line' } as never],
           },
@@ -184,6 +187,59 @@ describe('fs-33 — DetectEmotionsButton', () => {
       const toasts = (store.getState() as unknown as { notifications: { toasts: Array<{ message: string }> } })
         .notifications.toasts;
       expect(toasts.map((t) => t.message).join(' ')).toMatch(/not saved/i);
+    });
+
+    it("does not run while the slices still hold another book (the stage's book has not loaded)", async () => {
+      detectEmotions.mockImplementation((_id: string, opts?: any) => {
+        if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
+        opts.onAnnotation({ chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'angry' }] });
+        return Promise.resolve({ annotatedChapters: 1, totalAnnotations: 1 });
+      });
+      detectInstruct.mockResolvedValue({ annotatedChapters: 0, totalAnnotations: 0 });
+      /* The stage names bX; bX's read is slow, so the Manuscript view shows
+         book B's sentences. A click must not bind to B. */
+      const store = configureStore({
+        reducer: {
+          manuscript: manuscriptSlice.reducer, ui: uiSlice.reducer,
+          chapters: chaptersSlice.reducer, prosody: prosodySlice.reducer,
+          scriptReview: scriptReviewSlice.reducer,
+        },
+        preloadedState: {
+          manuscript: {
+            ...manuscriptSlice.getInitialState(),
+            bookId: 'bB',
+            manuscriptId: 'mB',
+            sentences: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'B line' } as never],
+          },
+          ui: { ...uiSlice.getInitialState(), stage: { kind: 'ready', bookId: 'bX', view: 'manuscript', currentChapterId: 1 } as never },
+        },
+      });
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+
+      expect(screen.getByTestId('detect-emotions-button')).toBeDisabled();
+      expect(screen.getByTestId('detect-emotions-menu-toggle')).toBeDisabled();
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(detectEmotions).not.toHaveBeenCalled();
+      expect(store.getState().manuscript.sentences[0].emotion).toBeUndefined();
+    });
+
+    it('the whole-book confirm does not run if the slices moved to another book while it was open', async () => {
+      detectEmotions.mockResolvedValue({ annotatedChapters: 0, totalAnnotations: 0 });
+      detectInstruct.mockResolvedValue({ annotatedChapters: 0, totalAnnotations: 0 });
+      const store = makeSwitchableStore();
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      fireEvent.click(screen.getByTestId('detect-emotions-menu-toggle'));
+      fireEvent.click(screen.getByTestId('detect-emotions-wholebook'));
+      /* Y's slices land while the stage still names X (a stand-in for the
+         read of another book landing under the open popover). */
+      store.dispatch(manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'bY', manuscriptId: 'mY', title: 'Y' } as never,
+        sentences: null,
+      }));
+      fireEvent.click(screen.getByTestId('detect-emotions-confirm'));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(detectEmotions).not.toHaveBeenCalled();
     });
 
     it('control: a run that skipped nothing does not touch the watermark or toast', async () => {
@@ -405,7 +461,7 @@ describe('fs-33 — DetectEmotionsButton', () => {
         scriptReview: scriptReviewSlice.reducer,
       },
       preloadedState: {
-        manuscript: { ...manuscriptSlice.getInitialState(), sentences: [
+        manuscript: { ...manuscriptSlice.getInitialState(), bookId: 'b1', sentences: [
           { id: 1, chapterId: 1, characterId: 'wren', text: 'Get down!' } as never,
         ] },
         // current chapter 2 has NO sentences

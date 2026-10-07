@@ -53,6 +53,11 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   const abortRef = useRef<AbortController | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const busy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
+  /* #3435 — the slices hold the stage's book. While its read is slow or
+     failing they still hold the previous book, whose sentences the Manuscript
+     view shows under this one: a run bound then would write that book's
+     sentences and save them into this book. */
+  const holdsBook = useAppSelector((s) => bookId != null && s.manuscript.bookId === bookId);
 
   // Close the ⌄ menu on an outside click or Escape (mirrors the Review Script menu).
   useEffect(() => {
@@ -74,6 +79,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   if (!bookId) return null;
 
   const run = async (scope: { chapterId?: number }) => {
+    if (store.getState().manuscript.bookId !== bookId) return; // #3435 — see holdsBook
     setMenuOpen(false);
     setPhase('running');
     setProgress(0);
@@ -167,8 +173,8 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   }
 
   const primaryDisabled =
-    disabled || busy || currentChapterId == null || !currentChapterHasSentences;
-  const wholeBookDisabled = disabled || busy;
+    disabled || busy || !holdsBook || currentChapterId == null || !currentChapterHasSentences;
+  const wholeBookDisabled = disabled || busy || !holdsBook;
 
   return (
     <div ref={menuRef} className="relative shrink-0 inline-flex items-stretch">
