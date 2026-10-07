@@ -397,3 +397,9 @@ test('parseAuditOutput: fail-closed when npm audit returns an error response', (
     /npm audit returned an error/,
   );
 });
+test('committed audit-waivers.json: validates through loadWaivers and no entry is expired', () => {
+  const waivers = loadWaivers();
+  for (const w of waivers) {
+    assert.equal(isExpired(w), false, `${w.ghsaId}|${w.package} is expired (${w.expiry})`);
+  }
+});

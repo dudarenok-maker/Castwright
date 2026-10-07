@@ -171,6 +171,9 @@
     "openapi-typescript": {
       "typescript": "$typescript"
     },
-    "browserslist": "^4.28.8"
+    "browserslist": "^4.28.8",
+    "concurrently": {
+      "shell-quote": "^1.12.0"
+    }
   }
 }
