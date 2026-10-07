@@ -177,8 +177,9 @@ coverRouter.post(
       const { bookDir, state } = located;
 
       const file = req.file;
+      let sniffedMime: UploadMimeType;
       try {
-        validateUpload(file?.buffer, file?.mimetype);
+        sniffedMime = validateUpload(file?.buffer, file?.mimetype);
       } catch (e) {
         if (e instanceof UploadError) {
           const status = e.kind === 'oversize' ? 413 : e.kind === 'invalid_mime' ? 415 : 400;
@@ -188,11 +189,7 @@ coverRouter.post(
       }
 
       try {
-        await writeUploadedCover(
-          file!.buffer,
-          file!.mimetype as UploadMimeType,
-          coverImagePath(bookDir),
-        );
+        await writeUploadedCover(file!.buffer, sniffedMime, coverImagePath(bookDir));
       } catch (e) {
         if (e instanceof UploadError && e.kind === 'transcode_failed') {
           return res.status(502).json({ error: e.message, kind: e.kind });
