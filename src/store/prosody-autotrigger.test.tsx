@@ -1179,6 +1179,25 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     expect(detectEmotionsMock).toHaveBeenCalledTimes(1); // not restarted this visit
   });
 
+  it('yields: a run that yielded is not marked done even when nothing arrived after it yielded', async () => {
+    let release!: () => void;
+    detectEmotionsMock.mockImplementation(async () => {
+      await new Promise<void>((r) => (release = r));
+      return { totalAnnotations: 0, annotatedChapters: 0 };
+    });
+    libBooks = [makeBook('b1', 'cast_pending')];
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      store.dispatch(queued('b1'));
+    });
+    await act(async () => release());
+    await settle(300);
+    expect(watermarkPuts('b1')).toEqual([]);
+  });
+
   it('yields: a manual run that takes the book mid-run keeps its own pill', async () => {
     const { store, release } = await openWithHeldRun();
     await act(async () => {
