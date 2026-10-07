@@ -167,6 +167,20 @@ const REVISIONS_HYDRATE_FAILED_KEY = 'revisions-hydrate-failed';
 const REVISIONS_HYDRATE_RETRY_BASE_MS = 1000;
 const REVISIONS_HYDRATE_RETRY_MAX_MS = 15000;
 
+/* #3435 — the book the emotion-detection open trigger serves: the book open
+   on Confirm or a Ready view, once the slices hold it (the manuscript slice
+   names it and carries its manuscriptId). Null on any other stage. */
+function selectOpenProsodyBookId(s: RootState): string | null {
+  const stage = s.ui.stage as { kind: string; bookId?: string };
+  const id = stage.bookId ?? null;
+  return (stage.kind === 'confirm' || stage.kind === 'ready') &&
+    id &&
+    s.manuscript.bookId === id &&
+    s.manuscript.manuscriptId
+    ? id
+    : null;
+}
+
 export function Layout() {
   const dispatch = useAppDispatch();
   const store = useStore<RootState>();
@@ -1225,9 +1239,11 @@ export function Layout() {
      shows, but it never makes the book busy (analysis-substage-selectors), so
      Generate / Resume / Design / Detect and the queue stay open while it runs.
      It yields instead: the moment the user starts work of their own on the
-     book (selectBookHasForegroundWork) it is aborted and its pill cleared; the
-     book stays marked unfinished, so it is run again the next time it is
-     opened. The run in flight, if any. */
+     book (selectBookHasForegroundWork, which counts an analysis run), or the
+     book stops being the open trigger's book (another book or a non-book
+     view opens), it is aborted and its pill cleared; the book stays marked
+     unfinished, so it is run again the next time it is opened. So at most
+     one runs at a time: the open book's. The run in flight, if any. */
   const prosodyBackground = useRef<{ id: string; ctrl: AbortController } | null>(null);
   useEffect(
     () =>
@@ -1235,7 +1251,7 @@ export function Layout() {
         const bg = prosodyBackground.current;
         if (!bg || bg.ctrl.signal.aborted) return;
         const s = store.getState();
-        if (!selectBookHasForegroundWork(s, bg.id)) return;
+        if (selectOpenProsodyBookId(s) === bg.id && !selectBookHasForegroundWork(s, bg.id)) return;
         bg.ctrl.abort();
         if (s.prosody.activeStreams[bg.id]?.background) dispatch(prosodyActions.clear({ bookId: bg.id }));
       }),
@@ -1271,7 +1287,7 @@ export function Layout() {
              book under another manuscriptId than its read reports, or it is no
              longer open), nor one the user's own work would end at once — the
              open trigger looks again when that work is gone. */
-          if (!isOpen()) return;
+          if (!isOpen() || selectOpenProsodyBookId(store.getState()) !== id) return;
           if (selectBookHasForegroundWork(store.getState(), id)) {
             if (prosodyOpenHandled.current === id) prosodyOpenHandled.current = null;
             return;
@@ -1403,13 +1419,7 @@ export function Layout() {
      a filled emotion or instruct, and a chapter with rendered audio keeps its
      text), never alongside a run already in flight for it, and gated by the
      same getBookState read. An unset watermark is left alone (fs-65). */
-  const openProsodyBookId =
-    (stageKind === 'confirm' || stageKind === 'ready') &&
-    bookId &&
-    manuscript.bookId === bookId &&
-    manuscript.manuscriptId
-      ? bookId
-      : null;
+  const openProsodyBookId = useAppSelector(selectOpenProsodyBookId);
   const openProsodyBusy = useAppSelector((s) =>
     openProsodyBookId
       ? !shouldAutoTriggerProsody(s, openProsodyBookId) ||

@@ -66,6 +66,14 @@ describe('analysis-substage selectors', () => {
     expect(
       selectBookHasForegroundWork(st({ castDesign: { active: { bookId: 'b1', state: 'done' } } }), 'b1'),
     ).toBe(false);
+    // an analysis run (main or subset) for the book, while it runs
+    const run = (bookId: string, state: string, kind?: string) => ({
+      analysis: { activeStream: { bookId, manuscriptId: `mns_${bookId}`, state, ...(kind ? { kind } : {}) } },
+    });
+    expect(selectBookHasForegroundWork(st(run('b1', 'running')), 'b1')).toBe(true);
+    expect(selectBookHasForegroundWork(st(run('b1', 'running', 'subset')), 'b1')).toBe(true);
+    expect(selectBookHasForegroundWork(st(run('b1', 'halted')), 'b1')).toBe(false);
+    expect(selectBookHasForegroundWork(st(run('b2', 'running')), 'b1')).toBe(false);
   });
 
   it('selectAnalysisSubstage prefers prosody, then lowest bookId', () => {

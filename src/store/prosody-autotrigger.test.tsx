@@ -34,7 +34,7 @@ import { changeLogSlice } from './change-log-slice';
 import { accountSlice } from './account-slice';
 import { bookMetaSlice } from './book-meta-slice';
 import { exportsSlice } from './exports-slice';
-import { analysisSlice } from './analysis-slice';
+import { analysisSlice, analysisActions } from './analysis-slice';
 import { castDesignSlice } from './cast-design-slice';
 import { queueSlice } from './queue-slice';
 import { tourSlice } from './tour-slice';
@@ -1349,5 +1349,164 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
     await settle(100);
     expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
+  });
+
+  /* #3435 (PR #3505 review pass 7) — the background re-run belongs to the
+     open book: it stops the moment its book is not the open one, or an
+     analysis run starts for it. Each held run here ends the way the real SSE
+     request does when its signal aborts. */
+  type HeldRun = { id: string; signal?: AbortSignal; release: () => void };
+  function holdRuns(): HeldRun[] {
+    const runs: HeldRun[] = [];
+    detectEmotionsMock.mockImplementation(
+      (id: string, opts: Opts) =>
+        new Promise((resolve, reject) => {
+          runs.push({
+            id,
+            signal: opts.signal,
+            release: () => {
+              emit(opts, [ch1, ch2]);
+              resolve({ totalAnnotations: 2, annotatedChapters: 2 });
+            },
+          });
+          opts.signal?.addEventListener('abort', () =>
+            reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+          );
+        }),
+    );
+    return runs;
+  }
+  const live = (runs: HeldRun[]) => runs.filter((r) => !r.signal?.aborted).map((r) => r.id);
+
+  async function openAndWait(store: ReturnType<typeof makeStore>, id: string) {
+    await act(async () => {
+      store.dispatch(uiActions.openBook({ id, status: 'cast_pending' }));
+    });
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe(`mns_${id}`));
+  }
+
+  it('P7a: opening another book ends the run; back on the book with generation queued, nothing of it lands', async () => {
+    const runs = holdRuns();
+    libBooks = [makeBook('b1', 'cast_pending'), makeBook('b2', 'cast_pending')];
+    marks.set('b1', false);
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(runs).toHaveLength(1));
+
+    await openAndWait(store, 'b2');
+    expect(runs[0].signal?.aborted).toBe(true);
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+    await waitFor(() => expect(unfinishedPuts()).toEqual(['b1'])); // its own book only, never b2
+
+    await openAndWait(store, 'b1');
+    await act(async () => {
+      store.dispatch(queued('b1'));
+    });
+    await act(async () => runs.forEach((r) => r.release()));
+    await settle(700);
+    expect(emotionOf(store, 1)).toBeUndefined();
+    expect(manuscriptPuts()).toEqual([]);
+    expect(watermarkPuts('b1')).toEqual([]);
+  });
+
+  it('P7b: opening three unfinished books in a row leaves one run in flight, never three', async () => {
+    const runs = holdRuns();
+    libBooks = ['b1', 'b2', 'b3'].map((id) => makeBook(id, 'cast_pending'));
+    ['b1', 'b2', 'b3'].forEach((id) => marks.set(id, false));
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(runs).toHaveLength(1));
+    await openAndWait(store, 'b2');
+    await waitFor(() => expect(runs).toHaveLength(2));
+    await openAndWait(store, 'b3');
+    await waitFor(() => expect(runs).toHaveLength(3));
+    await settle(50);
+
+    expect(live(runs)).toEqual(['b3']);
+    expect(Object.keys(store.getState().prosody.activeStreams)).toEqual(['b3']);
+    await act(async () => runs.forEach((r) => r.release()));
+  });
+
+  it('P7e: a Re-analyse from Confirm ends the run; nothing of it lands mid-analysis', async () => {
+    const runs = holdRuns();
+    libBooks = [makeBook('b1', 'cast_pending')];
+    marks.set('b1', false);
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(runs).toHaveLength(1));
+    expect(store.getState().ui.stage.kind).toBe('confirm');
+
+    await act(async () => {
+      store.dispatch(uiActions.reanalyse({ manuscriptId: 'mns_b1' }));
+    });
+    expect(runs[0].signal?.aborted).toBe(true);
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+    await act(async () => runs[0].release());
+    await settle(700);
+    expect(emotionOf(store, 1)).toBeUndefined();
+    expect(manuscriptPuts()).toEqual([]);
+    expect(watermarkPuts('b1')).toEqual([]);
+  });
+
+  it('P7e: a Re-analyse while the re-run waits on its read starts no run at all', async () => {
+    const runs = holdRuns();
+    libBooks = [makeBook('b1', 'cast_pending')];
+    marks.set('b1', false);
+    /* The layout's own read lands; the open trigger's read is held. */
+    let reads = 0;
+    const held: Array<() => void> = [];
+    getBookStateMock.mockImplementation((id: string) =>
+      reads++ === 0
+        ? Promise.resolve(stateFor(id))
+        : new Promise((r) => held.push(() => r(stateFor(id)))),
+    );
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(reads).toBe(2));
+
+    await act(async () => {
+      store.dispatch(uiActions.reanalyse({ manuscriptId: 'mns_b1' }));
+    });
+    await act(async () => held.forEach((release) => release()));
+    await settle(200);
+    expect(runs).toEqual([]);
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+  });
+
+  it('P7e: a subset analysis run started for the book ends the run', async () => {
+    const runs = holdRuns();
+    libBooks = [makeBook('b1', 'voices_pending')];
+    marks.set('b1', false);
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'voices_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(runs).toHaveLength(1));
+
+    await act(async () => {
+      store.dispatch(
+        analysisActions.setActiveStream({
+          bookId: 'b1',
+          manuscriptId: 'mns_b1',
+          phaseId: 0,
+          phaseLabel: 'Detecting characters',
+          phaseProgress: 0,
+          remainingMs: null,
+          lastTickAt: Date.now(),
+          state: 'running',
+          kind: 'subset',
+          subsetChapterIds: [1],
+        }),
+      );
+    });
+    expect(runs[0].signal?.aborted).toBe(true);
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+    await act(async () => runs[0].release());
+    await settle(700);
+    expect(emotionOf(store, 1)).toBeUndefined();
+    expect(watermarkPuts('b1')).toEqual([]);
   });
 });

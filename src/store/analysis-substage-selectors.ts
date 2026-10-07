@@ -17,11 +17,12 @@ export const selectAnalysisBusyForBook = (state: RootState, bookId: string): boo
   selectProsodyRunningForBook(state, bookId) || selectReviewRunningForBook(state, bookId);
 
 /** #3435 — anything the user has started on this book: a manual analysis
-    pass, generation queued or rendering, or a cast-design run. The layout's
-    background re-run of emotion detection does not start while this holds and
-    ends at once when it starts to. */
+    pass, an analysis run (main or subset), generation queued or rendering,
+    or a cast-design run. The layout's background re-run of emotion detection
+    does not start while this holds and ends at once when it starts to. */
 export const selectBookHasForegroundWork = (state: RootState, bookId: string): boolean =>
   selectAnalysisBusyForBook(state, bookId) ||
+  (state.analysis?.activeStream?.bookId === bookId && state.analysis.activeStream.state === 'running') ||
   (state.queue?.entries ?? []).some(
     (e) => e.bookId === bookId && (e.status === 'queued' || e.status === 'in_progress'),
   ) ||
