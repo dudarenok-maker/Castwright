@@ -30,6 +30,7 @@ import {
 } from '../check-onbox-register.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
+import * as onbox from '../check-onbox-register.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-onbox-register.mjs');
@@ -2956,18 +2957,12 @@ test('--against-published routes a row-ID collision to its own bucket and remedy
 // union path — the file about to be published carries the other lane's row.
 test('--against-published --publishing a union file goes green; without it the same run fails (#3529)', () => {
   const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
-  const { mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
   // The union: the tracked page (row lastB) PLUS the other lane's row
-  // (lastB + 1), its block copied verbatim from the live page.
-  const blockOf = (html, id) =>
-    html.match(
-      new RegExp(
-        `<details\\b[^>]*class="item"[^>]*>\\s*<summary><span class="num">${id}</span>[\\s\\S]*?</details>`,
-      ),
-    )[0];
-  const theirs = blockOf(mutated, `B${lastB + 1}`);
-  const mine = blockOf(REAL_LIVE_VIEW_HTML, `B${lastB}`);
-  const union = REAL_LIVE_VIEW_HTML.replace(mine, `${mine}\n    ${theirs}`);
+  // (lastB + 1), its block copied verbatim from the live page, with the
+  // derived figures regenerated (review pass 2, 🟠3 — a hand-built union
+  // whose figures were not is refused; see the pass-2 tests).
+  const union = onbox.buildUnionLiveView(REAL_LIVE_VIEW_HTML, mutated, [newId]);
   assert.notEqual(union, REAL_LIVE_VIEW_HTML, 'fixture setup: the union must differ');
   withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
     const unionPath = join(dirname(publishedPath), 'union.html');
@@ -4337,6 +4332,8 @@ test('#3529: --publishing a file whose copy of the other lane’s row differs fr
   const mismatch = ofPrefix(errors, PUBLISHING_FILE_ERROR_PREFIX);
   assert.equal(mismatch.length, 1, JSON.stringify(errors));
   assert.match(mismatch[0], /B103/);
+  // The specific verdict, not only the whole-file comparison's generic one.
+  assert.match(mismatch[0], /differs from the live page's/);
 });
 
 test('#3529: --publishing a file that lacks the other lane’s row still fails', () => {
@@ -4385,15 +4382,21 @@ test('#3529: a collision with a lane that already merged fails via the merge-bas
   assert.equal(ofPrefix(rebased, ROW_ID_COLLISION_ERROR_PREFIX).length, 0, JSON.stringify(rebased));
 });
 
+// Review pass 2 (🟡3) narrowed this to the one case the merge-base decides:
+// an ID origin/main carries under another title. See the pass-2 test for the
+// silent case.
 test('#3529: an unresolvable merge-base fails closed rather than skipping the merged-lane collision check', () => {
   const errors = checkLiveView(
     ...collisionOptions({
+      baseline: buildSingleGroupRegister('B', [101, 102, 103], 104).replace('### B103 · thing 103', '### B103 · Theirs'),
+      working: buildSingleGroupRegister('B', [101, 102, 103], 104).replace('### B103 · thing 103', '### B103 · Mine'),
       trackedRows: baseRows,
       publishedRows: baseRows,
       extra: { mergeBaseText: null },
     }),
   );
   assert.equal(ofPrefix(errors, UNKNOWN_PROVENANCE_ERROR_PREFIX).length, 1, JSON.stringify(errors));
+  assert.equal(ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX).length, 0, 'undecidable, not a collision');
 });
 
 test('#3529: the real incident — colliding B103 and a live-only B104 — fails on both counts', () => {
@@ -4548,5 +4551,762 @@ test('#3529 git: resolveMergeBaseRegister reads the register at merge-base(HEAD,
     assert.equal(resolveMergeBaseRegister(repo, PROV_REGISTER, mainSha, provRunner), 'REGISTER AT FORK\n');
     assert.equal(resolveMergeBaseRegister(repo, 'docs/absent.md', mainSha, provRunner), '');
     assert.equal(resolveMergeBaseRegister(repo, PROV_REGISTER, 'not-a-ref', provRunner), null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3529, PR #3532 review pass 2. Exports added by this round are read through
+// the `onbox` namespace so a missing one fails its own test, not the import.
+//
+//   🟠1 the stamping commit is the OLDEST commit that introduced the nonce
+//       (the stamp, not the merge commit that later brought it to main), and
+//       a row ID origin/main's register has EVER carried is a discharge.
+//   🟠2 the "Retired carried rows" record, its PR-state check, and naming a
+//       carried row's OWNER rather than whoever carried it.
+//   🟠3 `--publishing` checks the whole file against the deterministic union.
+//   🟠4 the whole-group paths classify a row main lacks by provenance too.
+// ---------------------------------------------------------------------------
+
+// Real merges in a throwaway repo. `uMerge` makes a genuine `--no-ff` merge
+// commit and writes the resolution explicitly — never `-X theirs`, which
+// makes the merge commit's view equal the stamp's and hid the pass-2 defect.
+const U_ROW = (n) => ({ id: `B${n}`, body: `body B${n}`, title: `title B${n}` });
+const uView = (nonce, nums) =>
+  buildRowContentLiveView(nums.map(U_ROW), 'B').replace(
+    '<title>',
+    `<div hidden data-published-as="1" data-publish-id="${nonce}"></div>\n<title>`,
+  );
+function uWrite(repo, nonce, nums, next) {
+  mkdirSync(join(repo, 'docs', 'testing'), { recursive: true });
+  writeFileSync(join(repo, PROV_LIVE), uView(nonce, nums));
+  writeFileSync(join(repo, PROV_REGISTER), buildSingleGroupRegister('B', nums, next));
+}
+function uCommit(repo, nonce, nums, next, msg) {
+  uWrite(repo, nonce, nums, next);
+  provGit(repo, 'add', '-A');
+  provGit(repo, 'commit', '-qm', msg ?? `stamp ${nonce}`);
+  return provGit(repo, 'rev-parse', 'HEAD');
+}
+function uMerge(repo, branch, nonce, nums, next) {
+  spawnSync('git', ['merge', '--no-ff', '--no-commit', '-q', branch], {
+    cwd: repo,
+    env: provEnv(),
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  uWrite(repo, nonce, nums, next);
+  provGit(repo, 'add', '-A');
+  provGit(repo, 'commit', '-qm', `Merge ${branch}`);
+  const head = provGit(repo, 'rev-parse', 'HEAD');
+  assert.equal(provGit(repo, 'rev-list', '--parents', '-n', '1', head).split(' ').length, 3, 'a real merge commit');
+  return head;
+}
+function withUnionRepo(fn) {
+  const repo = mkdtempSync(join(tmpdir(), 'onbox-union-'));
+  try {
+    provGit(repo, 'init', '-q', '-b', 'main');
+    provGit(repo, 'config', 'user.email', 'test@example.com');
+    provGit(repo, 'config', 'user.name', 'Test');
+    provGit(repo, 'config', 'commit.gpgsign', 'false');
+    uCommit(repo, 'main0001', [101, 102], 103);
+    return fn(repo);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+}
+// What a lane checked out at `branch` gets from --against-published, through
+// the same real lookups the CLI wires in.
+function uCheck(repo, branch, page, extra = {}) {
+  provGit(repo, 'switch', '-q', branch);
+  const mainSha = provGit(repo, 'rev-parse', 'main');
+  const provenance = onbox.resolvePublishedProvenance(repo, PROV_LIVE, page, mainSha, provRunner);
+  return checkLiveView(readFileSync(join(repo, PROV_REGISTER), 'utf8'), page, {
+    direction: 'extraOnly',
+    baselineText: provGit(repo, 'show', `${mainSha}:${PROV_REGISTER}`) + '\n',
+    baselineLiveViewText: provGit(repo, 'show', `${mainSha}:${PROV_LIVE}`) + '\n',
+    trackedLiveViewHtml: readFileSync(join(repo, PROV_LIVE), 'utf8'),
+    publishedProvenance: provenance,
+    mergeBaseText: onbox.resolveMergeBaseRegister(repo, PROV_REGISTER, mainSha, provRunner),
+    mainEverCarried: (id) => onbox.resolveMainEverCarried?.(repo, PROV_REGISTER, mainSha, id, provRunner),
+    rowOwnerLookup: (id) => onbox.resolveRowOwner?.(repo, PROV_LIVE, id, provRunner),
+    ...extra,
+  });
+}
+const realErrors = (errors) => errors.filter((e) => !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX));
+
+// 🟠1 (a): kills "newest hit" (pass-2 mutant M27's inverse).
+test('#3529 pass 2: on a merged page the stamping commit is the stamp, not the merge commit into main', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'lane-l');
+    const stamp = uCommit(repo, 'lane0001', [101, 102, 103], 104);
+    uCommit(repo, 'lane0001', [101, 102], 104, 'review round drops B103 without re-stamping');
+    provGit(repo, 'switch', '-q', 'main');
+    const merge = uMerge(repo, 'lane-l', 'lane0001', [101, 102], 104);
+    assert.notEqual(merge, stamp);
+    const p = onbox.resolvePublishedProvenance(repo, PROV_LIVE, uView('lane0001', [101, 102, 103]), merge, provRunner);
+    assert.equal(p.kind, 'merged');
+    assert.equal(p.commit, stamp, 'the stamp commit, not the merge commit');
+    assert.deepEqual([...p.stampedRowIds].sort(), ['B101', 'B102', 'B103']);
+  });
+});
+
+// Pass-2 M1: when the stamp commit itself cannot be read, the next pickaxe
+// hit is the re-stamp that REMOVED the nonce. Only the anchor check keeps it
+// from being taken as the stamp; an unreadable stamp is unknown, never a guess.
+test('#3529 pass 2: an unreadable stamp commit is unknown, never the later commit that re-stamped it away', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'lane-l');
+    const stamp = uCommit(repo, 'lane0001', [101, 102, 103], 104);
+    const restamp = uCommit(repo, 'lane0002', [101, 102], 104, 're-stamp');
+    provGit(repo, 'switch', '-q', 'main');
+    const merge = uMerge(repo, 'lane-l', 'lane0002', [101, 102], 104);
+    const stampUnreadable = (args, cwd) =>
+      args[0] === 'show' && args[1].startsWith(`${stamp}:`) ? { status: 128, stdout: '', stderr: 'fatal' } : provRunner(args, cwd);
+    const p = onbox.resolvePublishedProvenance(repo, PROV_LIVE, uView('lane0001', [101, 102, 103]), merge, stampUnreadable);
+    assert.notEqual(p.commit, restamp, JSON.stringify(p));
+    assert.equal(p.kind, 'unknown', JSON.stringify(p));
+  });
+});
+
+// 🟠1 (a): kills dropping `--diff-merges=first-parent` (pass-2 M26's shape).
+// The natural resolution of a live-view conflict IS a re-stamp, so the nonce
+// is born in the merge commit itself.
+test('#3529 pass 2: a nonce born in a merge commit (a re-stamp during conflict resolution) is found', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'lane-l');
+    uCommit(repo, 'lane0001', [101, 102, 103], 104);
+    provGit(repo, 'switch', '-q', 'main');
+    uCommit(repo, 'main0002', [101, 102, 104], 105);
+    provGit(repo, 'switch', '-q', 'lane-l');
+    const merge = uMerge(repo, 'main', 'lane0002', [101, 102, 103, 104], 105);
+    const mainSha = provGit(repo, 'rev-parse', 'main');
+    const p = onbox.resolvePublishedProvenance(repo, PROV_LIVE, uView('lane0002', [101, 102, 103, 104]), mainSha, provRunner);
+    assert.equal(p.kind, 'own', JSON.stringify(p));
+    assert.equal(p.commit, merge);
+    assert.deepEqual([...p.stampedRowIds].sort(), ['B101', 'B102', 'B103', 'B104']);
+  });
+});
+
+// Review pass 2, S1: the operator's direct case still passes.
+test('#3529 pass 2 S1: a merged publish that carried B103, then a merged discharge without a republish, is silent', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'lane-l');
+    uCommit(repo, 'lane0001', [101, 102, 103], 104);
+    provGit(repo, 'switch', '-q', 'main');
+    uMerge(repo, 'lane-l', 'lane0001', [101, 102, 103], 104);
+    provGit(repo, 'switch', '-q', '-c', 'disch');
+    uCommit(repo, 'disc0001', [101, 102], 104, 'discharge B103');
+    provGit(repo, 'switch', '-q', 'main');
+    uMerge(repo, 'disch', 'disc0001', [101, 102], 104);
+    provGit(repo, 'switch', '-q', '-c', 'q');
+    assert.deepEqual(realErrors(uCheck(repo, 'q', uView('lane0001', [101, 102, 103]))), []);
+  });
+});
+
+// Review pass 2, S2: the lane's own row, dropped after its publish, is not
+// "another unmerged lane's" once that lane merges.
+test('#3529 pass 2 S2: own row dropped after publishing, then merged — silent for the lane and for every later lane', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'lane-l');
+    uCommit(repo, 'lane0001', [101, 102, 103], 104);
+    const page = uView('lane0001', [101, 102, 103]);
+    uCommit(repo, 'lane0001', [101, 102], 104, 'drop own B103');
+    assert.deepEqual(realErrors(uCheck(repo, 'lane-l', page)), [], 'pre-merge, own lane');
+    provGit(repo, 'switch', '-q', 'main');
+    uMerge(repo, 'lane-l', 'lane0001', [101, 102], 104);
+    provGit(repo, 'switch', '-q', '-c', 'q');
+    assert.deepEqual(realErrors(uCheck(repo, 'q', page)), [], 'post-merge, another lane');
+  });
+});
+
+// Review pass 2, S3/S3b: the verdict no longer depends on merge order.
+function s3(xFirst) {
+  return withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'lane-x');
+    uCommit(repo, 'xxxx0001', [101, 102, 103], 104);
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'lane-k');
+    uCommit(repo, 'kkkk0001', [101, 102, 104], 105);
+    // K's union publish: its own view plus X's B103.
+    const union = uView('kkkk0001', [101, 102, 103, 104]);
+    provGit(repo, 'switch', '-q', 'main');
+    if (xFirst) {
+      uMerge(repo, 'lane-x', 'xxxx0001', [101, 102, 103], 104);
+      provGit(repo, 'switch', '-q', 'lane-k');
+      uMerge(repo, 'main', 'kkkk0001', [101, 102, 103, 104], 105);
+      provGit(repo, 'switch', '-q', 'main');
+      uMerge(repo, 'lane-k', 'kkkk0001', [101, 102, 103, 104], 105);
+    } else {
+      uMerge(repo, 'lane-k', 'kkkk0001', [101, 102, 104], 105);
+      provGit(repo, 'switch', '-q', 'lane-x');
+      uMerge(repo, 'main', 'xxxx0002', [101, 102, 103, 104], 105);
+      provGit(repo, 'switch', '-q', 'main');
+      uMerge(repo, 'lane-x', 'xxxx0002', [101, 102, 103, 104], 105);
+    }
+    provGit(repo, 'switch', '-q', '-c', 'disch');
+    uCommit(repo, 'disc0001', [101, 102, 104], 105, 'discharge B103');
+    provGit(repo, 'switch', '-q', 'main');
+    uMerge(repo, 'disch', 'disc0001', [101, 102, 104], 105);
+    provGit(repo, 'switch', '-q', '-c', 'q');
+    return realErrors(uCheck(repo, 'q', union));
+  });
+}
+test('#3529 pass 2 S3: a union-carried row whose carrier merged first, then its own lane, then a discharge — silent', () => {
+  assert.deepEqual(s3(false), []);
+});
+test('#3529 pass 2 S3b: the same with the owning lane merging first — silent, consistent with S3', () => {
+  assert.deepEqual(s3(true), []);
+});
+
+test('#3529 pass 2: a live-only row origin/main has ever carried is a discharge, whatever the provenance', () => {
+  const [working, published, options] = collisionOptions({
+    working: buildSingleGroupRegister('B', [101, 102], 104),
+    baseline: buildSingleGroupRegister('B', [101, 102], 104),
+    trackedRows: baseRows,
+    publishedRows: [...baseRows, { id: 'B103', body: 'once on main', title: 'gone' }],
+  });
+  for (const provenance of [UNMERGED, merged(['B101', 'B102'])]) {
+    const opts = { ...options, publishedProvenance: provenance };
+    assert.deepEqual(checkLiveView(working, published, { ...opts, mainEverCarried: (id) => id === 'B103' }), []);
+    const never = checkLiveView(working, published, { ...opts, mainEverCarried: () => false });
+    assert.equal(ofPrefix(never, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, JSON.stringify(never));
+    // A failed lookup (null) grants no exemption.
+    const failed = checkLiveView(working, published, { ...opts, mainEverCarried: () => null });
+    assert.equal(ofPrefix(failed, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, JSON.stringify(failed));
+  }
+});
+
+test('#3529 pass 2 git: resolveMainEverCarried reads every register main has ever had', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'lane-l');
+    uCommit(repo, 'lane0001', [101, 102, 103], 104);
+    provGit(repo, 'switch', '-q', 'main');
+    uMerge(repo, 'lane-l', 'lane0001', [101, 102, 103], 104);
+    const mainSha = uCommit(repo, 'main0002', [101, 102], 104, 'discharge B103');
+    provGit(repo, 'switch', '-q', '-c', 'lane-y');
+    uCommit(repo, 'yyyy0001', [101, 102, 104], 105);
+    assert.equal(onbox.resolveMainEverCarried(repo, PROV_REGISTER, mainSha, 'B103', provRunner), true);
+    assert.equal(onbox.resolveMainEverCarried(repo, PROV_REGISTER, mainSha, 'B104', provRunner), false, 'only on an unmerged lane');
+    assert.equal(onbox.resolveMainEverCarried(repo, PROV_REGISTER, mainSha, 'B10', provRunner), false, 'no prefix match');
+    const failing = () => ({ status: 128, stdout: '', stderr: 'fatal' });
+    assert.equal(onbox.resolveMainEverCarried(repo, PROV_REGISTER, mainSha, 'B103', failing), null);
+  });
+});
+
+// 🟠2 sub-point: a union-carried row names its OWNER, never the carrier.
+test('#3529 pass 2: a union-carried row names the lane that first committed it, not the carrier', () => {
+  const owner = { commit: '0123456789abcdef0123456789abcdef01234567', refs: ['origin/lane-x'] };
+  const [working, published, options] = collisionOptions({
+    working: buildSingleGroupRegister('B', [101, 102], 103),
+    trackedRows: baseRows,
+    publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+    extra: { publishedProvenance: merged(['B101', 'B102']), rowOwnerLookup: (id) => (id === 'B103' ? owner : null) },
+  });
+  const errors = ofPrefix(checkLiveView(working, published, options), UNMERGED_LANE_ROW_ERROR_PREFIX);
+  assert.equal(errors.length, 1, JSON.stringify(errors));
+  assert.ok(errors[0].includes('0123456789ab'), errors[0]);
+  assert.ok(errors[0].includes('gh pr list --head lane-x'), errors[0]);
+  assert.ok(!errors[0].includes('def5678'), 'must not name the carrier commit');
+  assert.ok(!errors[0].includes('main0x1'), 'must not name the carrier publish id');
+});
+
+test('#3529 pass 2 git: resolveRowOwner finds the commit and branch that first committed a row', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'lane-x');
+    const xCommit = uCommit(repo, 'xxxx0001', [101, 102, 103], 104);
+    uCommit(repo, 'xxxx0002', [101, 102, 103], 104, 'restamp');
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'lane-k');
+    uCommit(repo, 'kkkk0001', [101, 102, 104], 105);
+    // A carrier that later COMMITS a union with X's B103 (dated later, so
+    // date order is unambiguous) must not be named as its owner.
+    provGit(repo, 'switch', '-q', '-c', 'lane-c');
+    uWrite(repo, 'cccc0001', [101, 102, 103, 104], 105);
+    provGit(repo, 'add', '-A');
+    const later = { ...provEnv(), GIT_AUTHOR_DATE: '2030-01-01T01:00:00Z', GIT_COMMITTER_DATE: '2030-01-01T01:00:00Z' };
+    assert.equal(spawnSync('git', ['commit', '-qm', 'carrier commits a union'], { cwd: repo, env: later, windowsHide: true }).status, 0);
+    provGit(repo, 'switch', '-q', 'lane-k');
+    const owner = onbox.resolveRowOwner(repo, PROV_LIVE, 'B103', provRunner);
+    assert.equal(owner.commit, xCommit);
+    assert.deepEqual(owner.refs, ['lane-x']);
+    assert.equal(onbox.resolveRowOwner(repo, PROV_LIVE, 'B109', provRunner), null);
+  });
+});
+
+// 🟠2: the committed retirement record.
+function withRetired(registerText, rowsMd) {
+  return registerText.replace(
+    '## At a glance',
+    `## Retired carried rows\n\nPreamble.\n\n| Row | Owning PR | Closed unmerged | Reason |\n|---|---|---|---|\n${rowsMd}\n## At a glance`,
+  );
+}
+const closedStates = (state, mergedAt = null) => ({ available: true, states: new Map([[3505, { state, mergedAt }]]) });
+
+test('#3529 pass 2: checkRegister accepts a well-formed Retired carried rows table, empty or not, and its absence', () => {
+  const reg = MAIN_B();
+  assert.deepEqual(checkRegister(reg), []);
+  assert.deepEqual(checkRegister(withRetired(reg, '')), []);
+  assert.deepEqual(checkRegister(withRetired(reg, '| B103 | #3505 | 2026-10-07 | closed in favour of #3525 |\n')), []);
+});
+
+test('#3529 pass 2: checkRegister rejects a malformed Retired carried rows table, naming what is wrong', () => {
+  const reg = MAIN_B();
+  const cases = [
+    ['| B103 | 3505 | 2026-10-07 | r |\n', /PR/],
+    ['| B103 | #3505 | Oct 7 | r |\n', /date/],
+    ['| B10x | #3505 | 2026-10-07 | r |\n', /row ID/],
+    ['| B103 | #3505 | 2026-10-07 |  |\n', /reason/],
+    ['| B103 | #3505 | 2026-10-07 |\n', /four cells/],
+    ['| B103 | #3505 | 2026-10-07 | r |\n| B103 | #3506 | 2026-10-07 | r |\n', /more than once/],
+    ['| B101 | #3505 | 2026-10-07 | r |\n', /still a row/],
+  ];
+  for (const [rows, pattern] of cases) {
+    const errors = checkRegister(withRetired(reg, rows));
+    assert.equal(errors.length, 1, `${rows}: ${JSON.stringify(errors)}`);
+    assert.match(errors[0], /Retired carried rows/);
+    assert.match(errors[0], pattern);
+  }
+  const wrongHeader = withRetired(reg, '').replace('| Row | Owning PR | Closed unmerged | Reason |', '| ID | PR | Date | Why |');
+  assert.match(checkRegister(wrongHeader)[0] ?? '', /Retired carried rows.*table/);
+  const noTable = reg.replace('## At a glance', '## Retired carried rows\n\nNo table here.\n\n## At a glance');
+  assert.match(checkRegister(noTable)[0] ?? '', /Retired carried rows.*table/);
+});
+
+function retiredCase(registerRows, extra = {}) {
+  return checkLiveView(
+    ...collisionOptions({
+      working: withRetired(buildSingleGroupRegister('B', [101, 102], 103), registerRows),
+      trackedRows: baseRows,
+      publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+      extra,
+    }),
+  );
+}
+const RETIRED_B103 = '| B103 | #3505 | 2026-10-07 | closed in favour of #3525 |\n';
+
+test('#3529 pass 2: a retired row whose PR is closed unmerged is dropped from the must-carry set', () => {
+  assert.deepEqual(retiredCase(RETIRED_B103, { retiredPrStates: closedStates('CLOSED') }), []);
+});
+
+test('#3529 pass 2: a malformed Retired carried rows table fails the --against-published run too', () => {
+  const errors = retiredCase('| B103 | 3505 | 2026-10-07 | r |\n', { retiredPrStates: closedStates('CLOSED') });
+  const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX ?? '\u0000');
+  assert.equal(retired.length, 1, JSON.stringify(errors));
+  assert.match(retired[0], /PR/);
+});
+
+test('#3529 pass 2: a retirement record naming an OPEN PR is refused, naming the PR, and mutes nothing', () => {
+  const errors = retiredCase(RETIRED_B103, { retiredPrStates: closedStates('OPEN') });
+  const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX ?? '\u0000');
+  assert.equal(retired.length, 1, JSON.stringify(errors));
+  assert.match(retired[0], /#3505/);
+  assert.match(retired[0], /OPEN/);
+  assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, 'the row still must be carried');
+});
+
+test('#3529 pass 2: a retirement record naming a MERGED PR is refused', () => {
+  for (const states of [closedStates('MERGED', '2026-10-07T00:00:00Z'), closedStates('CLOSED', '2026-10-07T00:00:00Z')]) {
+    const errors = retiredCase(RETIRED_B103, { retiredPrStates: states });
+    const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX ?? '\u0000');
+    assert.equal(retired.length, 1, JSON.stringify(errors));
+    assert.match(retired[0], /#3505/);
+    assert.match(retired[0], /merged/i);
+  }
+});
+
+test('#3529 pass 2: a PR whose state could not be read is refused; gh unavailable warns and accepts', () => {
+  const unreadable = retiredCase(RETIRED_B103, {
+    retiredPrStates: { available: true, states: new Map([[3505, { error: 'Could not resolve to a PullRequest' }]]) },
+  });
+  assert.equal(ofPrefix(unreadable, onbox.RETIRED_ROW_ERROR_PREFIX ?? '\u0000').length, 1, JSON.stringify(unreadable));
+  for (const states of [{ available: false, reason: 'gh is not installed' }, undefined]) {
+    const errors = retiredCase(RETIRED_B103, { retiredPrStates: states });
+    const warnings = ofPrefix(errors, onbox.RETIRED_ROW_WARNING_PREFIX ?? '\u0000');
+    assert.equal(warnings.length, 1, JSON.stringify(errors));
+    assert.match(warnings[0], /#3505/);
+    assert.deepEqual(errors.filter((e) => !warnings.includes(e)), []);
+  }
+});
+
+test('#3529 pass 2: a retirement recorded on origin/main applies to a branch that predates it', () => {
+  const [working, published, options] = collisionOptions({
+    working: buildSingleGroupRegister('B', [101, 102], 103),
+    baseline: withRetired(MAIN_B(), RETIRED_B103),
+    trackedRows: baseRows,
+    publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+    extra: { retiredPrStates: closedStates('CLOSED') },
+  });
+  assert.deepEqual(checkLiveView(working, published, options), []);
+});
+
+test('#3529 pass 2: resolveRetiredPrStates reads gh through an injected runner, never the network', () => {
+  const calls = [];
+  const gh = (states) => (args) => {
+    calls.push(args.join(' '));
+    if (args[0] === 'auth') return { status: 0, stdout: '', stderr: '' };
+    const n = Number(args[2]);
+    if (!(n in states)) return { status: 1, stdout: '', stderr: 'Could not resolve to a PullRequest' };
+    return { status: 0, stdout: JSON.stringify(states[n]), stderr: '' };
+  };
+  const r = onbox.resolveRetiredPrStates(
+    '/repo',
+    [3505, 3506, 3507, 3508],
+    gh({
+      3505: { state: 'CLOSED', mergedAt: null },
+      3506: { state: 'OPEN', mergedAt: null },
+      3508: { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z' },
+    }),
+  );
+  assert.equal(r.available, true);
+  assert.deepEqual(r.states.get(3508), { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z' });
+  assert.deepEqual(r.states.get(3505), { state: 'CLOSED', mergedAt: null });
+  assert.equal(r.states.get(3506).state, 'OPEN');
+  assert.match(r.states.get(3507).error, /Could not resolve/);
+  assert.ok(calls.some((c) => c === 'pr view 3505 --json state,mergedAt'), calls.join('\n'));
+  calls.length = 0;
+  assert.deepEqual(onbox.resolveRetiredPrStates('/repo', [], gh({})).states.size, 0);
+  assert.deepEqual(calls, [], 'no entries, no gh calls');
+  const noGh = onbox.resolveRetiredPrStates('/repo', [3505], () => ({ error: Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }) }));
+  assert.equal(noGh.available, false);
+  const noAuth = onbox.resolveRetiredPrStates('/repo', [3505], (args) =>
+    args[0] === 'auth' ? { status: 1, stdout: '', stderr: 'not logged in' } : assert.fail('must not query a PR unauthenticated'),
+  );
+  assert.equal(noAuth.available, false);
+  assert.match(noAuth.reason, /not authenticated|not logged in/);
+});
+
+// 🟠3: `--publishing` checks the WHOLE file.
+const theirsB103 = { id: 'B103', body: 'theirs a', title: THEIRS_TITLE };
+const theirsB104 = { id: 'B104', body: 'theirs b', title: 'second row from the unmerged lane' };
+const mineB105 = { id: 'B105', body: 'mine', title: MINE_TITLE };
+function unionFixture() {
+  const tracked = buildRowContentLiveView([...baseRows, mineB105], 'B');
+  const live = buildRowContentLiveView([...baseRows, theirsB103, theirsB104], 'B');
+  const [working, , options] = collisionOptions({
+    working: buildSingleGroupRegister('B', [101, 102, 105], 106),
+    trackedRows: [...baseRows, mineB105],
+    publishedRows: [],
+  });
+  return { tracked, live, working, options };
+}
+
+test('#3529 pass 2: buildUnionLiveView inserts carried blocks in ID order and regenerates the derived figures', () => {
+  const { tracked, live } = unionFixture();
+  const union = onbox.buildUnionLiveView(tracked, live, ['B104', 'B103']);
+  assert.equal(union, buildRowContentLiveView([...baseRows, theirsB103, theirsB104, mineB105], 'B'));
+});
+
+test('#3529 pass 2: a union built by buildUnionLiveView passes --publishing, CRLF or not', () => {
+  const { tracked, live, working, options } = unionFixture();
+  const union = onbox.buildUnionLiveView(tracked, live, ['B103', 'B104']);
+  assert.deepEqual(checkLiveView(working, live, { ...options, publishingHtml: union }), []);
+  assert.deepEqual(checkLiveView(working, live, { ...options, publishingHtml: union.replace(/\n/g, '\r\n') }), [], 'CRLF');
+});
+
+test('#3529 pass 2 S6: a union missing one of your own rows fails, naming it', () => {
+  const { tracked, live, working, options } = unionFixture();
+  const union = onbox.buildUnionLiveView(tracked, live, ['B103', 'B104']);
+  const block101 = union.match(/ {4}<details class="item">\s*<summary><span class="num">B101<\/span>[\s\S]*?<\/details>\n/)[0];
+  const errors = checkLiveView(working, live, { ...options, publishingHtml: union.replace(block101, '') });
+  const pub = ofPrefix(errors, PUBLISHING_FILE_ERROR_PREFIX);
+  assert.ok(pub.some((e) => /B101/.test(e)), JSON.stringify(errors));
+});
+
+test('#3529 pass 2: a union whose copy of your own row differs fails, naming it', () => {
+  const { tracked, live, working, options } = unionFixture();
+  const union = onbox.buildUnionLiveView(tracked, live, ['B103', 'B104']).replace('<p>mine</p>', '<p>stale mine</p>');
+  const pub = ofPrefix(checkLiveView(working, live, { ...options, publishingHtml: union }), PUBLISHING_FILE_ERROR_PREFIX);
+  assert.ok(pub.some((e) => /B105/.test(e)), JSON.stringify(pub));
+});
+
+test('#3529 pass 2: a hand-built union whose derived figures were not regenerated fails, naming --build-union', () => {
+  const { tracked, live, working, options } = unionFixture();
+  const union = onbox.buildUnionLiveView(tracked, live, ['B103', 'B104']).replace('<div class="n owed">5</div>', '<div class="n owed">3</div>');
+  const pub = ofPrefix(checkLiveView(working, live, { ...options, publishingHtml: union }), PUBLISHING_FILE_ERROR_PREFIX);
+  assert.equal(pub.length, 1, JSON.stringify(pub));
+  assert.match(pub[0], /--build-union/);
+});
+
+test('#3529 pass 2: a union carrying a row that is neither yours nor live fails, naming it', () => {
+  const { tracked, live, working, options } = unionFixture();
+  const union = onbox.buildUnionLiveView(tracked, live, ['B103', 'B104']).replace('<span class="num">B104</span>', '<span class="num">B107</span>');
+  const pub = ofPrefix(checkLiveView(working, live, { ...options, publishingHtml: union }), PUBLISHING_FILE_ERROR_PREFIX);
+  assert.ok(pub.some((e) => /B107/.test(e) && /neither/.test(e)), JSON.stringify(pub));
+});
+
+test('#3529 pass 2: buildUnionLiveView refuses a carried row whose group has no section in your live view', () => {
+  const tracked = buildRowContentLiveView(baseRows, 'B');
+  const iView = buildRowContentLiveView([{ id: 'I101', body: 'theirs' }], 'I');
+  const live = `${tracked}\n${iView.slice(iView.indexOf('  <section'))}`;
+  assert.throws(() => onbox.buildUnionLiveView(tracked, live, ['I101']), /Group I/);
+  assert.throws(() => onbox.buildUnionLiveView(tracked, live, ['B109']), /not on the live page/);
+  assert.throws(() => onbox.buildUnionLiveView(tracked, live, ['B101']), /already in your live view/);
+});
+
+// 🟠4: the whole-group paths.
+test('#3529 pass 2 S7: in a group this register dropped entirely, another lane’s row is classified, and --discharging cannot silence it', () => {
+  const workingRegister = buildSingleGroupRegister('A', [1]);
+  const baselineRegister = buildMultiGroupRegister([
+    { letter: 'A', rowNumbers: [1] },
+    { letter: 'F', rowNumbers: [1] },
+  ]);
+  const liveView = buildMultiGroupLiveView(3, [
+    { letter: 'A', glanceCount: 1, headerCount: 1, rowIds: ['A1'] },
+    { letter: 'F', glanceCount: 2, headerCount: 2, rowIds: ['F1', 'F2'] },
+  ]);
+  const opts = { direction: 'extraOnly', baselineText: baselineRegister, publishedProvenance: UNMERGED };
+  for (const named of [['F1'], ['F1', 'F2']]) {
+    const errors = checkLiveView(workingRegister, liveView, { ...opts, dischargingIds: named });
+    const unmerged = ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX);
+    assert.deepEqual(unmerged.map((e) => e.match(/^unmerged-lane-row: ([A-Z]\d+):/)?.[1]), ['F2'], JSON.stringify(errors));
+    assert.ok(!errors.some((e) => /BEHIND/.test(e) && /F2/.test(e)), `F2 is not BEHIND-routed: ${JSON.stringify(errors)}`);
+    assert.equal(ofPrefix(errors, DISCHARGE_NAME_ERROR_PREFIX).length, 0, JSON.stringify(errors));
+  }
+  // The discharge itself still passes when nothing else is on the page.
+  const clean = buildMultiGroupLiveView(2, [
+    { letter: 'A', glanceCount: 1, headerCount: 1, rowIds: ['A1'] },
+    { letter: 'F', glanceCount: 1, headerCount: 1, rowIds: ['F1'] },
+  ]);
+  assert.deepEqual(checkLiveView(workingRegister, clean, { ...opts, dischargingIds: ['F1'] }), []);
+});
+
+// 🟡2: pass-2 survivors M7 and M8.
+test('#3529 pass 2 (M7): on your own page, a row your stamp did NOT commit is not exempt from the collision check', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      trackedRows: [...baseRows, { id: 'B103', body: 'mine', title: MINE_TITLE }],
+      publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+      // Your union publish carried B103 for another lane; your stamp did not.
+      extra: { publishedProvenance: own(['B101', 'B102']) },
+    }),
+  );
+  assert.equal(ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX).length, 1, JSON.stringify(errors));
+});
+
+test('#3529 pass 2 (M8): a same-ID title difference under unknown provenance is reported, not skipped', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      trackedRows: [...baseRows, { id: 'B103', body: 'mine', title: MINE_TITLE }],
+      publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+      extra: { publishedProvenance: { kind: 'unknown', nonce: 'ghost0x1', reason: 'x' } },
+    }),
+  );
+  const unknown = ofPrefix(errors, UNKNOWN_PROVENANCE_ERROR_PREFIX);
+  assert.equal(unknown.length, 1, JSON.stringify(errors));
+  assert.match(unknown[0], /B103/);
+  // B103 is in your own file, so "carry it" is not the way forward.
+  assert.ok(!unknown[0].includes('--build-union'), unknown[0]);
+  assert.match(unknown[0], /renumber/);
+});
+
+// 🟡3: an unreadable merge-base only matters when a verdict depends on it.
+test('#3529 pass 2: an unreadable merge-base is silent unless an ID is shared with origin/main under another title', () => {
+  const quiet = checkLiveView(
+    ...collisionOptions({ trackedRows: baseRows, publishedRows: baseRows, extra: { mergeBaseText: null } }),
+  );
+  assert.deepEqual(quiet, []);
+  const mainRegister = buildSingleGroupRegister('B', [101, 102, 103], 104).replace('### B103 · thing 103', '### B103 · Theirs');
+  const mineRegister = buildSingleGroupRegister('B', [101, 102, 103], 104).replace('### B103 · thing 103', '### B103 · Mine');
+  const loud = checkLiveView(mineRegister, buildRowContentLiveView(baseRows, 'B'), {
+    direction: 'extraOnly',
+    baselineText: mainRegister,
+    publishedProvenance: merged(['B101', 'B102']),
+    mergeBaseText: null,
+  });
+  const unknown = ofPrefix(loud, UNKNOWN_PROVENANCE_ERROR_PREFIX);
+  assert.equal(unknown.length, 1, JSON.stringify(loud));
+  assert.match(unknown[0], /B103/);
+  assert.match(unknown[0], /merge-base/);
+});
+
+// 🟡4: the unknown-provenance error gives the next step.
+test('#3529 pass 2: the unknown-provenance error names both ways forward — fetch, or carry the rows', () => {
+  const errors = checkLiveView(
+    ...collisionOptions({
+      working: buildSingleGroupRegister('B', [101, 102], 103),
+      trackedRows: baseRows,
+      publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
+      extra: { publishedProvenance: { kind: 'unknown', nonce: 'ghost0x1', reason: 'x' } },
+    }),
+  );
+  const unknown = ofPrefix(errors, UNKNOWN_PROVENANCE_ERROR_PREFIX)[0] ?? '';
+  assert.match(unknown, /--build-union/);
+  assert.match(unknown, /--publishing/);
+});
+
+// ---------------------------------------------------------------------------
+// CLI wiring against REAL git (🟡2: pass-2 mutants M20/M21 unwired the real
+// provenance and merge-base lookups with the whole suite green, because every
+// other CLI test runs under ONBOX_TEST_BASELINE_FILE, which skips both). A
+// throwaway repo with a bare `origin`, the CLI copied into it, no overrides.
+// ---------------------------------------------------------------------------
+const CLI_FILES = ['check-onbox-register.mjs', 'git-env.mjs', 'gh.mjs', 'publish-token.mjs', join('lib', 'is-main-module.mjs')];
+// No ambient GitHub token may make the real gh lookup authenticated here.
+function withoutGhTokens(env) {
+  for (const key of Object.keys(env)) {
+    if (/^(GH|GITHUB)_(TOKEN|ENTERPRISE_TOKEN)$/i.test(key)) delete env[key];
+  }
+  return env;
+}
+function withCliRepo(fn) {
+  const root = mkdtempSync(join(tmpdir(), 'onbox-cli-'));
+  const origin = join(root, 'origin.git');
+  const repo = join(root, 'work');
+  try {
+    mkdirSync(repo);
+    provGit(root, 'init', '-q', '--bare', '-b', 'main', origin);
+    provGit(repo, 'init', '-q', '-b', 'main');
+    provGit(repo, 'config', 'user.email', 'test@example.com');
+    provGit(repo, 'config', 'user.name', 'Test');
+    provGit(repo, 'config', 'commit.gpgsign', 'false');
+    provGit(repo, 'remote', 'add', 'origin', origin);
+    for (const f of CLI_FILES) {
+      mkdirSync(dirname(join(repo, 'scripts', f)), { recursive: true });
+      writeFileSync(join(repo, 'scripts', f), readFileSync(join(HERE, '..', f)));
+    }
+    writeFileSync(join(repo, '.gitignore'), 'scripts/\n*.saved.html\n');
+    return fn(repo, (args, env = {}) =>
+      spawnSync(process.execPath, [join(repo, 'scripts', 'check-onbox-register.mjs'), ...args], {
+        cwd: repo,
+        encoding: 'utf8',
+        timeout: 120000,
+        env: withoutGhTokens({ ...provEnv(), ...env }),
+        windowsHide: true,
+      }),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+const titled = (nums, titles) =>
+  nums.map((n) => ({ id: `B${n}`, body: `body B${n}`, title: titles[n] ?? `title B${n}` }));
+function cliCommit(repo, nonce, nums, next, titles = {}, retiredRows = null) {
+  mkdirSync(join(repo, 'docs', 'testing'), { recursive: true });
+  writeFileSync(
+    join(repo, PROV_LIVE),
+    buildRowContentLiveView(titled(nums, titles), 'B').replace(
+      '<title>',
+      `<div hidden data-published-as="1" data-publish-id="${nonce}"></div>\n<title>`,
+    ),
+  );
+  let reg = buildSingleGroupRegister('B', nums, next);
+  for (const [n, t] of Object.entries(titles)) reg = reg.replace(`### B${n} · thing ${n}`, `### B${n} · ${t}`);
+  if (retiredRows !== null) reg = withRetired(reg, retiredRows);
+  writeFileSync(join(repo, PROV_REGISTER), reg);
+  provGit(repo, 'add', '-A');
+  provGit(repo, 'commit', '-qm', `stamp ${nonce}`);
+}
+
+test('#3529 pass 2 CLI: real provenance, merge-base, ever-carried, owner and gh lookups are all wired', () => {
+  withCliRepo((repo, cli) => {
+    cliCommit(repo, 'main0001', [101, 102], 103);
+    provGit(repo, 'push', '-q', 'origin', 'main');
+    // mine forks here, mints its own B103, discharges B102 and retires an
+    // unrelated B109 (a retirement the real gh lookup must try to confirm).
+    provGit(repo, 'switch', '-q', '-c', 'mine');
+    cliCommit(repo, 'mine0001', [101, 103], 104, { 103: 'Mine' }, '| B109 | #1 | 2026-10-07 | test fixture |\n');
+    // lane-y mints a different B103 and merges first.
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'lane-y');
+    cliCommit(repo, 'yyyy0001', [101, 102, 103], 104, { 103: 'Theirs Y' });
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'merge', '-q', '--no-ff', '--no-edit', 'lane-y');
+    provGit(repo, 'push', '-q', 'origin', 'main');
+    // lane-x, unmerged, adds B104 and publishes.
+    provGit(repo, 'switch', '-q', '-c', 'lane-x');
+    cliCommit(repo, 'xxxx0001', [101, 102, 103, 104], 105, { 103: 'Theirs Y', 104: 'X row' });
+    const page = readFileSync(join(repo, PROV_LIVE), 'utf8');
+    // main then discharges B102 — which lane-x's page still carries.
+    provGit(repo, 'switch', '-q', 'main');
+    cliCommit(repo, 'main0003', [101, 103], 104, { 103: 'Theirs Y' });
+    provGit(repo, 'push', '-q', 'origin', 'main');
+    provGit(repo, 'switch', '-q', 'mine');
+    writeFileSync(join(repo, 'page.saved.html'), page);
+    // gh made unauthenticated (or absent): the real lookup must say so.
+    const ghHome = mkdtempSync(join(tmpdir(), 'onbox-gh-'));
+    const env = { GH_CONFIG_DIR: ghHome };
+    let r;
+    try {
+      r = cli(['--against-published', 'page.saved.html'], env);
+    } finally {
+      rmSync(ghHome, { recursive: true, force: true });
+    }
+    assert.ok(!r.stderr.includes('unmerged-lane-row: B102'), `main has carried B102 — a discharge: ${r.stderr}`);
+    assert.match(r.stderr, /retired-row-warning: B109 .*\(gh (is not installed|is not authenticated|could not run)/);
+    assert.equal(r.status, 1, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
+    assert.ok(!/WARNING: .*injected/.test(r.stderr), 'no test override in play');
+    assert.ok(r.stderr.includes('unmerged-lane-row: B104:'), r.stderr);
+    assert.ok(r.stderr.includes('gh pr list --head lane-x'), `names the owning lane: ${r.stderr}`);
+    assert.ok(r.stderr.includes('row-id-collision: B103:'), `merged-lane collision via the merge-base: ${r.stderr}`);
+  });
+});
+
+test('#3529 pass 2 CLI: --build-union writes a union that then passes, and is refused without --against-published or with --publishing', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
+  withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const env = { ONBOX_TEST_BASELINE_FILE: baselinePath, ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged' };
+    const unionPath = join(dirname(publishedPath), 'union.html');
+    const built = runCli(['--against-published', publishedPath, '--build-union', unionPath], env);
+    assert.equal(built.status, 0, `stdout: ${built.stdout}\nstderr: ${built.stderr}`);
+    assert.ok(built.stdout.includes(unionPath) && built.stdout.includes(newId), built.stdout);
+    const union = readFileSync(unionPath, 'utf8');
+    assert.ok(union.includes(`<span class="num">${newId}</span>`));
+    const checked = runCli(['--against-published', publishedPath, '--publishing', unionPath], env);
+    assert.equal(checked.status, 0, `stdout: ${checked.stdout}\nstderr: ${checked.stderr}`);
+    const both = runCli(['--against-published', publishedPath, '--publishing', unionPath, '--build-union', unionPath], env);
+    assert.equal(both.status, 1);
+    assert.match(both.stderr, /--build-union cannot be combined with --publishing/);
+  });
+  const alone = runCli(['--build-union', 'x.html']);
+  assert.equal(alone.status, 1);
+  assert.match(alone.stderr, /--build-union only makes sense alongside --against-published/);
+});
+
+test('#3529 pass 2 CLI: a hand-built union with stale figures is refused under --publishing', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const { mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
+  const blockOf = (html, id) =>
+    html.match(new RegExp(`<details\\b[^>]*class="item"[^>]*>\\s*<summary><span class="num">${id}</span>[\\s\\S]*?</details>`))[0];
+  const mine = blockOf(REAL_LIVE_VIEW_HTML, `B${lastB}`);
+  // Rows right, figures not regenerated — the 2026-10-07 hand-edit shape, minus the edit.
+  const stale = REAL_LIVE_VIEW_HTML.replace(mine, `${mine}\n    ${blockOf(mutated, `B${lastB + 1}`)}`);
+  withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const unionPath = join(dirname(publishedPath), 'union.html');
+    writeFileSync(unionPath, stale, 'utf8');
+    const r = runCli(['--against-published', publishedPath, '--publishing', unionPath], {
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged',
+    });
+    assert.equal(r.status, 1, r.stderr);
+    assert.match(r.stderr, /publishing-file: .*--build-union/);
+  });
+});
+
+test('#3529 pass 2 CLI: the retirement PR-state check is wired, through the ONBOX_TEST_GH_PR_STATES seam', () => {
+  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
+  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
+  assert.match(REAL_REGISTER_TEXT, /^## Retired carried rows$/m, 'the register carries the (empty) table');
+  const baseline = REAL_REGISTER_TEXT.replace(
+    /(\| Row \| Owning PR \| Closed unmerged \| Reason \|\n\|---\|---\|---\|---\|\n)/,
+    `$1| ${newId} | #9999 | 2026-10-07 | test fixture |\n`,
+  );
+  assert.notEqual(baseline, REAL_REGISTER_TEXT, 'fixture setup: the table header must match');
+  withHermeticBaseline(mutated, baseline, (publishedPath, baselinePath) => {
+    const env = (states) => ({
+      ONBOX_TEST_BASELINE_FILE: baselinePath,
+      ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged',
+      ONBOX_TEST_GH_PR_STATES: states,
+    });
+    const open = runCli(['--against-published', publishedPath], env('{"9999":"OPEN"}'));
+    assert.equal(open.status, 1, open.stderr);
+    assert.match(open.stderr, /retired-carried-row: .*#9999/);
+    assert.ok(!/BEHIND what is already live/.test(open.stderr), open.stderr);
+    assert.match(open.stderr, /WARNING: gh PR states injected from ONBOX_TEST_GH_PR_STATES/);
+    const closed = runCli(['--against-published', publishedPath], env('{"9999":"CLOSED"}'));
+    assert.equal(closed.status, 0, `stdout: ${closed.stdout}\nstderr: ${closed.stderr}`);
+    const unavailable = runCli(['--against-published', publishedPath], env('unavailable'));
+    assert.equal(unavailable.status, 0, unavailable.stderr);
+    assert.match(unavailable.stderr, /retired-row-warning: .*#9999/);
   });
 });

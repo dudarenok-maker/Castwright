@@ -47,6 +47,7 @@ function makeSandbox() {
       'scripts/check-register-row-citations.mjs',
       'scripts/check-onbox-register.mjs',
       'scripts/publish-token.mjs',
+      'scripts/gh.mjs',
       'scripts/git-env.mjs',
       'scripts/lib/read-normalized.mjs',
       'scripts/lib/is-main-module.mjs',

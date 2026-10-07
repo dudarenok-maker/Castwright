@@ -287,6 +287,8 @@ function buildCliFixture() {
   cpSync(join(SCRIPTS_DIR, 'check-onbox-register.mjs'), join(root, 'scripts', 'check-onbox-register.mjs'));
   cpSync(join(SCRIPTS_DIR, 'git-env.mjs'), join(root, 'scripts', 'git-env.mjs'));
   cpSync(join(SCRIPTS_DIR, 'publish-token.mjs'), join(root, 'scripts', 'publish-token.mjs'));
+  // #3529: the gh chokepoint check-onbox-register.mjs imports.
+  cpSync(join(SCRIPTS_DIR, 'gh.mjs'), join(root, 'scripts', 'gh.mjs'));
   cpSync(join(SCRIPTS_DIR, 'lib', 'is-main-module.mjs'), join(root, 'scripts', 'lib', 'is-main-module.mjs'));
   return root;
 }
