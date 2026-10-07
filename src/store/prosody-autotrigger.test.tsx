@@ -140,6 +140,7 @@ import { queueActions } from './queue-slice';
 import { selectAnalysisBusyForBook } from './analysis-substage-selectors';
 import { api } from '../lib/api';
 import { persistenceMiddleware } from './persistence-middleware';
+import { isChapterTextEditedSinceRender, textHashForStale } from '../lib/stale-chapters';
 
 /* ── Store factory ─────────────────────────────────────────────────────── */
 
@@ -267,10 +268,11 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
   it('does NOT fire runProsodyPasses for a book that is already analysis-complete on first render (seed-on-mount)', async () => {
     const store = makeStore();
     /* The library hydrates (loaded=true) with a book ALREADY complete — it is
-       seeded into `considered` as the baseline and must not fire. The book
-       is a background one: the OPEN book is run on open when its watermark is
-       unset (#3435 — see "a skipped book is re-run when it is next opened"). */
-    store.dispatch(librarySlice.actions.hydrate(libResponse([makeBook('b2', 'cast_pending')])));
+       seeded into `considered` as the baseline and must not fire — not even
+       when it is the open book: its watermark is unset, and only a book
+       explicitly marked unfinished is run on open (#3435, fs-65: pre-existing
+       books are not retro-annotated). */
+    store.dispatch(librarySlice.actions.hydrate(libResponse([makeBook('b1', 'cast_pending')])));
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
 
     renderLayout(store);
@@ -298,11 +300,9 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
        complete books in one hydrate. That first loaded snapshot is the seed
        baseline — nothing should fire. (Before the fix the seed ran against the
        empty pre-hydrate library, so all 15 books looked brand-new and fired at
-       once — the SSE/GPU/VRAM flood that hung the app on restart.) The
-       backlog is background books: the open book is run on open when its
-       watermark is unset (#3435). */
+       once — the SSE/GPU/VRAM flood that hung the app on restart.) */
     vi.mocked(api.getLibrary).mockResolvedValueOnce(
-      libResponse([makeBook('b2', 'cast_pending'), makeBook('b3', 'cast_pending')]) as never,
+      libResponse([makeBook('b1', 'cast_pending'), makeBook('b2', 'cast_pending')]) as never,
     );
 
     renderLayout(store);
@@ -474,7 +474,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
   // ── Test 7: failed:1 → no putBookState + book re-eligible ──
 
-  it('does NOT write putBookState when failed > 0 and the book is re-eligible on the next transition', async () => {
+  it('marks the book unfinished (never done) when failed > 0, and the book is re-eligible on the next transition', async () => {
     const store = makeStore();
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     runProsodyPassesMock.mockResolvedValueOnce({ totalAnnotations: 5, totalChapters: 2, failed: 1, skipped: 0 });
@@ -497,8 +497,13 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
       expect(runProsodyPassesMock).toHaveBeenCalledTimes(1);
     });
 
-    /* No watermark written because failed > 0. */
-    expect(putBookStateMock).not.toHaveBeenCalled();
+    /* failed > 0: marked unfinished (#3435 — so the next open re-runs it),
+       never done, and only for its own book. */
+    await waitFor(() => expect(putBookStateMock).toHaveBeenCalledTimes(1));
+    expect(putBookStateMock).toHaveBeenCalledWith('b1', {
+      slice: 'state',
+      patch: { prosodyAnnotated: false },
+    });
 
     /* Simulate a second appearance: book transitions through a non-complete
        status and back to complete. This changes completeKey, retriggering
@@ -583,8 +588,12 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
       expect(runProsodyPassesMock).toHaveBeenCalledTimes(1);
     });
 
-    /* No watermark written. */
-    expect(putBookStateMock).not.toHaveBeenCalled();
+    /* The run had started: marked unfinished, never done (#3435). */
+    await waitFor(() => expect(putBookStateMock).toHaveBeenCalledTimes(1));
+    expect(putBookStateMock).toHaveBeenCalledWith('b1', {
+      slice: 'state',
+      patch: { prosodyAnnotated: false },
+    });
 
     /* A subsequent status change should fire again (book was removed from considered).
        Cycle through a non-complete status to retrigger the effect with a new completeKey. */
@@ -817,7 +826,7 @@ describe('Layout — prosody auto-trigger writes only into its own book (#3435)'
       (c) => c[0] === id && (c[1] as { patch: { prosodyAnnotated?: boolean } }).patch?.prosodyAnnotated,
     );
 
-  it("a background book's emotions never land in the open book, and it is not marked annotated", async () => {
+  it("a background book's emotions never land in the open book, and it is marked unfinished — it alone", async () => {
     const store = await runFor('b2', 'b1');
 
     const s = store.getState().manuscript.sentences.find((x) => x.chapterId === 1 && x.id === 1);
@@ -825,6 +834,10 @@ describe('Layout — prosody auto-trigger writes only into its own book (#3435)'
     expect(s?.instruct).toBeUndefined();
     expect(manuscriptPuts()).toEqual([]);
     expect(watermarkPuts('b1')).toEqual([]);
+    /* #3435 — the skipped run marks ITS book unfinished (so opening it re-runs
+       it), never the open book the slices and the stage hold. */
+    const statePuts = putBookStateMock.mock.calls.filter((c) => (c[1] as { slice: string }).slice === 'state');
+    expect(statePuts).toEqual([['b1', { slice: 'state', patch: { prosodyAnnotated: false } }]]);
   });
 
   it("the open book's own emotions land in it and persist to it once, and it is marked annotated", async () => {
@@ -906,38 +919,64 @@ describe('Layout — prosody auto-trigger writes only into its own book (#3435)'
   });
 });
 
-/* #3435 (PR #3505 review pass 6, owner option b) — an annotation that
-   arrives while its book is not open is skipped (a write never lands on a
-   stage that names no book), and the book is left un-marked. The skipped work
-   is redone when the book is next opened: the layout re-runs detection
-   (fill-only) for an open, analysis-complete book whose watermark is unset.
+/* #3435 (PR #3505 review passes 6-7) — an annotation that arrives while its
+   book is not open is skipped (a write never lands on a stage that names no
+   book). Every run that started and did not finish — skipped work, a failed
+   chapter, or a background run that yielded — marks its own book unfinished
+   (prosodyAnnotated: false). The layout re-runs detection (fill-only) for an
+   open, analysis-complete book so marked, and ONLY so marked: a book whose
+   watermark is unset (analysed before fs-65, or never seen finish) is not
+   retro-annotated (fs-65 design: no backlog-wide auto-spend). A re-run never
+   rewrites the text of a chapter that has rendered audio, and it stops as
+   soon as its book is no longer the open one or the user starts work on it.
    Runs the REAL thunk and the REAL persistence middleware; the server mocks
-   keep the watermark the way the server does. */
-describe('Layout — a skipped book is re-run when it is next opened (#3435)', () => {
+   keep the watermark the way the server does (true / false / unset). */
+describe('Layout — an unfinished book is re-run when it is next opened (#3435)', () => {
   const sentence = (chapterId: number, id: number) =>
     ({ chapterId, id, text: 'Hello.', characterId: 'narrator' }) as never;
 
   let libBooks: LibraryBook[];
-  let watermarked: Set<string>;
+  /* The server's watermark per book: absent = unset. */
+  let marks: Map<string, boolean>;
+  /* Book ids whose chapter 1 has rendered audio. */
+  let renderedCh1: Set<string>;
 
   function stateFor(bookId: string) {
     const base = defaultStateResponse(bookId);
+    const rendered = renderedCh1.has(bookId);
     return {
       ...base,
-      state: { ...base.state, prosodyAnnotated: watermarked.has(bookId) ? true : undefined },
+      state: {
+        ...base.state,
+        prosodyAnnotated: marks.get(bookId),
+        chapters: rendered
+          ? [
+              { id: 1, title: 'One', slug: 'ch-1' },
+              { id: 2, title: 'Two', slug: 'ch-2' },
+            ]
+          : [],
+      },
       manuscriptEdits: { sentences: [sentence(1, 1), sentence(2, 1)], mergedAwayKeys: [] },
+      ...(rendered
+        ? {
+            completedSlugs: ['ch-1'],
+            renderedSpeakersByChapter: { 1: { 1: 'narrator' } },
+            renderedTextByChapter: { 1: { 1: textHashForStale('Hello.') } },
+          }
+        : {}),
     };
   }
 
   const ch1 = { chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'angry' }] };
   const ch2 = { chapterId: 2, annotations: [{ sentenceId: 1, emotion: 'sad' }] };
-  type Opts = { onAnnotation?: (e: unknown) => void };
+  type Opts = { onAnnotation?: (e: unknown) => void; signal?: AbortSignal };
   const emit = (opts: Opts, chapters: unknown[]) => chapters.forEach((c) => opts.onAnnotation?.(c));
 
   beforeEach(async () => {
     vi.clearAllMocks();
     libBooks = [];
-    watermarked = new Set();
+    marks = new Map();
+    renderedCh1 = new Set();
     const actual = await vi.importActual<typeof import('./prosody-thunk')>('./prosody-thunk');
     runProsodyPassesMock.mockImplementation((...args: unknown[]) =>
       (actual.runProsodyPasses as (...a: unknown[]) => unknown)(...args),
@@ -946,8 +985,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     getBookStateMock.mockImplementation(async (id: string) => stateFor(id));
     putBookStateMock.mockImplementation(
       async (id: string, body: { patch?: { prosodyAnnotated?: boolean } }) => {
-        if (body.patch?.prosodyAnnotated === true) watermarked.add(id);
-        if (body.patch?.prosodyAnnotated === false) watermarked.delete(id);
+        if (typeof body.patch?.prosodyAnnotated === 'boolean') marks.set(id, body.patch.prosodyAnnotated);
         return {};
       },
     );
@@ -986,8 +1024,15 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     putBookStateMock.mock.calls.filter(
       (c) => c[0] === id && (c[1] as { patch: { prosodyAnnotated?: boolean } }).patch?.prosodyAnnotated,
     );
+  /* Every `prosodyAnnotated: false` write, as the book id it went to. */
+  const unfinishedPuts = () =>
+    putBookStateMock.mock.calls
+      .filter((c) => (c[1] as { patch?: { prosodyAnnotated?: boolean } }).patch?.prosodyAnnotated === false)
+      .map((c) => c[0]);
+  const sentenceOf = (store: ReturnType<typeof makeStore>, chapterId: number) =>
+    store.getState().manuscript.sentences.find((x) => x.chapterId === chapterId && x.id === 1);
   const emotionOf = (store: ReturnType<typeof makeStore>, chapterId: number) =>
-    store.getState().manuscript.sentences.find((x) => x.chapterId === chapterId && x.id === 1)?.emotion;
+    sentenceOf(store, chapterId)?.emotion;
 
   it('P6a: a run that crossed a Library trip is finished on reopen, saved to its book only, and the book ends annotated', async () => {
     /* First run: chapter 1 arrives while the user is on the Library, chapter 2
@@ -1035,6 +1080,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1), { timeout: 3000 });
     await settle(700);
 
+    expect(unfinishedPuts()).toEqual(['b1']); // the skipped first run marked it unfinished
     expect(emotionOf(store, 1)).toBe('angry');
     expect(emotionOf(store, 2)).toBe('sad');
     const puts = manuscriptPuts();
@@ -1043,7 +1089,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     expect(detectEmotionsMock).toHaveBeenCalledTimes(2);
   }, 10_000);
 
-  it('P6b: a run that stays on the Library saves nothing; opening the book re-runs it into that book and marks it', async () => {
+  it('P6b: a run that stays on the Library saves nothing and marks its book unfinished; opening the book re-runs it into that book and marks it', async () => {
     const store = makeStore(true);
     renderAnyPath(store); // boots on the Library
     await settle(30);
@@ -1055,6 +1101,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     await settle(700);
     expect(manuscriptPuts()).toEqual([]);
     expect(watermarkPuts('b1')).toEqual([]);
+    expect(unfinishedPuts()).toEqual(['b1']);
 
     await act(async () => {
       store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
@@ -1069,8 +1116,29 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     expect(puts[0][0]).toBe('b1');
   });
 
-  it('reload: a complete book left un-marked is not treated as done by the seed — opening it runs detection (the backlog stays quiet)', async () => {
+  it('P7c: a book complete at boot with its watermark unset is NOT run on open — its text is never rewritten (fs-65: no retro-annotation)', async () => {
+    libBooks = [makeBook('b1', 'cast_pending')];
+    detectInstructMock.mockImplementation(async (_id: string, opts: Opts) => {
+      emit(opts, [{ chapterId: 1, annotations: [{ sentenceId: 1, text: 'Hhhh… Hello.', vocalization: true }] }]);
+      return { totalAnnotations: 1, annotatedChapters: 1 };
+    });
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b1'));
+    await settle(800);
+
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+    expect(detectInstructMock).not.toHaveBeenCalled();
+    expect(sentenceOf(store, 1)?.text).toBe('Hello.');
+    expect(manuscriptPuts()).toEqual([]);
+    expect(putBookStateMock).not.toHaveBeenCalled();
+  });
+
+  it('reopen: a complete book marked unfinished is run on open and marked done (the backlog stays quiet, unfinished or not)', async () => {
     libBooks = [makeBook('b1', 'cast_pending'), makeBook('b2', 'cast_pending')];
+    marks.set('b1', false);
+    marks.set('b2', false);
     const store = makeStore(true);
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     renderAnyPath(store);
@@ -1086,7 +1154,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
 
   it('control: opening a book already marked annotated does not re-run it', async () => {
     libBooks = [makeBook('b1', 'cast_pending')];
-    watermarked.add('b1');
+    marks.set('b1', true);
     const store = makeStore(true);
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     renderAnyPath(store);
@@ -1098,6 +1166,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
 
   it('control: an open book that is not analysis-complete is not run', async () => {
     libBooks = [makeBook('b1', 'analysing')];
+    marks.set('b1', false);
     const store = makeStore(true);
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     renderAnyPath(store);
@@ -1113,6 +1182,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
        skip every annotation: the run is not started at all — no pill, no busy
        window, and nothing to loop on. */
     libBooks = [makeBook('b1', 'cast_pending')];
+    marks.set('b1', false);
     let reads = 0;
     getBookStateMock.mockImplementation(async (id: string) => {
       const st = stateFor(id);
@@ -1133,6 +1203,41 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     expect(watermarkPuts('b1')).toEqual([]);
   });
 
+  it('rendered audio: the re-run never rewrites the text of a chapter with rendered audio, and makes no chapter stale', async () => {
+    libBooks = [makeBook('b1', 'voices_pending')];
+    marks.set('b1', false);
+    renderedCh1.add('b1');
+    const rewrite = (chapterId: number) => ({
+      chapterId,
+      annotations: [{ sentenceId: 1, text: 'Hhhh… Hello.', vocalization: true, instruct: 'gasping' }],
+    });
+    detectInstructMock.mockImplementation(async (_id: string, opts: Opts) => {
+      emit(opts, [rewrite(1), rewrite(2)]);
+      return { totalAnnotations: 2, annotatedChapters: 2 };
+    });
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'voices_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(detectInstructMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+    await settle(700);
+
+    expect(store.getState().chapters.chapters.find((c) => c.id === 1)?.state).toBe('done');
+    /* Chapter 1 has audio: its line is untouched (its emotion still fills). */
+    expect(sentenceOf(store, 1)?.text).toBe('Hello.');
+    expect(sentenceOf(store, 1)?.vocalization).toBeFalsy();
+    expect(emotionOf(store, 1)).toBe('angry');
+    const { renderedTextByChapter } = store.getState().chapters;
+    expect(
+      isChapterTextEditedSinceRender(
+        renderedTextByChapter[1],
+        store.getState().manuscript.sentences.filter((s) => s.chapterId === 1),
+      ),
+    ).toBe(false);
+    /* Control: chapter 2 has no audio, so the same annotation lands there. */
+    expect(sentenceOf(store, 2)?.text).toBe('Hhhh… Hello.');
+  });
+
   /* #3435 (PR #3505 CI) — the open re-run is background work: it never blocks
      or delays what the user does on the book. */
   const queued = (bookId: string) =>
@@ -1151,6 +1256,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
       return { totalAnnotations: 2, annotatedChapters: 2 };
     });
     libBooks = [makeBook('b1', 'cast_pending')];
+    marks.set('b1', false);
     const store = makeStore(true);
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     renderAnyPath(store);
@@ -1166,7 +1272,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
   });
 
-  it('yields: generation work queued for the book mid-run ends the run at once; nothing more lands, the book stays un-marked', async () => {
+  it('yields: generation work queued for the book mid-run ends the run at once; nothing more lands, the book stays marked unfinished', async () => {
     const { store, release } = await openWithHeldRun();
     await act(async () => {
       store.dispatch(queued('b1'));
@@ -1176,16 +1282,18 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     await settle(300);
     expect(emotionOf(store, 1)).toBeUndefined();
     expect(watermarkPuts('b1')).toEqual([]);
+    expect(unfinishedPuts()).toEqual(['b1']);
     expect(detectEmotionsMock).toHaveBeenCalledTimes(1); // not restarted this visit
   });
 
-  it('yields: a run that yielded is not marked done even when nothing arrived after it yielded', async () => {
+  it('yields: a run that yielded is marked unfinished, never done, even when nothing arrived after it yielded', async () => {
     let release!: () => void;
     detectEmotionsMock.mockImplementation(async () => {
       await new Promise<void>((r) => (release = r));
       return { totalAnnotations: 0, annotatedChapters: 0 };
     });
     libBooks = [makeBook('b1', 'cast_pending')];
+    marks.set('b1', false);
     const store = makeStore(true);
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     renderAnyPath(store);
@@ -1196,6 +1304,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     await act(async () => release());
     await settle(300);
     expect(watermarkPuts('b1')).toEqual([]);
+    expect(unfinishedPuts()).toEqual(['b1']);
   });
 
   it('yields: a manual run that takes the book mid-run keeps its own pill', async () => {
@@ -1212,6 +1321,7 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
 
   it('waits: an open book with generation work queued is not run until that work is gone', async () => {
     libBooks = [makeBook('b1', 'cast_pending')];
+    marks.set('b1', false);
     const store = makeStore(true);
     store.dispatch(queued('b1'));
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
@@ -1227,33 +1337,15 @@ describe('Layout — a skipped book is re-run when it is next opened (#3435)', (
     expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
   });
 
-  it('no double run: reopening the book and a library transition while its run is in flight start nothing new', async () => {
-    let release!: () => void;
-    detectEmotionsMock.mockImplementation(async (_id: string, opts: Opts) => {
-      await new Promise<void>((r) => (release = r));
-      emit(opts, [ch1, ch2]);
-      return { totalAnnotations: 2, annotatedChapters: 2 };
-    });
-    libBooks = [makeBook('b1', 'cast_pending')];
-    const store = makeStore(true);
-    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
-    renderAnyPath(store);
-    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
-
-    await act(async () => {
-      store.dispatch(uiActions.goHome());
-    });
-    await settle(30);
+  it('no double run: a library transition while the open re-run is in flight starts nothing new', async () => {
+    const { store, release } = await openWithHeldRun();
     await act(async () => {
       store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'voices_pending')));
-      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     });
     await settle(50);
     expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
 
-    await act(async () => {
-      release();
-    });
+    await act(async () => release());
     await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
     await settle(100);
     expect(detectEmotionsMock).toHaveBeenCalledTimes(1);

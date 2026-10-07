@@ -10,7 +10,8 @@
    share one AbortController + the bookId-keyed prosody substage lock, so only
    one runs at a time. Per-chapter is manual only and never sets the
    prosodyAnnotated watermark (that stays the layout.tsx auto-trigger's job);
-   a run of either scope that skipped lines clears it (#3435). */
+   a run of either scope that skipped lines writes it false, which is what
+   makes the layout re-run the book on its next open (#3435). */
 
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
@@ -114,8 +115,9 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
       });
       const lines = `${totalAnnotations} line${totalAnnotations === 1 ? '' : 's'}`;
       if (skipped > 0) {
-        /* #3435 (PR #3505 review pass 6) — clear the watermark so the layout
-           re-runs this book (fill-only) the next time it is opened, and say so
+        /* #3435 (PR #3505 review passes 6-7) — mark the book unfinished
+           (false, not cleared: the layout re-runs only an explicit false) so
+           it is re-run (fill-only) the next time it is opened, and say so
            in a toast: leaving the book unmounts this button, so a status line
            here would never be seen. */
         void api

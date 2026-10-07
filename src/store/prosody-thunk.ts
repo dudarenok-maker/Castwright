@@ -96,6 +96,11 @@ export interface RunProsodyPassesOpts {
    *  annotation for a book that is not the open one is skipped (and counted in
    *  `skipped`) rather than written into another book. Omitted: always apply. */
   canApply?: () => boolean;
+  /** #3435 — chapters whose instruct-pass annotations are dropped (and not
+   *  counted in `skipped`). The layout's re-run passes the chapters with
+   *  rendered audio: a vocalization annotation rewrites the line's text,
+   *  which would leave that audio stale. Omitted: no chapter is held. */
+  holdsAudio?: (chapterId: number) => boolean;
 }
 
 export interface RunProsodyPassesResult {
@@ -114,7 +119,7 @@ export interface RunProsodyPassesResult {
  */
 export async function runProsodyPasses(
   bookId: string,
-  { dispatch, signal, chapterId, onProgress, onStatus, onThrottle, canApply }: RunProsodyPassesOpts,
+  { dispatch, signal, chapterId, onProgress, onStatus, onThrottle, canApply, holdsAudio }: RunProsodyPassesOpts,
 ): Promise<RunProsodyPassesResult> {
   let failed = 0;
   let skipped = 0;
@@ -184,7 +189,10 @@ export async function runProsodyPasses(
       if (e.label) onStatus?.(e.label);
     },
     onThrottle: () => onThrottle?.(),
-    onAnnotation: (e) => apply(manuscriptActions.applyDetectedInstruct(e)),
+    onAnnotation: (e) => {
+      if (holdsAudio?.(e.chapterId)) return;
+      apply(manuscriptActions.applyDetectedInstruct(e));
+    },
     onChapterFailed: () => {
       failed++;
     },

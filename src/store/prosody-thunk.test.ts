@@ -114,6 +114,35 @@ describe('runProsodyPasses', () => {
     expect(applying.skipped).toBe(0);
   });
 
+  /* #3435 — a chapter with rendered audio keeps its text: its instruct-pass
+     annotations are dropped, uncounted; its emotions still apply. */
+  it('drops, without counting, the instruct annotations of a chapter holdsAudio names', async () => {
+    const emotions = { chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'angry' }] };
+    const rendered = { chapterId: 1, annotations: [{ sentenceId: 1, text: 'Ah! Hi.', vocalization: true }] };
+    const fresh = { chapterId: 2, annotations: [{ sentenceId: 1, text: 'Ah! Hi.', vocalization: true }] };
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onAnnotation?.(emotions);
+        return { totalAnnotations: 1, annotatedChapters: 1 };
+      },
+    );
+    vi.mocked(api.detectInstruct).mockImplementation(
+      async (_bookId: string, opts: DetectInstructOpts = {}) => {
+        opts.onAnnotation?.(rendered);
+        opts.onAnnotation?.(fresh);
+        return { totalAnnotations: 2, annotatedChapters: 2 };
+      },
+    );
+
+    const dispatch = vi.fn();
+    const res = await runProsodyPasses(bookId, { dispatch, holdsAudio: (id) => id === 1 });
+    expect(dispatch.mock.calls.map((c) => c[0])).toEqual([
+      manuscriptActions.applyDetectedEmotions(emotions),
+      manuscriptActions.applyDetectedInstruct(fresh),
+    ]);
+    expect(res.skipped).toBe(0);
+  });
+
   it('increments failed when detectEmotions reports a chapter-failed', async () => {
     vi.mocked(api.detectEmotions).mockImplementation(
       async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
