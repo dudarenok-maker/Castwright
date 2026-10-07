@@ -31,6 +31,7 @@
    catalog, so request shape and the thinking window are stable per model. */
 import { createHash } from 'node:crypto';
 import { GoogleGenAI } from '@google/genai';
+import { redactKnownSecrets } from '../redact.js';
 
 export interface GeminiModelInfo {
   id: string;
@@ -240,7 +241,7 @@ export async function warmGeminiCatalog(
       lastFailure = { keyHash, at: Date.now() };
       if (!warnedFailure) {
         warnedFailure = true;
-        const message = ((err as Error)?.message ?? String(err)).split(apiKey).join('<redacted>');
+        const message = redactKnownSecrets((err as Error)?.message ?? String(err), [apiKey]);
         console.warn(
           `[gemini-catalog] models.list failed — any listing still cached for this key keeps being served (even past its TTL); with none, Auto max output tokens falls back to 8192. The input cap is unaffected (it never comes from the catalog): ${message}`,
         );

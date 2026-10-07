@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="45" data-publish-id="47c619da8c65"></div>
+  <div hidden data-published-as="46" data-publish-id="e3f9516cf43d"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">57</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">59</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -210,10 +210,10 @@
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
       <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->34<!-- END GENERATED:glance:A --></td></tr>
-      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->3<!-- END GENERATED:glance:B --></td></tr>
+      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->4<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->12<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->13<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -775,7 +775,7 @@
   <!-- B -->
   <section class="group" id="gb">
     <header>
-      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">3 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">4 rows</span></h3>
       <p class="setup">
         A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a
         <strong>CPU-only sub-case</strong> — the analogous B2-step-7 CPU-only case retired to
@@ -820,6 +820,19 @@
           <li><b>Short-context tags:</b> for at least two tags, <code>num_ctx</code> sent (32768) against <code>/api/show</code> native context, and one chapter's truncation count.</li>
         </ul>
         <p class="src">The 16 GB card, Ollama only, no TTS engine · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B105</span><span class="iname">Ollama structured-output modes on a real model (#3084 PR 3b)</span><span class="risk low">Owed · local Ollama</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>With <code>analyzer.ollama.structuredOutput</code> set to <code>json</code>, then <code>off</code>, analyse one real chapter each on <code>qwen3.5:4b</code>. Observe the inbox request's <code>format</code> key, whether the chapter validates, and how a rejecting daemon is reported.</p>
+        <ul>
+          <li>Request carried <code>format: "json"</code>, then no <code>format</code> key.</li>
+          <li>The chapter still validates, or fails as "analyzer reply failed validation", never as <code>unknown</code>.</li>
+          <li>A daemon that rejects a mode fails as "analyzer rejected the request" naming <code>analyzer.ollama.structuredOutput</code>.</li>
+        </ul>
+        <p>Record the validation-retry count for each mode against the default <code>schema</code> run on the same chapter.</p>
+        <p class="src">Real Ollama daemon, <code>qwen3.5:4b</code> · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §4 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
       </div>
     </details>
   </section>
@@ -1090,7 +1103,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">12 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">13 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1228,6 +1241,18 @@
           <li><b>Pass:</b> Auto completes with no <code>analyzer-timeout</code> and no overflow, using no more requests than the 8192 run, and the Gemma check holds.</li>
         </ul>
         <p class="src">Any machine with a Gemini key; no GPU; two chapter runs within <code>gemini-3.6-flash</code>'s 20 requests a day · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §2 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E112</span><span class="iname">Gemini schema mode on a real key (#3084 PR 3b)</span><span class="risk low">Owed · any Gemini key</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>With a Gemini key and <code>analyzer.gemini.structuredOutput</code> = <code>schema</code>, analyse one real chapter on <code>gemma-4-31b-it</code> and one on <code>gemini-3.5-flash-lite</code>. This row does not by itself move Gemini's default.</p>
+        <ul>
+          <li>Whether Gemini returns HTTP 400 for the adapted <code>responseJsonSchema</code>, or accepts it.</li>
+          <li>The debug log's "schema adapter dropped" list must match the PR's <code>gemini / *</code> snapshot.</li>
+          <li>Whether replies conform on the first attempt.</li>
+        </ul>
+        <p class="src">Gemini key, no GPU · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §5 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
       </div>
     </details>
 

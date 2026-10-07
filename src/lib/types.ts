@@ -155,6 +155,13 @@ export type UserSettingsPatch = components['schemas']['UserSettingsPatch'] & {
   backupRetention?: number;
 };
 
+/* #3084 — analyzer endpoints (generated shapes). */
+export type AnalyzerEndpoint = components['schemas']['AnalyzerEndpoint'];
+export type AnalyzerEndpointInput = components['schemas']['AnalyzerEndpointInput'];
+export type AnalyzerEndpointKeyStatus = components['schemas']['AnalyzerEndpointKeyStatus'];
+export type AnalyzerEndpointDetectRequest = components['schemas']['AnalyzerEndpointDetectRequest'];
+export type AnalyzerEndpointDetectResult = components['schemas']['AnalyzerEndpointDetectResult'];
+
 /* srv-2 — one auto-backup snapshot of a book's state.json, newest first.
    Mirrors server/src/routes/backup.ts BackupSnapshot. */
 export interface BackupSnapshot {

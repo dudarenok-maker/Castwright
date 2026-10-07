@@ -124,7 +124,8 @@ export const FAILURE_REMEDIATIONS = {
       "Retry the chapter. If it recurs: when a thinking Gemini model stayed silent before answering, raise " +
       "'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most " +
       "290000 ms, below the 300 s network timeout); when a request ran too long overall, raise 'Gemini request " +
-      "ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) in Advanced Settings. Or switch to a faster analyzer model.",
+      "ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) in Advanced Settings, or the endpoint's request time limit " +
+      'for an OpenAI-compatible endpoint. Or switch to a faster analyzer model.',
   },
   'analyzer-daily-quota': {
     userMessage: "The analyzer's free-tier daily quota is exhausted.",
@@ -156,9 +157,11 @@ export const FAILURE_REMEDIATIONS = {
       'this check active at all.',
   },
   auth: {
-    userMessage: 'Gemini TTS authentication failed — check GEMINI_API_KEY.',
+    userMessage: 'Authentication failed — an API key or access setting is missing, wrong or expired.',
     remediation:
-      'Verify GEMINI_API_KEY in server/.env is set and valid, restart the server, then retry.',
+      'Check the API key or access setting of the service that failed, then retry: the Gemini API key (Settings, or ' +
+      'GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), ' +
+      "the Ollama server's access settings, or the endpoint's API key.",
   },
   'xtts-speaker-desync': {
     userMessage:
@@ -270,6 +273,34 @@ export const FAILURE_REMEDIATIONS = {
       'the cast. Set the language in the book settings and try again.',
     remediation:
       'Open the book settings, choose a language for the book, then retry the chapter.',
+  },
+  'analyzer-request-rejected': {
+    /* #3084 — a 400 from Ollama, Gemini or an OpenAI-compatible endpoint. The
+       live message carries the provider's own (redacted) text and names the
+       settings that shape the request; this is the offline Help copy. */
+    userMessage:
+      'The analyzer refused the request as invalid (HTTP 400) — something about how the request ' +
+      'was shaped is not accepted by this model or server.',
+    remediation:
+      'Change one of the settings named in the error for this engine or endpoint, then retry. ' +
+      'Castwright never retries a rejected request with a setting silently removed.',
+    helpDetail:
+      'A 400 has many causes: a structured-output mode the server does not support (LM Studio ' +
+      'rejects "json", for example), a context or output size larger than the server allows, or an ' +
+      "option the model does not accept. The provider's message is shown with any saved keys removed.",
+  },
+  'analyzer-invalid-output': {
+    userMessage:
+      "The analyzer's reply did not match the expected structure, even after an automatic retry.",
+    remediation:
+      'Retry the chapter. If it keeps failing, check the Structured output setting for this engine or ' +
+      'endpoint, or pick a stronger model.',
+  },
+  'analyzer-endpoint-missing': {
+    userMessage: 'The run names an analyzer endpoint that cannot be used for analysis yet.',
+    remediation:
+      'Pick a different model for this run. If the model came from ' +
+      'ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL in server/.env, fix or clear that value.',
   },
   unknown: {
     /* Rendered by the Help view only — the live unknown path shows trimRaw(raw) instead. */

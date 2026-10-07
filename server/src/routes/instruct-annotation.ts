@@ -19,9 +19,10 @@ import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
-import type { StageCall } from '../analyzer/index.js';
+import type { StageCall, AnalyzerSelection } from '../analyzer/index.js';
 import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
+import { analyzerSelectionErrorEvent } from './failure-taxonomy.js';
 import {
   chunkSentencesByBudget,
   chunkWithContext,
@@ -146,7 +147,19 @@ instructAnnotationRouter.post(
     }
 
     const heartbeat = makeThrottledHeartbeat(send, 2000);
-    const selection = selectAnalyzerForPhase({ phase: 'phase1', model: req.body?.model });
+    let selection: AnalyzerSelection;
+    try {
+      selection = selectAnalyzerForPhase({ phase: 'phase1', model: req.body?.model });
+    } catch (err) {
+      /* #3084 P23 — the SSE headers are already flushed, so a throw escaping here
+         would end the stream with no error event. Every selection error is sent with
+         its classified code (analyzer-endpoint-missing, auth for a key-origin
+         mismatch, …) and the stream ends; nothing is rethrown. */
+      send(analyzerSelectionErrorEvent(err));
+      clearInterval(keepAlive);
+      res.end();
+      return;
+    }
 
     let totalAnnotations = 0;
     let annotatedChapters = 0;

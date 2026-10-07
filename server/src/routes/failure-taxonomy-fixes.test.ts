@@ -15,8 +15,11 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, afterEach } from 'vitest';
-import { reasoningOverflowFixes, type AnalysisFailureFix } from './failure-taxonomy.js';
+import { reasoningOverflowFixes, classifyAnalysisFailure, type AnalysisFailureFix } from './failure-taxonomy.js';
 import { allKnobs } from '../config/registry.js';
+import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
+import { analyzerEndpointSchema, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 import { _seedGeminiCatalogForTest, _resetGeminiCatalogForTest } from '../analyzer/catalog/gemini-catalog.js';
 
 /* #3084 F7 — resolved from this FILE's own location, never cwd-relative: the
@@ -57,6 +60,15 @@ describe('reasoningOverflowFixes — every settingKey/wikiPage is real (#3084 wa
     }
   });
 
+  it('every endpointField names a real analyzerEndpointSchema field (#3084 F7, 3b)', () => {
+    const fields = new Set(Object.keys(analyzerEndpointSchema.shape));
+    for (const ctx of CONTEXTS) {
+      for (const fix of reasoningOverflowFixes(ctx)) {
+        if (fix.endpointField) expect(fields.has(fix.endpointField.field), fix.endpointField.field).toBe(true);
+      }
+    }
+  });
+
   it('every wikiPage names a file that exists under docs/wiki/ (resolved from this file, not cwd)', () => {
     for (const ctx of CONTEXTS) {
       for (const fix of reasoningOverflowFixes(ctx)) {
@@ -73,8 +85,63 @@ describe('reasoningOverflowFixes — every settingKey/wikiPage is real (#3084 wa
     }
   });
 
-  it('openai returns no fixes yet (3b adds them)', () => {
-    expect(reasoningOverflowFixes(CONTEXTS[2])).toEqual([]);
+});
+
+describe('reasoningOverflowFixes — openai transport (#3084 F7)', () => {
+  afterEach(() => _resetUserSettingsCache());
+
+  const LAB_ENDPOINT: AnalyzerEndpoint = {
+    id: 'lab',
+    name: 'Lab box',
+    baseUrl: 'http://127.0.0.1:8080/v1',
+    gpu: 'any',
+    concurrency: 1,
+    requestCeilingMs: 10_000,
+    structuredOutput: 'schema',
+    reasoningStyle: 'not_controllable',
+    reasoning: 'model-default',
+    maxOutputTokens: 0,
+    contextTokens: 32_768,
+  };
+
+  it('offers the endpoint\'s own maxOutputTokens/contextTokens and the stage fractions, naming the endpoint, never reasoning or payload, and no wikiPage yet', () => {
+    /* Structural, not an exact-count toEqual on the whole array: a later wave may
+       append a `Read:` entry to any reasoningOverflowFixes result. This asserts the
+       ACTIONABLE rows this branch contributes, exactly, and that every `Read:` entry
+       sits after every actionable one. */
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [LAB_ENDPOINT],
+    });
+    const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'lab' });
+    const isRead = (f: { label: string }) => f.label.startsWith('Read:');
+    const actionable = fixes.filter((f) => !isRead(f));
+    const reads = fixes.filter(isRead);
+    expect(actionable).toEqual([
+      expect.objectContaining({ label: expect.stringContaining('Lab box'), endpointField: { endpointId: 'lab', field: 'maxOutputTokens' } }),
+      expect.objectContaining({ label: expect.stringContaining('Lab box'), endpointField: { endpointId: 'lab', field: 'contextTokens' } }),
+      expect.objectContaining({ settingKey: 'analyzer.stage1.localInputFraction' }),
+      expect.objectContaining({ settingKey: 'analyzer.stage2.localInputFraction' }),
+    ]);
+    const lastActionableIndex = fixes.length - 1 - [...fixes].reverse().findIndex((f) => !isRead(f));
+    const firstReadIndex = fixes.findIndex(isRead);
+    if (reads.length > 0) expect(firstReadIndex).toBeGreaterThan(lastActionableIndex);
+    expect(fixes.every((f) => f.wikiPage === undefined)).toBe(true);
+    expect(fixes.some((f) => f.settingKey?.includes('reasoning') || ('endpointField' in f && f.endpointField?.field === 'reasoning'))).toBe(false);
+  });
+
+  it('falls back to the endpoint id when the endpoint has been deleted since the failure', () => {
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+    const fixes = reasoningOverflowFixes({ transport: 'openai', model: 'm', endpointId: 'gone' });
+    expect(fixes[0].label).toContain('gone');
+  });
+
+  it('classifyAnalysisFailure passes the real error\'s endpointId through to the fixes (review finding)', () => {
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [LAB_ENDPOINT],
+    });
+    const err = new AnalyzerReasoningOverflowError('openai', 'qwen3:30b', 512, { endpointId: 'lab' });
+    const failure = classifyAnalysisFailure(err, 'Endpoint lab (qwen3:30b)');
+    expect(failure.fixes?.some((f) => 'endpointField' in f && f.endpointField?.endpointId === 'lab')).toBe(true);
   });
 });
 

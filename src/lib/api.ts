@@ -35,6 +35,10 @@ import type {
   WorkspaceChangeLogResponse,
   UserSettings,
   UserSettingsPatch,
+  AnalyzerEndpoint,
+  AnalyzerEndpointInput,
+  AnalyzerEndpointDetectRequest,
+  AnalyzerEndpointDetectResult,
   DroppedQuotesResponse,
   AnalysisStateResponse,
   ActiveAnalysesResponse,
@@ -68,7 +72,7 @@ import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
-import { engineForModelId, type AnalysisEngine } from './model-id';
+import { engineForModelId, parseEndpointModelId, type AnalysisEngine } from './model-id';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -7043,6 +7047,9 @@ const MOCK_USER_SETTINGS: UserSettings = {
   workspaceSource: 'default',
   corruptSettingsFile: false,
   analyzerKeepAliveByModel: {},
+  analyzerEndpoints: [],
+  analyzerEndpointKeyStatus: {},
+  droppedEndpointEntries: [],
 };
 
 async function realGetUserSettings(): Promise<UserSettings> {
@@ -7082,6 +7089,60 @@ async function realPutGeminiKey(key: string | null): Promise<UserSettings> {
       `Gemini key save failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
   return res.json();
+}
+
+/* #3084 F5 — analyzer endpoint writes. A refusal keeps its machine code and
+   the structured {path, message} issues so the PR 3d form can show each one
+   next to the right input, without ever holding a rejected field or key
+   value (the server never sends one). */
+export class AnalyzerEndpointError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string,
+    message: string,
+    readonly issues: { path: string[]; message: string }[] = [],
+  ) {
+    super(message);
+    this.name = 'AnalyzerEndpointError';
+  }
+}
+
+async function analyzerEndpointRequest<T>(url: string, init: RequestInit): Promise<T> {
+  const res = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json' } });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as {
+      error?: string;
+      code?: string;
+      issues?: { path: string[]; message: string }[];
+    };
+    throw new AnalyzerEndpointError(res.status, body.code ?? 'unknown', body.error ?? res.statusText, body.issues ?? []);
+  }
+  return res.json() as Promise<T>;
+}
+
+const endpointPath = (id: string) => `/api/analyzer/endpoints/${encodeURIComponent(id)}`;
+
+async function realCreateAnalyzerEndpoint(input: AnalyzerEndpointInput): Promise<UserSettings> {
+  return analyzerEndpointRequest('/api/analyzer/endpoints', { method: 'POST', body: JSON.stringify(input) });
+}
+async function realUpdateAnalyzerEndpoint(id: string, input: AnalyzerEndpointInput): Promise<UserSettings> {
+  return analyzerEndpointRequest(endpointPath(id), { method: 'PUT', body: JSON.stringify(input) });
+}
+async function realDeleteAnalyzerEndpoint(id: string): Promise<UserSettings> {
+  return analyzerEndpointRequest(endpointPath(id), { method: 'DELETE' });
+}
+async function realPutAnalyzerEndpointKey(id: string, key: string | null): Promise<UserSettings> {
+  return analyzerEndpointRequest(`${endpointPath(id)}/key`, { method: 'PUT', body: JSON.stringify({ key }) });
+}
+
+/* #3084 — Detect talks to a user-run server through the Castwright server. It
+   is a local-machine surface with NO mock counterpart (CLAUDE.md "Mocks behind
+   VITE_USE_MOCKS"), so it is not on the `real`/`mock` objects: `api` is their
+   union and could not expose a member only one of them has. */
+export async function detectAnalyzerEndpointContext(
+  body: AnalyzerEndpointDetectRequest,
+): Promise<AnalyzerEndpointDetectResult> {
+  return analyzerEndpointRequest('/api/analyzer/endpoints/detect-context', { method: 'POST', body: JSON.stringify(body) });
 }
 
 /* fs-1 — in-app upgrade + app-info endpoints. */
@@ -7518,6 +7579,187 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
   }
   return { ...MOCK_USER_SETTINGS };
 }
+
+/* #3084 — mock analyzer endpoints. Mirrors the server's defaults and refusals
+   (server/src/workspace/analyzer-endpoints.ts) for mock-mode e2e. Keys are not
+   stored — only the origin they were bound to, which is all the status needs. */
+const mockEndpointKeyOrigins: Record<string, string> = {};
+const MOCK_ENDPOINT_ID = /^[a-z0-9-]{1,40}$/;
+const MOCK_LOOPBACK = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
+
+function mockOrigin(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
+function mockEndpointFromInput(input: AnalyzerEndpointInput): AnalyzerEndpoint {
+  /* #3084 F5 — {path, message}, never the rejected value (mirrors the server). */
+  const problems: { path: string[]; message: string }[] = [];
+  if (!MOCK_ENDPOINT_ID.test(input.id ?? '')) problems.push({ path: ['id'], message: 'must match ^[a-z0-9-]{1,40}$' });
+  if (!input.name?.trim()) problems.push({ path: ['name'], message: 'required' });
+  const baseOrigin = mockOrigin(input.baseUrl ?? '');
+  if (!baseOrigin) problems.push({ path: ['baseUrl'], message: 'must be a URL' });
+  if (typeof input.contextTokens !== 'number' || input.contextTokens < 512) {
+    problems.push({ path: ['contextTokens'], message: 'required, at least 512' });
+  }
+  if (problems.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', problems);
+  /* #3084 P23 — mirrors the server's parseEndpointInput until PRs 5a/5b. */
+  const notYet: { path: string[]; message: string }[] = [];
+  if (input.reasoning !== undefined && input.reasoning !== 'model-default') {
+    notYet.push({ path: ['reasoning'], message: 'only "model-default" can be saved until PR 5a enables reasoning levels' });
+  }
+  if (input.extraParams !== undefined && Object.keys(input.extraParams).length > 0) {
+    notYet.push({ path: ['extraParams'], message: 'custom request parameters cannot be saved until PR 5b enables them' });
+  }
+  if (notYet.length > 0) throw new AnalyzerEndpointError(400, 'invalid', 'Invalid analyzer endpoint.', notYet);
+  if (input.unloadUrl && mockOrigin(input.unloadUrl) !== baseOrigin) {
+    /* F5 no-echo — names the field, never either URL. */
+    throw new AnalyzerEndpointError(400, 'unload-off-origin', 'The unload URL must be on the same scheme, host and port as the base URL.', [
+      { path: ['unloadUrl'], message: 'must be on the same scheme, host and port as baseUrl' },
+    ]);
+  }
+  return {
+    ...input,
+    name: input.name.trim(),
+    gpu: input.gpu ?? (MOCK_LOOPBACK.has(new URL(input.baseUrl).hostname) ? 'any' : 'none'),
+    concurrency: input.concurrency ?? 1,
+    requestCeilingMs: input.requestCeilingMs ?? 1_800_000,
+    structuredOutput: input.structuredOutput ?? 'schema',
+    reasoningStyle: input.reasoningStyle ?? 'not_controllable',
+    reasoning: input.reasoning ?? 'model-default',
+    maxOutputTokens: input.maxOutputTokens ?? 0,
+  };
+}
+
+function mockSettingsWithEndpoints(endpoints: AnalyzerEndpoint[]): UserSettings {
+  const status = Object.fromEntries(
+    endpoints.map((e) => {
+      const origin = mockEndpointKeyOrigins[e.id];
+      return [e.id, !origin ? 'unset' : origin === mockOrigin(e.baseUrl) ? 'set' : 'origin-mismatch'] as const;
+    }),
+  );
+  Object.assign(MOCK_USER_SETTINGS, { analyzerEndpoints: endpoints, analyzerEndpointKeyStatus: status });
+  return { ...MOCK_USER_SETTINGS };
+}
+
+const mockEndpoints = () => MOCK_USER_SETTINGS.analyzerEndpoints ?? [];
+
+function mockEndpointOrThrow(id: string): AnalyzerEndpoint {
+  const found = mockEndpoints().find((e) => e.id === id);
+  if (!found) throw new AnalyzerEndpointError(404, 'not-found', `No analyzer endpoint with id "${id}".`);
+  return found;
+}
+
+async function mockCreateAnalyzerEndpoint(input: AnalyzerEndpointInput): Promise<UserSettings> {
+  await wait(50);
+  const ep = mockEndpointFromInput(input);
+  if (mockEndpoints().some((e) => e.id === ep.id)) {
+    throw new AnalyzerEndpointError(409, 'duplicate-id', `An analyzer endpoint with id "${ep.id}" already exists.`);
+  }
+  return mockSettingsWithEndpoints([...mockEndpoints(), ep]);
+}
+
+async function mockUpdateAnalyzerEndpoint(id: string, input: AnalyzerEndpointInput): Promise<UserSettings> {
+  await wait(50);
+  mockEndpointOrThrow(id);
+  if (input.id !== id) throw new AnalyzerEndpointError(400, 'invalid', 'An endpoint id cannot be changed.');
+  const ep = mockEndpointFromInput(input);
+  return mockSettingsWithEndpoints(mockEndpoints().map((e) => (e.id === id ? ep : e)));
+}
+
+async function mockDeleteAnalyzerEndpoint(id: string): Promise<UserSettings> {
+  await wait(50);
+  mockEndpointOrThrow(id);
+  /* The server's references, labels and grammar (findEndpointReferences in
+     server/src/workspace/analyzer-endpoints.ts): the model-id account field
+     (defaultAnalysisModel — the phase models are config overrides only, #3084
+     A5), then the three model-id overrides. `configOverrides` is server-side
+     only in OpenAPI, so the mock reads it structurally. */
+  const names = (v: unknown) => typeof v === 'string' && parseEndpointModelId(v.trim())?.endpointId === id;
+  const overrides = (MOCK_USER_SETTINGS as { configOverrides?: Record<string, unknown> }).configOverrides ?? {};
+  const refs = [
+    ...(['defaultAnalysisModel'] as const)
+      .filter((f) => names(MOCK_USER_SETTINGS[f]))
+      .map((f) => `Account setting "${f}"`),
+    ...(['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.personaGeneration.engine'] as const)
+      .filter((k) => names(overrides[k]))
+      .map((k) => `Advanced setting "${k}"`),
+  ];
+  if (refs.length > 0) {
+    throw new AnalyzerEndpointError(
+      409,
+      'referenced',
+      `Analyzer endpoint "${id}" is still used by ${refs.length} saved setting(s).`,
+      refs.map((r) => ({ path: [], message: r })),
+    );
+  }
+  delete mockEndpointKeyOrigins[id];
+  return mockSettingsWithEndpoints(mockEndpoints().filter((e) => e.id !== id));
+}
+
+/* #3084 P22 — the server's applyKey rule and text (server/src/workspace/analyzer-endpoints.ts). */
+const MOCK_ENDPOINT_KEY_CONTROL_CHARACTER_RULE =
+  'An API key cannot contain control characters (such as a line break, tab or NUL). Paste the key again without them.';
+
+function mockHasControlCharacter(value: string): boolean {
+  for (const ch of value) {
+    const c = ch.codePointAt(0) ?? 0;
+    if (c <= 0x1f || (c >= 0x7f && c <= 0x9f)) return true;
+  }
+  return false;
+}
+
+async function mockPutAnalyzerEndpointKey(id: string, key: string | null): Promise<UserSettings> {
+  await wait(50);
+  const ep = mockEndpointOrThrow(id);
+  if (typeof key === 'string' && mockHasControlCharacter(key)) {
+    throw new AnalyzerEndpointError(400, 'invalid', MOCK_ENDPOINT_KEY_CONTROL_CHARACTER_RULE, [
+      { path: ['key'], message: MOCK_ENDPOINT_KEY_CONTROL_CHARACTER_RULE },
+    ]);
+  }
+  if (key && key.trim().length > 0) mockEndpointKeyOrigins[id] = new URL(ep.baseUrl).origin;
+  else delete mockEndpointKeyOrigins[id];
+  return mockSettingsWithEndpoints(mockEndpoints());
+}
+
+/* #3084 F5 review, item 7 — mockEndpointFromInput refuses at save time (matching
+   the server), so the mock CRUD functions never populate
+   MOCK_USER_SETTINGS.droppedEndpointEntries themselves. PR 3d's own tests seed
+   it directly (its mock-mode UI tests need a dropped entry to show the banner
+   against), so this must actually filter, not no-op, or 3d's "Got it" test
+   would pass for the wrong reason (nothing to hide in the first place). */
+async function mockAcknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<UserSettings> {
+  await wait(50);
+  const acked = new Set(archiveIds);
+  /* `droppedEndpointEntries` is readOnly in the generated UserSettings (it is
+     response-only on the real server — the acknowledge route is the only
+     writer), so the mock mutates it through a mutable view, the same way
+     `configOverrides` is persisted above. */
+  const mutable = MOCK_USER_SETTINGS as { droppedEndpointEntries: UserSettings['droppedEndpointEntries'] };
+  mutable.droppedEndpointEntries = (MOCK_USER_SETTINGS.droppedEndpointEntries ?? []).filter(
+    (e) => !acked.has(e.archiveId ?? ''),
+  );
+  return mockSettingsWithEndpoints(mockEndpoints());
+}
+async function realAcknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<UserSettings> {
+  return analyzerEndpointRequest('/api/user/settings/dropped-endpoint-entries/acknowledge', {
+    method: 'POST',
+    body: JSON.stringify({ archiveIds }),
+  });
+}
+
+/** Test-only (#3084): seed mock settings the way a file saved before PR 3d would
+    look. The mock PUT refuses endpoint model ids until PR 3d (P23, Task 3a.5), so
+    a reference cannot be created through it. */
+export function _setMockUserSettingsForTest(
+  patch: Partial<UserSettings> & { configOverrides?: Record<string, string> },
+): void {
+  Object.assign(MOCK_USER_SETTINGS, patch);
+}
+
 
 /* ── Audiobook export ───────────────────────────────────────────────────
    POST /api/books/:bookId/exports creates a job. The modal polls
@@ -10126,6 +10368,11 @@ const real = {
   getUserSettings: realGetUserSettings,
   putUserSettings: realPutUserSettings,
   putGeminiKey: realPutGeminiKey,
+  createAnalyzerEndpoint: realCreateAnalyzerEndpoint,
+  updateAnalyzerEndpoint: realUpdateAnalyzerEndpoint,
+  deleteAnalyzerEndpoint: realDeleteAnalyzerEndpoint,
+  putAnalyzerEndpointKey: realPutAnalyzerEndpointKey,
+  acknowledgeDroppedEndpointEntries: realAcknowledgeDroppedEndpointEntries,
   getAppInfo: realGetAppInfo,
   getUpdateStatus: realGetUpdateStatus,
   checkCompanionApk: realCheckCompanionApk,
@@ -10438,6 +10685,11 @@ const mock = {
   getUserSettings: mockGetUserSettings,
   putUserSettings: mockPutUserSettings,
   putGeminiKey: mockPutGeminiKey,
+  createAnalyzerEndpoint: mockCreateAnalyzerEndpoint,
+  updateAnalyzerEndpoint: mockUpdateAnalyzerEndpoint,
+  deleteAnalyzerEndpoint: mockDeleteAnalyzerEndpoint,
+  putAnalyzerEndpointKey: mockPutAnalyzerEndpointKey,
+  acknowledgeDroppedEndpointEntries: mockAcknowledgeDroppedEndpointEntries,
   getAppInfo: mockGetAppInfo,
   getUpdateStatus: mockGetUpdateStatus,
   checkCompanionApk: mockCheckCompanionApk,

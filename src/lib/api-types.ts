@@ -109,6 +109,135 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/analyzer/endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a named OpenAI-compatible analyzer endpoint
+         * @description #3084 — adds an endpoint to user settings. `contextTokens` is required.
+         *     `gpu` defaults to `any` for a localhost / 127.0.0.1 / ::1 base URL,
+         *     else `none`. An `unloadUrl` must share the base URL's origin and may
+         *     contain `{model}`. The response is the GET /api/user/settings body;
+         *     API keys are never returned. Endpoints are NOT writable through
+         *     PUT /api/user/settings.
+         */
+        post: operations["createAnalyzerEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analyzer/endpoints/detect-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read a llama.cpp / llama-swap server's served context size
+         * @description #3084 decision 3b — runs only when the user clicks Detect. Reads
+         *     `GET <origin>/props` → `default_generation_settings.n_ctx`
+         *     (llama.cpp), or `GET <origin>/props?model=<model>` (llama-swap), which
+         *     loads the model and therefore requires `allowModelLoad: true`. A body
+         *     `apiKey` is sent to the body `baseUrl`; a stored key (`endpointId`) is
+         *     sent only when its saved origin matches, else 400 `auth` with no
+         *     request. Local-machine surface: no mock in src/lib/api.ts.
+         */
+        post: operations["detectAnalyzerEndpointContext"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analyzer/endpoints/{endpointId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpointId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace an analyzer endpoint's settings
+         * @description #3084 — the id cannot change. Changing `baseUrl` to another origin does
+         *     not move a saved key: its status becomes `origin-mismatch` and it is
+         *     not sent until re-entered.
+         */
+        put: operations["updateAnalyzerEndpoint"];
+        post?: never;
+        /**
+         * Delete an analyzer endpoint and its key
+         * @description #3084 — refused with 409 while a saved setting references the endpoint
+         *     (defaultAnalysisModel, or the analyzer.phase0.model /
+         *     analyzer.phase1.model / analyzer.personaGeneration.engine overrides);
+         *     `issues` lists them. The read-only effective `analyzerPhase0Model` /
+         *     `analyzerPhase1Model` response fields are not references.
+         */
+        delete: operations["deleteAnalyzerEndpoint"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analyzer/endpoints/{endpointId}/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpointId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save (or clear) an analyzer endpoint's API key
+         * @description #3084 decision 3c — stores the key bound to the endpoint base URL's
+         *     origin. Pass `{ "key": null }` to clear it. The key is never returned;
+         *     GET exposes `analyzerEndpointKeyStatus` only.
+         */
+        put: operations["putAnalyzerEndpointKey"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/user/settings/dropped-endpoint-entries/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge dropped analyzer endpoint entries
+         * @description #3084 F5 — marks each named archiveId acknowledged; it stops appearing
+         *     in droppedEndpointEntries. An unknown or already-acknowledged id is
+         *     ignored, not refused.
+         */
+        post: operations["acknowledgeDroppedEndpointEntries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/backups": {
         parameters: {
             query?: never;
@@ -3525,6 +3654,20 @@ export interface components {
                 [key: string]: number;
             };
             /**
+             * @description #3084 — named OpenAI-compatible analyzer endpoints. Written only by
+             *     the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
+             */
+            analyzerEndpoints?: components["schemas"]["AnalyzerEndpoint"][];
+            /** @description Per endpoint id — whether a key is saved and still bound to its base URL's origin. Keys are never returned. */
+            readonly analyzerEndpointKeyStatus?: {
+                [key: string]: components["schemas"]["AnalyzerEndpointKeyStatus"];
+            };
+            /**
+             * @description #3084 F5 — every unacknowledged analyzer-endpoint entry dropped at
+             *     read time (Task 3b.6). Never a key or field value.
+             */
+            readonly droppedEndpointEntries?: components["schemas"]["DroppedEndpointEntrySummary"][];
+            /**
              * @description Number of chapters the generation queue synthesises concurrently
              *     (queue-worker concurrency). Default 1. Pulled from the flat queue
              *     across books; same-book chapters fan out within one stream via the
@@ -3618,6 +3761,15 @@ export interface components {
             analyzerKeepAliveByModel?: {
                 [key: string]: number;
             };
+            /**
+             * @description #3084 — named OpenAI-compatible analyzer endpoints. Written only by
+             *     the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
+             */
+            readonly analyzerEndpoints?: components["schemas"]["AnalyzerEndpoint"][];
+            /** @description Per endpoint id — whether a key is saved and still bound to its base URL's origin. Keys are never returned. */
+            readonly analyzerEndpointKeyStatus?: {
+                [key: string]: components["schemas"]["AnalyzerEndpointKeyStatus"];
+            };
             generationWorkers?: number;
             /** @description srv-2 — auto-snapshot this book's state.json on the cadence below. Default true. */
             backupEnabled?: boolean;
@@ -3628,6 +3780,100 @@ export interface components {
             backupCadence?: "daily" | "weekly";
             /** @description srv-2 — number of snapshots to keep; older ones are pruned. Default 14. */
             backupRetention?: number;
+        };
+        AnalyzerEndpoint: {
+            id: string;
+            name: string;
+            /** Format: uri */
+            baseUrl: string;
+            /** @description `none`, `any`, or a device key such as `cuda:0`. */
+            gpu: string;
+            /**
+             * Format: uri
+             * @description Same origin as baseUrl; may contain `{model}`.
+             */
+            unloadUrl?: string;
+            concurrency: number;
+            requestCeilingMs: number;
+            /** @enum {string} */
+            structuredOutput: "schema" | "json" | "off";
+            /** @enum {string} */
+            reasoningStyle: "reasoning_effort" | "enable_thinking" | "not_controllable";
+            reasoning: string;
+            /** @description 0 = Auto. */
+            maxOutputTokens: number;
+            contextTokens: number;
+            maxInputTokensPerRequest?: number;
+            extraParams?: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description Same fields as AnalyzerEndpoint; everything but id, name, baseUrl and contextTokens has a server default. */
+        AnalyzerEndpointInput: {
+            id: string;
+            name: string;
+            /** Format: uri */
+            baseUrl: string;
+            gpu?: string;
+            /** Format: uri */
+            unloadUrl?: string;
+            concurrency?: number;
+            requestCeilingMs?: number;
+            /** @enum {string} */
+            structuredOutput?: "schema" | "json" | "off";
+            /** @enum {string} */
+            reasoningStyle?: "reasoning_effort" | "enable_thinking" | "not_controllable";
+            reasoning?: string;
+            maxOutputTokens?: number;
+            contextTokens: number;
+            maxInputTokensPerRequest?: number;
+            extraParams?: {
+                [key: string]: unknown;
+            };
+        };
+        /** @enum {string} */
+        AnalyzerEndpointKeyStatus: "set" | "unset" | "origin-mismatch";
+        /**
+         * @description #3084 F5 — issues are {path, message} pairs, never a field or key value:
+         *     a UI shows each one inline next to the named field. path is [] for a
+         *     refusal naming no single field (duplicate-id, not-found, referenced).
+         */
+        AnalyzerEndpointRefusal: {
+            error: string;
+            /** @enum {string} */
+            code: "invalid" | "duplicate-id" | "unload-off-origin" | "not-found" | "referenced";
+            issues: {
+                path: string[];
+                message: string;
+            }[];
+        };
+        AnalyzerEndpointDetectRequest: {
+            /** Format: uri */
+            baseUrl: string;
+            model?: string;
+            apiKey?: string;
+            endpointId?: string;
+            /** @enum {string} */
+            flavor: "llama.cpp" | "llama-swap";
+            allowModelLoad?: boolean;
+        };
+        AnalyzerEndpointDetectResult: {
+            contextTokens: number;
+            /** @enum {string} */
+            source: "llama.cpp /props" | "llama-swap /props";
+        };
+        DroppedEndpointEntrySummary: {
+            /** @description null while the archive append is still pending. */
+            archiveId?: string | null;
+            /** @enum {string} */
+            kind: "endpoint" | "key";
+            endpointId?: string;
+            name?: string;
+            origin?: string;
+            /** @description "path: code" strings, never a value. */
+            issues: string[];
+            /** Format: date-time */
+            droppedAt: string;
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];
@@ -5414,7 +5660,7 @@ export interface components {
          *     catch-all for an unmapped error (the raw message is surfaced verbatim).
          * @enum {string}
          */
-        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "analyzer-timeout" | "analyzer-reasoning-overflow" | "attribution-incomplete" | "attribution-collapse" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention" | "language-unset";
+        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "analyzer-timeout" | "analyzer-reasoning-overflow" | "attribution-incomplete" | "attribution-collapse" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention" | "language-unset" | "analyzer-request-rejected" | "analyzer-invalid-output" | "analyzer-endpoint-missing";
         /**
          * @description srv-27 — advisory post-synthesis audio QA verdict for a rendered
          *     chapter. ADVISORY only: a `suspect` status drives a badge but never
@@ -6697,6 +6943,266 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    createAnalyzerEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyzerEndpointInput"];
+            };
+        };
+        responses: {
+            /** @description Created — updated settings (same shape as GET /api/user/settings) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Invalid endpoint (missing contextTokens, bad id, off-origin unload URL) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+            /** @description An endpoint with this id already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+        };
+    };
+    detectAnalyzerEndpointContext: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyzerEndpointDetectRequest"];
+            };
+        };
+        responses: {
+            /** @description Served context size */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointDetectResult"];
+                };
+            };
+            /** @description Invalid body, missing model / load confirmation, or key origin mismatch (code auth) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code: "invalid" | "model-required" | "model-load-confirmation-required" | "auth";
+                        /** @description Present when `code` is `invalid` — one message per failed field, never a value. */
+                        details?: string[];
+                    };
+                };
+            };
+            /** @description The server could not be reached or did not report n_ctx */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code: "detect-failed";
+                        upstreamStatus?: number;
+                    };
+                };
+            };
+        };
+    };
+    updateAnalyzerEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpointId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyzerEndpointInput"];
+            };
+        };
+        responses: {
+            /** @description Updated settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Invalid endpoint or a changed id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+            /** @description No endpoint with this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+        };
+    };
+    deleteAnalyzerEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpointId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description No endpoint with this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+            /** @description Still referenced by saved settings */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+        };
+    };
+    putAnalyzerEndpointKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpointId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    key: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Malformed body, or a key with a control character (`code` is `invalid`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+            /** @description No endpoint with this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+        };
+    };
+    acknowledgeDroppedEndpointEntries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    archiveIds: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Updated settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Malformed body (archiveIds is not an array of strings) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
             };
         };
     };

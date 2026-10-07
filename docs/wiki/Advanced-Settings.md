@@ -11,7 +11,7 @@ LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
 memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
-attribution — 118 knobs across 12 groups in total. High-risk groups (marked
+attribution — 120 knobs across 12 groups in total. High-risk groups (marked
 with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
@@ -62,8 +62,10 @@ is disabled.
 | Ollama temperature | Sampling temperature for the first analysis attempt | 0.2 | 0–2, step 0.1 | live | medium |
 | Ollama retry temperature | Temp used on invalid-JSON retries | 0.6 | 0–2, step 0.1 | live | medium |
 | Ollama num_predict | Output-token cap for Ollama; -1 = predict until context fills | -1 | integer, min -1 | live | medium |
+| Ollama structured output | "schema" sends the stage's JSON schema as Ollama `format`; "json" asks only for syntactically valid JSON; "off" sends no format. Every reply is still validated and retried once. | schema | schema, json, off | live | medium |
 | Gemini max output tokens | Per-request output-token cap for Gemini | 0 | 0–1048576 | live | medium |
 | Gemini temperature | Sampling temperature for cloud Gemini/Gemma analysis | 0.2 | 0–2, step 0.1 | live | medium |
+| Gemini structured output | "json" sets responseMimeType only; "schema" also sends the stage schema as responseJsonSchema (reduced to Gemini's supported keywords); "off" sends neither. | json | schema, json, off | live | medium |
 | Gemini max input tokens per request | Per-request INPUT-token cap for cloud analyzer passes; body chunks are sized to this | 12000 | 1000–1000000 | live | medium |
 | Gemini thinking idle timeout (ms) | Silence allowed before a Gemini answer starts: the wait for the first chunk, and each gap between thought summaries. 0 = automatic: 2 min for thinking models, else the 45 s idle window | 0 | integer, 0–290000 | live | medium |
 | Gemini request ceiling (ms) | Absolute time limit for one Gemini analysis request attempt | 1800000 | integer, 60000–14400000 | live | medium |

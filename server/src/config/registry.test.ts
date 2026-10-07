@@ -48,6 +48,25 @@ describe('config registry', () => {
     expect(knobByEnv('NOT_A_REAL_ENV')).toBeUndefined();
   });
 
+  it('ships the two structured-output enum knobs with today\'s request as the default (#3084 PR 3b)', () => {
+    expect(knobByEnv('ANALYZER_OLLAMA_STRUCTURED_OUTPUT')).toMatchObject({
+      key: 'analyzer.ollama.structuredOutput',
+      group: 'analyzer-sampling',
+      type: 'enum',
+      options: ['schema', 'json', 'off'],
+      default: 'schema',
+      apply: 'live',
+    });
+    expect(knobByEnv('ANALYZER_GEMINI_STRUCTURED_OUTPUT')).toMatchObject({
+      key: 'analyzer.gemini.structuredOutput',
+      group: 'analyzer-sampling',
+      type: 'enum',
+      options: ['schema', 'json', 'off'],
+      default: 'json',
+      apply: 'live',
+    });
+  });
+
   it('analyzer.engine is not a registered knob (the engine is a saved account setting)', () => {
     expect(getKnob('analyzer.engine')).toBeUndefined();
     expect(knobByEnv('ANALYZER')).toBeUndefined();
