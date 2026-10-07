@@ -17,7 +17,7 @@
    8. {failed:0} → putBookState writes prosodyAnnotated:true watermark.
    9. A rejected runProsodyPasses removes the book from considered (retry-safe). */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
@@ -265,8 +265,10 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
   it('does NOT fire runProsodyPasses for a book that is already analysis-complete on first render (seed-on-mount)', async () => {
     const store = makeStore();
     /* The library hydrates (loaded=true) with a book ALREADY complete — it is
-       seeded into `considered` as the baseline and must not fire. */
-    store.dispatch(librarySlice.actions.hydrate(libResponse([makeBook('b1', 'cast_pending')])));
+       seeded into `considered` as the baseline and must not fire. The book
+       is a background one: the OPEN book is run on open when its watermark is
+       unset (#3435 — see "a skipped book is re-run when it is next opened"). */
+    store.dispatch(librarySlice.actions.hydrate(libResponse([makeBook('b2', 'cast_pending')])));
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
 
     renderLayout(store);
@@ -294,9 +296,11 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
        complete books in one hydrate. That first loaded snapshot is the seed
        baseline — nothing should fire. (Before the fix the seed ran against the
        empty pre-hydrate library, so all 15 books looked brand-new and fired at
-       once — the SSE/GPU/VRAM flood that hung the app on restart.) */
+       once — the SSE/GPU/VRAM flood that hung the app on restart.) The
+       backlog is background books: the open book is run on open when its
+       watermark is unset (#3435). */
     vi.mocked(api.getLibrary).mockResolvedValueOnce(
-      libResponse([makeBook('b1', 'cast_pending'), makeBook('b2', 'cast_pending')]) as never,
+      libResponse([makeBook('b2', 'cast_pending'), makeBook('b3', 'cast_pending')]) as never,
     );
 
     renderLayout(store);
@@ -897,5 +901,239 @@ describe('Layout — prosody auto-trigger writes only into its own book (#3435)'
     expect(s?.emotion).toBeUndefined();
     expect(manuscriptPuts()).toEqual([]);
     expect(watermarkPuts('b1')).toEqual([]);
+  });
+});
+
+/* #3435 (PR #3505 review pass 6, owner option b) — an annotation that
+   arrives while its book is not open is skipped (a write never lands on a
+   stage that names no book), and the book is left un-marked. The skipped work
+   is redone when the book is next opened: the layout re-runs detection
+   (fill-only) for an open, analysis-complete book whose watermark is unset.
+   Runs the REAL thunk and the REAL persistence middleware; the server mocks
+   keep the watermark the way the server does. */
+describe('Layout — a skipped book is re-run when it is next opened (#3435)', () => {
+  const sentence = (chapterId: number, id: number) =>
+    ({ chapterId, id, text: 'Hello.', characterId: 'narrator' }) as never;
+
+  let libBooks: LibraryBook[];
+  let watermarked: Set<string>;
+
+  function stateFor(bookId: string) {
+    const base = defaultStateResponse(bookId);
+    return {
+      ...base,
+      state: { ...base.state, prosodyAnnotated: watermarked.has(bookId) ? true : undefined },
+      manuscriptEdits: { sentences: [sentence(1, 1), sentence(2, 1)], mergedAwayKeys: [] },
+    };
+  }
+
+  const ch1 = { chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'angry' }] };
+  const ch2 = { chapterId: 2, annotations: [{ sentenceId: 1, emotion: 'sad' }] };
+  type Opts = { onAnnotation?: (e: unknown) => void };
+  const emit = (opts: Opts, chapters: unknown[]) => chapters.forEach((c) => opts.onAnnotation?.(c));
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    libBooks = [];
+    watermarked = new Set();
+    const actual = await vi.importActual<typeof import('./prosody-thunk')>('./prosody-thunk');
+    runProsodyPassesMock.mockImplementation((...args: unknown[]) =>
+      (actual.runProsodyPasses as (...a: unknown[]) => unknown)(...args),
+    );
+    vi.mocked(api.getLibrary).mockImplementation(async () => libResponse(libBooks) as never);
+    getBookStateMock.mockImplementation(async (id: string) => stateFor(id));
+    putBookStateMock.mockImplementation(
+      async (id: string, body: { patch?: { prosodyAnnotated?: boolean } }) => {
+        if (body.patch?.prosodyAnnotated === true) watermarked.add(id);
+        if (body.patch?.prosodyAnnotated === false) watermarked.delete(id);
+        return {};
+      },
+    );
+    /* Default: every run emits both chapters at once. */
+    detectEmotionsMock.mockImplementation(async (_id: string, opts: Opts) => {
+      emit(opts, [ch1, ch2]);
+      return { totalAnnotations: 2, annotatedChapters: 2 };
+    });
+    detectInstructMock.mockResolvedValue({ totalAnnotations: 0, annotatedChapters: 0 });
+  });
+
+  afterEach(() => {
+    vi.mocked(api.getLibrary).mockImplementation(async () => ({ authors: [] }) as never);
+  });
+
+  /* Any path: leaving for the Library must not unmount the layout. */
+  function renderAnyPath(store: ReturnType<typeof makeStore>) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/cast']}>
+          <Routes>
+            <Route path="*" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+
+  const settle = (ms: number) =>
+    act(async () => {
+      await new Promise((r) => setTimeout(r, ms));
+    });
+  const manuscriptPuts = () =>
+    putBookStateMock.mock.calls.filter((c) => (c[1] as { slice: string }).slice === 'manuscript');
+  const watermarkPuts = (id: string) =>
+    putBookStateMock.mock.calls.filter(
+      (c) => c[0] === id && (c[1] as { patch: { prosodyAnnotated?: boolean } }).patch?.prosodyAnnotated,
+    );
+  const emotionOf = (store: ReturnType<typeof makeStore>, chapterId: number) =>
+    store.getState().manuscript.sentences.find((x) => x.chapterId === chapterId && x.id === 1)?.emotion;
+
+  it('P6a: a run that crossed a Library trip is finished on reopen, saved to its book only, and the book ends annotated', async () => {
+    /* First run: chapter 1 arrives while the user is on the Library, chapter 2
+       after they reopen the book. */
+    let releaseCh2!: () => void;
+    detectEmotionsMock.mockImplementationOnce(async (_id: string, opts: Opts) => {
+      emit(opts, [ch1]);
+      await new Promise<void>((r) => (releaseCh2 = r));
+      emit(opts, [ch2]);
+      return { totalAnnotations: 2, annotatedChapters: 2 };
+    });
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b1'));
+    await settle(30);
+
+    /* The book finished analysing in the foreground; the Library refresh is
+       where it is first seen complete, so the run starts there. */
+    libBooks = [makeBook('b1', 'cast_pending')];
+    await act(async () => {
+      store.dispatch(uiActions.goHome());
+    });
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
+    expect(emotionOf(store, 1)).toBeUndefined(); // skipped: the Library names no book
+
+    /* Reopen b1 while the run is in flight: no second, concurrent run. */
+    await act(async () => {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    });
+    await settle(50);
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
+
+    /* The re-run applies past the first batch's debounce, so each applied
+       batch is its own PUT. */
+    detectEmotionsMock.mockImplementation(async (_id: string, opts: Opts) => {
+      await new Promise((r) => setTimeout(r, 700));
+      emit(opts, [ch1, ch2]);
+      return { totalAnnotations: 2, annotatedChapters: 2 };
+    });
+    await act(async () => {
+      releaseCh2();
+    });
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1), { timeout: 3000 });
+    await settle(700);
+
+    expect(emotionOf(store, 1)).toBe('angry');
+    expect(emotionOf(store, 2)).toBe('sad');
+    const puts = manuscriptPuts();
+    expect(puts.map((c) => c[0])).toEqual(['b1', 'b1']); // one per applied batch, all to b1
+    expect(JSON.stringify(puts[1][1])).toContain('"emotion":"angry"');
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(2);
+  }, 10_000);
+
+  it('P6b: a run that stays on the Library saves nothing; opening the book re-runs it into that book and marks it', async () => {
+    const store = makeStore(true);
+    renderAnyPath(store); // boots on the Library
+    await settle(30);
+
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+    });
+    await waitFor(() => expect(detectInstructMock).toHaveBeenCalledTimes(1));
+    await settle(700);
+    expect(manuscriptPuts()).toEqual([]);
+    expect(watermarkPuts('b1')).toEqual([]);
+
+    await act(async () => {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    });
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+    await settle(700);
+
+    expect(emotionOf(store, 1)).toBe('angry');
+    const puts = manuscriptPuts();
+    expect(puts).toHaveLength(1);
+    expect(puts[0][0]).toBe('b1');
+  });
+
+  it('reload: a complete book left un-marked is not treated as done by the seed — opening it runs detection (the backlog stays quiet)', async () => {
+    libBooks = [makeBook('b1', 'cast_pending'), makeBook('b2', 'cast_pending')];
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+    await settle(700);
+    expect(detectEmotionsMock).toHaveBeenCalledWith('b1', expect.anything());
+    expect(detectEmotionsMock).not.toHaveBeenCalledWith('b2', expect.anything());
+    expect(emotionOf(store, 1)).toBe('angry');
+    expect(manuscriptPuts().map((c) => c[0])).toEqual(['b1']);
+  });
+
+  it('control: opening a book already marked annotated does not re-run it', async () => {
+    libBooks = [makeBook('b1', 'cast_pending')];
+    watermarked.add('b1');
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b1'));
+    await settle(100);
+
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+  });
+
+  it('control: an open book that is not analysis-complete is not run', async () => {
+    libBooks = [makeBook('b1', 'analysing')];
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b1'));
+    await settle(100);
+
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+  });
+
+  it('no double run: reopening the book and a library transition while its run is in flight start nothing new', async () => {
+    let release!: () => void;
+    detectEmotionsMock.mockImplementation(async (_id: string, opts: Opts) => {
+      await new Promise<void>((r) => (release = r));
+      emit(opts, [ch1, ch2]);
+      return { totalAnnotations: 2, annotatedChapters: 2 };
+    });
+    libBooks = [makeBook('b1', 'cast_pending')];
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      store.dispatch(uiActions.goHome());
+    });
+    await settle(30);
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'voices_pending')));
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    });
+    await settle(50);
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      release();
+    });
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+    await settle(100);
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
   });
 });

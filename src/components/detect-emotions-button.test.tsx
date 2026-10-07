@@ -7,15 +7,17 @@ import { uiSlice } from '../store/ui-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice, scriptReviewActions } from '../store/script-review-slice';
+import { notificationsSlice } from '../store/notifications-slice';
 import { DetectEmotionsButton } from './detect-emotions-button';
 
-const { detectEmotions, detectInstruct } = vi.hoisted(() => ({
+const { detectEmotions, detectInstruct, putBookState } = vi.hoisted(() => ({
   detectEmotions: vi.fn(),
   detectInstruct: vi.fn(),
+  putBookState: vi.fn(async () => ({})),
 }));
 vi.mock('../lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../lib/api')>();
-  return { ...actual, api: { detectEmotions, detectInstruct } };
+  return { ...actual, api: { detectEmotions, detectInstruct, putBookState } };
 });
 
 function makeStore() {
@@ -46,6 +48,7 @@ function makeStore() {
 beforeEach(() => {
   detectEmotions.mockReset();
   detectInstruct.mockReset();
+  putBookState.mockClear();
 });
 
 describe('fs-33 — DetectEmotionsButton', () => {
@@ -100,6 +103,7 @@ describe('fs-33 — DetectEmotionsButton', () => {
         chapters: chaptersSlice.reducer,
         prosody: prosodySlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
+        notifications: notificationsSlice.reducer,
       });
       const yState = {
         manuscript: {
@@ -160,6 +164,41 @@ describe('fs-33 — DetectEmotionsButton', () => {
       await waitFor(() => expect(store.getState().prosody.activeStreams['bX']).toBeUndefined());
       expect(store.getState().manuscript.sentences[0].emotion).toBeUndefined();
       expect(store.getState().manuscript.sentences[0].text).toBe('Y line');
+    });
+
+    it('a run that skipped lines leaves its book un-marked, so it is re-run when next opened, and says so in a toast', async () => {
+      const resolve = deferredRun();
+      const store = makeSwitchableStore();
+      const { unmount } = render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
+
+      /* The user leaves the book: the Manuscript view (and this button) unmounts. */
+      store.dispatch({ type: 'test/switchToY' });
+      unmount();
+      resolve();
+
+      await waitFor(() => expect(store.getState().prosody.activeStreams['bX']).toBeUndefined());
+      expect(putBookState).toHaveBeenCalledWith('bX', { slice: 'state', patch: { prosodyAnnotated: false } });
+      expect(putBookState).not.toHaveBeenCalledWith('bY', expect.anything());
+      const toasts = (store.getState() as unknown as { notifications: { toasts: Array<{ message: string }> } })
+        .notifications.toasts;
+      expect(toasts.map((t) => t.message).join(' ')).toMatch(/not saved/i);
+    });
+
+    it('control: a run that skipped nothing does not touch the watermark or toast', async () => {
+      const resolve = deferredRun();
+      const store = makeSwitchableStore();
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
+      resolve();
+
+      await waitFor(() => expect(store.getState().manuscript.sentences[0].emotion).toBe('angry'));
+      await waitFor(() => expect(store.getState().prosody.activeStreams['bX']).toBeUndefined());
+      expect(putBookState).not.toHaveBeenCalled();
+      const toasts = (store.getState() as unknown as { notifications: { toasts: unknown[] } }).notifications.toasts;
+      expect(toasts).toEqual([]);
     });
 
     it('control: staying on the book applies the annotations', async () => {

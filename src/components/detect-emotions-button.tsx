@@ -8,14 +8,16 @@
    Scope comes from the store (ui.stage.currentChapterId + manuscript.sentences),
    as bookId already does — so manuscript.tsx needs no new props. Both scopes
    share one AbortController + the bookId-keyed prosody substage lock, so only
-   one runs at a time. Per-chapter is manual only and never writes the
-   prosodyAnnotated watermark (that stays the layout.tsx auto-trigger's job). */
+   one runs at a time. Per-chapter is manual only and never sets the
+   prosodyAnnotated watermark (that stays the layout.tsx auto-trigger's job);
+   a run of either scope that skipped lines clears it (#3435). */
 
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
-import { DetectEmotionsError, DetectInstructError } from '../lib/api';
+import { api, DetectEmotionsError, DetectInstructError } from '../lib/api';
+import { notificationsActions } from '../store/notifications-slice';
 import {
   runProsodyPasses,
   buildProsodyProgressPayload,
@@ -105,13 +107,29 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
       });
       const lines = `${totalAnnotations} line${totalAnnotations === 1 ? '' : 's'}`;
-      setStatus(
-        skipped > 0
-          ? 'Some lines were not saved because you left this book — run it again to fill them.'
-          : scope.chapterId != null
-          ? `Tagged ${lines} in this chapter.`
-          : `Tagged ${lines} across ${totalChapters} chapter${totalChapters === 1 ? '' : 's'}.`,
-      );
+      if (skipped > 0) {
+        /* #3435 (PR #3505 review pass 6) — clear the watermark so the layout
+           re-runs this book (fill-only) the next time it is opened, and say so
+           in a toast: leaving the book unmounts this button, so a status line
+           here would never be seen. */
+        void api
+          .putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: false } })
+          .catch(() => {});
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'warn',
+            message:
+              'Some detected emotions were not saved because you left the book — they will be filled in the next time you open it.',
+          }),
+        );
+        setStatus(null);
+      } else {
+        setStatus(
+          scope.chapterId != null
+            ? `Tagged ${lines} in this chapter.`
+            : `Tagged ${lines} across ${totalChapters} chapter${totalChapters === 1 ? '' : 's'}.`,
+        );
+      }
       setPhase('idle');
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
