@@ -7607,7 +7607,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Content type is not `image/jpeg` or `image/png` */
+            /** @description The declared content type is not `image/jpeg` or `image/png`, or the upload content is neither a PNG nor a JPEG (checked by its leading bytes; a valid PNG or JPEG with the other label is accepted) */
             415: {
                 headers: {
                     [name: string]: unknown;
