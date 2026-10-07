@@ -218,9 +218,15 @@ comparison, see the edge list above). The merge step that closes this, run
    defect, so it is never reported here. A row (or group) the live page has that
    your register lacks is reported when `origin/main`'s own copy of this
    register still has it too — the signature of another lane having already
-   published ahead of you. When `origin/main` also lacks it, **who published
-   the live page decides** (#3529). The check finds the commit that stamped the
-   page's `data-publish-id` (the same `git log --all -S` lookup as step 3):
+   published ahead of you. When `origin/main` also lacks it, it is not
+   reported if `origin/main`'s register has **ever** carried that row ID (row
+   IDs are allocated once, so it was discharged there, whoever published the
+   page and in whatever order the lanes merged), or if the row is listed under
+   "Retired carried rows" below. Otherwise **who published the live page
+   decides** (#3529). The check finds the commit that stamped the page's
+   `data-publish-id`: the **oldest** commit that introduced it, which is the
+   commit step 3's `git log --all -S` names, never the merge commit that later
+   brought it to `main`:
    - **reachable from `origin/main`** (a merged publish), or **in your own
      branch's history** (your earlier publish): a row that commit's live view
      carried is a deliberate discharge, or your own row you have since
@@ -228,17 +234,21 @@ comparison, see the edge list above). The merge step that closes this, run
      a union publish for another lane, and FAILS as `unmerged-lane-row`.
    - **on another branch only** (an unmerged lane published): every such row
      is that lane's and FAILS as `unmerged-lane-row` — a brand-new group
-     letter included.
+     letter included, and so does a row in a group this register has dropped
+     entirely, where `--discharging` silences only rows `origin/main` still
+     has.
    - **in no history this checkout has**: FAILS as `unknown-provenance`.
 
    A row ID you share with the live page under a different title FAILS as
-   `row-id-collision` (unless the page is your own earlier publish — then it
-   is your retitle), and so does one you share with `origin/main` under a
-   different title when the merge-base your branch forked from lacks it (the
-   other lane merged first). To publish a **union** — your rows plus another
-   lane's — pass the file you are actually publishing with
-   `--publishing <file>`: a live row your register lacks then passes when that
-   file carries the live page's block for it byte-for-byte.
+   `row-id-collision` (unless the page is your own earlier publish and its
+   stamp carried that row — then it is your retitle), and so does one you
+   share with `origin/main` under a different title when the merge-base your
+   branch forked from lacks it (the other lane merged first). To publish a
+   **union** — your rows plus another lane's — build it with
+   `--build-union <out>` (see step 3) and pass the file you are actually
+   publishing with `--publishing <file>`: the check then requires that file to
+   be exactly your tracked `.html` plus the carried rows' live blocks, with
+   the derived figures regenerated.
    **The command fetches `origin/main` itself, fresh, every run — you do not
    need to `git fetch` by hand first.** It then reads `FETCH_HEAD`, deliberately
    NOT the local `origin/main` ref: `git fetch origin main` only guarantees it
@@ -313,17 +323,39 @@ comparison, see the edge list above). The merge step that closes this, run
        no-op — the point is to keep a genuinely competing-lane row from
        slipping through unreported, not to mute the check wholesale.
    - **`unmerged-lane-row: <ID>`** (#3529) — the live page carries a row that
-     belongs to a lane `origin/main` has not merged (the error names the
-     publish id and its commit). Publishing your tracked file would delete it.
-     It is not yours, so **never name it in `--discharging`**. Either build
-     the union — your tracked `.html` plus that lane's row blocks, copied
-     verbatim from the saved live page — and re-run step 2 with
-     `--publishing <union-file>`, then publish that file in step 4; or
-     coordinate with that lane (`gh pr list --head <its branch>`) and let it
-     merge first.
-   - **`publishing-file: <ID>`** — the `--publishing` file carries that row,
-     but not byte-for-byte as it is live. Copy the live page's block in
-     unchanged; another lane's row is that lane's to edit.
+     belongs to a lane `origin/main` has not merged. The error names the row's
+     **owner**: the commit that first committed it and that commit's branch,
+     with the `gh pr list --head <branch> --state all` that finds its PR. It
+     never names whoever merely carried the row in a union. Publishing your
+     tracked file would delete the row. It is not yours, so **never name it in
+     `--discharging`**. Do one of three things:
+     - **Build the union and publish that.** Re-run step 2 with
+       `--build-union <out>`, e.g. `npm run check:onbox-register --
+       --against-published <saved-file> --build-union <scratch>/union.html`.
+       It writes your tracked `.html` plus each such row's live block, copied
+       verbatim and placed in ID order, with the derived figures (owed count,
+       the group's glance-table count and `gcount`) raised by one per carried
+       row. It then checks that file exactly as `--publishing` would. If that
+       passes, publish **that file** in step 4. Never hand-build or hand-edit
+       a union: `--publishing` refuses anything but this exact file. On
+       2026-10-07 the union was assembled by hand in a throwaway worktree and
+       its strip figures were edited by hand. That file happens to equal what
+       `--build-union` writes, but nothing checked it at the time.
+     - **Let that lane merge first.** Coordinate through its PR.
+     - **Retire the row.** If its PR was closed without merging, add the row
+       to "Retired carried rows" below, by PR.
+   - **`publishing-file: <ID>`** — the `--publishing` file is not exactly the
+     union: it drops or alters one of your tracked rows, carries a row that
+     is not on the live page, carries a live row with changes (another lane's
+     row is that lane's to edit), or its derived figures differ from the
+     regenerated ones. Rebuild it with `--build-union <out>`.
+   - **`retired-carried-row: <ID>`** — a "Retired carried rows" entry the
+     check will not honour: its PR is open or merged (an open lane's row must
+     still be carried), `gh` could not read it, or the table is malformed.
+     Fix or remove the entry. When `gh` is unavailable the entry is accepted
+     with a **`retired-row-warning`** instead — confirm the PR is closed
+     unmerged by hand (`gh pr view <N> --json state,mergedAt`) before you
+     publish.
    - **`row-id-collision: <ID>`** (#3529) — another lane allocated the same ID
      for a different row: either it is live under another title, or it is on
      `origin/main` under another title and absent from the merge-base you
@@ -332,11 +364,13 @@ comparison, see the edge list above). The merge step that closes this, run
      bump your `next-id`, and re-run.
    - **`unknown-provenance`** (#3529) — the live page's publish id is in no git
      history this checkout has (an unfetched branch, or a hand-published page),
-     the page has no token, or the merge-base could not be read; a verdict
-     depended on it, so the check refuses to guess. Fetch every branch —
+     or the page has no token, and a live row's verdict depended on it; or the
+     merge-base could not be read while `origin/main` carries one of your row
+     IDs under another title. The check refuses to guess. Fetch every branch —
      `git fetch origin '+refs/heads/*:refs/remotes/origin/*'` — and re-run.
-     If it still fails, establish by hand who published the page before you
-     publish over it.
+     If a live row is still undecided, do not drop it: carry it with
+     `--build-union <out>` (as for `unmerged-lane-row`) and publish that file.
+     For the merge-base case, run from a clone with full history.
    - **"Cannot verify"** — the check refuses to guess whether an extra row
      is a discharge or a race, and fails closed instead. This is NOT the
      same as the register being behind: pulling `main` on your own machine
@@ -428,12 +462,14 @@ comparison, see the edge list above). The merge step that closes this, run
    **Known limitations** (#3529): provenance is the stamping commit's, so it
    is only as good as the history this checkout has. A page published by a
    branch you have not fetched reads as `unknown-provenance` until you fetch
-   it. A row an unmerged lane published whose ID `origin/main` has since
-   discharged also reads as that lane's row, not a discharge, because the page
-   predates the discharge; confirm the discharge on `main`, then let that lane
-   rebase and republish. A row carried on a merged publish that its stamping
-   commit also committed reads as discharged even if a later revert on `main`
-   removed it. See `checkLiveView`'s own header comment in
+   it, and an `unmerged-lane-row`'s owner reads as unknown the same way. A row
+   carried on a merged publish that its stamping commit also committed reads
+   as discharged even if a later revert on `main` removed it. "`origin/main`
+   has ever carried it" reads the register's whole history, including a
+   `### <ID>` heading inside a fenced example. Each lookup that a failing row
+   needs costs a few seconds of `git log` on this repo, the ever-carried one
+   and the owner one, so a run with several such rows takes a minute or more.
+   See `checkLiveView`'s own header comment in
    `scripts/check-onbox-register.mjs`.
 
    **A live version of this same limitation: the Artifact tool's own publish
@@ -458,8 +494,12 @@ comparison, see the edge list above). The merge step that closes this, run
    live, and only then run the four-step procedure above from that synced
    copy. Two lanes should never be mid-publish on this URL at once — if you
    find one, that is the thing to fix, not the loop.
-4. Only once step 2 passes, publish the tracked `.html`, with the canonical
-   URL above as `url` **and `favicon` set to 📋**.
+4. Only once step 2 passes, publish the file step 2 passed on, with the
+   canonical URL above as `url` **and `favicon` set to 📋**. That is the
+   tracked `.html`, **unless step 2 needed a union**: then publish the union
+   file that `--build-union` wrote (or the one you passed with
+   `--publishing`), never the tracked file. Publishing the tracked file there
+   drops the other lane's rows, which is the #3529 incident itself.
 
    **Provenance, so you can weigh it:** 📋 is the value the 2026-08-23 publish
    set, recorded here at that moment. It is **not** a recovered original — if
@@ -591,6 +631,27 @@ setup rather than repeatedly loading and evicting models.
 > corrected the same day). The honest record from an isolated run is "not
 > available **to this run**," never "does not exist" — leave the actual
 > existence question to whoever runs from an environment that can see it.
+
+## Retired carried rows
+
+When another lane publishes a row to the live view, every later publish has to
+carry that row until the lane merges (step 3's `unmerged-lane-row`). If that
+lane's PR is closed without merging, it never will, and the row would have to be
+carried forever. Record such a row here, with the owning PR, the date the PR
+was closed unmerged, and the reason (no `|` in it). The change goes through a PR
+like any other register edit. `--against-published` then drops the row from the
+set that must be carried, so a publish without it goes green. When `gh` is
+installed and authenticated, the check first confirms that the PR really is
+CLOSED and not merged; an open or merged PR fails the check, naming that PR, so
+this record cannot mute a live lane. **Without `gh`, the check prints a warning
+and accepts the entry,** so confirm by hand with
+`gh pr view <N> --json state,mergedAt` before you publish. `npm run
+check:onbox-register` validates the table's shape: a row ID, a `#<N>` PR
+reference, a `YYYY-MM-DD` date, a non-empty reason, one entry per row, and no
+row this register still carries. Keep the table even when it is empty.
+
+| Row | Owning PR | Closed unmerged | Reason |
+|---|---|---|---|
 
 ---
 
