@@ -1501,7 +1501,7 @@ async function mockUploadManuscript({
   };
 }
 
-async function mockAnalyseManuscript(
+export async function mockAnalyseManuscript(
   manuscriptId: string,
   { onPhase, onHeartbeat }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
@@ -1571,6 +1571,14 @@ async function mockAnalyseManuscript(
         }
       }, 60);
     });
+  }
+  /* The real server mints the manuscript id once at confirm and writes it to
+     state.json, so the analysed book's state always reports the id the
+     client holds. The mock resolves every upload to the one fixture book,
+     so stamp the id it was analysed under onto that book's state. */
+  const analysed = MOCK_BOOK_STATES.get(res.bookId);
+  if (analysed) {
+    MOCK_BOOK_STATES.set(res.bookId, { ...analysed, state: { ...analysed.state, manuscriptId } });
   }
   return {
     bookId: res.bookId,
