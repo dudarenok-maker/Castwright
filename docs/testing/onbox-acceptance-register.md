@@ -216,17 +216,29 @@ comparison, see the edge list above). The merge step that closes this, run
    content drift (per-row body text hash comparison). Your register having rows
    the live page doesn't have yet is the normal reason you're publishing, not a
    defect, so it is never reported here. A row (or group) the live page has that
-   your register lacks is reported ONLY when `origin/main`'s own copy of this
+   your register lacks is reported when `origin/main`'s own copy of this
    register still has it too — the signature of another lane having already
-   published ahead of you. When `origin/main` also lacks it, the row was a
-   deliberate discharge (by this change or an already-merged one), not a race,
-   and is not reported: discharging a row always makes the still-live page look
-   "ahead" of your working copy in this exact shape, and that is expected —
-   **but only if its number is below `origin/main`'s own `next-id` for that
-   group** (#3529). A discharged row was allocated on `main`; one at or above
-   `main`'s marker was added by another unmerged lane and FAILS: publish the
-   union or coordinate with that lane. A row ID you share with the live page
-   under a different title also FAILS — renumber yours.
+   published ahead of you. When `origin/main` also lacks it, **who published
+   the live page decides** (#3529). The check finds the commit that stamped the
+   page's `data-publish-id` (the same `git log --all -S` lookup as step 3):
+   - **reachable from `origin/main`** (a merged publish), or **in your own
+     branch's history** (your earlier publish): a row that commit's live view
+     carried is a deliberate discharge, or your own row you have since
+     dropped, and is not reported. A row that commit did NOT carry rode in on
+     a union publish for another lane, and FAILS as `unmerged-lane-row`.
+   - **on another branch only** (an unmerged lane published): every such row
+     is that lane's and FAILS as `unmerged-lane-row` — a brand-new group
+     letter included.
+   - **in no history this checkout has**: FAILS as `unknown-provenance`.
+
+   A row ID you share with the live page under a different title FAILS as
+   `row-id-collision` (unless the page is your own earlier publish — then it
+   is your retitle), and so does one you share with `origin/main` under a
+   different title when the merge-base your branch forked from lacks it (the
+   other lane merged first). To publish a **union** — your rows plus another
+   lane's — pass the file you are actually publishing with
+   `--publishing <file>`: a live row your register lacks then passes when that
+   file carries the live page's block for it byte-for-byte.
    **The command fetches `origin/main` itself, fresh, every run — you do not
    need to `git fetch` by hand first.** It then reads `FETCH_HEAD`, deliberately
    NOT the local `origin/main` ref: `git fetch origin main` only guarantees it
@@ -242,7 +254,7 @@ comparison, see the edge list above). The merge step that closes this, run
    `origin`, with no offline fallback: you're about to publish to a remote URL
    anyway, so an operator who can't reach the network here can't complete step 4
    either.
-3. **If it fails**, do NOT publish. There are two distinct failure shapes,
+3. **If it fails**, do NOT publish. There are several distinct failure shapes,
    named in the error text:
    - **A row/group named as already live and BEHIND** — this message has TWO
      different causes, and they need opposite fixes; check which one applies
@@ -300,6 +312,31 @@ comparison, see the edge list above). The merge step that closes this, run
        copied from the wrong discharge) is itself a refusal, not a silent
        no-op — the point is to keep a genuinely competing-lane row from
        slipping through unreported, not to mute the check wholesale.
+   - **`unmerged-lane-row: <ID>`** (#3529) — the live page carries a row that
+     belongs to a lane `origin/main` has not merged (the error names the
+     publish id and its commit). Publishing your tracked file would delete it.
+     It is not yours, so **never name it in `--discharging`**. Either build
+     the union — your tracked `.html` plus that lane's row blocks, copied
+     verbatim from the saved live page — and re-run step 2 with
+     `--publishing <union-file>`, then publish that file in step 4; or
+     coordinate with that lane (`gh pr list --head <its branch>`) and let it
+     merge first.
+   - **`publishing-file: <ID>`** — the `--publishing` file carries that row,
+     but not byte-for-byte as it is live. Copy the live page's block in
+     unchanged; another lane's row is that lane's to edit.
+   - **`row-id-collision: <ID>`** (#3529) — another lane allocated the same ID
+     for a different row: either it is live under another title, or it is on
+     `origin/main` under another title and absent from the merge-base you
+     forked from. Renumber YOUR row to the ID the error names (it clears your
+     `next-id`, the live page's highest ID and `origin/main`'s `next-id`),
+     bump your `next-id`, and re-run.
+   - **`unknown-provenance`** (#3529) — the live page's publish id is in no git
+     history this checkout has (an unfetched branch, or a hand-published page),
+     the page has no token, or the merge-base could not be read; a verdict
+     depended on it, so the check refuses to guess. Fetch every branch —
+     `git fetch origin '+refs/heads/*:refs/remotes/origin/*'` — and re-run.
+     If it still fails, establish by hand who published the page before you
+     publish over it.
    - **"Cannot verify"** — the check refuses to guess whether an extra row
      is a discharge or a race, and fails closed instead. This is NOT the
      same as the register being behind: pulling `main` on your own machine
@@ -388,14 +425,16 @@ comparison, see the edge list above). The merge step that closes this, run
        conflicts. If the content seems wrong, investigate manually; otherwise,
        you can proceed to publish.
 
-   **Known limitation:** a row that's live and still genuinely owed but was
-   never actually merged into `main` at all (e.g. published straight from a
-   branch that never merged, or from a PR later reverted) is not
-   distinguishable from a deliberate discharge when its number is below
-   `main`'s `next-id` — it silently reads as discharged rather than being
-   flagged (at or above the marker it IS flagged, #3529). Accepted trade-off, not an
-   oversight; see `checkLiveView`'s own header comment in
-   `scripts/check-onbox-register.mjs` (#2199 review round 3, A3).
+   **Known limitations** (#3529): provenance is the stamping commit's, so it
+   is only as good as the history this checkout has. A page published by a
+   branch you have not fetched reads as `unknown-provenance` until you fetch
+   it. A row an unmerged lane published whose ID `origin/main` has since
+   discharged also reads as that lane's row, not a discharge, because the page
+   predates the discharge; confirm the discharge on `main`, then let that lane
+   rebase and republish. A row carried on a merged publish that its stamping
+   commit also committed reads as discharged even if a later revert on `main`
+   removed it. See `checkLiveView`'s own header comment in
+   `scripts/check-onbox-register.mjs`.
 
    **A live version of this same limitation: the Artifact tool's own publish
    loop (2026-08-26).** This whole procedure assumes the race is between PRs
