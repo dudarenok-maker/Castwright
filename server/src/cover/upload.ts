@@ -1,9 +1,10 @@
 /* Local-disk cover upload pipeline (plan 40).
 
-   - validateUpload(buffer, mimeType): throws UploadError on size/MIME,
-     including a MIME label that disagrees with the magic bytes.
+   - validateUpload(buffer, mimeType): throws UploadError on size/MIME unless
+     the magic bytes are a PNG or JPEG; returns the sniffed type (the label
+     only gates the allowlist, so a real JPEG named .png still uploads).
    - writeUploadedCover(buffer, mimeType, destPath): transcodes PNG→JPEG
-     via sharp (q=85), writes atomically (tmp + rename) — same pattern
+     via sharp (q=85), decode-validates JPEG (bytes kept), writes atomically (tmp + rename) — same pattern
      as `downloadCover` in openlibrary.ts.
    - patchStateLocalCover(bookDir, originalFilename): replaces
      state.json.coverImage with the `source: 'local'` shape, dropping
@@ -48,7 +49,7 @@ export interface CoverFraming {
 export function validateUpload(
   buffer: Buffer | undefined,
   mimeType: string | undefined,
-): asserts buffer is Buffer {
+): UploadMimeType {
   if (!buffer || buffer.length === 0) {
     throw new UploadError('empty', 'Upload body is empty.');
   }
@@ -61,11 +62,14 @@ export function validateUpload(
   if (!mimeType || !(ACCEPTED_MIME_TYPES as readonly string[]).includes(mimeType)) {
     throw new UploadError('invalid_mime', `Unsupported MIME type: ${mimeType ?? 'unknown'}`);
   }
-  // The declared type is client-controlled and sharp picks its loader from the
-  // bytes, so the bytes must agree with the label before anything decodes them (#3533).
-  if (sniffMime(buffer) !== mimeType) {
-    throw new UploadError('invalid_mime', `Upload content does not match MIME type: ${mimeType}`);
+  // The declared type is client-controlled (browsers take it from the file
+  // extension) and sharp picks its loader from the bytes, so the bytes choose the
+  // branch. A valid PNG/JPEG with the wrong label is still accepted (#3533).
+  const sniffed = sniffMime(buffer);
+  if (!sniffed) {
+    throw new UploadError('invalid_mime', 'Upload is not a PNG or JPEG image.');
   }
+  return sniffed;
 }
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -93,6 +97,13 @@ export async function writeUploadedCover(
       );
     }
   } else {
+    // Keep the original bytes (no re-encode), but a bare FF D8 FF prefix is not
+    // enough: decode it so non-image bytes are never stored as the cover.
+    try {
+      await sharp(buffer).raw().toBuffer();
+    } catch (e) {
+      throw new UploadError('transcode_failed', `JPEG decode failed: ${(e as Error).message}`);
+    }
     jpegBytes = buffer;
   }
 
