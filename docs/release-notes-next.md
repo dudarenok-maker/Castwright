@@ -373,6 +373,10 @@ Two chains land together. The first stops a refusal being issued against a pessi
 - **Edits to a chapter awaiting re-attribution are replaced** — If you edit speakers in a chapter that is waiting to be re-attributed, re-attribution replaces those edits (#3435).
 - **Soft analysis stops read "needs action"** — Soft analysis stops (cast detection pending, resume required) show a "needs action" note instead of a red error (#3435).
 - **Start fresh checks the book folder before deleting** — Start fresh now verifies the book folder before deleting analysis files, so a renamed book's stale path can't lose another book's files (#3503).
+- **Voice-match no longer saves another book's cast** — Confirm's voice-match waits for its own book's cast, and a main run's cast update, late analysis results and an upload's manuscript id only land in the book the slices hold, so a book switch mid-run can't write one book's cast into another (#3435, PR #3505).
+- **Emotion detection no longer writes into another book** — Detected emotions and instructions, from the auto-trigger and from a manual Detect run, are applied only while their own book is open; the Detect emotions button binds to the open book (#3435, PR #3505).
+- **Detected delivery directions are saved right away** — Detected instructions are persisted like detected emotions, instead of waiting for the next unrelated save (#3435, PR #3505).
+- **An analysed book whose emotion detection didn't finish is re-run when you next open it** — Opening an analysis-complete book whose emotion watermark is unset runs detection again, fill-only and once per visit, never alongside a run already in flight for it; a run that skipped work while the book was away is re-run at once if the book is open again when it ends. A manual Detect run that skipped lines clears the watermark and says so in a toast (#3435, PR #3505).
 
 ---
 
