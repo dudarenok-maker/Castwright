@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
-# 285 — Analysis failure bookkeeping: explicit phase and completeness markers (#3435)
+# 287 — Analysis failure bookkeeping: explicit phase and completeness markers (#3435)
 
-> Status: draft — **plan approved by the owner on 2026-10-03 (O4)**, after plan checks 1–3 and owner decisions A–C, E–H and O1–O3. Implementation is a new PR superseding #3439, with the normal review gate. No fourth check.
+> Status: active — implemented on `fix/server-failure-phase-markers` (T1–T7), not yet merged or on-box accepted. **Plan approved by the owner on 2026-10-03 (O4)**, after plan checks 1–3 and owner decisions A–C, E–H and O1–O3. Implementation is a new PR superseding #3439, with the normal review gate. No fourth check.
 >
 > **Line numbers** in this plan are on **`origin/main` at c64943ff** (2026-10-03), like the spec. c64943ff differs from the previous basis 6f01fa20 only in test files, so production lines are unchanged; test-file lines were re-derived. Each citation names a symbol or the code at that line; if `origin/main` has moved, re-derive the line from the symbol before editing. Nothing is cited from #3439's head.
 >
@@ -423,7 +423,7 @@ Frontend (`src/views/analysing.test.tsx`, `src/store/analysis-stream-middleware.
 | O2 control: `on a book that has not reached Confirm, the same Retry still ends resume_required` | same | — |
 | Hint snapshot: a mid-run Exclude is ignored by S14 | same | live hints read |
 | Main run on a confirmed book keeps designed voice fields (invariant 6) | `analysis.test.ts` | — (control) |
-| `GET book-state: stage1Ready, resumeRequired, unattributedChapterIds` (no stage1 / pending / complete / reached Confirm → resumeRequired false) | `book-state.test.ts` (**slow**) | fields absent |
+| `GET book-state: stage1Ready, resumeRequired, unattributedChapterIds` (no stage1 / pending / complete / reached Confirm → resumeRequired false). Amended (PR #3505 gate pass 1): past Confirm, a chapter whose sentences are in manuscript-edits.json (pending included) is omitted unless it has a failure record | `book-state.test.ts` (**slow**) | fields absent |
 
 Frontend:
 
@@ -482,7 +482,7 @@ Frontend:
 >
 > Every analysis job ending — Pause, an error, an overflow, a quota stop — now aborts its in-flight model calls; in-flight chapters are left for the next Resume or Retry. This supersedes #3084 P20/N4 ("in-flight work finishes") on the main route. A 60 s drain deadline guarantees the analysis-busy flag and the Ollama pin are released (#3435).
 >
-> A non-fresh Resume while a stopped run is still draining is refused for a moment ("still finishing the chapters it had started") (#3435).
+> A non-fresh Resume while a stopped run is still draining is refused for a moment ("still stopping") (#3435).
 >
 > A Pause between chapters, or after attribution, now ends the run `aborted` with nothing persisted; it no longer stitches and saves a partial book. A halted pipelined run no longer finalises a partial cast (#3435).
 >
@@ -498,7 +498,7 @@ Frontend:
 
 **Other T7 steps:**
 - **Reviewer catalogue** (`.claude/skills/pr-review-gate/references/reviewer-brief.md`): port entries #17 and #18 from 9a063ea6 (`git show 9a063ea6:.claude/skills/pr-review-gate/references/reviewer-brief.md`). Add "a sentinel that is also a valid value" and "a flag read as 'phase N finished' that is written before phase N".
-- **On-box register** (Before-shipping step 3): add the two rows under "On-box acceptance owed" to `docs/testing/onbox-acceptance-register.md`, update the live view `docs/testing/onbox-acceptance-register-live-view.html`, run `npm run register:build` and `npm run check:onbox-register`, and publish per the register's own "Live view" procedure.
+- **On-box register** (Before-shipping step 3): add the three rows under "On-box acceptance owed" to `docs/testing/onbox-acceptance-register.md`, update the live view `docs/testing/onbox-acceptance-register-live-view.html`, run `npm run register:build` and `npm run check:onbox-register`, and publish per the register's own "Live view" procedure.
 - **#3436:** post a comment re-scoping it (spec §2.6).
 - **#3084:** comment that decision E supersedes P20/N4 on the main route, linking the rewritten test.
 - **#3436:** include the full writer list (spec §2.6), including the exclude toggle an Include calls before its subset POST (A17).
@@ -507,7 +507,7 @@ Frontend:
   - restructure does not remap chapter-keyed analysis state (records, `chapterCast`, P);
   - **decision C:** a better treatment for included chapters with no narratable text (auto-exclude at analysis, or skip at generation and count the chapter complete). This PR only changes the generation copy.
 - **Close #3439** with a pointer to the new PR.
-- `docs/features/INDEX.md`: keep the 285 entry current.
+- `docs/features/INDEX.md`: keep the 287 entry current.
 
 ## Test plan
 
@@ -529,10 +529,12 @@ The per-task mutation checks are the mutant battery; there is no out-of-repo mut
 
 1. **(mock) Disabled while running.** Open `#/books/sb/generate`. In the browser console, seed a manuscript id if it is empty and dispatch a raw `analysis/setActiveStream` running main snapshot through `window.__store__` (the e2e spec's steps 1–2). Re-analyse and Include are disabled and read "Pause the analysis first"; dispatch `setPaused` and they come back.
 2. **(real) A Retry that fails stays failed.** Open a book with an attribution row on the Analysing view (`#/books/<id>/analysing`). Stop the analyzer, Retry. The row stays, labelled "Speaker attribution". Reload; it is still there.
-3. **(real) Refused while running, then allowed.** Start an analysis; during Phase 1 the Retry buttons are disabled. Pause. Click Retry at once: either it runs, or the row says the analysis is still finishing; a few seconds later Retry runs. On a second browser that never saw the run start, Retry during the run shows the server's message on the row.
+3. **(real) Refused while running, then allowed.** Start an analysis; during Phase 1 the Retry buttons are disabled. Pause. Click Retry at once: either it runs, or the row says the analysis is still stopping; a few seconds later Retry runs. On a second browser that never saw the run start, Retry during the run shows the server's message on the row.
 4. **(real) An unfinished book asks to resume.** In sequential mode (so stage1 is written before attribution), halt a main run part-way through attribution. Retry a failed row. (In pipelined mode a halt during Phase 0 leaves no stage1, and the attribution rows instead read "Attributed when you resume the analysis." with no Retry — check that too.) The phase card shows "… still need attribution — resume the analysis to finish the book", no red toast. Reload: the line and "Resume analysis" are still there. Resume; the run finishes and routes to Confirm.
 5. **(real) A done book stays done.** On a generated book, Re-analyse one chapter and stop the analyzer mid-run. The library still shows the book as generated; the Generate view row shows the failure with Re-analyse. Start the analyzer and click it: the chapter re-analyses and saves, even if another chapter is still unfinished.
 6. **(real) Start fresh un-confirms.** On a confirmed book, Start fresh: the library shows "Analysing" until the run finishes and you confirm again.
+7. **(real) Past-Confirm edits rule.** On a confirmed book with a sample or handoff-less chapter (no cache take, sentences present in manuscript-edits.json), the Generate view shows no unfinished row for it; a chapter with a failure record still does.
+8. **(real) Retry result routing.** A Retry that returns a `result` on a castConfirmed book stays on the Analysing view (no jump to Confirm); the same Retry on an unconfirmed book routes to Confirm like a main result.
 
 ### On-box acceptance owed
 
@@ -540,6 +542,7 @@ Recorded in `docs/testing/onbox-acceptance-register.md` by T7:
 
 1. **Abort and drain on a local Ollama analyzer.** (a) Pipelined run, Pause mid-Phase 1, click Retry immediately: refused with the draining message. (b) Same, but force a halt instead (stop the model mid-Phase 1 so one chapter throws). In both, observe in the server log `[analysis] main run drained manuscript=<id>` **before** `[analysis-subset] start manuscript=<id>`, no cache or edits write from the main job after the drained line, no `drain deadline exceeded` line, and `ollama ps` showing the model released after the drain. Note each drain's duration.
 2. **A Resume on a cast-confirmed book with designed voices** (invariant 6; the 2026-07-14 voice-strip incident class). After the run, every designed voice field is intact in cast.json.
+3. **The background emotion re-run yields to and is aborted by real work on a real analyzer** (B106; #3435). Open a book whose `state.json` has `prosodyAnnotated: false` and confirm the "Detecting emotions" re-run starts. Mid-run, (a) start an analysis, then separately (b) switch to another book, then separately (c) queue a chapter render. In all three, the server log shows the prosody requests for that book stop (no further prosody calls for it) and `state.json` still has `prosodyAnnotated: false`; in (c) Generate is never disabled and the pill clears. Reopen the book and confirm the run resumes. Then reload the app mid-run and reopen the book: the run starts again (it marked the book `false` as it started). Cover: the open-time trigger re-runs only an explicit `false`, never an unset watermark (pinned in mock mode by `e2e/prosody-rerun-on-open.spec.ts`; the real-analyzer abort is only provable on the box).
 
 ## Out of scope
 
@@ -547,6 +550,26 @@ Recorded in `docs/testing/onbox-acceptance-register.md` by T7:
 - #3437: Start fresh displacement stragglers.
 - Restructure remapping (follow-up issue).
 - A better treatment for chapters with no narratable text beyond the copy (decision C follow-up).
+
+## Implementation notes
+
+Deviations and rulings made during the build (recorded in the run ledger as "Ruling:" lines):
+
+- **`phase1Dispatch` throws on abort, in T2.** The preflight ruling had T2 skip on `signal.aborted` and T3 convert it to a throw; the ledger reversed that. T2 throws `AnalysisAbortedError` on `signal.aborted` and T3's Item A-1 test ("Pause between chapters ends aborted, no persist") moved into T2, because the skip let a Pause between chapters end as success with a partial persist, a regression against `main`. The plan's own T2 and T3 task text is stale on this point.
+- **Subset Phase-1 recording (S11)** landed in T4, whose title names it, not T2.
+- **T3 regressions** (rename-midrun and the H1 guard 14 vs 13) were branch regressions and were fixed in T3, not deferred; the `user-settings` ollama-url failure is an artifact of the mandated `OLLAMA_URL` env.
+- **T3 mutation 4** is unpinnable by construction (halting set in the same sync block as the pool-local aborted flag); it was replaced with "drop both the halting/ended and pool-local checks", which turns the `markPhase0ChapterComplete` wake test red.
+- **`restoreFromServer` staleness (T3 minor 4)** is a defect: it had no staleness re-check after its awaits and could overwrite a newer subset snapshot, so it was fixed in the same round.
+- **T4 same-round fixes:** the `cast_incomplete` copy no longer says "Retry below" on the Generate view, the title list in that message is bounded, and the stage-1-existed plus non-target blocking-chapter branch and "S3/S4 never clear an attribution record at Phase 0" are now pinned. The main route's `phase0FailedCount` stop first kept "Retry below"; the final review changed it to the same `castIncompleteMessage(titles)` copy, because its message becomes the top-bar pill's `haltReason` on every view.
+- **G3 guard bump 2 → 3** is the guard's documented maintenance (census re-measured), not a swallow.
+- **T5 → T6:** the subset persist set its flags before S14 as an interim; T6 moved flag-setting inside S14's pass branch and asserts `confirmReached` absent and `takesPersisted` false on the `resume_required` path.
+- **Incidental fix #3503:** Start fresh now verifies the book folder before deleting analysis files (found in T5, fixed in a510d8f9).
+- **T6 `castIncomplete` mount-arming (b)** is kept per the spec's arming row, but a `castIncomplete` armed on mount does not auto-resume after a reload (`analysisStarted` unset): the user clicks Resume once. The double POST that arming exposed was fixed. Arming (b) has no observable consumer, and neither it nor its mount-read keying is tested; whether to drop it or make it imply `analysisStarted` is an owner question. Because it is inert, the plan's T6 mutation "arm `castIncomplete` from every refresh" is no longer pinned by any test.
+- **T5 regression fixed in passing (b4486856):** a stale `vi.mock` of `analysis-cache.js` in `analysis.stage2-estimate-label` lacked `hasCurrentTake`; it now passes the real module through via `importOriginal`.
+- **D1 copy placement:** the refused main-start message started under the Start button (T3); T4 moved it onto the needs-action line, as the spec wants.
+- **A15 ("each task green on its own") did not hold at two task tips:** the T2 tip (527c4d8f) failed `analysis.rename-midrun` and the H1 guard, and the T5 tip (e800d319) failed `analysis.stage2-estimate-label`. Both were fixed in later commits (T3, and b4486856 respectively); the branch tip is green.
+- **Past-Confirm edits rule (e2dc611b; documented after PR #3505 gate pass 1).** For a book that has reached Confirm, `unattributedChapterIds` omits any active chapter whose sentences are present in manuscript-edits.json (edits are what generation renders from; it rebuilds the cache from them on every Generate request), including a pending (P) chapter. A chapter with a failure record keeps its gap regardless. Before Confirm the list is unchanged. Owner-reversible. Owner question: should a pending (P) take on a book past Confirm show as unfinished? Today it does not (S0 sample takes are curated; an M8c pending take on a confirmed book is reachable only by deep-linking to the Analysing view).
+- **Retry `result` routing.** A Retry `result` on a castConfirmed book stays on the Analysing view (does not route to Confirm); on an unconfirmed book it routes to Confirm like a main result (PR #3505 gate pass 1).
 
 ## Ship notes
 

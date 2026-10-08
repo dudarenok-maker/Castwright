@@ -109,6 +109,42 @@ export interface ChaptersState {
       path only). Optional: absent until a hydrate carries one, so the existing
       ChaptersState test literals need no edit. */
   renderedInstructByChapter?: Record<number, Record<number, string>>;
+  /** #3435 (decision F, O2) — chapters whose analysis did not finish
+      (non-excluded, no current take, or a failure record), keyed by chapter
+      id, with the note the Generate row shows. Hydrated from the book-state
+      GET; a subset `result` for a chapter clears its entry and a subset
+      failure sets it. Optional: absent until a hydrate or a subset run
+      writes one, so the existing ChaptersState test literals need no edit. */
+  analysisGapById?: Record<number, { message: string }>;
+}
+
+/** #3435 — the Generate row's note for a chapter with no current take and no
+    failure record of its own. */
+export const ANALYSIS_GAP_MESSAGE = "Analysis didn't finish for this chapter.";
+
+/** #3435 — the book-state's analysis facts a gap is derived from. */
+type AnalysisGapFacts = {
+  unattributedChapterIds?: number[];
+  failedChapterErrors?: Record<string, { message: string }>;
+};
+
+/* #3435 — the server's gaps: chapters with no current take, and every failure
+   record (a record's own message wins over the generic note). Excluded
+   chapters get no entry. */
+function analysisGapsFrom(
+  chapters: Array<{ id: number; excluded?: boolean }>,
+  analysis: AnalysisGapFacts | undefined,
+): Record<number, { message: string }> {
+  const included = new Set(chapters.filter((c) => !c.excluded).map((c) => c.id));
+  const gaps: Record<number, { message: string }> = {};
+  for (const id of analysis?.unattributedChapterIds ?? []) {
+    if (included.has(id)) gaps[id] = { message: ANALYSIS_GAP_MESSAGE };
+  }
+  for (const [key, record] of Object.entries(analysis?.failedChapterErrors ?? {})) {
+    const id = Number(key);
+    if (included.has(id)) gaps[id] = { message: record.message };
+  }
+  return gaps;
 }
 
 const initialState: ChaptersState = {
@@ -143,6 +179,24 @@ export const chaptersSlice = createSlice({
     },
     clearLastError: (s) => {
       s.lastError = null;
+    },
+
+    /** #3435 — a subset run (Re-analyse / Include) failed for this chapter:
+        its Generate row shows `message` with a Re-analyse control. */
+    setAnalysisGap: (s, a: PayloadAction<{ chapterId: number; message: string }>) => {
+      (s.analysisGapById ??= {})[a.payload.chapterId] = { message: a.payload.message };
+    },
+    /** #3435 — a subset `result` for this chapter: its analysis finished. */
+    clearAnalysisGap: (s, a: PayloadAction<number>) => {
+      if (s.analysisGapById) delete s.analysisGapById[a.payload];
+    },
+    /** #3435 — replace the gaps from a book-state read (the server's truth),
+        e.g. after a main `result`, which skips the layout's hydrate. */
+    setAnalysisGapsFromBookState: (
+      s,
+      a: PayloadAction<{ chapters: Array<{ id: number; excluded?: boolean }>; analysis?: AnalysisGapFacts }>,
+    ) => {
+      s.analysisGapById = analysisGapsFrom(a.payload.chapters, a.payload.analysis);
     },
 
     /** fs-26 — after a per-character splice rewrites a chapter's audio in
@@ -229,6 +283,9 @@ export const chaptersSlice = createSlice({
          gating both have a truthful frame of reference the instant
          chapters land. */
       if (bookId) s.currentBookId = bookId;
+      /* #3435 — the gaps are left alone: a main `result` can still carry a
+         flagged chapter (decision B), so the Confirm route's book-state re-read
+         replaces them from the server (setAnalysisGapsFromBookState). */
       /* Server emits `chapters[i].characters = {}` from analysis; the
          per-chapter speaker map is recoverable from sentences. Without
          this seeding the Generate view's expanded chapter row shows no
@@ -284,6 +341,13 @@ export const chaptersSlice = createSlice({
         /** fs-58 — render-time sentence→instructHash map per chapter (1.7b
           liveInstruct path only). Absent → left empty. */
         renderedInstructByChapter?: Record<number, Record<number, string>>;
+        /** #3435 — the book-state's analysis gaps: chapters with no current
+          take, and per-chapter failure records. Absent (older server) → no
+          gaps. Excluded chapters get no entry. */
+        analysis?: {
+          unattributedChapterIds?: number[];
+          failedChapterErrors?: Record<string, { message: string }>;
+        };
       }>,
     ) => {
       const {
@@ -296,8 +360,10 @@ export const chaptersSlice = createSlice({
         renderedSpeakersByChapter,
         renderedTextByChapter,
         renderedInstructByChapter,
+        analysis,
       } = a.payload;
       if (bookId) s.currentBookId = bookId;
+      s.analysisGapById = analysisGapsFrom(chapters, analysis);
       s.renderedSpeakersByChapter = renderedSpeakersByChapter ?? {};
       s.renderedTextByChapter = renderedTextByChapter ?? {};
       s.renderedInstructByChapter = renderedInstructByChapter ?? {};

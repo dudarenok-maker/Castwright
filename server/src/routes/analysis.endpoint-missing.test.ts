@@ -125,6 +125,10 @@ describe('analysis selection call sites report analyzer-endpoint-missing (#3084 
       engine: 'gemini',
       replay: { logs: [], lastPhase: null, lastEta: null, lastCastUpdate: null, failedByChapterId: new Map(), lastSeriesPrior: null, warnings: new Map() },
       lastDiskWriteAt: 0,
+      ended: false,
+      halting: false,
+      left: false,
+      liveWork: 0,
     };
     const keepAlive = setInterval(() => {}, 100_000);
     clearInterval(keepAlive);

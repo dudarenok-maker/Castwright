@@ -989,6 +989,10 @@ export function AnalysisPill({ data }: { data: AnalysisPillData }) {
     isSubset && subsetChapterCount && subsetChapterCount > 0
       ? `${subsetChapterCount} chapter${subsetChapterCount === 1 ? '' : 's'}`
       : phaseLabel;
+  /* #3435 — a subset that stopped for the user (needs-action) is no longer
+     retrying anything and its phase label is stale: the server's reason is the
+     useful part, so it stands alone after the label. */
+  const needsActionSubsetWithReason = isSubset && state === 'needs-action' && !!haltTrim;
   return (
     <button
       onClick={onClick}
@@ -999,9 +1003,11 @@ export function AnalysisPill({ data }: { data: AnalysisPillData }) {
     >
       {v.icon}
       <span className="tabular-nums">
-        {v.label} · {state === 'running' && isSubset ? subsetSecondary : phaseLabel}
+        {needsActionSubsetWithReason
+          ? `${v.label} · ${haltTrim}`
+          : `${v.label} · ${state === 'running' && isSubset ? subsetSecondary : phaseLabel}`}
         {state === 'running' && ` · ${percent}%`}
-        {(state === 'halted' || state === 'needs-action') && haltTrim && ` · ${haltTrim}`}
+        {(state === 'halted' || state === 'needs-action') && !needsActionSubsetWithReason && haltTrim && ` · ${haltTrim}`}
       </span>
     </button>
   );

@@ -88,6 +88,61 @@ describe('runProsodyPasses', () => {
     );
   });
 
+  /* #3435 — an annotation for a book that is no longer the open one is
+     counted, not written into the slices that now hold another book. */
+  it('skips and counts annotations from both passes while canApply returns false', async () => {
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onAnnotation?.({ chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'angry' }] });
+        return { totalAnnotations: 1, annotatedChapters: 1 };
+      },
+    );
+    vi.mocked(api.detectInstruct).mockImplementation(
+      async (_bookId: string, opts: DetectInstructOpts = {}) => {
+        opts.onAnnotation?.({ chapterId: 1, annotations: [{ sentenceId: 1, instruct: 'gasp' }] });
+        return { totalAnnotations: 1, annotatedChapters: 1 };
+      },
+    );
+
+    const dispatch = vi.fn();
+    const skipping = await runProsodyPasses(bookId, { dispatch, canApply: () => false });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(skipping.skipped).toBe(2);
+
+    const applying = await runProsodyPasses(bookId, { dispatch, canApply: () => true });
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(applying.skipped).toBe(0);
+  });
+
+  /* #3435 — a chapter with rendered audio keeps its text: its instruct-pass
+     annotations are dropped, uncounted; its emotions still apply. */
+  it('drops, without counting, the instruct annotations of a chapter holdsAudio names', async () => {
+    const emotions = { chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'angry' }] };
+    const rendered = { chapterId: 1, annotations: [{ sentenceId: 1, text: 'Ah! Hi.', vocalization: true }] };
+    const fresh = { chapterId: 2, annotations: [{ sentenceId: 1, text: 'Ah! Hi.', vocalization: true }] };
+    vi.mocked(api.detectEmotions).mockImplementation(
+      async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
+        opts.onAnnotation?.(emotions);
+        return { totalAnnotations: 1, annotatedChapters: 1 };
+      },
+    );
+    vi.mocked(api.detectInstruct).mockImplementation(
+      async (_bookId: string, opts: DetectInstructOpts = {}) => {
+        opts.onAnnotation?.(rendered);
+        opts.onAnnotation?.(fresh);
+        return { totalAnnotations: 2, annotatedChapters: 2 };
+      },
+    );
+
+    const dispatch = vi.fn();
+    const res = await runProsodyPasses(bookId, { dispatch, holdsAudio: (id) => id === 1 });
+    expect(dispatch.mock.calls.map((c) => c[0])).toEqual([
+      manuscriptActions.applyDetectedEmotions(emotions),
+      manuscriptActions.applyDetectedInstruct(fresh),
+    ]);
+    expect(res.skipped).toBe(0);
+  });
+
   it('increments failed when detectEmotions reports a chapter-failed', async () => {
     vi.mocked(api.detectEmotions).mockImplementation(
       async (_bookId: string, opts: DetectEmotionsOpts = {}) => {
