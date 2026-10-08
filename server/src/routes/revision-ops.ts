@@ -24,6 +24,7 @@ import {
   parseSelection,
   readRevisions,
   revisionOpLockKey,
+  revisionsFailureText,
   toRevisionsState,
   type ChapterRef,
 } from '../workspace/revisions-store.js';
@@ -110,7 +111,7 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/accept', async (req: Requ
     console.error('[revision-ops] accept failed', e);
     /* Plan 285 — the store takes the per-book revisions lock, whose key embeds
        the absolute book path. Same curation as every whole-request site. */
-    return res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to accept revision.') });
+    return res.status(500).json({ error: requestFailureMessage(e, revisionsFailureText(e, 'Failed to accept revision.')) });
   }
 });
 
@@ -169,7 +170,7 @@ revisionOpsRouter.post('/:bookId/revisions/:revisionId/reject', async (req: Requ
     });
   } catch (e) {
     console.error('[revision-ops] reject failed', e);
-    return res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to reject revision.') });
+    return res.status(500).json({ error: requestFailureMessage(e, revisionsFailureText(e, 'Failed to reject revision.')) });
   }
 });
 
@@ -182,6 +183,6 @@ revisionOpsRouter.post('/:bookId/drift/:driftId/dismiss', async (req: Request, r
     return res.json(toRevisionsState(bookId, file));
   } catch (e) {
     console.error('[revision-ops] dismiss failed', e);
-    return res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to dismiss drift.') });
+    return res.status(500).json({ error: requestFailureMessage(e, revisionsFailureText(e, 'Failed to dismiss drift.')) });
   }
 });

@@ -12,7 +12,10 @@
      dropped) and surfaced by both the single-book route (whole
      RevisionsState + drift, even with an empty cast) and the bulk
      GET /api/revisions ({ pending, drift }); a non-array value falls back
-     to []; a corrupt file 500s (raw parse error); a lock timeout 500s with the curated contention message.
+     to []; a corrupt file 500s with a fixed sentence (plan 286 Task 3 — never
+     the raw parse error, which can embed a workspace path; a newer-schema file
+     keeps UnsupportedSchemaError's own upgrade sentence); a lock timeout 500s
+     with the curated contention message.
 
 
    Workspace tempdir + supertest pattern matches book-state.reparse.test.ts. */
@@ -31,6 +34,16 @@ vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
   return { ...real, readRevisions: vi.fn(real.readRevisions) };
 });
+
+/* Plan 286 Task 3 (invariant 8) — a store failure whose message embeds an
+   absolute path. Every path-freedom assertion in this file drives one of
+   these: an `EISDIR` fixture's message carries no path, so asserting its
+   absence would prove nothing. */
+const pathError = () =>
+  Object.assign(
+    new Error("EPERM: operation not permitted, open 'C:\\SECRET-WORKSPACE\\book\\.audiobook\\revisions.json'"),
+    { code: 'EPERM' },
+  );
 
 const AUTHOR = 'Drift Test';
 const SERIES = 'Standalones';
@@ -609,6 +622,29 @@ describe('GET /api/books/:bookId/revisions — pending read through the store (p
     writeFileSync(revisionsPath(), '{"pending": [');
     const res = await request(app).get(`/api/books/${bookId}/revisions`);
     expect(res.status).toBe(500);
+  });
+
+  /* Plan 286 Task 3 (invariant 8, OD26) — the single-book poll's 500 is a fixed
+     sentence; never the fs error's own text, which embeds the absolute
+     workspace path and from Task 14 would reach a client toast. */
+  it('plan 286 — an unreadable revisions.json answers a fixed sentence, not the fs error', async () => {
+    const store = await import('../workspace/revisions-store.js');
+    vi.mocked(store.readRevisions).mockRejectedValueOnce(pathError());
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to compute revisions.' });
+    expect(res.text).not.toContain('SECRET-WORKSPACE');
+  });
+
+  /* The one class that keeps its own text: UnsupportedSchemaError's message is
+     fixed and path-free by construction, and tells the user to upgrade. */
+  it('plan 286 — a newer-schema file keeps its own upgrade sentence', async () => {
+    writeFileSync(revisionsPath(), JSON.stringify({ schema: 99 }));
+    const res = await request(app).get(`/api/books/${bookId}/revisions`);
+    expect(res.status).toBe(500);
+    expect(res.body.error).toMatch(/upgrade the server/i);
   });
 
   it('bulk GET /api/revisions answers exactly { pending, drift } per book, pending normalised', async () => {

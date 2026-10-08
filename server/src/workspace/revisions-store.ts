@@ -422,3 +422,11 @@ export async function commitRevisionOp(
   });
 }
 
+/** Plan 286 (invariant 8) — the text a whole-request 500 may show for a
+    store failure: UnsupportedSchemaError's own fixed "upgrade" sentence, or
+    the caller's fixed fallback. Never an fs error's message (it embeds the
+    absolute workspace path). */
+export function revisionsFailureText(err: unknown, fallback: string): string {
+  return err instanceof UnsupportedSchemaError ? err.message : fallback;
+}
+

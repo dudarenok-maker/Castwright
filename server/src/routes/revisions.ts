@@ -19,7 +19,7 @@ import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
-import { readRevisions, toRevisionsState, type RevisionsState, type StoredRevision } from '../workspace/revisions-store.js';
+import { readRevisions, revisionsFailureText, toRevisionsState, type RevisionsState, type StoredRevision } from '../workspace/revisions-store.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
@@ -235,7 +235,7 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
   } catch (e) {
     console.error('[revisions] GET failed', e);
     /* Plan 285 — curated: a store failure may carry a lock-key path. */
-    res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to compute revisions.') });
+    res.status(500).json({ error: requestFailureMessage(e, revisionsFailureText(e, 'Failed to compute revisions.')) });
   }
 });
 
@@ -281,7 +281,7 @@ revisionsBulkRouter.get('/revisions', async (req: Request, res: Response) => {
     res.json(Object.keys(errors).length > 0 ? { byBookId, errors } : { byBookId });
   } catch (e) {
     console.error('[revisions] bulk GET failed', e);
-    res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to compute bulk revisions.') });
+    res.status(500).json({ error: requestFailureMessage(e, revisionsFailureText(e, 'Failed to compute bulk revisions.')) });
   }
 });
 
