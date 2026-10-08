@@ -392,7 +392,7 @@ export function parseLiveViewRowBlocks(liveViewHtml) {
 //   in your view or absent from the live page.
 // Throws an Error with an operator-facing message on any refusal.
 const ROW_BLOCK_REGEX = /<details\b[^>]*\bclass="item"[^>]*>[\s\S]*?<\/details>/g;
-const GROUP_SECTION_REGEX = /<section\b[^>]*\bclass="group(?:\s[^"]*)?"[^>]*>/g;
+const GROUP_SECTION_REGEX = /<section\b[^>]*\bclass=\u0022group(?:\s[^\u0022]*)?\u0022[^>]*>/g;
 function findGroupSection(html, letter) {
   for (const m of html.matchAll(GROUP_SECTION_REGEX)) {
     const end = html.indexOf('</section>', m.index);

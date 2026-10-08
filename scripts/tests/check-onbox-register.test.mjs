@@ -3004,7 +3004,7 @@ test('--against-published routes unknown-provenance and publishing-file errors t
       ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged',
     });
     assert.equal(differs.status, 1, differs.stderr);
-    assert.match(differs.stderr, /does not carry the live page's rows verbatim:\s+- publishing-file: /);
+    assert.match(differs.stderr, /does not carry the live page\u0027s rows verbatim:\s+- publishing-file: /);
     assert.ok(!/BEHIND what is already live/.test(differs.stderr), differs.stderr);
   });
 });
@@ -4333,7 +4333,7 @@ test('#3529: --publishing a file whose copy of the other lane’s row differs fr
   assert.equal(mismatch.length, 1, JSON.stringify(errors));
   assert.match(mismatch[0], /B103/);
   // The specific verdict, not only the whole-file comparison's generic one.
-  assert.match(mismatch[0], /differs from the live page's/);
+  assert.match(mismatch[0], /differs from the live page\u0027s/);
 });
 
 test('#3529: --publishing a file that lacks the other lane’s row still fails', () => {
