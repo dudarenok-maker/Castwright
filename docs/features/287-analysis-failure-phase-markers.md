@@ -4,7 +4,7 @@ shipped: null
 owner: null
 ---
 
-# 286 — Analysis failure bookkeeping: explicit phase and completeness markers (#3435)
+# 287 — Analysis failure bookkeeping: explicit phase and completeness markers (#3435)
 
 > Status: active — implemented on `fix/server-failure-phase-markers` (T1–T7), not yet merged or on-box accepted. **Plan approved by the owner on 2026-10-03 (O4)**, after plan checks 1–3 and owner decisions A–C, E–H and O1–O3. Implementation is a new PR superseding #3439, with the normal review gate. No fourth check.
 >
@@ -507,7 +507,7 @@ Frontend:
   - restructure does not remap chapter-keyed analysis state (records, `chapterCast`, P);
   - **decision C:** a better treatment for included chapters with no narratable text (auto-exclude at analysis, or skip at generation and count the chapter complete). This PR only changes the generation copy.
 - **Close #3439** with a pointer to the new PR.
-- `docs/features/INDEX.md`: keep the 286 entry current.
+- `docs/features/INDEX.md`: keep the 287 entry current.
 
 ## Test plan
 
