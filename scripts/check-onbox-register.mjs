@@ -503,7 +503,8 @@ export function parseRegisterRowTitles(registerText) {
 // the row, not to a branch name or a PR number: a closed PR with none of
 // those commits cannot mute a lane. It does not prove that no OPEN PR also
 // carries the commit — a closed PR stacked on the owner's branch but opened
-// against main lists the owner's commits too.
+// against main lists the owner's commits too, and so does a PR closed and
+// re-opened as a new PR from the owner's branch.
 //
 // The section is OPTIONAL: `checkRegister` is retro-applied to origin/main's
 // copy (see this file's header), so requiring it would break every
@@ -1397,7 +1398,7 @@ export function checkLiveView(
       if (!retiredPrStates || !retiredPrStates.available) {
         retiredIds.add(id);
         errors.push(
-          `${RETIRED_ROW_WARNING_PREFIX}${id} is retired as PR #${pr}'s row without confirming that #${pr} is closed and unmerged, or that it owns ${id} (${retiredPrStates?.reason ?? 'no gh lookup was made'}). Confirm both by hand — gh pr view ${pr} --json state,mergedAt,commits, and that one of those commits introduced the live page's ${id} — before you publish.`,
+          `${RETIRED_ROW_WARNING_PREFIX}${id} is retired as PR #${pr}'s row without confirming that #${pr} is closed and unmerged, or that it owns ${id} (${retiredPrStates?.reason ?? 'no gh lookup was made'}). Confirm both by hand — gh pr view ${pr} --json state,mergedAt (its commit list stops at 100 — use gh api graphql --paginate for the rest), and that one of #${pr}'s commits introduced the live page's ${id} — before you publish.`,
         );
         continue;
       }
@@ -1407,7 +1408,11 @@ export function checkLiveView(
           `${RETIRED_ROW_ERROR_PREFIX}${id}: the register retires it as PR #${pr}'s row, but gh could not read #${pr} (${st?.error ?? 'no answer'}). A retirement is honoured only for a PR confirmed closed without merging — fix the PR reference, or re-run once gh can read it.`,
         );
       } else if (st.state === 'CLOSED' && !st.mergedAt) {
-        retiredCandidates.set(id, { pr, commits: Array.isArray(st.commits) ? st.commits : null });
+        retiredCandidates.set(id, {
+          pr,
+          commits: Array.isArray(st.commits) ? st.commits : null,
+          incompleteCommits: st.incompleteCommits ?? null,
+        });
       } else {
         const state = st.state === 'MERGED' || st.mergedAt ? 'MERGED' : st.state;
         errors.push(
@@ -1428,9 +1433,11 @@ export function checkLiveView(
     const candidate = retiredCandidates.get(id);
     if (!candidate) return false;
     if (retiredOwnerMemo.has(id)) return retiredOwnerMemo.get(id);
-    const { pr, commits } = candidate;
+    const { pr, commits, incompleteCommits } = candidate;
     let reason = null;
-    if (commits === null) {
+    if (incompleteCommits) {
+      reason = `gh returned an incomplete commit list for #${pr} (${incompleteCommits.have} of ${incompleteCommits.total} commits), so the commit that introduced the live ${id} cannot be matched against it. Re-run once gh can read the whole list.`;
+    } else if (commits === null) {
       reason = `gh did not report #${pr}'s commits, so the commit that introduced the live ${id} cannot be matched against them. Re-run once gh can read it.`;
     } else {
       const owner = typeof rowOwnerLookup === 'function' ? rowOwnerLookup(id, commits) : null;
@@ -2358,8 +2365,9 @@ export function resolveMainEverCarried(repoRoot, registerPath, mainRef, id, gitR
 // summary line, so a retitle is found too; the snapshot's normalised title
 // then decides, and a commit counts only when none of its parents already
 // carried that summary (a lane's merge of main, which brings main's rows in
-// through its first-parent diff, introduces none of them). Two lanes that wrote the byte-identical summary under one ID
-// cannot be told apart, and the older is named.
+// through its first-parent diff, introduces none of them). Two lanes that wrote the same ID and the same title after
+// normalisation (tags stripped, entities decoded, whitespace collapsed) cannot be
+// told apart, and the older is named.
 // `extraCommits` (a retirement's PR commits, from gh) join the search roots,
 // so an introducing commit no fetched branch holds any more is still found
 // while this checkout has the object; the ones it lacks are returned as
@@ -2420,6 +2428,14 @@ export function resolveRowOwner(repoRoot, liveViewPath, id, { title, mainRef, ex
 function runGhCommand(args, cwd) {
   return ghSpawn(args, { cwd, timeout: GIT_TIMEOUT_MS, env: { ...process.env, GH_PROMPT_DISABLED: '1' } });
 }
+// The PR's FULL commit list: `gh pr view --json commits` reports only the first
+// 100 (#3505 has 120), and REST `pulls/N/commits` caps at 250. GraphQL pages
+// with `--paginate` (which needs the $endCursor variable) have no cap; the
+// `totalCount` lets the caller prove the list it assembled is whole.
+const PR_COMMITS_QUERY =
+  'query($owner: String!, $name: String!, $number: Int!, $endCursor: String) { ' +
+  'repository(owner: $owner, name: $name) { pullRequest(number: $number) { state mergedAt ' +
+  'commits(first: 100, after: $endCursor) { totalCount pageInfo { hasNextPage endCursor } nodes { commit { oid } } } } } }';
 export function resolveRetiredPrStates(repoRoot, prNumbers, ghRunner = runGhCommand) {
   const states = new Map();
   if (prNumbers.length === 0) return { available: true, states };
@@ -2435,18 +2451,35 @@ export function resolveRetiredPrStates(repoRoot, prNumbers, ghRunner = runGhComm
     return { available: false, reason: `gh is not authenticated${detail ? ` (${detail})` : ''}` };
   }
   for (const pr of prNumbers) {
-    const r = ghRunner(['pr', 'view', String(pr), '--json', 'state,mergedAt,commits'], repoRoot);
+    const r = ghRunner(
+      [
+        'api', 'graphql', '--paginate', '--slurp',
+        '-F', 'owner={owner}', '-F', 'name={repo}', '-F', `number=${pr}`,
+        '-f', `query=${PR_COMMITS_QUERY}`,
+      ],
+      repoRoot,
+    );
     if (r.error || r.status !== 0) {
       states.set(pr, { error: String(r.stderr ?? '').trim().split(/\r?\n/)[0] || r.error?.message || `gh exited ${r.status}` });
       continue;
     }
     try {
-      const json = JSON.parse(r.stdout);
-      const commits =
-        Array.isArray(json.commits) && json.commits.every((c) => typeof c?.oid === 'string')
-          ? json.commits.map((c) => c.oid)
-          : null;
-      states.set(pr, { state: json.state, mergedAt: json.mergedAt ?? null, commits });
+      const raw = JSON.parse(r.stdout);
+      const pages = Array.isArray(raw) ? raw : [raw];
+      const pull = pages[0]?.data?.repository?.pullRequest;
+      if (!pull) {
+        states.set(pr, { error: `gh found no pull request #${pr}` });
+        continue;
+      }
+      const nodes = pages.flatMap((page) => page?.data?.repository?.pullRequest?.commits?.nodes ?? []);
+      const total = pull.commits?.totalCount;
+      const oids = nodes.every((n) => typeof n?.commit?.oid === 'string') ? nodes.map((n) => n.commit.oid) : null;
+      const entry = { state: pull.state, mergedAt: pull.mergedAt ?? null, commits: oids };
+      if (oids !== null && Number.isInteger(total) && oids.length !== total) {
+        entry.commits = null;
+        entry.incompleteCommits = { have: oids.length, total };
+      }
+      states.set(pr, entry);
     } catch {
       states.set(pr, { error: 'gh printed output that is not JSON' });
     }
@@ -3060,16 +3093,18 @@ function runCheckOnboxRegisterCli() {
             ? { status: 1, stdout: '', stderr: 'injected as unavailable by ONBOX_TEST_GH_PR_STATES' }
             : { status: 0, stdout: '', stderr: '' };
         }
-        const answer = injected[args[2]];
+        const number = args.find((a) => String(a).startsWith('number='))?.slice('number='.length);
+        const answer = injected[number];
         if (answer === undefined) {
-          return { status: 1, stdout: '', stderr: `Could not resolve to a PullRequest (#${args[2]} is not in ONBOX_TEST_GH_PR_STATES)` };
+          return { status: 1, stdout: '', stderr: `Could not resolve to a PullRequest (#${number} is not in ONBOX_TEST_GH_PR_STATES)` };
         }
         const { state, commits = [] } = typeof answer === 'string' ? { state: answer } : answer;
-        return {
-          status: 0,
-          stdout: JSON.stringify({ state, mergedAt: state === 'MERGED' ? 'injected' : null, commits: commits.map((oid) => ({ oid })) }),
-          stderr: '',
+        const pullRequest = {
+          state,
+          mergedAt: state === 'MERGED' ? 'injected' : null,
+          commits: { totalCount: commits.length, pageInfo: { hasNextPage: false, endCursor: null }, nodes: commits.map((oid) => ({ commit: { oid } })) },
         };
+        return { status: 0, stdout: JSON.stringify([{ data: { repository: { pullRequest } } }]), stderr: '' };
       });
     } else {
       retiredPrStates = resolveRetiredPrStates(repoRoot, retiredPrs);

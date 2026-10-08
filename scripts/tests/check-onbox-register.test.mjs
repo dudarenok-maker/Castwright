@@ -5311,39 +5311,76 @@ test('#3529 pass 4: the owner of a row no commit this checkout holds is undeterm
   });
 });
 
-test('#3529 pass 2: resolveRetiredPrStates reads gh through an injected runner, never the network', () => {
+// A stand-in for gh with the REAL caps (#3529 pass 5): `gh pr view --json
+// commits` reports only a PR's first 100 commits (observed: #3505 has 120, gh
+// 2.92.0 reports 100), while `gh api graphql --paginate --slurp` over
+// `commits(first: 100, after: $endCursor)` reports them all, as an array of
+// pages. `prs` maps a PR number to { state, mergedAt?, commits: [oid, ...],
+// totalCount? }; `totalCount` defaults to the list's length.
+function fakeGh(prs, { pageSize = 100 } = {}) {
   const calls = [];
-  const gh = (states) => (args) => {
+  const notFound = { status: 1, stdout: '', stderr: 'Could not resolve to a PullRequest' };
+  const run = (args) => {
     calls.push(args.join(' '));
     if (args[0] === 'auth') return { status: 0, stdout: '', stderr: '' };
-    const n = Number(args[2]);
-    if (!(n in states)) return { status: 1, stdout: '', stderr: 'Could not resolve to a PullRequest' };
-    return { status: 0, stdout: JSON.stringify(states[n]), stderr: '' };
+    if (args[0] === 'pr' && args[1] === 'view') {
+      const pr = prs[Number(args[2])];
+      if (!pr) return notFound;
+      return {
+        status: 0,
+        stdout: JSON.stringify({ state: pr.state, mergedAt: pr.mergedAt ?? null, commits: (pr.commits ?? []).slice(0, 100).map((oid) => ({ oid })) }),
+        stderr: '',
+      };
+    }
+    assert.deepEqual(args.slice(0, 4), ['api', 'graphql', '--paginate', '--slurp'], args.join(' '));
+    const pr = prs[Number(args.find((a) => a.startsWith('number=')).slice('number='.length))];
+    if (!pr) return notFound;
+    const oids = pr.commits ?? [];
+    const pages = [];
+    for (let i = 0; i === 0 || i < oids.length; i += pageSize) {
+      const nodes = oids.slice(i, i + pageSize).map((oid) => (oid === null ? { commit: {} } : { commit: { oid } }));
+      pages.push({
+        data: {
+          repository: {
+            pullRequest: {
+              state: pr.state,
+              mergedAt: pr.mergedAt ?? null,
+              commits: {
+                totalCount: pr.totalCount ?? oids.length,
+                pageInfo: { hasNextPage: i + pageSize < oids.length, endCursor: `c${i}` },
+                nodes,
+              },
+            },
+          },
+        },
+      });
+    }
+    return { status: 0, stdout: JSON.stringify(pages), stderr: '' };
   };
-  const r = onbox.resolveRetiredPrStates(
-    '/repo',
-    [3505, 3506, 3507, 3508, 3509, 3510],
-    gh({
-      // gh's own shape: each commit an object, the SHA under `oid`.
-      3505: { state: 'CLOSED', mergedAt: null, commits: [{ oid: 'aaaa', messageHeadline: 'a' }, { oid: 'bbbb', messageHeadline: 'b' }] },
-      3506: { state: 'OPEN', mergedAt: null, commits: [] },
-      3508: { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z', commits: [{ oid: 'cccc' }] },
-      3509: { state: 'CLOSED', mergedAt: null },
-      3510: { state: 'CLOSED', mergedAt: null, commits: [{ oid: 'dddd' }, { messageHeadline: 'no oid' }] },
-    }),
-  );
+  run.calls = calls;
+  return run;
+}
+
+test('#3529 pass 2: resolveRetiredPrStates reads gh through an injected runner, never the network', () => {
+  const gh = fakeGh({
+    3505: { state: 'CLOSED', commits: ['aaaa', 'bbbb'] },
+    3506: { state: 'OPEN', commits: [] },
+    3508: { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z', commits: ['cccc'] },
+    3510: { state: 'CLOSED', commits: ['dddd', null] },
+  });
+  const r = onbox.resolveRetiredPrStates('/repo', [3505, 3506, 3507, 3508, 3510], gh);
   assert.equal(r.available, true);
   assert.deepEqual(r.states.get(3508), { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z', commits: ['cccc'] });
   assert.deepEqual(r.states.get(3505), { state: 'CLOSED', mergedAt: null, commits: ['aaaa', 'bbbb'] });
   assert.equal(r.states.get(3506).state, 'OPEN');
   assert.match(r.states.get(3507).error, /Could not resolve/);
-  assert.equal(r.states.get(3509).commits, null, 'no commits field is not an empty PR');
   assert.equal(r.states.get(3510).commits, null, 'a commit without an oid poisons the list');
-  assert.ok(calls.some((c) => c === 'pr view 3505 --json state,mergedAt,commits'), calls.join('\n'));
-  assert.ok(!calls.some((c) => c.includes('headRefName')), calls.join('\n'));
-  calls.length = 0;
-  assert.deepEqual(onbox.resolveRetiredPrStates('/repo', [], gh({})).states.size, 0);
-  assert.deepEqual(calls, [], 'no entries, no gh calls');
+  assert.ok(gh.calls.some((c) => c.startsWith('api graphql --paginate --slurp') && c.includes('number=3505')), gh.calls.join('\n'));
+  assert.ok(!gh.calls.some((c) => c.startsWith('pr view')), 'gh pr view caps its commit list at 100');
+  assert.ok(!gh.calls.some((c) => c.includes('headRefName')), gh.calls.join('\n'));
+  gh.calls.length = 0;
+  assert.deepEqual(onbox.resolveRetiredPrStates('/repo', [], gh).states.size, 0);
+  assert.deepEqual(gh.calls, [], 'no entries, no gh calls');
   const noGh = onbox.resolveRetiredPrStates('/repo', [3505], () => ({ error: Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' }) }));
   assert.equal(noGh.available, false);
   const noAuth = onbox.resolveRetiredPrStates('/repo', [3505], (args) =>
@@ -5351,6 +5388,22 @@ test('#3529 pass 2: resolveRetiredPrStates reads gh through an injected runner, 
   );
   assert.equal(noAuth.available, false);
   assert.match(noAuth.reason, /not authenticated|not logged in/);
+});
+
+test('#3529 pass 5: resolveRetiredPrStates reads every page of a PR with more than 100 commits', () => {
+  const oids = Array.from({ length: 120 }, (_, i) => `c${String(i).padStart(3, '0')}`);
+  const r = onbox.resolveRetiredPrStates('/repo', [9040], fakeGh({ 9040: { state: 'CLOSED', commits: oids } }));
+  assert.deepEqual(r.states.get(9040).commits, oids, 'all 120, in order, not the first 100');
+  const bad = (out) => onbox.resolveRetiredPrStates('/repo', [1], (a) => (a[0] === 'auth' ? { status: 0 } : { status: 0, stdout: out, stderr: '' })).states.get(1);
+  assert.match(bad('not json').error, /not JSON/);
+  assert.match(bad(JSON.stringify([{ data: { repository: { pullRequest: null } } }])).error, /no such pull request|not found|no pull request/i);
+});
+
+test('#3529 pass 5: a commit list shorter than totalCount is reported as incomplete, never as complete', () => {
+  const r = onbox.resolveRetiredPrStates('/repo', [9041], fakeGh({ 9041: { state: 'CLOSED', commits: ['aaaa', 'bbbb'], totalCount: 120 } }));
+  const st = r.states.get(9041);
+  assert.equal(st.commits, null, 'an incomplete list must not be matched against');
+  assert.deepEqual(st.incompleteCommits, { have: 2, total: 120 });
 });
 
 // 🟠3: `--publishing` checks the WHOLE file.
@@ -5742,5 +5795,48 @@ test('#3529 pass 4 CLI: a retirement is honoured only for the closed PR whose co
     assert.equal(absent.status, 1, absent.stderr);
     assert.match(absent.stderr, /retired-carried-row: B103: .*#77.*run git fetch origin and re-run/);
     assert.ok(!/pull[/]\d+[/]head/.test(absent.stderr), absent.stderr);
+  });
+});
+
+// #3529 pass 5 (🟠): a lane whose row lands after its 100th commit. Real
+// `gh pr view --json commits` reports only the first 100, so the owner's commit
+// was never in the list and the retirement was refused forever, with a
+// "names the wrong PR" diagnosis that pointed back at the same PR. The gh
+// stand-in (fakeGh) keeps that cap on `pr view` and serves the full list only
+// through paginated GraphQL.
+function p5BigLane(repo) {
+  provGit(repo, 'switch', '-q', '-c', 'fix/server-big');
+  const oids = [];
+  for (let i = 0; i < 100; i++) {
+    oids.push(p4Other(repo, `2030-01-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`, `work ${i}`));
+  }
+  oids.push(p4Commit(repo, '2030-01-01T02:00:00Z', 'bbbb0001', [101, 102, 103], 104, 'big lane adds B103 late', { 103: 'X row' }));
+  const page = uView('bbbb0001', [101, 102, 103], { 103: 'X row' });
+  provGit(repo, 'switch', '-q', 'main');
+  provGit(repo, 'switch', '-q', '-c', 'fix/server-q');
+  writeFileSync(join(repo, PROV_REGISTER), p4Retire(9030, [101, 102], 104));
+  return { oids, page };
+}
+
+test('#3529 pass 5: a closed PR whose row lands after its 100th commit is retired once the list is complete', () => {
+  withUnionRepo((repo) => {
+    const { oids, page } = p5BigLane(repo);
+    assert.equal(oids.length, 101);
+    const states = onbox.resolveRetiredPrStates(repo, [9030], fakeGh({ 9030: { state: 'CLOSED', commits: oids } }));
+    assert.equal(states.states.get(9030).commits.length, 101);
+    assert.deepEqual(realErrors(uCheck(repo, 'fix/server-q', page, { retiredPrStates: states })), []);
+  });
+});
+
+test('#3529 pass 5: an incomplete commit list fails closed and says so, not "names the wrong PR"', () => {
+  withUnionRepo((repo) => {
+    const { oids, page } = p5BigLane(repo);
+    const states = onbox.resolveRetiredPrStates(repo, [9030], fakeGh({ 9030: { state: 'CLOSED', commits: oids.slice(0, 100), totalCount: 101 } }));
+    const retired = ofPrefix(realErrors(uCheck(repo, 'fix/server-q', page, { retiredPrStates: states })), onbox.RETIRED_ROW_ERROR_PREFIX);
+    assert.equal(retired.length, 1, JSON.stringify(retired));
+    assert.match(retired[0], /#9030/);
+    assert.match(retired[0], /incomplete|only 100 of 101/i);
+    assert.ok(!/names the wrong PR/.test(retired[0]), retired[0]);
+    assert.match(retired[0], /must still be carried/);
   });
 });
