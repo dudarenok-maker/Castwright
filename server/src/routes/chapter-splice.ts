@@ -246,7 +246,9 @@ chapterSpliceRouter.post(
       const editsPath = manuscriptEditsJsonPath(bookDir);
       const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
       if (Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0) {
-        await rebuildCacheFromEdits(state.manuscriptId, editsPath).catch(() => {});
+        await rebuildCacheFromEdits(state.manuscriptId, editsPath, {
+          excludedChapterIds: state.chapters.filter((c) => c.excluded).map((c) => c.id),
+        }).catch(() => {});
       }
       const analysis = await loadAnalysisCache(state.manuscriptId);
       const sentences = analysis.chapters?.[chapterId] ?? [];

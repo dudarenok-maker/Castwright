@@ -690,20 +690,38 @@ row this register still carries. Keep the table even when it is empty.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 3 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 7 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 12 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**57 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-03 (#3414), 56 → 57.** Added **A112** — the
+> **Last change: 2026-10-08 (#3435, plan 287), 61 → 62.** Row **B106** (the
+> background emotion re-run yields to and is aborted by real work on a real
+> analyzer) added from plan 287's "On-box acceptance owed" item 3. Group B
+> 6 → 7. `next-id` bumped B106 → B107 in the same change. Owed; not run here.
+>
+> **Prior change: 2026-10-06 (#3084 wave 3b, PR 3b), 59 → 61 on this branch (57 → 59 on `main`).** Rows **B105**
+> (Ollama `format` modes on a real model: `json`, then `off`, against `schema`)
+> and **E112** (Gemini `schema` mode, `responseJsonSchema` accepted or rejected
+> on a real key) added from #3084 PR 3b's run sheet
+> (`3084-openai-analyzer-onbox-acceptance.md` §4–§5). Group B `next-id` marker
+> bumped by one, Group E by one. Both rows are owed; neither was run here.
+>
+> **Prior change: 2026-10-04 (#3435, plan 287), 57 → 59.** Rows **B103** (abort
+> and drain on a local Ollama analyzer: a stopped main run releases the model
+> before a chapter Retry starts) and **B104** (a Resume on a cast-confirmed book
+> keeps every designed voice) added from plan 287's "On-box acceptance owed".
+> Group B 3 → 5. `next-id` bumped B103 → B105 in the same change.
+>
+> **Prior change: 2026-10-03 (#3414), 56 → 57.** Added **A112** — the
 > qa-repair centroid filter now drops an audition centroid whose recorded
 > voice differs from the character's CURRENT cast voice (rather than keying
 > off the chapter's last-render snapshot), so an acoustic-only flagged line
@@ -715,6 +733,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > accept/reject decision against a real sidecar's ECAPA embedding on real
 > hardware. Group A 33 → 34. `next-id` bumped A112 → A113 in the same
 > change.
+>
 >
 > **Prior change: 2026-09-27 (#3084 wave 2b), 53 → 56.** Rows **B102** (capacity
 > recalibration — the measurement owed before any capacity default changes),
@@ -6010,7 +6029,7 @@ kept-and-gates) for the exact defect this closes.
 
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B103 -->
+<!-- next-id: B107 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -6111,6 +6130,45 @@ On three large chapters, record stage-1/stage-2 section counts, truncation count
 For at least two short-context tags, also record `num_ctx` sent (32768) against `/api/show`'s native context, plus one chapter's truncation count.
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §3](3084-openai-analyzer-onbox-acceptance.md). Clears when §3's three `Result:` lines are filled.
+
+### B103 · Abort and drain on a local Ollama analyzer — a stopped main run releases the model before a chapter Retry starts ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama, a pipelined main run; no TTS engine**
+
+Every analysis ending (Pause, an error, an overflow, a quota stop) now aborts the run's in-flight model calls, and Retry / Re-analyse / Include are refused with a 409 until the stopped run has drained. Mock mode has no server, so none of that is visible there. Run it twice on a book big enough to be in Phase 1 for a while:
+
+- **(a) Pause.** Start a pipelined analysis, Pause mid-Phase 1, click Retry on a failed row at once. Retry is refused with the "still stopping" message; a few seconds later it runs.
+- **(b) Halt.** Same, but force a halt instead of a pause: stop the model mid-Phase 1 so one chapter throws.
+
+In both, observe in the server log `[analysis] main run drained manuscript=<id>` **before** `[analysis-subset] start manuscript=<id>`, no cache or edits write from the main job after the drained line, no `drain deadline exceeded` line, and `ollama ps` showing the model released after the drain. Note each drain's duration.
+
+Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 1 and the walkthroughs under it. Clears when both runs are recorded with their drain durations.
+
+### B104 · A Resume on a cast-confirmed book with designed voices leaves every designed voice intact ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama; a real book with a confirmed cast and at least one designed voice**
+
+The 2026-07-14 voice-strip incident class (invariant 6). Plan 287 changed what a stopped run persists and what a Resume re-merges, so a real confirmed cast is the only honest test that a Resume does not strip a designed voice. Take a confirmed book with at least one designed voice, note its `cast.json` voice fields (`designModel`, `instruct`, `baseModel`, the `.pt` reference), Pause a Resume part-way, Resume it to the end, then diff `cast.json`. Every designed voice field must be byte-identical.
+
+Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 2. Clears when the diff is recorded as empty for the designed voices.
+
+### B105 · Ollama structured-output modes on a real model (#3084 PR 3b) · **local Ollama; `qwen3.5:4b`**
+
+With `analyzer.ollama.structuredOutput` set to `json`, then `off`, analyse one real chapter each on `qwen3.5:4b`. Observe:
+- in `server/handoff/inbox/…` and the debug log, the request carried `format: "json"`, then no `format` key;
+- the chapter still validates (or fails as "analyzer reply failed validation", never as `unknown`);
+- a daemon that rejects a mode fails as "analyzer rejected the request" naming `analyzer.ollama.structuredOutput`.
+
+Record the validation-retry count for each mode against the default `schema` run on the same chapter. Criteria: [`3084-openai-analyzer-onbox-acceptance.md` §4](3084-openai-analyzer-onbox-acceptance.md).
+
+### B106 · The background emotion re-run yields to and is aborted by real work on a real analyzer ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama; a real analysed book; a TTS engine only for (c)**
+
+Opening an analysed book whose `state.json` has `prosodyAnnotated: false` re-runs emotion detection in the background; the run is meant to stop the moment the user starts real work. Mock mode has no analyzer, so only the box can show the requests actually stop. Take such a book (or set the flag by hand on a copy) and open it:
+
+- **Starts.** The "Detecting emotions" pill shows and prosody requests reach the analyzer.
+- **(a) Analysis.** Mid-run, start an analysis for the book. In the server log the prosody requests for that book stop (no further prosody calls for it), and the book stays `prosodyAnnotated: false`.
+- **(b) Switch book.** Same, but open another book instead. Same observation.
+- **(c) Generation.** Same, but queue a chapter render for the book while the run is active. The prosody requests stop, the pill clears, Generate was never disabled at any point, and the book stays `prosodyAnnotated: false`.
+- **Resumes.** Reopen the book: the run starts again.
+- **Reload.** Reload (or close and reopen the app) mid-run, then open the book again. The run starts again, because the run marked the book `false` as it started.
+
+Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 3. Clears when (a), (b), (c), the resume and the reload are recorded with the last prosody log line for each abort.
 
 ---
 
@@ -6517,7 +6575,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E112 -->
+<!-- next-id: E113 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -7154,6 +7212,15 @@ On a 19,000–21,000-character chapter, record on `gemini-3.6-flash`, once at Au
 **Pass:** Auto completes with no `analyzer-timeout` and no overflow, using no more requests than the 8192 run; and on Gemma at `64` at least one `bytes=0` truncation appears, each is followed by a re-split, and no `analyzer-reasoning-overflow` failure occurs. **The row fails if no `bytes=0` truncation can be reproduced at `64`.**
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §2](3084-openai-analyzer-onbox-acceptance.md).
+
+### E112 · Gemini `schema` mode on a real key (#3084 PR 3b) · **any machine with a Gemini key; no GPU**
+
+With a Gemini key and `analyzer.gemini.structuredOutput` = `schema`, analyse one real chapter on `gemma-4-31b-it` and one on `gemini-3.5-flash-lite`. Observe:
+- whether Gemini returns HTTP 400 for the adapted `responseJsonSchema`, or accepts it;
+- the debug log's "schema adapter dropped" list, which must match the PR's `gemini / *` snapshot;
+- whether replies conform on the first attempt.
+
+This row does not by itself move Gemini's default: the spec gates that on attribution quality, which PR 3c's Test-action row records. Criteria: [`3084-openai-analyzer-onbox-acceptance.md` §5](3084-openai-analyzer-onbox-acceptance.md).
 
 ## Group G — GitHub Actions itself
 

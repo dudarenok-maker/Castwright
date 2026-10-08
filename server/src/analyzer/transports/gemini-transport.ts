@@ -8,9 +8,12 @@
    content blocks are reported through `finish` and mapped to errors by
    the runner (finish.ts). It DOES throw abort / idle / HTTP / quota
    errors so the retry helper can classify and retry them. */
-import { GoogleGenAI } from '@google/genai';
+import { ApiError, GoogleGenAI } from '@google/genai';
 import { configValue } from '../../config/resolver.js';
 import { AnalysisAbortedError, AnalyzerTimeoutError } from '../errors.js';
+import { redactKnownSecrets } from '../redact.js';
+/* #3084 A9 — through the leaf gate. */
+import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { geminiRateLimiter } from '../rate-limit.js';
 import { geminiModelThinks, warmGeminiCatalog, type GeminiModelsClient } from '../catalog/gemini-catalog.js';
 import { GEMINI_FALLBACK_MAX_OUTPUT_TOKENS } from '../capacity.js';
@@ -22,12 +25,21 @@ import {
   type RetryClassifier,
 } from '../runner/transport-retry.js';
 
-import type { ChatTransport, TransportRequest, TransportResult } from '../runner/transport.js';
+import type { ChatTransport, StructuredOutputRequest, TransportRequest, TransportResult } from '../runner/transport.js';
 import type { StageChunkInfo } from '../types.js';
 
 /* Idle-chunk watchdog: if the SDK stream goes more than this long between
    chunks (or before the first chunk), assume the upstream is wedged and
    throw a retryable error so the retry loop kicks in. */
+/** #3084 spec §2 — Gemini structured-output config per mode. */
+export function geminiStructuredConfig(
+  so: StructuredOutputRequest,
+): { responseMimeType?: string; responseJsonSchema?: unknown } {
+  if (so.mode === 'schema') return { responseMimeType: 'application/json', responseJsonSchema: so.schema };
+  if (so.mode === 'json') return { responseMimeType: 'application/json' };
+  return {};
+}
+
 export const STREAM_IDLE_TIMEOUT_MS = 45_000;
 
 /* Hard cap on the streamed-response accumulator. */
@@ -37,6 +49,21 @@ export function appendBounded(buf: string, text: string, max = MAX_RESPONSE_BYTE
     throw new Error('Analyzer response exceeded the maximum size.');
   }
   return buf + text;
+}
+
+/* #3084 P22 — the SDK's ApiError keeps the upstream body in `.message`, and so in
+   `.stack`. An error whose message holds a known secret is rebuilt with it removed:
+   an ApiError stays an ApiError with its status, so the taxonomy's envelope parse and
+   the retry classifier read it exactly as before. An error with no secret is returned
+   as the same object. */
+export function redactGeminiError(err: unknown, secrets: readonly string[]): unknown {
+  if (!(err instanceof Error)) return err;
+  const message = redactKnownSecrets(err.message, secrets);
+  if (message === err.message) return err;
+  if (err instanceof ApiError) return new ApiError({ status: err.status, message });
+  const rebuilt = new Error(message);
+  rebuilt.name = err.name;
+  return rebuilt;
 }
 
 export function resolveStreamIdleTimeoutMs(): number {
@@ -202,12 +229,7 @@ export class GeminiTransport implements ChatTransport {
       ...(includeThoughts ? { thinkingConfig: { includeThoughts: true } } : {}),
       maxOutputTokens: req.maxOutputTokens ?? GEMINI_FALLBACK_MAX_OUTPUT_TOKENS,
     };
-    if (req.structuredOutput.mode === 'json') {
-      config.responseMimeType = 'application/json';
-    } else if (req.structuredOutput.mode === 'schema') {
-      config.responseMimeType = 'application/json';
-      config.responseJsonSchema = req.structuredOutput.schema;
-    }
+    Object.assign(config, geminiStructuredConfig(req.structuredOutput));
 
     const watchdog = new AbortController();
     let idleFired = false;
@@ -464,18 +486,20 @@ export class GeminiTransport implements ChatTransport {
          `details[]` payload — the only useful diagnostic for a 5xx/4xx that
          withTransportRetry classifies 'no-retry' or exhausts its retries on.
          Moved from pre-W1 generate()'s own catch (gemini.ts:710-726). */
+      /* #3084 P22 — redacted before it is logged or rethrown. */
+      const safe = redactGeminiError(err, await loadKnownAnalyzerSecrets());
       const status = (err as { status?: number })?.status;
-      const message = (err as Error)?.message ?? String(err);
+      const message = (safe as Error)?.message ?? String(safe);
       const userTurn = contents[contents.length - 1]?.parts[0]?.text ?? '';
       console.error('[gemini] generate failed', {
         model: this.model,
         status,
-        name: (err as Error)?.name,
+        name: (safe as Error)?.name,
         message,
         userTurnLength: userTurn.length,
         userTurnHead: userTurn.slice(0, 200),
       });
-      throw err;
+      throw safe;
     } finally {
       disarmIdleTimer();
       releaseAbortListener();

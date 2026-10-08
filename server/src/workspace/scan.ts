@@ -19,7 +19,12 @@ import {
 import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
 import { ensureChapterUuids } from './chapter-uuid.js';
-import { loadAnalysisCache } from '../store/analysis-cache.js';
+import {
+  analysisCompleteFor,
+  hasCurrentTake,
+  loadAnalysisCache,
+  reachedConfirm,
+} from '../store/analysis-cache.js';
 import { formatDuration } from '../audio/format-duration.js';
 import { engineBreakdownFromSnapshots } from '../audio/engine-breakdown.js';
 import { normaliseBookLanguage, resolveEligibleEngines } from '../tts/language.js';
@@ -785,20 +790,30 @@ async function scanBook(
      some chapters never ran. Cross-check the cache against the active
      (non-excluded) chapter list so the badge surfaces 'analysing' until
      every chapter is actually analysed; that's the signal the resume
-     button needs to be honest about what's still pending. */
+     button needs to be honest about what's still pending.
+
+     Plan 286 spec 2.2 — "analysed" is `analysisCompleteFor` (a final roster,
+     a current take per chapter, takes persisted), not an own-key count. It
+     gates only a book that has never reached Confirm (`reachedConfirm`,
+     decision F): a confirmed or generated book is never demoted by it. */
   let analysedChapterCount = 0;
+  let analysisComplete = chapterCount === 0;
+  let bookReachedConfirm = state?.castConfirmed === true;
   if (state?.manuscriptId) {
     try {
       const cache = await loadAnalysisCache(state.manuscriptId);
-      const cachedIds = new Set(Object.keys(cache.chapters ?? {}).map((k) => Number(k)));
       for (const ch of activeChapters) {
-        if (cachedIds.has(ch.id)) analysedChapterCount += 1;
+        if (hasCurrentTake(cache, ch.id)) analysedChapterCount += 1;
       }
+      analysisComplete = analysisCompleteFor(
+        cache,
+        activeChapters.map((c) => c.id),
+      );
+      bookReachedConfirm = reachedConfirm(state, cache);
     } catch {
       /* missing/corrupt cache → treat as nothing analysed */
     }
   }
-  const analysisComplete = chapterCount === 0 || analysedChapterCount >= chapterCount;
 
   /* voices_pending — cast confirmed but generation not started. "Started" is
      derived from disk: any audio rendered, or any chapter carrying a durable
@@ -812,7 +827,7 @@ async function scanBook(
   if (unreadable) status = 'unreadable';
   else if (hasState && !manuscriptFile) status = 'orphaned';
   else if (!hasState && manuscriptFile) status = 'not_analysed';
-  else if (state && (!hasUsableCast || !analysisComplete)) status = 'analysing';
+  else if (state && (!hasUsableCast || (!bookReachedConfirm && !analysisComplete))) status = 'analysing';
   else if (state && !state.castConfirmed) status = 'cast_pending';
   else if (state && state.castConfirmed && !generationStarted && completedChapters < chapterCount)
     status = 'voices_pending';

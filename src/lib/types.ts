@@ -155,6 +155,13 @@ export type UserSettingsPatch = components['schemas']['UserSettingsPatch'] & {
   backupRetention?: number;
 };
 
+/* #3084 — analyzer endpoints (generated shapes). */
+export type AnalyzerEndpoint = components['schemas']['AnalyzerEndpoint'];
+export type AnalyzerEndpointInput = components['schemas']['AnalyzerEndpointInput'];
+export type AnalyzerEndpointKeyStatus = components['schemas']['AnalyzerEndpointKeyStatus'];
+export type AnalyzerEndpointDetectRequest = components['schemas']['AnalyzerEndpointDetectRequest'];
+export type AnalyzerEndpointDetectResult = components['schemas']['AnalyzerEndpointDetectResult'];
+
 /* srv-2 — one auto-backup snapshot of a book's state.json, newest first.
    Mirrors server/src/routes/backup.ts BackupSnapshot. */
 export interface BackupSnapshot {
@@ -522,8 +529,17 @@ export interface BookStateResponse {
       render per-chapter Retry buttons after reload. failedChapterIds is
       the set of chapters whose Phase 0a cast detection threw across the
       analyzer's built-in retry — server-side they live in the analysis
-      cache. */
-  analysis?: { failedChapterIds: number[]; failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }> };
+      cache. #3435 — `stage1Ready` (the roster is final), `resumeRequired`
+      (an unfinished book that has not reached Confirm needs a main resume) and
+      `unattributedChapterIds` (non-excluded chapters with no current take)
+      survive a reload and a dropped snapshot. */
+  analysis?: {
+    failedChapterIds: number[];
+    failedChapterErrors?: Record<string, { code: string; message: string; remediation: string; phase: 'cast' | 'attribution' }>;
+    stage1Ready?: boolean;
+    resumeRequired?: boolean;
+    unattributedChapterIds?: number[];
+  };
 }
 
 /** Drop-reason enum mirrored from server/src/store/dropped-quotes.ts.

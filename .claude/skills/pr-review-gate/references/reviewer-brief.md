@@ -133,6 +133,142 @@ recite:
     write, is the value read in the same synchronous step as the enqueue (no
     `await` between), and does a test make the FIRST caller's await slower
     than the second's with distinct snapshots?
+17. **A clear on one phase's success path that does not check which phase
+    the record came from** — a failure record is cleared when a later phase
+    completes for the chapter (here: Phase 1 clears any `failedChapterIds`
+    entry). Harmless while the phases run in sequence, because a chapter
+    reaching Phase 1 has necessarily passed Phase 0; wrong once they overlap.
+    In pipelined mode Phase 1 dispatches off a watermark (the highest Phase-0
+    index completed, not a contiguous prefix), so a chapter whose own Phase 0a
+    failed is still attributed, and its Phase-1 success erased the cast-phase
+    record the resume needed to re-cast it (PR #3439 pass 3,
+    `routes/analysis.ts`). Checkable: for every clear, name every phase that
+    can have written the record, and ask whether this phase's success is
+    evidence that THAT phase's failure is fixed — and whether a test
+    interleaves the two phases for one chapter rather than running them in
+    order.
+18. **A hand-off tested by calling the receiver directly** — the producer
+    is meant to cause a later step (a subset Retry that "hands off to the
+    main resume"), and the test invokes that later step itself, so it cannot
+    see that the product's real trigger never fires. Here the trigger was the
+    view's auto-resume, which waits for every failed row to clear; the Retry
+    kept its row, so the main run was never re-POSTed, while the test that
+    called `runMainAnalyzerJob` itself passed (PR #3439 pass 3,
+    `src/views/analysing.tsx`). Checkable: for every "X then Y resumes"
+    claim, find what actually starts Y in the product, and ask whether a test
+    reaches Y through that trigger (the view harness with the real slice and
+    middleware) or only by calling it.
+19. **A sentinel that is also a valid value** — a marker meaning "none" or
+    "not recorded" (an empty array, `0`, `''`, `null`) is also something the
+    field legitimately holds, so the reader cannot tell "never written" from
+    "written as empty". In `server/src/routes/analysis.ts` the Phase-0
+    failure catch wrote `chapterCast[id] = []` as the cast-failure marker,
+    but `[]` is also a real cast for a narration-only chapter (cast detection
+    succeeded and found no characters). `isPhase0aCoverageComplete` read every
+    `[]` as "cast missing", so a Retry or Re-analyse on a book with a
+    narration-only chapter never reached Phase 1 (test P-theta). #3435 makes
+    the failure record's `phase: 'cast'` the discriminator, passed in as
+    `castFailedIds`.
+    Checkable: for every default or "empty" value a reader branches on, ask
+    whether a real writer can produce exactly that value, and whether a test
+    seeds that case.
+20. **A flag read as "phase N finished" that is written before phase N** —
+    a completeness marker set on entry to, or in the middle of, the step it
+    vouches for, so an interrupted or refused step leaves the flag claiming
+    success. In `server/src/routes/analysis.ts` the subset persist set
+    `takesPersisted`/`confirmReached` before the S14 gate had passed, so a
+    `resume_required` exit left the book marked as having reached Confirm;
+    the fix sits inside S14's pass branch (`if (wroteStateJson)`) (#3435).
+    Checkable: for every marker, find the write site and ask whether it sits
+    inside the success branch of the last step the marker is read as proving,
+    and whether a test fails that step and asserts the marker is absent.
+21. **A derived "not done" list computed from a store that isn't the record
+    for every book it's applied to, so an absent store reads as "nothing
+    done"** — the list is correct where its source exists and silently wrong
+    where it does not. `server/src/routes/book-state.ts` built
+    `unattributedChapterIds` from the analysis cache alone, and a missing
+    cache loads as `{ chapters: {} }`, so a confirmed sample book with no
+    cache showed every chapter as unfinished; the fix treats
+    `manuscript-edits.json` as authoritative past Confirm (#3435, PR #3505
+    gate pass 1).
+    Checkable: for every derived list, name the store it reads, and ask what
+    it reports for a book where that store is absent or was never written.
+22. **Test cleanup that deletes a directory the code under test is still
+    writing to fire-and-forget** — the test passes its assertions, then the
+    teardown races the detached writes and fails intermittently. The
+    plan-287 `afterEach` in `server/src/routes/analysis.test.ts` `rmSync`'d
+    the book dir while `endJob`'s detached `persistTerminalSnapshot` write was
+    still landing (ENOTEMPTY, 1 run in 3); fixed by awaiting the recorded
+    `withVerifiedBookDir` promises. That covers the snapshot write only; the
+    last-outcome write (`tryResolveVerifiedBookDir`) of a registered job is
+    not awaited (#3435, PR #3505 gate pass 1).
+    Checkable: for every `afterEach` that removes a directory, list the
+    fire-and-forget writes the code under test can still be making into it,
+    and confirm the test awaits them.
+23. **A completion moved onto a promise chain that outlives its view** — in
+    `src/views/analysing.tsx` a Retry's `.then` began calling the shared
+    `completeRun`/`onComplete`; the main run's call sat behind an unmount
+    guard (`cancelled`) but the Retry's chain did not, so a late Retry result
+    hydrated whichever book was open and could persist one book's roster into
+    another's cast.json. Pass 2's fix covered only the `.then`/`.catch`/
+    `.finally` completion; pass 3 found the Retry's stream callbacks and the
+    Generate view's flows still unguarded, closed in 50dbb2cc (#3435, PR
+    #3505). Checkable: when a completion/dispatch is moved or added onto an
+    async chain, find the guard the original call site had against unmount or
+    navigation and confirm the new site has it too, with a test that resolves
+    the chain after unmount. A "fixed" claim covers only the call sites it
+    names: list every callback and flow that writes on the same chain, not
+    just the one that was reported.
+24. **A guard tied to component lifetime when the rule is about what the
+    screen shows** — `src/views/analysing.tsx`, PR #3505 gate pass 3: a
+    `mountedRef` guard on a Retry's completion both let too much through (the
+    unkeyed route element survived a book switch, so A's result routed B to
+    A's Confirm) and blocked too much (returning via the pill mounted a new
+    instance, so the old one skipped completion and left a stale screen);
+    fixed by reading `ui.stage` at resolution (`bookOnScreen()`), scoping
+    snapshot writes by manuscriptId, gating store writes with
+    `selectIsOpenBook()` (`src/store/open-book.ts`), and keying the
+    Generate/Analysing route elements by bookId. Checkable: for every async
+    guard, state the rule it enforces in terms of what the user sees; if the
+    guard is about component lifetime, find the route param change that keeps
+    the instance and the remount that starts a new one, and test both.
+25. **A guard that checks which book the screen shows, while the write lands
+    in slices — or on disk — that still hold the previous book for one state
+    read** — PR #3505 gate pass 4: `AnalysingRoute`'s `onComplete` routed by
+    `ui.stage` but loaded the payload into the cast/chapters/manuscript slices
+    that still held another book (`src/routes/index.tsx`), and the Generate
+    gate refused on the stage alone, dropping a result its own slices should
+    take; fixed by deciding late writes by which book the slices hold
+    (`selectIsOpenBook`, `src/store/open-book.ts`, which compares
+    `manuscript.manuscriptId`). Pass 5: Confirm's auto voice-match effect
+    (`src/components/layout.tsx`) fired on `confirm/A` with the previous
+    book's cast before A's read landed, and its `applyVoiceMatches` is
+    persisted to the book the stage names, so B's cast was written to A's
+    cast.json; fixed by waiting until `manuscript.bookId === bookId`. The
+    background and manual emotion detection (`runProsodyPasses` `canApply`,
+    `src/store/prosody-thunk.ts`) had the same shape (#3435, PR #3505 gate
+    passes 4-5). The general class is tracked as design issue #3519 (no
+    explicit loaded-book identity on the slices). Checkable: for every async
+    write into a book-scoped slice or a persisted action, name (a) which book
+    the screen shows, (b) which book the slices hold, (c) which book the
+    persistence middleware will save to — and test with the stage and the
+    slices moved independently, including with the real persistence
+    middleware so a disk write to the wrong book is visible.
+26. **A job started under a condition, but tracked and cancelled by when it
+    started, in a single slot** — `src/components/layout.tsx`, PR #3505 gate
+    pass 7: the open trigger's background emotion run was started only while
+    its book was open on Confirm or Generate, but nothing stopped it when that
+    stopped being true, and the yield tracker (`prosodyBackground`) was one
+    slot that the next background run overwrote. A second instance silently
+    untracked the first, so the first's yield or cancel never fired: it kept
+    applying annotations to a book being rendered or re-analysed, and opening
+    three books in turn left three whole-book runs in flight. Fixed in
+    b3bf65be by aborting the run the moment its book stops being the open
+    trigger's book (`selectOpenProsodyBookId`) or an analysis starts for it,
+    which also makes the single slot sufficient (#3435). Checkable: for every
+    detached job, name the condition it may run under; ask what stops it when
+    that condition ends; and ask what a second concurrent instance does to the
+    first's registration.
 
 ### Keeping the catalogue current
 

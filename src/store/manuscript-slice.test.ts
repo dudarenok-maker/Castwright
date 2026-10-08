@@ -683,6 +683,23 @@ describe('manuscriptSlice — bookId anchoring', () => {
     expect(next.manuscriptId).toBe('mns_b');
   });
 
+  it("uploadComplete never leaves the previous book's bookId beside the upload's manuscriptId", () => {
+    const start = { ...baseState([]), bookId: 'b1', manuscriptId: 'm1', title: 'Book A' };
+    const next = manuscriptSlice.reducer(
+      start,
+      manuscriptActions.uploadComplete({
+        bookId: 'b2',
+        manuscriptId: 'm2',
+        title: 'Book B',
+        format: 'plaintext',
+        wordCount: 10,
+        sourceText: '',
+      } as unknown as import('../lib/types').UploadResponse),
+    );
+    expect(next.manuscriptId).toBe('m2');
+    expect(next.bookId).not.toBe('b1');
+  });
+
   it('reset clears bookId alongside the rest of the slice', () => {
     const start = { ...baseState([]), bookId: 'bk_a', manuscriptId: 'mns_a', title: 'Book A' };
     const next = manuscriptSlice.reducer(start, manuscriptActions.reset());

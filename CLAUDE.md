@@ -546,8 +546,10 @@ Design rationale:
   `api = USE_MOCKS ? mock : real`. Components import from `api.*` with a
   bounded, deliberate exception set: the install/detect/provisioning
   surfaces (`/api/{ollama,qwen,kokoro,coqui,whisper}/{detect,install}`,
-  `/api/ollama/{pull,refresh}`, `/api/setup/venv/bootstrap`) talk to the
-  local machine and have no mock counterpart; `mini-player`'s `keepalive`
+  `/api/ollama/{pull,refresh}`, `/api/setup/venv/bootstrap`,
+  `POST /api/analyzer/endpoints/detect-context`) talk to the local machine
+  (Detect reads a user-run llama.cpp / llama-swap server's `/props`) and have
+  no mock counterpart; `mini-player`'s `keepalive`
   unload flush bypasses the mock api by design (must survive page unload);
   `store/queue-thunks.ts` honours the toggle through its own branch rather
   than through `api.*`. `.env.development` sets `VITE_USE_MOCKS=false` (real

@@ -388,6 +388,11 @@ describe('user-settings router', () => {
       'showWhatsNew',
       'setupCompletedAt',
       'tourCompletedAt',
+      /* #3084 PR 3b — analyzer endpoints and their origin-bound keys are written
+         only by the dedicated /api/analyzer/endpoints routes (they sit in the
+         server's FORBIDDEN_KEYS), never by the general PUT this guard probes. */
+      'analyzerEndpoints',
+      'analyzerEndpointKeys',
     ]);
     const writableKeys = Object.keys(userSettingsSchema.shape).filter((k) => !NON_WRITABLE.has(k));
     for (const key of writableKeys) {
@@ -576,6 +581,45 @@ describe('user-settings router', () => {
     expect(refused.body.issues.map((i: { path: string[] }) => i.path)).toEqual([
       ['configOverrides', 'analyzer.ollama.model'],
     ]);
+  });
+
+  it('GET exposes analyzer endpoints and key status, never the keys (#3084 PR 3b)', async () => {
+    writeFileSync(
+      userSettingsPath,
+      JSON.stringify({
+        analyzerEndpoints: [
+          { id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 },
+          { id: 'moved', name: 'Moved', baseUrl: 'http://127.0.0.1:9090/v1', gpu: 'any', contextTokens: 32768 },
+        ],
+        analyzerEndpointKeys: {
+          lab: { origin: 'http://127.0.0.1:8080', key: 'sk-lab-secret-1234' },
+          moved: { origin: 'http://127.0.0.1:8080', key: 'sk-moved-secret-1234' },
+        },
+      }),
+    );
+    resetCache();
+    const res = await request(app).get('/api/user/settings');
+    expect(res.status).toBe(200);
+    expect(res.body.analyzerEndpoints.map((e: { id: string }) => e.id)).toEqual(['lab', 'moved']);
+    expect(res.body.analyzerEndpointKeyStatus).toEqual({ lab: 'set', moved: 'origin-mismatch' });
+    expect(res.body).not.toHaveProperty('analyzerEndpointKeys');
+    expect(JSON.stringify(res.body)).not.toMatch(/sk-(lab|moved)-secret/);
+  });
+
+  it('the general PUT cannot write analyzer endpoints, their keys, or the key status (#3084 PR 3b)', async () => {
+    const res = await request(app)
+      .put('/api/user/settings')
+      .send({
+        displayName: 'Still writable',
+        analyzerEndpoints: [{ id: 'x', name: 'X', baseUrl: 'http://127.0.0.1:1/v1', gpu: 'any', contextTokens: 4096 }],
+        analyzerEndpointKeys: { x: { origin: 'http://127.0.0.1:1', key: 'sk-smuggled-1234' } },
+        analyzerEndpointKeyStatus: { x: 'set' },
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.displayName).toBe('Still writable');
+    expect(res.body.analyzerEndpoints).toEqual([]);
+    expect(res.body.analyzerEndpointKeyStatus).toEqual({});
+    expect(readFileSync(userSettingsPath, 'utf8')).not.toContain('sk-smuggled');
   });
 
 });

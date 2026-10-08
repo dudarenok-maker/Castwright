@@ -6,8 +6,11 @@
 
 import { GeminiTransport } from './transports/gemini-transport.js';
 import { TransportAnalyzer } from './runner/transport-analyzer.js';
-import { StageRunner, identitySchemaAdapter } from './runner/stage-runner.js';
+import { StageRunner } from './runner/stage-runner.js';
+import { adaptSchemaForGemini } from './runner/schema-adapters.js';
+import type { StructuredOutputMode } from './runner/transport.js';
 import { GEMINI_RETRY_POLICY } from './runner/retry-policy.js';
+import { configValue } from '../config/resolver.js';
 import { resolveGeminiMaxOutputTokens } from './capacity.js';
 
 /* Re-exports for backward compatibility — callers and tests that imported
@@ -35,11 +38,13 @@ export class GeminiAnalyzer extends TransportAnalyzer {
       new StageRunner({
         transport: new GeminiTransport({ apiKey: opts.apiKey, model: opts.model }),
         policy: GEMINI_RETRY_POLICY,
-        /* Structured output stays 'json' (wave 3 resolves it from
-           analyzer.gemini.structuredOutput). maxOutputTokens reads the catalog
-           the transport's prepare() warmed. */
-        settings: () => ({ structuredOutput: 'json', maxOutputTokens: resolveGeminiMaxOutputTokens(opts.model) }),
-        adaptSchema: identitySchemaAdapter,
+        /* The mode is read per request (analyzer.gemini.structuredOutput).
+           maxOutputTokens reads the catalog the transport's prepare() warmed. */
+        settings: () => ({
+          structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'),
+          maxOutputTokens: resolveGeminiMaxOutputTokens(opts.model),
+        }),
+        adaptSchema: adaptSchemaForGemini,
       }),
     );
   }

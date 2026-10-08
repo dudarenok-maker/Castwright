@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import { walk } from '../lib/module-graph.mjs';
+import { computeScopes } from '../ci-scope.mjs';
 import {
   composeInputHash,
   decide,
@@ -3703,3 +3704,17 @@ test('#3271: a --steps run is left alone (the deliberate narrow developer/hook f
     'the checker must not have been spawned again by the --steps run',
   );
 });
+
+// check-audit.test.mjs reads audit-waivers.json (the committed-waivers
+// validity test) and BOTH lockfiles (the braces/micromatch/fast-glob waiver
+// premise pin) as TEXT at RUNTIME - no module-graph edge. Without these
+// extraFiles entries, a waivers-only or server-lockfile-only diff leaves
+// test:hooks [cached] locally and skips its CI leg (computeScopes derives from
+// the same STEPS[] entry). A root package-lock.json diff already trips
+// computeShared, but is pinned here too so the entry cannot be dropped.
+for (const f of ['audit-waivers.json', 'package-lock.json', 'server/package-lock.json']) {
+  test(`stepTouchedByDiff + computeScopes: a ${f}-only diff puts test:hooks in scope (check-audit.test.mjs reads it at runtime)`, () => {
+    assert.equal(stepTouchedByDiff(stepByName['test:hooks'], [f]), true);
+    assert.equal(computeScopes([f]).step_test_hooks, true);
+  });
+}

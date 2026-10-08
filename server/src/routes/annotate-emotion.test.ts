@@ -31,7 +31,7 @@ let manuscriptId: string;
    derives a finite, num_ctx-bound budget and a large chapter splits. */
 const { runEmotion, engineState: emotionEngineState } = vi.hoisted(() => ({
   runEmotion: vi.fn(),
-  engineState: { engine: 'gemini' as 'gemini' | 'local' },
+  engineState: { engine: 'gemini' as 'gemini' | 'local', selectError: null as Error | null },
 }));
 
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
@@ -47,12 +47,15 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   };
   return {
     ...actual,
-    selectAnalyzerForPhase: () => ({
-      analyzer: fakeAnalyzer,
-      engine: emotionEngineState.engine,
-      model: 'test-model',
-      fallbackModel: null,
-    }),
+    selectAnalyzerForPhase: () => {
+      if (emotionEngineState.selectError) throw emotionEngineState.selectError;
+      return {
+        analyzer: fakeAnalyzer,
+        engine: emotionEngineState.engine,
+        model: 'test-model',
+        fallbackModel: null,
+      };
+    },
   };
 });
 
@@ -126,6 +129,7 @@ beforeAll(async () => {
 beforeEach(() => {
   runEmotion.mockReset();
   emotionEngineState.engine = 'gemini';
+  emotionEngineState.selectError = null;
   delete process.env.ANALYZER_NUM_CTX;
   rmSync(join(workspaceRoot, 'books'), { recursive: true, force: true });
 });
@@ -394,5 +398,38 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     const phases = events.filter((e) => e.kind === 'phase' && typeof e.chapterId === 'number');
     // Chapter 1 failed but still took real time — chapter 2's phase event still gets an estimate.
     expect(typeof phases[1].estRemainingMs).toBe('number');
+  });
+
+  it('an endpoint id this build cannot run ends the stream with analyzer-endpoint-missing, before any analyzer call (#3084 P23)', async () => {
+    writeBook(SENTENCES);
+    const { AnalyzerEndpointMissingError } = await import('../analyzer/errors.js');
+    emotionEngineState.selectError = new AnalyzerEndpointMissingError('gone', 'run-pick');
+    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:gone::m' });
+    expect(res.status).toBe(200);
+    expect(parseSse(res.text).find((e) => e.kind === 'error')).toMatchObject({ kind: 'error', code: 'analyzer-endpoint-missing' });
+    expect(runEmotion).not.toHaveBeenCalled();
+  });
+
+  it('any other selection error ends the stream with its classified code instead of escaping the handler (#3084 P23)', async () => {
+    writeBook(SENTENCES);
+    emotionEngineState.selectError = new Error('misconfigured engine: missing GEMINI_API_KEY');
+    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    expect(res.status).toBe(200);
+    expect(parseSse(res.text).find((e) => e.kind === 'error')).toMatchObject({
+      kind: 'error',
+      code: 'unknown',
+      message: 'misconfigured engine: missing GEMINI_API_KEY',
+    });
+    expect(runEmotion).not.toHaveBeenCalled();
+  });
+
+  it('a key-origin selection error (not an endpoint miss) is sent as a classified auth event on the open stream, never rethrown (#3084 P23)', async () => {
+    writeBook(SENTENCES);
+    const { AnalyzerKeyOriginError } = await import('../analyzer/errors.js');
+    emotionEngineState.selectError = new AnalyzerKeyOriginError('run-pick', 'Run Pick');
+    const res = await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({});
+    expect(res.status).toBe(200);
+    expect(parseSse(res.text).find((e) => e.kind === 'error')).toMatchObject({ kind: 'error', code: 'auth' });
+    expect(runEmotion).not.toHaveBeenCalled();
   });
 });

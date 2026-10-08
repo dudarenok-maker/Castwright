@@ -124,11 +124,11 @@ The block is deterministic — retrying the same model on the same text fails id
 
 **What to do:** Click Retry on this chapter to re-run attribution. Already-attributed lines are kept; a retry usually fills the gaps.
 
-### Gemini API key problem
+### API key or access problem
 
-**What you saw:** Gemini TTS authentication failed — check GEMINI_API_KEY.
+**What you saw:** Authentication failed — an API key or access setting is missing, wrong or expired.
 
-**What to do:** Verify GEMINI_API_KEY in server/.env is set and valid, restart the server, then retry.
+**What to do:** Check the API key or access setting of the service that failed, then retry: the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), the Ollama server's access settings, or the endpoint's API key.
 
 ### Voice catalog out of sync
 

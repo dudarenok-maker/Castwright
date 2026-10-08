@@ -41,6 +41,9 @@ import { configValue } from '../../config/resolver.js';
 import { getLastKnownVram } from '../../gpu/vram-state.js';
 import type { RawEvalTiming } from '../analyzer-eval-stats.js';
 import { AnalysisAbortedError, LocalUnreachableError, AnalyzerHttpError } from '../errors.js';
+import { redactKnownSecrets } from '../redact.js';
+/* #3084 A9 — through the leaf gate: no import edge to workspace/user-settings.ts. */
+import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { keepAliveFor, resolveAnalyzerNumCtx, resolveAnalyzerNumGpu, resolveNumPredict } from '../ollama-settings.js';
 import type { ChatTransport, StructuredOutputRequest, TransportRequest, TransportResult } from '../runner/transport.js';
 
@@ -87,7 +90,8 @@ export interface OllamaTransportOptions {
   dispatcher?: Agent;
 }
 
-function ollamaFormat(so: StructuredOutputRequest): unknown {
+/** #3084 spec §2 — the Ollama `format` field per mode; `undefined` omits the key. */
+export function ollamaFormatField(so: StructuredOutputRequest): unknown {
   if (so.mode === 'schema') return so.schema;
   if (so.mode === 'json') return 'json';
   return undefined;
@@ -128,7 +132,7 @@ export class OllamaTransport implements ChatTransport {
          particular) — the model literally cannot produce invalid JSON or
          extra fields. The existing validation-retry loop below still guards
          against semantic violations the schema can't express. */
-      format: ollamaFormat(req.structuredOutput),
+      format: ollamaFormatField(req.structuredOutput),
       /* Per-model keep_alive — see keepAliveFor + resolveKeepAliveSeconds
          above; a user override in analyzerKeepAliveByModel wins over the flat
          DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS fallback. */
@@ -195,10 +199,13 @@ export class OllamaTransport implements ChatTransport {
       }
 
       if (!response.ok) {
-        /* Reachable but errored — hard-fail. Surface the body verbatim so
-           operator can diagnose ("model not found", "invalid format", …). */
+        /* Reachable but errored — hard-fail. Surface the body so the operator can
+           diagnose ("model not found", "invalid format", …), with every known
+           analyzer secret removed where the error is built (#3084 P22). Redacted
+           BEFORE truncating, so a secret the slice would cut in half cannot
+           survive. With no secret in the body the text is byte-identical. */
         const text = await response.text().catch(() => '');
-        const bodyExcerpt = text.slice(0, 500);
+        const bodyExcerpt = redactKnownSecrets(text, await loadKnownAnalyzerSecrets()).slice(0, 500);
         throw new AnalyzerHttpError(
           'ollama',
           response.status,
@@ -285,7 +292,11 @@ export class OllamaTransport implements ChatTransport {
             }
 
             if (parsed.error) {
-              throw new Error(`Ollama ${this.url} stream error: ${parsed.error}`);
+              /* #3084 P22, A8 — the daemon's in-stream error can echo request text; every
+                 known analyzer secret is removed where the error is built. With no secret
+                 the message is byte-identical. */
+              const streamError = redactKnownSecrets(String(parsed.error), await loadKnownAnalyzerSecrets());
+              throw new Error(`Ollama ${this.url} stream error: ${streamError}`);
             }
             if (parsed.done) {
               if (parsed.done_reason) doneReason = parsed.done_reason;

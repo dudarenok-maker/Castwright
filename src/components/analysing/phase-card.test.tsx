@@ -9,7 +9,7 @@ import { castSlice } from '../../store/cast-slice';
 import type { AnalysisPhase } from '../../lib/types';
 import type { AnalysisLiveChapter } from '../../lib/api';
 import type React from 'react';
-import { PhaseCard } from './phase-card';
+import { PhaseCard, NeedsActionLine } from './phase-card';
 
 function mountStore() {
   return configureStore({
@@ -516,5 +516,19 @@ describe('PhaseCard resume indicator (reload re-attach)', () => {
   it('does not show the reconnecting line on a normal (non-resume) start', () => {
     renderCard({ isResuming: false, live: null });
     expect(screen.queryByText(/Reconnecting to the running analysis/)).not.toBeInTheDocument();
+  });
+});
+
+describe('NeedsActionLine (#3435)', () => {
+  it('renders the message as a status line', () => {
+    render(<NeedsActionLine message="Phase 0 paused - 1 chapter still needs cast detection." />);
+    const line = screen.getByTestId('analysis-needs-action-line');
+    expect(line).toHaveTextContent('Phase 0 paused - 1 chapter still needs cast detection.');
+    expect(line).toHaveAttribute('role', 'status');
+  });
+
+  it('renders nothing for an empty message', () => {
+    render(<NeedsActionLine message="" />);
+    expect(screen.queryByTestId('analysis-needs-action-line')).not.toBeInTheDocument();
   });
 });

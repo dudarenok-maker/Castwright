@@ -50,7 +50,14 @@ import {
   getOrHydrateManuscript,
   type ManuscriptRecord,
 } from '../store/manuscripts.js';
-import { clearAnalysisCache, loadAnalysisCache, type ChapterErrorRecord } from '../store/analysis-cache.js';
+import {
+  analysisCompleteFor,
+  clearAnalysisCache,
+  loadAnalysisCache,
+  reachedConfirm,
+  unattributedChapterIds,
+  type ChapterErrorRecord,
+} from '../store/analysis-cache.js';
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.js';
@@ -321,10 +328,36 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        populated in analysis.ts:913 (full route) and the subset route. */
     let failedChapterIds: number[] = [];
     let failedChapterErrors: Record<string, ChapterErrorRecord> = {};
+    /* Plan 286 §3.4 (C18, C20, F) — server facts the analysing view reads
+       after a reload or a dropped snapshot: the roster is final
+       (`stage1Ready`); the book has not reached Confirm and still needs a main
+       resume (`resumeRequired` — never true past Confirm, so no Resume is
+       offered on a confirmed book); and the non-excluded chapters without a
+       current take (`unattributedChapterIds`, the Generate view's analysis gaps). */
+    let stage1Ready = false;
+    let resumeRequired = false;
+    let unattributed: number[] = [];
     if (state.manuscriptId) {
       const cache = await loadAnalysisCache(state.manuscriptId);
       failedChapterIds = cache.failedChapterIds ?? [];
       failedChapterErrors = cache.failedChapterErrors ?? {};
+      const activeIds = (state.chapters ?? []).filter((c) => !c.excluded).map((c) => c.id);
+      stage1Ready = !!cache.stage1;
+      resumeRequired = !reachedConfirm(state, cache) && stage1Ready && !analysisCompleteFor(cache, activeIds);
+      unattributed = unattributedChapterIds(cache, activeIds);
+      /* Spec §3.4 book-state row, amended by PR #3505 gate pass 1 — past
+         Confirm, manuscript-edits.json is authoritative downstream (generation
+         rebuilds the cache from it), so a chapter whose sentences it carries
+         is attributed even when the cache has no take for it (a sample /
+         handoff-less book) or only a pending one. A chapter in
+         failedChapterErrors keeps its gap. */
+      if (reachedConfirm(state, cache) && Array.isArray(edits?.sentences)) {
+        const editedChapters = new Set<number>();
+        for (const s of edits.sentences as Array<{ chapterId?: unknown }>) {
+          if (typeof s?.chapterId === 'number') editedChapters.add(s.chapterId);
+        }
+        unattributed = unattributed.filter((id) => !editedChapters.has(id) || Object.hasOwn(failedChapterErrors, String(id)));
+      }
       const cachedSentences = Object.values(cache.chapters ?? {}).flat();
       if (edits && Array.isArray(edits.sentences) && edits.sentences.length > 0) {
         if (cachedSentences.length > 0) {
@@ -635,7 +668,13 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       renderedTextByChapter,
       renderedInstructByChapter,
       changeLog: changeLog?.events ?? null,
-      analysis: { failedChapterIds, failedChapterErrors },
+      analysis: {
+        failedChapterIds,
+        failedChapterErrors,
+        stage1Ready,
+        resumeRequired,
+        unattributedChapterIds: unattributed,
+      },
     });
   } catch (e) {
     console.error('[book-state] GET failed', e);

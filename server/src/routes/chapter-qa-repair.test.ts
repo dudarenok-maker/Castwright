@@ -226,6 +226,42 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (dry-run scan)', () 
   });
 });
 
+describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (repair) — the edits rebuild keeps an excluded take (plan 287)', () => {
+  it("a repair keeps an excluded chapter's cached take (the route passes state.json's excluded ids)", async () => {
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await vi.importActual<
+      typeof import('../store/analysis-cache.js')
+    >('../store/analysis-cache.js');
+    const manuscriptId = 'm_qa_repair_rebuild';
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const original = readFileSync(statePath, 'utf8');
+    const state = JSON.parse(original);
+    state.manuscriptId = manuscriptId;
+    state.chapters = [...state.chapters, { id: 2, title: 'Chapter 2', slug: '02-two', excluded: true }];
+    writeFileSync(statePath, JSON.stringify(state));
+    const line = { id: 1, chapterId: 1, characterId: 'amy', text: 'Amy line.' };
+    const excludedTake = [{ id: 9, chapterId: 2, characterId: 'amy', text: 'Front matter.' }];
+    await saveAnalysisCache(manuscriptId, { chapters: { 1: [line], 2: excludedTake } });
+    /* The edits never carry an excluded chapter. */
+    writeFileSync(editsPath, JSON.stringify({ sentences: [line] }));
+    try {
+      /* The flagged (silent) segment's sentence (id 2) is not in the rebuilt
+         analysis, so the repair refuses after the rebuild and before any audio
+         is touched. */
+      await request(app)
+        .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio-qa-repair`)
+        .send({ dryRun: false, modelKey: 'kokoro-v1' });
+      const after = await loadAnalysisCache(manuscriptId);
+      expect(after.chapters[2]).toEqual(excludedTake);
+    } finally {
+      writeFileSync(statePath, original);
+      rmSync(editsPath, { force: true });
+      await clearAnalysisCache(manuscriptId);
+    }
+  });
+});
+
 describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (repair)', () => {
   it('fails gracefully when flagged segments have no cached analysis to re-synthesise', async () => {
     // No analysis cache for this fixture, so the re-record can't find sentences

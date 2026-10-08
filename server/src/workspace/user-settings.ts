@@ -10,9 +10,10 @@
    PUT validator silently drops any `geminiApiKey`-shaped field. */
 
 import { z } from 'zod';
-import { dirname } from 'node:path';
-import { existsSync, statSync } from 'node:fs';
-import { copyFile, mkdir } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { appendFile, copyFile, mkdir } from 'node:fs/promises';
 import { readJsonWithRecovery, writeJsonAtomic } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
 import { resolveSidecarPort } from '../tts/sidecar-owner.js';
@@ -23,6 +24,9 @@ import {
 } from './user-settings-path.js';
 import type { CloneEngine } from '../tts/clone-engines.js';
 import { inferEngineFromModelId, type AnalysisEngine } from '../analyzer/model-id.js';
+import { analyzerEndpointSchema } from './analyzer-endpoints.js';
+import { registerKnownSecretsProvider } from '../analyzer/known-secrets-gate.js';
+import { registerAnalyzerEndpointsProvider } from '../analyzer/analyzer-endpoints-gate.js';
 
 /* Path resolution itself lives in the dependency-free user-settings-path.ts
    (shared with paths.ts's boot-time workspace-override read — see that
@@ -185,6 +189,9 @@ export const COVER_PICKER_TAB_VALUES = ['search', 'upload'] as const;
 export const THEME_PREFERENCE_VALUES = ['light', 'dark', 'system'] as const;
 export const BACKUP_CADENCE_VALUES = ['daily', 'weekly'] as const;
 
+/* #3084 — one saved endpoint key, bound at save time to the base URL's origin. */
+const endpointKeyEntrySchema = z.object({ origin: z.string(), key: z.string() });
+
 export const userSettingsSchema = z.object({
   /* config-override store — sparse key→value map for the advanced-settings
      knob resolver. Keys are dotted ConfigKnob keys (e.g.
@@ -316,6 +323,15 @@ export const userSettingsSchema = z.object({
      synchronously by resolveKeepAliveSeconds. Optional-with-default so legacy
      files load unchanged. */
   analyzerKeepAliveByModel: z.record(z.string(), z.number().int()).default({}),
+  /* #3084 PR 3b — named OpenAI-compatible analyzer endpoints. Returned by GET.
+     NOT writable through the general PUT (FORBIDDEN_KEYS): the dedicated
+     /api/analyzer/endpoints routes are the only writers, via mutateUserSettings. */
+  analyzerEndpoints: z.array(analyzerEndpointSchema).default([]),
+  /* #3084 decision 3c — per-endpoint API keys, each bound at save time to the
+     base URL's origin. Never returned by GET (routes/user-settings.ts envDerived
+     strips it and adds analyzerEndpointKeyStatus), never accepted by the general
+     PUT (FORBIDDEN_KEYS), never logged. */
+  analyzerEndpointKeys: z.record(z.string(), endpointKeyEntrySchema).default({}),
 });
 
 export type UserSettings = z.infer<typeof userSettingsSchema>;
@@ -389,6 +405,9 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   /* Per-model analyzer keep-alive — empty by default; every model falls
      through to the flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS (30s). */
   analyzerKeepAliveByModel: {},
+  /* #3084 — no endpoints and no keys on a fresh install. */
+  analyzerEndpoints: [],
+  analyzerEndpointKeys: {},
   /* srv-2 — auto-backup ON by default (disaster recovery without manual
      intervention), daily, keep the last 14 snapshots. Flip in lockstep with
      src/lib/account-defaults.ts FRONTEND_ACCOUNT_DEFAULTS. */
@@ -467,6 +486,448 @@ export function isUserSettingsFileCorrupt(): boolean {
   return settingsFileCorrupt;
 }
 
+/* #3084 P25 — endpoint entries are parsed one by one BEFORE the whole-file
+   safeParse below. That parse falls back to DEFAULT_USER_SETTINGS when any
+   field fails, so one malformed endpoint would otherwise reset every setting,
+   the saved Gemini key included. An invalid entry, or a later entry repeating
+   an earlier id, is dropped from the loaded settings. Because every writer
+   writes the whole merged object, the next write would delete it from disk, so
+   readUserSettings appends it to the archive first, and while that append is
+   failing every writer puts it back (withUnarchivedEntries). */
+interface DroppedEndpointEntry {
+  droppedAt: string;
+  field: 'analyzerEndpoints' | 'analyzerEndpointKeys';
+  /** list index, the key map's endpoint id, or null when the whole field was unusable */
+  position: number | string | null;
+  id: unknown;
+  issues: string[];
+  /** what the archive stores (a key entry: its origin only) */
+  entry: unknown;
+  /** In memory only, never appended: the value exactly as it was on disk, which a
+      writer puts back while the append is failing (a key entry's raw value holds the key). */
+  raw: unknown;
+  /** #3084 F5 — "path: code" strings, one per zodIssues() entry (or a synthetic
+      code for the two non-zod refusals). Never a value: exposed to the client
+      via listDroppedEndpointEntries, where `issues` (path: message) is not. */
+  codes: string[];
+  /** #3084 F5 review, item 2 — sha256 of a canonical (sorted-key) JSON encoding
+      of the value that is SAFE to hash: `entry` for an endpoint-list or
+      whole-field drop, but for a KEY entry `{ id: endpointId, ...keyEntryOriginOnly(entry) }`
+      — the origin-only projection plus the endpoint id, NEVER the raw entry,
+      because the raw entry holds the key. Never `droppedAt`/`id` for the
+      other two cases either, so the hash depends only on what makes the entry
+      invalid. Drives durable de-duplication and durable "Got it" — never
+      leaves the server, never appears in DroppedEndpointEntrySummary, and (by
+      construction, for a key entry) is never computed over key material. */
+  contentHash: string;
+}
+
+/** Beside the settings file. One JSON object per line; append-only — never truncated or rewritten. */
+export function invalidEndpointsArchivePath(): string {
+  return join(dirname(USER_SETTINGS_PATH), 'user-settings.invalid-endpoints.json');
+}
+
+export interface DroppedEndpointEntrySummary {
+  archiveId: string | null;
+  kind: 'endpoint' | 'key';
+  endpointId?: string;
+  name?: string;
+  origin?: string;
+  issues: string[]; // path: code — never a value
+  droppedAt: string;
+}
+
+const DROPPED_ENTRY_NAME_MAX = 80; // #3084 F5 review, item 10 — a raw entry never went through
+                                    // analyzerEndpointSchema's own .max(80), so cap it here.
+
+/** Beside the settings file, like the archive itself. A tiny JSON array of
+    acknowledged CONTENT HASHES (item 5 — never archiveIds: an archiveId is
+    minted fresh on every append, including a restart's re-drop of the same
+    unchanged entry, so an ack keyed on archiveId would stop applying the
+    moment the process restarts). This sidecar is what acknowledgement
+    actually mutates; the archive file itself stays append-only (P25). */
+export function droppedEndpointEntriesAcknowledgedPath(): string {
+  return join(dirname(USER_SETTINGS_PATH), 'user-settings.invalid-endpoints.acknowledged.json');
+}
+
+function readAcknowledgedHashes(): Set<string> {
+  try {
+    const raw = JSON.parse(readFileSync(droppedEndpointEntriesAcknowledgedPath(), 'utf8'));
+    return new Set(Array.isArray(raw) ? raw.filter((v) => typeof v === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Parses one archive line; returns its contentHash alongside the built
+    summary (or null for a line this function itself rejects),
+    so callers with different jobs (list vs. resolve-archiveId-to-hash) each
+    read the hash without re-deriving it. */
+function parseArchiveLine(line: string): { summary: DroppedEndpointEntrySummary; contentHash: string | undefined } | null {
+  let rec: Record<string, unknown>;
+  try {
+    rec = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof rec.archiveId !== 'string') return null; // a pre-F5 line, from before this task shipped
+  const kind: 'endpoint' | 'key' = rec.field === 'analyzerEndpoints' ? 'endpoint' : 'key';
+  const entry = rec.entry as Record<string, unknown> | undefined;
+  const rawName = kind === 'endpoint' && entry && typeof entry.name === 'string' ? entry.name : undefined;
+  return {
+    summary: {
+      archiveId: rec.archiveId,
+      kind,
+      endpointId: kind === 'endpoint' ? (typeof rec.id === 'string' ? rec.id : undefined) : (typeof rec.position === 'string' ? rec.position : undefined),
+      name: rawName?.slice(0, DROPPED_ENTRY_NAME_MAX),
+      origin: kind === 'key' && entry && typeof entry.origin === 'string' ? entry.origin : undefined,
+      issues: Array.isArray(rec.codes) ? (rec.codes as string[]) : [],
+      droppedAt: typeof rec.droppedAt === 'string' ? rec.droppedAt : new Date(0).toISOString(),
+    },
+    contentHash: typeof rec.contentHash === 'string' ? rec.contentHash : undefined,
+  };
+}
+
+function summarisePending(d: DroppedEndpointEntry): DroppedEndpointEntrySummary {
+  const kind: 'endpoint' | 'key' = d.field === 'analyzerEndpoints' ? 'endpoint' : 'key';
+  const entry = d.entry as Record<string, unknown> | undefined;
+  const rawName = kind === 'endpoint' && entry && typeof entry.name === 'string' ? entry.name : undefined;
+  return {
+    archiveId: null,
+    kind,
+    endpointId: kind === 'endpoint' ? (typeof d.id === 'string' ? d.id : undefined) : (typeof d.position === 'string' ? d.position : undefined),
+    name: rawName?.slice(0, DROPPED_ENTRY_NAME_MAX),
+    origin: kind === 'key' && entry && typeof entry.origin === 'string' ? entry.origin : undefined,
+    issues: d.codes,
+    droppedAt: d.droppedAt,
+  };
+}
+
+/** #3084 F5 — every unacknowledged drop: archived (from the append-only archive
+    file, minus anything whose contentHash is in the acknowledged sidecar)
+    plus whatever is still pending an archive append (unarchivedDrops, Task
+    3b.6, listed with archiveId: null — the user must still be told even
+    though the append hasn't landed; also filtered against the acknowledged
+    set, for the edge case of a retried entry whose earlier attempt was
+    already acknowledged). Synchronous: both files are small, and envDerived
+    (sync, shared by every endpoint-CRUD 200 response) needs this too. */
+export function listDroppedEndpointEntriesSync(): DroppedEndpointEntrySummary[] {
+  const acknowledged = readAcknowledgedHashes();
+  let archived: DroppedEndpointEntrySummary[] = [];
+  try {
+    archived = readFileSync(invalidEndpointsArchivePath(), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim().length > 0)
+      .map(parseArchiveLine)
+      .filter((p): p is NonNullable<typeof p> => p !== null && !(p.contentHash && acknowledged.has(p.contentHash)))
+      .map((p) => p.summary);
+  } catch {
+    archived = [];
+  }
+  const pending = unarchivedDrops.filter((d) => !acknowledged.has(d.contentHash)).map(summarisePending);
+  return [...archived, ...pending];
+}
+
+export async function listDroppedEndpointEntries(): Promise<DroppedEndpointEntrySummary[]> {
+  return listDroppedEndpointEntriesSync();
+}
+
+/** #3084 F5 review, item 6 — serialised through `writeChain` (the same chain
+    every settings writer and mutateUserSettings use), so two concurrent
+    acknowledge calls (a double click) read-modify-write the sidecar one at a
+    time instead of racing a lost update. */
+function readAndUnionAcknowledgedHashes(hashes: Iterable<string>): Promise<void> {
+  const next = writeChain.then(async () => {
+    const current = readAcknowledgedHashes();
+    for (const h of hashes) current.add(h);
+    await writeJsonAtomic(droppedEndpointEntriesAcknowledgedPath(), [...current]);
+  });
+  writeChain = next.catch(() => undefined);
+  return next;
+}
+
+/** #3084 F5 — an archiveId not currently on disk (already acknowledged, still
+    pending an archive append and so never had one, or simply unknown) is
+    ignored rather than refused: an ack racing a retry or a duplicate click is
+    not an error. Resolves each archiveId to its contentHash (item 5 — the
+    sidecar stores hashes, never archiveIds) by re-reading the archive once. */
+export async function acknowledgeDroppedEndpointEntries(archiveIds: string[]): Promise<void> {
+  if (archiveIds.length === 0) return;
+  const wanted = new Set(archiveIds);
+  const hashesToAck = new Set<string>();
+  try {
+    for (const line of readFileSync(invalidEndpointsArchivePath(), 'utf8').split('\n')) {
+      if (!line.trim()) continue;
+      const parsed = parseArchiveLine(line);
+      if (parsed && wanted.has(parsed.summary.archiveId as string) && parsed.contentHash) {
+        hashesToAck.add(parsed.contentHash);
+      }
+    }
+  } catch {
+    return; // no archive file yet — nothing to acknowledge
+  }
+  if (hashesToAck.size === 0) return;
+  await readAndUnionAcknowledgedHashes(hashesToAck);
+}
+
+function zodIssues(error: z.ZodError): string[] {
+  return error.issues.map((i) => `${i.path.join('.') || '(entry)'}: ${i.message}`);
+}
+
+function zodIssueCodes(error: z.ZodError): string[] {
+  return error.issues.map((i) => `${i.path.join('.') || '(entry)'}: ${i.code}`);
+}
+
+/** #3084 F5 review — stable regardless of key insertion order, so re-parsing
+    the same bad entry on a later read (same process or after a restart)
+    always hashes identically. */
+function canonicalStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalStringify((value as Record<string, unknown>)[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function droppedEntryContentHash(entry: unknown): string {
+  return createHash('sha256').update(canonicalStringify(entry)).digest('hex');
+}
+
+function dropInvalidEndpointEntries(raw: unknown, now: Date): { value: unknown; dropped: DroppedEndpointEntry[] } {
+  const dropped: DroppedEndpointEntry[] = [];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { value: raw, dropped };
+  const obj = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = { ...obj };
+  const droppedAt = now.toISOString();
+  if ('analyzerEndpoints' in obj) {
+    if (!Array.isArray(obj.analyzerEndpoints)) {
+      dropped.push({
+        droppedAt,
+        field: 'analyzerEndpoints',
+        position: null,
+        id: null,
+        issues: ['analyzerEndpoints: not a list'],
+        codes: ['analyzerEndpoints: invalid_type'],
+        entry: obj.analyzerEndpoints,
+        raw: obj.analyzerEndpoints,
+        contentHash: droppedEntryContentHash(obj.analyzerEndpoints),
+      });
+      out.analyzerEndpoints = [];
+    } else {
+      const seenIds = new Set<string>();
+      out.analyzerEndpoints = obj.analyzerEndpoints.filter((entry, i) => {
+        const parsed = analyzerEndpointSchema.safeParse(entry);
+        if (parsed.success && !seenIds.has(parsed.data.id)) {
+          seenIds.add(parsed.data.id);
+          return true;
+        }
+        const id = entry && typeof entry === 'object' ? ((entry as { id?: unknown }).id ?? null) : null;
+        const issues = parsed.success
+          ? [`id: repeats the id of an earlier endpoint (${JSON.stringify(parsed.data.id)}); the first is kept`]
+          : zodIssues(parsed.error);
+        dropped.push({
+          droppedAt,
+          field: 'analyzerEndpoints',
+          position: i,
+          id,
+          issues,
+          codes: parsed.success ? ['id: duplicate_id'] : zodIssueCodes(parsed.error),
+          entry,
+          raw: entry,
+          contentHash: droppedEntryContentHash(entry),
+        });
+        return false;
+      });
+    }
+  }
+  if ('analyzerEndpointKeys' in obj) {
+    const keys = obj.analyzerEndpointKeys;
+    if (!keys || typeof keys !== 'object' || Array.isArray(keys)) {
+      /* P25 — origin only, never a key, even from a malformed field. */
+      const entry = Array.isArray(keys) ? keys.map(keyEntryOriginOnly) : keyEntryOriginOnly(keys);
+      dropped.push({
+        droppedAt,
+        field: 'analyzerEndpointKeys',
+        position: null,
+        id: null,
+        issues: ['analyzerEndpointKeys: not a map'],
+        codes: ['analyzerEndpointKeys: invalid_type'],
+        entry,
+        raw: keys,
+        contentHash: droppedEntryContentHash(entry),
+      });
+      out.analyzerEndpointKeys = {};
+    } else {
+      out.analyzerEndpointKeys = Object.fromEntries(
+        Object.entries(keys as Record<string, unknown>).filter(([endpointId, entry]) => {
+          const parsed = endpointKeyEntrySchema.safeParse(entry);
+          if (parsed.success) return true;
+          dropped.push({
+            droppedAt,
+            field: 'analyzerEndpointKeys',
+            position: endpointId,
+            id: endpointId,
+            issues: zodIssues(parsed.error),
+            codes: zodIssueCodes(parsed.error),
+            entry: keyEntryOriginOnly(entry),
+            raw: entry,
+            /* Review pass 2, item 2 — hash the origin-only projection plus the
+               endpoint id, NEVER the raw entry (which holds the key). */
+            contentHash: droppedEntryContentHash({ id: endpointId, ...keyEntryOriginOnly(entry) }),
+          });
+          return false;
+        }),
+      );
+    }
+  }
+  return { value: out, dropped };
+}
+
+/* #3084 P25 — a dropped key entry is archived with its origin only, never the key:
+   the archive is a plain file beside the settings, and a key can be re-entered. A
+   value with no `origin` (a bare string may BE the key) archives as {}. */
+function keyEntryOriginOnly(entry: unknown): { origin?: unknown } {
+  return entry !== null && typeof entry === 'object' && !Array.isArray(entry) && 'origin' in entry
+    ? { origin: (entry as { origin: unknown }).origin }
+    : {};
+}
+
+/* Entries this process has already archived: a cold re-read of the same file does
+   not append them twice. (A restart before any write can append them again; the
+   archive is append-only, so a repeat costs a line, never an entry.) */
+const archivedDrops = new Set<string>();
+
+const archiveKey = (d: DroppedEndpointEntry): string => JSON.stringify([d.field, d.position, d.entry]);
+
+/* #3084 F5 review, item 5 — durable de-dupe: the in-memory `archivedDrops` Set above only
+   survives one process, so a restart re-appends the SAME bad entry under a FRESH archiveId.
+   Reading the hashes already on disk lets the append skip an entry whose contentHash is
+   already archived, durably, across restarts. */
+function readExistingArchiveHashes(archive: string): Set<string> {
+  try {
+    return new Set(
+      readFileSync(archive, 'utf8')
+        .split('\n')
+        .filter((l) => l.trim().length > 0)
+        .map((l) => {
+          try {
+            return (JSON.parse(l) as { contentHash?: unknown }).contentHash;
+          } catch {
+            return undefined;
+          }
+        })
+        .filter((h): h is string => typeof h === 'string'),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+async function archiveDroppedEndpointEntries(dropped: DroppedEndpointEntry[], archive: string): Promise<void> {
+  /* #3084 F5 review, item 5 — also skip a hash the ON-DISK archive already has. */
+  const onDisk = readExistingArchiveHashes(archive);
+  const fresh = dropped.filter((d) => !archivedDrops.has(archiveKey(d)) && !onDisk.has(d.contentHash));
+  if (fresh.length === 0) return;
+  await mkdir(dirname(archive), { recursive: true });
+  /* P25 — field by field, never the whole object: `raw` is in-memory only (a key entry's
+     raw value holds the key), and only `entry` is safe to write. #3084 F5 — the line also
+     carries a fresh `archiveId` (minted per append; no `acknowledgedAt`, acknowledgement
+     lives only in the sidecar) and the never-a-value `codes`. */
+  const lines = fresh.map((d) =>
+    `${JSON.stringify({
+      archiveId: randomUUID(),
+      droppedAt: d.droppedAt,
+      field: d.field,
+      position: d.position,
+      id: d.id,
+      issues: d.issues,
+      codes: d.codes,
+      contentHash: d.contentHash,
+      entry: d.entry,
+    })}\n`,
+  );
+  await appendFile(archive, lines.join(''), { encoding: 'utf8', flag: 'a' });
+  /* #3084 P25 — marked only once the append has succeeded; a failed append leaves the
+     entries unmarked, so the retry appends them. */
+  for (const d of fresh) archivedDrops.add(archiveKey(d));
+}
+
+/* #3084 P25 — dropped entries whose append failed. The next read retries them. Until
+   that succeeds, every writer writes them back into the file raw (withUnarchivedEntries):
+   each writer writes the whole merged object, which no longer holds them, so without
+   that a write would delete them from disk before they are saved anywhere. */
+let unarchivedDrops: DroppedEndpointEntry[] = [];
+let archiveRetry: Promise<void> | null = null;
+
+/* Never rejects: a failure is logged and kept pending. */
+async function archiveOrKeepPending(dropped: DroppedEndpointEntry[]): Promise<void> {
+  const archive = invalidEndpointsArchivePath();
+  try {
+    await archiveDroppedEndpointEntries(dropped, archive);
+    unarchivedDrops = [];
+  } catch (err) {
+    unarchivedDrops = dropped;
+    console.error(
+      `[user-settings] could not append dropped analyzer endpoint entries to ${archive}; the next settings read retries, and until then settings writes keep those entries in the file unchanged:`,
+      (err as Error)?.message,
+    );
+  }
+}
+
+/* Single-flight, like the cold read: concurrent warm reads share one retry. */
+function retryUnarchivedDrops(): Promise<void> {
+  if (!archiveRetry) {
+    const retry = archiveOrKeepPending(unarchivedDrops);
+    archiveRetry = retry;
+    void retry.then(() => {
+      if (archiveRetry === retry) archiveRetry = null;
+    });
+  }
+  return archiveRetry;
+}
+
+/** #3084 P25 — what every settings writer puts on disk. A write never refuses because an
+    append failed: the merged settings are written with each still-unarchived dropped
+    entry put back raw and unchanged, so the entry stays in the file until its append
+    lands. The cache keeps `merged`, so the entry stays dropped from the loaded settings.
+    - An endpoint list entry goes after the merged list's entries.
+    - A key-map entry goes back under its endpoint id, unless this write saved a key for
+      that id: the new key replaces it, and the dropped entry stays pending for the archive.
+    - A whole field that was not a list or map goes back only while the merged field is
+      still empty. */
+function withUnarchivedEntries(merged: UserSettings): Record<string, unknown> {
+  if (unarchivedDrops.length === 0) return merged;
+  const endpoints: unknown[] = [...merged.analyzerEndpoints];
+  const keys: Record<string, unknown> = { ...merged.analyzerEndpointKeys };
+  let endpointsField: unknown = endpoints;
+  let keysField: unknown = keys;
+  for (const d of unarchivedDrops) {
+    if (d.field === 'analyzerEndpoints') {
+      if (d.position !== null) endpoints.push(d.raw);
+      else if (merged.analyzerEndpoints.length === 0) endpointsField = d.raw;
+    } else if (d.position === null) {
+      if (Object.keys(merged.analyzerEndpointKeys).length === 0) keysField = d.raw;
+    } else if (!Object.hasOwn(merged.analyzerEndpointKeys, String(d.position))) {
+      keys[String(d.position)] = d.raw;
+    }
+  }
+  return { ...merged, analyzerEndpoints: endpointsField, analyzerEndpointKeys: keysField };
+}
+
+/* Names the entry's position and id, never its values (a key entry holds a key). */
+function droppedEntryWarning(d: DroppedEndpointEntry, archive: string): string {
+  const what =
+    d.field === 'analyzerEndpointKeys'
+      ? d.position === null
+        ? 'analyzerEndpointKeys is not a map; ignoring it'
+        : `dropping invalid key entry for analyzer endpoint ${JSON.stringify(d.position)}`
+      : d.position === null
+        ? 'analyzerEndpoints is not a list; ignoring it'
+        : `dropping invalid analyzer endpoint #${d.position} (id ${JSON.stringify(d.id)})`;
+  return `[user-settings] ${what}; the entry was saved to ${archive}`;
+}
+
 /** Reads from disk; falls back to defaults when the file is missing or
     malformed. Cached in-process so the hot paths (selectAnalyzer, sidecar
     URL resolution) don't re-parse JSON on every request.
@@ -493,7 +954,12 @@ export function isUserSettingsFileCorrupt(): boolean {
 export async function readUserSettings(): Promise<UserSettings> {
   // If another read is already in flight, await it instead of racing
   if (inFlightRead) return inFlightRead;
-  if (cached && cacheMatchesDisk()) return cached;
+  if (cached && cacheMatchesDisk()) {
+    /* #3084 P25 — a failed append left entries unarchived: retry it on this read. The
+       stamp check is unchanged; this only adds the retry to the warm path. */
+    if (unarchivedDrops.length > 0) await retryUnarchivedDrops();
+    return cached;
+  }
 
   // Start the in-flight read before any awaits below, so concurrent callers
   // see it and await the same promise instead of each racing independently
@@ -577,7 +1043,19 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       },
     );
   }
-  const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(migrated as object) });
+  const { value: loaded, dropped } = dropInvalidEndpointEntries(migrated, new Date());
+  if (dropped.length > 0) {
+    /* #3084 P25 — the append runs BEFORE commitRead publishes the cache and this read
+       resolves, so no writer (they all read first, inside writeChain) can persist the
+       drop before the entry is saved. A failed append keeps the entries pending: the
+       next read retries it, and until it lands every writer writes them back into the
+       file raw (withUnarchivedEntries) instead of refusing. The migration write above
+       writes `migrated`, which still holds the entries. */
+    await archiveOrKeepPending(dropped);
+    const archive = invalidEndpointsArchivePath();
+    for (const d of dropped) console.warn(droppedEntryWarning(d, archive));
+  }
+  const parsed = userSettingsSchema.safeParse({ ...DEFAULT_USER_SETTINGS, ...(loaded as object) });
   // A successful read or backup recovery means the corruption episode, if any, is over.
   return commitRead({
     settings: parsed.success ? parsed.data : { ...DEFAULT_USER_SETTINGS },
@@ -648,7 +1126,7 @@ const STAMP_FORCE_REREAD: FileStamp = { mtimeMs: -1, size: -1 };
     mismatch (or a failed stat) records STAMP_FORCE_REREAD, and the next
     read self-heals from disk exactly as it would have with no stamp at
     all. */
-function stampCacheAfterWrite(written: UserSettings): void {
+function stampCacheAfterWrite(written: object): void {
   const now = statFileStamp();
   const expectedSize = Buffer.byteLength(JSON.stringify(written, null, 2), 'utf8');
   cachedFileStamp = now !== null && now.size === expectedSize ? now : STAMP_FORCE_REREAD;
@@ -690,10 +1168,11 @@ export async function writeUserSettings(patch: unknown): Promise<UserSettings> {
     ) {
       merged.defaultTtsModelKeyExplicit = true;
     }
+    const written = withUnarchivedEntries(merged);
     await snapshotCorruptBytesBeforeWrite();
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    await writeJsonAtomic(USER_SETTINGS_PATH, written, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
-    stampCacheAfterWrite(merged);
+    stampCacheAfterWrite(written);
     cached = merged;
     // Track that sentKeys are now explicitly set in the file (#2632 N2)
     for (const key of sentKeys) {
@@ -726,6 +1205,17 @@ const FORBIDDEN_KEYS = new Set([
   'setupCompletedAt',
   /* guided tour — written only by writeTourCompletedAt. */
   'tourCompletedAt',
+  /* #3084 PR 3b — analyzer endpoints are written only by the endpoint routes;
+     their keys only by PUT /api/analyzer/endpoints/{id}/key; the key status is
+     derived on GET. */
+  'analyzerEndpoints',
+  'analyzerEndpointKeys',
+  'analyzerEndpointKeyStatus',
+  /* #3084 F5 — the dropped-endpoint-entry list is response-only (built by
+     envDerived in routes/user-settings.ts); the acknowledge route is its only
+     writer. Defensive-only, exactly like corruptSettingsFile above: it is never
+     added to userSettingsSchema's shape, so the general PUT already strips it. */
+  'droppedEndpointEntries',
 ]);
 
 function stripForbiddenKeys(value: unknown): Record<string, unknown> {
@@ -1084,11 +1574,45 @@ export async function writeGeminiApiKey(key: string | null): Promise<UserSetting
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, geminiApiKey: normalised };
+    const written = withUnarchivedEntries(merged);
     await snapshotCorruptBytesBeforeWrite();
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    await writeJsonAtomic(USER_SETTINGS_PATH, written, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
-    stampCacheAfterWrite(merged);
+    stampCacheAfterWrite(written);
     cached = merged;
+    return merged;
+  });
+  writeChain = next.catch(() => undefined);
+  return next;
+}
+
+/** Serialised read-decide-write for fields the general PUT may not touch
+    (#3084 endpoint routes). `decide` runs INSIDE writeChain against the
+    freshly read settings, so two concurrent endpoint edits cannot lose each
+    other's change, and a refusal (duplicate id, still referenced, …) is
+    decided against exactly the settings it would have overwritten. A throw
+    from `decide` writes nothing and propagates. */
+export async function mutateUserSettings(
+  decide: (current: UserSettings) => Partial<UserSettings>,
+): Promise<UserSettings> {
+  const next = writeChain.then(async () => {
+    /* P25 — the read runs (and retries) the archive append first; the write then puts any
+       still-unarchived entry back into the file raw, so saving never refuses and nothing
+       is lost. */
+    const current = await readUserSettings();
+    const patch = decide(current);
+    const merged = userSettingsSchema.parse({ ...current, ...patch });
+    /* Same write discipline as the five shipped writers (#3195): rotate a `.bak.N`
+       snapshot so an endpoint write is recoverable like any other, preserve any corrupt
+       bytes first, clear the flag on success, and stamp the cache from what was actually
+       written so the next read doesn't mistake our own write for an out-of-band change. */
+    const written = withUnarchivedEntries(merged);
+    await snapshotCorruptBytesBeforeWrite();
+    await writeJsonAtomic(USER_SETTINGS_PATH, written, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    clearCorruptFlagAfterWrite();
+    stampCacheAfterWrite(written);
+    cached = merged;
+    for (const key of Object.keys(patch)) explicitlySetKeys.add(key);
     return merged;
   });
   writeChain = next.catch(() => undefined);
@@ -1111,6 +1635,39 @@ export function getResolvedGeminiApiKey(): string | null {
   return null;
 }
 
+/* #3084 A9 — register the known-secrets provider at module load so any route or
+   analyzer module can redact saved credentials from upstream error text without
+   importing user-settings.ts (which would add an edge that can close a cycle).
+   The gate (known-secrets-gate.ts) is a leaf: it holds no state of its own. */
+/* #3084 A9 — the provider behind analyzer/known-secrets-gate.ts. */
+export function knownAnalyzerSecrets(): string[] {
+  const out: string[] = [];
+  const gemini = getResolvedGeminiApiKey();
+  if (gemini) out.push(gemini);
+  for (const entry of Object.values(cached?.analyzerEndpointKeys ?? {})) out.push(entry.key);
+  return out;
+}
+
+/** #3084 P22 — the same list after settings have been read at least once. The
+    boot warm (index.ts:188, void bootWarmUserSettings()) is not awaited, so an
+    error could be redacted against a cold cache. readUserSettings() returns the
+    cache when warm. */
+export async function loadKnownAnalyzerSecrets(): Promise<string[]> {
+  await readUserSettings();
+  return knownAnalyzerSecrets();
+}
+
+/* Register the named provider at module load (A9): analyzer and transport
+   modules reach it through known-secrets-gate.ts without importing
+   user-settings.ts. */
+registerKnownSecretsProvider({ known: knownAnalyzerSecrets, load: loadKnownAnalyzerSecrets });
+
+/* #3084 P23/A9 — the endpoints provider behind analyzer/analyzer-endpoints-gate.ts:
+   failure-taxonomy.ts's reasoning-overflow fixes name an endpoint by its saved name
+   without importing this module, exactly as the secrets provider above lets the
+   transports redact without importing it. */
+registerAnalyzerEndpointsProvider({ list: () => getCachedUserSettings().analyzerEndpoints });
+
 /** fs-1 — dedicated write path for upgrade bookkeeping fields. The general
     writeUserSettings() strips these (FORBIDDEN_KEYS), so the only sanctioned
     writers are the boot upgrade-coordinator and the /api/info dismiss endpoint.
@@ -1123,10 +1680,11 @@ export async function writeUpgradeMeta(patch: {
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, ...patch };
+    const written = withUnarchivedEntries(merged);
     await snapshotCorruptBytesBeforeWrite();
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    await writeJsonAtomic(USER_SETTINGS_PATH, written, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
-    stampCacheAfterWrite(merged);
+    stampCacheAfterWrite(written);
     cached = merged;
     return merged;
   });
@@ -1149,10 +1707,11 @@ export async function writeSetupCompletedAt(ts: string | null): Promise<UserSett
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, setupCompletedAt: ts };
+    const written = withUnarchivedEntries(merged);
     await snapshotCorruptBytesBeforeWrite();
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    await writeJsonAtomic(USER_SETTINGS_PATH, written, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
-    stampCacheAfterWrite(merged);
+    stampCacheAfterWrite(written);
     cached = merged;
     return merged;
   });
@@ -1172,10 +1731,11 @@ export async function writeTourCompletedAt(ts: string | null): Promise<UserSetti
   const next = writeChain.then(async () => {
     const current = await readUserSettings();
     const merged: UserSettings = { ...current, tourCompletedAt: ts };
+    const written = withUnarchivedEntries(merged);
     await snapshotCorruptBytesBeforeWrite();
-    await writeJsonAtomic(USER_SETTINGS_PATH, merged, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+    await writeJsonAtomic(USER_SETTINGS_PATH, written, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
     clearCorruptFlagAfterWrite();
-    stampCacheAfterWrite(merged);
+    stampCacheAfterWrite(written);
     cached = merged;
     return merged;
   });
@@ -1219,6 +1779,11 @@ export function _resetUserSettingsCache(): void {
   lastKnownEngineInstallState.qwen = 'not-installed';
   lastKnownEngineInstallState.coqui = 'not-installed';
   settingsFileCorrupt = false;
+  /* #3084 P25 — forget archived and unarchived drops and any in-flight archive retry,
+     so a later test that reuses an entry archives it again. */
+  archivedDrops.clear();
+  unarchivedDrops = [];
+  archiveRetry = null;
   // #2632 N26: clear both srv-21 warn-dedup latches too, or a later test that
   // reuses a rejected value a prior test already latched gets ZERO warnings —
   // and would misread as a passing dedupe test rather than a suppressed one.

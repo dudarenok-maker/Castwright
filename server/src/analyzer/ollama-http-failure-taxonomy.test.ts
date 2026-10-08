@@ -30,7 +30,7 @@ async function classifyOllamaHttp(status: number, statusText: string, body: stri
 }
 
 afterAll(async () => {
-  for (const s of [400, 404, 500, 503]) {
+  for (const s of [400, 401, 404, 500, 503]) {
     await rm(resolve(HANDOFF_ROOT, 'inbox', `m_ollama_http_${s}-stage1-ch1.md`), { force: true });
   }
 });
@@ -40,9 +40,9 @@ describe('Ollama non-OK responses → classifyAnalysisFailure (captured from mai
     const { outcome } = await classifyOllamaHttp(400, 'Bad Request', '{"error":"invalid format: expected \\"json\\" or a valid JSON schema"}');
     expect(outcome).toMatchInlineSnapshot(`
       {
-        "code": "unknown",
-        "detail": undefined,
-        "userMessage": "Ollama http://localhost:11434 returned 400 Bad Request: {"error":"invalid format: expected \\"json\\" or a valid JSON schema"}",
+        "code": "analyzer-request-rejected",
+        "detail": "{"error":"invalid format: expected \\"json\\" or a valid JSON schema"}",
+        "userMessage": "Ollama (qwen3.5:9b) rejected the request (400): {"error":"invalid format: expected \\"json\\" or a valid JSON schema"}",
       }
     `);
   });
@@ -75,6 +75,11 @@ describe('Ollama non-OK responses → classifyAnalysisFailure (captured from mai
         "userMessage": "Ollama http://localhost:11434 returned 503 Service Unavailable: {"error":"server busy, please try again.  maximum pending requests exceeded"}",
       }
     `);
+  });
+  it('401 unauthorised → auth (#3084 PR 3b; unknown on main)', async () => {
+    const { outcome } = await classifyOllamaHttp(401, 'Unauthorized', '{"error":"unauthorized"}');
+    expect(outcome.code).toBe('auth');
+    expect(outcome.userMessage).toBe("Ollama (qwen3.5:9b) refused the credentials (401) — check the Ollama server's access settings.");
   });
   it.each([
     [400, 'Bad Request'],

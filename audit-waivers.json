@@ -1,1 +1,20 @@
-[]
+[
+  {
+    "ghsaId": "GHSA-vfj7-8cjw-p6xm",
+    "package": "braces",
+    "reason": "Stack-exhaustion DoS needs an attacker-controlled, deeply nested brace pattern. No fixed braces is published (3.0.3 is latest). braces is reachable only via fast-glob -> micromatch, and fast-glob is a root devDependency called solely from scripts/run-hooks-tests.mjs, scripts/run-pinokio-tests.mjs and scripts/build-release-zip.mjs with hardcoded patterns. No server or runtime code path passes user input to a glob. Remove this waiver when a fixed braces ships.",
+    "expiry": "2027-01-07"
+  },
+  {
+    "ghsaId": "GHSA-vfj7-8cjw-p6xm",
+    "package": "micromatch",
+    "reason": "Same advisory as braces, inherited through it; no fixed micromatch is published (4.0.8 is latest). micromatch is reachable only via fast-glob, a root devDependency used by build/test scripts with hardcoded patterns; no runtime or user-supplied glob path. Remove this waiver when a fixed braces/micromatch ships.",
+    "expiry": "2027-01-07"
+  },
+  {
+    "ghsaId": "GHSA-vfj7-8cjw-p6xm",
+    "package": "fast-glob",
+    "reason": "Same advisory as braces, inherited through micromatch. fast-glob is a root devDependency called directly only from scripts/run-hooks-tests.mjs, scripts/run-pinokio-tests.mjs and scripts/build-release-zip.mjs with hardcoded patterns; never fed user input and not shipped in the runtime. Remove this waiver when a fixed braces ships.",
+    "expiry": "2027-01-07"
+  }
+]
