@@ -1591,6 +1591,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/chapters/{chapterId}/audio/previous/restore-unrecorded": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore the preserved take for a preview whose review was never recorded (plan 286)
+         * @description Used only by the A/B preview stub when finalize answered
+         *     `reviewOutcome: 'failed'` (its take was preserved but no entry was recorded). Busy check first, then the chapter lookups.
+         *     409 `has_revision` when revisions.json holds a pending entry for the
+         *     chapter (read lock-free — a guard, not a fence). Never writes
+         *     revisions.json. Serialised per chapter with accept/reject.
+         */
+        post: operations["restorePreviousUnrecorded"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/voices": {
         parameters: {
             query?: never;
@@ -5438,8 +5462,9 @@ export interface components {
         RevisionOpError: {
             /**
              * @description A machine-readable code — `invalid_selection`, `book_not_found`,
-             *     `revision_not_found`, `chapter_busy`, `no_previous_audio`,
-             *     `live_audio_missing`, `revision_gone`, `restore_failed` — or, on an
+             *     `not_found`, `revision_not_found`, `chapter_busy`,
+             *     `no_previous_audio`, `has_revision`, `live_audio_missing`,
+             *     `revision_gone`, `lock_contention`, `restore_failed` — or, on an
              *     unexpected 500, the curated failure message.
              */
             error: string;
@@ -9462,6 +9487,54 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    restorePreviousUnrecorded: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `not_found` (book / chapter) or `no_previous_audio`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+            /** @description `chapter_busy` or `has_revision`. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+            /** @description `restore_failed`, `lock_contention`, or a fixed failure sentence. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
             };
         };
     };

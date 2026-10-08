@@ -81,3 +81,10 @@ describe('openapi: plan 285 PR 1', () => {
     >().toEqualTypeOf<boolean | undefined>();
   });
 });
+
+describe('openapi: plan 286 PR 2', () => {
+  it('plan 286 — restore-unrecorded is a POST with 204 / 404 / 409 / 500', () => {
+    type Op = paths['/api/books/{bookId}/chapters/{chapterId}/audio/previous/restore-unrecorded']['post'];
+    expectTypeOf<keyof Op['responses']>().toEqualTypeOf<204 | 404 | 409 | 500>();
+  });
+});

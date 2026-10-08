@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import {
   readRevisions,
+  hasPendingForChapter,
   assertRevisionsResettable,
   resetRevisions,
   recordPending,
@@ -124,6 +125,20 @@ describe('readRevisions — normalisation (never writes)', () => {
     expect(file.acceptedSelections).toEqual({ r1: { '0': 'A' } });
     expect(file.timeline).toEqual({});
     expect(({} as Record<string, unknown>)['0']).toBeUndefined();
+  });
+});
+
+describe('hasPendingForChapter (plan 286)', () => {
+  it('is true only for a chapter with a pending entry in the normalised view', async () => {
+    seedRaw({ schema: 1, fileId: null, rev: 0, pending: [serverEntry(1, 'r1')], dismissed: [], acceptedSelections: {}, timeline: {} });
+    expect(await hasPendingForChapter(bookDir, CHAPTERS, 1)).toBe(true);
+    expect(await hasPendingForChapter(bookDir, CHAPTERS, 2)).toBe(false);
+  });
+  it('a legacy entry whose .previous.mp3 is gone does not count', async () => {
+    seedRaw({ pending: [{ id: 'revision:1:narrator', chapterId: 1, characterId: 'narrator', playable: true, segments: [] }] });
+    expect(await hasPendingForChapter(bookDir, CHAPTERS, 1)).toBe(false);
+    writeFileSync(join(audioDir(bookDir), '01-one.previous.mp3'), 'PREV');
+    expect(await hasPendingForChapter(bookDir, CHAPTERS, 1)).toBe(true);
   });
 });
 

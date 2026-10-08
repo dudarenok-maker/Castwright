@@ -647,7 +647,8 @@ Design rationale:
   `qwen-voice`, `voice-style`, `single-design`, `script-review`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
   merge routes and of the two legacy `…/audio/previous` routes in
-  `chapter-audio.ts` (`DELETE` and `…/restore`); and
+  `chapter-audio.ts` (`DELETE` and `…/restore`), and of `restore-unrecorded`
+  in `chapter-audio.ts`; and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
   `detail` blob (that blob renders in the UI's collapsible). The raw error goes

@@ -255,6 +255,17 @@ export async function readRevisions(bookDir: string, chapters: readonly ChapterR
   return load(bookDir, chapters);
 }
 
+/** Plan 286 — lock-free: does the normalised view hold a pending entry for
+    this chapter? restore-unrecorded's check-then-act guard (spec §4: a guard
+    against the common case, not a fence). */
+export async function hasPendingForChapter(
+  bookDir: string,
+  chapters: readonly ChapterRef[],
+  chapterId: number,
+): Promise<boolean> {
+  return (await load(bookDir, chapters)).pending.some((p) => p.chapterId === chapterId);
+}
+
 /** Preflight for reparse / replace, run BEFORE they delete anything (lock-free
     read). A reset discards the contents, so a corrupt or missing file is fine
     to reset; only a NEWER-schema file must be refused (never downgraded). */

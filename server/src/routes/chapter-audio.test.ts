@@ -6,8 +6,8 @@
    fallback narrative has been retired; the `audio.wav` route is no longer
    registered and a legacy `.wav` on disk is invisible to the locator. */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -41,6 +41,10 @@ vi.mock('../workspace/file-lock.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/file-lock.js')>();
   return { ...real, withKeyLock: vi.fn(real.withKeyLock) };
 });
+vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+  return { ...real, hasPendingForChapter: vi.fn(real.hasPendingForChapter) };
+});
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
@@ -60,10 +64,10 @@ beforeAll(async () => {
   // Defer module load so paths.ts picks up WORKSPACE_DIR. Importing the
   // router after env is set guarantees the workspace root resolves into
   // our tempdir rather than the repo's default.
-  const [{ chapterAudioRouter }, { makeBookId }] = await Promise.all([
-    import('./chapter-audio.js'),
-    import('../workspace/paths.js'),
-  ]);
+  /* Sequential, not `Promise.all` — this file carries hoisted async-factory
+     `vi.mock`s, which a `Promise.all` of dynamic imports races (#2083). */
+  const { chapterAudioRouter } = await import('./chapter-audio.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -701,6 +705,81 @@ describe('chapter-audio router', () => {
         vi.resetModules();
       });
     });
+    describe('POST /audio/previous/restore-unrecorded (plan 286)', () => {
+      const RU = () => `/api/books/${bookId}/chapters/1/audio/previous/restore-unrecorded`;
+      const revisionsFile = () => join(bookDir, '.audiobook', 'revisions.json');
+      const seedPendingForCh1 = () =>
+        writeFileSync(revisionsFile(), JSON.stringify({ schema: 1, fileId: '000000000000001-a', rev: 1,
+          pending: [{ id: 'revision:1:1', chapterId: 1, characterId: 'narrator', playable: true, hasPreviousAudio: true, segments: [], origin: 'server' }],
+          dismissed: [], acceptedSelections: {}, timeline: {} }));
+      beforeEach(() => { if (existsSync(revisionsFile())) rmSync(revisionsFile()); });
+
+      it('204: restores .previous over live and never writes revisions.json', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3();
+        const res = await request(app).post(RU());
+        expect(res.status).toBe(204);
+        expect(existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(false);
+        expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
+        expect(existsSync(revisionsFile())).toBe(false);
+      });
+      it('404 no_previous_audio when nothing was preserved', async () => {
+        resetAudio(); writeMp3();
+        const res = await request(app).post(RU());
+        expect(res.status).toBe(404);
+        expect(res.body.error).toBe('no_previous_audio');
+      });
+      it('409 has_revision when revisions.json has a pending entry for the chapter; audio and file untouched', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3(); seedPendingForCh1();
+        const before = readFileSync(revisionsFile(), 'utf8');
+        const res = await request(app).post(RU());
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe('has_revision');
+        expect(existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(true);
+        expect(readFileSync(revisionsFile(), 'utf8')).toBe(before);
+      });
+      it('409 chapter_busy during generation, checked before the chapter-id parse', async () => {
+        vi.resetModules();
+        vi.doMock('./generation.js', () => ({ generationRouter: undefined, isGenerationActive: () => true }));
+        const { chapterAudioRouter: mocked } = await import('./chapter-audio.js');
+        const mApp = express(); mApp.use('/api/books', mocked);
+        const res = await request(mApp).post(`/api/books/${bookId}/chapters/not-a-number/audio/previous/restore-unrecorded`);
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe('chapter_busy');
+        vi.doUnmock('./generation.js'); vi.resetModules();
+      });
+      it('a lock timeout answers the curated contention body (no key or path) and is logged', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3();
+        const { withKeyLock, LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+        vi.mocked(withKeyLock).mockRejectedValueOnce(new LockAcquisitionTimeoutError('revision-op:C:/SECRET-WORKSPACE/book:1', 10_000));
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(500);
+          expect(res.body).toEqual({ error: 'lock_contention', message: LOCK_CONTENTION_REQUEST_ERROR });
+          expect(res.text).not.toContain('SECRET-WORKSPACE');
+          expect(errSpy).toHaveBeenCalled();
+        } finally { errSpy.mockRestore(); }
+      });
+      it('an unreadable revisions.json answers a fixed 500 without the path, and the raw error is logged', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3();
+        const { hasPendingForChapter } = await import('../workspace/revisions-store.js');
+        /* EISDIR's own message carries no path, so it could not prove path-freedom;
+           a mocked EPERM-style rejection whose message embeds the path can. */
+        vi.mocked(hasPendingForChapter).mockRejectedValueOnce(
+          Object.assign(new Error("EPERM: operation not permitted, open 'C:\\SECRET-WORKSPACE\\book\\.audiobook\\revisions.json'"), { code: 'EPERM' }),
+        );
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(500);
+          expect(res.body).toEqual({ error: "Couldn't read this chapter's review state." });
+          expect(res.text).not.toContain('SECRET-WORKSPACE');
+          expect(errSpy).toHaveBeenCalled();
+          expect(existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(true);
+        } finally { errSpy.mockRestore(); }
+      });
+    });
+
   });
 });
 

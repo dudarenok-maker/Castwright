@@ -2329,6 +2329,31 @@ paths:
         '409':
           description: Generation is in flight for this book — restore would race the write path
 
+  /api/books/{bookId}/chapters/{chapterId}/audio/previous/restore-unrecorded:
+    post:
+      summary: Restore the preserved take for a preview whose review was never recorded (plan 286)
+      operationId: restorePreviousUnrecorded
+      description: |
+        Used only by the A/B preview stub when finalize answered
+        `reviewOutcome: 'failed'` (its take was preserved but no entry was recorded). Busy check first, then the chapter lookups.
+        409 `has_revision` when revisions.json holds a pending entry for the
+        chapter (read lock-free — a guard, not a fence). Never writes
+        revisions.json. Serialised per chapter with accept/reject.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: chapterId, required: true, schema: { type: integer } }
+      responses:
+        '204': { description: Restored. }
+        '404':
+          description: '`not_found` (book / chapter) or `no_previous_audio`.'
+          content: { application/json: { schema: { $ref: '#/components/schemas/RevisionOpError' } } }
+        '409':
+          description: '`chapter_busy` or `has_revision`.'
+          content: { application/json: { schema: { $ref: '#/components/schemas/RevisionOpError' } } }
+        '500':
+          description: '`restore_failed`, `lock_contention`, or a fixed failure sentence.'
+          content: { application/json: { schema: { $ref: '#/components/schemas/RevisionOpError' } } }
+
   /api/voices:
     get:
       summary: List voices derived from every confirmed cast in the workspace
@@ -7508,8 +7533,9 @@ components:
           type: string
           description: |
             A machine-readable code — `invalid_selection`, `book_not_found`,
-            `revision_not_found`, `chapter_busy`, `no_previous_audio`,
-            `live_audio_missing`, `revision_gone`, `restore_failed` — or, on an
+            `not_found`, `revision_not_found`, `chapter_busy`,
+            `no_previous_audio`, `has_revision`, `live_audio_missing`,
+            `revision_gone`, `lock_contention`, `restore_failed` — or, on an
             unexpected 500, the curated failure message.
         message: { type: string }
         state: { $ref: '#/components/schemas/RevisionsState' }
