@@ -622,7 +622,7 @@ describe('GET /api/books/:bookId/revisions — pending read through the store (p
     expect(res.body.byBookId[bookId]).toEqual({ pending: [serverEntry], drift: [] });
   });
 
-  it('a lock timeout under either poll answers the curated 500 (no lock-key path)', async () => {
+  it('a lock timeout answers the curated 500 on the single poll and a fixed per-book error on the bulk poll', async () => {
     const store = await import('../workspace/revisions-store.js');
     const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
     const err = () => new LockAcquisitionTimeoutError('revisions:C:/SECRET-WORKSPACE/book', 10_000);
@@ -632,8 +632,74 @@ describe('GET /api/books/:bookId/revisions — pending read through the store (p
     expect(single.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
     vi.mocked(store.readRevisions).mockRejectedValueOnce(err());
     const bulk = await request(app).get(`/api/revisions?bookIds=${bookId}`);
-    expect(bulk.status).toBe(500);
-    expect(bulk.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    expect(bulk.status).toBe(200);
+    expect(bulk.body.errors).toEqual({ [bookId]: "Couldn't read this book's review state." });
+    expect(bulk.text).not.toContain('SECRET-WORKSPACE');
+  });
+});
+
+describe('GET /api/revisions — per-book isolation (plan 286, D9)', () => {
+  let goodId: string;
+  let badId: string;
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    for (const title of ['Bulk Good', 'Bulk Bad']) {
+      const dir = join(workspaceRoot, 'books', 'Bulk Author', 'Standalones', title);
+      mkdirSync(join(dir, '.audiobook'), { recursive: true });
+      writeFileSync(join(dir, 'manuscript.txt'), 'x');
+      const id = makeBookId('Bulk Author', 'Standalones', title);
+      writeFileSync(
+        join(dir, '.audiobook', 'state.json'),
+        JSON.stringify({
+          bookId: id,
+          manuscriptId: `m_${title}`,
+          title,
+          author: 'Bulk Author',
+          series: 'Standalones',
+          seriesPosition: null,
+          isStandalone: true,
+          manuscriptFile: 'manuscript.txt',
+          castConfirmed: true,
+          chapters: [{ id: 1, title: 'One', slug: '01-one' }],
+          coverGradient: ['#000', '#fff'],
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      if (title === 'Bulk Bad') writeFileSync(join(dir, '.audiobook', 'revisions.json'), '[]'); // non-object top level → store throws
+      if (title === 'Bulk Good') goodId = id;
+      else badId = id;
+    }
+  });
+  it('returns the healthy books and lists the broken one in errors with a path-free sentence', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).get(`/api/revisions?bookIds=${goodId},${badId}`);
+    err.mockRestore();
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body.byBookId)).toEqual([goodId]);
+    expect(res.body.errors).toEqual({ [badId]: "Couldn't read this book's review state." });
+    expect(res.text).not.toContain(workspaceRoot);
+  });
+  it('omits errors when every book succeeds', async () => {
+    const res = await request(app).get(`/api/revisions?bookIds=${goodId}`);
+    expect(res.status).toBe(200);
+    expect(res.body).not.toHaveProperty('errors');
+  });
+  it('a failure whose message embeds an absolute path never reaches the body', async () => {
+    /* The '[]' fixture above throws a path-free SyntaxError, so it cannot prove
+       path-freedom; this EPERM-style rejection embeds the path. readRevisions is
+       already a vi.fn passthrough (the file's hoisted revisions-store mock). */
+    const store = await import('../workspace/revisions-store.js');
+    vi.mocked(store.readRevisions).mockRejectedValueOnce(
+      Object.assign(new Error(`EPERM: operation not permitted, open '${join(workspaceRoot, 'books', 'SECRET', 'revisions.json')}'`), { code: 'EPERM' }),
+    );
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).get(`/api/revisions?bookIds=${goodId}`);
+    err.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body.errors).toEqual({ [goodId]: "Couldn't read this book's review state." });
+    expect(res.text).not.toContain(workspaceRoot);
+    expect(res.text).not.toContain('SECRET');
   });
 });
 

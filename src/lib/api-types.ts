@@ -5382,6 +5382,10 @@ export interface components {
             byBookId: {
                 [key: string]: components["schemas"]["RevisionsResponse"];
             };
+            /** @description Plan 286 — bookIds whose computation failed, each with a fixed path-free sentence. Present only when non-empty. */
+            errors?: {
+                [key: string]: string;
+            };
         };
         TimelineEntry: {
             /** @description Stable unique id (the revision id for accept/reject; a generated id for rollback events). */

@@ -244,7 +244,8 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
    books on 120s tick) calls this with the cross-book id list; the response
    is keyed by bookId so the slice's applyBackgroundPoll cascade fires
    per-book. Skips bookIds that don't exist on disk (no 404 — just omitted
-   from response) so one removed book doesn't take down the whole poll.
+   from response) so one removed book doesn't take down the whole poll. A book
+   whose computation throws lands in `errors` (plan 286), not a whole-request 500.
    Lives on its own Router instance because it's mounted at `/api` (not
    `/api/books`). */
 export const revisionsBulkRouter = Router();
@@ -258,14 +259,26 @@ revisionsBulkRouter.get('/revisions', async (req: Request, res: Response) => {
     if (bookIds.length > 50) {
       return res.status(400).json({ error: 'Up to 50 bookIds per request' });
     }
+    /* Plan 286 (D9) — one book's failure no longer blanks every other book's
+       drift. Its id goes into `errors` with a fixed, path-free sentence; the
+       raw error is logged. */
+    const errors: Record<string, string> = {};
     const entries = await Promise.all(
-      bookIds.map(async (id) => [id, await getRevisionsForBook(id)] as const),
+      bookIds.map(async (id) => {
+        try {
+          return [id, await getRevisionsForBook(id)] as const;
+        } catch (e) {
+          console.error(`[revisions] bulk GET: book ${id} failed`, e);
+          errors[id] = "Couldn't read this book's review state.";
+          return [id, null] as const;
+        }
+      }),
     );
     const byBookId: Record<string, { pending: StoredRevision[]; drift: DriftEvent[] }> = {};
     for (const [id, result] of entries) {
       if (result) byBookId[id] = { pending: result.pending, drift: result.drift };
     }
-    res.json({ byBookId });
+    res.json(Object.keys(errors).length > 0 ? { byBookId, errors } : { byBookId });
   } catch (e) {
     console.error('[revisions] bulk GET failed', e);
     res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to compute bulk revisions.') });

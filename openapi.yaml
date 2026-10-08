@@ -7403,6 +7403,10 @@ components:
         byBookId:
           type: object
           additionalProperties: { $ref: '#/components/schemas/RevisionsResponse' }
+        errors:
+          type: object
+          description: Plan 286 — bookIds whose computation failed, each with a fixed path-free sentence. Present only when non-empty.
+          additionalProperties: { type: string }
 
     TimelineEntry:
       type: object
