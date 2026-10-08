@@ -7,12 +7,31 @@
    so a refactor can't silently regress them. The file also covers the
    analysis-side classifiers (classifyAnalysisError + classifyAnalysisFailure). */
 
-import { describe, it, expect } from 'vitest';
-import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure } from './failure-taxonomy.js';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { ApiError } from '@google/genai';
+import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure, analyzerSelectionErrorEvent } from './failure-taxonomy.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
-import { AnalyzerReasoningOverflowError, AnalyzerTimeoutError, AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
+import {
+  AnalyzerReasoningOverflowError,
+  AnalyzerTimeoutError,
+  AnalyzerTruncatedError,
+  GeminiContentBlockedError,
+  AnalyzerHttpError,
+  AnalyzerKeyOriginError,
+  AnalyzerEndpointMissingError,
+  AnalyzerInvalidOutputError,
+  AnalyzerStreamIncompleteError,
+  AnalyzerTransportError,
+  AnalyzerUnreachableError,
+  causeCodeSuffix,
+  sanitizeCauseCode,
+} from '../analyzer/errors.js';
+import { LIMIT_400_PATTERNS } from '../analyzer/limit-400-patterns.js';
 import { UnresolvableClonedVoiceError } from '../tts/clone-voice-resolver.js';
+/* #3084 A9 — importing user-settings.js registers the known-secrets provider
+   at module load, so redactKnownSecrets can strip a saved key in the tests below. */
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
 
 /* No copy should leak raw stack/jargon at the user — assert the message reads
    like a sentence (starts uppercase, ends with punctuation, no "Traceback"
@@ -402,8 +421,11 @@ describe('failure-remediations copy module (fe-29/fs-19 shared copy)', () => {
       [
         'analyzer-content-blocked',
         'analyzer-daily-quota',
+        'analyzer-endpoint-missing',
+        'analyzer-invalid-output',
         'analyzer-rate-limit',
         'analyzer-reasoning-overflow',
+        'analyzer-request-rejected',
         'analyzer-timeout',
         'analyzer-truncated',
         'analyzer-unreachable',
@@ -488,12 +510,12 @@ describe('classifyAnalysisFailure (run-level, ports describeError verbatim — s
     const r = classifyAnalysisFailure(new Error(raw), 'Gemini (gemma-4-31b-it)');
     expect(r.code).toBe('analyzer-rate-limit');
   });
-  it('envelope 503 → analyzer-unreachable; 401 → auth; 400 → unknown', () => {
+  it('envelope 503 → analyzer-unreachable; 401 → auth; 400 → analyzer-request-rejected (#3084 PR 3b)', () => {
     const env = (code: number, status: string) =>
       new Error(`got status: ${code}. {"error":{"code":${code},"message":"boom","status":"${status}"}}`);
     expect(classifyAnalysisFailure(env(503, 'UNAVAILABLE'), 'm').code).toBe('analyzer-unreachable');
     expect(classifyAnalysisFailure(env(401, 'UNAUTHENTICATED'), 'm').code).toBe('auth');
-    expect(classifyAnalysisFailure(env(400, 'INVALID_ARGUMENT'), 'm').code).toBe('unknown');
+    expect(classifyAnalysisFailure(env(400, 'INVALID_ARGUMENT'), 'm').code).toBe('analyzer-request-rejected');
   });
   it('bare status (no envelope) classifies too', () => {
     const err = Object.assign(new Error('Service Unavailable'), { status: 503 });
@@ -616,7 +638,7 @@ describe('AnalyzerTimeoutError (#3084 wave 2b)', () => {
     expect(r.userMessage).toContain('GEMINI_THINKING_IDLE_MS');
     expect(r.userMessage).toContain('290000');
     expect(r.userMessage).not.toContain('request ceiling');
-    expect(r.remediation).toContain('analyzer.gemini.thinkingIdleTimeoutMs');
+    expect(r.remediation).toContain('ANALYZER_GEMINI_REQUEST_CEILING_MS');
     expect(r.detail).toContain('reason=thinking-idle');
   });
 
@@ -741,5 +763,516 @@ describe('AnalyzerReasoningOverflowError (#3084 wave 2b)', () => {
       'OpenAI-compatible (m)',
     );
     expect(r.fixes).toEqual([]);
+  });
+});
+
+describe('classifyAnalysisFailure — wave-3 analyzer codes (#3084 PR 3b)', () => {
+  const savedKey = process.env.GEMINI_API_KEY;
+  afterEach(() => {
+    if (savedKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = savedKey;
+    _resetUserSettingsCache();
+  });
+
+  it.each(['ollama', 'gemini', 'openai'] as const)(
+    'AnalyzerHttpError(%s, 400) → analyzer-request-rejected naming that engine\'s request-shaping settings',
+    (transport) => {
+      const body = '{"error":"response_format.type must be json_schema or text"}';
+      const r = classifyAnalysisFailure(
+        new AnalyzerHttpError(transport, 400, body, `returned 400: ${body}`),
+        'Some model',
+      );
+      expect(r.code).toBe('analyzer-request-rejected');
+      expect(r.userMessage).toContain('rejected the request (400)');
+      expect(r.userMessage).toContain('response_format.type must be json_schema');
+      const expected = {
+        ollama: 'analyzer.ollama.structuredOutput',
+        gemini: 'analyzer.gemini.structuredOutput',
+        openai: "the endpoint's Structured output field",
+      }[transport];
+      expect(r.remediation).toContain(expected);
+    },
+  );
+
+  it("an endpoint's bad-key 400 (Google OpenAI-compat body) is auth, naming the endpoint's key", () => {
+    const body =
+      '[{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID","domain":"googleapis.com"}]}}]';
+    const r = classifyAnalysisFailure(new AnalyzerHttpError('openai', 400, body, 'HTTP 400'), 'Lab box');
+    expect(r.code).toBe('auth');
+    expect(r.remediation).toBe("Check the endpoint's API key, then retry the chapter.");
+  });
+
+  it("an endpoint's ordinary shape 400 stays analyzer-request-rejected", () => {
+    const body = '{"error":{"message":"Invalid value for response_format","type":"invalid_request_error"}}';
+    const r = classifyAnalysisFailure(new AnalyzerHttpError('openai', 400, body, 'HTTP 400'), 'Lab box');
+    expect(r.code).toBe('analyzer-request-rejected');
+  });
+
+  it('a Gemini ApiError 400 envelope → analyzer-request-rejected with the provider message, keeping the status/details detail block', () => {
+    const err = new ApiError({
+      status: 400,
+      message:
+        'got status: 400 Bad Request. {"error":{"code":400,"message":"Invalid JSON payload received. Unknown name \\"minLength\\"","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.BadRequest","fieldViolations":[{"field":"generation_config.response_json_schema"}]}]}}',
+    });
+    const r = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(r.code).toBe('analyzer-request-rejected');
+    expect(r.userMessage).toContain('Unknown name');
+    expect(r.remediation).toContain('analyzer.gemini.structuredOutput');
+    /* failure-taxonomy.ts:556-560 — the envelope's status and details stay in `detail`. */
+    expect(r.detail).toContain('status: INVALID_ARGUMENT');
+    expect(r.detail).toContain('details:');
+    expect(r.detail).toContain('generation_config.response_json_schema');
+  });
+
+  it('an endpoint 400 naming a token or context limit points to the max-output field; a schema 400 does not (#3084 P24)', () => {
+    const limited = classifyAnalysisFailure(
+      new AnalyzerHttpError('openai', 400, LIMIT_400_PATTERNS[0].example, `returned 400: ${LIMIT_400_PATTERNS[0].example}`),
+      'Endpoint lab (qwen3:30b)',
+    );
+    expect(limited.code).toBe('analyzer-request-rejected');
+    expect(limited.remediation).toContain("the endpoint's Max output tokens field");
+    const schema = classifyAnalysisFailure(
+      new AnalyzerHttpError('openai', 400, "'response_format.type' must be 'json_schema' or 'text'", 'returned 400'),
+      'Endpoint lab (qwen3:30b)',
+    );
+    expect(schema.remediation).not.toContain("the endpoint's Max output tokens field");
+  });
+
+  it('redacts a saved API key from the provider message and the detail', () => {
+    delete process.env.GEMINI_API_KEY;
+    _setUserSettingsCacheForTest({ geminiApiKey: 'AIzaSyTEST-SECRET-123456' });
+    const body = '{"error":{"message":"key AIzaSyTEST-SECRET-123456 cannot use responseJsonSchema"}}';
+    const r = classifyAnalysisFailure(
+      new AnalyzerHttpError('gemini', 400, body, `Gemini returned 400: ${body}`),
+      'Gemini',
+    );
+    expect(`${r.userMessage}\n${r.detail}`).not.toContain('AIzaSyTEST-SECRET-123456');
+    expect(r.userMessage).toContain('[redacted]');
+  });
+
+  it.each([401, 403])('AnalyzerHttpError(openai, %i) → auth', (status) => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerHttpError('openai', status, '{"error":"bad key"}', `returned ${status}`),
+      'Endpoint lab (qwen3:30b)',
+    );
+    expect(r.code).toBe('auth');
+    expect(r.userMessage).toContain("the endpoint's API key");
+  });
+
+  it('AnalyzerKeyOriginError → auth naming the endpoint to re-enter the key for', () => {
+    const r = classifyAnalysisFailure(new AnalyzerKeyOriginError('lab', 'Lab box'), 'Endpoint lab (m)');
+    expect(r.code).toBe('auth');
+    expect(r.userMessage).toContain('re-enter the key for Lab box');
+  });
+
+  it('AnalyzerTimeoutError → analyzer-timeout', () => {
+    const r = classifyAnalysisFailure(new AnalyzerTimeoutError('openai', 'm', 1_800_000, 'ceiling'), 'Endpoint lab (m)');
+    expect(r.code).toBe('analyzer-timeout');
+    expect(r.userMessage).toContain('1800 s');
+    expect(r.detail).toContain('reason=ceiling');
+    expect(r.remediation).toContain('endpoint');
+  });
+
+  it('AnalyzerEndpointMissingError → analyzer-endpoint-missing naming the id and its source', () => {
+    const r = classifyAnalysisFailure(new AnalyzerEndpointMissingError('gone', 'env'), 'Endpoint gone (m)');
+    expect(r.code).toBe('analyzer-endpoint-missing');
+    expect(r.userMessage).toContain('"gone"');
+    expect(r.userMessage).toContain('ANALYZER_PHASE0_MODEL');
+  });
+
+  it.each([
+    ['schema', 'may not enforce'],
+    ['json', 'constrains the structure'],
+    ['off', 'structured output was off'],
+  ] as const)('AnalyzerInvalidOutputError(mode %s) → analyzer-invalid-output with a mode-aware hint', (mode, hint) => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerInvalidOutputError('ollama', 'qwen3.5:4b', '1-ch1', 'invalid-json — Unexpected token', mode),
+      'Ollama (qwen3.5:4b)',
+    );
+    expect(r.code).toBe('analyzer-invalid-output');
+    expect(r.userMessage).toContain(hint);
+  });
+
+  it.each(['json', 'off'] as const)('a Gemini run in mode %s is never steered to "schema" in the user message', (mode) => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerInvalidOutputError('gemini', 'gemini-3.5-flash-lite', '1-ch1', 'invalid-json — Unexpected token', mode),
+      'Gemini (gemini-3.5-flash-lite)',
+    );
+    expect(r.code).toBe('analyzer-invalid-output');
+    expect(r.userMessage).toContain(`structured output was ${mode === 'json' ? '"json"' : 'off'}`);
+    expect(r.userMessage).not.toMatch(/schema/i);
+    expect(r.remediation).not.toMatch(/schema/i);
+  });
+});
+
+describe('classifyAnalysisFailure — unreachable and endpoint final errors (#3084 PR 3b)', () => {
+  const savedKey = process.env.GEMINI_API_KEY;
+  beforeEach(() => {
+    delete process.env.GEMINI_API_KEY;
+  });
+  afterEach(() => {
+    if (savedKey === undefined) delete process.env.GEMINI_API_KEY;
+    else process.env.GEMINI_API_KEY = savedKey;
+    _resetUserSettingsCache();
+  });
+
+  it('AnalyzerUnreachableError from an endpoint → analyzer-unreachable naming the endpoint', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerUnreachableError('Endpoint qwen3:30b is unreachable (ECONNREFUSED).', 'openai'),
+      'Endpoint lab (qwen3:30b)',
+    );
+    expect(r.code).toBe('analyzer-unreachable');
+    expect(r.userMessage).toBe('Endpoint lab (qwen3:30b) could not be reached: Endpoint qwen3:30b is unreachable (ECONNREFUSED).');
+    expect(r.remediation).toContain("endpoint's server");
+  });
+
+  it.each([
+    [502, 'Endpoint lab (qwen3:30b) returned HTTP 502: '],
+    [404, 'Endpoint lab (qwen3:30b) returned HTTP 404: '],
+    [422, 'Endpoint lab (qwen3:30b) returned HTTP 422: '],
+    [0, 'Endpoint lab (qwen3:30b) sent an error inside its response stream: '],
+  ] as const)(
+    'endpoint AnalyzerHttpError(%i) → unknown with a curated message naming the endpoint, the status and a redacted excerpt',
+    (status, lead) => {
+      _setUserSettingsCacheForTest({ geminiApiKey: 'AIzaSy-taxonomy-secret-1' });
+      const body = '{"error":{"message":"upstream failed for key AIzaSy-taxonomy-secret-1"}}';
+      const r = classifyAnalysisFailure(new AnalyzerHttpError('openai', status, body, `raw ${body}`), 'Endpoint lab (qwen3:30b)');
+      expect(r.code).toBe('unknown');
+      expect(r.userMessage).toBe(`${lead}{"error":{"message":"upstream failed for key [redacted]"}}`);
+      expect(r.detail).toBe(`transport=openai status=${status}`);
+      expect(`${r.userMessage}\n${r.detail}\n${r.remediation}`).not.toContain('AIzaSy-taxonomy-secret-1');
+      expect(r.remediation).toContain("endpoint's server");
+    },
+  );
+
+  it('AnalyzerStreamIncompleteError from an endpoint → unknown naming the endpoint', () => {
+    const r = classifyAnalysisFailure(new AnalyzerStreamIncompleteError('openai', 'qwen3:30b'), 'Endpoint lab (qwen3:30b)');
+    expect(r.code).toBe('unknown');
+    expect(r.userMessage).toBe(
+      'Endpoint lab (qwen3:30b) dropped the connection or stopped streaming before it finished its answer, and retrying did not help.',
+    );
+    expect(r.remediation).toContain("endpoint's server");
+  });
+
+  it('a pre-header AnalyzerStreamIncompleteError names its causeCode, so a DNS failure never reads as a mid-answer drop (P22)', () => {
+    const err = new AnalyzerStreamIncompleteError('openai', 'qwen3:30b', { causeCode: 'EAI_AGAIN' });
+    expect(err.phase).toBe('before-response');
+    expect(err.causeCode).toBe('EAI_AGAIN');
+    expect(err.message).toBe('Endpoint qwen3:30b dropped the connection before a response (EAI_AGAIN).');
+    const r = classifyAnalysisFailure(err, 'Endpoint lab (qwen3:30b)');
+    expect(r.code).toBe('unknown');
+    expect(r.userMessage).toBe('Endpoint lab (qwen3:30b) dropped the connection before a response (EAI_AGAIN), and retrying did not help.');
+    expect(r.userMessage).not.toContain('stopped streaming');
+    expect(r.detail).toBe('transport=openai model=qwen3:30b causeCode=EAI_AGAIN');
+  });
+
+  it('AnalyzerTransportError → unknown naming the endpoint and appending its sanitized causeCode; the class chain goes to detail, never a raw cause (P22)', () => {
+    const message =
+      'Endpoint qwen3:30b request failed before a response (ERR_SSL_WRONG_VERSION_NUMBER) (APIConnectionError <- TypeError <- Error).';
+    const err = new AnalyzerTransportError('openai', 'qwen3:30b', message, 'ERR_SSL_WRONG_VERSION_NUMBER');
+    const r = classifyAnalysisFailure(err, 'Endpoint lab (qwen3:30b)');
+    expect(r.code).toBe('unknown');
+    expect(r.userMessage).toBe('Endpoint lab (qwen3:30b) request failed (ERR_SSL_WRONG_VERSION_NUMBER).');
+    expect(r.detail).toBe(message);
+    expect('cause' in err).toBe(false);
+  });
+
+  it('AnalyzerTransportError with no causeCode → the same copy with no code suffix (P22)', () => {
+    const err = new AnalyzerTransportError('openai', 'qwen3:30b', 'Endpoint qwen3:30b request failed (RangeError).', undefined);
+    const r = classifyAnalysisFailure(err, 'Endpoint lab (qwen3:30b)');
+    expect(r.userMessage).toBe('Endpoint lab (qwen3:30b) request failed.');
+    expect(r.detail).toBe('Endpoint qwen3:30b request failed (RangeError).');
+  });
+
+  it('causeCodeSuffix is the one " (CODE)" shape, empty without a code (P22)', () => {
+    expect(causeCodeSuffix('EAI_AGAIN')).toBe(' (EAI_AGAIN)');
+    expect(causeCodeSuffix(undefined)).toBe('');
+  });
+
+  it('sanitizeCauseCode keeps an upper-case system code and drops anything else, including a secret (P22)', () => {
+    expect(sanitizeCauseCode('ECONNRESET', [])).toBe('ECONNRESET');
+    expect(sanitizeCauseCode('UND_ERR_SOCKET', [])).toBe('UND_ERR_SOCKET');
+    expect(sanitizeCauseCode('sk-lowercase-key-1234', [])).toBeUndefined();
+    expect(sanitizeCauseCode('ABCDEFGHSECRET', ['ABCDEFGHSECRET'])).toBeUndefined();
+    expect(sanitizeCauseCode(42, [])).toBeUndefined();
+  });
+
+  it("the unknown fall-through redacts a saved key from a raw message (P22)", () => {
+    _setUserSettingsCacheForTest({ geminiApiKey: 'AIzaSy-taxonomy-secret-1' });
+    const r = classifyAnalysisFailure(new Error('weird failure mentioning AIzaSy-taxonomy-secret-1'), 'Some model');
+    expect(r.code).toBe('unknown');
+    expect(r.userMessage).toBe('weird failure mentioning [redacted]');
+  });
+});
+
+describe('analyzerSelectionErrorEvent (#3084 P23)', () => {
+  it.each([
+    [
+      'AnalyzerEndpointMissingError',
+      new AnalyzerEndpointMissingError('gone', 'env'),
+      'analyzer-endpoint-missing',
+      'Analyzer endpoint "gone" (from ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL) cannot be used for analysis yet. Pick another model.',
+    ],
+    [
+      'AnalyzerKeyOriginError',
+      new AnalyzerKeyOriginError('lab', 'Lab box'),
+      'auth',
+      'The API key saved for Lab box was entered for a different host, so it was not sent — re-enter the key for Lab box.',
+    ],
+    ['a plain Error', new Error('misconfigured engine: missing GEMINI_API_KEY'), 'unknown', 'misconfigured engine: missing GEMINI_API_KEY'],
+  ] as const)('codes %s through classifyAnalysisFailure and never returns null', (_name, err, code, message) => {
+    const failure = classifyAnalysisFailure(err, 'Analyzer');
+    expect(failure.code).toBe(code);
+    expect(analyzerSelectionErrorEvent(err)).toEqual({
+      kind: 'error',
+      code,
+      message,
+      remediation: failure.remediation,
+      ...(failure.detail ? { detail: failure.detail } : {}),
+    });
+  });
+
+  it("selection's own missing-Gemini-key error classifies as auth and keeps what is missing as its detail (declared outcome change: phase 0 / subset sent it uncoded)", () => {
+    const err = new Error(
+      'GEMINI_API_KEY is required when analyzer engine is Gemini. Set it in Admin → Model Manager → Gemini API key, or in server/.env for CI / power users.',
+    );
+    /* The `auth` signature's copy is generic ("check the Gemini API key"), so without the
+       detail the event no longer says WHICH of the two auth cases this is. */
+    expect(analyzerSelectionErrorEvent(err)).toMatchObject({ kind: 'error', code: 'auth', detail: 'Gemini API key required' });
+  });
+});
+
+
+
+describe('Gemini invalid / expired API key (#3084 PR 3b review 🟠1)', () => {
+  it.each([
+    ['API_KEY_INVALID', 'API key not valid. Please pass a valid API key.'],
+    ['API_KEY_EXPIRED', 'API key expired. Please renew the API key.'],
+  ] as const)('a 400 envelope with reason %s classifies as auth, never analyzer-request-rejected', (reason, message) => {
+    const err = new ApiError({
+      status: 400,
+      message: `got status: 400 Bad Request. {"error":{"code":400,"message":"${message}","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"${reason}"}]}}`,
+    });
+    const r = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(r.code).toBe('auth');
+    expect(r.userMessage).toContain(message);
+  });
+
+  it('a bare-status 400 whose message names an API key classifies as auth', () => {
+    const err = Object.assign(new Error('API key not valid. Please pass a valid API key.'), { status: 400 });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('auth');
+  });
+
+  it('a 400 that only names an api_key request field stays analyzer-request-rejected', () => {
+    const err = new ApiError({
+      status: 400,
+      message:
+        'got status: 400 Bad Request. {"error":{"code":400,"message":"Invalid JSON payload received. Unknown name \\"api_key\\": Cannot find field.","status":"INVALID_ARGUMENT"}}',
+    });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('analyzer-request-rejected');
+  });
+
+  it('a 400 whose key was redacted out of the wording still classifies as auth', () => {
+    const err = Object.assign(new Error('API key [redacted] not valid. Please pass a valid API key.'), { status: 400 });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('auth');
+  });
+});
+
+describe('a Gemini 400 that is not about the request shape (#3084 PR 3b review pass 2 🟠)', () => {
+  it.each([
+    'User location is not supported for the API use.',
+    'Gemini API free tier is not available in your country. Please enable billing on your project in Google AI Studio.',
+  ])('a FAILED_PRECONDITION 400 (%s) is main\'s unknown, never request-rejected', (message) => {
+    const err = new ApiError({
+      status: 400,
+      message: `got status: 400 Bad Request. {"error":{"code":400,"message":"${message}","status":"FAILED_PRECONDITION"}}`,
+    });
+    const r = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(r.code).toBe('unknown');
+    expect(r.remediation).toBe(FAILURE_REMEDIATIONS.unknown.remediation);
+    expect(r.remediation).not.toContain('analyzer.gemini.structuredOutput');
+  });
+
+  it('an INVALID_ARGUMENT shape error is still request-rejected', () => {
+    const err = new ApiError({
+      status: 400,
+      message:
+        'got status: 400 Bad Request. {"error":{"code":400,"message":"Invalid JSON payload received.","status":"INVALID_ARGUMENT"}}',
+    });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('analyzer-request-rejected');
+  });
+
+  it('an envelope with no status field keeps the request-rejected mapping', () => {
+    const err = new ApiError({
+      status: 400,
+      message: 'got status: 400 Bad Request. {"error":{"code":400,"message":"bad field"}}',
+    });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').code).toBe('analyzer-request-rejected');
+  });
+});
+
+describe('Gemini auth remediation names both key homes (#3084 PR 3b review pass 2 🟡)', () => {
+  it('the key-rejection 400 points at Settings as well as .env', () => {
+    const err = new ApiError({
+      status: 400,
+      message:
+        'got status: 400 Bad Request. {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}',
+    });
+    const r = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(r.code).toBe('auth');
+    expect(r.remediation).toBe(
+      'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry the chapter.',
+    );
+  });
+
+  it("selection's missing-key event carries a remediation that agrees with its message", () => {
+    const ev = analyzerSelectionErrorEvent(
+      new Error(
+        'GEMINI_API_KEY is required when analyzer engine is Gemini. Set it in Admin → Model Manager → Gemini API key, or in server/.env for CI / power users.',
+      ),
+    );
+    expect(ev.remediation).toBe(
+      'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry the chapter.',
+    );
+  });
+
+  it('a Gemini ApiError 401 envelope gets the Gemini key remediation (declared outcome 8)', () => {
+    const err = new ApiError({
+      status: 401,
+      message:
+        'got status: 401 Unauthorized. {"error":{"code":401,"message":"Request had invalid authentication credentials.","status":"UNAUTHENTICATED"}}',
+    });
+    const r = classifyAnalysisFailure(err, 'Gemini 3.6 Flash');
+    expect(r.code).toBe('auth');
+    expect(r.remediation).toBe(
+      'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry the chapter.',
+    );
+  });
+});
+
+describe('auth remediation names its own key (#3084 PR 3b review 🟠2)', () => {
+  it('a key-origin mismatch does not send the user to GEMINI_API_KEY', () => {
+    const r = classifyAnalysisFailure(new AnalyzerKeyOriginError('lab', 'Lab box'), 'Analyzer');
+    expect(r.code).toBe('auth');
+    expect(r.remediation).not.toContain('GEMINI_API_KEY');
+    expect(r.remediation).toContain('Lab box');
+  });
+
+  it.each([
+    ['ollama', "Ollama server's access settings"],
+    ['openai', "endpoint's API key"],
+    ['gemini', 'GEMINI_API_KEY'],
+  ] as const)('a %s 401 remediation names that transport\'s key setting', (transport, expected) => {
+    const r = classifyAnalysisFailure(new AnalyzerHttpError(transport, 401, 'nope', 'raw nope'), 'Model');
+    expect(r.code).toBe('auth');
+    expect(r.remediation).toContain(expected);
+    if (transport !== 'gemini') expect(r.remediation).not.toContain('GEMINI_API_KEY');
+  });
+
+  it("selection's missing-Gemini-key event keeps its own actionable sentence, not the TTS auth copy", () => {
+    const text =
+      'GEMINI_API_KEY is required when analyzer engine is Gemini. Set it in Admin → Model Manager → Gemini API key, or in server/.env for CI / power users.';
+    const ev = analyzerSelectionErrorEvent(new Error(text));
+    expect(ev.code).toBe('auth');
+    expect(ev.message).toBe(text);
+    expect(ev.message).not.toContain('TTS');
+  });
+});
+
+describe('analyzer-timeout remediation (#3084 PR 3b review 🟠4)', () => {
+  it("a thinking-idle timeout's remediation names the same control its message names, plus the request ceiling", () => {
+    const r = classifyAnalysisFailure(new AnalyzerTimeoutError('gemini', 'gemini-3.6-flash', 121_000, 'thinking-idle'), 'Gemini 3.6 Flash');
+    expect(r.userMessage).toContain("'Gemini thinking idle timeout'");
+    expect(r.remediation).toContain("'Gemini thinking idle timeout'");
+    expect(r.remediation).toContain('analyzer.gemini.thinkingIdleTimeoutMs');
+    expect(r.remediation).toContain("'Gemini request ceiling'");
+  });
+
+  it("promises no reasoning-level control before wave 5", () => {
+    expect(FAILURE_REMEDIATIONS['analyzer-timeout'].remediation).not.toContain('reasoning level');
+  });
+});
+
+describe('analyzer-invalid-output remediation (#3084 PR 3b review 🟡1)', () => {
+  const classify = (transport: 'ollama' | 'gemini' | 'openai', mode: 'schema' | 'json' | 'off') =>
+    classifyAnalysisFailure(new AnalyzerInvalidOutputError(transport, 'm', '1-ch1', 'invalid-json — x', mode), 'Model');
+
+  it('never tells a run already in "schema" mode to switch to "schema"', () => {
+    expect(classify('ollama', 'schema').remediation).not.toMatch(/set Structured output to "schema"/);
+    expect(classify('ollama', 'schema').remediation).toContain('already "schema"');
+  });
+
+  it('never steers Gemini to "schema" (E112 has not shown it accepts it)', () => {
+    expect(classify('gemini', 'json').remediation).not.toContain('"schema"');
+    expect(classify('gemini', 'off').remediation).not.toContain('"schema"');
+  });
+
+  it('suggests "schema" to an Ollama or endpoint run that is on "json"', () => {
+    expect(classify('ollama', 'json').remediation).toContain('"schema"');
+    expect(classify('openai', 'json').remediation).toContain('"schema"');
+  });
+
+  it('the static Help copy is mode-neutral', () => {
+    expect(FAILURE_REMEDIATIONS['analyzer-invalid-output'].remediation).not.toContain('"schema"');
+  });
+});
+
+describe('analyzer-endpoint-missing copy is true today (#3084 PR 3b review 🟡2)', () => {
+  it('does not promise a Settings UI or claim a possibly-saved endpoint is unconfigured', () => {
+    const live = classifyAnalysisFailure(new AnalyzerEndpointMissingError('gone', 'settings'), 'Analyzer');
+    const help = FAILURE_REMEDIATIONS['analyzer-endpoint-missing'];
+    for (const text of [live.userMessage, live.remediation, help.userMessage, help.remediation]) {
+      expect(text).not.toMatch(/Settings/);
+      expect(text).not.toMatch(/not configured/);
+    }
+    expect(live.userMessage).toContain('"gone"');
+  });
+});
+
+describe('Gemini key advice says the env var wins and needs a restart (#3084 PR 3b review pass 3 🟡2)', () => {
+  it('the key-rejection 400 remediation', () => {
+    const err = new ApiError({
+      status: 400,
+      message:
+        'got status: 400 Bad Request. {"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}',
+    });
+    expect(classifyAnalysisFailure(err, 'Gemini 3.6 Flash').remediation).toBe(
+      'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry the chapter.',
+    );
+  });
+
+  it('the static auth remediation keeps the restart', () => {
+    expect(FAILURE_REMEDIATIONS.auth.remediation).toContain('restart the server after changing it');
+  });
+});
+
+describe('auth copy is true for TTS (#3084 PR 3b review pass 3 🟡1)', () => {
+  const MISSING_KEY =
+    'Gemini TTS selected but no API key is configured. Set it in Admin → Model Manager → Gemini API key, or add it to server/.env for CI / power users.';
+  const KEY_ADVICE =
+    'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry.';
+
+  it('a Gemini TTS missing-key error gets Gemini-named copy that does not claim a refusal', () => {
+    const out = classifyFailure(new Error(MISSING_KEY), 'gemini');
+    expect(out.code).toBe('auth');
+    expect(out.userMessage).toBe(
+      'Gemini TTS authentication failed — the Gemini API key is missing, or Gemini did not accept it.',
+    );
+    expect(out.remediation).toBe(KEY_ADVICE);
+  });
+
+  it('a Gemini TTS 403 gets the same Gemini-named copy', () => {
+    const out = classifyFailure(Object.assign(new Error('forbidden'), { status: 403 }), 'gemini');
+    expect(out.userMessage).toMatch(/^Gemini TTS authentication failed/);
+    expect(out.remediation).toBe(KEY_ADVICE);
+  });
+
+  it('the engine-less fallback keeps "authentication" but neither says "refused" nor points at "the message"', () => {
+    const out = classifyFailure(Object.assign(new Error('forbidden'), { status: 403 }));
+    expect(out.userMessage).toMatch(/authentication/i);
+    for (const text of [out.userMessage, out.remediation]) {
+      expect(text).not.toMatch(/refused/i);
+      expect(text).not.toMatch(/named in the message/i);
+    }
   });
 });

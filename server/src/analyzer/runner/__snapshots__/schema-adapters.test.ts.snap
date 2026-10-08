@@ -1,0 +1,81 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > gemini / emotion 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > gemini / escalation 1`] = `
+[
+  "properties.assignments.items.properties.characterId.minLength",
+]
+`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > gemini / nonStory 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > gemini / scriptReview 1`] = `
+[
+  "properties.ops.items.properties.proposed.properties.name.minLength",
+]
+`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > gemini / stage1 1`] = `
+[
+  "properties.chapters.items.properties.title.minLength",
+  "properties.characters.items.properties.color.minLength",
+  "properties.characters.items.properties.id.minLength",
+  "properties.characters.items.properties.name.minLength",
+  "properties.characters.items.properties.notLinkedTo.items.properties.bookId.minLength",
+  "properties.characters.items.properties.notLinkedTo.items.properties.characterId.minLength",
+  "properties.characters.items.properties.role.minLength",
+]
+`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > gemini / stage1Chapter 1`] = `
+[
+  "properties.characters.items.properties.color.minLength",
+  "properties.characters.items.properties.id.minLength",
+  "properties.characters.items.properties.name.minLength",
+  "properties.characters.items.properties.notLinkedTo.items.properties.bookId.minLength",
+  "properties.characters.items.properties.notLinkedTo.items.properties.characterId.minLength",
+  "properties.characters.items.properties.role.minLength",
+]
+`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > gemini / stage2Chapter 1`] = `
+[
+  "properties.sentences.items.properties.characterId.minLength",
+  "properties.sentences.items.properties.text.minLength",
+]
+`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > gemini / stage3Chapter 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > ollama / emotion 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > ollama / escalation 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > ollama / nonStory 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > ollama / scriptReview 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > ollama / stage1 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > ollama / stage1Chapter 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > ollama / stage2Chapter 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > ollama / stage3Chapter 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > openai / emotion 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > openai / escalation 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > openai / nonStory 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > openai / scriptReview 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > openai / stage1 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > openai / stage1Chapter 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > openai / stage2Chapter 1`] = `[]`;
+
+exports[`dropped keywords per stage schema per provider (snapshot, #3084 spec Testing) > openai / stage3Chapter 1`] = `[]`;

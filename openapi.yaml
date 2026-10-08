@@ -176,6 +176,216 @@ paths:
         '400':
           description: Malformed body (path missing, empty, or too long)
 
+  /api/analyzer/endpoints:
+    post:
+      summary: Add a named OpenAI-compatible analyzer endpoint
+      operationId: createAnalyzerEndpoint
+      description: |
+        #3084 — adds an endpoint to user settings. `contextTokens` is required.
+        `gpu` defaults to `any` for a localhost / 127.0.0.1 / ::1 base URL,
+        else `none`. An `unloadUrl` must share the base URL's origin and may
+        contain `{model}`. The response is the GET /api/user/settings body;
+        API keys are never returned. Endpoints are NOT writable through
+        PUT /api/user/settings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalyzerEndpointInput' }
+      responses:
+        '201':
+          description: Created — updated settings (same shape as GET /api/user/settings)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Invalid endpoint (missing contextTokens, bad id, off-origin unload URL)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+        '409':
+          description: An endpoint with this id already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+
+  /api/analyzer/endpoints/detect-context:
+    post:
+      summary: Read a llama.cpp / llama-swap server's served context size
+      operationId: detectAnalyzerEndpointContext
+      description: |
+        #3084 decision 3b — runs only when the user clicks Detect. Reads
+        `GET <origin>/props` → `default_generation_settings.n_ctx`
+        (llama.cpp), or `GET <origin>/props?model=<model>` (llama-swap), which
+        loads the model and therefore requires `allowModelLoad: true`. A body
+        `apiKey` is sent to the body `baseUrl`; a stored key (`endpointId`) is
+        sent only when its saved origin matches, else 400 `auth` with no
+        request. Local-machine surface: no mock in src/lib/api.ts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalyzerEndpointDetectRequest' }
+      responses:
+        '200':
+          description: Served context size
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointDetectResult' }
+        '400':
+          description: Invalid body, missing model / load confirmation, or key origin mismatch (code auth)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [invalid, model-required, model-load-confirmation-required, auth] }
+                  details:
+                    type: array
+                    items: { type: string }
+                    description: 'Present when `code` is `invalid` — one message per failed field, never a value.'
+        '502':
+          description: The server could not be reached or did not report n_ctx
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [detect-failed] }
+                  upstreamStatus: { type: integer }
+
+  /api/analyzer/endpoints/{endpointId}:
+    parameters:
+      - in: path
+        name: endpointId
+        required: true
+        schema: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
+    put:
+      summary: Replace an analyzer endpoint's settings
+      operationId: updateAnalyzerEndpoint
+      description: |
+        #3084 — the id cannot change. Changing `baseUrl` to another origin does
+        not move a saved key: its status becomes `origin-mismatch` and it is
+        not sent until re-entered.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalyzerEndpointInput' }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Invalid endpoint or a changed id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+        '404':
+          description: No endpoint with this id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+    delete:
+      summary: Delete an analyzer endpoint and its key
+      operationId: deleteAnalyzerEndpoint
+      description: |
+        #3084 — refused with 409 while a saved setting references the endpoint
+        (defaultAnalysisModel, or the analyzer.phase0.model /
+        analyzer.phase1.model / analyzer.personaGeneration.engine overrides);
+        `issues` lists them. The read-only effective `analyzerPhase0Model` /
+        `analyzerPhase1Model` response fields are not references.
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '404':
+          description: No endpoint with this id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+        '409':
+          description: Still referenced by saved settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+
+  /api/analyzer/endpoints/{endpointId}/key:
+    parameters:
+      - in: path
+        name: endpointId
+        required: true
+        schema: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
+    put:
+      summary: Save (or clear) an analyzer endpoint's API key
+      operationId: putAnalyzerEndpointKey
+      description: |
+        #3084 decision 3c — stores the key bound to the endpoint base URL's
+        origin. Pass `{ "key": null }` to clear it. The key is never returned;
+        GET exposes `analyzerEndpointKeyStatus` only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Malformed body, or a key with a control character (`code` is `invalid`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+        '404':
+          description: No endpoint with this id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+
+  /api/user/settings/dropped-endpoint-entries/acknowledge:
+    post:
+      summary: Acknowledge dropped analyzer endpoint entries
+      operationId: acknowledgeDroppedEndpointEntries
+      description: |
+        #3084 F5 — marks each named archiveId acknowledged; it stops appearing
+        in droppedEndpointEntries. An unknown or already-acknowledged id is
+        ignored, not refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [archiveIds]
+              properties:
+                archiveIds: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Malformed body (archiveIds is not an array of strings)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+
   /api/books/{bookId}/backups:
     get:
       summary: List a book's state.json auto-backup snapshots
@@ -1012,8 +1222,8 @@ paths:
         '400': { description: Missing `image` field }
         '404': { description: Book not found }
         '413': { description: Upload exceeds 10 MB }
-        '415': { description: Content type is not `image/jpeg` or `image/png` }
-        '502': { description: PNG → JPEG transcode failed }
+        '415': { description: 'The declared content type is not `image/jpeg` or `image/png`, or the upload content is neither a PNG nor a JPEG (checked by its leading bytes; a valid PNG or JPEG with the other label is accepted)' }
+        '502': { description: 'PNG → JPEG transcode failed, or the JPEG could not be decoded' }
 
   /api/books/{bookId}/cover/framing:
     patch:
@@ -5026,6 +5236,24 @@ components:
           additionalProperties:
             type: integer
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
+        analyzerEndpoints:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyzerEndpoint' }
+          description: |
+            #3084 — named OpenAI-compatible analyzer endpoints. Written only by
+            the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
+        analyzerEndpointKeyStatus:
+          type: object
+          readOnly: true
+          additionalProperties: { $ref: '#/components/schemas/AnalyzerEndpointKeyStatus' }
+          description: Per endpoint id — whether a key is saved and still bound to its base URL's origin. Keys are never returned.
+        droppedEndpointEntries:
+          type: array
+          readOnly: true
+          items: { $ref: '#/components/schemas/DroppedEndpointEntrySummary' }
+          description: |
+            #3084 F5 — every unacknowledged analyzer-endpoint entry dropped at
+            read time (Task 3b.6). Never a key or field value.
         generationWorkers:
           type: integer
           minimum: 1
@@ -5142,6 +5370,18 @@ components:
           additionalProperties:
             type: integer
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
+        analyzerEndpoints:
+          type: array
+          readOnly: true
+          items: { $ref: '#/components/schemas/AnalyzerEndpoint' }
+          description: |
+            #3084 — named OpenAI-compatible analyzer endpoints. Written only by
+            the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
+        analyzerEndpointKeyStatus:
+          type: object
+          readOnly: true
+          additionalProperties: { $ref: '#/components/schemas/AnalyzerEndpointKeyStatus' }
+          description: Per endpoint id — whether a key is saved and still bound to its base URL's origin. Keys are never returned.
         generationWorkers:
           type: integer
           minimum: 1
@@ -5158,6 +5398,101 @@ components:
           minimum: 1
           maximum: 365
           description: srv-2 — number of snapshots to keep; older ones are pruned. Default 14.
+
+    AnalyzerEndpoint:
+      type: object
+      required: [id, name, baseUrl, gpu, concurrency, requestCeilingMs, structuredOutput, reasoningStyle, reasoning, maxOutputTokens, contextTokens]
+      properties:
+        id: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
+        name: { type: string, minLength: 1, maxLength: 80 }
+        baseUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://' }
+        gpu:
+          type: string
+          pattern: '^(none|any|[a-z]+:\d+)$'
+          description: '`none`, `any`, or a device key such as `cuda:0`.'
+        unloadUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://', description: 'Same origin as baseUrl; may contain `{model}`.' }
+        concurrency: { type: integer, minimum: 1, maximum: 16 }
+        requestCeilingMs: { type: integer, minimum: 60000, maximum: 14400000 }
+        structuredOutput: { type: string, enum: [schema, json, 'off'] }
+        reasoningStyle: { type: string, enum: [reasoning_effort, enable_thinking, not_controllable] }
+        reasoning: { type: string }
+        maxOutputTokens: { type: integer, minimum: 0, description: '0 = Auto.' }
+        contextTokens: { type: integer, minimum: 512 }
+        maxInputTokensPerRequest: { type: integer, minimum: 256 }
+        extraParams: { type: object, additionalProperties: true }
+
+    AnalyzerEndpointInput:
+      type: object
+      description: Same fields as AnalyzerEndpoint; everything but id, name, baseUrl and contextTokens has a server default.
+      required: [id, name, baseUrl, contextTokens]
+      properties:
+        id: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
+        name: { type: string, minLength: 1, maxLength: 80 }
+        baseUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://' }
+        gpu: { type: string, pattern: '^(none|any|[a-z]+:\d+)$' }
+        unloadUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://' }
+        concurrency: { type: integer, minimum: 1, maximum: 16 }
+        requestCeilingMs: { type: integer, minimum: 60000, maximum: 14400000 }
+        structuredOutput: { type: string, enum: [schema, json, 'off'] }
+        reasoningStyle: { type: string, enum: [reasoning_effort, enable_thinking, not_controllable] }
+        reasoning: { type: string }
+        maxOutputTokens: { type: integer, minimum: 0 }
+        contextTokens: { type: integer, minimum: 512 }
+        maxInputTokensPerRequest: { type: integer, minimum: 256 }
+        extraParams: { type: object, additionalProperties: true }
+
+    AnalyzerEndpointKeyStatus:
+      type: string
+      enum: [set, unset, origin-mismatch]
+
+    AnalyzerEndpointRefusal:
+      type: object
+      required: [error, code, issues]
+      description: |
+        #3084 F5 — issues are {path, message} pairs, never a field or key value:
+        a UI shows each one inline next to the named field. path is [] for a
+        refusal naming no single field (duplicate-id, not-found, referenced).
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [invalid, duplicate-id, unload-off-origin, not-found, referenced] }
+        issues:
+          type: array
+          items:
+            type: object
+            required: [path, message]
+            properties:
+              path: { type: array, items: { type: string } }
+              message: { type: string }
+
+    AnalyzerEndpointDetectRequest:
+      type: object
+      required: [baseUrl, flavor]
+      properties:
+        baseUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://' }
+        model: { type: string }
+        apiKey: { type: string }
+        endpointId: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
+        flavor: { type: string, enum: [llama.cpp, llama-swap] }
+        allowModelLoad: { type: boolean }
+
+    AnalyzerEndpointDetectResult:
+      type: object
+      required: [contextTokens, source]
+      properties:
+        contextTokens: { type: integer }
+        source: { type: string, enum: [llama.cpp /props, llama-swap /props] }
+
+    DroppedEndpointEntrySummary:
+      type: object
+      required: [kind, issues, droppedAt]
+      properties:
+        archiveId: { type: string, nullable: true, description: 'null while the archive append is still pending.' }
+        kind: { type: string, enum: [endpoint, key] }
+        endpointId: { type: string }
+        name: { type: string }
+        origin: { type: string }
+        issues: { type: array, items: { type: string }, description: '"path: code" strings, never a value.' }
+        droppedAt: { type: string, format: date-time }
 
     # --- Library ----------------------------------------------------
     LibraryResponse:
@@ -7524,6 +7859,9 @@ components:
         - cloned-voice-broken
         - lock-contention
         - language-unset
+        - analyzer-request-rejected
+        - analyzer-invalid-output
+        - analyzer-endpoint-missing
 
     ChapterQaVerdict:
       type: object

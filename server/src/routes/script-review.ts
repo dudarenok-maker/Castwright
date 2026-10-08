@@ -29,7 +29,7 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
-import { selectAnalyzer, type StageCall } from '../analyzer/index.js';
+import { selectAnalyzer, type StageCall, type AnalyzerSelection } from '../analyzer/index.js';
 import { markReviewBusy, clearReviewBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { unloadResidentOllama } from './ollama-health.js';
 import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
@@ -40,6 +40,7 @@ import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { AnalyzerReasoningOverflowError, AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
+import { analyzerSelectionErrorEvent } from './failure-taxonomy.js';
 import { upsertChapterEntry, readLedger, discardChapters, resolveOps, patchSelection } from '../workspace/script-review-ledger.js';
 import { itemFailureReason, requestFailureMessage } from '../workspace/file-lock.js';
 import {
@@ -711,7 +712,19 @@ async function runScriptReviewJob(
     broadcast(job, record);
   };
   const heartbeat = makeThrottledHeartbeat(send, 2000);
-  const selection = selectAnalyzerForPhase({ phase: 'phase1', model });
+  let selection: AnalyzerSelection;
+  try {
+    selection = selectAnalyzerForPhase({ phase: 'phase1', model });
+  } catch (err) {
+    /* #3084 P23 — any error selection throws is reported with its classified code
+       (analyzer-endpoint-missing, auth for a key-origin mismatch, …) and ends the job
+       here, as the model_load_failed return below does; `send` also records it for a
+       reconnect's replay. A throw from later in the job still reaches the launch
+       .catch as internal_error. */
+    send(analyzerSelectionErrorEvent(err));
+    for (const sub of job.subscribers) sub.res.end();
+    return;
+  }
   let activeSelection = selection; // Task 6 may reassign this to a Gemini-only selection
 
   let fellBack = false;

@@ -36,6 +36,9 @@ const CATEGORIES = {
   'analyzer-timeout': 'analysis',
   'analyzer-unreachable': 'analysis',
   'analyzer-content-blocked': 'analysis',
+  'analyzer-request-rejected': 'analysis',
+  'analyzer-invalid-output': 'analysis',
+  'analyzer-endpoint-missing': 'analysis',
   'attribution-incomplete': 'analysis',
   'attribution-collapse': 'analysis',
   oom: 'performance',
@@ -67,6 +70,9 @@ const TITLES = {
   'analyzer-timeout': 'Analyzer request ran past its time limit',
   'analyzer-unreachable': 'Analyzer not reachable',
   'analyzer-content-blocked': 'Gemini blocked the chapter (copyright filter)',
+  'analyzer-request-rejected': 'Analyzer rejected the request',
+  'analyzer-invalid-output': 'Analyzer reply failed validation',
+  'analyzer-endpoint-missing': 'Analyzer endpoint cannot be used',
   'attribution-incomplete': 'Chapter attribution incomplete',
   'attribution-collapse': "Chapter cast wasn't used (dialogue collapse)",
   oom: 'Computer ran out of memory',
@@ -80,7 +86,7 @@ const TITLES = {
   'cloned-voice-broken': "Cloned voice can't render as itself",
   'lock-contention': 'Something else had the book open',
   'language-unset': "Book's language not set",
-  auth: 'Gemini API key problem',
+  auth: 'API key or access problem',
   unknown: 'Unrecognised error',
 } satisfies Record<FailureCode, string>;
 

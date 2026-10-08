@@ -13,10 +13,15 @@ const HANDOFF_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..'
 const IDS = ['m_sr_first', 'm_sr_json', 'm_sr_retry', 'm_sr_noraw', 'm_sr_raw', 'm_sr_single', 'm_sr_cap', 'm_sr_prepare', 'm_sr_overflow'];
 
 class FakeTransport implements ChatTransport {
-  readonly kind = 'ollama' as const;
+  readonly kind: 'ollama' | 'gemini';
   readonly model = 'fake:1';
   readonly requests: TransportRequest[] = [];
-  constructor(private readonly replies: Array<string | Error>) {}
+  constructor(
+    private readonly replies: Array<string | Error>,
+    kind: 'ollama' | 'gemini' = 'ollama',
+  ) {
+    this.kind = kind;
+  }
   async send(req: TransportRequest): Promise<TransportResult> {
     this.requests.push(req);
     const next = this.replies.shift();
@@ -124,8 +129,8 @@ describe('StageRunner (#3084 wave 1)', () => {
     expect(t.requests[1].structuredOutput).toEqual(t.requests[0].structuredOutput);
   });
 
-  it('writesRawAttempts=false writes errors.json only, and throws the policy message', async () => {
-    const t = new FakeTransport(['{"a":1}', '{"a":2}']);
+  it('writesRawAttempts=false writes errors.json only, and throws today\'s message', async () => {
+    const t = new FakeTransport(['{"a":1}', '{"a":2}'], 'gemini');
     const err = await makeRunner(t, GEMINI_RETRY_POLICY, JSON_MODE).runStage(spec('m_sr_noraw'), {}).then(() => null, (e: Error) => e);
     expect(err?.message.startsWith('Gemini 1-ch1 failed validation after retry: schema-validation — ')).toBe(true);
     expect(existsSync(outbox('m_sr_noraw', '.errors.json'))).toBe(true);

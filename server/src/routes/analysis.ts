@@ -178,6 +178,7 @@ import {
   tryParseApiError,
   FAILURE_REMEDIATIONS,
   reasoningOverflowAdvice,
+  analyzerSelectionErrorEvent,
   type FailureCode,
 } from './failure-taxonomy.js';
 import { dropBylineAuthorFromChapter } from '../analyzer/byline-author-guard.js';
@@ -3892,7 +3893,8 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
       phaseModel: requestedPhase0Model,
     });
   } catch (e) {
-    send({ kind: 'error', message: (e as Error).message });
+    /* #3084 P23 — every selection error is sent with its classified code. */
+    send(analyzerSelectionErrorEvent(e));
     clearInterval(keepAlive);
     return res.end();
   }
@@ -7589,7 +7591,8 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       phaseModel: requestedPhase1Model,
     });
   } catch (e) {
-    send({ kind: 'error', message: (e as Error).message });
+    /* #3084 P23 — every selection error is sent with its classified code. */
+    send(analyzerSelectionErrorEvent(e));
     clearInterval(keepAlive);
     return res.end();
   }

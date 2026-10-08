@@ -272,6 +272,12 @@ export const STEPS = [
          that could add or break a citation — prints [cached] and the citation
          checker sits stale-green. Same #1847 runtime-read trap. */
       extraFiles: [
+        // check-audit.test.mjs reads these at RUNTIME (committed-waivers
+        // validity + the braces/micromatch/fast-glob waiver-premise pin over
+        // both lockfiles); no module-graph edge, same #1847 trap.
+        'audit-waivers.json',
+        'package-lock.json',
+        'server/package-lock.json',
         'scripts/validate-commit-msg.mjs',
         'scripts/preflight-ffmpeg.cjs',
         'RELEASE_NOTES.md',

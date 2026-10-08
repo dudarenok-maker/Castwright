@@ -49,7 +49,7 @@ owner: dudarenok-maker
 
 1. `<bookDir>/.audiobook/cover.jpg` is the only JPEG path. Both OpenLibrary and local uploads land here. Framing never writes bytes.
 2. `computeCoverStyle(undefined) === {}` — pre-existing books with no framing render identically to today's `object-cover` behaviour.
-3. Upload accepts only `image/jpeg` and `image/png`. PNG is transcoded to JPEG server-side so the export pipeline's `covr`/APIC frames stay JPEG. Other content types → 415.
+3. Upload accepts only `image/jpeg` and `image/png`. PNG is transcoded to JPEG server-side so the export pipeline's `covr`/APIC frames stay JPEG. Other content types → 415. The branch is chosen by the file's magic bytes (PNG or JPEG signature), not the client label (#3533): a valid PNG/JPEG with the wrong label still uploads, bytes with neither signature → 415, and JPEG bytes are decode-validated (kept verbatim) so a bare `FF D8 FF` prefix on non-image data → 502 `transcode_failed`.
 4. Upload size cap = 10 MB. Larger → 413 with a clear error message in the picker.
 5. Framing values are clamped server-side: `offsetX`, `offsetY` ∈ [-100, 100]; `zoom` ∈ [1.0, 3.0]. Out-of-range → 400.
 6. The export pipeline reads bytes off disk, not from `state.json.coverImage`. Adding `framing` metadata must not change export behaviour. Plan 36's `build-m4b.test.ts` and `id3-tags.test.ts` continue to pass without modification.

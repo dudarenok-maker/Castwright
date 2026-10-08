@@ -22,13 +22,29 @@
 
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
+import { ApiError } from '@google/genai';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import {
+  AnalyzerTruncatedError,
+  AnalyzerHttpError,
+  AnalyzerKeyOriginError,
   AnalyzerReasoningOverflowError,
   AnalyzerTimeoutError,
-  AnalyzerTruncatedError,
+  AnalyzerEndpointMissingError,
+  AnalyzerInvalidOutputError,
+  AnalyzerStreamIncompleteError,
+  AnalyzerTransportError,
+  AnalyzerUnreachableError,
+  causeCodeSuffix,
   type TransportKind,
 } from '../analyzer/errors.js';
+import { redactKnownSecrets } from '../analyzer/redact.js';
+import { namesContextOrTokenLimit } from '../analyzer/limit-400-patterns.js';
+/* #3084 A9 — through the leaf gate, never an import of workspace/user-settings.ts. */
+import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
+/* #3084 P23/A9 — the saved endpoints, through the leaf gate too: the openai fix
+   names its endpoint by saved name without an import of workspace/user-settings.ts. */
+import { listAnalyzerEndpoints } from '../analyzer/analyzer-endpoints-gate.js';
 import { getCachedGeminiModelInfo } from '../analyzer/catalog/gemini-catalog.js';
 import { configValue } from '../config/resolver.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
@@ -44,6 +60,9 @@ export type FailureCode =
   | 'analyzer-timeout'
   | 'analyzer-unreachable'
   | 'analyzer-content-blocked'
+  | 'analyzer-request-rejected'
+  | 'analyzer-invalid-output'
+  | 'analyzer-endpoint-missing'
   | 'attribution-incomplete'
   | 'attribution-collapse'
   | 'oom'
@@ -354,6 +373,12 @@ function trimRaw(raw: string): string {
   return raw.length > 240 ? `${raw.slice(0, 240)}…` : raw;
 }
 
+const GEMINI_TTS_AUTH_COPY = {
+  userMessage: 'Gemini TTS authentication failed — the Gemini API key is missing, or Gemini did not accept it.',
+  remediation:
+    'Check the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it), then retry.',
+};
+
 function scanSignatures(
   err: unknown,
   sources: ReadonlySet<FailureSource>,
@@ -368,7 +393,11 @@ function scanSignatures(
   for (const sig of FAILURE_SIGNATURES) {
     if (!sources.has(sig.source)) continue;
     if ((sig.matchName != null && sig.matchName === ctx.name) || sig.match(raw, ctx)) {
-      const copy = FAILURE_REMEDIATIONS[sig.code];
+      /* The static `auth` copy is neutral because it can come from any source. A Gemini TTS failure
+         (a 401/403, or selectTtsProvider's missing-key error, where nothing was sent) gets copy that
+         names the one key it can be about. */
+      const copy =
+        sig.code === 'auth' && engine === 'gemini' ? GEMINI_TTS_AUTH_COPY : FAILURE_REMEDIATIONS[sig.code];
       return {
         code: sig.code,
         userMessage: copy.userMessage,
@@ -487,10 +516,20 @@ export function tryParseApiError(
   return null;
 }
 
+/* Only Gemini's key-rejection signals — the envelope reasons and the "API key [<redacted key>] not
+   valid / expired" wording. A bare mention of an `api_key` request field is a request-shape error. */
+const GEMINI_KEY_REJECTED = /\bAPI_KEY_(?:INVALID|EXPIRED)\b|\bAPI key(?: \S{1,80})? (?:not valid|expired)\b/i;
+
 /* classifyStatus, ported from analysis.ts — now emits FailureCode per the
    spec-A2 mapping (rate_limit→analyzer-rate-limit, daily_quota→analyzer-daily-quota,
-   unavailable/internal→analyzer-unreachable, invalid_key→auth, bad_request→unknown). */
-function statusToFailureCode(status: number | undefined, message?: string): FailureCode {
+   unavailable/internal→analyzer-unreachable, invalid_key→auth; a 400 → analyzer-request-rejected
+   only when it is about the request's shape, see below). */
+function statusToFailureCode(
+  status: number | undefined,
+  message?: string,
+  keyText: string | undefined = message,
+  envelopeStatus?: string,
+): FailureCode {
   if (!status) return 'unknown';
   if (status === 429) {
     /* Same per_day marker as the analyzer-daily-quota signature, but applied to the parsed envelope MESSAGE
@@ -502,11 +541,22 @@ function statusToFailureCode(status: number | undefined, message?: string): Fail
   }
   if (status === 503 || status === 500) return 'analyzer-unreachable';
   if (status === 401 || status === 403) return 'auth';
+  /* #3084 PR 3b review — Gemini answers a bad or expired key with a 400 whose envelope
+     reason is API_KEY_INVALID / API_KEY_EXPIRED. That is a credentials problem (main
+     returned `unknown` for it), not a request-shape one. */
+  if (status === 400) {
+    if (keyText && GEMINI_KEY_REJECTED.test(keyText)) return 'auth';
+    /* A 400 is request-rejected only when it is about the request's shape: Gemini marks those
+       INVALID_ARGUMENT. Any other envelope status (FAILED_PRECONDITION for an unsupported
+       region or a free tier that is not available, …) names no setting this code's copy points
+       at, so it keeps main's `unknown`. A bare 400 (no envelope status) keeps the mapping. */
+    return !envelopeStatus || envelopeStatus === 'INVALID_ARGUMENT' ? 'analyzer-request-rejected' : 'unknown';
+  }
   return 'unknown';
 }
 
-function withCopy(code: FailureCode, userMessage: string, detail?: string): AnalysisFailure {
-  return { code, userMessage, remediation: FAILURE_REMEDIATIONS[code].remediation, detail };
+function withCopy(code: FailureCode, userMessage: string, detail?: string, remediation?: string): AnalysisFailure {
+  return { code, userMessage, remediation: remediation ?? FAILURE_REMEDIATIONS[code].remediation, detail };
 }
 
 /* ── #3084 F7 — structured "how to fix" entries (wave 2b) ───────────────────
@@ -542,10 +592,10 @@ export interface AnalysisFailureFix {
     branch's own pushes — is what keeps every wiki entry after every actionable
     one as 3b/5a/5b append their own entries, with no re-sort anywhere. */
 export function reasoningOverflowFixes(ctx: {
-  /** 'openai' returns [] until 3b. */
+  /** 'openai' with no endpointId returns []: there is no endpoint to name. */
   transport: TransportKind;
   model: string;
-  /** Unused in 2b; 3b starts passing it. */
+  /** The endpoint whose request overflowed (set by OpenAIAnalyzer; 3b). */
   endpointId?: string;
 }): AnalysisFailureFix[] {
   const fixes: AnalysisFailureFix[] = []; // actionable — settingKey or label-only
@@ -601,10 +651,19 @@ export function reasoningOverflowFixes(ctx: {
       label: 'Read: When a model thinks past its output limit',
       wikiPage: 'Analysis-and-the-Analyzer',
     });
-  } else {
-    /* 'openai' — 3b (Task 3b.1b) adds the endpoint branch, ending with the
-       endpoints page's own wiki-link entry (F3), not this one. */
-    return [];
+  } else if (ctx.transport === 'openai' && ctx.endpointId) {
+    /* #3084 F7 (Task 3b.1b) — the endpoint's own output and context caps, plus the
+       stage input fractions. Named by saved name, falling back to the id when the
+       endpoint was deleted after the failure. No wikiPage yet: the endpoints page
+       (F3) lands in PR 3d, which adds it with the page file. No reasoning or payload
+       rows: those are 5a and 5b. */
+    const name = listAnalyzerEndpoints().find((e) => e.id === ctx.endpointId)?.name ?? ctx.endpointId;
+    fixes.push(
+      { label: `Lower ${name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' } },
+      { label: `Lower ${name}'s context size`, endpointField: { endpointId: ctx.endpointId, field: 'contextTokens' } },
+      { label: 'Shrink Stage 1 chunks', settingKey: 'analyzer.stage1.localInputFraction' },
+      { label: 'Shrink Stage 2 chunks', settingKey: 'analyzer.stage2.localInputFraction' },
+    );
   }
 
   /* The thinking window (analyzer.gemini.thinkingIdleTimeoutMs) never appears
@@ -624,6 +683,116 @@ export function reasoningOverflowAdvice(ctx: Parameters<typeof reasoningOverflow
     .filter((f) => !f.wikiPage)
     .map((f) => f.label)
     .join('; ');
+}
+
+/* #3084 PR 3b — the settings that shape a request, per transport, named in an
+   analyzer-request-rejected remediation. Wave 5 adds the reasoning and
+   custom-payload settings when they exist. */
+const REQUEST_SHAPING_SETTINGS: Record<TransportKind, string[]> = {
+  ollama: [
+    'Ollama structured output (analyzer.ollama.structuredOutput)',
+    'Ollama num_ctx (analyzer.ollama.numCtx)',
+    'Ollama num_predict (analyzer.ollama.numPredict)',
+  ],
+  gemini: [
+    'Gemini structured output (analyzer.gemini.structuredOutput)',
+    'Gemini max output tokens (analyzer.gemini.maxOutputTokens)',
+  ],
+  openai: [
+    "the endpoint's Structured output field",
+    "the endpoint's Context size field",
+  ],
+};
+
+const KEY_SETTING: Record<TransportKind, string> = {
+  ollama: "the Ollama server's access settings",
+  gemini:
+    'the Gemini API key (Settings, or GEMINI_API_KEY in server/.env, which takes precedence; restart the server after changing it)',
+  openai: "the endpoint's API key",
+};
+
+/* #3084 P24 — an endpoint 400 whose message names a context, token or length
+   limit is about the request's size. Auto output leaves a margin, but the
+   input size is an estimate. */
+const ENDPOINT_TOKEN_LIMIT_HINT =
+  " The message names a token or context limit: lower the endpoint's Max output tokens field " +
+  '(0 = Auto), or set its Context size field to the context the server actually serves.';
+
+/* #3084 PR 3b — copy for an endpoint's final errors that no FailureCode fits
+   exactly. `analyzer-unreachable` tells the user to start Ollama, `analyzer-request-rejected`
+   is 400-only by contract, and `model-not-loaded` is TTS copy, so these classify
+   as `unknown` with a curated message instead of the raw one. */
+const ENDPOINT_FAILURE_REMEDIATION =
+  "Check the endpoint's server log and that the model name exists on that server, then retry the " +
+  'chapter. If it keeps failing, pick a different model or endpoint for this run.';
+const ENDPOINT_UNREACHABLE_REMEDIATION =
+  "Check that the endpoint's server is running and that its base URL in Settings is right, then " +
+  'retry. Castwright switches to Gemini only when a Gemini key is saved and cloud fallback is on.';
+
+/* A Gemini key problem (an ApiError, or the 400 whose wording names the key) points at both places
+   the key can live; the static `auth` text is neutral across every source. Anything else keeps the static copy. */
+function geminiAuthRemediation(err: unknown, code: FailureCode): string | undefined {
+  if (code !== 'auth') return undefined;
+  const status = (err as { status?: number })?.status;
+  if (!(err instanceof ApiError) && status !== 400) return undefined;
+  return `Check ${KEY_SETTING.gemini}, then retry the chapter.`;
+}
+
+function requestRejected(
+  modelLabel: string,
+  transport: TransportKind | undefined,
+  providerMessage: string,
+  envelopeDetail?: string,
+): AnalysisFailure {
+  const secrets = knownAnalyzerSecrets();
+  const redacted = redactKnownSecrets(providerMessage, secrets).slice(0, 500);
+  const settings = transport
+    ? REQUEST_SHAPING_SETTINGS[transport]
+    : Object.values(REQUEST_SHAPING_SETTINGS).flat();
+  const limitHint = transport === 'openai' && namesContextOrTokenLimit(providerMessage) ? ENDPOINT_TOKEN_LIMIT_HINT : '';
+  return {
+    code: 'analyzer-request-rejected',
+    userMessage: `${modelLabel} rejected the request (400): ${redacted}`,
+    remediation: `${FAILURE_REMEDIATIONS['analyzer-request-rejected'].remediation} Settings that shape this request: ${settings.join('; ')}.${limitHint}`,
+    /* A Google envelope keeps main's status/details block (failure-taxonomy.ts:556-560). */
+    detail: (envelopeDetail !== undefined ? redactKnownSecrets(envelopeDetail, secrets) : redacted) || undefined,
+  };
+}
+
+/* Gemini is never steered to "schema" here either (see invalidOutputRemediation). */
+function invalidOutputHint(
+  transport: TransportKind,
+  mode: AnalyzerInvalidOutputError['structuredOutputMode'],
+): string {
+  if (mode === 'schema') return 'structured output was "schema"; this model or server may not enforce it';
+  if (mode === 'json') {
+    return transport === 'gemini'
+      ? 'structured output was "json"'
+      : 'structured output was "json" — "schema" constrains the structure as well as the syntax';
+  }
+  return transport === 'gemini'
+    ? 'structured output was off — "json" usually prevents this'
+    : 'structured output was off — "json" or "schema" usually prevents this';
+}
+
+/* The advice follows the run's own mode. Gemini is never steered to "schema": whether it
+   accepts that mode is still owed on-box acceptance (E112). */
+function invalidOutputRemediation(
+  transport: TransportKind,
+  mode: AnalyzerInvalidOutputError['structuredOutputMode'],
+): string {
+  const lead = 'Retry the chapter. If it keeps failing, ';
+  if (mode === 'schema') {
+    return `${lead}Structured output is already "schema" for this run, so pick a stronger model or one this server enforces it for.`;
+  }
+  if (transport === 'gemini') {
+    return mode === 'off'
+      ? `${lead}set Gemini structured output to "json", or pick a stronger model.`
+      : `${lead}pick a stronger model.`;
+  }
+  return mode === 'off'
+    ? `${lead}set Structured output to "json" or "schema" for this engine or endpoint, or pick a stronger model.`
+    : `${lead}set Structured output to "schema" for this engine or endpoint, or pick a stronger model.`;
 }
 
 /** Run-level analysis classifier — the unified replacement for analysis.ts's
@@ -697,7 +866,7 @@ export function classifyAnalysisFailure(
       /* #3084 F7 — the structured fixes for this exact instance. `err` already
          carries both ctx fields with the ctx's own types, so this is called
          with no cast. */
-      fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model }),
+      fixes: reasoningOverflowFixes({ transport: err.transport, model: err.model, endpointId: err.endpointId }),
     };
   }
   if (err instanceof AnalyzerTimeoutError) {
@@ -727,12 +896,117 @@ export function classifyAnalysisFailure(
       `resetAt: ${err.resetAt.toISOString()}`,
     );
   }
-  const raw = (err as Error)?.message ?? String(err);
+  if (err instanceof AnalyzerKeyOriginError) {
+    return withCopy(
+      'auth',
+      `The API key saved for ${err.endpointName} was entered for a different host, so it was not sent — re-enter the key for ${err.endpointName}.`,
+      undefined,
+      `Re-enter the API key for ${err.endpointName} — a saved key is only ever sent to the host it was entered for — then retry.`,
+    );
+  }
+  if (err instanceof AnalyzerUnreachableError && err.transport === 'openai') {
+    /* #3084 PR 3b, P28 — ENDPOINT errors only. Ollama's LocalUnreachableError
+       (transport 'ollama') does not enter this branch: it falls through to main's
+       path below (the signature scan over its message), so its code, copy and
+       detail stay exactly main's (unreachable-failure-taxonomy.test.ts, captured
+       on main). */
+    return {
+      code: 'analyzer-unreachable',
+      userMessage: `${modelLabel} could not be reached: ${redactKnownSecrets(err.message, knownAnalyzerSecrets())}`,
+      remediation: ENDPOINT_UNREACHABLE_REMEDIATION,
+    };
+  }
+  if (err instanceof AnalyzerHttpError) {
+    /* Google's OpenAI-compatible endpoint answers a bad key with a 400 (API_KEY_INVALID), the same
+       credentials problem statusToFailureCode maps for a direct Gemini call. Endpoints only: an
+       Ollama 400 body has no key concept, so it keeps main's request-rejected handling. */
+    const endpointKeyRejected =
+      err.httpStatus === 400 && err.transport === 'openai' && GEMINI_KEY_REJECTED.test(err.bodyExcerpt);
+    if (err.httpStatus === 401 || err.httpStatus === 403 || endpointKeyRejected) {
+      return withCopy(
+        'auth',
+        `${modelLabel} refused the credentials (${err.httpStatus}) — check ${KEY_SETTING[err.transport]}.`,
+        redactKnownSecrets(err.bodyExcerpt, knownAnalyzerSecrets()) || undefined,
+        `Check ${KEY_SETTING[err.transport]}, then retry the chapter.`,
+      );
+    }
+    if (err.httpStatus === 400) return requestRejected(modelLabel, err.transport, err.bodyExcerpt);
+    if (err.transport === 'openai') {
+      /* #3084 PR 3b — an endpoint that answered with any other status (5xx, 404,
+         422, or 0 for an error event inside the stream) is never "unreachable"
+         (P21). No FailureCode fits it exactly (see ENDPOINT_FAILURE_REMEDIATION),
+         so: `unknown`, a curated message and the redacted excerpt. An Ollama
+         AnalyzerHttpError falls through to main's handling below, unchanged. */
+      const excerpt = redactKnownSecrets(err.bodyExcerpt, knownAnalyzerSecrets()).slice(0, 500);
+      const what = err.httpStatus === 0 ? 'sent an error inside its response stream' : `returned HTTP ${err.httpStatus}`;
+      return {
+        code: 'unknown',
+        userMessage: `${modelLabel} ${what}: ${excerpt}`,
+        remediation: ENDPOINT_FAILURE_REMEDIATION,
+        detail: `transport=openai status=${err.httpStatus}`,
+      };
+    }
+  }
+  if (err instanceof AnalyzerStreamIncompleteError) {
+    /* #3084 P22 — the pre-header case (a reset or DNS failure before any response)
+       appends its sanitized cause code, so a persistent DNS failure never reads as
+       a mid-answer drop. */
+    return {
+      code: 'unknown',
+      userMessage:
+        err.phase === 'before-response'
+          ? `${modelLabel} dropped the connection before a response${causeCodeSuffix(err.causeCode)}, and retrying did not help.`
+          : `${modelLabel} dropped the connection or stopped streaming before it finished its answer, and retrying did not help.`,
+      remediation: ENDPOINT_FAILURE_REMEDIATION,
+      detail: `transport=${err.transport} model=${err.model}${err.causeCode ? ` causeCode=${err.causeCode}` : ''}`,
+    };
+  }
+  if (err instanceof AnalyzerTransportError && err.transport === 'openai') {
+    /* #3084 P22 — a rebuilt transport error (rule 7). Its message holds only class
+       names and the sanitized code. The curated copy names the endpoint and appends
+       the code (ERR_SSL_WRONG_VERSION_NUMBER: https:// against a plain-HTTP server;
+       UNABLE_TO_VERIFY_LEAF_SIGNATURE: an untrusted certificate;
+       ERR_TLS_CERT_ALTNAME_INVALID: a hostname mismatch); the class chain goes to
+       detail. Without this branch the fall-through signature scan could read a
+       code-bearing message as Ollama copy. */
+    return {
+      code: 'unknown',
+      userMessage: `${modelLabel} request failed${causeCodeSuffix(err.causeCode)}.`,
+      remediation: ENDPOINT_FAILURE_REMEDIATION,
+      detail: redactKnownSecrets(err.message, knownAnalyzerSecrets()),
+    };
+  }
+  if (err instanceof AnalyzerEndpointMissingError) {
+    return withCopy(
+      'analyzer-endpoint-missing',
+      `${err.message} Pick another model.`,
+    );
+  }
+  if (err instanceof AnalyzerInvalidOutputError) {
+    return withCopy(
+      'analyzer-invalid-output',
+      `${modelLabel} returned output that failed validation twice (${invalidOutputHint(err.transport, err.structuredOutputMode)}).`,
+      redactKnownSecrets(err.detail, knownAnalyzerSecrets()),
+      invalidOutputRemediation(err.transport, err.structuredOutputMode),
+    );
+  }
+  /* #3084 P22 — every branch below that shows raw provider text (the envelope,
+     the bare status, the unknown fall-through) shows it with known secrets
+     removed. With no secret present the text is unchanged. */
+  const raw = redactKnownSecrets((err as Error)?.message ?? String(err), knownAnalyzerSecrets());
   const status = (err as { status?: number })?.status;
 
   const parsed = tryParseApiError(raw);
   if (parsed) {
-    const code = statusToFailureCode(parsed.code ?? status, parsed.message);
+    const code = statusToFailureCode(parsed.code ?? status, parsed.message, raw, parsed.status);
+    if (code === 'analyzer-request-rejected') {
+      return requestRejected(
+        modelLabel,
+        err instanceof ApiError ? 'gemini' : undefined,
+        parsed.message,
+        formatErrorDetail(parsed, raw),
+      );
+    }
     /* Only trim quota messages — 4xx/5xx bodies are usually short and
        informative (an INVALID_ARGUMENT body names the failed field), so
        trimming them throws away the only useful diagnostic. */
@@ -745,10 +1019,15 @@ export function classifyAnalysisFailure(
       code,
       `${modelLabel} returned ${parsed.code ?? status ?? '???'}${statusSuffix}: ${trimmed}`,
       formatErrorDetail(parsed, raw),
+      geminiAuthRemediation(err, code),
     );
   }
   if (status) {
-    return withCopy(statusToFailureCode(status, raw), `${modelLabel} returned ${status}: ${raw}`);
+    const code = statusToFailureCode(status, raw);
+    if (code === 'analyzer-request-rejected') {
+      return requestRejected(modelLabel, err instanceof ApiError ? 'gemini' : undefined, raw);
+    }
+    return withCopy(code, `${modelLabel} returned ${status}: ${raw}`, undefined, geminiAuthRemediation(err, code));
   }
   /* Not an API envelope — give the signature table a chance (catches the
      connection-refused / fetch-failed family) before the unknown fallback. */
@@ -758,3 +1037,33 @@ export function classifyAnalysisFailure(
   }
   return withCopy('unknown', raw || 'Analysis failed.');
 }
+
+/** #3084 P23 — the SSE error event for ANY error selection throws, coded through
+    classifyAnalysisFailure: AnalyzerEndpointMissingError → analyzer-endpoint-missing,
+    AnalyzerKeyOriginError → auth, anything else → its classified code. Never null, so
+    no selection call site ends a stream uncoded or rethrows after the SSE headers.
+    Per class of error, not per site: a class a later PR adds is coded here without
+    touching the six call sites. */
+export function analyzerSelectionErrorEvent(
+  err: unknown,
+): { kind: 'error'; code: FailureCode; message: string; remediation: string; detail?: string } {
+  const failure = classifyAnalysisFailure(err, 'Analyzer');
+  /* Selection's own missing-key Error (analyzer/index.ts) matches the `auth` signature, whose
+     copy does not name what is missing; keep that as the detail the UI's collapsible shows.
+     Every other detail comes from the classification itself. */
+  const raw = err instanceof Error ? err.message : String(err);
+  const missingKey = failure.code === 'auth' && GEMINI_KEY_REQUIRED.test(raw);
+  const detail = failure.detail ?? (missingKey ? 'Gemini API key required' : undefined);
+  return {
+    kind: 'error',
+    code: failure.code,
+    /* The signature's generic `auth` copy ("Authentication failed — an API key or access setting is missing, wrong or expired")
+       does not say which key is missing or where the setting lives. Main's own sentence says both,
+       and the remediation below names the same two homes. */
+    message: missingKey ? raw : failure.userMessage,
+    remediation: missingKey ? `Check ${KEY_SETTING.gemini}, then retry the chapter.` : failure.remediation,
+    ...(detail ? { detail } : {}),
+  };
+}
+
+const GEMINI_KEY_REQUIRED = /GEMINI_API_KEY is required/;
