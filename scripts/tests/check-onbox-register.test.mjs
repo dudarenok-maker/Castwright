@@ -5014,7 +5014,7 @@ test('#3529 pass 3: a retirement whose PR head branch gh did not report is refus
   const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
   assert.equal(retired.length, 1, JSON.stringify(errors));
   assert.match(retired[0], /#3505/);
-  assert.match(retired[0], /head branch/);
+  assert.match(retired[0], /did not report #3505.s head branch/);
 });
 
 test('#3529 pass 3: the owner is looked up only for a retired row the live page still carries', () => {
