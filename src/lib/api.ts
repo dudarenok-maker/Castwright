@@ -7047,6 +7047,7 @@ const MOCK_USER_SETTINGS: UserSettings = {
   workspaceSource: 'default',
   corruptSettingsFile: false,
   analyzerKeepAliveByModel: {},
+  analyzerRateLimitsByModel: {},
   analyzerEndpoints: [],
   analyzerEndpointKeyStatus: {},
   droppedEndpointEntries: [],
@@ -7550,6 +7551,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     exportSyncFolder,
     dualModelEnabled,
     analyzerKeepAliveByModel,
+    analyzerRateLimitsByModel,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -7564,6 +7566,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         exportSyncFolder,
         dualModelEnabled,
         analyzerKeepAliveByModel,
+        analyzerRateLimitsByModel,
       }).filter(([, v]) => v !== undefined),
     ),
   );

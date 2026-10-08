@@ -5204,6 +5204,13 @@ components:
           additionalProperties:
             type: integer
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
+        analyzerRateLimitsByModel:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AnalyzerModelRateLimits'
+          description: |
+            #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
+            `openai:<endpointId>::<model>`). PUT replaces the whole map.
         analyzerEndpoints:
           type: array
           items: { $ref: '#/components/schemas/AnalyzerEndpoint' }
@@ -5281,6 +5288,18 @@ components:
             the five settings writers). Server-computed — ignored if sent
             on a PUT.
 
+    AnalyzerModelRateLimits:
+      type: object
+      additionalProperties: false
+      description: |
+        #3084 — one model's saved analyzer rate limits. Absent fields fall through:
+        Gemini ids env GEMINI_{RPM,TPM,RPD}_<slug> → this entry → built-in table;
+        endpoint ids this entry → unlimited. `tpm: 0` means unlimited.
+      properties:
+        rpm: { type: integer, minimum: 1 }
+        tpm: { type: integer, minimum: 0 }
+        rpd: { type: integer, minimum: 1 }
+
     UserSettingsPatch:
       type: object
       description: |
@@ -5338,6 +5357,13 @@ components:
           additionalProperties:
             type: integer
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
+        analyzerRateLimitsByModel:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/AnalyzerModelRateLimits'
+          description: |
+            #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
+            `openai:<endpointId>::<model>`). PUT replaces the whole map.
         analyzerEndpoints:
           type: array
           readOnly: true

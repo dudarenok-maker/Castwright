@@ -3654,6 +3654,13 @@ export interface components {
                 [key: string]: number;
             };
             /**
+             * @description #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
+             *     `openai:<endpointId>::<model>`). PUT replaces the whole map.
+             */
+            analyzerRateLimitsByModel?: {
+                [key: string]: components["schemas"]["AnalyzerModelRateLimits"];
+            };
+            /**
              * @description #3084 — named OpenAI-compatible analyzer endpoints. Written only by
              *     the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
              */
@@ -3717,6 +3724,16 @@ export interface components {
             readonly corruptSettingsFile: boolean;
         };
         /**
+         * @description #3084 — one model's saved analyzer rate limits. Absent fields fall through:
+         *     Gemini ids env GEMINI_{RPM,TPM,RPD}_<slug> → this entry → built-in table;
+         *     endpoint ids this entry → unlimited. `tpm: 0` means unlimited.
+         */
+        AnalyzerModelRateLimits: {
+            rpm?: number;
+            tpm?: number;
+            rpd?: number;
+        };
+        /**
          * @description Partial update payload. Read-only fields (apiKeyStatus,
          *     workspaceRoot, workspaceSource, corruptSettingsFile) are ignored.
          *     Any `geminiApiKey`-shaped field is dropped — the API key only lives
@@ -3760,6 +3777,13 @@ export interface components {
             /** @description Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin). */
             analyzerKeepAliveByModel?: {
                 [key: string]: number;
+            };
+            /**
+             * @description #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
+             *     `openai:<endpointId>::<model>`). PUT replaces the whole map.
+             */
+            analyzerRateLimitsByModel?: {
+                [key: string]: components["schemas"]["AnalyzerModelRateLimits"];
             };
             /**
              * @description #3084 — named OpenAI-compatible analyzer endpoints. Written only by
