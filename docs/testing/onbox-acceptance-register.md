@@ -6028,9 +6028,11 @@ Opening an analysed book whose `state.json` has `prosodyAnnotated: false` re-run
 - **Starts.** The "Detecting emotions" pill shows and prosody requests reach the analyzer.
 - **(a) Analysis.** Mid-run, start an analysis for the book. In the server log the prosody requests for that book stop (no further prosody calls for it), and the book stays `prosodyAnnotated: false`.
 - **(b) Switch book.** Same, but open another book instead. Same observation.
+- **(c) Generation.** Same, but queue a chapter render for the book while the run is active. The prosody requests stop, the pill clears, Generate was never disabled at any point, and the book stays `prosodyAnnotated: false`.
 - **Resumes.** Reopen the book: the run starts again.
+- **Reload.** Reload (or close and reopen the app) mid-run, then open the book again. The run starts again, because the run marked the book `false` as it started.
 
-Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 3. Clears when (a), (b) and the resume are recorded with the last prosody log line for each abort.
+Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 3. Clears when (a), (b), (c), the resume and the reload are recorded with the last prosody log line for each abort.
 
 ---
 

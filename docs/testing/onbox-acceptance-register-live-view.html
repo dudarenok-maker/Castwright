@@ -865,7 +865,9 @@
           <li><b>Starts:</b> the “Detecting emotions” pill shows and prosody requests reach the analyzer.</li>
           <li><b>(a) Analysis:</b> mid-run, start an analysis for the book — the server log shows no further prosody calls for it, and the book stays <code>prosodyAnnotated: false</code>.</li>
           <li><b>(b) Switch book:</b> same, but open another book instead.</li>
+          <li><b>(c) Generation:</b> same, but queue a chapter render for the book while the run is active — the prosody requests stop, the pill clears, Generate is never disabled, and the book stays <code>prosodyAnnotated: false</code>.</li>
           <li><b>Resumes:</b> reopen the book and the run starts again.</li>
+          <li><b>Reload:</b> reload (or close and reopen the app) mid-run, then open the book again — the run starts again, because it marked the book <code>false</code> as it started.</li>
         </ul>
         <p class="src">Local Ollama, a real analysed book, no TTS engine · plan <code>287</code> “On-box acceptance owed” item 3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3435">#3435</a></p>
       </div>
