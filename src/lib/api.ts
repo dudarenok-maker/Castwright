@@ -1297,7 +1297,17 @@ export async function mockGetBookState(bookId: string): Promise<BookStateRespons
   if (DEMO_CAPTURE && HOLLOW_TIDE_BOOK_STATES.has(bookId)) {
     return HOLLOW_TIDE_BOOK_STATES.get(bookId) ?? null;
   }
-  return MOCK_BOOK_STATES.get(bookId) ?? null;
+  const stored = MOCK_BOOK_STATES.get(bookId) ?? null;
+  /* e2e seam: a spec can prime a book's prosodyAnnotated watermark via
+     `page.addInitScript` BEFORE the app boots (mock PUTs never write it), so
+     the open-time emotion re-run sees an explicit `false`. Undefined in
+     normal dev/prod. */
+  const seeded = (
+    globalThis as unknown as { __SEED_PROSODY_ANNOTATED__?: Record<string, boolean> }
+  ).__SEED_PROSODY_ANNOTATED__?.[bookId];
+  return stored && seeded !== undefined
+    ? { ...stored, state: { ...stored.state, prosodyAnnotated: seeded } }
+    : stored;
 }
 
 export async function mockPutBookState(bookId: string, req: PutStateRequest): Promise<void> {
