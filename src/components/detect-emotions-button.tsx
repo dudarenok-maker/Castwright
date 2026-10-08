@@ -8,10 +8,11 @@
    Scope comes from the store (ui.stage.currentChapterId + manuscript.sentences),
    as bookId already does — so manuscript.tsx needs no new props. Both scopes
    share one AbortController + the bookId-keyed prosody substage lock, so only
-   one runs at a time. Per-chapter is manual only and never sets the
-   prosodyAnnotated watermark (that stays the layout.tsx auto-trigger's job);
-   a run of either scope that skipped lines writes it false, which is what
-   makes the layout re-run the book on its next open (#3435). */
+   one runs at a time. Per-chapter is manual only; neither scope ever writes
+   the prosodyAnnotated watermark true (that stays the layout.tsx
+   auto-trigger's job), and it does not write false as a run starts. A run of
+   either scope that skipped lines writes it false, which is what makes the
+   layout re-run the book on its next open (#3435). */
 
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'react-redux';

@@ -1248,7 +1248,8 @@ export function Layout() {
      book stops being the open trigger's book (another book or a non-book
      view opens), it is aborted and its pill cleared; the book stays marked
      unfinished, so it is run again the next time it is opened. So at most
-     one runs at a time: the open book's. The run in flight, if any. */
+     one background run at a time: the open book's. The run in flight, if
+     any. */
   const prosodyBackground = useRef<{ id: string; ctrl: AbortController } | null>(null);
   useEffect(
     () =>
@@ -1319,11 +1320,12 @@ export function Layout() {
            them only while the slices hold this book (store/open-book.ts) AND
            the stage names it — the stage moves before the next book's read
            lands, and a write in that window would be saved into the next
-           book. A skipped annotation marks the book unfinished, like a
-           partial failure, and the open trigger below runs it again
-           (fill-only) the next time the book is open — at once, if it is
-           open again by the time this run ends. A background run that yielded
-           applies nothing more and marks the book unfinished. */
+           book. A skipped annotation leaves the start mark in place (the
+           book never reaches true), like a partial failure, and the open
+           trigger below runs it again (fill-only) the next time the book is
+           open — at once, if it is open again by the time this run ends. A
+           background run that yielded applies nothing more and leaves the
+           start mark too. */
         const signal = ctrl?.signal;
         /* A re-run never rewrites the text of a chapter with rendered audio
            (done, rendering, a render stamp, or a render map on disk — a chapter
@@ -1411,7 +1413,7 @@ export function Layout() {
   /* #3435 (PR #3505 review passes 6-7) — re-run on open. The trigger above
      keys on library.books, which refreshes on the Library: a book analysed in
      the foreground is usually first seen complete there, where its
-     annotations cannot land, and that run marks it unfinished. So when an
+     annotations cannot land, and that run leaves it marked unfinished. So when an
      analysis-complete book is open (the stage names it and the slices hold
      it) and its watermark is explicitly false, run it again: once per visit,
      fill-only (applyDetectedEmotions / applyDetectedInstruct never overwrite
