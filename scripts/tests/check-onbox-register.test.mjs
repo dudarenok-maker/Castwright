@@ -4758,6 +4758,32 @@ test('#3529 pass 2 S3b: the same with the owning lane merging first — silent, 
   assert.deepEqual(s3(true), []);
 });
 
+// Review pass 3, 🔴 (P3g): "main has ever carried it" follows main's own
+// first-parent line. A merged lane that minted a colliding ID on its branch
+// and renumbered it BEFORE merging (#3525's f980d2c8 B103) never put that ID
+// in main's register, so it must not exempt the other lane's live copy.
+test('#3529 pass 3 P3g: a merged lane that minted a colliding ID and renumbered it before merging does not exempt the other lane', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'lane-x');
+    uCommit(repo, 'xxxx0001', [101, 102, 103], 104);
+    const pageX = uView('xxxx0001', [101, 102, 103]);
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'lane-k');
+    uCommit(repo, 'kkkk0001', [101, 102, 103], 104, 'K mints B103 (collides with X)');
+    uCommit(repo, 'kkkk0002', [101, 102, 104], 105, 'K renumbers B103 -> B104');
+    provGit(repo, 'switch', '-q', 'main');
+    uMerge(repo, 'lane-k', 'kkkk0002', [101, 102, 104], 105);
+    const mainSha = provGit(repo, 'rev-parse', 'main');
+    assert.equal(onbox.resolveMainEverCarried(repo, PROV_REGISTER, mainSha, 'B103', provRunner), false);
+    assert.equal(onbox.resolveMainEverCarried(repo, PROV_REGISTER, mainSha, 'B104', provRunner), true, 'the merge brought B104');
+    provGit(repo, 'switch', '-q', '-c', 'q');
+    const carryOut = new Set();
+    const errors = realErrors(uCheck(repo, 'q', pageX, { carryOut }));
+    assert.equal(ofPrefix(errors, `${UNMERGED_LANE_ROW_ERROR_PREFIX}B103`).length, 1, JSON.stringify(errors));
+    assert.deepEqual([...carryOut], ['B103']);
+  });
+});
+
 test('#3529 pass 2: a live-only row origin/main has ever carried is a discharge, whatever the provenance', () => {
   const [working, published, options] = collisionOptions({
     working: buildSingleGroupRegister('B', [101, 102], 104),
@@ -4840,7 +4866,14 @@ function withRetired(registerText, rowsMd) {
     `## Retired carried rows\n\nPreamble.\n\n| Row | Owning PR | Closed unmerged | Reason |\n|---|---|---|---|\n${rowsMd}\n## At a glance`,
   );
 }
-const closedStates = (state, mergedAt = null) => ({ available: true, states: new Map([[3505, { state, mergedAt }]]) });
+// Review pass 3 (operator decision 4): gh also reports the PR's head branch,
+// which must be the branch that first committed the row.
+const closedStates = (state, mergedAt = null, headRefName = 'lane-x') => ({
+  available: true,
+  states: new Map([[3505, { state, mergedAt, headRefName }]]),
+});
+const OWNER_X = { commit: '0123456789abcdef0123456789abcdef01234567', refs: ['origin/lane-x'] };
+const ownerOfB103 = (owner) => (id) => (id === 'B103' ? owner : null);
 
 test('#3529 pass 2: checkRegister accepts a well-formed Retired carried rows table, empty or not, and its absence', () => {
   const reg = MAIN_B();
@@ -4878,7 +4911,7 @@ function retiredCase(registerRows, extra = {}) {
       working: withRetired(buildSingleGroupRegister('B', [101, 102], 103), registerRows),
       trackedRows: baseRows,
       publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
-      extra,
+      extra: { rowOwnerLookup: ownerOfB103(OWNER_X), ...extra },
     }),
   );
 }
@@ -4924,6 +4957,7 @@ test('#3529 pass 2: a PR whose state could not be read is refused; gh unavailabl
     const warnings = ofPrefix(errors, onbox.RETIRED_ROW_WARNING_PREFIX ?? '\u0000');
     assert.equal(warnings.length, 1, JSON.stringify(errors));
     assert.match(warnings[0], /#3505/);
+    assert.match(warnings[0], /owns/);
     assert.deepEqual(errors.filter((e) => !warnings.includes(e)), []);
   }
 });
@@ -4934,9 +4968,65 @@ test('#3529 pass 2: a retirement recorded on origin/main applies to a branch tha
     baseline: withRetired(MAIN_B(), RETIRED_B103),
     trackedRows: baseRows,
     publishedRows: [...baseRows, { id: 'B103', body: 'theirs', title: THEIRS_TITLE }],
-    extra: { retiredPrStates: closedStates('CLOSED') },
+    extra: { retiredPrStates: closedStates('CLOSED'), rowOwnerLookup: ownerOfB103(OWNER_X) },
   });
   assert.deepEqual(checkLiveView(working, published, options), []);
+});
+
+// Review pass 3, 🟡1 (P3a) and operator decision 4: a retirement is honoured
+// only when the named PR's head branch is the branch that first committed
+// the row. A wrong PR number cannot mute a live lane.
+test('#3529 pass 3 P3a: a retirement naming an unrelated closed PR is refused, naming both branches, and mutes nothing', () => {
+  const states = { available: true, states: new Map([[3509, { state: 'CLOSED', mergedAt: null, headRefName: 'fix/unrelated' }]]) };
+  const errors = retiredCase('| B103 | #3509 | 2026-10-07 | typo for #3505 |\n', { retiredPrStates: states });
+  const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
+  assert.equal(retired.length, 1, JSON.stringify(errors));
+  assert.match(retired[0], /#3509/);
+  assert.match(retired[0], /fix\/unrelated/);
+  assert.match(retired[0], /lane-x/);
+  assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, 'the row still must be carried');
+});
+
+test('#3529 pass 3: a retirement whose PR head branch is the row owner\'s branch is honoured, local or remote ref', () => {
+  for (const refs of [['origin/lane-x'], ['lane-x'], ['lane-y', 'origin/lane-x']]) {
+    const errors = retiredCase(RETIRED_B103, {
+      retiredPrStates: closedStates('CLOSED'),
+      rowOwnerLookup: ownerOfB103({ ...OWNER_X, refs }),
+    });
+    assert.deepEqual(errors, [], JSON.stringify(refs));
+  }
+});
+
+test('#3529 pass 3: a retirement whose row owner cannot be determined is refused, naming the PR branch and how to fetch it', () => {
+  for (const rowOwnerLookup of [() => null, () => ({ ...OWNER_X, refs: [] }), undefined]) {
+    const errors = retiredCase(RETIRED_B103, { retiredPrStates: closedStates('CLOSED'), rowOwnerLookup });
+    const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
+    assert.equal(retired.length, 1, JSON.stringify(errors));
+    assert.match(retired[0], /#3505/);
+    assert.match(retired[0], /lane-x/);
+    assert.match(retired[0], /git fetch origin pull\/3505\/head:lane-x/);
+    assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, 'the row still must be carried');
+  }
+});
+
+test('#3529 pass 3: a retirement whose PR head branch gh did not report is refused', () => {
+  const errors = retiredCase(RETIRED_B103, { retiredPrStates: closedStates('CLOSED', null, null) });
+  const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
+  assert.equal(retired.length, 1, JSON.stringify(errors));
+  assert.match(retired[0], /#3505/);
+  assert.match(retired[0], /head branch/);
+});
+
+test('#3529 pass 3: the owner is looked up only for a retired row the live page still carries', () => {
+  let lookups = 0;
+  const [working, published, options] = collisionOptions({
+    working: withRetired(buildSingleGroupRegister('B', [101, 102], 103), RETIRED_B103),
+    trackedRows: baseRows,
+    publishedRows: baseRows,
+    extra: { retiredPrStates: closedStates('CLOSED'), rowOwnerLookup: () => (lookups++, null) },
+  });
+  assert.deepEqual(checkLiveView(working, published, options), []);
+  assert.equal(lookups, 0, 'a retired row no longer live needs no owner — its branch may be long gone');
 });
 
 test('#3529 pass 2: resolveRetiredPrStates reads gh through an injected runner, never the network', () => {
@@ -4952,17 +5042,17 @@ test('#3529 pass 2: resolveRetiredPrStates reads gh through an injected runner, 
     '/repo',
     [3505, 3506, 3507, 3508],
     gh({
-      3505: { state: 'CLOSED', mergedAt: null },
-      3506: { state: 'OPEN', mergedAt: null },
-      3508: { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z' },
+      3505: { state: 'CLOSED', mergedAt: null, headRefName: 'lane-x' },
+      3506: { state: 'OPEN', mergedAt: null, headRefName: 'lane-o' },
+      3508: { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z', headRefName: 'lane-m' },
     }),
   );
   assert.equal(r.available, true);
-  assert.deepEqual(r.states.get(3508), { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z' });
-  assert.deepEqual(r.states.get(3505), { state: 'CLOSED', mergedAt: null });
+  assert.deepEqual(r.states.get(3508), { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z', headRefName: 'lane-m' });
+  assert.deepEqual(r.states.get(3505), { state: 'CLOSED', mergedAt: null, headRefName: 'lane-x' });
   assert.equal(r.states.get(3506).state, 'OPEN');
   assert.match(r.states.get(3507).error, /Could not resolve/);
-  assert.ok(calls.some((c) => c === 'pr view 3505 --json state,mergedAt'), calls.join('\n'));
+  assert.ok(calls.some((c) => c === 'pr view 3505 --json state,mergedAt,headRefName'), calls.join('\n'));
   calls.length = 0;
   assert.deepEqual(onbox.resolveRetiredPrStates('/repo', [], gh({})).states.size, 0);
   assert.deepEqual(calls, [], 'no entries, no gh calls');
@@ -4994,6 +5084,33 @@ test('#3529 pass 2: buildUnionLiveView inserts carried blocks in ID order and re
   const { tracked, live } = unionFixture();
   const union = onbox.buildUnionLiveView(tracked, live, ['B104', 'B103']);
   assert.equal(union, buildRowContentLiveView([...baseRows, theirsB103, theirsB104, mineB105], 'B'));
+});
+
+// Review pass 3, 🟡5 (R2/R3): with two groups, a carried Group B row lands in
+// Group B's section and raises only Group B's glance count and gcount. Every
+// earlier union test had a single group, so a lookup that ignored the letter
+// stayed green.
+test('#3529 pass 3: in a two-group view the union carries each row into its own group and raises only its figures', () => {
+  const twoGroup = (bRows) => {
+    const a = buildRowContentLiveView([{ id: 'A101', body: 'a', title: 'ta' }], 'A');
+    const html = a
+      .replace('<div class="n owed">1</div>', `<div class="n owed">${1 + bRows.length}</div>`)
+      .replace('    </tbody>', `      <tr><td><a href="#gb">B</a></td><td>Setup B</td><td>${bRows.length}</td></tr>\n    </tbody>`);
+    const bBlocks = bRows
+      .map(
+        (r) =>
+          `    <details class="item">\n      <summary><span class="num">${r.id}</span><span class="iname">${r.title}</span><span class="risk">default</span></summary>\n      <div class="body">\n        <p>${r.body}</p>\n      </div>\n    </details>`,
+      )
+      .join('\n');
+    return html.replace(
+      '</section>\n',
+      `</section>\n\n  <section class="group" id="gb">\n    <h3 class="gtitle"><span class="gtag">B</span> Setup B <span class="gcount">${bRows.length} rows</span></h3>\n${bBlocks}\n  </section>\n`,
+    );
+  };
+  const b = (n) => ({ id: `B${n}`, body: `b${n}`, title: `t${n}` });
+  const tracked = twoGroup([b(101), b(102), b(105)]);
+  const live = twoGroup([b(101), b(102), b(103), b(104)]);
+  assert.equal(onbox.buildUnionLiveView(tracked, live, ['B104', 'B103']), twoGroup([b(101), b(102), b(103), b(104), b(105)]));
 });
 
 test('#3529 pass 2: a union built by buildUnionLiveView passes --publishing, CRLF or not', () => {
@@ -5283,30 +5400,49 @@ test('#3529 pass 2 CLI: a hand-built union with stale figures is refused under -
   });
 });
 
-test('#3529 pass 2 CLI: the retirement PR-state check is wired, through the ONBOX_TEST_GH_PR_STATES seam', () => {
-  const lastB = computeMaxRowNumber(REAL_REGISTER_TEXT, 'B');
-  const { newId, mutated } = renameLiveViewRowId(REAL_LIVE_VIEW_HTML, 'B', lastB, lastB + 1);
-  assert.match(REAL_REGISTER_TEXT, /^## Retired carried rows$/m, 'the register carries the (empty) table');
-  const baseline = REAL_REGISTER_TEXT.replace(
-    /(\| Row \| Owning PR \| Closed unmerged \| Reason \|\n\|---\|---\|---\|---\|\n)/,
-    `$1| ${newId} | #9999 | 2026-10-07 | test fixture |\n`,
-  );
-  assert.notEqual(baseline, REAL_REGISTER_TEXT, 'fixture setup: the table header must match');
-  withHermeticBaseline(mutated, baseline, (publishedPath, baselinePath) => {
-    const env = (states) => ({
-      ONBOX_TEST_BASELINE_FILE: baselinePath,
-      ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged',
-      ONBOX_TEST_GH_PR_STATES: states,
-    });
-    const open = runCli(['--against-published', publishedPath], env('{"9999":"OPEN"}'));
+// Review pass 3 (operator decision 4, 🟡5 R4): the retirement check, end to
+// end through real git (the owner lookup) and the ONBOX_TEST_GH_PR_STATES
+// seam (gh). The seam answers only the PRs the run asks about, so an entry
+// the CLI forgot to look up — one only origin/main's register records —
+// reads as unresolvable rather than silently passing.
+test('#3529 pass 3 CLI: a retirement is honoured only for the closed PR that owns the row, including one only origin/main records', () => {
+  withCliRepo((repo, cli) => {
+    cliCommit(repo, 'main0001', [101, 102], 103);
+    provGit(repo, 'push', '-q', 'origin', 'main');
+    // lane-x, never merged, mints B103 and publishes the page.
+    provGit(repo, 'switch', '-q', '-c', 'lane-x');
+    cliCommit(repo, 'xxxx0001', [101, 102, 103], 104, { 103: 'X row' });
+    writeFileSync(join(repo, 'page.saved.html'), readFileSync(join(repo, PROV_LIVE), 'utf8'));
+    // old forks main before the retirement lands there.
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'old');
+    provGit(repo, 'switch', '-q', 'main');
+    cliCommit(repo, 'main0002', [101, 102], 103, {}, '| B103 | #77 | 2026-10-08 | lane-x closed unmerged |\n');
+    provGit(repo, 'push', '-q', 'origin', 'main');
+    const run = (branch, states) => {
+      provGit(repo, 'switch', '-q', branch);
+      return cli(['--against-published', 'page.saved.html'], { ONBOX_TEST_GH_PR_STATES: states });
+    };
+    for (const branch of ['main', 'old']) {
+      const owned = run(branch, '{"77":{"state":"CLOSED","headRefName":"lane-x"}}');
+      assert.equal(owned.status, 0, `${branch}: stdout: ${owned.stdout}\nstderr: ${owned.stderr}`);
+      assert.match(owned.stderr, /WARNING: gh PR states injected from ONBOX_TEST_GH_PR_STATES/);
+    }
+    const wrongPr = run('old', '{"77":{"state":"CLOSED","headRefName":"fix/unrelated"}}');
+    assert.equal(wrongPr.status, 1, wrongPr.stderr);
+    assert.match(wrongPr.stderr, /retired-carried-row: B103: .*#77.*fix[/]unrelated.*lane-x/);
+    assert.ok(wrongPr.stderr.includes('unmerged-lane-row: B103:'), wrongPr.stderr);
+    assert.ok(!/BEHIND what is already live/.test(wrongPr.stderr), wrongPr.stderr);
+    const open = run('old', '{"77":{"state":"OPEN","headRefName":"lane-x"}}');
     assert.equal(open.status, 1, open.stderr);
-    assert.match(open.stderr, /retired-carried-row: .*#9999/);
-    assert.ok(!/BEHIND what is already live/.test(open.stderr), open.stderr);
-    assert.match(open.stderr, /WARNING: gh PR states injected from ONBOX_TEST_GH_PR_STATES/);
-    const closed = runCli(['--against-published', publishedPath], env('{"9999":"CLOSED"}'));
-    assert.equal(closed.status, 0, `stdout: ${closed.stdout}\nstderr: ${closed.stderr}`);
-    const unavailable = runCli(['--against-published', publishedPath], env('unavailable'));
+    assert.match(open.stderr, /retired-carried-row: B103: .*#77.*OPEN/);
+    const unavailable = run('old', 'unavailable');
     assert.equal(unavailable.status, 0, unavailable.stderr);
-    assert.match(unavailable.stderr, /retired-row-warning: .*#9999/);
+    assert.match(unavailable.stderr, /retired-row-warning: B103 .*#77/);
+    // The owner's branch gone from this checkout: fail closed, naming the fetch.
+    provGit(repo, 'branch', '-q', '-D', 'lane-x');
+    const ownerless = run('old', '{"77":{"state":"CLOSED","headRefName":"lane-x"}}');
+    assert.equal(ownerless.status, 1, ownerless.stderr);
+    assert.match(ownerless.stderr, /retired-carried-row: B103: .*git fetch origin pull[/]77[/]head:lane-x/);
   });
 });
