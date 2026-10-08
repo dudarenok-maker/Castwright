@@ -46,7 +46,7 @@ The standalone prosody pill (`layout-prosody-pill.test.tsx` + its rendering in `
 - The discriminated-union `ui.stage` and hash-router grammar are untouched.
 - The `BroadcastChannel('audiobook-state')` narrow-scope guard (plan 63): only `activeStreams`-slot mutations propagate cross-tab; per-chapter rows, cast, and manuscript content stay local.
 - `applyExternalSet` / `applyExternalClear` are **not** in the outbound action filter (echo-suppression layer 2) so they never re-broadcast an inbound message.
-- The `prosodyAnnotated` disk watermark (`putBookState`) is written `true` only when `failed === 0`, and `false` by a run that skipped work, failed a chapter, threw or yielded (#3435; the open trigger re-runs only an explicit `false`, never an unset watermark). It is NOT cleared by the in-memory guard — it is the separate, durable complement.
+- The `prosodyAnnotated` disk watermark (`putBookState`) is written `false` by every automatic run for its own book as it STARTS, and `true` only at a clean end (`failed === 0` and nothing skipped); a run that skipped work, failed a chapter, threw, yielded or was cut off by a reload therefore leaves `false` (#3435; the open trigger re-runs only an explicit `false`, never an unset watermark). It is NOT cleared by the in-memory guard — it is the separate, durable complement.
 
 **Reversibility:** the `activeStreams` maps default to `{}` (no migration); removing the substage selectors and broadcast lines reverts to the pre-plan behavior. The retired prosody pill had no external callers.
 

@@ -286,9 +286,10 @@ unrelated `instructHash`/`renderedInstructHashes` "liveInstruct render" comments
   (covered by the manual button); and a book whose analysis finished while the app
   was closed is treated as pre-existing on next launch. Both are the conservative
   side of the trade (skip, don't double-spend). **Amended by #3435:** a book whose
-  own run started and did not finish is marked `prosodyAnnotated: false` and is
-  re-run in the background when next opened (a chapter holding audio keeps its
-  text); a book with the watermark unset is still never re-run.
+  own run started is marked `prosodyAnnotated: false` as the run starts, and
+  `true` only if it ends clean; one that did not finish (including a reload
+  mid-run) is re-run in the background when next opened (a chapter holding audio
+  keeps its text); a book with the watermark unset is still never re-run.
 - Multi-book: each book's Phase 3 is a separate background stream sharing the
   per-model analyzer rate-limit bucket (same as today's button). The trigger's
   per-book guard keeps concurrent books' passes independent. No per-manuscript
