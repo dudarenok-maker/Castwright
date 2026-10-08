@@ -497,8 +497,13 @@ export function parseRegisterRowTitles(registerText) {
 // closed without merging would otherwise have to be carried by every later
 // publish forever. Listing it here drops it from that must-carry set; the
 // `--against-published` run confirms through `gh` that the PR really is
-// closed and unmerged and (operator decision 4) that its head branch is the
-// branch that first committed the row, so the record cannot mute a live lane.
+// closed and unmerged and (operator decision 5, replacing decision 4's
+// branch-name match) that the commit which introduced the live row is one of
+// that PR's own commits. That binds an entry to the PR whose commits carry
+// the row, not to a branch name or a PR number: a closed PR with none of
+// those commits cannot mute a lane. It does not prove that no OPEN PR also
+// carries the commit — a closed PR stacked on the owner's branch but opened
+// against main lists the owner's commits too.
 //
 // The section is OPTIONAL: `checkRegister` is retro-applied to origin/main's
 // copy (see this file's header), so requiring it would break every
@@ -1206,12 +1211,14 @@ export const RETIRED_ROW_WARNING_PREFIX = 'retired-row-warning: ';
 //     a row listed in the register's "Retired carried rows" record (this
 //     register's or origin/main's) is no longer carried, provided
 //     `options.retiredPrStates` (CLI: `resolveRetiredPrStates`) confirms its
-//     PR is closed unmerged and (review pass 3, operator decision 4) that PR's
-//     head branch is among the branches `options.rowOwnerLookup` finds for the
-//     row; an open or merged PR, a different branch, or an owner that cannot
-//     be found fails as `retired-carried-row`, and `gh` being unavailable is
-//     a warning that accepts the entry. `options.rowOwnerLookup` (CLI:
-//     `resolveRowOwner`) also names an `unmerged-lane-row`'s owner; without
+//     PR is closed unmerged and (review pass 4, operator decision 5) that the
+//     commit `options.rowOwnerLookup(id, prCommits)` finds introducing the
+//     live row is one of that PR's own commits; an open or merged PR, an
+//     introducing commit the PR lacks, an owner that cannot be found, or
+//     commits gh did not report fail as `retired-carried-row`, and `gh` being
+//     unavailable is a warning that accepts the entry.
+//     `options.rowOwnerLookup` (CLI: `resolveRowOwner`) also names an
+//     `unmerged-lane-row`'s owner; without
 //     it the error says the owner is unknown and that the publish id names
 //     the page's publisher, not necessarily the row's owner.
 //     `options.carryOut`, a Set, receives every live row this run found that
@@ -1372,8 +1379,8 @@ export function checkLiveView(
   // #3529 (review pass 2, 🟠2): the "Retired carried rows" record — this
   // register's entries plus origin/main's, so a branch that predates a
   // retirement still honours it. An entry is honoured only for a PR `gh`
-  // confirms is closed unmerged AND (review pass 3, operator decision 4)
-  // whose head branch is the branch that first committed the row
+  // confirms is closed unmerged AND (review pass 4, operator decision 5)
+  // whose own commits include the commit that introduced the live row
   // (`rowOwnerLookup`); without `gh` it is accepted with a warning. The
   // owner is checked lazily, only for a retired row the live page still
   // carries: once a retirement has been published, that row and its lane's
@@ -1390,7 +1397,7 @@ export function checkLiveView(
       if (!retiredPrStates || !retiredPrStates.available) {
         retiredIds.add(id);
         errors.push(
-          `${RETIRED_ROW_WARNING_PREFIX}${id} is retired as PR #${pr}'s row without confirming that #${pr} is closed and unmerged, or that it owns ${id} (${retiredPrStates?.reason ?? 'no gh lookup was made'}). Confirm both by hand — gh pr view ${pr} --json state,mergedAt,headRefName, and that branch is the one that first committed ${id} — before you publish.`,
+          `${RETIRED_ROW_WARNING_PREFIX}${id} is retired as PR #${pr}'s row without confirming that #${pr} is closed and unmerged, or that it owns ${id} (${retiredPrStates?.reason ?? 'no gh lookup was made'}). Confirm both by hand — gh pr view ${pr} --json state,mergedAt,commits, and that one of those commits introduced the live page's ${id} — before you publish.`,
         );
         continue;
       }
@@ -1400,7 +1407,7 @@ export function checkLiveView(
           `${RETIRED_ROW_ERROR_PREFIX}${id}: the register retires it as PR #${pr}'s row, but gh could not read #${pr} (${st?.error ?? 'no answer'}). A retirement is honoured only for a PR confirmed closed without merging — fix the PR reference, or re-run once gh can read it.`,
         );
       } else if (st.state === 'CLOSED' && !st.mergedAt) {
-        retiredCandidates.set(id, { pr, headRefName: st.headRefName ?? null });
+        retiredCandidates.set(id, { pr, commits: Array.isArray(st.commits) ? st.commits : null });
       } else {
         const state = st.state === 'MERGED' || st.mergedAt ? 'MERGED' : st.state;
         errors.push(
@@ -1409,25 +1416,34 @@ export function checkLiveView(
       }
     }
   }
-  // Decision 4: a closed-unmerged retirement is honoured only once the row's
-  // owner is confirmed to be that PR's head branch. Memoised; a refusal is
-  // reported once, and the row then still has to be carried.
+  // Decision 5: a closed-unmerged retirement is honoured only once the commit
+  // that introduced the live row is confirmed to be one of that PR's own
+  // commits. The lookup is handed those commits, so one no fetched branch
+  // holds any more (a deleted branch, a fork's) still counts while this
+  // checkout has the object. Memoised; a refusal is reported once, and the
+  // row then still has to be carried.
   const retiredOwnerMemo = new Map();
   const isRetired = (id) => {
     if (retiredIds.has(id)) return true;
     const candidate = retiredCandidates.get(id);
     if (!candidate) return false;
     if (retiredOwnerMemo.has(id)) return retiredOwnerMemo.get(id);
-    const { pr, headRefName } = candidate;
-    const owner = typeof rowOwnerLookup === 'function' ? rowOwnerLookup(id) : null;
-    const ownerBranches = (owner?.commit ? owner.refs ?? [] : []).map((r) => r.replace(/^origin[/]/, ''));
+    const { pr, commits } = candidate;
     let reason = null;
-    if (!headRefName) {
-      reason = `gh did not report #${pr}'s head branch, so it cannot be matched against the branch that first committed ${id}. Re-run once gh can read it.`;
-    } else if (ownerBranches.length === 0) {
-      reason = `the branch that first committed ${id} cannot be determined here, so #${pr} (head branch ${headRefName}) cannot be confirmed as its owner. Fetch that branch — git fetch origin pull/${pr}/head:${headRefName} — and re-run.`;
-    } else if (!ownerBranches.includes(headRefName)) {
-      reason = `#${pr}'s head branch is ${headRefName}, but ${id} was first committed on ${ownerBranches.join(', ')} (${String(owner.commit).slice(0, 12)}). The record names the wrong PR — find the owner's with gh pr list --head ${ownerBranches[0]} --state all.`;
+    if (commits === null) {
+      reason = `gh did not report #${pr}'s commits, so the commit that introduced the live ${id} cannot be matched against them. Re-run once gh can read it.`;
+    } else {
+      const owner = typeof rowOwnerLookup === 'function' ? rowOwnerLookup(id, commits) : null;
+      const missing = owner?.missingCommits ?? [];
+      const n = `${commits.length} commit${commits.length === 1 ? '' : 's'}`;
+      const fetch = missing.length
+        ? ` This checkout lacks ${missing.length} of them (${missing.map((c) => String(c).slice(0, 12)).join(', ')}): run git fetch origin and re-run.`
+        : '';
+      if (!owner?.commit) {
+        reason = `no commit this checkout has — on a fetched branch or among #${pr}'s ${n} — introduced the live page's ${id}, so its owner cannot be determined${fetch ? `.${fetch}` : ': run git fetch origin and re-run.'}`;
+      } else if (!commits.some((c) => String(c).toLowerCase() === String(owner.commit).toLowerCase())) {
+        reason = `the live ${id} was introduced by ${owner.commit}, which is not one of #${pr}'s ${n}. The record names the wrong PR — find the owner's with gh pr list --state all --search ${owner.commit}.${fetch}`;
+      }
     }
     if (reason !== null) {
       errors.push(
@@ -1490,11 +1506,11 @@ export function checkLiveView(
   };
   // Review pass 2, 🟠2: name the row's OWNER — the lane that first committed
   // it — never the page's publisher, which for a union is only its carrier.
+  // Review pass 4: its PR is found by that commit, never by a branch name.
   const ownerText = (id) => {
     const owner = typeof rowOwnerLookup === 'function' ? rowOwnerLookup(id) : null;
     if (owner && owner.commit) {
-      const branch = owner.refs?.[0]?.replace(/^origin\//, '');
-      return `It was first committed in ${String(owner.commit).slice(0, 12)}${owner.refs?.length ? ` (on ${owner.refs.join(', ')})` : ''}, by the lane that owns it${branch ? ` — find its PR with \`gh pr list --head ${branch} --state all\`` : ''}.`;
+      return `It was first committed in ${String(owner.commit).slice(0, 12)}${owner.refs?.length ? ` (on ${owner.refs.join(', ')})` : ''}, by the lane that owns it — find its PR with \`gh pr list --state all --search ${owner.commit}\`.`;
     }
     return `No branch this checkout has fetched committed it, so its owner cannot be named here — fetch every branch (git fetch origin '+refs/heads/*:refs/remotes/origin/*') and re-run to name it. The page's publish id "${provenance.nonce}" names whoever PUBLISHED the page, which for a union publish is not the row's owner.`;
   };
@@ -2308,9 +2324,12 @@ export function resolveMergeBaseRegister(repoRoot, registerPath, mainRef, gitRun
 // Main's first-parent line is mostly merge commits, so
 // `--diff-merges=first-parent` is what lets `-G` see a merge's register
 // change at all. `-G` is anchored to the heading and to the end of the
-// number, so B10 never matches B101. Not allocate-once-proof: a colliding ID
-// that reached main and was discharged while the other lane's copy is still
-// live reads as carried (both lanes must have escaped both collision checks).
+// number, so B10 never matches B101. Two residuals read as carried: a
+// colliding ID that reached main and was discharged while the other lane's
+// copy is still live (both lanes must have escaped both collision checks —
+// not allocate-once-proof), and a row main merged and then reverted while a
+// re-landing lane's copy is live, until that re-land merges (review pass 4,
+// P4f — not revert-proof).
 // `checkLiveView` asks only for a row that would otherwise fail, so the
 // common run makes no call. `true`/`false`, or `null` when git failed,
 // which grants no exemption.
@@ -2324,29 +2343,60 @@ export function resolveMainEverCarried(repoRoot, registerPath, mainRef, id, gitR
   return log.stdout.trim() !== '';
 }
 
-// #3529 (PR #3532 review pass 2, 🟠2): the lane that OWNS a live row — the
-// oldest commit on any branch whose live view introduced the row's
-// `<span class="num">` — with the branches that contain it, main excluded. A
-// union publish carries another lane's row under the carrier's own publish
-// id, so the page's provenance names the carrier, never the owner. `null`
-// when no fetched branch committed the row, or git failed.
-export function resolveRowOwner(repoRoot, liveViewPath, id, gitRunner = runGitCommand) {
+// #3529 (PR #3532 review pass 2, 🟠2; review pass 4, operator decision 5):
+// the lane that OWNS a live row — the oldest commit whose live view
+// introduced the row's own summary, its ID AND its title (`title`, the
+// normalised key `parseLiveViewRowTitles` gives for the live page), on any
+// branch but never one `mainRef` contains — with the branches that contain
+// it, main excluded. A union publish carries another lane's row under the
+// carrier's own publish id, so the page's provenance names the carrier, never
+// the owner. The bare ID is not enough (review pass 4): in a row-ID collision
+// it is exactly what two lanes share, so the oldest commit carrying it was
+// another lane's row; and main never carried the live row on its first-parent
+// line, so a commit main contains (a merged lane's renumbered copy) owns
+// nothing. `-G` on the ID anchor lists every commit that touched the row's
+// summary line, so a retitle is found too; the snapshot's normalised title
+// then decides, and a commit counts only when none of its parents already
+// carried that summary (a lane's merge of main, which brings main's rows in
+// through its first-parent diff, introduces none of them). Two lanes that wrote the byte-identical summary under one ID
+// cannot be told apart, and the older is named.
+// `extraCommits` (a retirement's PR commits, from gh) join the search roots,
+// so an introducing commit no fetched branch holds any more is still found
+// while this checkout has the object; the ones it lacks are returned as
+// `missingCommits`. `null` when no commit introduced the row and none was
+// missing, when the title or `mainRef` is unknown, or when git failed.
+export function resolveRowOwner(repoRoot, liveViewPath, id, { title, mainRef, extraCommits } = {}, gitRunner = runGitCommand) {
+  if (typeof title !== 'string' || typeof mainRef !== 'string' || !mainRef || !/^[A-Z]\d+$/.test(id)) return null;
+  const roots = [];
+  const missingCommits = [];
+  for (const oid of Array.isArray(extraCommits) ? extraCommits : []) {
+    const present = /^[0-9a-f]{7,64}$/i.test(String(oid)) && gitRunner(['cat-file', '-e', `${oid}^{commit}`], repoRoot);
+    if (present && !present.error && present.status === 0) roots.push(String(oid));
+    else missingCommits.push(String(oid));
+  }
   const anchored = `<span class="num">${id}</span>`;
   const log = gitRunner(
-    ['log', '--all', '--format=%H', '-s', '--full-history', '--diff-merges=first-parent', '-S', anchored, '--', liveViewPath],
+    ['log', '--format=%H', '-s', '--full-history', '--diff-merges=first-parent', '-G', anchored, '--all', ...roots, '--not', mainRef, '--', liveViewPath],
     repoRoot,
   );
   if (log.error || log.status !== 0 || typeof log.stdout !== 'string') return null;
+  const carries = (rev) => {
+    const show = gitRunner(['show', `${rev}:${liveViewPath}`], repoRoot);
+    if (show.error || show.status !== 0 || typeof show.stdout !== 'string') return false;
+    return parseLiveViewRowTitles(stripHtmlComments(show.stdout)).get(id) === title;
+  };
   let commit = null;
   for (const sha of log.stdout.split(/\s+/).filter(Boolean).reverse()) {
-    const show = gitRunner(['show', `${sha}:${liveViewPath}`], repoRoot);
-    if (show.error || show.status !== 0 || typeof show.stdout !== 'string') continue;
-    if (show.stdout.includes(anchored)) {
-      commit = sha;
-      break;
-    }
+    if (!carries(sha)) continue;
+    // Introduced HERE only if no parent already carried it: a lane's merge of
+    // main brings main's rows in through its first-parent diff, and owns none.
+    const parents = gitRunner(['rev-list', '--parents', '-n', '1', sha], repoRoot);
+    if (parents.error || parents.status !== 0 || typeof parents.stdout !== 'string') continue;
+    if (parents.stdout.trim().split(/\s+/).slice(1).some(carries)) continue;
+    commit = sha;
+    break;
   }
-  if (commit === null) return null;
+  if (commit === null) return missingCommits.length > 0 ? { commit: null, refs: [], missingCommits } : null;
   const branches = gitRunner(['branch', '-a', '--contains', commit, '--format=%(refname:short)'], repoRoot);
   const refs =
     branches.error || branches.status !== 0 || typeof branches.stdout !== 'string'
@@ -2355,16 +2405,16 @@ export function resolveRowOwner(repoRoot, liveViewPath, id, gitRunner = runGitCo
           .split(/\r?\n/)
           .map((r) => r.trim())
           .filter((r) => r && r !== 'origin' && !r.startsWith('(') && !/^(origin\/)?(main|HEAD)$/.test(r));
-  return { commit, refs };
+  return { commit, refs, missingCommits };
 }
 
 // #3529 (PR #3532 review pass 2, 🟠2): the state of each PR the "Retired
 // carried rows" record names, from `gh`. `{ available: false, reason }` when
 // gh is missing or not authenticated — the record is then accepted with a
 // warning, since the check cannot confirm it. Otherwise `states` maps each PR
-// number to `{ state, mergedAt, headRefName }` (the head branch, for the
-// ownership check of operator decision 4), or `{ error }` when gh could not
-// read it.
+// number to `{ state, mergedAt, commits }` (the PR's own commit SHAs, for
+// the ownership check of operator decision 5; `null` when gh's answer had no
+// usable list), or `{ error }` when gh could not read it.
 // `ghRunner` is injectable so tests never touch the network; the default
 // goes through the repo's `gh` chokepoint (scripts/gh.mjs, #2184).
 function runGhCommand(args, cwd) {
@@ -2385,14 +2435,18 @@ export function resolveRetiredPrStates(repoRoot, prNumbers, ghRunner = runGhComm
     return { available: false, reason: `gh is not authenticated${detail ? ` (${detail})` : ''}` };
   }
   for (const pr of prNumbers) {
-    const r = ghRunner(['pr', 'view', String(pr), '--json', 'state,mergedAt,headRefName'], repoRoot);
+    const r = ghRunner(['pr', 'view', String(pr), '--json', 'state,mergedAt,commits'], repoRoot);
     if (r.error || r.status !== 0) {
       states.set(pr, { error: String(r.stderr ?? '').trim().split(/\r?\n/)[0] || r.error?.message || `gh exited ${r.status}` });
       continue;
     }
     try {
       const json = JSON.parse(r.stdout);
-      states.set(pr, { state: json.state, mergedAt: json.mergedAt ?? null, headRefName: json.headRefName ?? null });
+      const commits =
+        Array.isArray(json.commits) && json.commits.every((c) => typeof c?.oid === 'string')
+          ? json.commits.map((c) => c.oid)
+          : null;
+      states.set(pr, { state: json.state, mergedAt: json.mergedAt ?? null, commits });
     } catch {
       states.set(pr, { error: 'gh printed output that is not JSON' });
     }
@@ -2968,13 +3022,21 @@ function runCheckOnboxRegisterCli() {
       mergeBaseText = resolveMergeBaseRegister(repoRoot, REGISTER, baseline.fetchedSha);
       // #3529 (review pass 2): asked only for a row that would otherwise fail.
       mainEverCarried = (id) => resolveMainEverCarried(repoRoot, REGISTER, baseline.fetchedSha, id);
-      rowOwnerLookup = (id) => resolveRowOwner(repoRoot, LIVE_VIEW, id);
+      // Decision 5: the owner of the LIVE row — its own summary, never a
+      // commit main contains — searched also from a retirement's PR commits.
+      const liveTitles = parseLiveViewRowTitles(stripHtmlComments(publishedHtml));
+      rowOwnerLookup = (id, prCommits) =>
+        resolveRowOwner(repoRoot, LIVE_VIEW, id, {
+          title: liveTitles.get(id),
+          mainRef: baseline.fetchedSha,
+          extraCommits: prCommits,
+        });
     }
     // #3529 (review pass 2, 🟠2): the PRs the "Retired carried rows" record
     // names, confirmed through gh (no call at all when the record is empty).
     // TEST-ONLY override, mirroring the ones above: ONBOX_TEST_GH_PR_STATES is
     // a JSON object of PR number -> OPEN | CLOSED | MERGED, or
-    // { state, headRefName }, or `unavailable`. It stands in for gh itself,
+    // { state, commits: [sha, ...] }, or `unavailable`. It stands in for gh itself,
     // not for the lookup, so only the PRs this run asks about are answered
     // and a PR it does not list reads as one gh could not resolve.
     const retiredPrs = [
@@ -3002,8 +3064,12 @@ function runCheckOnboxRegisterCli() {
         if (answer === undefined) {
           return { status: 1, stdout: '', stderr: `Could not resolve to a PullRequest (#${args[2]} is not in ONBOX_TEST_GH_PR_STATES)` };
         }
-        const { state, headRefName = null } = typeof answer === 'string' ? { state: answer } : answer;
-        return { status: 0, stdout: JSON.stringify({ state, mergedAt: state === 'MERGED' ? 'injected' : null, headRefName }), stderr: '' };
+        const { state, commits = [] } = typeof answer === 'string' ? { state: answer } : answer;
+        return {
+          status: 0,
+          stdout: JSON.stringify({ state, mergedAt: state === 'MERGED' ? 'injected' : null, commits: commits.map((oid) => ({ oid })) }),
+          stderr: '',
+        };
       });
     } else {
       retiredPrStates = resolveRetiredPrStates(repoRoot, retiredPrs);

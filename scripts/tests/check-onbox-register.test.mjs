@@ -4570,15 +4570,16 @@ test('#3529 git: resolveMergeBaseRegister reads the register at merge-base(HEAD,
 // Real merges in a throwaway repo. `uMerge` makes a genuine `--no-ff` merge
 // commit and writes the resolution explicitly — never `-X theirs`, which
 // makes the merge commit's view equal the stamp's and hid the pass-2 defect.
-const U_ROW = (n) => ({ id: `B${n}`, body: `body B${n}`, title: `title B${n}` });
-const uView = (nonce, nums) =>
-  buildRowContentLiveView(nums.map(U_ROW), 'B').replace(
+// `titles` (number -> title) gives a lane its own row under a colliding ID.
+const U_ROW = (n, titles = {}) => ({ id: `B${n}`, body: `body B${n}`, title: titles[n] ?? `title B${n}` });
+const uView = (nonce, nums, titles = {}) =>
+  buildRowContentLiveView(nums.map((n) => U_ROW(n, titles)), 'B').replace(
     '<title>',
     `<div hidden data-published-as="1" data-publish-id="${nonce}"></div>\n<title>`,
   );
-function uWrite(repo, nonce, nums, next) {
+function uWrite(repo, nonce, nums, next, titles = {}) {
   mkdirSync(join(repo, 'docs', 'testing'), { recursive: true });
-  writeFileSync(join(repo, PROV_LIVE), uView(nonce, nums));
+  writeFileSync(join(repo, PROV_LIVE), uView(nonce, nums, titles));
   writeFileSync(join(repo, PROV_REGISTER), buildSingleGroupRegister('B', nums, next));
 }
 function uCommit(repo, nonce, nums, next, msg) {
@@ -4587,14 +4588,14 @@ function uCommit(repo, nonce, nums, next, msg) {
   provGit(repo, 'commit', '-qm', msg ?? `stamp ${nonce}`);
   return provGit(repo, 'rev-parse', 'HEAD');
 }
-function uMerge(repo, branch, nonce, nums, next) {
+function uMerge(repo, branch, nonce, nums, next, titles = {}) {
   spawnSync('git', ['merge', '--no-ff', '--no-commit', '-q', branch], {
     cwd: repo,
     env: provEnv(),
     encoding: 'utf8',
     windowsHide: true,
   });
-  uWrite(repo, nonce, nums, next);
+  uWrite(repo, nonce, nums, next, titles);
   provGit(repo, 'add', '-A');
   provGit(repo, 'commit', '-qm', `Merge ${branch}`);
   const head = provGit(repo, 'rev-parse', 'HEAD');
@@ -4620,6 +4621,7 @@ function uCheck(repo, branch, page, extra = {}) {
   provGit(repo, 'switch', '-q', branch);
   const mainSha = provGit(repo, 'rev-parse', 'main');
   const provenance = onbox.resolvePublishedProvenance(repo, PROV_LIVE, page, mainSha, provRunner);
+  const liveTitles = onbox.parseLiveViewRowTitles(page);
   return checkLiveView(readFileSync(join(repo, PROV_REGISTER), 'utf8'), page, {
     direction: 'extraOnly',
     baselineText: provGit(repo, 'show', `${mainSha}:${PROV_REGISTER}`) + '\n',
@@ -4628,7 +4630,8 @@ function uCheck(repo, branch, page, extra = {}) {
     publishedProvenance: provenance,
     mergeBaseText: onbox.resolveMergeBaseRegister(repo, PROV_REGISTER, mainSha, provRunner),
     mainEverCarried: (id) => onbox.resolveMainEverCarried?.(repo, PROV_REGISTER, mainSha, id, provRunner),
-    rowOwnerLookup: (id) => onbox.resolveRowOwner?.(repo, PROV_LIVE, id, provRunner),
+    rowOwnerLookup: (id, prCommits) =>
+      onbox.resolveRowOwner(repo, PROV_LIVE, id, { title: liveTitles.get(id), mainRef: mainSha, extraCommits: prCommits }, provRunner),
     ...extra,
   });
 }
@@ -4821,7 +4824,7 @@ test('#3529 pass 2 git: resolveMainEverCarried reads every register main has eve
 
 // 🟠2 sub-point: a union-carried row names its OWNER, never the carrier.
 test('#3529 pass 2: a union-carried row names the lane that first committed it, not the carrier', () => {
-  const owner = { commit: '0123456789abcdef0123456789abcdef01234567', refs: ['origin/lane-x'] };
+  const owner = { commit: '0123456789abcdef0123456789abcdef01234567', refs: ['origin/fix/server-x'] };
   const [working, published, options] = collisionOptions({
     working: buildSingleGroupRegister('B', [101, 102], 103),
     trackedRows: baseRows,
@@ -4831,14 +4834,17 @@ test('#3529 pass 2: a union-carried row names the lane that first committed it, 
   const errors = ofPrefix(checkLiveView(working, published, options), UNMERGED_LANE_ROW_ERROR_PREFIX);
   assert.equal(errors.length, 1, JSON.stringify(errors));
   assert.ok(errors[0].includes('0123456789ab'), errors[0]);
-  assert.ok(errors[0].includes('gh pr list --head lane-x'), errors[0]);
+  assert.ok(errors[0].includes('(on origin/fix/server-x)'), errors[0]);
+  // Decision 5: the PR is found by the commit, never by a branch name.
+  assert.ok(errors[0].includes('gh pr list --state all --search 0123456789abcdef0123456789abcdef01234567'), errors[0]);
+  assert.ok(!errors[0].includes('--head'), errors[0]);
   assert.ok(!errors[0].includes('def5678'), 'must not name the carrier commit');
   assert.ok(!errors[0].includes('main0x1'), 'must not name the carrier publish id');
 });
 
 test('#3529 pass 2 git: resolveRowOwner finds the commit and branch that first committed a row', () => {
   withUnionRepo((repo) => {
-    provGit(repo, 'switch', '-q', '-c', 'lane-x');
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-x');
     const xCommit = uCommit(repo, 'xxxx0001', [101, 102, 103], 104);
     uCommit(repo, 'xxxx0002', [101, 102, 103], 104, 'restamp');
     provGit(repo, 'switch', '-q', 'main');
@@ -4852,10 +4858,75 @@ test('#3529 pass 2 git: resolveRowOwner finds the commit and branch that first c
     const later = { ...provEnv(), GIT_AUTHOR_DATE: '2030-01-01T01:00:00Z', GIT_COMMITTER_DATE: '2030-01-01T01:00:00Z' };
     assert.equal(spawnSync('git', ['commit', '-qm', 'carrier commits a union'], { cwd: repo, env: later, windowsHide: true }).status, 0);
     provGit(repo, 'switch', '-q', 'lane-k');
-    const owner = onbox.resolveRowOwner(repo, PROV_LIVE, 'B103', provRunner);
+    const mainRef = provGit(repo, 'rev-parse', 'main');
+    const at = (id, title) => onbox.resolveRowOwner(repo, PROV_LIVE, id, { title, mainRef }, provRunner);
+    const owner = at('B103', 'title B103');
     assert.equal(owner.commit, xCommit);
-    assert.deepEqual(owner.refs, ['lane-x']);
-    assert.equal(onbox.resolveRowOwner(repo, PROV_LIVE, 'B109', provRunner), null);
+    assert.deepEqual(owner.refs, ['fix/server-x']);
+    assert.equal(at('B109', 'title B109'), null);
+    // Decision 5: the live row's summary, not the bare ID — and no title, or
+    // no main to exclude, is no owner.
+    assert.equal(at('B103', 'a different row under the same ID'), null);
+    assert.equal(at('B103', undefined), null);
+    assert.equal(onbox.resolveRowOwner(repo, PROV_LIVE, 'B103', { title: 'title B103' }, provRunner), null);
+  });
+});
+
+// Decision 5 (review pass 4, 🟠): the owner is the commit that introduced
+// the live row's own summary — ID plus normalised title — and never a commit
+// main already contains.
+test('#3529 pass 4 git: resolveRowOwner matches the normalised title, skips another lane\'s row under the same ID, and excludes main', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-k');
+    const kCommit = p4Commit(repo, '2030-01-01T00:00:00Z', 'kkkk0001', [101, 102, 103], 104, 'K mints B103', { 103: 'K &amp; its row' });
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-x');
+    const xCommit = p4Commit(repo, '2030-01-02T00:00:00Z', 'xxxx0001', [101, 102, 103], 104, 'X mints B103', { 103: 'X row' });
+    const xRetitle = p4Commit(repo, '2030-01-03T00:00:00Z', 'xxxx0002', [101, 102, 103], 104, 'X retitles B103', { 103: 'X row, retitled' });
+    const mainRef = provGit(repo, 'rev-parse', 'main');
+    const at = (title, extra = {}) => onbox.resolveRowOwner(repo, PROV_LIVE, 'B103', { title, mainRef, ...extra }, provRunner);
+    assert.equal(at('X row').commit, xCommit);
+    assert.deepEqual(at('X row').refs, ['fix/server-x']);
+    assert.equal(at('X row, retitled').commit, xRetitle, 'a retitle introduces the live summary');
+    assert.equal(at('K & its row').commit, kCommit, 'entities normalised the way the collision check reads titles');
+    // Merge K into main: K's commit is now main's, so it owns nothing.
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'merge', '-q', '--no-ff', '--no-edit', 'fix/server-k');
+    assert.equal(onbox.resolveRowOwner(repo, PROV_LIVE, 'B103', { title: 'K & its row', mainRef: provGit(repo, 'rev-parse', 'main') }, provRunner), null);
+    const failing = () => ({ status: 128, stdout: '', stderr: 'fatal' });
+    assert.equal(onbox.resolveRowOwner(repo, PROV_LIVE, 'B103', { title: 'X row', mainRef }, failing), null);
+    // A failed parent lookup proves nothing was inherited, so it names no owner.
+    const noParents = (args, cwd) => (args[0] === 'rev-list' ? failing() : provRunner(args, cwd));
+    assert.equal(onbox.resolveRowOwner(repo, PROV_LIVE, 'B103', { title: 'X row', mainRef }, noParents), null);
+    // A commit that DROPS the row is a -G hit too; with no title to match it
+    // must not read as the introducer of "no title".
+    provGit(repo, 'switch', '-q', 'fix/server-x');
+    p4Commit(repo, '2030-01-04T00:00:00Z', 'xxxx0003', [101, 102], 104, 'X drops B103');
+    assert.equal(at(undefined), null);
+  });
+});
+
+// A lane that merges main brings main's rows in through that merge commit,
+// which main does not contain and whose first-parent diff adds them. It
+// introduced nothing: the row came from a parent (found replaying this very
+// branch after it merged #3505, which named its own merge commit as B103's
+// owner).
+test('#3529 pass 4 git: a lane\'s merge of main is not the owner of the rows main brought in; a row its resolution added is', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-k');
+    p4Commit(repo, '2030-01-01T00:00:00Z', 'kkkk0001', [101, 102, 103], 104, 'K mints B103', { 103: 'K row' });
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-l');
+    p4Other(repo, '2030-01-01T01:00:00Z', 'L works');
+    provGit(repo, 'switch', '-q', 'main');
+    uMerge(repo, 'fix/server-k', 'kkkk0001', [101, 102, 103], 104, { 103: 'K row' });
+    const mainRef = provGit(repo, 'rev-parse', 'main');
+    provGit(repo, 'switch', '-q', 'fix/server-l');
+    // L merges main; its resolution also adds a B104 of its own.
+    const lMerge = uMerge(repo, 'main', 'llll0001', [101, 102, 103, 104], 105, { 103: 'K row', 104: 'L row' });
+    const at = (id, title) => onbox.resolveRowOwner(repo, PROV_LIVE, id, { title, mainRef }, provRunner);
+    assert.equal(at('B103', 'K row'), null, 'B103 came from main through the merge');
+    assert.equal(at('B104', 'L row').commit, lMerge, 'B104 was introduced by the resolution itself');
   });
 });
 
@@ -4866,13 +4937,13 @@ function withRetired(registerText, rowsMd) {
     `## Retired carried rows\n\nPreamble.\n\n| Row | Owning PR | Closed unmerged | Reason |\n|---|---|---|---|\n${rowsMd}\n## At a glance`,
   );
 }
-// Review pass 3 (operator decision 4): gh also reports the PR's head branch,
-// which must be the branch that first committed the row.
-const closedStates = (state, mergedAt = null, headRefName = 'lane-x') => ({
+// Operator decision 5 (review pass 4): gh also reports the PR's commits, one
+// of which must be the commit that introduced the live row.
+const OWNER_X = { commit: '0123456789abcdef0123456789abcdef01234567', refs: ['origin/fix/server-x'] };
+const closedStates = (state, mergedAt = null, commits = [OWNER_X.commit]) => ({
   available: true,
-  states: new Map([[3505, { state, mergedAt, headRefName }]]),
+  states: new Map([[3505, { state, mergedAt, commits }]]),
 });
-const OWNER_X = { commit: '0123456789abcdef0123456789abcdef01234567', refs: ['origin/lane-x'] };
 const ownerOfB103 = (owner) => (id) => (id === 'B103' ? owner : null);
 
 test('#3529 pass 2: checkRegister accepts a well-formed Retired carried rows table, empty or not, and its absence', () => {
@@ -4973,48 +5044,73 @@ test('#3529 pass 2: a retirement recorded on origin/main applies to a branch tha
   assert.deepEqual(checkLiveView(working, published, options), []);
 });
 
-// Review pass 3, 🟡1 (P3a) and operator decision 4: a retirement is honoured
-// only when the named PR's head branch is the branch that first committed
-// the row. A wrong PR number cannot mute a live lane.
-test('#3529 pass 3 P3a: a retirement naming an unrelated closed PR is refused, naming both branches, and mutes nothing', () => {
-  const states = { available: true, states: new Map([[3509, { state: 'CLOSED', mergedAt: null, headRefName: 'fix/unrelated' }]]) };
+// Review pass 3, 🟡1 (P3a), and operator decision 5: a retirement is honoured
+// only when the commit that introduced the live row is one of the named PR's
+// own commits. Branch names play no part (review pass 4, 🟡1).
+test('#3529 pass 3 P3a: a retirement naming an unrelated closed PR is refused, naming the PR and the introducing commit, and mutes nothing', () => {
+  const states = { available: true, states: new Map([[3509, { state: 'CLOSED', mergedAt: null, commits: ['fedcba9876543210fedcba9876543210fedcba98'] }]]) };
   const errors = retiredCase('| B103 | #3509 | 2026-10-07 | typo for #3505 |\n', { retiredPrStates: states });
   const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
   assert.equal(retired.length, 1, JSON.stringify(errors));
   assert.match(retired[0], /#3509/);
-  assert.match(retired[0], /fix\/unrelated/);
-  assert.match(retired[0], /lane-x/);
+  assert.ok(retired[0].includes(OWNER_X.commit), retired[0]);
+  assert.match(retired[0], /not one of #3509.s 1 commit/);
   assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, 'the row still must be carried');
 });
 
-test('#3529 pass 3: a retirement whose PR head branch is the row owner\'s branch is honoured, local or remote ref', () => {
-  for (const refs of [['origin/lane-x'], ['lane-x'], ['lane-y', 'origin/lane-x']]) {
-    const errors = retiredCase(RETIRED_B103, {
-      retiredPrStates: closedStates('CLOSED'),
-      rowOwnerLookup: ownerOfB103({ ...OWNER_X, refs }),
-    });
-    assert.deepEqual(errors, [], JSON.stringify(refs));
+test('#3529 pass 4: a retirement whose PR commits include the introducing commit is honoured, wherever it sits in the list and in any case', () => {
+  for (const commits of [[OWNER_X.commit], ['1111111111111111111111111111111111111111', OWNER_X.commit], [OWNER_X.commit.toUpperCase()]]) {
+    const errors = retiredCase(RETIRED_B103, { retiredPrStates: closedStates('CLOSED', null, commits) });
+    assert.deepEqual(errors, [], JSON.stringify(commits));
   }
 });
 
-test('#3529 pass 3: a retirement whose row owner cannot be determined is refused, naming the PR branch and how to fetch it', () => {
-  for (const rowOwnerLookup of [() => null, () => ({ ...OWNER_X, refs: [] }), undefined]) {
+test('#3529 pass 4: the owner lookup is handed the PR\'s own commits, so an introducing commit no branch holds still counts', () => {
+  const seen = [];
+  const errors = retiredCase(RETIRED_B103, {
+    retiredPrStates: closedStates('CLOSED'),
+    rowOwnerLookup: (id, prCommits) => (
+      seen.push([id, prCommits]), id === 'B103' && prCommits?.includes(OWNER_X.commit) ? { commit: OWNER_X.commit, refs: [] } : null
+    ),
+  });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(seen, [['B103', [OWNER_X.commit]]]);
+});
+
+test('#3529 pass 4: a retirement whose row owner cannot be determined is refused, naming the PR and to git fetch origin, never a local ref', () => {
+  for (const rowOwnerLookup of [() => null, () => ({ commit: null, refs: [] }), undefined]) {
     const errors = retiredCase(RETIRED_B103, { retiredPrStates: closedStates('CLOSED'), rowOwnerLookup });
     const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
     assert.equal(retired.length, 1, JSON.stringify(errors));
     assert.match(retired[0], /#3505/);
-    assert.match(retired[0], /lane-x/);
-    assert.match(retired[0], /git fetch origin pull\/3505\/head:lane-x/);
+    assert.match(retired[0], /run git fetch origin and re-run/);
+    assert.ok(!/pull[/]|refs[/]|head:/.test(retired[0]), `no ref target: ${retired[0]}`);
     assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, 'the row still must be carried');
   }
 });
 
-test('#3529 pass 3: a retirement whose PR head branch gh did not report is refused', () => {
-  const errors = retiredCase(RETIRED_B103, { retiredPrStates: closedStates('CLOSED', null, null) });
+test('#3529 pass 4: a mismatch names any of the PR\'s commits this checkout lacks, and to git fetch origin', () => {
+  const errors = retiredCase(RETIRED_B103, {
+    retiredPrStates: closedStates('CLOSED', null, ['2222222222222222222222222222222222222222']),
+    rowOwnerLookup: ownerOfB103({ ...OWNER_X, missingCommits: ['2222222222222222222222222222222222222222'] }),
+  });
   const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
   assert.equal(retired.length, 1, JSON.stringify(errors));
-  assert.match(retired[0], /#3505/);
-  assert.match(retired[0], /did not report #3505.s head branch/);
+  assert.ok(retired[0].includes(OWNER_X.commit), retired[0]);
+  assert.match(retired[0], /222222222222/);
+  assert.match(retired[0], /run git fetch origin and re-run/);
+});
+
+test('#3529 pass 4: a retirement whose PR commits gh did not report is refused', () => {
+  // (undefined would take closedStates' default; gh's own missing field is
+  // parsed to null by resolveRetiredPrStates, tested below.)
+  for (const commits of [null, 'not a list', { oid: OWNER_X.commit }]) {
+    const errors = retiredCase(RETIRED_B103, { retiredPrStates: closedStates('CLOSED', null, commits) });
+    const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
+    assert.equal(retired.length, 1, JSON.stringify(errors));
+    assert.match(retired[0], /#3505/);
+    assert.match(retired[0], /did not report #3505.s commits/);
+  }
 });
 
 test('#3529 pass 3: the owner is looked up only for a retired row the live page still carries', () => {
@@ -5029,6 +5125,192 @@ test('#3529 pass 3: the owner is looked up only for a retired row the live page 
   assert.equal(lookups, 0, 'a retired row no longer live needs no owner — its branch may be long gone');
 });
 
+// Review pass 4, 🟠 (operator decision 5): the row's owner is the commit
+// that introduced the LIVE row's own summary (ID plus normalised title), not
+// the oldest commit carrying the bare ID, and never a commit main contains. A
+// retirement is honoured only when that commit is one of the named PR's own
+// commits. Real git, gh stubbed; explicit dates make "oldest" deterministic.
+// Branches use this repo's <type>/<scope>-<slug> shape (review pass 4, 🟡3).
+function p4Commit(repo, date, nonce, nums, next, msg, titles = {}) {
+  uWrite(repo, nonce, nums, next, titles);
+  provGit(repo, 'add', '-A');
+  const env = { ...provEnv(), GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date };
+  const r = spawnSync('git', ['commit', '-qm', msg ?? `stamp ${nonce}`], { cwd: repo, env, windowsHide: true, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  return provGit(repo, 'rev-parse', 'HEAD');
+}
+function p4Other(repo, date, msg) {
+  writeFileSync(join(repo, 'other.txt'), msg);
+  provGit(repo, 'add', '-A');
+  const env = { ...provEnv(), GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date };
+  const r = spawnSync('git', ['commit', '-qm', msg], { cwd: repo, env, windowsHide: true, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  return provGit(repo, 'rev-parse', 'HEAD');
+}
+const p4States = (entries) => ({
+  available: true,
+  states: new Map(entries.map(([pr, state, commits]) => [pr, { state, mergedAt: state === 'MERGED' ? '2030-01-04T00:00:00Z' : null, commits }])),
+});
+const p4Retire = (pr, nums = [101, 102, 104], next = 105) =>
+  withRetired(buildSingleGroupRegister('B', nums, next), `| B103 | #${pr} | 2030-01-05 | probe |\n`);
+const X_TITLES = { 103: 'X row' };
+
+// K mints B103 first (older), renumbers it to B104 and merges (#3525's shape).
+// X, forked before K merged, mints its own B103 later and publishes. Z is
+// unrelated work cut from main after K merged; q is the publishing lane.
+function p4CollisionWorld(fn) {
+  return withUnionRepo((repo) => {
+    const fork = provGit(repo, 'rev-parse', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-k');
+    const kCommit = p4Commit(repo, '2030-01-01T00:00:00Z', 'kkkk0001', [101, 102, 103], 104, 'K mints B103', { 103: 'K row' });
+    p4Commit(repo, '2030-01-01T01:00:00Z', 'kkkk0002', [101, 102, 104], 105, 'K renumbers to B104');
+    provGit(repo, 'switch', '-q', 'main');
+    uMerge(repo, 'fix/server-k', 'kkkk0002', [101, 102, 104], 105);
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-x', fork);
+    const xCommit = p4Commit(repo, '2030-01-02T00:00:00Z', 'xxxx0001', [101, 102, 103], 104, 'X mints B103', X_TITLES);
+    const pageX = uView('xxxx0001', [101, 102, 103], X_TITLES);
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-z', 'main');
+    const zCommit = p4Other(repo, '2030-01-03T00:00:00Z', 'unrelated Z work');
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-q', 'main');
+    return fn(repo, { pageX, xCommit, kCommit, zCommit });
+  });
+}
+
+test('#3529 pass 4 P4a: in a collision, a retirement naming an unrelated closed PR (or the publishing lane) is refused', () => {
+  p4CollisionWorld((repo, { pageX, xCommit, zCommit }) => {
+    for (const [pr, commits] of [[9001, [zCommit]], [9009, [provGit(repo, 'rev-parse', 'fix/server-q')]]]) {
+      writeFileSync(join(repo, PROV_REGISTER), p4Retire(pr));
+      const errors = realErrors(uCheck(repo, 'fix/server-q', pageX, { retiredPrStates: p4States([[pr, 'CLOSED', commits]]) }));
+      const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
+      assert.equal(retired.length, 1, `#${pr}: ${JSON.stringify(errors)}`);
+      assert.ok(retired[0].includes(`#${pr}`) && retired[0].includes(xCommit), retired[0]);
+      assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, 'B103 must still be carried');
+    }
+  });
+});
+
+test('#3529 pass 4 P4b: in a collision, the legitimate retirement (X closed unmerged) is honoured; one under merged K is not', () => {
+  p4CollisionWorld((repo, { pageX, xCommit, kCommit }) => {
+    writeFileSync(join(repo, PROV_REGISTER), p4Retire(9002));
+    assert.deepEqual(realErrors(uCheck(repo, 'fix/server-q', pageX, { retiredPrStates: p4States([[9002, 'CLOSED', [xCommit]]]) })), []);
+    writeFileSync(join(repo, PROV_REGISTER), p4Retire(9003));
+    const errors = realErrors(uCheck(repo, 'fix/server-q', pageX, { retiredPrStates: p4States([[9003, 'MERGED', [kCommit]]]) }));
+    assert.equal(ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX).length, 1, JSON.stringify(errors));
+  });
+});
+
+test('#3529 pass 4 P4b2: in a collision, the unmerged-lane-row error names X\'s commit and branch, not K\'s', () => {
+  p4CollisionWorld((repo, { pageX, xCommit, kCommit }) => {
+    const errors = ofPrefix(realErrors(uCheck(repo, 'fix/server-q', pageX)), UNMERGED_LANE_ROW_ERROR_PREFIX);
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.ok(errors[0].includes(xCommit.slice(0, 12)) && errors[0].includes(`--search ${xCommit}`), errors[0]);
+    assert.ok(errors[0].includes('(on fix/server-x)'), errors[0]);
+    assert.ok(!errors[0].includes(kCommit.slice(0, 12)) && !errors[0].includes('fix/server-k'), errors[0]);
+  });
+});
+
+test('#3529 pass 4 P4i: K (closed, never merged) minted B103 first; retiring it under K cannot mute X\'s live, still-owed B103', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-k');
+    const kCommit = p4Commit(repo, '2030-01-01T00:00:00Z', 'kkkk0001', [101, 102, 103], 104, 'K mints B103', { 103: 'K row' });
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-x');
+    const xCommit = p4Commit(repo, '2030-01-02T00:00:00Z', 'xxxx0001', [101, 102, 103], 104, 'X mints its own B103', X_TITLES);
+    const pageX = uView('xxxx0001', [101, 102, 103], X_TITLES);
+    provGit(repo, 'switch', '-q', 'main');
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-q');
+    writeFileSync(join(repo, PROV_REGISTER), p4Retire(9010, [101, 102], 104));
+    const errors = realErrors(uCheck(repo, 'fix/server-q', pageX, { retiredPrStates: p4States([[9010, 'CLOSED', [kCommit]]]) }));
+    const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
+    assert.equal(retired.length, 1, JSON.stringify(errors));
+    assert.ok(retired[0].includes('#9010') && retired[0].includes(xCommit), retired[0]);
+    const unmerged = ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX);
+    assert.equal(unmerged.length, 1, 'X is open: its live B103 must still be carried');
+    assert.ok(unmerged[0].includes('(on fix/server-x)') && !unmerged[0].includes('fix/server-k'), unmerged[0]);
+  });
+});
+
+// Review pass 4, 🟡1: PR identity, not branch names.
+function p4LaneX(repo, { stacked = false } = {}) {
+  provGit(repo, 'switch', '-q', '-c', 'fix/server-x');
+  const xCommit = p4Commit(repo, '2030-01-02T00:00:00Z', 'xxxx0001', [101, 102, 103], 104, 'X mints B103', X_TITLES);
+  const stackedCommit = stacked ? (provGit(repo, 'switch', '-q', '-c', 'fix/server-x-part2'), p4Other(repo, '2030-01-03T00:00:00Z', 'stacked')) : null;
+  provGit(repo, 'switch', '-q', 'main');
+  provGit(repo, 'switch', '-q', '-c', 'fix/server-q');
+  return { xCommit, stackedCommit, pageX: uView('xxxx0001', [101, 102, 103], X_TITLES) };
+}
+
+test('#3529 pass 4 P4c: an older closed PR that reused the owner\'s branch name is refused (its commits are not X\'s)', () => {
+  withUnionRepo((repo) => {
+    const old = p4Other(repo, '2029-12-01T00:00:00Z', 'the older PR on fix/server-x');
+    const { pageX, xCommit } = p4LaneX(repo);
+    writeFileSync(join(repo, PROV_REGISTER), p4Retire(9004, [101, 102], 104));
+    const errors = realErrors(uCheck(repo, 'fix/server-q', pageX, { retiredPrStates: p4States([[9004, 'CLOSED', [old]]]) }));
+    const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
+    assert.equal(retired.length, 1, JSON.stringify(errors));
+    assert.ok(retired[0].includes('#9004') && retired[0].includes(xCommit), retired[0]);
+  });
+});
+
+test('#3529 pass 4 P4c2: a closed stacked PR cut from the owner\'s branch is refused while the owner is open', () => {
+  withUnionRepo((repo) => {
+    const { pageX, xCommit, stackedCommit } = p4LaneX(repo, { stacked: true });
+    writeFileSync(join(repo, PROV_REGISTER), p4Retire(9007, [101, 102], 104));
+    const errors = realErrors(uCheck(repo, 'fix/server-q', pageX, { retiredPrStates: p4States([[9007, 'CLOSED', [stackedCommit]]]) }));
+    const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
+    assert.equal(retired.length, 1, JSON.stringify(errors));
+    assert.ok(retired[0].includes('#9007') && retired[0].includes(xCommit), retired[0]);
+  });
+});
+
+test('#3529 pass 4 P4d: the owner\'s branch deleted after close needs no fetch — the PR\'s own commit is still found', () => {
+  withUnionRepo((repo) => {
+    const { pageX, xCommit } = p4LaneX(repo);
+    provGit(repo, 'branch', '-q', '-D', 'fix/server-x');
+    writeFileSync(join(repo, PROV_REGISTER), p4Retire(9005, [101, 102], 104));
+    assert.deepEqual(realErrors(uCheck(repo, 'fix/server-q', pageX, { retiredPrStates: p4States([[9005, 'CLOSED', [xCommit]]]) })), []);
+  });
+});
+
+test('#3529 pass 4 P4e: a fork PR whose head branch is main is matched by its commits, and nothing names a local ref to write', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'fork-tmp');
+    const fCommit = p4Commit(repo, '2030-01-02T00:00:00Z', 'ffff0001', [101, 102, 103], 104, 'fork mints B103', X_TITLES);
+    const pageF = uView('ffff0001', [101, 102, 103], X_TITLES);
+    provGit(repo, 'switch', '-q', 'main');
+    const mainBefore = provGit(repo, 'rev-parse', 'main');
+    provGit(repo, 'branch', '-q', '-D', 'fork-tmp');
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-q');
+    writeFileSync(join(repo, PROV_REGISTER), p4Retire(9006, [101, 102], 104));
+    assert.deepEqual(realErrors(uCheck(repo, 'fix/server-q', pageF, { retiredPrStates: p4States([[9006, 'CLOSED', [fCommit]]]) })), []);
+    // The fork's commit not in this checkout at all: refused, and the remedy
+    // is a plain fetch — never a refspec that could move local main.
+    const absent = '3333333333333333333333333333333333333333';
+    const errors = realErrors(uCheck(repo, 'fix/server-q', pageF, { retiredPrStates: p4States([[9006, 'CLOSED', [absent]]]) }));
+    const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
+    assert.equal(retired.length, 1, JSON.stringify(errors));
+    assert.ok(retired[0].includes('#9006') && retired[0].includes(absent.slice(0, 12)), retired[0]);
+    assert.match(retired[0], /run git fetch origin and re-run/);
+    assert.ok(!/pull[/]|head:|:main/.test(retired[0]), retired[0]);
+    assert.equal(provGit(repo, 'rev-parse', 'main'), mainBefore);
+  });
+});
+
+test('#3529 pass 4: the owner of a row no commit this checkout holds is undeterminable, and the retirement says to git fetch origin', () => {
+  withUnionRepo((repo) => {
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-q');
+    const pageX = uView('xxxx0001', [101, 102, 103], X_TITLES);
+    writeFileSync(join(repo, PROV_REGISTER), p4Retire(9011, [101, 102], 104));
+    const absent = '4444444444444444444444444444444444444444';
+    const errors = realErrors(uCheck(repo, 'fix/server-q', pageX, { retiredPrStates: p4States([[9011, 'CLOSED', [absent]]]) }));
+    const retired = ofPrefix(errors, onbox.RETIRED_ROW_ERROR_PREFIX);
+    assert.equal(retired.length, 1, JSON.stringify(errors));
+    assert.match(retired[0], /#9011/);
+    assert.match(retired[0], /444444444444/);
+    assert.match(retired[0], /run git fetch origin and re-run/);
+  });
+});
+
 test('#3529 pass 2: resolveRetiredPrStates reads gh through an injected runner, never the network', () => {
   const calls = [];
   const gh = (states) => (args) => {
@@ -5040,19 +5322,25 @@ test('#3529 pass 2: resolveRetiredPrStates reads gh through an injected runner, 
   };
   const r = onbox.resolveRetiredPrStates(
     '/repo',
-    [3505, 3506, 3507, 3508],
+    [3505, 3506, 3507, 3508, 3509, 3510],
     gh({
-      3505: { state: 'CLOSED', mergedAt: null, headRefName: 'lane-x' },
-      3506: { state: 'OPEN', mergedAt: null, headRefName: 'lane-o' },
-      3508: { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z', headRefName: 'lane-m' },
+      // gh's own shape: each commit an object, the SHA under `oid`.
+      3505: { state: 'CLOSED', mergedAt: null, commits: [{ oid: 'aaaa', messageHeadline: 'a' }, { oid: 'bbbb', messageHeadline: 'b' }] },
+      3506: { state: 'OPEN', mergedAt: null, commits: [] },
+      3508: { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z', commits: [{ oid: 'cccc' }] },
+      3509: { state: 'CLOSED', mergedAt: null },
+      3510: { state: 'CLOSED', mergedAt: null, commits: [{ oid: 'dddd' }, { messageHeadline: 'no oid' }] },
     }),
   );
   assert.equal(r.available, true);
-  assert.deepEqual(r.states.get(3508), { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z', headRefName: 'lane-m' });
-  assert.deepEqual(r.states.get(3505), { state: 'CLOSED', mergedAt: null, headRefName: 'lane-x' });
+  assert.deepEqual(r.states.get(3508), { state: 'MERGED', mergedAt: '2026-10-07T00:00:00Z', commits: ['cccc'] });
+  assert.deepEqual(r.states.get(3505), { state: 'CLOSED', mergedAt: null, commits: ['aaaa', 'bbbb'] });
   assert.equal(r.states.get(3506).state, 'OPEN');
   assert.match(r.states.get(3507).error, /Could not resolve/);
-  assert.ok(calls.some((c) => c === 'pr view 3505 --json state,mergedAt,headRefName'), calls.join('\n'));
+  assert.equal(r.states.get(3509).commits, null, 'no commits field is not an empty PR');
+  assert.equal(r.states.get(3510).commits, null, 'a commit without an oid poisons the list');
+  assert.ok(calls.some((c) => c === 'pr view 3505 --json state,mergedAt,commits'), calls.join('\n'));
+  assert.ok(!calls.some((c) => c.includes('headRefName')), calls.join('\n'));
   calls.length = 0;
   assert.deepEqual(onbox.resolveRetiredPrStates('/repo', [], gh({})).states.size, 0);
   assert.deepEqual(calls, [], 'no entries, no gh calls');
@@ -5329,9 +5617,10 @@ test('#3529 pass 2 CLI: real provenance, merge-base, ever-carried, owner and gh 
     provGit(repo, 'switch', '-q', 'main');
     provGit(repo, 'merge', '-q', '--no-ff', '--no-edit', 'lane-y');
     provGit(repo, 'push', '-q', 'origin', 'main');
-    // lane-x, unmerged, adds B104 and publishes.
-    provGit(repo, 'switch', '-q', '-c', 'lane-x');
+    // fix/server-x, unmerged, adds B104 and publishes.
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-x');
     cliCommit(repo, 'xxxx0001', [101, 102, 103, 104], 105, { 103: 'Theirs Y', 104: 'X row' });
+    const xCommit = provGit(repo, 'rev-parse', 'HEAD');
     const page = readFileSync(join(repo, PROV_LIVE), 'utf8');
     // main then discharges B102 — which lane-x's page still carries.
     provGit(repo, 'switch', '-q', 'main');
@@ -5353,7 +5642,8 @@ test('#3529 pass 2 CLI: real provenance, merge-base, ever-carried, owner and gh 
     assert.equal(r.status, 1, `stdout: ${r.stdout}\nstderr: ${r.stderr}`);
     assert.ok(!/WARNING: .*injected/.test(r.stderr), 'no test override in play');
     assert.ok(r.stderr.includes('unmerged-lane-row: B104:'), r.stderr);
-    assert.ok(r.stderr.includes('gh pr list --head lane-x'), `names the owning lane: ${r.stderr}`);
+    assert.ok(r.stderr.includes(`(on fix/server-x)`), `names the owning lane: ${r.stderr}`);
+    assert.ok(r.stderr.includes(`gh pr list --state all --search ${xCommit}`), `finds its PR by commit: ${r.stderr}`);
     assert.ok(r.stderr.includes('row-id-collision: B103:'), `merged-lane collision via the merge-base: ${r.stderr}`);
   });
 });
@@ -5405,44 +5695,52 @@ test('#3529 pass 2 CLI: a hand-built union with stale figures is refused under -
 // seam (gh). The seam answers only the PRs the run asks about, so an entry
 // the CLI forgot to look up — one only origin/main's register records —
 // reads as unresolvable rather than silently passing.
-test('#3529 pass 3 CLI: a retirement is honoured only for the closed PR that owns the row, including one only origin/main records', () => {
+test('#3529 pass 4 CLI: a retirement is honoured only for the closed PR whose commits introduced the live row, including one only origin/main records', () => {
   withCliRepo((repo, cli) => {
     cliCommit(repo, 'main0001', [101, 102], 103);
     provGit(repo, 'push', '-q', 'origin', 'main');
-    // lane-x, never merged, mints B103 and publishes the page.
-    provGit(repo, 'switch', '-q', '-c', 'lane-x');
+    // fix/server-x, never merged, mints B103 and publishes the page.
+    provGit(repo, 'switch', '-q', '-c', 'fix/server-x');
     cliCommit(repo, 'xxxx0001', [101, 102, 103], 104, { 103: 'X row' });
+    const xCommit = provGit(repo, 'rev-parse', 'HEAD');
     writeFileSync(join(repo, 'page.saved.html'), readFileSync(join(repo, PROV_LIVE), 'utf8'));
     // old forks main before the retirement lands there.
     provGit(repo, 'switch', '-q', 'main');
     provGit(repo, 'switch', '-q', '-c', 'old');
     provGit(repo, 'switch', '-q', 'main');
-    cliCommit(repo, 'main0002', [101, 102], 103, {}, '| B103 | #77 | 2026-10-08 | lane-x closed unmerged |\n');
+    cliCommit(repo, 'main0002', [101, 102], 103, {}, '| B103 | #77 | 2026-10-08 | fix/server-x closed unmerged |\n');
     provGit(repo, 'push', '-q', 'origin', 'main');
-    const run = (branch, states) => {
+    const other = provGit(repo, 'rev-parse', 'main');
+    const states = (state, commits) => JSON.stringify({ 77: { state, commits } });
+    const run = (branch, ghStates) => {
       provGit(repo, 'switch', '-q', branch);
-      return cli(['--against-published', 'page.saved.html'], { ONBOX_TEST_GH_PR_STATES: states });
+      return cli(['--against-published', 'page.saved.html'], { ONBOX_TEST_GH_PR_STATES: ghStates });
     };
     for (const branch of ['main', 'old']) {
-      const owned = run(branch, '{"77":{"state":"CLOSED","headRefName":"lane-x"}}');
+      const owned = run(branch, states('CLOSED', [xCommit]));
       assert.equal(owned.status, 0, `${branch}: stdout: ${owned.stdout}\nstderr: ${owned.stderr}`);
       assert.match(owned.stderr, /WARNING: gh PR states injected from ONBOX_TEST_GH_PR_STATES/);
     }
-    const wrongPr = run('old', '{"77":{"state":"CLOSED","headRefName":"fix/unrelated"}}');
+    const wrongPr = run('old', states('CLOSED', [other]));
     assert.equal(wrongPr.status, 1, wrongPr.stderr);
-    assert.match(wrongPr.stderr, /retired-carried-row: B103: .*#77.*fix[/]unrelated.*lane-x/);
+    assert.match(wrongPr.stderr, new RegExp(`retired-carried-row: B103: .*#77.*${xCommit}`));
     assert.ok(wrongPr.stderr.includes('unmerged-lane-row: B103:'), wrongPr.stderr);
     assert.ok(!/BEHIND what is already live/.test(wrongPr.stderr), wrongPr.stderr);
-    const open = run('old', '{"77":{"state":"OPEN","headRefName":"lane-x"}}');
+    const open = run('old', states('OPEN', [xCommit]));
     assert.equal(open.status, 1, open.stderr);
     assert.match(open.stderr, /retired-carried-row: B103: .*#77.*OPEN/);
     const unavailable = run('old', 'unavailable');
     assert.equal(unavailable.status, 0, unavailable.stderr);
     assert.match(unavailable.stderr, /retired-row-warning: B103 .*#77/);
-    // The owner's branch gone from this checkout: fail closed, naming the fetch.
-    provGit(repo, 'branch', '-q', '-D', 'lane-x');
-    const ownerless = run('old', '{"77":{"state":"CLOSED","headRefName":"lane-x"}}');
-    assert.equal(ownerless.status, 1, ownerless.stderr);
-    assert.match(ownerless.stderr, /retired-carried-row: B103: .*git fetch origin pull[/]77[/]head:lane-x/);
+    // The owner's branch gone from this checkout: its commit is still #77's
+    // own, so no fetch is needed (review pass 4, P4d).
+    provGit(repo, 'branch', '-q', '-D', 'fix/server-x');
+    const branchless = run('old', states('CLOSED', [xCommit]));
+    assert.equal(branchless.status, 0, branchless.stderr);
+    // A commit this checkout lacks: fail closed, naming a plain fetch.
+    const absent = run('old', states('CLOSED', ['5555555555555555555555555555555555555555']));
+    assert.equal(absent.status, 1, absent.stderr);
+    assert.match(absent.stderr, /retired-carried-row: B103: .*#77.*run git fetch origin and re-run/);
+    assert.ok(!/pull[/]\d+[/]head/.test(absent.stderr), absent.stderr);
   });
 });
