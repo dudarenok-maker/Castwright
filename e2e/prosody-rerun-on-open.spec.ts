@@ -77,3 +77,58 @@ test('opening a book whose watermark is unset does NOT re-run emotion detection'
   await page.waitForTimeout(2_000);
   expect(await seen(page)).toEqual([]);
 });
+
+/* The re-run is background work (PR #3505 pass 8): while its pill shows it must
+ * not hold the Generate controls closed, and starting generation must make it
+ * yield — its pill clears and it applies nothing more. Chapter 1 is flipped to
+ * 'queued' (the stuck-queued shape) so the Generate view offers "Resume
+ * generation"; clicking it queues the book, which is user work the run yields
+ * to. The mock run lasts ~2.5 s, so the yield is told from a natural finish by
+ * the pill clearing well inside that window. */
+type ProsodyStore = {
+  getState: () => {
+    prosody: { activeStreams: Record<string, { background?: boolean }> };
+    chapters: { chapters: Array<Record<string, unknown>> };
+  };
+  dispatch: (action: unknown) => void;
+};
+
+test('while the background re-run is active Generate stays enabled, and starting generation clears its pill', async ({
+  page,
+}) => {
+  await installStreamSpy(page, { sb: false });
+  await page.goto('/#/books/sb/generate');
+  await expect(page.getByTestId('chapter-row-1-reanalyse')).toBeVisible({ timeout: 10_000 });
+
+  const pillActive = () =>
+    page.evaluate(
+      () =>
+        (window as unknown as { __store__: ProsodyStore }).__store__.getState().prosody
+          .activeStreams.sb?.background === true,
+    );
+  await expect.poll(pillActive, { timeout: 8_000 }).toBe(true);
+
+  /* The sb fixture has every chapter done, so the header offers "Regenerate",
+     which a foreground analysis pass disables (analysisBusy). */
+  await expect(page.getByRole('button', { name: /^Regenerate$/ })).toBeEnabled({ timeout: 2_000 });
+  expect(await pillActive()).toBe(true);
+
+  await page.evaluate(() => {
+    const store = (window as unknown as { __store__: ProsodyStore }).__store__;
+    const chapters = store.getState().chapters.chapters;
+    store.dispatch({
+      type: 'chapters/setChapters',
+      payload: chapters.map((c, i) => (i === 0 ? { ...c, state: 'queued' } : c)),
+    });
+  });
+
+  /* Generate is open while the pill is showing... */
+  const resume = page.getByTestId('generation-view-resume');
+  await expect(resume).toBeEnabled({ timeout: 2_000 });
+  expect(await pillActive()).toBe(true);
+
+  /* ...and starting generation ends the run: the pill goes, well before the
+     mock run would have finished on its own. */
+  await resume.click();
+  await expect.poll(pillActive, { timeout: 1_000 }).toBe(false);
+});
