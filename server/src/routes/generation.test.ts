@@ -1537,9 +1537,9 @@ describe('POST /api/books/:bookId/generation — plan 80 edits override cache', 
   });
 });
 
-/* ── Plan 286 — a `[]` take survives the rebuild, and generation names why a
+/* ── plan 287 — a `[]` take survives the rebuild, and generation names why a
    chapter with no lines produced no audio (decision C). */
-describe('POST /api/books/:bookId/generation — [] takes (plan 286)', () => {
+describe('POST /api/books/:bookId/generation — [] takes (plan 287)', () => {
   let editsPath: string;
   let cacheModule: typeof import('../store/analysis-cache.js');
   let fsModule: typeof import('node:fs');

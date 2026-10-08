@@ -228,7 +228,7 @@ vi.mock('../workspace/scan.js', async () => {
   };
 });
 
-/* Plan 286 T5 — a case sets `__p286_save_hook` to observe every cache save
+/* plan 287 T5 — a case sets `__p286_save_hook` to observe every cache save
    (what the cache held at that moment). Pass-through otherwise. */
 vi.mock('../store/analysis-cache.js', async () => {
   const actual = await vi.importActual<typeof import('../store/analysis-cache.js')>(
@@ -246,7 +246,7 @@ vi.mock('../store/analysis-cache.js', async () => {
   };
 });
 
-/* Plan 286 T5 — a case sets this to make the analysis persist's state.json
+/* plan 287 T5 — a case sets this to make the analysis persist's state.json
    write throw, so the persist block's `catch (persistErr)` swallows it.
    Pass-through otherwise. */
 vi.mock('../workspace/state-migrate.js', async () => {
@@ -1539,7 +1539,7 @@ describe('isPhase0aCoverageComplete — Phase 0a coverage gate for stage1 finali
   });
 });
 
-/* #3435 (plan 286 spec 2.1) — the phase-aware readers of the failure record
+/* #3435 (plan 287 spec 2.1) — the phase-aware readers of the failure record
    that need no pending set. */
 describe('castFailedChapterIds / promoteCastRecordToAttribution', () => {
   const rec = (phase: 'cast' | 'attribution') => ({ code: 'x', message: 'm', remediation: 'r', phase });
@@ -4982,7 +4982,7 @@ describe('runSubsetAnalyzerJob — re-reports a coverage failure instead of sile
   );
 });
 
-describe('runMainAnalyzerJob — chapter-failed frames carry phase (plan 286 T1)', () => {
+describe('runMainAnalyzerJob — chapter-failed frames carry phase (plan 287 T1)', () => {
   const BODY = 'This is a perfectly ordinary paragraph of narration with no dialogue at all.';
   const roster = (): CharacterOutput[] => [
     { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' },
@@ -9478,10 +9478,10 @@ describe('Task 6c (#2246) - the analyzer path stops defaulting to en', () => {
   }, 30_000);
 });
 
-/* Plan 286 T5 — "current take": the pending set P and its writers, the
+/* plan 287 T5 — "current take": the pending set P and its writers, the
    takesPersisted / confirmReached flags, the word-free short-circuit and the
    main replay, driven through the real main route. */
-describe('runMainAnalyzerJob — current takes (plan 286 T5)', () => {
+describe('runMainAnalyzerJob — current takes (plan 287 T5)', () => {
   const WORDED: Record<number, string> = {
     1: 'Mara opened the door and stepped out into the cold morning air.',
     2: 'The harbour lay quiet under a low grey sky that promised rain.',

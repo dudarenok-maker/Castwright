@@ -66,14 +66,14 @@ export interface ChapterErrorRecord {
   message: string;
   remediation: string;
   /** Which phase failed: Phase 0a cast detection or Phase 1 attribution.
-      Optional on disk only for records written before plan 286;
+      Optional on disk only for records written before plan 287;
       `normaliseFailureRecords` tags those on load. */
   phase?: 'cast' | 'attribution';
 }
 
 const MISSING_RECORD_MESSAGE = 'Analysis failed on a previous attempt. Retry to try again.';
 
-/* Plan 286 spec 2.1 — tag the untagged legacy failure records of a freshly
+/* plan 287 spec 2.1 — tag the untagged legacy failure records of a freshly
    loaded cache, mutating it in place. Rules, first match wins:
    1. already tagged: keep;
    2. no stage1 and the cast is missing or `[]`: 'cast' (origin/main writes
@@ -146,23 +146,23 @@ export interface AnalysisCache {
       classified code + copy so the analysing view shows a real message +
       remediation after reload instead of the generic fallback. */
   failedChapterErrors?: Record<string, ChapterErrorRecord>;
-  /** Plan 286 spec 2.2 — P: chapters whose take predates the final roster and
+  /** plan 287 spec 2.2 — P: chapters whose take predates the final roster and
       is known to be bad (a failed chapter's take at a stage1-less load, or a
       take made against the rolling roster while the chapter's cast record
       stood). A pending take is kept, never deleted, until it is replaced.
       Absent means empty. */
   pendingAttributionChapterIds?: number[];
-  /** Plan 286 spec 2.2 — false means a take was written after the last
+  /** plan 287 spec 2.2 — false means a take was written after the last
       authoritative persist (state.json). Absent (legacy caches) means
       persisted. */
   takesPersisted?: boolean;
-  /** Plan 286 decision F — set by the first authoritative persist and never
+  /** plan 287 decision F — set by the first authoritative persist and never
       cleared except with the cache: the book has reached Confirm. */
   confirmReached?: true;
   updatedAt?: string;
 }
 
-/** Plan 286 spec 2.2 — the one per-chapter "done" predicate: the chapter has a
+/** plan 287 spec 2.2 — the one per-chapter "done" predicate: the chapter has a
     take (an own key, including `[]`, decision B) that is not pending. */
 export function hasCurrentTake(cache: AnalysisCache, chapterId: number): boolean {
   return (
@@ -171,7 +171,7 @@ export function hasCurrentTake(cache: AnalysisCache, chapterId: number): boolean
   );
 }
 
-/** Plan 286 spec 2.2 — book-level completeness over `chapterIds` (the
+/** plan 287 spec 2.2 — book-level completeness over `chapterIds` (the
     non-excluded chapters): the roster is final, every chapter has a current
     take, and no take was written after the last authoritative persist. */
 export function analysisCompleteFor(cache: AnalysisCache, chapterIds: readonly number[]): boolean {
@@ -183,13 +183,13 @@ export function analysisCompleteFor(cache: AnalysisCache, chapterIds: readonly n
   );
 }
 
-/** Plan 286 §3.4 — the chapters of `chapterIds` (the non-excluded chapters)
+/** plan 287 §3.4 — the chapters of `chapterIds` (the non-excluded chapters)
     that have no current take. */
 export function unattributedChapterIds(cache: AnalysisCache, chapterIds: readonly number[]): number[] {
   return chapterIds.filter((id) => !hasCurrentTake(cache, id));
 }
 
-/** Plan 286 decision F — the book has reached Confirm: its cast was confirmed,
+/** plan 287 decision F — the book has reached Confirm: its cast was confirmed,
     or an authoritative persist has run since the cache was last cleared. */
 export function reachedConfirm(
   state: { castConfirmed?: boolean } | null | undefined,

@@ -368,7 +368,7 @@ vi.mock('../store/analysis-cache.js', async () => {
   const actual = await vi.importActual<typeof import('../store/analysis-cache.js')>('../store/analysis-cache.js');
   const mem = new Map<string, unknown>();
   return {
-    /* The pure predicates (plan 286) need no I/O. */
+    /* The pure predicates (plan 287) need no I/O. */
     hasCurrentTake: actual.hasCurrentTake,
     analysisCompleteFor: actual.analysisCompleteFor,
     reachedConfirm: actual.reachedConfirm,
@@ -782,11 +782,11 @@ describe('runMainAnalyzerJob — Phase 1 resolves via selectAnalyzerForPhase eve
 });
 
 /* ───────────────────────────────────────────────────────────────────
-   Plan 286 T5 — a take made against the rolling roster while the
+   plan 287 T5 — a take made against the rolling roster while the
    chapter's cast record stood is pending (M8c), and a pending take is
    never stitched: the run re-attributes it after the join (M8d).
    ─────────────────────────────────────────────────────────────────── */
-describe('runMainAnalyzerJob — pending takes in pipelined mode (plan 286 T5)', () => {
+describe('runMainAnalyzerJob — pending takes in pipelined mode (plan 287 T5)', () => {
   async function cacheOf(manuscriptId: string) {
     const { loadAnalysisCache } = await import('../store/analysis-cache.js');
     return loadAnalysisCache(manuscriptId);

@@ -242,7 +242,7 @@ export interface AnalyseOpts {
     message: string;
     code?: string;
     remediation?: string;
-    /** Which phase failed (plan 286). Absent only from a pre-286 server. */
+    /** Which phase failed (plan 287). Absent only from a pre-287 server. */
     phase?: 'cast' | 'attribution';
   }) => void;
   /** A previously-failed chapter just had its Phase 0a re-run succeed
@@ -2853,7 +2853,7 @@ interface AnalysisStreamEvent {
   message?: string;
   code?: string;
   remediation?: string;
-  /** `chapter-failed` — which phase failed (plan 286). */
+  /** `chapter-failed` — which phase failed (plan 287). */
   phase?: 'cast' | 'attribution';
   /** #3084 F7 — terminal `error` frames on the analysis streams carry a
       structured "how to fix" list when the classifier can name something

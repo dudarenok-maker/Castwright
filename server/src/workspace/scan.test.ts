@@ -20,7 +20,7 @@ let clearAnalysisCache: typeof import('../store/analysis-cache.js').clearAnalysi
 const seededManuscriptIds: string[] = [];
 
 /* A finished analysis of `chapterIds`: Phase 0's stage1 plus a take per chapter
-   (plan 286: a book is analysed only once its roster is final). `extra` overrides
+   (plan 287: a book is analysed only once its roster is final). `extra` overrides
    or adds cache fields. */
 async function seedAnalysisCache(
   manuscriptId: string,
@@ -696,10 +696,10 @@ describe('voices_pending status', () => {
   });
 });
 
-/* Plan 286 spec 2.2 — the library's analysis rule is `analysisCompleteFor`
+/* plan 287 spec 2.2 — the library's analysis rule is `analysisCompleteFor`
    (one current take per non-excluded chapter, a final roster, takes persisted),
    and it gates only a book that has never reached Confirm (decision F). */
-describe('scan status — current takes (plan 286)', () => {
+describe('scan status — current takes (plan 287)', () => {
   const take = [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'A line.' }] as never;
   const twoChapters = [
     { id: 1, slug: 'c-01' },

@@ -134,7 +134,7 @@ describe('rebuildCacheFromEdits', () => {
   });
 });
 
-describe('rebuildCacheFromEdits — overlay (plan 286 spec 2.2)', () => {
+describe('rebuildCacheFromEdits — overlay (plan 287 spec 2.2)', () => {
   const s = (id: number, chapterId: number, text: string) => ({ id, chapterId, characterId: 'narr', text });
   const stage1 = {
     characters: [{ id: 'narr', name: 'Narrator', role: 'narrator' as const, color: '#fff' }],
