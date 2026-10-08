@@ -13,7 +13,8 @@
       opt-out, ignores store selector).
    5. getBookState → {prosodyAnnotated:true} → no-op (watermark respected).
    6. Two books transitioning → each fires once (dedup by considered ref).
-   7. {failed:1} → no putBookState + book is re-eligible (deleted from considered).
+   7. {failed:1} → putBookState writes prosodyAnnotated:false (never true) + book is
+      re-eligible (deleted from considered).
    8. {failed:0} → putBookState writes prosodyAnnotated:true watermark.
    9. A rejected runProsodyPasses removes the book from considered (retry-safe). */
 

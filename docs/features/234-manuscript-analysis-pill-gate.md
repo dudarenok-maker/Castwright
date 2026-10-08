@@ -46,7 +46,7 @@ The standalone prosody pill (`layout-prosody-pill.test.tsx` + its rendering in `
 - The discriminated-union `ui.stage` and hash-router grammar are untouched.
 - The `BroadcastChannel('audiobook-state')` narrow-scope guard (plan 63): only `activeStreams`-slot mutations propagate cross-tab; per-chapter rows, cast, and manuscript content stay local.
 - `applyExternalSet` / `applyExternalClear` are **not** in the outbound action filter (echo-suppression layer 2) so they never re-broadcast an inbound message.
-- The `prosodyAnnotated` disk watermark (`putBookState`) is written only when `failed === 0` and is NOT cleared by the in-memory guard — it is the separate, durable complement.
+- The `prosodyAnnotated` disk watermark (`putBookState`) is written `true` only when `failed === 0`, and `false` by a run that skipped work, failed a chapter, threw or yielded (#3435; the open trigger re-runs only an explicit `false`, never an unset watermark). It is NOT cleared by the in-memory guard — it is the separate, durable complement.
 
 **Reversibility:** the `activeStreams` maps default to `{}` (no migration); removing the substage selectors and broadcast lines reverts to the pre-plan behavior. The retired prosody pill had no external callers.
 
@@ -89,7 +89,7 @@ The standalone prosody pill (`layout-prosody-pill.test.tsx` + its rendering in `
 - Disabled while a review runs on the same book (`selectAnalysisBusyForBook` gate).
 
 **Vitest integration tests (`src/store/prosody-autotrigger.test.tsx`):**
-- Covers the full double-fire guard: does NOT fire when a book is already analysis-complete (seed-on-mount); does NOT fire for pre-existing complete books that arrive via async library hydrate (boot seed-race); fires once when a book transitions to `cast_pending` after the seeded first render; skips when `getBookState` returns `prosodyAnnotated:true` (disk watermark); does NOT fire when `prosody.activeStreams` already has the book (in-memory guard); does NOT write `putBookState` when `failed > 0`; calls `putBookState` with `prosodyAnnotated:true` when `failed === 0`.
+- Covers the full double-fire guard: does NOT fire when a book is already analysis-complete (seed-on-mount); does NOT fire for pre-existing complete books that arrive via async library hydrate (boot seed-race); fires once when a book transitions to `cast_pending` after the seeded first render; skips when `getBookState` returns `prosodyAnnotated:true` (disk watermark); does NOT fire when `prosody.activeStreams` already has the book (in-memory guard); writes `prosodyAnnotated:false` (never `true`) when `failed > 0`; calls `putBookState` with `prosodyAnnotated:true` when `failed === 0`.
 
 **Vitest integration tests (`src/store/queue-thunks.test.ts`):**
 - `enqueueQueueEntries — analysis gate` describe block: enqueues only un-gated entries and toasts the gated pass.

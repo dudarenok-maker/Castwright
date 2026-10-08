@@ -195,7 +195,7 @@ launchEligible(state) = state.prosodyEnabled !== false && !state.prosodyAnnotate
 - **Seed-on-mount to skip pre-existing books.** `Layout` is the persistent app
   shell (mounts once). On the effect's **first run**, every already-complete book
   is added to a `considered` ref-`Set` *without firing* — so the existing library
-  is not retro-annotated (no backlog-wide quota spend on upgrade). Only books that
+  is not retro-annotated (no backlog-wide quota spend on upgrade; #3435 keeps this: the open-time re-run touches only a book whose watermark is explicitly `false`, never an unset one). Only books that
   reach analysis-complete *later in the session* (a fresh or background analysis)
   fire. This seed also makes a `Layout` remount self-healing: a re-seed re-marks
   any in-flight book as considered, so it can't double-fire (round-2 #5).
@@ -285,7 +285,10 @@ unrelated `instructHash`/`renderedInstructHashes` "liveInstruct render" comments
   the *exact* render the shell first mounts is seeded as pre-existing and skipped
   (covered by the manual button); and a book whose analysis finished while the app
   was closed is treated as pre-existing on next launch. Both are the conservative
-  side of the trade (skip, don't double-spend).
+  side of the trade (skip, don't double-spend). **Amended by #3435:** a book whose
+  own run started and did not finish is marked `prosodyAnnotated: false` and is
+  re-run in the background when next opened (a chapter holding audio keeps its
+  text); a book with the watermark unset is still never re-run.
 - Multi-book: each book's Phase 3 is a separate background stream sharing the
   per-model analyzer rate-limit bucket (same as today's button). The trigger's
   per-book guard keeps concurrent books' passes independent. No per-manuscript
