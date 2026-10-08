@@ -225,10 +225,13 @@ comparison, see the edge list above). The merge step that closes this, run
    a commit on a merged PR's branch does not count, so a lane that minted an
    ID and renumbered it before merging (#3525's B103) never exempts the other
    lane's live copy. A row `main` held and then dropped was discharged there,
-   whoever published the page. One rare case still reads as a discharge: two
-   lanes mint the same ID, one reaches `main` and is discharged there, and
-   the other's copy is still live. Both lanes must have slipped past the
-   live-collision and merged-lane collision checks for that to happen.
+   whoever published the page. Two rare cases still read as a discharge.
+   Two lanes mint the same ID, one reaches `main` and is discharged there,
+   and the other's copy is still live; both lanes must have slipped past the
+   live-collision and merged-lane collision checks for that to happen. And
+   `main` merges a lane's row and then reverts that merge, and a lane
+   re-landing the row publishes it: its live copy reads as discharged until
+   the re-land merges.
    Otherwise **who published the live page decides** (#3529). The check finds the commit that stamped the page's
    `data-publish-id`: the **oldest** commit that introduced it, which is the
    commit step 3's `git log --all -S` names, never the merge commit that later
@@ -338,9 +341,11 @@ comparison, see the edge list above). The merge step that closes this, run
        slipping through unreported, not to mute the check wholesale.
    - **`unmerged-lane-row: <ID>`** (#3529) — the live page carries a row that
      belongs to a lane `origin/main` has not merged. The error names the row's
-     **owner**: the commit that first committed it and that commit's branch,
-     with the `gh pr list --head <branch> --state all` that finds its PR. It
-     never names whoever merely carried the row in a union. Publishing your
+     **owner**: the oldest commit that introduced the live row itself, found
+     by its ID and title (never a commit `origin/main` already contains, and
+     never another lane's row under the same ID), with the branches that hold
+     it and the `gh pr list --state all --search <commit>` that finds its PR.
+     It never names whoever merely carried the row in a union. Publishing your
      tracked file would delete the row. It is not yours, so **never name it in
      `--discharging`**. Do one of three things. **The exception:** a row in a
      group your live view has no section for (that lane added a new group
@@ -369,16 +374,19 @@ comparison, see the edge list above). The merge step that closes this, run
      regenerated ones. Rebuild it with `--build-union <out>`.
    - **`retired-carried-row: <ID>`** — a "Retired carried rows" entry the
      check will not honour: its PR is open or merged (an open lane's row must
-     still be carried), `gh` could not read it, the PR does not own the row,
-     or the table is malformed. The PR owns the row when its head branch is
-     the branch that first committed the row, the one `unmerged-lane-row`
-     names. When that branch is not in this checkout, the owner cannot be
-     determined and the entry is refused; fetch it with
-     `git fetch origin pull/<N>/head:<branch>` and re-run. Fix or remove the
-     entry. When `gh` is unavailable, the entry is accepted with a
-     **`retired-row-warning`** instead. Confirm by hand that the PR is closed
-     unmerged and owns the row (`gh pr view <N> --json
-     state,mergedAt,headRefName`) before you publish.
+     still be carried), `gh` could not read it or did not report its
+     commits, the PR does not own the row, or the table is malformed. The PR
+     owns the row when the commit that introduced the live row, the one
+     `unmerged-lane-row` names, is one of the PR's own commits
+     (`gh pr view <N> --json commits`). Branch names play no part. The
+     PR's own commits are searched too, so a deleted branch or a fork's
+     needs no local ref. When this checkout has neither that commit nor the
+     PR's commits, the owner cannot be determined and the entry is refused:
+     run `git fetch origin` and re-run. Fix or remove the entry. When `gh`
+     is unavailable, the entry is accepted with a **`retired-row-warning`**
+     instead. Confirm by hand that the PR is closed unmerged and that one of
+     its commits introduced the row (`gh pr view <N> --json
+     state,mergedAt,commits`) before you publish.
    - **`row-id-collision: <ID>`** (#3529) — another lane allocated the same ID
      for a different row: either it is live under another title, or it is on
      `origin/main` under another title and absent from the merge-base you
@@ -492,7 +500,11 @@ comparison, see the edge list above). The merge step that closes this, run
    including a `### <ID>` heading inside a fenced example. It is not
    allocate-once-proof: the colliding ID that reached `main` and was
    discharged while the other lane's copy is still live (step 2) reads as a
-   discharge. Each lookup that a failing row needs costs a few seconds of
+   discharge. Nor is it revert-proof: a row `main` merged and then reverted
+   reads as discharged while a re-landing lane's copy is live, until the
+   re-land merges (step 2). A row's owner is found by its summary line, so
+   two lanes that wrote the byte-identical ID and title cannot be told
+   apart, and the older is named. Each lookup that a failing row needs costs a few seconds of
    `git log` on this repo: the ever-carried one, and the owner one, which a
    retired row the live page still carries also needs. A run with several
    such rows takes a minute or more.
@@ -669,13 +681,20 @@ was closed unmerged, and the reason (no `|` in it). The change goes through a PR
 like any other register edit. `--against-published` then drops the row from the
 set that must be carried, so a publish without it goes green. When `gh` is
 installed and authenticated, the check first confirms two things. The PR must
-be CLOSED and not merged. And it must **own** the row: its head branch must be
-the branch that first committed the row (#3529 decision 4). An open or merged
-PR fails the check, naming that PR. So does a PR whose branch is not the row's
-owner, naming both branches, and a row whose owning branch is not in this
-checkout. So a wrong PR number cannot mute a live lane. **Without `gh`, the
-check prints a warning and accepts the entry,** so confirm both by hand with
-`gh pr view <N> --json state,mergedAt,headRefName` before you publish. `npm run
+be CLOSED and not merged. And it must **own** the row: the commit that
+introduced the live row, found by the row's ID and title and never a commit
+`main` already contains, must be one of the PR's own commits (#3529 decision
+5). An open or merged PR fails the check, naming that PR. So does a PR whose
+commits do not include that commit, naming the PR and the commit, and a row
+whose introducing commit this checkout cannot find (run `git fetch origin`
+and re-run). Branch names play no part, so a closed PR that reused the
+owner's branch name, or one stacked on the owner's branch and opened against
+it, cannot mute the owner's live row. The check does not prove that no other
+PR carries the commit, though: a closed PR opened against `main` from a
+branch stacked on the owner's lists the owner's commits too, and is honoured.
+**Without `gh`, the check prints a warning and accepts the entry,** so confirm
+both by hand with `gh pr view <N> --json state,mergedAt,commits` before you
+publish. `npm run
 check:onbox-register` validates the table's shape: a row ID, a `#<N>` PR
 reference, a `YYYY-MM-DD` date, a non-empty reason, one entry per row, and no
 row this register still carries. Keep the table even when it is empty.
