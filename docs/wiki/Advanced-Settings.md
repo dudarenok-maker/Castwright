@@ -10,8 +10,8 @@ The knobs are grouped into a collapsible, side-nav-indexed accordion:
 LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
-memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
-attribution — 120 knobs across 12 groups in total. High-risk groups (marked
+memory, analyzer rate limits, LAN access & device tokens, and dialogue-structure
+attribution — 114 knobs across 12 groups in total. High-risk groups (marked
 with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
@@ -334,22 +334,15 @@ RAM/VRAM recycle-and-restart thresholds. See
 [Troubleshooting](Troubleshooting#gpu-capacity--vram-placement) if an op
 won't place on a card it should fit, or the eGPU drops off the bus.
 
-## 10. Gemini rate limits
+## 10. Analyzer rate limits
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/10-gemini-rate-limits-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/10-gemini-rate-limits.png">
-  <img alt="Gemini rate limits" src="images/advanced-settings/10-gemini-rate-limits.png">
+  <img alt="Analyzer rate limits" src="images/advanced-settings/10-gemini-rate-limits.png">
 </picture>
 
-| Knob | What it does | Default | Range | Apply | Risk |
-|---|---|---|---|---|---|
-| Gemma 4 31B RPM | Requests-per-minute cap | 30 | integer, min 1 | restart · app | low |
-| Gemma 4 31B TPM | Input-tokens-per-minute cap; 0 = unlimited sentinel | 16000 | integer, min 0 | restart · app | low |
-| Gemma 4 31B RPD | Requests-per-day cap | 14400 | integer, min 1 | restart · app | low |
-| Gemma 4 26B A4B RPM | Requests-per-minute cap | 30 | integer, min 1 | restart · app | low |
-| Gemma 4 26B A4B TPM | Input-tokens-per-minute cap; 0 = unlimited sentinel | 16000 | integer, min 0 | restart · app | low |
-| Gemma 4 26B A4B RPD | Requests-per-day cap | 14400 | integer, min 1 | restart · app | low |
+Per-model request, token and daily caps for Gemini models and OpenAI-compatible endpoint models, edited in the per-model table in this section. GEMINI_{RPM,TPM,RPD}_<slug> environment variables still win for Gemini models. Saved gemma overrides from earlier versions are migrated into the table.
 
 ## 11. LAN access & device tokens
 

@@ -10,7 +10,7 @@ export const GROUPS: ConfigGroup[] = [
   { id: 'qa-gates', label: 'Per-sentence QA gates', help: 'Acoustic and ASR checks applied before assembly.', risk: 'low', collapsedByDefault: false },
   { id: 'audio-loudness', label: 'Audio loudness targets', help: 'EBU R128 normalization targets.', risk: 'low', collapsedByDefault: false },
   { id: 'gpu-lifecycle', label: 'GPU arbitration, memory & lifecycle', help: 'Idle-eviction TTLs, the per-device VRAM reserve, and sidecar recycle/restart thresholds. Footguns live here.', risk: 'high', collapsedByDefault: true },
-  { id: 'rate-limits', label: 'Gemini rate limits', help: 'Per-model request/token/day caps for the Gemini API.', risk: 'low', collapsedByDefault: false },
+  { id: 'rate-limits', label: 'Analyzer rate limits', help: 'Per-model request/token/day caps for Gemini models and OpenAI-compatible endpoints. Edit them in the per-model table in this section; GEMINI_{RPM,TPM,RPD}_<slug> env vars still win for Gemini ids.', risk: 'low', collapsedByDefault: false },
   { id: 'lan-access', label: 'LAN access & device tokens', help: 'Lifetime of browser/device authorizations minted from Admin.', risk: 'low', collapsedByDefault: false },
   { id: 'analyzer-structure', label: 'Dialogue-structure attribution', help: 'Deterministic structure engine that corrects/flags stage-2 attributions.', risk: 'medium', collapsedByDefault: false },
 ];
@@ -1049,68 +1049,6 @@ export const KNOBS: ConfigKnob[] = [
         + 'Cached for 60s per probe. Default on; turn off to skip the diagnostic overhead if this information is not needed.',
     type: 'boolean',
     default: true,
-    apply: 'live', risk: 'low',
-  },
-
-  // ── rate-limits ───────────────────────────────────────────────────────────
-  {
-    key: 'rate.rpm.gemma',
-    env: 'GEMINI_RPM_GEMMA_4_31B_IT',
-    group: 'rate-limits',
-    label: 'Gemma 4 31B RPM',
-    help: 'Requests-per-minute cap for gemma-4-31b-it. Override to adjust the free-tier limit (default 30 RPM from AI Studio 2026-05-16). The limiter waits proactively so no 429s are issued.',
-    type: 'integer', min: 1,
-    default: 30, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpm in analyzer/rate-limit.ts
-    apply: 'live', risk: 'low',
-  },
-  {
-    key: 'rate.tpm.gemma',
-    env: 'GEMINI_TPM_GEMMA_4_31B_IT',
-    group: 'rate-limits',
-    label: 'Gemma 4 31B TPM',
-    help: 'Input-tokens/min for gemma-4-31b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
-    type: 'integer', min: 0,
-    default: 16000, // ← BUILTIN_LIMITS['gemma-4-31b-it'].tpm in analyzer/rate-limit.ts (line 41); 0/"unlimited" = Infinity sentinel
-    apply: 'live', risk: 'low',
-  },
-  {
-    key: 'rate.rpd.gemma',
-    env: 'GEMINI_RPD_GEMMA_4_31B_IT',
-    group: 'rate-limits',
-    label: 'Gemma 4 31B RPD',
-    help: 'Requests-per-day cap for gemma-4-31b-it. Default 14400 (free-tier from AI Studio 2026-05-16). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
-    type: 'integer', min: 1,
-    default: 14400, // ← BUILTIN_LIMITS['gemma-4-31b-it'].rpd in analyzer/rate-limit.ts
-    apply: 'live', risk: 'low',
-  },
-  {
-    key: 'rate.rpm.gemma26',
-    env: 'GEMINI_RPM_GEMMA_4_26B_A4B_IT',
-    group: 'rate-limits',
-    label: 'Gemma 4 26B A4B RPM',
-    help: 'Requests-per-minute cap for gemma-4-26b-a4b-it (free tier 30). The limiter waits proactively so no 429s are issued.',
-    type: 'integer', min: 1,
-    default: 30,
-    apply: 'live', risk: 'low',
-  },
-  {
-    key: 'rate.tpm.gemma26',
-    env: 'GEMINI_TPM_GEMMA_4_26B_A4B_IT',
-    group: 'rate-limits',
-    label: 'Gemma 4 26B A4B TPM',
-    help: 'Input-tokens/min for gemma-4-26b-a4b-it (free tier 16000). Set 0 (or "unlimited") for a paid key.',
-    type: 'integer', min: 0,
-    default: 16000,
-    apply: 'live', risk: 'low',
-  },
-  {
-    key: 'rate.rpd.gemma26',
-    env: 'GEMINI_RPD_GEMMA_4_26B_A4B_IT',
-    group: 'rate-limits',
-    label: 'Gemma 4 26B A4B RPD',
-    help: 'Requests-per-day cap for gemma-4-26b-a4b-it (free tier 14400). The limiter raises DailyQuotaExhaustedError rather than firing a 429.',
-    type: 'integer', min: 1,
-    default: 14400,
     apply: 'live', risk: 'low',
   },
 

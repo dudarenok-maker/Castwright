@@ -99,6 +99,59 @@ function migrateLegacyEagerLoadFields(raw: unknown): unknown {
   return next;
 }
 
+/* #3084 — the six rate.{rpm,tpm,rpd}.gemma[26] registry knobs (#3139) were retired
+   into analyzerRateLimitsByModel. Move any saved override into the map (a value the map
+   already holds wins) and drop the dead configOverrides keys. No-op once none remain. */
+const LEGACY_RATE_KNOBS: ReadonlyArray<{ key: string; model: string; field: 'rpm' | 'tpm' | 'rpd' }> = [
+  { key: 'rate.rpm.gemma', model: 'gemma-4-31b-it', field: 'rpm' },
+  { key: 'rate.tpm.gemma', model: 'gemma-4-31b-it', field: 'tpm' },
+  { key: 'rate.rpd.gemma', model: 'gemma-4-31b-it', field: 'rpd' },
+  { key: 'rate.rpm.gemma26', model: 'gemma-4-26b-a4b-it', field: 'rpm' },
+  { key: 'rate.tpm.gemma26', model: 'gemma-4-26b-a4b-it', field: 'tpm' },
+  { key: 'rate.rpd.gemma26', model: 'gemma-4-26b-a4b-it', field: 'rpd' },
+];
+
+/* The smallest value analyzerRateLimitsByModel's schema accepts per field. A saved
+   override below it is dropped, never copied: copying it would make
+   userSettingsSchema.safeParse fail, and readUserSettings's whole-object safeParse would then
+   reset EVERY saved setting to defaults (P8) — that's the schema-validation-failure
+   path; an unparseable file is recovered from its .bak.N backups, else it falls back
+   with a corruption flag, so it never reaches this code. The
+   same holds for an integer past 2^53: zod 4's `.int()` accepts safe integers only,
+   so the copy test is Number.isSafeInteger, not Number.isInteger. */
+const LEGACY_RATE_MIN: Readonly<Record<'rpm' | 'tpm' | 'rpd', number>> = { rpm: 1, tpm: 0, rpd: 1 };
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Runs on every settings READ, before schema validation. It never throws. It copies a
+    legacy value only when the map's own schema accepts it. It leaves any shape it does
+    not recognise to the schema. */
+export function migrateLegacyRateLimitOverrides(raw: unknown): unknown {
+  if (!isPlainObject(raw) || !isPlainObject(raw.configOverrides)) return raw;
+  const overrides = raw.configOverrides;
+  if (!LEGACY_RATE_KNOBS.some((k) => Object.hasOwn(overrides, k.key))) return raw;
+  const nextOverrides: Record<string, unknown> = { ...overrides };
+  for (const { key } of LEGACY_RATE_KNOBS) delete nextOverrides[key];
+  const existing = raw.analyzerRateLimitsByModel;
+  if (existing !== undefined && !isPlainObject(existing)) {
+    /* A malformed saved map is the schema's to judge: drop only the dead knob keys. */
+    return { ...raw, configOverrides: nextOverrides };
+  }
+  const map: Record<string, unknown> = { ...(existing ?? {}) };
+  for (const { key, model, field } of LEGACY_RATE_KNOBS) {
+    const value = overrides[key];
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < LEGACY_RATE_MIN[field]) continue;
+    const current = map[model];
+    if (current !== undefined && !isPlainObject(current)) continue;
+    const entry: Record<string, unknown> = { ...(current ?? {}) };
+    if (entry[field] === undefined) entry[field] = value;
+    map[model] = entry;
+  }
+  return { ...raw, configOverrides: nextOverrides, analyzerRateLimitsByModel: map };
+}
+
 /* #3141 step 2 — the four legacy Account-settings analyzer knobs
    (ollamaUrl, analyzerPhase0Model, analyzerPhase1Model,
    analyzerPhase1MinLagChapters) are no longer read at runtime — step 1
@@ -323,6 +376,23 @@ export const userSettingsSchema = z.object({
      synchronously by resolveKeepAliveSeconds. Optional-with-default so legacy
      files load unchanged. */
   analyzerKeepAliveByModel: z.record(z.string(), z.number().int()).default({}),
+  /* #3084 — per-model analyzer rate limits (Advanced → Analyzer rate limits). Sparse:
+     model id (Gemini id or `openai:<endpointId>::<model>`) → any of rpm/tpm/rpd.
+     Gemini ids: env → this map → built-in table; endpoint ids: this map → unlimited.
+     `tpm: 0` = unlimited. The general PUT writes the whole map (NOT in FORBIDDEN_KEYS);
+     resolveLimits reads it synchronously on every acquire. */
+  analyzerRateLimitsByModel: z
+    .record(
+      z.string(),
+      z
+        .object({
+          rpm: z.number().int().min(1).optional(),
+          tpm: z.number().int().min(0).optional(),
+          rpd: z.number().int().min(1).optional(),
+        })
+        .strict(),
+    )
+    .default({}),
   /* #3084 PR 3b — named OpenAI-compatible analyzer endpoints. Returned by GET.
      NOT writable through the general PUT (FORBIDDEN_KEYS): the dedicated
      /api/analyzer/endpoints routes are the only writers, via mutateUserSettings. */
@@ -405,6 +475,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   /* Per-model analyzer keep-alive — empty by default; every model falls
      through to the flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS (30s). */
   analyzerKeepAliveByModel: {},
+  analyzerRateLimitsByModel: {},
   /* #3084 — no endpoints and no keys on a fresh install. */
   analyzerEndpoints: [],
   analyzerEndpointKeys: {},
@@ -1035,7 +1106,7 @@ async function performUserSettingsRead(): Promise<UserSettings> {
   const explicitKeys = new Set(Object.keys(raw as Record<string, unknown>));
 
   const eagerLoadMigrated = migrateLegacyEagerLoadFields(raw);
-  const migrated = migrateLegacyAnalyzerModelFields(eagerLoadMigrated);
+  const migrated = migrateLegacyRateLimitOverrides(migrateLegacyAnalyzerModelFields(eagerLoadMigrated));
   if (migrated !== raw) {
     await writeJsonAtomic(USER_SETTINGS_PATH, migrated, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } }).catch(
       (err) => {

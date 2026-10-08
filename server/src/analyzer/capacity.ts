@@ -60,8 +60,8 @@ export function resolveCapacity(sel: { engine: AnalysisEngine; model: string }):
     maxOutputTokens: listed?.outputTokenLimit ?? GEMINI_FALLBACK_MAX_OUTPUT_TOKENS,
     /* #3084 wave 2b (spec §6) — size the request to the smaller of the registry
        cap and the model's per-minute token limit, so one request never exceeds
-       a TPM an operator lowered (env GEMINI_TPM_<SLUG> or a saved rate.tpm.*
-       override). tpm is Infinity for "unlimited", which leaves the cap. */
+       a TPM an operator lowered (env GEMINI_TPM_<SLUG> or a saved analyzerRateLimitsByModel
+       tpm). tpm is Infinity for "unlimited", which leaves the cap. */
     perRequestInputCap: Math.min(cap, resolveLimits(sel.model).tpm),
   };
 }
