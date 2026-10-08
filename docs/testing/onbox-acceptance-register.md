@@ -6021,7 +6021,7 @@ With `analyzer.ollama.structuredOutput` set to `json`, then `off`, analyse one r
 
 Record the validation-retry count for each mode against the default `schema` run on the same chapter. Criteria: [`3084-openai-analyzer-onbox-acceptance.md` §4](3084-openai-analyzer-onbox-acceptance.md).
 
-### B106 · The background emotion re-run yields to and is aborted by real work on a real analyzer ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama; a real analysed book; no TTS engine**
+### B106 · The background emotion re-run yields to and is aborted by real work on a real analyzer ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama; a real analysed book; a TTS engine only for (c)**
 
 Opening an analysed book whose `state.json` has `prosodyAnnotated: false` re-runs emotion detection in the background; the run is meant to stop the moment the user starts real work. Mock mode has no analyzer, so only the box can show the requests actually stop. Take such a book (or set the flag by hand on a copy) and open it:
 

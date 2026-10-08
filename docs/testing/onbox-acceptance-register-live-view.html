@@ -858,7 +858,7 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">B106</span><span class="iname">The background emotion re-run yields to and is aborted by real work on a real analyzer (#3435)</span><span class="risk low">3 observations</span><span class="chev">›</span></summary>
+      <summary><span class="num">B106</span><span class="iname">The background emotion re-run yields to and is aborted by real work on a real analyzer (#3435)</span><span class="risk low">5 observations</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Opening an analysed book whose <code>state.json</code> has <code>prosodyAnnotated: false</code> re-runs emotion detection in the background; the run should stop the moment the user starts real work. Mock mode has no analyzer, so only the box shows the requests actually stop.</p>
         <ul>
@@ -869,7 +869,7 @@
           <li><b>Resumes:</b> reopen the book and the run starts again.</li>
           <li><b>Reload:</b> reload (or close and reopen the app) mid-run, then open the book again — the run starts again, because it marked the book <code>false</code> as it started.</li>
         </ul>
-        <p class="src">Local Ollama, a real analysed book, no TTS engine · plan <code>287</code> “On-box acceptance owed” item 3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3435">#3435</a></p>
+        <p class="src">Local Ollama, a real analysed book, a TTS engine only for (c) · plan <code>287</code> “On-box acceptance owed” item 3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3435">#3435</a></p>
       </div>
     </details>
   </section>
