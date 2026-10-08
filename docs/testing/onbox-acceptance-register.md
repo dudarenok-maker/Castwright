@@ -554,7 +554,7 @@ setup rather than repeatedly loading and evicting models.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 6 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 7 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
@@ -563,11 +563,16 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**61 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-06 (#3084 wave 3b, PR 3b), 59 → 61 on this branch (57 → 59 on `main`).** Rows **B105**
+> **Last change: 2026-10-08 (#3435, plan 287), 61 → 62.** Row **B106** (the
+> background emotion re-run yields to and is aborted by real work on a real
+> analyzer) added from plan 287's "On-box acceptance owed" item 3. Group B
+> 6 → 7. `next-id` bumped B106 → B107 in the same change. Owed; not run here.
+>
+> **Prior change: 2026-10-06 (#3084 wave 3b, PR 3b), 59 → 61 on this branch (57 → 59 on `main`).** Rows **B105**
 > (Ollama `format` modes on a real model: `json`, then `off`, against `schema`)
 > and **E112** (Gemini `schema` mode, `responseJsonSchema` accepted or rejected
 > on a real key) added from #3084 PR 3b's run sheet
@@ -5888,7 +5893,7 @@ kept-and-gates) for the exact defect this closes.
 
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B106 -->
+<!-- next-id: B107 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -6015,6 +6020,17 @@ With `analyzer.ollama.structuredOutput` set to `json`, then `off`, analyse one r
 - a daemon that rejects a mode fails as "analyzer rejected the request" naming `analyzer.ollama.structuredOutput`.
 
 Record the validation-retry count for each mode against the default `schema` run on the same chapter. Criteria: [`3084-openai-analyzer-onbox-acceptance.md` §4](3084-openai-analyzer-onbox-acceptance.md).
+
+### B106 · The background emotion re-run yields to and is aborted by real work on a real analyzer ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama; a real analysed book; no TTS engine**
+
+Opening an analysed book whose `state.json` has `prosodyAnnotated: false` re-runs emotion detection in the background; the run is meant to stop the moment the user starts real work. Mock mode has no analyzer, so only the box can show the requests actually stop. Take such a book (or set the flag by hand on a copy) and open it:
+
+- **Starts.** The "Detecting emotions" pill shows and prosody requests reach the analyzer.
+- **(a) Analysis.** Mid-run, start an analysis for the book. In the server log the prosody requests for that book stop (no further prosody calls for it), and the book stays `prosodyAnnotated: false`.
+- **(b) Switch book.** Same, but open another book instead. Same observation.
+- **Resumes.** Reopen the book: the run starts again.
+
+Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 3. Clears when (a), (b) and the resume are recorded with the last prosody log line for each abort.
 
 ---
 

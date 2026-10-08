@@ -498,7 +498,7 @@ Frontend:
 
 **Other T7 steps:**
 - **Reviewer catalogue** (`.claude/skills/pr-review-gate/references/reviewer-brief.md`): port entries #17 and #18 from 9a063ea6 (`git show 9a063ea6:.claude/skills/pr-review-gate/references/reviewer-brief.md`). Add "a sentinel that is also a valid value" and "a flag read as 'phase N finished' that is written before phase N".
-- **On-box register** (Before-shipping step 3): add the two rows under "On-box acceptance owed" to `docs/testing/onbox-acceptance-register.md`, update the live view `docs/testing/onbox-acceptance-register-live-view.html`, run `npm run register:build` and `npm run check:onbox-register`, and publish per the register's own "Live view" procedure.
+- **On-box register** (Before-shipping step 3): add the three rows under "On-box acceptance owed" to `docs/testing/onbox-acceptance-register.md`, update the live view `docs/testing/onbox-acceptance-register-live-view.html`, run `npm run register:build` and `npm run check:onbox-register`, and publish per the register's own "Live view" procedure.
 - **#3436:** post a comment re-scoping it (spec §2.6).
 - **#3084:** comment that decision E supersedes P20/N4 on the main route, linking the rewritten test.
 - **#3436:** include the full writer list (spec §2.6), including the exclude toggle an Include calls before its subset POST (A17).
@@ -542,6 +542,7 @@ Recorded in `docs/testing/onbox-acceptance-register.md` by T7:
 
 1. **Abort and drain on a local Ollama analyzer.** (a) Pipelined run, Pause mid-Phase 1, click Retry immediately: refused with the draining message. (b) Same, but force a halt instead (stop the model mid-Phase 1 so one chapter throws). In both, observe in the server log `[analysis] main run drained manuscript=<id>` **before** `[analysis-subset] start manuscript=<id>`, no cache or edits write from the main job after the drained line, no `drain deadline exceeded` line, and `ollama ps` showing the model released after the drain. Note each drain's duration.
 2. **A Resume on a cast-confirmed book with designed voices** (invariant 6; the 2026-07-14 voice-strip incident class). After the run, every designed voice field is intact in cast.json.
+3. **The background emotion re-run yields to and is aborted by real work on a real analyzer** (B106; #3435). Open a book whose `state.json` has `prosodyAnnotated: false` and confirm the "Detecting emotions" re-run starts. Mid-run, (a) start an analysis, then separately (b) switch to another book. In both, the server log shows the prosody requests for that book stop (no further prosody calls for it) and `state.json` still has `prosodyAnnotated: false`. Reopen the book and confirm the run resumes. Cover: the open-time trigger re-runs only an explicit `false`, never an unset watermark (pinned in mock mode by `e2e/prosody-rerun-on-open.spec.ts`; the real-analyzer abort is only provable on the box).
 
 ## Out of scope
 
