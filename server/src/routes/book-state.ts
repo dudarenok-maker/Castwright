@@ -32,9 +32,10 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { withKeyLock, requestFailureMessage } from '../workspace/file-lock.js';
+import { withKeyLock, requestFailureMessage, isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { assertRevisionsResettable, resetRevisions } from '../workspace/revisions-store.js';
+import { UnsupportedSchemaError } from '../workspace/schema-migrate.js';
 import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
 import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile, type StatsPutBody } from '../workspace/listen-stats.js';
@@ -1207,7 +1208,16 @@ async function applyReparse(
        file is replaced (as the rm did); a newer-schema one was already
        refused by the route's preflight. This arm sits BESIDE the
        withCastLock arm, never inside it. */
-    resetRevisions(bookDir),
+    /* Plan 286 (invariant 8) — this arm's fs error embeds the absolute
+       workspace path, and both handlers answer (e as Error).message. Log it raw;
+       surface a fixed sentence. A lock timeout and a newer-schema refusal pass
+       through unchanged: the handlers' requestFailureMessage curates the first,
+       and the second's text is fixed and path-free. */
+    resetRevisions(bookDir).catch((e: unknown) => {
+      console.error('[book-state] revisions reset failed', e);
+      if (isLockAcquisitionTimeout(e) || e instanceof UnsupportedSchemaError) throw e;
+      throw new Error("Couldn't reset this book's A/B review history.");
+    }),
     existsSync(ad) ? rm(ad, { recursive: true, force: true }) : Promise.resolve(),
   ]);
 

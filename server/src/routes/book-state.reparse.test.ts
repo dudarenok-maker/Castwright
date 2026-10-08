@@ -47,6 +47,15 @@ vi.mock('../workspace/state-io.js', async (importOriginal) => {
   return { ...actual, readJson: vi.fn(actual.readJson) };
 });
 
+/* Plan 286 Task 4 — a hoisted passthrough mock so the two plan-286 tests below
+   can force the reset arm to reject. Same idiom as the state-io mock above:
+   defaults to the real implementation, so every other test in this file is
+   unaffected. */
+vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+  return { ...real, resetRevisions: vi.fn(real.resetRevisions) };
+});
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
 const CACHE_DIR = join(SERVER_ROOT, 'handoff', 'cache');
@@ -130,6 +139,24 @@ beforeEach(() => {
   }
   if (existsSync(cachePath)) rmSync(cachePath, { force: true });
 });
+
+/* A12 / plan 286 — one sentinel per sibling arm of applyReparse's Promise.all. */
+function seedSiblingSentinels() {
+  writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({ characters: [] }));
+  mkdirSync(join(bookDir, 'audio'), { recursive: true });
+  writeFileSync(join(bookDir, 'audio', '01-chapter-one.mp3'), 'LIVE');
+  mkdirSync(CACHE_DIR, { recursive: true });
+  writeFileSync(cachePath, '{}');
+}
+/* The 500 arrives when the reset arm rejects; wait until every sibling
+   arm's last fs effect has landed, so none outlives the test. */
+async function awaitSiblingArms() {
+  await vi.waitFor(() => {
+    expect(existsSync(join(bookDir, '.audiobook', 'cast.json'))).toBe(false);
+    expect(existsSync(join(bookDir, 'audio'))).toBe(false);
+    expect(existsSync(cachePath)).toBe(false);
+  });
+}
 
 describe('reparse handler — preserves manuscript-edits.json', () => {
   it('keeps the edits file on disk after reparse', async () => {
@@ -248,6 +275,51 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
       rmSync(join(bookDir, 'audio'), { recursive: true, force: true });
       rmSync(revisionsPath, { force: true });
     }
+  });
+
+  /* Plan 286 (Task 4, invariant 8) — a resetRevisions failure that names a path
+     must never reach the client. The arm logs the raw error and re-throws a
+     fixed sentence; both handlers answer (e as Error).message. */
+  it('plan 286 — a revisions reset failure naming a path answers a fixed sentence', async () => {
+    seedSiblingSentinels();
+    const { resetRevisions } = await import('../workspace/revisions-store.js');
+    vi.mocked(resetRevisions).mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "EPERM: operation not permitted, rename 'C:\\SECRET-WORKSPACE\\book\\.audiobook\\revisions.json.tmp'",
+        ),
+        { code: 'EPERM' },
+      ),
+    );
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
+    await awaitSiblingArms();
+    const logged = err.mock.calls.flat().map(String).join(' ');
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Couldn't reset this book's A/B review history." });
+    expect(res.text).not.toContain('SECRET-WORKSPACE');
+    expect(logged).toContain('SECRET-WORKSPACE'); // the raw error is logged
+  });
+
+  /* A lock timeout is NOT a path leak: it must keep the curated contention
+     sentence the routes already answer. Red evidence is mutation 3, which flips
+     this test alone. */
+  it('plan 286 — a lock timeout on the reset still answers the curated contention body', async () => {
+    seedSiblingSentinels();
+    const { resetRevisions } = await import('../workspace/revisions-store.js');
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+      '../workspace/file-lock.js'
+    );
+    vi.mocked(resetRevisions).mockRejectedValueOnce(
+      new LockAcquisitionTimeoutError('revisions:C:/SECRET-WORKSPACE/book', 10_000),
+    );
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
+    await awaitSiblingArms();
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
   });
 });
 
