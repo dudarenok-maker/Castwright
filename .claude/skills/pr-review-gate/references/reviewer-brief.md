@@ -254,6 +254,21 @@ recite:
     persistence middleware will save to — and test with the stage and the
     slices moved independently, including with the real persistence
     middleware so a disk write to the wrong book is visible.
+26. **A job started under a condition, but tracked and cancelled by when it
+    started, in a single slot** — `src/components/layout.tsx`, PR #3505 gate
+    pass 7: the open trigger's background emotion run was started only while
+    its book was open on Confirm or Generate, but nothing stopped it when that
+    stopped being true, and the yield tracker (`prosodyBackground`) was one
+    slot that the next background run overwrote. A second instance silently
+    untracked the first, so the first's yield or cancel never fired: it kept
+    applying annotations to a book being rendered or re-analysed, and opening
+    three books in turn left three whole-book runs in flight. Fixed in
+    b3bf65be by aborting the run the moment its book stops being the open
+    trigger's book (`selectOpenProsodyBookId`) or an analysis starts for it,
+    which also makes the single slot sufficient (#3435). Checkable: for every
+    detached job, name the condition it may run under; ask what stops it when
+    that condition ends; and ask what a second concurrent instance does to the
+    first's registration.
 
 ### Keeping the catalogue current
 
