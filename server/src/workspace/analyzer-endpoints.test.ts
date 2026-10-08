@@ -243,6 +243,7 @@ describe('findEndpointReferences', () => {
     const FIELD_EXCLUDED = new Set([
       'analyzerKeepAliveByModel', // map keyed by Ollama tag, not a selection
       'analyzerRateLimitsByModel', // map keyed by model id, not a selection (#3084 PR 3c)
+      'analyzerCapabilitiesByModel', // Test records keyed by model id, not a selection (#3084 PR 3c)
       'defaultTtsModelKey', // TTS
       'defaultTtsModelKeyExplicit', // TTS
       'dualModelEnabled', // boolean toggle for the two-model pipeline (user-settings.ts:268), not an id

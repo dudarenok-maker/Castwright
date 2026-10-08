@@ -17,6 +17,20 @@ export function stripThink(raw: string): { text: string; unterminated: boolean }
   return { text: raw, unterminated: false };
 }
 
+/** The candidate strings parseAndValidate tries to JSON.parse, in its order (see its comment):
+    fence strip, trailing-prose trim, structural-punctuation repair, the quote walker, and the
+    combinations. Exported so the Test action's marker probe (#3084 P7) accepts exactly the
+    outputs a run accepts. The caller dedupes, as parseAndValidate's loop does. */
+export function jsonParseCandidates(raw: string): string[] {
+  const stripped = stripCodeFences(raw);
+  const trimmed = trimTrailingProse(stripped);
+  const trimThenStruct = repairStructuralPunctuation(trimmed);
+  const quoteFixed = repairUnescapedQuotes(stripped);
+  const quoteThenTrim = trimTrailingProse(quoteFixed);
+  const quoteThenTrimThenStruct = repairStructuralPunctuation(quoteThenTrim);
+  return [stripped, trimmed, trimThenStruct, quoteFixed, quoteThenTrim, quoteThenTrimThenStruct];
+}
+
 export type ParseResult<T> =
   | { ok: true; value: T; repaired: boolean }
   | { ok: false; kind: 'invalid-json'; detail: string }
@@ -59,24 +73,11 @@ export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseRes
      warn "required JSON cleanup (markdown fence and/or unescaped quotes)" —
      nothing of the sort happened (pr-review-gate pass 1 finding 6). */
   const afterThink = stripThink(raw).text;
-  const stripped = stripCodeFences(afterThink);
 
   /* Build the candidate list and dedupe so each parse is attempted at
-     most once. */
-  const trimmed = trimTrailingProse(stripped);
-  const trimThenStruct = repairStructuralPunctuation(trimmed);
-  const quoteFixed = repairUnescapedQuotes(stripped);
-  const quoteThenTrim = trimTrailingProse(quoteFixed);
-  const quoteThenTrimThenStruct = repairStructuralPunctuation(quoteThenTrim);
-
-  const candidates: string[] = [
-    stripped,
-    trimmed,
-    trimThenStruct,
-    quoteFixed,
-    quoteThenTrim,
-    quoteThenTrimThenStruct,
-  ];
+     most once. The list itself lives in `jsonParseCandidates` so the Test
+     action's marker probe accepts exactly the outputs a run accepts (P7). */
+  const candidates = jsonParseCandidates(afterThink);
   const seen = new Set<string>();
   let parsed: unknown;
   let winner: string | null = null;

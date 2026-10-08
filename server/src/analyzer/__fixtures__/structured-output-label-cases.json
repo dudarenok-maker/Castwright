@@ -1,0 +1,11 @@
+[
+  { "mode": "schema", "dropped": [], "outcome": null, "expected": "schema" },
+  { "mode": "schema", "dropped": ["$schema"], "outcome": null, "expected": "schema (partial)" },
+  { "mode": "schema", "dropped": ["$schema", "properties.name.minLength"], "outcome": null, "expected": "schema (partial)" },
+  { "mode": "schema", "dropped": [], "outcome": "enforced", "expected": "schema" },
+  { "mode": "schema", "dropped": [], "outcome": "ignored", "expected": "schema (not enforced)" },
+  { "mode": "schema", "dropped": ["properties.name.minLength"], "outcome": "ignored", "expected": "schema (not enforced)" },
+  { "mode": "schema", "dropped": [], "outcome": "rejected", "expected": "schema" },
+  { "mode": "json", "dropped": [], "outcome": null, "expected": "json" },
+  { "mode": "off", "dropped": [], "outcome": null, "expected": "off" }
+]

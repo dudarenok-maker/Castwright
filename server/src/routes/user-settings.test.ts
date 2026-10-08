@@ -377,6 +377,10 @@ describe('user-settings router', () => {
       /* Sparse per-model keep-alive override map (seconds). A non-empty map
          proves the field round-trips; the value is a plain integer-second. */
       analyzerKeepAliveByModel: { 'qwen3.5:4b': 300 },
+      /* #3084 PR 3c.1 — the whole per-model rate-limit map is written by the
+         general PUT (it is NOT in FORBIDDEN_KEYS), so it round-trips like any
+         other writable field. */
+      analyzerRateLimitsByModel: { 'gemma-4-31b-it': { rpm: 12 } },
     };
 
     /* Guard: every writable schema field has a sample value here. A field
@@ -393,6 +397,10 @@ describe('user-settings router', () => {
          server's FORBIDDEN_KEYS), never by the general PUT this guard probes. */
       'analyzerEndpoints',
       'analyzerEndpointKeys',
+      /* #3084 PR 3c.3 — Test-action capability records are written only by
+         writeAnalyzerCapabilityRecord (they sit in the server's FORBIDDEN_KEYS),
+         never by the general PUT this guard probes. */
+      'analyzerCapabilitiesByModel',
     ]);
     const writableKeys = Object.keys(userSettingsSchema.shape).filter((k) => !NON_WRITABLE.has(k));
     for (const key of writableKeys) {

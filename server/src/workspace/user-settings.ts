@@ -245,6 +245,29 @@ export const BACKUP_CADENCE_VALUES = ['daily', 'weekly'] as const;
 /* #3084 — one saved endpoint key, bound at save time to the base URL's origin. */
 const endpointKeyEntrySchema = z.object({ origin: z.string(), key: z.string() });
 
+const probeOutcomeSchema = z.enum(['enforced', 'ignored', 'rejected', 'accepted']);
+const probeByLevelSchema = z.record(z.string(), probeOutcomeSchema);
+/* #3084 — persisted shape of analyzer/capabilities.ts ModelCapabilityRecord (declared
+   here, not imported, so user-settings stays a leaf of the analyzer import graph). The
+   inner record keys are the reasoning level the Test requests actually sent (P7). */
+export const modelCapabilityRecordSchema = z.object({
+  serverUrl: z.string(),
+  testedAt: z.string(),
+  control: z.union([z.object({ ok: z.literal(true) }), z.object({ ok: z.literal(false), error: z.string() })]),
+  structuredOutput: z.object({
+    schema: probeByLevelSchema.optional(),
+    json: probeByLevelSchema.optional(),
+    off: probeByLevelSchema.optional(),
+  }),
+  /* Declared to match analyzer/capabilities.ts ModelCapabilityRecord EXACTLY: those two shapes
+     must be assignable in both directions under `strict`. The plan pairs a `Partial<Record<...>>`
+     in that interface with this non-optional `z.record`, which is not mutually assignable, so
+     capabilities.ts drops the `Partial` and both sides are the plain record. */
+  reasoning: z.record(z.string(), z.enum(['accepted', 'rejected'])),
+  /* 3c (A3): Ollama digest at Test time; 5a adds verdictTestedAt beside it. */
+  digest: z.string().optional(),
+});
+
 export const userSettingsSchema = z.object({
   /* config-override store — sparse key→value map for the advanced-settings
      knob resolver. Keys are dotted ConfigKnob keys (e.g.
@@ -393,6 +416,10 @@ export const userSettingsSchema = z.object({
         .strict(),
     )
     .default({}),
+  /* #3084 — Test-action records keyed by model id. Server-written only
+     (writeAnalyzerCapabilityRecord); stripped from the general PUT via FORBIDDEN_KEYS;
+     returned by GET so Settings can show the outcome. */
+  analyzerCapabilitiesByModel: z.record(z.string(), modelCapabilityRecordSchema).default({}),
   /* #3084 PR 3b — named OpenAI-compatible analyzer endpoints. Returned by GET.
      NOT writable through the general PUT (FORBIDDEN_KEYS): the dedicated
      /api/analyzer/endpoints routes are the only writers, via mutateUserSettings. */
@@ -476,6 +503,7 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
      through to the flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS (30s). */
   analyzerKeepAliveByModel: {},
   analyzerRateLimitsByModel: {},
+  analyzerCapabilitiesByModel: {},
   /* #3084 — no endpoints and no keys on a fresh install. */
   analyzerEndpoints: [],
   analyzerEndpointKeys: {},
@@ -1287,6 +1315,8 @@ const FORBIDDEN_KEYS = new Set([
      writer. Defensive-only, exactly like corruptSettingsFile above: it is never
      added to userSettingsSchema's shape, so the general PUT already strips it. */
   'droppedEndpointEntries',
+  /* #3084 Test-action records — written only by writeAnalyzerCapabilityRecord. */
+  'analyzerCapabilitiesByModel',
 ]);
 
 function stripForbiddenKeys(value: unknown): Record<string, unknown> {
@@ -1688,6 +1718,20 @@ export async function mutateUserSettings(
   });
   writeChain = next.catch(() => undefined);
   return next;
+}
+
+/** #3084 — persist one Test-action record, replacing any earlier record for the id.
+    Goes through mutateUserSettings so it serialises with endpoint and key writes. Only a
+    completed test calls it: a failed control or an inconclusive step writes nothing, so the
+    previous record stays (P7). */
+export async function writeAnalyzerCapabilityRecord(
+  modelId: string,
+  record: z.infer<typeof modelCapabilityRecordSchema>,
+): Promise<UserSettings> {
+  const validated = modelCapabilityRecordSchema.parse(record);
+  return mutateUserSettings((current) => ({
+    analyzerCapabilitiesByModel: { ...current.analyzerCapabilitiesByModel, [modelId]: validated },
+  }));
 }
 
 /** Plan 49 — resolve the Gemini API key from the canonical fallback chain:
