@@ -25,6 +25,7 @@ import {
 } from '../store/revisions-slice';
 import { flushBookPersistence } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
+import { chapterHoldsAudio } from '../store/chapter-holds-audio';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions, findSeriesBookIds } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
@@ -1209,17 +1210,21 @@ export function Layout() {
      - Detached job: void (async () => {...})() NOT tied to effect cleanup
        (survives a book-switch, round-1 H2).
      - Partial-aware watermark: writes prosodyAnnotated:true only when
-       failed === 0; on partial failure removes the book from considered so
-       a subsequent fill-only re-run can top it up (round-2 #6).
-     - Retry-safe: try/catch removes the book from considered on throw
-       (round-1 H3).
-     - Re-run on open (#3435): a run that started and did not finish —
-       skipped work (see below), a failed chapter, a throw, or a background
-       run that yielded — writes prosodyAnnotated:false for its own book, and
+       failed === 0 and nothing was skipped.
+     - Retry-safe: a run that never started (its book-state read threw)
+       removes the book from considered (round-1 H3). A run that started
+       does not — see the next point.
+     - Re-run on open (#3435): a run writes prosodyAnnotated:false for its
+       own book as it STARTS (a reload or app close mid-run leaves it
+       marked), and true only at a clean end. So a run that did not finish —
+       skipped work (see below), a failed chapter, a throw, a reload, or a
+       background run that yielded — leaves the book marked unfinished, and
        a book so marked is run again, fill-only, when it is next opened — the
-       open trigger after this effect. A book whose watermark is unset (the
-       seed passed over it) is not: pre-existing books are not
-       retro-annotated (fs-65). */
+       open trigger after this effect — and only then: a started run stays in
+       `considered`, so this trigger never restarts it (the open trigger's
+       run yields to the user's work and holds audio; this one does not). A
+       book whose watermark is unset (the seed passed over it) is not run:
+       pre-existing books are not retro-annotated (fs-65). */
   const isAnalysisComplete = (s: string) =>
     s !== 'not_analysed' && s !== 'analysing' && s !== 'unreadable' && s !== 'orphaned';
 
@@ -1261,10 +1266,6 @@ export function Layout() {
     if (prosodyInFlight.current.has(id)) return; // already running here
     if (!shouldAutoTriggerProsody(store.getState(), id)) return; // already running here / cross-tab
     prosodyInFlight.current.add(id);
-    /* #3435 — marks THIS run's book (by id, never the book the slices or the
-       stage hold) unfinished, so the open trigger re-runs it on its next open. */
-    const markUnfinished = () =>
-      api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: false } }).catch(() => {});
     void (async () => {
       // Detached: not tied to effect cleanup — survives a book-switch.
       let pillActive = false;
@@ -1304,6 +1305,14 @@ export function Layout() {
           }),
         );
         pillActive = true;
+        /* #3435 — marks THIS run's book (by id, never the book the slices or the
+           stage hold) unfinished as the run STARTS, before its first pass: a
+           run cut off by a reload or app close then leaves the mark, and the
+           open trigger re-runs the book on its next open. Only a clean end
+           below replaces it with true. */
+        await api
+          .putBookState(id, { slice: 'state', patch: { prosodyAnnotated: false } })
+          .catch(() => {});
         /* #3435 — the run outlives the book on screen, and the server never
            writes these annotations: they land in the manuscript slice, which
            holds ONE book and is saved into the book the stage names. Apply
@@ -1317,20 +1326,12 @@ export function Layout() {
            applies nothing more and marks the book unfinished. */
         const signal = ctrl?.signal;
         /* A re-run never rewrites the text of a chapter with rendered audio
-           (any audio: done, rendering, failed after a render, or a render map
-           on disk) — that would leave its audio stale. The book this run
-           targets is the one the chapters slice holds whenever an annotation
-           may apply at all (isOpen). */
+           (done, rendering, a render stamp, or a render map on disk — a chapter
+           that failed before it ever rendered has none) — that would leave its
+           audio stale. The book this run targets is the one the chapters slice
+           holds whenever an annotation may apply at all (isOpen). */
         const holdsAudio = background
-          ? (chapterId: number) => {
-              const c = store.getState().chapters;
-              const ch = c.chapters.find((x) => x.id === chapterId);
-              return (
-                (!!ch && (ch.state !== 'queued' || !!ch.audioRenderedAt)) ||
-                chapterId in c.renderedTextByChapter ||
-                chapterId in c.renderedSpeakersByChapter
-              );
-            }
+          ? (chapterId: number) => chapterHoldsAudio(store.getState().chapters, chapterId)
           : undefined;
         const { failed, skipped } = await runProsodyPasses(id, {
           dispatch,
@@ -1342,19 +1343,17 @@ export function Layout() {
           },
           canApply: () => !signal?.aborted && isOpen(),
         });
-        if (signal?.aborted) {
-          prosodyConsidered.current.delete(id); // yielded → run again on the next open
-          await markUnfinished();
-        } else if (failed === 0 && skipped === 0) {
-          await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
-        } else {
-          prosodyConsidered.current.delete(id); // partial / skipped → allow fill-only re-run
-          skippedWork = skipped > 0;
-          await markUnfinished();
+        /* Yielded, partial or skipped: the start mark stays, and the open
+           trigger owns the fill-only re-run — the book stays in `considered`. */
+        if (!signal?.aborted) {
+          if (failed === 0 && skipped === 0)
+            await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
+          else skippedWork = skipped > 0;
         }
       } catch {
-        prosodyConsidered.current.delete(id); // transient error → retry on next transition
-        if (pillActive) await markUnfinished(); // it started: re-run on the next open
+        /* A run that never started (its read threw) retries on the next
+           transition; one that started keeps its mark for the open trigger. */
+        if (!pillActive) prosodyConsidered.current.delete(id);
       } finally {
         if (ctrl) {
           // Only its own pill: a manual run may have taken the book's entry.
