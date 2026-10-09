@@ -99,6 +99,7 @@ export const MODEL_OPTIONS: ModelOption[] = [
 ];
 
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
+import type { AnalyzerCatalog, AnalyzerCatalogGroup } from './types';
 
 /* Frontend's view of the "no settings hydrated yet" default. Single source
    of truth lives in src/lib/account-defaults.ts — flip there once and the
@@ -195,3 +196,72 @@ export function buildModelOptionGroups(localOptions: ModelOption[]): Array<{
 export const MODEL_OPTION_GROUPS = buildModelOptionGroups(
   MODEL_OPTIONS.filter((m) => m.engine === 'local'),
 );
+
+export interface ModelOptionGroup {
+  id: string;
+  kind: AnalyzerCatalogGroup['kind'];
+  engine: ModelOption['engine'];
+  label: string;
+  status: AnalyzerCatalogGroup['status'];
+  error?: string;
+  models: ModelOption[];
+}
+
+/** Picker/editor groups from the live catalog (#3084). Gemini: curated entries first
+    (curated labels + hints), then live-only models; a `fallback` group (no key, or a
+    failed listing) shows the curated list. Ollama: installed-only (plan 221 invariant 1) —
+    an `error` group is empty. Endpoint groups only when `includeEndpoints`. */
+export function buildCatalogOptionGroups(
+  catalog: AnalyzerCatalog | null,
+  opts: { includeEndpoints: boolean },
+  curated: ModelOption[] = MODEL_OPTIONS,
+): ModelOptionGroup[] {
+  const curatedGemini = curated.filter((m) => m.engine === 'gemini');
+  const geminiGroup = catalog?.groups.find((g) => g.kind === 'gemini');
+  const liveGemini = geminiGroup?.status === 'ok' ? geminiGroup.models : [];
+  const gemini: ModelOptionGroup = {
+    id: 'gemini',
+    kind: 'gemini',
+    engine: 'gemini',
+    label: 'Gemini API (cloud)',
+    status: geminiGroup?.status ?? 'fallback',
+    ...(geminiGroup?.error ? { error: geminiGroup.error } : {}),
+    models:
+      liveGemini.length === 0
+        ? curatedGemini
+        : [
+            ...curatedGemini.filter((c) => liveGemini.some((l) => l.id === c.id)),
+            ...liveGemini
+              .filter((l) => !curatedGemini.some((c) => c.id === l.id))
+              .map((l) => ({ id: l.id, label: l.label, engine: 'gemini' as const })),
+          ],
+  };
+  const ollamaGroup = catalog?.groups.find((g) => g.kind === 'ollama');
+  const local: ModelOptionGroup = {
+    id: 'ollama',
+    kind: 'ollama',
+    engine: 'local',
+    label: 'Local Ollama (default, on-device)',
+    /* No catalog yet: nothing listed, so nothing to offer (installed-only). */
+    status: ollamaGroup?.status ?? 'error',
+    ...(ollamaGroup?.error ? { error: ollamaGroup.error } : {}),
+    models:
+      ollamaGroup?.status === 'ok'
+        ? buildLocalModelOptions(ollamaGroup.models.map((m) => ({ name: m.model })), curated.filter((m) => m.engine === 'local'))
+        : [],
+  };
+  const endpoints: ModelOptionGroup[] = opts.includeEndpoints
+    ? (catalog?.groups ?? [])
+        .filter((g) => g.kind === 'endpoint')
+        .map((g) => ({
+          id: g.id,
+          kind: 'endpoint' as const,
+          engine: 'openai' as const,
+          label: g.label,
+          status: g.status,
+          ...(g.error ? { error: g.error } : {}),
+          models: g.models.map((m) => ({ id: m.id, label: m.label, engine: 'openai' as const, ...(m.contextTokens ? { hint: `${m.contextTokens.toLocaleString()}-token context` } : {}) })),
+        }))
+    : [];
+  return [gemini, local, ...endpoints];
+}

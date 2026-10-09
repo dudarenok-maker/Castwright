@@ -1,4 +1,4 @@
-import { MODEL_OPTIONS } from '../../lib/models';
+import { modelLabel } from '../../lib/model-label';
 import { useAppSelector } from '../../store';
 import { selectAnalyzerSplitIsActive, selectAnalyzerPhase1MinLag } from '../../store/account-slice';
 import { selectPhaseModelPick } from '../../store/ui-slice';
@@ -82,6 +82,7 @@ export function PhaseModelChip({
   const overrideActive = useAppSelector(
     (s) => (s as { ui?: { selectedModelExplicit?: boolean } }).ui?.selectedModelExplicit === true,
   );
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog ?? null);
   if (phaseId === 2) return null;
 
   /* A per-run pick for this phase counts as split mode for display purposes
@@ -97,10 +98,12 @@ export function PhaseModelChip({
      (when serverModel is undefined). */
   const label =
     serverModel !== undefined
-      ? (MODEL_OPTIONS.find((m) => m.id === serverModel)?.label ?? serverModel)
+      ? modelLabel(serverModel, analyzerCatalog)
       : serverDefault
         ? 'Server default'
-        : (MODEL_OPTIONS.find((m) => m.id === modelId)?.label ?? modelId ?? 'Server default');
+        : modelId != null
+          ? modelLabel(modelId, analyzerCatalog)
+          : 'Server default';
 
   const meta = (() => {
     if (state === 'streaming') {

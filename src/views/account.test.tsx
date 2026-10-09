@@ -62,6 +62,7 @@ function renderView(initial: Partial<UserSettings> = {}) {
     hydrated: true,
     localAnalyzerModels: [],
     pullableModels: [],
+    analyzerCatalog: null,
   };
   const store = configureStore({
     reducer: {

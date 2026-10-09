@@ -32,7 +32,7 @@ import {
   type DesignPillData,
   type ExportPillData,
 } from './top-bar';
-import { MODEL_OPTIONS } from '../lib/models';
+import { modelLabel } from '../lib/model-label';
 import { analyzerEngineName, type AnalysisEngine } from '../lib/model-id';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
 import { useElapsed } from '../hooks/use-elapsed';
@@ -163,7 +163,7 @@ function SubstageRow({
       {analysisSubstage.model && (
         <span data-testid="substage-engine-model" className="text-xs text-ink/50">
           {analyzerEngineName(analysisSubstage.engine)} ·{' '}
-          {MODEL_OPTIONS.find((m) => m.id === analysisSubstage.model)?.label ?? analysisSubstage.model}
+          {modelLabel(analysisSubstage.model)}
         </span>
       )}
       <SubstageTimer state={analysisSubstage.activityState} since={analysisSubstage.activitySince} />
@@ -305,7 +305,7 @@ export function StatusPopover({
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-ink/30" />
                 <span className="tabular-nums">
-                  {MODEL_OPTIONS.find((m) => m.id === analysis.model)?.label ?? analysis.model}
+                  {modelLabel(analysis.model)}
                 </span>
               </span>
             )}

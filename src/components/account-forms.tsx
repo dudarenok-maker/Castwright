@@ -7,18 +7,20 @@
 import { useEffect, useState } from 'react';
 import { PrimaryButton } from './primitives';
 import { WikiLink } from './wiki-link';
-import { MODEL_OPTIONS } from '../lib/models';
+import { modelLabel } from '../lib/model-label';
 import { GEMINI_KEY_WIKI } from '../lib/wiki-links';
+import type { AnalyzerCatalog } from '../lib/types';
 
 /* Human label for an analyzer model id, for the split-status line and the
    Model Manager view's read-only per-phase rows (#3141 step 3, which passes
    'Not set' — the split-status line keeps the default 'server default'). */
 export function analyzerModelLabel(
   id: string | null | undefined,
+  catalog?: AnalyzerCatalog | null,
   fallback = 'server default',
 ): string {
   if (!id) return fallback;
-  return MODEL_OPTIONS.find((m) => m.id === id)?.label ?? id;
+  return modelLabel(id, catalog);
 }
 
 export function FormCard({

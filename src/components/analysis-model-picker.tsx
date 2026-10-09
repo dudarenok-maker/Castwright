@@ -14,6 +14,7 @@ import {
   type ModelOption,
 } from '../lib/models';
 import { SearchablePicker, type PickerGroup } from './searchable-picker';
+import { modelLabel } from '../lib/model-label';
 
 interface AnalysisModelPickerProps {
   selectedModel: string;
@@ -40,7 +41,7 @@ export function AnalysisModelPicker({
   const selectedOption = groupsProp.flatMap((g) => g.models).find(
     (m) => m.id === selectedModel,
   );
-  const triggerLabel = selectedOption?.label ?? selectedModel;
+  const triggerLabel = selectedOption?.label ?? modelLabel(selectedModel);
 
   const groups: PickerGroup<ModelOption>[] = groupsProp.map((g) => ({
     label: g.label,
