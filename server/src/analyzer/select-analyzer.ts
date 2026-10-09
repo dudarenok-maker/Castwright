@@ -74,56 +74,44 @@ export function isPerPhaseModelSelectionActive(hasPerRunPhasePick = false): bool
   );
 }
 
-/** Resolve an analyzer for the given phase. Precedence (highest first):
-      1. explicit env (`ANALYZER_PHASE{0,1}_MODEL`)
-      2. per-run `opts.phaseModel` (#3141 step 4 — this request's own
-         `phase0Model` / `phase1Model`, never persisted)
-      3. per-request `opts.model`
-      4. saved Advanced Settings override (`analyzer.phase{0,1}.model`)
-      5. hardcoded default via `selectAnalyzer({})`
-    The route layer is responsible for caching the result per phase so
-    each phase only constructs its analyzer once. */
-export function selectAnalyzerForPhase(opts: PerPhaseAnalyzerOptions): AnalyzerSelection {
+export type PhaseModelSource = 'env' | 'run-pick' | 'settings' | 'default';
+/** An explicit id always carries one of 3a's `modelSource` values; only the engine default
+    has none, so the union lets `selectAnalyzerForPhase` pass `source` straight through. */
+export type PhaseModelSelection =
+  | { modelId: string; source: 'env' | 'run-pick' | 'settings' }
+  | { modelId: null; source: 'default' };
+
+/** The precedence chain of selectAnalyzerForPhase, without constructing an analyzer, so
+    pre-run checks (#3084) validate the same model id the run will use and can name where
+    it came from. Precedence (highest first, #3141):
+      1. explicit env (`ANALYZER_PHASE{0,1}_MODEL`) → 'env'
+      2. per-run `opts.phaseModel` (this request's `phase0Model` / `phase1Model`) → 'run-pick'
+      3. per-request `opts.model` → 'run-pick'
+      4. saved Advanced Settings override (`analyzer.phase{0,1}.model`) → 'settings'
+      5. engine default → modelId null */
+export function resolvePhaseModelSelection(opts: PerPhaseAnalyzerOptions): PhaseModelSelection {
   const key = PHASE_MODEL_KEY[opts.phase];
   const knob = getKnob(key);
   if (!knob) throw new Error(`unknown config key ${key}`);
   const resolved = resolveKnob(knob);
   const resolvedModel = String(resolved.effective).trim();
+  if (resolved.source === 'env' && resolvedModel.length > 0) return { modelId: resolvedModel, source: 'env' };
+  if (opts.phaseModel) return { modelId: opts.phaseModel, source: 'run-pick' };
+  if (opts.model) return { modelId: opts.model, source: 'run-pick' };
+  if (resolved.source === 'override' && resolvedModel.length > 0) return { modelId: resolvedModel, source: 'settings' };
+  return { modelId: null, source: 'default' };
+}
 
-  /* Priority 1 — explicit env. Ops needs the override for triage so
-     this beats opts.phaseModel, opts.model and the saved Advanced
-     Settings value. */
-  if (resolved.source === 'env' && resolvedModel.length > 0) {
-    /* Delegate the engine inference + Fallback wrapping to the existing
-       `selectAnalyzer` — passing the model id is enough; it routes via
-       `inferEngineFromModelId` (./model-id.ts: endpoint shape → openai,
-       ':' → local, otherwise → Gemini). `modelSource` names where each
-       tier's model id came from, for `AnalyzerEndpointMissingError`
-       (#3084 P23). */
-    return selectAnalyzer({ model: resolvedModel, modelSource: 'env' });
-  }
-
-  /* Priority 2 — per-run phase pick from the analysis request itself. */
-  if (opts.phaseModel) {
-    return selectAnalyzer({ model: opts.phaseModel, modelSource: 'run-pick' });
-  }
-
-  /* Priority 3 — per-request override. UI dropdown for one specific run. */
-  if (opts.model) {
-    return selectAnalyzer({ model: opts.model, modelSource: 'run-pick' });
-  }
-
-  /* Priority 4 — saved Advanced Settings override; empty falls through
-     to the hardcoded default. */
-  if (resolved.source === 'override' && resolvedModel.length > 0) {
-    return selectAnalyzer({ model: resolvedModel, modelSource: 'settings' });
-  }
-
-  /* Priority 5 — hardcoded default. Falls through to today's
-     single-model resolution. The route layer can compare the two
-     returned selections to detect "same analyzer for both phases" and
-     skip the per-phase plumbing. */
-  return selectAnalyzer({});
+/** Resolve an analyzer for the given phase — see resolvePhaseModelSelection for the
+    precedence. The route layer caches the result per phase. */
+export function selectAnalyzerForPhase(opts: PerPhaseAnalyzerOptions): AnalyzerSelection {
+  const resolved = resolvePhaseModelSelection(opts);
+  /* 3a's `modelSource` must survive this extraction: it is what makes an endpoint named by
+     ANALYZER_PHASE{0,1}_MODEL report `source: 'env'` rather than `run-pick`
+     (3a Task 3a.2, `each phase source is named: env, run pick, saved phase model`). */
+  return resolved.modelId === null
+    ? selectAnalyzer({})
+    : selectAnalyzer({ model: resolved.modelId, modelSource: resolved.source });
 }
 
 /* Plan 88 phase-2 — Phase 1 minimum-lag resolver, rewired onto the
