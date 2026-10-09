@@ -635,7 +635,7 @@ export interface AnalysisStateResponse {
   writtenAt?: number;
 }
 
-export type StateSlice = 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog';
+export type StateSlice = 'cast' | 'manuscript' | 'state' | 'changeLog';
 
 export interface PutStateRequest {
   slice: StateSlice;

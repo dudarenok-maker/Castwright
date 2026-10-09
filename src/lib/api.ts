@@ -1266,8 +1266,6 @@ function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): Boo
       return { ...prev, cast: req.patch as BookStateResponse['cast'] };
     case 'manuscript':
       return { ...prev, manuscriptEdits: req.patch as BookStateResponse['manuscriptEdits'] };
-    case 'revisions':
-      return { ...prev, revisions: req.patch as BookStateResponse['revisions'] };
     case 'changeLog': {
       const events =
         (req.patch as { events?: ChangeLogEvent[] } | null | undefined)?.events ?? null;
