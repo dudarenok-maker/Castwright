@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,11 +563,20 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**59 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**60 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-06 (#3084 wave 3b, PR 3b), 57 → 59.** Rows **B105**
+> **Last change: 2026-10-09 (plan 286, #3400/#3397), 59 → 60.** Added **A113** —
+> the revisions server-ownership cutover: accept/reject/dismiss move to
+> per-op server routes, pending comes only from the server, and every render
+> records or drops a chapter's A/B state itself, closing the #3397 gap A9's
+> body documented (a take finishing while you were away from its book coming
+> back stuck or without an A/B prompt). A9's own "known gap (#3397)" sentences
+> now point here instead of restating the gap as open. Group A 34 → 35.
+> `next-id` bumped A113 → A114 in the same change.
+>
+> **Prior change: 2026-10-06 (#3084 wave 3b, PR 3b), 57 → 59.** Rows **B105**
 > (Ollama `format` modes on a real model: `json`, then `off`, against `schema`)
 > and **E112** (Gemini `schema` mode, `responseJsonSchema` accepted or rejected
 > on a real key) added from #3084 PR 3b's run sheet
@@ -1610,7 +1619,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A113 -->
+<!-- next-id: A114 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -2466,18 +2475,18 @@ revisions history of its own — its Status pill must show no pending revisions,
 not book A's; and start a multi-chapter Fix-audio batch on book A, then open
 book B before the batch finishes — book B must show none of book A's takes.
 Leaving the book mid-batch — for a different book or for any non-book view
-(Library, Voices, Admin, Settings, Help, New book) — is a known gap (#3397,
-design owed): the batch's enqueue and playable-flip are skipped while no book,
-or a different book, is active, so a take that finishes while you're away
-comes back stuck "rendering" or without an A/B prompt. Record what was
-observed there rather than treating it as an A9 fail. One more step, added
+(Library, Voices, Admin, Settings, Help, New book) — was a known gap (#3397):
+the batch's enqueue and playable-flip were skipped while no book, or a
+different book, was active, so a take that finished while you were away came
+back stuck "rendering" or without an A/B prompt. Closed server-side by plan
+286 (revisions server ownership) — see register row A113. One more step, added
 2026-09-24 (PR #3395 review pass 3, widened in pass 4) to pin the revisions
 slice's hydrate gating: with a take pending and at least one Revision History
 entry on a book, start a multi-chapter Fix-audio batch, then go to Library and
 back to the book while it is still running — the earlier pending take and
 Revision History are still there, and after the next chapter completes they're
-still on disk (reload); record separately what happened to the batch takes
-that finished while you were on the Library (the #3397 gap above). *Merged*
+still on disk (reload); the #3397 gap above (batch takes finishing while you
+were on the Library) is now closed — see register row A113. *Merged*
 2026-06-03, PR #500.
 
 > **2026-09-06 — on-box run, PARTIAL.** Loudness (+3 dB, Master Oduvan, CH 3):
@@ -2525,10 +2534,11 @@ that finished while you were on the Library (the #3397 gap above). *Merged*
 > but that echo is harmless, not load-bearing — nothing reads it from a
 > poll.) Known remaining gap: a batch chapter that finishes while you're
 > away from the book — on a different book or on any non-book view, such as
-> the Library — leaves that take stuck "rendering," or without an A/B
-> prompt, when you return; it no longer lands in another book at all
-> (#3397, design owed). The on-box re-run above is **still owed** — the row
-> stays open.
+> the Library — left that take stuck "rendering," or without an A/B
+> prompt, when you returned; it no longer landed in another book at all
+> (#3397). **Closed by plan 286** (revisions server ownership — the server now
+> records or drops A/B state on every render) — see register row A113. The
+> on-box re-run above is **still owed** — the row stays open.
 
 > **2026-09-24 — two more ways a pending take could go missing, fixed
 > (PR #3395 review pass 3).** The line above claiming `pending` is "seeded
@@ -2561,7 +2571,8 @@ that finished while you were on the Library (the #3397 gap above). *Merged*
 > leaving the book's revisions unsaveable for the rest of the visit. Leaving
 > a book sends its queued writes at once, and the re-read on return waits
 > for any still in flight, so an accept made just before a Library round trip
-> is not read back stale and erased. Not covered: the #3397 gap above. The
+> is not read back stale and erased. Not covered: the #3397 gap above —
+> closed by plan 286, see register row A113. The
 > on-box re-run above is **still owed** — the row stays open.
 
 > **2026-10-01 — review pass 5 (PR #3395).** A write recorded for a book
@@ -5878,6 +5889,54 @@ speaker-embedding model running (the mocked unit tests cover the logic branch
 but never the real embedding path). *Criteria:* the observations above; issue
 #3414 and the mutation-tested regression split (#3449 stale-drop, #3460
 kept-and-gates) for the exact defect this closes.
+
+### A113 · Revisions server ownership (plan [286](../features/286-revisions-client-cutover.md), [Castwright#3400](https://github.com/dudarenok-maker/Castwright/issues/3400)/[#3397](https://github.com/dudarenok-maker/Castwright/issues/3397)) · **GPU box, real sidecar, a real rendered book**
+
+`revisions.json` moves from a client-written cache to a server-owned one:
+accept/reject/dismiss go through per-op routes instead of a raw `PUT /state`,
+pending comes only from the server, and every render records or drops a
+chapter's A/B state itself — closing the #3397 gap A9 above left open (a
+Fix-audio or regen take finishing while you were on another book, or any
+non-book view, used to come back stuck "rendering" or without an A/B prompt;
+it now doesn't).
+
+**What to observe, concretely**, against a real rendered book with a real
+sidecar:
+
+1. Splice a character's lines (Fix audio) → switch to a different book
+   before it finishes → come back: the A/B prompt is there and playable
+   (closes the #3397 gap).
+2. **Commit selection** (accept) → the chapter's `.previous.mp3` is gone and
+   Revision History shows "Accepted".
+3. Re-splice the same chapter, this time **Reject** → the earlier take is
+   live again, Revision History shows "Rejected".
+4. Reject while a generation is running on that book → refused with "This
+   chapter is busy — try again when it finishes", the pending entry
+   unchanged.
+5. A real **profile-regen preview**: Approve fans the new take out to the
+   rest of the book; a second preview, Reject restores the original take.
+6. A **restructure** (merge two chapters, one of them carrying a pending
+   take) → that take disappears from the Revisions list.
+7. An **upgraded book's legacy entry** (pending from before this update) can
+   be accepted on one chapter and rejected on another.
+8. A **legacy stuck entry** ("Rendering…" from before the update,
+   `.previous.mp3` still on disk) is now reviewable and shows **Recovered
+   from before the update**, with the A card reading "The take kept before
+   this chapter's last render" (never "the original" — OD20). Reject puts
+   that kept take back live — record which take that turned out to be, since
+   it may predate the stuck take rather than being the one it was rendered
+   against.
+9. A **preview that finishes while you are on another book**: the "Preview
+   ready in ‹book title›" toast appears; returning to the book opens the
+   preview player by itself (OD27). Close it with the back arrow — the
+   Status pill shows it as pending and re-opens it (OD28).
+
+*Needs:* the GPU box, a real sidecar, and a real rendered book (no mock mode
+— the mock-mode equivalents of 1-9 are pinned by `e2e/revision-ops.spec.ts`,
+`e2e/revisions-book-switch.spec.ts` and `e2e/profile-regen-preview-recorded.spec.ts`,
+plan 286 Task 30). *Criteria:* plan 286's "Manual acceptance walkthrough" and
+the nine steps above; issues #3400 and #3397; open decisions OD20, OD27,
+OD28, OD29, OD30, OD31.
 
 ## Group B — local Ollama analyzer only
 

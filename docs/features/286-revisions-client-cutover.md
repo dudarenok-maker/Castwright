@@ -1,12 +1,12 @@
 ---
-status: draft
+status: active
 shipped: null
 owner: null
 ---
 
 # 286 — revisions.json server-owned, PR 2: the client cutover (#3400, #3397)
 
-> Status: draft (revision 5 — assumption-checker passes 1, 2, 3 and 4 folded, plus the operator decisions of 2026-10-06 and 2026-10-07, including OD28–OD31; 32 tasks). PR 2 of 2. PR 1 (plan [285](285-revisions-server-ops.md), PR #3504, merged `ce142a3c`) landed the server half dark. This plan switches the client over and turns the server switches on.
+> Status: active (revision 5 — assumption-checker passes 1, 2, 3 and 4 folded, plus the operator decisions of 2026-10-06 and 2026-10-07, including OD28–OD31; 32 tasks). PR 2 of 2. PR 1 (plan [285](285-revisions-server-ops.md), PR #3504, merged `ce142a3c`) landed the server half dark. This plan switches the client over and turns the server switches on.
 >
 > Key files:
 > - Client, new: `src/store/revisions-thunks.ts`, `src/store/preview-thunks.ts`, `src/store/revision-player-middleware.ts`, `src/mocks/mock-revisions.ts`, `src/lib/revision-op-failure.ts`, `src/lib/build-preview-stub.ts` (renamed from `build-pending-revision.ts`).
@@ -103,7 +103,10 @@ Real backend: owed as on-box acceptance — a **new** register row (Task 31) plu
 
 ## Ship notes
 
-(Filled in when PR 2 merges — see Task 31.)
+PR 2 (client cutover) is pending — opens in Task 32 as `fix(frontend,server):
+revisions.json client cutover to server ownership (#3400)`, `Closes #3400`,
+`Closes #3397`. Status stays `active` (not `stable`) until the on-box
+acceptance register row (A113, added in Task 31) is run and accepted (OD18).
 
 ---
 
@@ -5099,7 +5102,7 @@ The field has no client consumer before PR 2: the first ones are Tasks 11, 20 an
 - `docs/features/285-revisions-server-ops.md` — fill "Ship notes" (PR 1 merged `ce142a3c`; PR 2 merged `<sha>`); keep `status: active` (on-box owed) — OD18.
 - `docs/features/286-revisions-client-cutover.md` — `status: active`, fill Ship notes; `docs/features/INDEX.md` — flip 286's status word.
 
-- [ ] Steps: write each; run `check:onbox-register` and `register:build`; commit `docs(docs): release notes and on-box acceptance for the revisions cutover (#3400)`. Then hand back to the coordinator for the live-view publish (COORDINATOR-ONLY, above).
+- [x] Steps: write each; run `check:onbox-register` and `register:build`; commit `docs(docs): release notes and on-box acceptance for the revisions cutover (#3400)`. Then hand back to the coordinator for the live-view publish (COORDINATOR-ONLY, above).
 
 ---
 

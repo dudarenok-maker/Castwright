@@ -138,3 +138,11 @@ Shipped 2026-05-26 on `feat/frontend-profile-regen-preview` via PR #257 (merge
 commit `12f4152`). Replaces plan 11 (batch character regenerate, removed) and the
 per-character half of plan 17; repurposes the plan 20 revisions A/B as the
 preview gate (drift-triggered regen now applies immediately).
+
+**Plan 286 (2026-10): the preview's pending entry is recorded by the server
+(`review` on the queue entry); when none is recorded the player opens a
+client-only stub; Approve fans out only after the server confirmed the
+accept; a preview that finished on another book re-opens on return, and
+closing the player only hides it (Status popover and the next return re-open
+it); a recorded preview whose entry is gone on return is dropped as resolved
+elsewhere (OD27, OD28, OD29).
