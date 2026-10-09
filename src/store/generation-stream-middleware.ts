@@ -20,25 +20,32 @@
  *      the GPU).
  *   2. HALT — `chapters/requestStreamHalt` (local-analyzer confirm prompt)
  *      pauses each open book on the server and tears every stream down NOW.
- *   3. PROFILE-REGEN PREVIEW GATE — when the single preview chapter completes
- *      (markRevisionPlayable for the chapter the user is previewing), build the
- *      now-playable A/B stub and auto-open the diff player. See plan
- *      docs/features/archive/114-profile-regen-preview.md.
+ *   3. GENERATION PREVIEW — plan 286 (OD27/OD28/OD29, Task 24). On
+ *      `chapters/previewChapterComplete` (dispatched by the runner for ANY
+ *      book when a chapter was actually rendered with review), open the
+ *      preview's recorded server entry (refetching once, with one retry) or
+ *      a client-only stub, mark every completion finished so a closed or
+ *      never-opened preview stays re-openable, and re-run the open path on
+ *      arrival at the preview's book. See plan
+ *      docs/features/286-revisions-client-cutover.md Task 24.
  *
  * Skipped under VITE_USE_MOCKS=true? — NO. The mock SSE depends on a long-lived
  * caller; the runner (opened by the dispatcher) is that caller. */
 
 import type { Middleware } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
-import { buildPendingRevisionStub } from '../lib/build-pending-revision';
+import { buildPreviewStub } from '../lib/build-preview-stub';
 import { enqueueQueueEntries, type EnqueueInput } from './queue-thunks';
 import type { AppDispatch } from './index';
 import type { StreamRunner } from './generation-stream-runner';
-import type { ChaptersState } from './chapters-slice';
+import { previewChapterComplete, type ChaptersState } from './chapters-slice';
 import type { CastState } from './cast-slice';
-import { uiActions, type UiState } from './ui-slice';
+import { uiActions, type UiState, type PreviewRegenCtx } from './ui-slice';
 import type { AnalysisState } from './analysis-slice';
 import type { QueueState } from './queue-slice';
+import { activeBookId, refetchActiveRevisions } from './revisions-thunks';
+import { selectActivePending, type RevisionsState } from './revisions-slice';
+import { notificationsActions } from './notifications-slice';
 
 interface StreamableRootState {
   ui: UiState;
@@ -51,6 +58,101 @@ interface StreamableRootState {
   /* queue.paused = true means the user (or the local-analyzer halt) stopped
      the drain, so we must not auto-enqueue more work. */
   queue: QueueState;
+  /* Plan 286 — the active-book cache the preview's refetch (and the OD30
+     entry-lookup) reads. */
+  revisions: RevisionsState;
+  /* Plan 286 — book titles for the "Preview ready in ‹title›" toast. */
+  library: { books: Array<{ bookId: string; title: string }> };
+}
+
+const PREVIEW_REFETCH_RETRY_MS = 1000; // OD23
+
+/* Plan 286 (Task 24) — the only path that opens a preview; every early
+   return leaves `completed` set, so the preview stays re-openable (OD28). */
+async function openPreview(
+  dispatch: AppDispatch,
+  getState: () => StreamableRootState,
+  p: { bookId: string; chapterId: number; completed: PreviewRegenCtx['completed'] },
+): Promise<void> {
+  const reviewOutcome = p.completed?.reviewOutcome;
+  const stubFallback = p.completed?.stubFallback ?? false;
+  const isThisPreview = (s: StreamableRootState) =>
+    s.ui.previewRegen?.bookId === p.bookId && s.ui.previewRegen?.previewChapterId === p.chapterId;
+  /* OD29 (Task 7) — 'none' (a first render: nothing to review) and 'failed'
+     (preserved, but no entry recorded) have no server entry to look for: the
+     stub is the legitimate player, so no refetch. Only 'recorded' (or an
+     absent outcome) looks for the entry. */
+  if (reviewOutcome !== 'none' && reviewOutcome !== 'failed') {
+    let r = await dispatch(refetchActiveRevisions(p.bookId));
+    if (r === 'failed') {
+      await new Promise((res) => setTimeout(res, PREVIEW_REFETCH_RETRY_MS));
+      r = await dispatch(refetchActiveRevisions(p.bookId));
+    }
+    /* OD28 — the user left the book during the refetch ('skipped', or 'ok'
+       with the response not applied): leave the preview as it is; the next
+       arrival re-opens it. Without this check an unapplied 'ok' would read
+       the NEW book's empty cache below and drop the preview (OD29) wrongly. */
+    if (r === 'skipped' || activeBookId(getState()) !== p.bookId) return;
+    if (r === 'ok') {
+      /* OD30 — matched by chapter alone, deliberately: any entry for the
+         preview's chapter is the preview's player. */
+      const entry = selectActivePending(getState()).find((e) => e.chapterId === p.chapterId);
+      if (entry) {
+        /* A1 (pass 4) — the refetch awaited: never replace a player the user
+           opened meanwhile. `completed` stays set; the next arrival re-opens
+           it. (The active book was re-checked just above.) */
+        if (getState().ui.openRevision !== null) return;
+        dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: entry.id, chapterId: entry.chapterId }));
+        return;
+      }
+      if (isThisPreview(getState())) {
+        /* OD29 — the server recorded an entry and no longer has it: resolved
+           elsewhere (another tab, or a newer render dropped it). Never a stub:
+           its Reject (restore-unrecorded) could put the preview take back over
+           that newer render (finalize-chapter-write.ts ~:798). */
+        dispatch(uiActions.setPreviewRegen(null));
+        dispatch(notificationsActions.pushToast({ kind: 'info', message: 'This preview was resolved elsewhere', dedupeKey: 'preview-resolved-elsewhere' }));
+      }
+      return;
+    }
+    /* r === 'failed' twice (OD23). */
+    if (!stubFallback) {
+      console.warn('[preview] could not confirm the recorded take; it re-opens on the next visit to the book');
+      return;
+    }
+  }
+  const before = getState();
+  /* A8 — only this book's chapter rows (the fire gate already waited for
+     them; this guards the window after the refetch's await). */
+  const chapter = before.chapters.currentBookId === p.bookId ? before.chapters.chapters.find((c) => c.id === p.chapterId) : undefined;
+  const prev = chapter ? await api.getChapterAudioPrevious({ bookId: p.bookId, chapterId: p.chapterId, duration: chapter.duration }).catch(() => null) : null;
+  const s = getState();
+  const preview = s.ui.previewRegen;
+  if (!preview || !isThisPreview(s)) return; // resolved or replaced meanwhile: nothing left to open
+  /* A1 (pass 4) — the awaits above (refetch, retry, previous-audio GET) let
+     the user open a player or move to another book. Opening now would
+     replace that player, or (on another book) open a stub the watcher
+     instantly hides, closing the player the user has open there. Keep the
+     OD28 marker (`completed` stays set) and do not open: the next arrival
+     at the preview's book re-opens it. */
+  if (s.ui.openRevision !== null || activeBookId(s) !== p.bookId) return;
+  const character = s.cast.characters.find((c) => c.id === preview.characterId);
+  if (!chapter || !character) {
+    /* OD28 — never strand it: `completed` stays set, so the next arrival
+       retries once the chapters and cast are in. */
+    console.warn('[preview] could not build the preview stub (chapter or character not loaded); it re-opens on the next visit to the book');
+    return;
+  }
+  /* OD30 (pass 4) — ONE action sets the stub and opens it. Never
+     setPreviewRegen(stub) + setOpenRevision: between those two dispatches the
+     player watcher (Task 21) would drop the stub (rule 1, a cached entry for
+     the chapter, no player open yet) and then hide the stub player (rule 2),
+     so nothing would open. In one action the watcher sees the stub player
+     open, and when the active cache already holds an entry for this chapter,
+     rule 1 switches the player to that entry: an existing entry wins, for
+     every reviewOutcome, and the preview stays in preview mode so Approve
+     runs its fan-out (Task 22). */
+  dispatch(uiActions.openPreviewStub(buildPreviewStub({ chapter, character, hasPreviousAudio: prev !== null })));
 }
 
 function bookIdFromState(s: StreamableRootState): string | null {
@@ -134,11 +236,16 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
       });
     };
 
+    /* OD27/OD28 — closure state, one per store. The chapter id the fire
+       check will act on once everything holds (armed on arrival at the
+       preview's book, or on a completion seen while already there). */
+    let armedFor: string | null = null;
+
     return (next) => (action) => {
+      const activeBefore = activeBookId(store.getState() as StreamableRootState);
       const result = next(action);
       const a = action as { type?: string };
       const type = a?.type;
-      if (!type) return result;
 
       const runner = getRunner();
 
@@ -154,39 +261,62 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
         return result;
       }
 
-      /* Profile-change preview gate — when the single preview chapter's render
-         completes (markRevisionPlayable for the chapter the user is
-         previewing), build the now-playable A/B stub and auto-open the diff
-         player. Built fresh on completion rather than trusting whatever's
-         already in `pending` — a stub built by a stale in-flight action or
-         race could otherwise leave the gate without a revision to show.
-         (`pending` is client-owned since #3376 round 2: no poll writes it,
-         so a mid-render revisions poll can no longer race this at all —
-         the concern predates that fix but the fresh-build stays cheap
-         insurance.) Normal chapter regens never set previewRegen, so this
-         no-ops for them. See docs/features/archive/114-profile-regen-preview.md. */
-      if (type === 'revisions/markRevisionPlayable') {
-        const payload = (a as { payload?: { chapterId: number } }).payload;
-        if (payload) {
-          const after = store.getState() as StreamableRootState;
-          const preview = after.ui.previewRegen;
-          if (preview && preview.previewChapterId === payload.chapterId) {
-            const character = after.cast.characters.find((c) => c.id === preview.characterId);
-            const chapter = after.chapters.chapters.find((c) => c.id === payload.chapterId);
-            if (character && chapter) {
-              dispatch(
-                uiActions.openPreviewStub(
-                  buildPendingRevisionStub({ chapter, character, playable: true }),
-                ),
-              );
-            }
-          }
+      /* Plan 286 (Task 24) — a chapter actually rendered with review
+         completed, for ANY book. `mine` is "this is the preview's own
+         chapter"; `onBook` is "the user is currently on that book". */
+      if (previewChapterComplete.match(action)) {
+        const { bookId, chapterId, reviewOutcome } = action.payload;
+        const afterTick = store.getState() as StreamableRootState;
+        const onBook = activeBookId(afterTick) === bookId;
+        const preview = afterTick.ui.previewRegen;
+        const mine = !!preview && preview.bookId === bookId && preview.previewChapterId === chapterId;
+        /* Arm BEFORE the OD28 dispatch below: that dispatch re-enters this
+           middleware, and the re-entry's own fire check (below) can open the
+           preview in the same pass once chapters/openRevision allow it.
+           Arming first means exactly one fire (see mutation 15). */
+        if (onBook && mine) armedFor = bookId;
+        if (mine) {
+          /* OD28 — mark EVERY completion of this preview finished, on its
+             book or elsewhere. `stubFallback` matters only for a 'recorded'
+             completion whose refetch fails twice: true only when seen on its
+             own book (OD23). */
+          dispatch(uiActions.setPreviewRegen({ ...preview!, completed: { reviewOutcome, stubFallback: onBook } }));
         }
+        if (!onBook) {
+          const title = afterTick.library.books.find((b) => b.bookId === bookId)?.title ?? bookId;
+          dispatch(notificationsActions.pushToast({ kind: 'info', message: `Preview ready in ${title}`, dedupeKey: `preview-ready-${bookId}` }));
+        }
+        /* `onBook && !mine` (e.g. after a reload, which drops previewRegen) —
+           nothing to do: a recorded take reaches the Status popover with the
+           next poll (OD12). */
       }
 
-      if (ENQUEUE_TRIGGER_TYPES.has(type)) {
+      if (type && ENQUEUE_TRIGGER_TYPES.has(type)) {
         const payload = (a as { payload?: { fallbackConfirmed?: boolean } }).payload;
         enqueueOnWork(!!payload?.fallbackConfirmed);
+      }
+
+      /* The fire check: re-open on arrival (OD27) and the deferred active
+         open (OD28, A8). Runs after every action, not just
+         previewChapterComplete — the arrival itself is what arms it. */
+      const after = store.getState() as StreamableRootState;
+      const activeAfter = activeBookId(after);
+      const pv = after.ui.previewRegen;
+      if (activeBefore !== activeAfter) armedFor = pv && pv.bookId === activeAfter ? activeAfter : null;
+      if (
+        armedFor !== null &&
+        armedFor === activeAfter &&
+        pv?.bookId === armedFor &&
+        pv.completed !== undefined && // finished (OD27/OD28) — the ONLY completed test
+        after.ui.openRevision === null && // never over a player the user has open
+        after.chapters.currentBookId === armedFor // this book's chapter rows (A8)
+      ) {
+        armedFor = null; // once per arm; openPreview's own dispatches re-enter with it cleared
+        void openPreview(dispatch, () => store.getState() as StreamableRootState, {
+          bookId: pv.bookId,
+          chapterId: pv.previewChapterId,
+          completed: pv.completed,
+        });
       }
 
       return result;

@@ -8,24 +8,31 @@
 // the HALT path, and the plan-114 PROFILE-REGEN PREVIEW GATE (open the A/B
 // player when the previewed chapter completes). These tests cover exactly those.
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
-import { chaptersSlice } from './chapters-slice';
+import { chaptersSlice, previewChapterComplete } from './chapters-slice';
 import { manuscriptSlice } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { changeLogSlice } from './change-log-slice';
 import { castSlice } from './cast-slice';
 import { revisionsSlice } from './revisions-slice';
+import { notificationsSlice } from './notifications-slice';
+import { librarySlice } from './library-slice';
 import { analysisSlice, analysisActions } from './analysis-slice';
 import { queueSlice } from './queue-slice';
 import { accountSlice } from './account-slice';
 import { generationStreamMiddleware } from './generation-stream-middleware';
+import { revisionPlayerMiddleware } from './revision-player-middleware';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
 import type { Chapter } from '../lib/types';
 
 const streamGenerationMock = vi.fn();
 const cancelMock = vi.fn();
 const pauseGenerationMock = vi.fn();
+const { pollRevisionsMock, getChapterAudioPreviousMock } = vi.hoisted(() => ({
+  pollRevisionsMock: vi.fn(),
+  getChapterAudioPreviousMock: vi.fn(),
+}));
 let fetchMock: ReturnType<typeof vi.fn>;
 
 vi.mock('../lib/api', () => ({
@@ -38,6 +45,8 @@ vi.mock('../lib/api', () => ({
       pauseGenerationMock(args);
       return Promise.resolve();
     },
+    pollRevisions: (args: unknown) => pollRevisionsMock(args),
+    getChapterAudioPrevious: (args: unknown) => getChapterAudioPreviousMock(args),
   },
 }));
 
@@ -59,7 +68,7 @@ beforeEach(() => {
   vi.stubGlobal('fetch', fetchMock);
 });
 
-function makeStore() {
+function makeStore(opts: { watcher?: boolean } = {}) {
   let runner: StreamRunner | null = null;
   const getRunner = (): StreamRunner => runner!;
   const store = configureStore({
@@ -70,11 +79,14 @@ function makeStore() {
       changeLog: changeLogSlice.reducer,
       cast: castSlice.reducer,
       revisions: revisionsSlice.reducer,
+      notifications: notificationsSlice.reducer,
+      library: librarySlice.reducer,
       analysis: analysisSlice.reducer,
       queue: queueSlice.reducer,
       account: accountSlice.reducer,
     },
-    middleware: (gd) => gd().concat(generationStreamMiddleware(getRunner)),
+    middleware: (gd) =>
+      gd().concat(...(opts.watcher ? [revisionPlayerMiddleware] : []), generationStreamMiddleware(getRunner)),
   });
   runner = createStreamRunner(store);
   return { store, getRunner };
@@ -415,44 +427,357 @@ describe('generationStreamMiddleware — halt + preview gate', () => {
     expect(getRunner().openBookCount()).toBe(0);
   });
 
-  it('opens a playable A/B stub when the PREVIEWED chapter completes', () => {
-    const { store } = makeStore();
+});
+
+describe('plan 286 — previewChapterComplete', () => {
+  const F = '000000000000001-a';
+  const PREVIEW = { bookId: 'b1', characterId: 'marlow', previewChapterId: 3, remainingChapterIds: [4], reason: 'voice', note: '' };
+  function seedPreview(store: ReturnType<typeof makeStore>['store']) {
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
-    store.dispatch(
-      castSlice.actions.setCharacters([
-        { id: 'marlow', name: 'Marlow', isNarrator: false } as never,
-      ]),
-    );
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
-    store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'in_progress' })]));
-    store.dispatch(
-      uiSlice.actions.setPreviewRegen({
-        characterId: 'marlow',
-        previewChapterId: 3,
-        remainingChapterIds: [4, 5],
-        reason: 'voice',
-        note: '',
-        bookId: 'b1',
-      }),
-    );
-    /* chapter_complete for the preview chapter → markRevisionPlayable. The
-       middleware builds the playable stub fresh and opens the diff player. */
-    store.dispatch(revisionsSlice.actions.markRevisionPlayable({ chapterId: 3 }));
-    const stub = store.getState().ui.previewRegen?.stub;
-    expect(stub?.chapterId).toBe(3);
-    expect(stub?.characterId).toBe('marlow');
-    expect(stub?.playable).toBe(true);
+    store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '05:00' })]));
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'marlow', name: 'Marlow' } as never]));
+    store.dispatch(uiSlice.actions.setPreviewRegen(PREVIEW as never));
+  }
+  const recorded = (id = 'revision:3:1700') => ({ bookId: 'b1', fileId: F, rev: 1, pending: [{ id, chapterId: 3, characterId: 'marlow', segments: [], origin: 'server' }], dismissed: [], acceptedSelections: {}, timeline: {}, drift: [] });
+  const empty = () => ({ bookId: 'b1', fileId: F, rev: 1, pending: [], dismissed: [], acceptedSelections: {}, timeline: {}, drift: [] });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const toasts = (store: ReturnType<typeof makeStore>['store']) => store.getState().notifications.toasts.map((t) => t.message);
+  beforeEach(() => { pollRevisionsMock.mockReset(); getChapterAudioPreviousMock.mockReset(); });
+  afterEach(() => vi.useRealTimers());
+
+  it('active book + recorded entry → refetch, then open that server entry', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    pollRevisionsMock.mockResolvedValueOnce(recorded());
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'revision:3:1700', chapterId: 3 }));
+    expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
+  });
+  it('a completion on the book while an arrival arm is pending opens it once (one refetch)', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival arms; the preview has not finished
+    pollRevisionsMock.mockResolvedValue(recorded());
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'revision:3:1700', chapterId: 3 }));
+    await tick();
+    expect(pollRevisionsMock).toHaveBeenCalledTimes(1);
+  });
+  it("'failed' (preserved, unrecorded) → no refetch; previous metadata decides the stub", async () => {
+    const { store } = makeStore(); seedPreview(store);
+    getChapterAudioPreviousMock.mockResolvedValueOnce({ url: 'blob:a', durationSec: 1, peaks: [], sampleRate: 1, segments: [] });
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'failed' }));
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+    expect(pollRevisionsMock).not.toHaveBeenCalled();
+    expect(store.getState().ui.previewRegen?.stub).toMatchObject({ chapterId: 3, hasPreviousAudio: true, playable: true });
+  });
+  it("'none' (a first render) → no refetch, a stub with no kept take", async () => {
+    const { store } = makeStore(); seedPreview(store);
+    getChapterAudioPreviousMock.mockResolvedValueOnce(null);
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+    expect(pollRevisionsMock).not.toHaveBeenCalled();
+    expect(store.getState().ui.previewRegen?.stub?.hasPreviousAudio).toBe(false);
+    expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
+  });
+  it("OD29 — 'recorded' on its own book, but the refetch finds no entry → dropped as resolved elsewhere, never a stub", async () => {
+    const { store } = makeStore(); seedPreview(store);
+    pollRevisionsMock.mockResolvedValueOnce(empty());
+    getChapterAudioPreviousMock.mockResolvedValue(null); // a stub, if one were (wrongly) built, would open cleanly
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    await vi.waitFor(() => expect(store.getState().ui.previewRegen).toBeNull());
+    expect(store.getState().ui.openRevision).toBeNull();
+    expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
+    expect(toasts(store)).toEqual(['This preview was resolved elsewhere']);
+  });
+  it('a failed refetch does not open a stub straight away; the retry succeeding opens the entry', async () => {
+    vi.useFakeTimers();
+    const { store } = makeStore(); seedPreview(store);
+    pollRevisionsMock.mockRejectedValueOnce(new Error('x')).mockResolvedValueOnce(recorded());
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getState().ui.openRevision).toBeNull();
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'revision:3:1700', chapterId: 3 }));
+  });
+  it('a doubly-failed refetch still opens the stub', async () => {
+    vi.useFakeTimers();
+    const { store } = makeStore(); seedPreview(store);
+    pollRevisionsMock.mockRejectedValueOnce(new Error('x')).mockRejectedValueOnce(new Error('y'));
+    getChapterAudioPreviousMock.mockResolvedValueOnce(null);
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getState().ui.openRevision).toBeNull();
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+    expect(store.getState().revisions.pending).toEqual([]);
+  });
+  it('a previous-metadata GET that throws → stub with hasPreviousAudio:false', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    getChapterAudioPreviousMock.mockRejectedValueOnce(new Error('500'));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'failed' }));
+    await vi.waitFor(() => expect(store.getState().ui.previewRegen?.stub?.hasPreviousAudio).toBe(false));
+  });
+  it('a non-active book → "Preview ready in ‹title›" toast and nothing opens', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    store.dispatch(librarySlice.actions.hydrate({ authors: [{ name: 'A', series: [{ name: 'S', books: [{ bookId: 'other', title: 'Other Book' }] }] }] } as never));
+    store.dispatch(previewChapterComplete({ bookId: 'other', chapterId: 3, reviewOutcome: 'recorded' }));
+    expect(toasts(store)).toEqual(['Preview ready in Other Book']);
+    expect(store.getState().ui.openRevision).toBeNull();
+    expect(pollRevisionsMock).not.toHaveBeenCalled();
+  });
+  it('OD27 — a non-active completion marks the matching preview finished', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: false });
+    expect(store.getState().ui.openRevision).toBeNull();
+  });
+  it('OD28 — an active completion marks the preview finished too, so after a close the next arrival re-opens it', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+    expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
+    store.dispatch(uiSlice.actions.setOpenRevision(null)); // the player's close
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+    expect(getChapterAudioPreviousMock).toHaveBeenCalledTimes(2);
+  });
+  it("OD27 — arriving back at the preview book re-opens a first render ('none') as a stub — never dropped", async () => {
+    const { store } = makeStore(); seedPreview(store); // chapters.currentBookId is already 'b1'
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    getChapterAudioPreviousMock.mockResolvedValueOnce(null);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+    expect(store.getState().ui.previewRegen?.stub).toMatchObject({ chapterId: 3, hasPreviousAudio: false });
+  });
+  it('OD27 — arriving back opens the recorded server entry when there is one', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    expect(pollRevisionsMock).not.toHaveBeenCalled(); // not on completion elsewhere
+    pollRevisionsMock.mockResolvedValueOnce(recorded());
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'revision:3:1700', chapterId: 3 }));
+  });
+  it("OD29 — arriving back after a 'recorded' completion elsewhere, with no entry now, drops the preview with one notice", async () => {
+    const { store } = makeStore(); seedPreview(store);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    pollRevisionsMock.mockResolvedValueOnce(empty());
+    getChapterAudioPreviousMock.mockResolvedValue(null); // a stub, if one were (wrongly) built, would open cleanly
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    await vi.waitFor(() => expect(store.getState().ui.previewRegen).toBeNull());
+    expect(store.getState().ui.openRevision).toBeNull();
+    expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
+    expect(toasts(store).filter((m) => m === 'This preview was resolved elsewhere')).toHaveLength(1);
+  });
+  it('OD28/OD29 — leaving the book while the arrival refetch is in flight leaves the preview re-openable', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    let release!: (v: unknown) => void;
+    pollRevisionsMock.mockReturnValueOnce(new Promise((r) => (release = r)));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival: the refetch starts
+    await vi.waitFor(() => expect(pollRevisionsMock).toHaveBeenCalledTimes(1));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' })); // leave before it lands
+    release(empty());
+    await tick();
+    expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'recorded', stubFallback: false });
+    expect(toasts(store)).not.toContain('This preview was resolved elsewhere');
+  });
+  it("OD27 — the re-open waits for the arriving book's chapters", async () => {
+    const { store } = makeStore(); seedPreview(store);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b2'));
+    store.dispatch(chaptersSlice.actions.setChapters([ch(9, { state: 'done', duration: '01:00' })])); // b2's chapters
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival; chapters still b2's
+    await tick();
+    expect(store.getState().ui.openRevision).toBeNull();
+    /* b1's hydrate lands: rows first, then the book id the gate keys on (the
+       real per-book hydrate sets both in one action). */
+    store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '05:00' })]));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+  });
+  it("A8 — an active completion waits for its own book's chapters (chapter ids repeat across books)", async () => {
+    const { store } = makeStore(); seedPreview(store); // active b1
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b2'));
+    store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '09:00' })])); // ANOTHER book's chapter 3
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    await tick();
+    expect(store.getState().ui.openRevision).toBeNull();
+    expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
+    expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
+    store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '05:00' })]));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+    expect(getChapterAudioPreviousMock).toHaveBeenCalledWith({ bookId: 'b1', chapterId: 3, duration: '05:00' });
+  });
+  it('OD27 — no re-open on arrival without a finished preview', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // no completion happened
+    await tick();
+    expect(store.getState().ui.openRevision).toBeNull();
+    expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
+    expect(pollRevisionsMock).not.toHaveBeenCalled();
+  });
+  it('OD28 — never opens over a player the user has open; it opens once that player closes', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    store.dispatch(uiSlice.actions.setOpenRevision({ kind: 'server', revisionId: 'r-x', chapterId: 5 }));
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    await tick();
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'r-x', chapterId: 5 });
+    expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
+    store.dispatch(uiSlice.actions.setOpenRevision(null)); // the user closes it
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+  });
+  it('OD28 — a stub that cannot be built yet (character not loaded) leaves the preview re-openable', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    store.dispatch(castSlice.actions.hydrateCharacters([]));
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    await vi.waitFor(() => expect(getChapterAudioPreviousMock).toHaveBeenCalled());
+    await tick();
+    const warned = warn.mock.calls.length; // read before mockRestore, which clears mock.calls in vitest 5
+    warn.mockRestore();
+    expect(warned).toBeGreaterThan(0);
+    expect(store.getState().ui.openRevision).toBeNull();
+    expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'marlow', name: 'Marlow' } as never]));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+  });
+  it('the stub never enters the revisions cache and survives a poll', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    getChapterAudioPreviousMock.mockResolvedValueOnce(null);
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+    /* Asserted BEFORE the poll: a stub dispatched into the cache (mutation 4)
+       would be wiped by the rev-9 poll's adoption below, masking it. */
+    expect(store.getState().revisions.pending).toEqual([]);
+    store.dispatch(revisionsSlice.actions.applyPoll({ ...empty(), rev: 9 }));
+    expect(store.getState().revisions.pending).toEqual([]);
+    expect(store.getState().ui.previewRegen?.stub).toBeDefined();
     expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' });
   });
+  /* A1 (pass 4) — openPreview re-checks after its awaits. Each test holds one
+     await open with a manual promise, changes the state the guard reads, then
+     releases it. */
+  it('A1 — a player the user opens during the refetch window is not replaced', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    let release!: (v: unknown) => void;
+    pollRevisionsMock.mockReturnValueOnce(new Promise((r) => (release = r)));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    await vi.waitFor(() => expect(pollRevisionsMock).toHaveBeenCalledTimes(1));
+    store.dispatch(uiSlice.actions.setOpenRevision({ kind: 'server', revisionId: 'r-x', chapterId: 5 })); // the user opens another take
+    release(recorded()); // the refetch lands WITH an entry for chapter 3
+    await tick();
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'r-x', chapterId: 5 });
+    expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'recorded', stubFallback: true }); // the OD28 marker is kept
+  });
+  it('A1 — a player the user opens during the previous-audio GET is not replaced by the stub', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    let release!: (v: unknown) => void;
+    getChapterAudioPreviousMock.mockReturnValueOnce(new Promise((r) => (release = r)));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    await vi.waitFor(() => expect(getChapterAudioPreviousMock).toHaveBeenCalledTimes(1));
+    store.dispatch(uiSlice.actions.setOpenRevision({ kind: 'server', revisionId: 'r-x', chapterId: 5 }));
+    release(null);
+    await tick();
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'r-x', chapterId: 5 });
+    expect(store.getState().ui.previewRegen?.stub).toBeUndefined();
+    expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
+  });
+  it('A1 — moving to book B during the GET builds no stub there; returning to the preview book re-opens it', async () => {
+    const { store } = makeStore(); seedPreview(store);
+    let release!: (v: unknown) => void;
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    getChapterAudioPreviousMock.mockReturnValueOnce(new Promise((r) => (release = r)));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    await vi.waitFor(() => expect(getChapterAudioPreviousMock).toHaveBeenCalledTimes(1));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' })); // no player open on b2
+    release(null);
+    await tick();
+    expect(store.getState().ui.openRevision).toBeNull();
+    expect(store.getState().ui.previewRegen?.stub).toBeUndefined();
+    expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival: the kept marker re-opens it
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+  });
+});
 
-  it('does NOT open a preview when a chapter completes outside a preview (plain regen, no A/B gate)', () => {
-    const { store } = makeStore();
+/* OD30 (pass 4) — INTEGRATION: the generation middleware AND the player
+   watcher in one store, in production order, with a non-empty cache for the
+   preview's chapter. The unit stores above install no watcher, so they cannot
+   see the race between the stub and its open (watcher rule 1 dropping the
+   stub, rule 2 hiding its player); this describe exists for that. */
+describe('plan 286 — OD30: an existing entry for the chapter wins over the stub (generation middleware + watcher)', () => {
+  const F = '000000000000001-a';
+  const PREVIEW = { bookId: 'b1', characterId: 'marlow', previewChapterId: 3, remainingChapterIds: [4], reason: 'voice', note: '' };
+  const cached = { bookId: 'b1', fileId: F, rev: 1, pending: [{ id: 'revision:3:1700', chapterId: 3, characterId: 'marlow', segments: [], origin: 'server' as const }], dismissed: [], acceptedSelections: {}, timeline: {}, drift: [] };
+  function integratedStore() {
+    const { store } = makeStore({ watcher: true });
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
-    store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'in_progress' })]));
-    /* No previewRegen → a completing chapter just lands; no stub, no player. */
-    store.dispatch(revisionsSlice.actions.markRevisionPlayable({ chapterId: 3 }));
-    expect(store.getState().revisions.pending).toHaveLength(0);
-    expect(store.getState().ui.openRevision).toBeNull();
+    store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '05:00' })]));
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'marlow', name: 'Marlow' } as never]));
+    store.dispatch(revisionsSlice.actions.applyPoll(cached)); // the active cache already holds an entry for chapter 3
+    store.dispatch(uiSlice.actions.setPreviewRegen(PREVIEW as never));
+    return store;
+  }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const opensTheEntry = async (store: ReturnType<typeof integratedStore>, outcome: 'recorded' | 'none' | 'failed') => {
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'revision:3:1700', chapterId: 3 }));
+    const pv = store.getState().ui.previewRegen;
+    expect(pv).toMatchObject({ bookId: 'b1', previewChapterId: 3 }); // still the preview: the layout opens it in preview mode, so Approve runs the fan-out (Task 22)
+    expect(pv?.stub).toBeUndefined();
+    expect(pv?.completed).toEqual({ reviewOutcome: outcome, stubFallback: false });
+    expect(store.getState().notifications.toasts).toEqual([]);
+  };
+  beforeEach(() => { pollRevisionsMock.mockReset(); getChapterAudioPreviousMock.mockReset(); });
+  afterEach(() => vi.useRealTimers());
+
+  it.each(['none', 'failed'] as const)("'%s' with a cached entry for the chapter opens that entry, not a stub", async (outcome) => {
+    const store = integratedStore();
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: outcome }));
+    await opensTheEntry(store, outcome);
+    expect(pollRevisionsMock).not.toHaveBeenCalled(); // OD29: no refetch for these outcomes; the CACHED entry won
+  });
+  it("'recorded' whose refetch fails twice, with a cached entry for the chapter, opens that entry, not a stub", async () => {
+    vi.useFakeTimers();
+    const store = integratedStore();
+    pollRevisionsMock.mockRejectedValueOnce(new Error('x')).mockRejectedValueOnce(new Error('y'));
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    await vi.advanceTimersByTimeAsync(1000);
+    await opensTheEntry(store, 'recorded');
+    expect(pollRevisionsMock).toHaveBeenCalledTimes(2);
+  });
+  it("A1 — moving to book B during the GET does not close the player the user opened on B", async () => {
+    const store = integratedStore();
+    let release!: (v: unknown) => void;
+    getChapterAudioPreviousMock.mockReturnValueOnce(new Promise((r) => (release = r)));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    await vi.waitFor(() => expect(getChapterAudioPreviousMock).toHaveBeenCalledTimes(1));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(revisionsSlice.actions.applyServerState({ bookId: 'b2', fileId: F, rev: 1, pending: [{ id: 'rB', chapterId: 2, characterId: 'c', segments: [] }], dismissed: [], acceptedSelections: {}, timeline: {} }));
+    store.dispatch(uiSlice.actions.setOpenRevision({ kind: 'server', revisionId: 'rB', chapterId: 2 })); // B's own player, which the watcher keeps (rB is cached)
+    release(null);
+    await tick();
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'rB', chapterId: 2 });
+    expect(store.getState().ui.previewRegen?.stub).toBeUndefined();
+    expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
   });
 });
