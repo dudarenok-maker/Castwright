@@ -81,6 +81,7 @@ import {
 } from '../analyzer/roster-coverage.js';
 import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
 import { readUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
+import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight, type PreflightTarget } from '../analyzer/preflight.js';
 import {
   clearAnalysisCache,
   loadAnalysisCache,
@@ -3470,24 +3471,6 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      view's "Accept smaller roster" button re-fires the same request
      with this flag so the next attempt skips the gate. */
   const allowStage1Shrink = req.body?.allowStage1Shrink === true;
-  /* Plan 118 / #3141 step 1 — resolve the Phase 0 (cast detection) analyzer
-     via the per-phase selector, so a saved Advanced Settings override
-     (`analyzer.phase0.model`) is honoured rather than ignored (the old
-     `selectAnalyzer({ model })` only ever saw the per-request model + the
-     GEMINI_MODEL default). */
-  let selection: AnalyzerSelection;
-  try {
-    selection = selectAnalyzerForPhase({
-      phase: 'phase0',
-      model: requestedModel,
-      phaseModel: requestedPhase0Model,
-    });
-  } catch (e) {
-    /* #3084 P23 — every selection error is sent with its classified code. */
-    send(analyzerSelectionErrorEvent(e));
-    clearInterval(keepAlive);
-    return res.end();
-  }
   /* Read the prior outcome FILE OUTSIDE the critical section (before the
      existing-job check). The .await below would otherwise insert a gap into
      what must be an atomic "check existing, then set new job" window (#3004
@@ -3509,8 +3492,8 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
      this branch and the original analyzer keeps running untouched.
      Otherwise (no existing job, or fresh: true displacement), abort
      any prior job and start a new one detached in the background. */
-  const existing = inFlightAnalysisByManuscript.get(manuscriptId);
-  if (existing && !existing.controller.signal.aborted && !requestedFresh) {
+  /* #3084 P14 + #3004 — double-checked dispatch. `joinLive` is today's rejoin body, unchanged. */
+  const joinLive = (live: AnalysisJob): void => {
     /* F2 (#3169 fix wave) — the one outcome line for the attach path. The
        job object doesn't store the model it's running (only `engine`), so
        this deliberately omits `model` rather than printing the requesting
@@ -3519,18 +3502,66 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
        explicitly picked one. */
     console.log(`[analysis] subscribe manuscript=${JSON.stringify(manuscriptId)}`);
     const subscriber: AnalysisSubscriber = { send, res, keepAlive };
-    existing.subscribers.add(subscriber);
-    replayCatchUp(existing, send);
+    live.subscribers.add(subscriber);
+    replayCatchUp(live, send);
     res.on('close', () => {
       if (res.writableEnded) return;
-      existing.subscribers.delete(subscriber);
+      live.subscribers.delete(subscriber);
       clearInterval(keepAlive);
       /* Do NOT abort — sticky semantics. The analyzer keeps running
          until /pause or the queue drains. */
     });
     res.on('finish', () => clearInterval(keepAlive));
+  };
+  let existing = inFlightAnalysisByManuscript.get(manuscriptId);
+  /* 1. P14 — a reload joins the live job before any pre-run work: no digest read, no checks.
+     An endpoint (or its key) deleted mid-run must not refuse the reload, and the running job
+     keeps its own analyzer. */
+  if (existing && !existing.controller.signal.aborted && !requestedFresh) {
+    joinLive(existing);
     return;
   }
+  /* 2. #3084 N7 + A3 — only a new job reads saved settings and the installed digests of its
+     Ollama targets (bounded 2 s, fail-open). #3192 removed this POST's settings read; the checks
+     need the saved endpoints and keys, and the read warms the cache resolveKnob reads for a
+     saved phase-model override. */
+  const userSettings = await readUserSettings();
+  const requestedPhaseModels = { phase0: requestedPhase0Model, phase1: requestedPhase1Model };
+  const preflightDigests = await resolvePreflightDigests(
+    preflightTargets(['phase0', 'phase1'], requestedModel, userSettings, requestedPhaseModels),
+  );
+  /* 3. #3004 — those awaits reopened the check-then-register window: a concurrent POST may have
+     registered a job while this one waited. Re-check with the same condition and join that
+     job rather than start a second one. Reassigning `existing` also makes the displacement
+     below abort a job registered during the wait (fresh: true) instead of orphaning it. */
+  existing = inFlightAnalysisByManuscript.get(manuscriptId);
+  if (existing && !existing.controller.signal.aborted && !requestedFresh) {
+    joinLive(existing);
+    return;
+  }
+  /* 4. #3084 P14 — pre-run checks and analyzer selection, for a NEW job only. All three calls
+     are synchronous: no `await` from the re-check above to `inFlightAnalysisByManuscript.set`
+     below, so the check-then-register window stays atomic (#3004). `preflight` stays in
+     function scope: Task 3d.1 reads it. */
+  let preflight: PreflightTarget[];
+  let selection: AnalyzerSelection;
+  try {
+    preflight = preflightTargets(['phase0', 'phase1'], requestedModel, userSettings, requestedPhaseModels);
+    runAnalyzerPreflight(preflight, userSettings, preflightDigests);
+    selection = selectAnalyzerForPhase({ phase: 'phase0', model: requestedModel, phaseModel: requestedPhase0Model });
+  } catch (e) {
+    /* #3084 P23/P14 — one coded event for every check or selection failure: 3b Task 3b.1a's
+       helper classifies each class, never returns null, and carries its detail. This `catch`
+       is 3b.1a's, unchanged; only the block above it moved and grew the two check calls. */
+    send(analyzerSelectionErrorEvent(e));
+    clearInterval(keepAlive);
+    return res.end();
+  }
+  /* No log line here. On 80be2f1d the resolved selection is already logged once the
+     dispatch decision has been made — `[analysis] start manuscript=… engine=… model=…`
+     (`analysis.ts:3502-3504`, both values `JSON.stringify`d against log injection, #3169 F2).
+     The conditional `[analysis] manuscript=…` line this block used to re-add no longer
+     exists, so adding one here would duplicate the start line. */
   if (existing) {
     existing.controller.abort();
     /* Don't delete from the map here — the displaced job's own loop
@@ -6815,19 +6846,21 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
      reattach for the main run. Otherwise we register a new sticky job
      and spawn the analyzer work detached so the user can navigate
      away without aborting the retry. */
-  const existing = inFlightSubsetByManuscript.get(manuscriptId);
-  if (existing && !existing.controller.signal.aborted) {
+  /* #3084 P14 + #3004 — the same double-checked dispatch as the main POST. `joinLive` is
+     today's subset rejoin body. It keeps #3202's rule, so neither live-job check below can
+     silently attach this request to a run of other chapters. */
+  const joinLive = (live: AnalysisJob): void => {
     /* #3202 — join only when this request's chapter set matches the
        running job's. Compared as sets (order-independent): a request for
        different chapters must not silently attach to someone else's run
        and then report on the wrong chapters. */
     const requestedIdSet = new Set(toRun.map((t) => t.id));
-    const runningIdSet = new Set(existing.subsetChapterIds ?? []);
+    const runningIdSet = new Set(live.subsetChapterIds ?? []);
     const sameChapterSet =
       requestedIdSet.size === runningIdSet.size &&
       [...requestedIdSet].every((id) => runningIdSet.has(id));
     if (!sameChapterSet) {
-      const runningChapters = (existing.subsetChapterIds ?? [])
+      const runningChapters = (live.subsetChapterIds ?? [])
         .map((id) => hintsById.get(id))
         .filter((h): h is NonNullable<typeof h> => !!h);
       const runningTitles = runningChapters.map((c) => c.title).join(', ');
@@ -6842,7 +6875,8 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
          re-POST from a wedged request that never got a response. */
       console.log(`[analysis-subset] subset_in_progress manuscript=${JSON.stringify(manuscriptId)}`);
       clearInterval(keepAlive);
-      return res.end();
+      res.end();
+      return;
     }
     /* F2 (#3169 fix wave) — same rationale as the parent route: the job
        doesn't store the model it's running, so this omits `model` rather
@@ -6850,16 +6884,22 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
        one. */
     console.log(`[analysis-subset] subscribe manuscript=${JSON.stringify(manuscriptId)}`);
     const subscriber: AnalysisSubscriber = { send, res, keepAlive };
-    existing.subscribers.add(subscriber);
-    replayCatchUp(existing, send);
+    live.subscribers.add(subscriber);
+    replayCatchUp(live, send);
     res.on('close', () => {
       if (res.writableEnded) return;
-      existing.subscribers.delete(subscriber);
+      live.subscribers.delete(subscriber);
       clearInterval(keepAlive);
       /* Do NOT abort — sticky semantics. The retry keeps running until
          /pause or terminal completion. */
     });
     res.on('finish', () => clearInterval(keepAlive));
+  };
+  let existing = inFlightSubsetByManuscript.get(manuscriptId);
+  /* 1. P14 — a reload goes through the live subset job (joined for the same chapters, refused
+     with subset_in_progress for others): no settings read, no digest read, no checks. */
+  if (existing && !existing.controller.signal.aborted) {
+    joinLive(existing);
     return;
   }
 
@@ -6873,14 +6913,36 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
     typeof body?.phase1Model === 'string' && body.phase1Model.trim().length > 0
       ? body.phase1Model
       : undefined;
+  const requestedPhaseModels = { phase0: requestedPhase0Model, phase1: requestedPhase1Model };
+  /* 2. #3084 N7 + A3 — new subset job only: saved settings (#3192 removed this POST's read; the
+     checks need the saved endpoints and keys) and the installed digests of the Ollama targets
+     (bounded 2 s, fail-open). */
+  const userSettings = await readUserSettings();
+  const preflightDigests = await resolvePreflightDigests(
+    preflightTargets(['phase0', 'phase1'], requestedModel, userSettings, requestedPhaseModels),
+  );
+  /* 3. #3004 — both awaits above reopen the check-then-register window. Re-check with the same
+     condition: a job a concurrent POST registered meanwhile goes through joinLive, so the same
+     chapters join it and a different subset is refused (#3202), never duplicated. */
+  existing = inFlightSubsetByManuscript.get(manuscriptId);
+  if (existing && !existing.controller.signal.aborted) {
+    joinLive(existing);
+    return;
+  }
   /* Plan 118 / #3141 step 1 — resolve cast (Phase 0) and attribution
      (Phase 1) analyzers via the per-phase selector so a saved Advanced
      Settings override applies to the subset retry too. This path is
      sequential (no watermark); the split only changes which model each
      pass uses. */
+  /* 4. #3084 P14 — the checks and both selections share one failure path, and P23's shared
+     coded event (3b Task 3b.1a) reports every failure on it, checks included. No `await`
+     from the re-check above to `inFlightSubsetByManuscript.set` below (#3004). */
+  let preflight: PreflightTarget[];
   let selection: AnalyzerSelection;
   let phase1Selection: AnalyzerSelection;
   try {
+    preflight = preflightTargets(['phase0', 'phase1'], requestedModel, userSettings, requestedPhaseModels);
+    runAnalyzerPreflight(preflight, userSettings, preflightDigests);
     selection = selectAnalyzerForPhase({
       phase: 'phase0',
       model: requestedModel,
@@ -6892,8 +6954,7 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
       phaseModel: requestedPhase1Model,
     });
   } catch (e) {
-    /* #3084 P23 — every selection error is sent with its classified code. */
-    send(analyzerSelectionErrorEvent(e));
+    send(analyzerSelectionErrorEvent(e)); // P23/P14 — the shared coded event, checks included
     clearInterval(keepAlive);
     return res.end();
   }
