@@ -5885,7 +5885,7 @@ but never the real embedding path). *Criteria:* the observations above; issue
 #3414 and the mutation-tested regression split (#3449 stale-drop, #3460
 kept-and-gates) for the exact defect this closes.
 
-### A113 · Live structured output — Test action ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #NNNN) · **GPU box with Ollama + a llama-swap endpoint on one card; a Gemini key; a small-context vLLM or an OpenRouter endpoint**
+### A113 · Live structured output — Test action ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3595) · **GPU box with Ollama + a llama-swap endpoint on one card; a Gemini key; a small-context vLLM or an OpenRouter endpoint**
 
 The Test action (Advanced Settings → Analyzer rate limits → **Test**) runs a ladder: a
 control request with no structured output, then one request per mode (`schema` with a
