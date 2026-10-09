@@ -174,7 +174,7 @@ vi.mock('../store/prosody-thunk', () => ({
   runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0 })),
 }));
 
-import { Layout, _resetRevisionsErrorToastedForTests } from './layout';
+import { Layout, _resetRevisionsErrorToastedForTests, _resetRevisionPollWarningsForTests } from './layout';
 import { api, ApiError } from '../lib/api';
 import { uiActions } from '../store/ui-slice';
 import { revisionsActions } from '../store/revisions-slice';
@@ -1939,11 +1939,7 @@ describe('Layout — background revisions poll keeps the active book pending (#3
     store.dispatch(uiActions.openBook({ id: 'book-A-slug', status: 'cast_pending' }));
     /* The active book's disk-hydrated pending — this is what must survive. */
     store.dispatch(
-      revisionsActions.hydrateFromBookState({
-        bookId: 'book-A-slug',
-        pending: [{ id: 'r-active', chapterId: 3, characterId: 'eliza', segments: [] }],
-        drift: [],
-      }),
+      revisionsActions.applyServerState(revState('book-A-slug', F1, 1, ['r-active'])),
     );
 
     render(
@@ -1972,62 +1968,147 @@ describe('Layout — background revisions poll keeps the active book pending (#3
   });
 });
 
-/* #3376 round 2 — review pass 1 on PR #3395 found the ACTIVE book's own 30 s
-   poll still overwrote client-owned `pending`: applyPoll echoed whatever
-   `pollRevisions` returned, and a poll landing while the persistence
-   middleware's 500 ms debounce hadn't yet flushed the user's own
-   enqueuePending/markRevisionPlayable/accept/reject edits would revert them
-   in the store — then the NEXT debounced write would persist that reverted
-   list to disk, permanently losing the edit. `pending` is now seeded exactly
-   once, from the one-shot disk hydrate above, and the active poll (like the
-   background one) never touches it again. */
-describe('Layout — active book poll never overwrites client-owned pending (#3376 round 2)', () => {
-  it('a stale/empty pollRevisions response does not clobber pending set locally after hydrate', async () => {
-    /* null = nothing persisted on disk for this fetch; the seeded pending
-       below stands in for a disk-hydrated value the user has since mutated
-       locally (e.g. markRevisionPlayable after a regen completed) that
-       hasn't reached the server's revisions.json yet. */
-    getBookStateMock.mockResolvedValue(null);
-    /* The active book's 30 s ticker answers with a response reflecting an
-       OLDER disk snapshot than what the client already holds — exactly the
-       shape a poll lands with when it started before the client's own
-       debounced persist reached disk. */
-    pollRevisionsMock.mockResolvedValue({
-      pending: [{ id: 'r-old', chapterId: 1, characterId: 'halloran', segments: [] }],
-      drift: [],
-    });
+describe('Layout — revisions polls (plan 286)', () => {
+  function libraryOf(ids: string[]) {
+    return {
+      authors: [
+        {
+          name: 'Della Renwick',
+          series: [
+            {
+              name: 'The Hollow Tide',
+              books: ids.map((id) => ({
+                bookId: id,
+                title: `Book ${id}`,
+                author: 'Della Renwick',
+                series: 'The Hollow Tide',
+                seriesPosition: 1,
+                isStandalone: false,
+                status: 'complete',
+                chapterCount: 1,
+                completedChapters: 1,
+                characterCount: 1,
+                voiceCount: 1,
+                lastWorkedOn: 'today',
+                coverGradient: ['#000', '#fff'],
+                tags: [],
+              })),
+            },
+          ],
+        },
+      ],
+    } as unknown as LibraryResponse;
+  }
+  beforeEach(() => {
+    _resetRevisionPollWarningsForTests();
+  });
+  async function noUnhandled(run: () => Promise<void>) {
+    const seen: unknown[] = [];
+    const on = (e: unknown) => seen.push(e);
+    process.on('unhandledRejection', on);
+    try {
+      await run();
+      await new Promise((r) => setTimeout(r, 10));
+    } finally {
+      process.off('unhandledRejection', on);
+    }
+    expect(seen).toEqual([]);
+  }
 
+  it('a stale active poll (lower rev) does not clobber pending', async () => {
+    getBookStateMock.mockResolvedValue(bookStateFor('b1', revState('b1', F1, 5, ['keep'])));
+    pollRevisionsMock.mockResolvedValue({ ...revState('b1', F1, 4, []), drift: [] });
+    pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
     const store = makeStore();
-    store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' }));
-    store.dispatch(
-      revisionsActions.hydrateFromBookState({
-        bookId: 'b1',
-        pending: [{ id: 'r-client', chapterId: 2, characterId: 'eliza', segments: [] }],
-        drift: [],
-      }),
-    );
-
-    render(
-      <Provider store={store}>
-        <MemoryRouter initialEntries={['/books/b1']}>
-          <Routes>
-            <Route path="/books/:bookId" element={<Layout />} />
-          </Routes>
-        </MemoryRouter>
-      </Provider>,
-    );
-
-    /* The active 30 s ticker fetches immediately on mount. */
-    await waitFor(() => {
-      expect(pollRevisionsMock).toHaveBeenCalledWith({ bookId: 'b1' });
+    act(() => {
+      store.dispatch({ type: 'ui/openBook', payload: { id: 'b1', status: 'complete' } });
     });
-
-    /* Under the pre-fix `applyPoll` (which wrote `s.pending = payload.pending`),
-       this would now read ['r-old'] — the client's own pending edit lost. */
-    await waitFor(() => {
-      const s = store.getState();
-      expect(s.revisions.pending.map((r) => r.id)).toEqual(['r-client']);
+    renderLayoutAt(store, 'b1');
+    await waitFor(() => expect(pollRevisionsMock).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0));
     });
+    expect(store.getState().revisions.pending.map((p) => p.id)).toEqual(['keep']);
+  });
+  it('a failing active poll is caught', async () => {
+    getBookStateMock.mockResolvedValue(null);
+    pollRevisionsMock.mockRejectedValue(new Error('500'));
+    pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await noUnhandled(async () => {
+      const store = makeStore();
+      act(() => {
+        store.dispatch({ type: 'ui/openBook', payload: { id: 'b1', status: 'complete' } });
+      });
+      renderLayoutAt(store, 'b1');
+      await waitFor(() => expect(pollRevisionsMock).toHaveBeenCalled());
+    });
+    warn.mockRestore();
+  });
+  it('D9 — a failing bulk poll is caught', async () => {
+    getBookStateMock.mockResolvedValue(null);
+    pollRevisionsBulkMock.mockRejectedValue(new Error('500'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await noUnhandled(async () => {
+      const store = makeStore();
+      store.dispatch(librarySlice.actions.hydrate(libraryOf(['active', 'bg1'])));
+      act(() => {
+        store.dispatch({ type: 'ui/openBook', payload: { id: 'active', status: 'cast_pending' } });
+      });
+      renderLayoutAt(store, 'active');
+      await waitFor(() => expect(pollRevisionsBulkMock).toHaveBeenCalled());
+    });
+    warn.mockRestore();
+  });
+  it('D9 — a partial byBookId with errors still applies the healthy books', async () => {
+    getBookStateMock.mockResolvedValue(null);
+    pollRevisionsBulkMock.mockResolvedValue({
+      byBookId: {
+        good: {
+          pending: [],
+          drift: [
+            {
+              id: 'g',
+              bookId: 'good',
+              characterId: 'eliza',
+              chapterId: 1,
+              chapterTitle: 'C1',
+              severity: 'severe',
+              factor: 'voice',
+            },
+          ],
+        },
+      },
+      errors: { bad: "Couldn't read this book's review state." },
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const store = makeStore();
+    store.dispatch(librarySlice.actions.hydrate(libraryOf(['active', 'good', 'bad'])));
+    act(() => {
+      store.dispatch({ type: 'ui/openBook', payload: { id: 'active', status: 'cast_pending' } });
+    });
+    renderLayoutAt(store, 'active');
+    await waitFor(() =>
+      expect(store.getState().revisions.drift.map((d) => d.id)).toContain('g'),
+    );
+    expect(warn.mock.calls.some((c) => String(c[0]).includes('bad'))).toBe(true);
+    warn.mockRestore();
+  });
+  it('more than 50 background books are polled in chunks of at most 50', async () => {
+    getBookStateMock.mockResolvedValue(null);
+    pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
+    const ids = Array.from({ length: 121 }, (_, i) => `bk${i}`);
+    const store = makeStore();
+    store.dispatch(librarySlice.actions.hydrate(libraryOf(ids)));
+    act(() => {
+      store.dispatch({ type: 'ui/openBook', payload: { id: 'bk0', status: 'cast_pending' } });
+    });
+    renderLayoutAt(store, 'bk0');
+    await waitFor(() => expect(pollRevisionsBulkMock).toHaveBeenCalledTimes(3));
+    const sizes = pollRevisionsBulkMock.mock.calls.map(
+      (c) => (c[0] as { bookIds: string[] }).bookIds.length,
+    );
+    expect(sizes).toEqual([50, 50, 20]);
   });
 });
 

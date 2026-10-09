@@ -94,8 +94,7 @@ describe('revisions thunks (plan 286)', () => {
     const store = makeStore();
     await store.dispatch(rejectRevisionOp({ bookId: 'A', revisionId: 'r1', chapterId: 3 }));
     expect(apiMock.pollRevisions).toHaveBeenCalledWith({ bookId: 'A' });
-    /* Task 19 adds: expect(store.getState().revisions.rev).toBe(4) — applyPoll
-       only adopts server state from Task 19 on. */
+    expect(store.getState().revisions.rev).toBe(4);
   });
   it.each([
     ['chapter_busy', 'This chapter is busy — try again when it finishes'],

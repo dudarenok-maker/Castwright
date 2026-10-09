@@ -388,32 +388,13 @@ export const revisionsSlice = createSlice({
         r.chapterId === a.payload.chapterId ? { ...r, playable: true } : r,
       );
     },
-    /* Runtime poll (the active book's 30 s ticker): refresh drift but never
-       `pending` — `pending` is CLIENT-OWNED once a book is open. It is
-       seeded from the disk hydrate (hydrateFromBookState, fired on book-open
-       in layout.tsx — and again, revisions-only, if the book was already
-       loaded but `revisions` got reset by a trip to a non-book view; see
-       `hydratedFor` above and #3395 pass 3, R1), and every
-       subsequent mutation is a local action (enqueuePending,
-       markRevisionPlayable, acceptRevision, rejectRevision, …) plus the
-       500 ms-debounced persistence-middleware write-through. A poll landing
-       mid-debounce would otherwise echo a stale disk snapshot over a
-       write that hasn't reached disk yet — reverting an in-flight accept/
-       reject or losing a revision enqueued after the poll's own snapshot
-       was taken (#3376 round 2). Also DON'T touch dismissed or
-       acceptedSelections. Since plan 285 the single-book poll does carry
-       both (the bulk poll still doesn't), but until PR 2's cutover this
-       slice still owns them: adopting the poll's copy would revert a
-       local dismiss/accept still inside its persistence debounce.
-
-       Multi-book aware: when the caller stamps `bookId` onto the payload,
-       only that book's drift entries are replaced — events from other
-       concurrently-active books survive the poll. Same drift-merge shape as
-       applyBackgroundPoll below; the two differ only in polling cadence and
-       book scope now that neither touches `pending`. */
-    applyPoll: (s, a: PayloadAction<(RevisionsResponse & { bookId?: string }) | undefined>) => {
-      const payload = a.payload || ({} as RevisionsResponse & { bookId?: string });
-      mergeDriftForBook(s, payload.bookId, payload.drift);
+    /* Plan 286 — the server owns pending. The poll carries the whole
+       RevisionsState plus live drift: drift always merges (per book); the rest
+       is adopted by the ordered rule, so a slow poll cannot revert a newer op
+       response. Callers dispatch only for the active book. */
+    applyPoll: (s, a: PayloadAction<RevisionsResponse & { bookId: string }>) => {
+      mergeDriftForBook(s, a.payload.bookId, a.payload.drift);
+      if (shouldAdoptOrdered(s, a.payload)) adopt(s, a.payload);
       s.loaded = true;
     },
     /* Background fan-out (Plan 83's 120 s bulk poll over NON-active books):

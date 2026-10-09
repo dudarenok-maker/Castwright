@@ -10,7 +10,7 @@ import {
   scopeDriftGroupsByBook,
   distinctDriftChapterCount,
 } from './revisions-slice';
-import type { Revision, DriftEvent, RevisionsResponse } from '../lib/types';
+import type { Revision, DriftEvent } from '../lib/types';
 
 const rev = (id: string, overrides: Partial<Revision> = {}): Revision => ({
   id,
@@ -82,60 +82,63 @@ describe('distinctDriftChapterCount — headline count dedupes to chapters', () 
   });
 });
 
-describe('revisionsSlice — applyPoll', () => {
-  it('hydrates drift and flips loaded, but never touches pending', () => {
-    const next = revisionsSlice.reducer(
+describe('applyPoll adopts server state (plan 286)', () => {
+  const F = '000000000000001-a';
+  const base = () =>
+    revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
-        pending: [rev('r1'), rev('r2')],
-        drift: [drift('d1')],
+      revisionsActions.applyServerState({
+        bookId: 'A',
+        fileId: F,
+        rev: 2,
+        pending: [],
+        dismissed: [],
+        acceptedSelections: {},
+        timeline: {},
       }),
     );
-    /* `pending` is client-owned — even a payload that carries a `pending`
-       list (the server still echoes one; see server/src/routes/revisions.ts)
-       must not land in the slice from a poll. */
-    expect(next.pending).toEqual([]);
-    expect(next.drift.map((d) => d.id)).toEqual(['d1']);
-    expect(next.loaded).toBe(true);
-  });
-
-  it('falls back to an empty drift array when payload omits drift', () => {
-    const next = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.applyPoll({} as RevisionsResponse),
+  it('adopts pending/dismissed by the ordered rule and merges drift', () => {
+    const s = revisionsSlice.reducer(
+      base(),
+      revisionsActions.applyPoll({
+        bookId: 'A',
+        fileId: F,
+        rev: 3,
+        pending: [{ id: 'p', chapterId: 1, characterId: 'c', segments: [] }],
+        dismissed: ['d'],
+        drift: [{ id: 'x', bookId: 'A' } as never],
+      }),
     );
-    expect(next.pending).toEqual([]);
-    expect(next.drift).toEqual([]);
-    expect(next.loaded).toBe(true);
+    expect(s.pending.map((p) => p.id)).toEqual(['p']);
+    expect(s.dismissed).toEqual(['d']);
+    expect(s.drift.map((d) => d.id)).toEqual(['x']);
+    expect(s.loaded).toBe(true);
   });
-
-  it('replaces prior drift on each poll, and never overwrites an existing pending list (#3376 round 2)', () => {
-    /* Regression for the active-book-poll variant of #3376: a poll landing
-       mid-debounce used to echo disk's (older) pending list over a pending
-       entry the user had just enqueued locally, silently dropping it once
-       the 500ms persistence debounce fired and wrote the reverted list back
-       to disk. See src/components/layout.test.tsx for the full end-to-end
-       repro through the real store + persistence middleware.
-
-       The poll's payload below deliberately carries a DIFFERENT `pending`
-       list (`r2`, not `r1`) than the one already hydrated — if applyPoll
-       ever wrote `payload.pending` into the slice (as it used to), this
-       assertion would catch it going red; a poll that merely echoes back
-       the same list it hydrated can't distinguish "never touches pending"
-       from "overwrites pending with an identical copy". */
+  it('a stale poll (lower rev) updates drift but not pending', () => {
     let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({ pending: [rev('r1')], drift: [drift('d1')] }),
+      base(),
+      revisionsActions.applyServerState({
+        bookId: 'A',
+        fileId: F,
+        rev: 5,
+        pending: [{ id: 'keep', chapterId: 1, characterId: 'c', segments: [] }],
+        dismissed: [],
+        acceptedSelections: {},
+        timeline: {},
+      }),
     );
     s = revisionsSlice.reducer(
       s,
       revisionsActions.applyPoll({
-        pending: [rev('r2')],
-        drift: [],
+        bookId: 'A',
+        fileId: F,
+        rev: 4,
+        pending: [],
+        drift: [{ id: 'new', bookId: 'A' } as never],
       }),
     );
-    expect(s.pending.map((r) => r.id)).toEqual(['r1']);
-    expect(s.drift).toEqual([]);
+    expect(s.pending.map((p) => p.id)).toEqual(['keep']);
+    expect(s.drift.map((d) => d.id)).toEqual(['new']);
   });
 });
 
@@ -193,7 +196,7 @@ describe('revisionsSlice — applyBackgroundPoll (#3376)', () => {
     expect(loaded.loaded).toBe(false);
     const afterPoll = revisionsSlice.reducer(
       next,
-      revisionsActions.applyPoll({ pending: [], drift: [] }),
+      revisionsActions.applyPoll({ bookId: 'book-D', pending: [], drift: [] }),
     );
     expect(revisionsSlice.reducer(afterPoll, revisionsActions.applyBackgroundPoll({ bookId: 'book-D', drift: [] })).loaded).toBe(true);
   });
@@ -300,6 +303,7 @@ describe('revisionsSlice — dismissDrift', () => {
     const start = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [drift('d1'), drift('d2'), drift('d3')],
       }),
     );
@@ -311,6 +315,7 @@ describe('revisionsSlice — dismissDrift', () => {
     const start = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [drift('d1'), drift('d2')],
       }),
     );
@@ -322,6 +327,7 @@ describe('revisionsSlice — dismissDrift', () => {
     let s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [drift('d1')],
       }),
     );
@@ -334,6 +340,7 @@ describe('revisionsSlice — dismissDrift', () => {
     const start = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [drift('d1')],
       }),
     );
@@ -344,28 +351,6 @@ describe('revisionsSlice — dismissDrift', () => {
        Persisting it is harmless: the backend's drift detector only emits ids
        it knows, so a stray entry can never resurrect a real drift. */
     expect(next.dismissed).toEqual(['not-real']);
-  });
-});
-
-describe('revisionsSlice — applyPoll preserves dismissed', () => {
-  it('a runtime poll does not overwrite the dismissed list', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [],
-        drift: [drift('d1')],
-        dismissed: ['d2', 'd3'],
-      }),
-    );
-    s = revisionsSlice.reducer(
-      s,
-      revisionsActions.applyPoll({
-        pending: [],
-        drift: [drift('d4')],
-      }),
-    );
-    expect(s.dismissed).toEqual(['d2', 'd3']);
-    expect(s.drift.map((d) => d.id)).toEqual(['d4']);
   });
 });
 
@@ -952,9 +937,13 @@ describe('revisionsSlice — multi-book drift (plan: drift-report-fidelity)', ()
   });
 
   it('hydrateFromBookState with bookId merges into the flat drift list', () => {
+    /* Seeded via applyBackgroundPoll (drift-only, never adopts `bookId` —
+       plan 286's applyPoll now owns the single-book cache identity, which
+       would make a later hydrateFromBookState for a DIFFERENT book trip the
+       stale-hydrate guard at revisions-slice.ts `payload.bookId !== s.bookId`). */
     let s = revisionsSlice.reducer(
       undefined,
-      revisionsActions.applyPoll({
+      revisionsActions.applyBackgroundPoll({
         bookId: 'book-A',
         drift: [drift('d-A1', { bookId: 'book-A' })],
       }),
@@ -974,6 +963,7 @@ describe('revisionsSlice — multi-book drift (plan: drift-report-fidelity)', ()
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('d-A1', { bookId: 'book-A' }),
           drift('d-B1', { bookId: 'book-B' }),
@@ -995,6 +985,7 @@ describe('revisionsSlice — multi-book drift (plan: drift-report-fidelity)', ()
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [drift('d-A1', { bookId: 'book-A' })],
       }),
     );
@@ -1007,6 +998,7 @@ describe('revisionsSlice — multi-book drift (plan: drift-report-fidelity)', ()
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('d-A1', { bookId: 'book-A' }),
           drift('d-B1', { bookId: 'book-B' }),
@@ -1049,6 +1041,7 @@ describe('selectDriftGroupsByBook — (book × character × snapshot) consolidat
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('d1', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur }),
           drift('d2', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur }),
@@ -1066,6 +1059,7 @@ describe('selectDriftGroupsByBook — (book × character × snapshot) consolidat
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('d1', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur }),
           drift('d2', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur }),
@@ -1083,6 +1077,7 @@ describe('selectDriftGroupsByBook — (book × character × snapshot) consolidat
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('d3', { bookId: 'book-A', chapterId: 9, snapshot: snapA, current: cur }),
           drift('d1', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur }),
@@ -1098,6 +1093,7 @@ describe('selectDriftGroupsByBook — (book × character × snapshot) consolidat
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('d1', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, severity: 'severe' }),
           drift('d2', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, severity: 'moderate' }),
@@ -1114,6 +1110,7 @@ describe('selectDriftGroupsByBook — (book × character × snapshot) consolidat
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('d1', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, factor: 'voice' }),
           drift('d2', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, factor: 'warmth' }),
@@ -1129,6 +1126,7 @@ describe('selectDriftGroupsByBook — (book × character × snapshot) consolidat
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('d1', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, autoQueueable: true }),
           drift('d2', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, autoQueueable: undefined }),
@@ -1142,6 +1140,7 @@ describe('selectDriftGroupsByBook — (book × character × snapshot) consolidat
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [drift('d1', { bookId: 'book-A', snapshot: snapA, current: cur })],
       }),
     );
@@ -1172,6 +1171,7 @@ describe('selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)', 
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('drift:book-A:3:marlow:voice', {
             bookId: 'book-A',
@@ -1227,6 +1227,7 @@ describe('selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)', 
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('d-c5', { bookId: 'book-A', chapterId: 5, snapshot: snapA, current: cur, factor: 'voice' }),
           drift('d-c2-v', { bookId: 'book-A', chapterId: 2, snapshot: snapA, current: cur, factor: 'voice' }),
@@ -1247,6 +1248,7 @@ describe('selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)', 
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           /* CH 1: voice severe (auto) + warmth moderate (NOT auto) → chapter NOT auto. */
           drift('d1v', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, factor: 'voice', autoQueueable: true }),
@@ -1271,6 +1273,7 @@ describe('selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)', 
     const s = revisionsSlice.reducer(
       undefined,
       revisionsActions.applyPoll({
+        bookId: 'book-A',
         drift: [
           drift('d1s', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, factor: 'voice', severity: 'severe' }),
           drift('d1mod', { bookId: 'book-A', chapterId: 1, snapshot: snapA, current: cur, factor: 'warmth', severity: 'moderate' }),
@@ -1383,6 +1386,7 @@ describe('scopeDriftGroupsByBook', () => {
   const s = revisionsSlice.reducer(
     undefined,
     revisionsActions.applyPoll({
+      bookId: 'book-A',
       drift: [
         drift('d-a', { bookId: 'book-A' }),
         drift('d-b', { bookId: 'book-B' }),

@@ -24,6 +24,7 @@ import {
   selectDriftGroupsByBook,
   scopeDriftGroupsByBook,
 } from '../store/revisions-slice';
+import { dismissDriftOp } from '../store/revisions-thunks';
 import { flushBookPersistence } from '../store/persistence-middleware';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions, findSeriesBookIds } from '../store/library-slice';
@@ -174,6 +175,18 @@ const revisionsErrorToasted = new Set<string>();
 /** Test-only. */
 export function _resetRevisionsErrorToastedForTests(): void {
   revisionsErrorToasted.clear();
+}
+
+const BULK_POLL_MAX = 50; // server cap: 'Up to 50 bookIds per request' (routes/revisions.ts)
+const loggedRevisionPollWarnings = new Set<string>();
+function warnOnce(key: string, msg: string): void {
+  if (loggedRevisionPollWarnings.has(key)) return;
+  loggedRevisionPollWarnings.add(key);
+  console.warn(msg);
+}
+/** Test-only. */
+export function _resetRevisionPollWarningsForTests(): void {
+  loggedRevisionPollWarnings.clear();
 }
 
 export function Layout() {
@@ -1106,15 +1119,24 @@ export function Layout() {
     if (stageKind !== 'ready' || !bookId) return;
     let cancelled = false;
     const fetchOnce = () =>
-      api.pollRevisions({ bookId }).then((res) => {
-        if (!cancelled) dispatch(revisionsActions.applyPoll({ ...res, bookId }));
-      });
+      api
+        .pollRevisions({ bookId })
+        .then((res) => {
+          if (
+            !cancelled &&
+            (store.getState().ui.stage as { bookId?: string }).bookId === bookId
+          ) {
+            dispatch(revisionsActions.applyPoll({ ...res, bookId }));
+          }
+        })
+        .catch((err) => console.warn('[revisions] active poll failed:', (err as Error).message));
     fetchOnce();
     const t = setInterval(fetchOnce, 30000);
     return () => {
       cancelled = true;
       clearInterval(t);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stageKind, bookId, dispatch]);
 
   /* Plan 83 — background fan-out across non-active books past cast-pending
@@ -1142,13 +1164,28 @@ export function Layout() {
   useEffect(() => {
     if (bgBookIds.length === 0) return;
     let cancelled = false;
-    const fetchOnce = () =>
-      api.pollRevisionsBulk({ bookIds: bgBookIds }).then((res) => {
-        if (cancelled) return;
-        for (const [id, r] of Object.entries(res.byBookId)) {
-          dispatch(revisionsActions.applyBackgroundPoll({ bookId: id, drift: r.drift }));
-        }
-      });
+    const fetchOnce = () => {
+      for (let i = 0; i < bgBookIds.length; i += BULK_POLL_MAX) {
+        const chunk = bgBookIds.slice(i, i + BULK_POLL_MAX);
+        api
+          .pollRevisionsBulk({ bookIds: chunk })
+          .then((res) => {
+            if (cancelled) return;
+            for (const [id, r] of Object.entries(res.byBookId)) {
+              dispatch(revisionsActions.applyBackgroundPoll({ bookId: id, drift: r.drift }));
+            }
+            for (const [id, msg] of Object.entries(res.errors ?? {})) {
+              warnOnce(`book:${id}`, `[revisions] background poll skipped ${id}: ${msg}`);
+            }
+          })
+          .catch((err) =>
+            warnOnce(
+              `chunk:${(err as Error).message}`,
+              `[revisions] background poll failed: ${(err as Error).message}`,
+            ),
+          );
+      }
+    };
     fetchOnce();
     const t = setInterval(fetchOnce, 120000);
     return () => {
@@ -2189,7 +2226,7 @@ export function Layout() {
               dispatch(uiActions.changeView('generate'));
             });
           }}
-          onDismiss={(eventId) => dispatch(revisionsActions.dismissDrift(eventId))}
+          onDismiss={(eventId) => void dispatch(dismissDriftOp(eventId))}
         />
       )}
       {profileCharacter &&
