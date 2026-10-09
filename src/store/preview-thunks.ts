@@ -31,7 +31,13 @@ export function startPreviewRegen(args: { bookId: string; characterId: string; c
 export function approvePreviewSideEffects(preview: PreviewRegenCtx) {
   return async (dispatch: AppDispatch, getState: () => RootState): Promise<void> => {
     dispatch(uiActions.setPreviewRegen(null));
-    const character = getState().cast.characters.find((c) => c.id === preview.characterId);
+    /* The change log and the cast are the OPEN book's — persistence saves the
+       log to whichever book is open — so a preview approved after switching
+       books must not log into the wrong one. The fan-out below is keyed on
+       preview.bookId and is still correct cross-book. */
+    const character = activeBookId(getState()) === preview.bookId
+      ? getState().cast.characters.find((c) => c.id === preview.characterId)
+      : undefined;
     if (character) {
       dispatch(changeLogActions.appendLogEvent(buildCharacterRegenEvent({
         character, chapterIds: [preview.previewChapterId, ...preview.remainingChapterIds], reason: preview.reason, note: preview.note,
