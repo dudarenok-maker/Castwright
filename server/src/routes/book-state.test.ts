@@ -1377,6 +1377,141 @@ describe('book-state router — backfills missing cast.lines from attribution', 
   });
 });
 
+describe('book-state router — #3440 canonicalises drift-spelled attribution ids', () => {
+  /* Regression (#3440 step 1 — The Floodmark "the_torment" case): a
+     manuscript attribution spelled as a DRIFT VARIANT of a live cast id
+     (`the-torment` vs the cast row `the_torment` — the two mintings
+     normaliseIdKey exists for, #2040 RC2) previously bucketed under its
+     own raw spelling: the cast row read 0 lines and the Fix-audio modal
+     could not find the character's chapters. The GET handler now joins
+     every manuscript characterId through buildCastResolver — the same
+     resolver the drift detector and the orphan collector use (CLAUDE.md:
+     cast.json is the identity of record) — before bucketing. An id that
+     resolves to NOTHING keeps its raw spelling: canonicalisation must
+     never drop an attribution. */
+  const DRIFT_TITLE = 'Drift Canon Test';
+  const DRIFT_MANUSCRIPT_ID = 'm_drift_canon_test';
+  let driftBookId: string;
+  let driftBookDir: string;
+
+  const DRIFT_SENTENCES = [
+    { id: 1, chapterId: 71, characterId: 'the-torment', text: 'Let it out.' },
+    { id: 2, chapterId: 71, characterId: 'the_torment', text: 'It is out.' },
+    { id: 3, chapterId: 72, characterId: 'the-torment', text: 'Again.' },
+    { id: 4, chapterId: 72, characterId: 'spectre-9x', text: 'Nobody mints me.' },
+  ];
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    driftBookId = makeBookId(AUTHOR, SERIES, DRIFT_TITLE);
+    driftBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, DRIFT_TITLE);
+    mkdirSync(join(driftBookDir, '.audiobook'), { recursive: true });
+
+    writeFileSync(join(driftBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(driftBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: driftBookId,
+        manuscriptId: DRIFT_MANUSCRIPT_ID,
+        title: DRIFT_TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [
+          { id: 71, title: 'Chapter 71', slug: '71-chapter' },
+          { id: 72, title: 'Chapter 72', slug: '72-chapter' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+
+    /* The cast row is the UNDERSCORE minting (cast-create.ts shape); the
+       manuscript attributes the HYPHEN spelling (analyzer shape) plus the
+       underscore spelling once. No cast-id-history.json on disk — the
+       normalised-id tier is exactly what maps one onto the other. */
+    writeFileSync(
+      join(driftBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'narrator', name: 'Narrator', lines: 40 },
+          { id: 'the_torment', name: 'The Torment' },
+        ],
+      }),
+    );
+  });
+
+  afterAll(async () => {
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    await clearAnalysisCache(DRIFT_MANUSCRIPT_ID);
+  });
+
+  const expectCanonicalised = (body: {
+    cast?: { characters?: Array<{ id: string; lines?: number }> };
+    chapterCharacters?: Record<string, string[]>;
+    characterIdAliases?: Record<string, string>;
+  }) => {
+    const chars = body.cast!.characters!;
+    const byId = Object.fromEntries(chars.map((c) => [c.id, c.lines]));
+    /* All three `the-torment`/`the_torment` attributions count onto the
+       SINGLE cast row — before the fix the row read 0 (blank lines →
+       derive-always clobbered it to 0) and the raw spelling owned 3. */
+    expect(byId['the_torment']).toBe(3);
+    const ch71 = body.chapterCharacters?.[71] ?? [];
+    const ch72 = body.chapterCharacters?.[72] ?? [];
+    /* Chapter buckets key on the CANONICAL id; the drift spelling is gone
+       (it would render a phantom second speaker pill in Generate). */
+    expect(ch71).toContain('the_torment');
+    expect(ch71).not.toContain('the-torment');
+    expect(ch72).toContain('the_torment');
+    expect(ch72).not.toContain('the-torment');
+    /* An id no cast row resolves keeps its raw spelling and stays
+       visible. */
+    expect(ch72).toContain('spectre-9x');
+    /* #3440 step 2 — the response ships the raw→canonical alias map so the
+       client can join raw ids against the canonical chapter rows without
+       re-implementing the resolver. Only the drifted id appears: `the-torment`
+       (raw) → `the_torment` (canonical). The non-drifted id (`the_torment`,
+       spelled the same in both manuscript and cast) and the unresolvable id
+       (`spectre-9x`, no cast row) are both ABSENT. */
+    expect(body.characterIdAliases).toEqual({ 'the-torment': 'the_torment' });
+  };
+
+  it('manuscript-edits.json branch: drift spellings count onto the cast row', async () => {
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    await clearAnalysisCache(DRIFT_MANUSCRIPT_ID);
+    writeFileSync(
+      join(driftBookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({ sentences: DRIFT_SENTENCES }),
+    );
+
+    const res = await request(app).get(`/api/books/${driftBookId}/state`);
+    expect(res.status).toBe(200);
+    expectCanonicalised(res.body);
+  });
+
+  it('analysis-cache fallback branch: same canonicalisation when edits are absent', async () => {
+    /* Analysis in flight: no manuscript-edits.json on disk — the
+       cache-derived sentence list feeds the same bucketing path. */
+    rmSync(join(driftBookDir, '.audiobook', 'manuscript-edits.json'), { force: true });
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    await saveAnalysisCache(DRIFT_MANUSCRIPT_ID, {
+      chapters: {
+        71: DRIFT_SENTENCES.filter((s) => s.chapterId === 71),
+        72: DRIFT_SENTENCES.filter((s) => s.chapterId === 72),
+      },
+    });
+
+    const res = await request(app).get(`/api/books/${driftBookId}/state`);
+    expect(res.status).toBe(200);
+    expectCanonicalised(res.body);
+  });
+});
+
 describe('book-state router — state slice series-membership + on-disk rename', () => {
   /* Each case in this block creates its own book on disk so the test
      observing the post-rename layout doesn't tread on the shared bookId

@@ -6338,6 +6338,19 @@ export interface components {
                 [key: string]: string[];
             };
             /**
+             * @description #3440 — raw manuscript attribution id → canonical cast id, only for
+             *     ids whose canonical form differs; same resolution `chapterCharacters`
+             *     and cast `lines` use. Same mapping the server applied when building
+             *     `chapterCharacters` and the cast rows' `lines`, so a client holding
+             *     raw ids (SSE progress ticks, manuscript sentences, voice-prepare
+             *     events) can join them against the canonical chapter rows without
+             *     re-implementing the resolver. Absent entries mean the raw id already
+             *     equals its cast id or could not be resolved.
+             */
+            characterIdAliases?: {
+                [key: string]: string;
+            };
+            /**
              * @description fe-16 — characterId → the engine the character ACTUALLY rendered in
              *     when it differs from its configured engine (`kokoro` when a Qwen
              *     character fell back across any rendered chapter). Threaded into

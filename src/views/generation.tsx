@@ -232,6 +232,16 @@ export function GenerationView({
   const generationStartedAt = useAppSelector((s) => s.chapters.generationStartedAt);
   const lastTickAt = useAppSelector((s) => s.chapters.lastTickAt);
   const sentences = useAppSelector((s) => s.manuscript.sentences);
+  /* #3440 step 4 — raw manuscript sentence ids can drift from the canonical
+     cast ids a book-state hydrate keys the chapter rows with (e.g.
+     the-torment → the_torment). The three per-character stat/position/id
+     maps below look the chapter row up by its canonical key, so they need an
+     aliased sentence list where every drifted id is rewritten to its
+     canonical form. Every other consumer of `sentences` (the overall
+     manuscriptCounts and the rendered-diff staleness sets) either keys by
+     chapterId or compares against render maps that still carry raw ids, so
+     they keep the raw list. */
+  const characterIdAliases = useAppSelector((s) => s.chapters.characterIdAliases);
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   /* #3435 decision A — the server refuses a subset run (Re-analyse, Include)
      while this book's main analysis run is live, so both controls are
@@ -953,21 +963,33 @@ export function GenerationView({
     );
   }
 
+  /* #3440 step 4 — rewrite drifted sentence characterIds to their canonical
+     form before the per-character maps are built, so a row keyed the_torment
+     finds the three lines attributed the-torment. Return the raw list by
+     reference when there are no aliases so references stay stable and nothing
+     re-renders; otherwise map only the sentences whose id actually drifted. */
+  const aliasedSentences = useMemo(() => {
+    if (Object.keys(characterIdAliases).length === 0) return sentences;
+    return sentences.map((s) => {
+      const alias = characterIdAliases[s.characterId];
+      return alias ? { ...s, characterId: alias } : s;
+    });
+  }, [sentences, characterIdAliases]);
   /* Manuscript-derived shape used both for accurate overall-progress
      weighting (so 3 hydrated-Done chapters don't collapse the bar to the
      in-flight chapter's progress) and for the per-character lines/words
      readout in the expanded chapter rows. */
   const manuscriptCounts = useMemo(() => sentencesPerChapter(sentences), [sentences]);
-  const characterStats = useMemo(() => characterStatsByChapter(sentences), [sentences]);
+  const characterStats = useMemo(() => characterStatsByChapter(aliasedSentences), [aliasedSentences]);
   /* Per-character line positions inside each chapter — drives the truthful
      fractional bar in the expanded row instead of the slice's "active
      speaker only" status field. See generation-progress.ts. */
-  const characterPositions = useMemo(() => characterLinePositionsByChapter(sentences), [sentences]);
+  const characterPositions = useMemo(() => characterLinePositionsByChapter(aliasedSentences), [aliasedSentences]);
   /* fs-13 — per-character sentence ids inside each chapter. Intersected with
      the chapter's live completed-id set for an EXACT per-character done count
      under out-of-order completion (the positions+currentLine map above is the
      fallback when the set is absent). */
-  const characterSentenceIds = useMemo(() => characterSentenceIdsByChapter(sentences), [sentences]);
+  const characterSentenceIds = useMemo(() => characterSentenceIdsByChapter(aliasedSentences), [aliasedSentences]);
   /* #650 — the set of chapters whose live sentence→speaker mapping differs from
      what was rendered (precise reassignment staleness). Recomputed from the live
      manuscript, so it reflects an edit immediately without a refetch; only

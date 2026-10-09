@@ -719,17 +719,22 @@ row this register still carries. Keep the table even when it is empty.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 7 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 14 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**62 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**63 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-08 (#3435, plan 287), 61 → 62.** Row **B106** (the
+> **Last change: 2026-10-09 (#3440), 62 → 63.** Row **E113** added — the real-book
+> line-count and Fix-audio check for the drifted-attribution-id fix, owed because
+> unit/integration/e2e coverage all run in mock mode and nobody has yet confirmed the
+> real Playing with Fire book against it. Group E `next-id` marker bumped E113 → E114.
+>
+> **Prior change: 2026-10-08 (#3435, plan 287), 61 → 62.** Row **B106** (the
 > background emotion re-run yields to and is aborted by real work on a real
 > analyzer) added from plan 287's "On-box acceptance owed" item 3. Group B
 > 6 → 7. `next-id` bumped B106 → B107 in the same change. Owed; not run here.
@@ -6601,7 +6606,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E113 -->
+<!-- next-id: E114 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -7247,6 +7252,15 @@ With a Gemini key and `analyzer.gemini.structuredOutput` = `schema`, analyse one
 - whether replies conform on the first attempt.
 
 This row does not by itself move Gemini's default: the spec gates that on attribution quality, which PR 3c's Test-action row records. Criteria: [`3084-openai-analyzer-onbox-acceptance.md` §5](3084-openai-analyzer-onbox-acceptance.md).
+
+### E113 · Drifted attribution id resolves correctly on the real Playing with Fire book ([#3440](https://github.com/dudarenok-maker/Castwright/issues/3440)) · **no GPU needed; a real book with a drifted cast id**
+
+Server-side `book-state` canonicalisation (`buildCastResolver`) now resolves attribution ids that drift between the manuscript's spelling and the cast's spelling (e.g. a hyphen vs. an underscore) before building line counts and chapter-character maps, and the client (chapters slice, Generate view) follows the same `characterIdAliases` map for live SSE ticks, re-analyzed chapters and sentence-derived stats. Unit, integration and e2e coverage (mock-mode Playwright) all pass; the line-count and live-SSE client paths are mutation-verified against the client-side fix, and the Fix-audio case is covered by confirming correct rendering from server-supplied canonical data. This row is the one thing none of that coverage can prove — that the real book this bug was filed against now resolves correctly.
+
+On the real Playing with Fire book, open the Generate view: the `the_torment` cast row should show **67 lines** (not fewer, which is the drifted-undercounting symptom), and opening Fix audio for that character should list chapters **17, 19, 20, 38 and 40** with Re-record enabled on each.
+
+*Needs:* no GPU, just the real manuscript and a running server. *Cost:* ~5 minutes.
+*Criteria:* the line count and chapter list above; #3440's original bug report for what "wrong" looked like before the fix.
 
 ## Group G — GitHub Actions itself
 

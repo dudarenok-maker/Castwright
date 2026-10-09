@@ -109,6 +109,14 @@ export interface ChaptersState {
       path only). Optional: absent until a hydrate carries one, so the existing
       ChaptersState test literals need no edit. */
   renderedInstructByChapter?: Record<number, Record<number, string>>;
+  /** #3440 step 3 — raw attribution id → canonical cast id map from the
+      book-state GET (only ids whose canonical form differs). SSE ticks
+      still carry raw ids; `keyFor` maps them onto the key the chapter row
+      actually uses before matching against `chapters[].characters`. Set by
+      `hydrateFromBookState` (empty for older servers — ticks then match raw
+      ids exactly as before) and cleared whenever a hydrate rebuilds the
+      rows for a different book. */
+  characterIdAliases: Record<string, string>;
   /** #3435 (decision F, O2) — chapters whose analysis did not finish
       (non-excluded, no current take, or a failure record), keyed by chapter
       id, with the note the Generate row shows. Hydrated from the book-state
@@ -157,7 +165,24 @@ const initialState: ChaptersState = {
   scoringProgress: {},
   renderedSpeakersByChapter: {},
   renderedTextByChapter: {},
+  characterIdAliases: {},
 };
+
+/** #3440 step 3 — map a raw SSE attribution id to the key this chapter row
+    actually uses. After `hydrateFromBookState` the row is keyed by the
+    canonical cast id while the progress tick still carries the RAW
+    attribution id (`server/src/routes/generation.ts:1678`). Return the
+    canonical alias only when the alias map names it AND the row has that
+    key; otherwise the raw id itself, so rows seeded raw by
+    `hydrateFromAnalysis` keep highlighting unchanged. */
+function keyFor(
+  aliases: Record<string, string>,
+  characters: Chapter['characters'],
+  rawId: string,
+): string {
+  const canonical = aliases[rawId];
+  return canonical !== undefined && characters[canonical] !== undefined ? canonical : rawId;
+}
 
 export const chaptersSlice = createSlice({
   name: 'chapters',
@@ -283,6 +308,9 @@ export const chaptersSlice = createSlice({
          gating both have a truthful frame of reference the instant
          chapters land. */
       if (bookId) s.currentBookId = bookId;
+      /* #3440 — analysis rebuilds the rows from RAW sentence ids, so stale
+         book-state aliases must not leak across the reset. */
+      s.characterIdAliases = {};
       /* #3435 — the gaps are left alone: a main `result` can still carry a
          flagged chapter (decision B), so the Confirm route's book-state re-read
          replaces them from the server (setAnalysisGapsFromBookState). */
@@ -324,6 +352,11 @@ export const chaptersSlice = createSlice({
           that actually speak in it. Absent (older server, or no analysis
           cache yet) — fall back to seeding every cast member as queued. */
         chapterCharacters?: Record<number, string[]>;
+        /** #3440 — raw attribution id → canonical cast id (drifted ids only),
+          from the same buildCastResolver pass that canonicalised
+          chapterCharacters. Ticks carry raw ids; keyFor maps them through.
+          Absent (older server) → cleared, rows stay raw-matched. */
+        characterIdAliases?: Record<string, string>;
         /** Plan 77 — per-chapter EBU R128 loudness sidecar payloads keyed
           by chapter id, surfaced by the book-state endpoint. Drives the
           listen-view LUFS report card + per-row drift badges. Absent
@@ -356,6 +389,7 @@ export const chaptersSlice = createSlice({
         completedSlugs,
         characters,
         chapterCharacters,
+        characterIdAliases,
         chapterLufs,
         renderedSpeakersByChapter,
         renderedTextByChapter,
@@ -367,6 +401,7 @@ export const chaptersSlice = createSlice({
       s.renderedSpeakersByChapter = renderedSpeakersByChapter ?? {};
       s.renderedTextByChapter = renderedTextByChapter ?? {};
       s.renderedInstructByChapter = renderedInstructByChapter ?? {};
+      s.characterIdAliases = characterIdAliases ?? {};
       const done = new Set(completedSlugs);
       const allCastQueued: Record<string, 'queued'> = {};
       for (const c of characters) allCastQueued[c.id] = 'queued';
@@ -592,7 +627,10 @@ export const chaptersSlice = createSlice({
         ch.progress = ev.progress ?? ch.progress;
         if (ev.currentLine != null) ch.currentLine = ev.currentLine;
         if (ev.totalLines != null) ch.totalLines = ev.totalLines;
-        ch.preparingVoiceCharacterId = ev.characterId ?? null;
+        ch.preparingVoiceCharacterId =
+          ev.characterId != null
+            ? keyFor(s.characterIdAliases, ch.characters, ev.characterId)
+            : null;
         return;
       }
 
@@ -675,14 +713,17 @@ export const chaptersSlice = createSlice({
            `chapter.currentLine` + manuscript line positions; the slice's
            status field just tracks "who is speaking right now". `done`
            still lands on `chapter_complete` for everyone non-skipped. */
-        const liveStatus = ch.characters[ev.characterId];
+        /* #3440 — the tick's id is the RAW attribution id; map it through the
+           book-state alias map onto the key this row actually uses. */
+        const liveKey = keyFor(s.characterIdAliases, ch.characters, ev.characterId);
+        const liveStatus = ch.characters[liveKey];
         if (liveStatus && liveStatus !== 'skipped') {
           for (const k of Object.keys(ch.characters)) {
-            if (ch.characters[k] === 'in_progress' && k !== ev.characterId) {
+            if (ch.characters[k] === 'in_progress' && k !== liveKey) {
               ch.characters[k] = 'queued';
             }
           }
-          ch.characters[ev.characterId] = 'in_progress';
+          ch.characters[liveKey] = 'in_progress';
         }
       }
     },
@@ -767,7 +808,15 @@ export const chaptersSlice = createSlice({
        contains the full chapter list, but only the subset's chapters
        have meaningful character maps. We update characters for chapters
        in `chapterIds` and leave the rest of the row (state/progress/
-       phase/etc.) untouched. */
+       phase/etc.) untouched.
+
+       #3440 — the response's sentences carry RAW attribution ids (the
+       same drift the rest of this slice resolves via `characterIdAliases`).
+       Canonicalising the speaker id here keeps the rebuilt row keyed the
+       same way `hydrateFromBookState` keys it; skipping this left a
+       re-analyzed chapter's row keyed raw while `aliasedSentences` in the
+       Generate view always rewrites to canonical, so the character's line
+       count and Fix-audio chapter list silently dropped that chapter. */
     mergeSubsetAnalysis: (
       s,
       a: PayloadAction<{ response: AnalyseResponse; chapterIds: number[] }>,
@@ -777,7 +826,8 @@ export const chaptersSlice = createSlice({
       const speakersByChapter: Record<number, Set<string>> = {};
       for (const sent of response.sentences ?? []) {
         if (!idSet.has(sent.chapterId)) continue;
-        (speakersByChapter[sent.chapterId] ??= new Set()).add(sent.characterId);
+        const canonical = s.characterIdAliases[sent.characterId] ?? sent.characterId;
+        (speakersByChapter[sent.chapterId] ??= new Set()).add(canonical);
       }
       for (const ch of s.chapters) {
         if (!idSet.has(ch.id)) continue;

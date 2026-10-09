@@ -297,6 +297,154 @@ describe('GenerationView — chapter & character metadata (regression for screen
   });
 });
 
+describe('GenerationView — #3440 step 4: aliased sentences join drifted attribution ids to their cast row', () => {
+  /* A book hydrated from book-state keys chapter rows by the CANONICAL cast id
+     (the_torment) while the manuscript sentences still carry the RAW
+     attribution id (the-torment). The chapters slice carries
+     characterIdAliases: { 'the-torment': 'the_torment' } from the same
+     hydrate. Without the alias rewrite the per-character stat lookup misses
+     (stat undefined → no "N lines · M words" span) and the drifted row shows
+     nothing. With it, the three maps key by the_torment and the row finds its
+     3 lines. */
+  const driftedCast: Character[] = [
+    { id: 'the_torment', name: 'The Torment', role: 'main', color: 'magenta' },
+    { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+  ];
+
+  /* 3 lines for the drifted character (raw the-torment) + 1 narrator line,
+     all in chapter 1 → 9 + 3 = 12 words. */
+  const driftedSentences: Sentence[] = [
+    { id: 1, chapterId: 1, characterId: 'the-torment', text: 'One two three.' }, // 3 words
+    { id: 2, chapterId: 1, characterId: 'the-torment', text: 'Four five six.' }, // 3 words
+    { id: 3, chapterId: 1, characterId: 'the-torment', text: 'Seven eight nine.' }, // 3 words
+    { id: 4, chapterId: 1, characterId: 'narrator', text: 'Hello there friend!' }, // 3 words
+  ];
+
+  /* Row keyed by the CANONICAL id the_torment — the drifted character's
+     lines only join it once the alias rewrite runs. */
+  const driftedChapter: Chapter = {
+    id: 1,
+    title: 'Chapter 1',
+    duration: '00:30',
+    state: 'done',
+    progress: 1,
+    characters: { the_torment: 'done', narrator: 'done' },
+  };
+
+  /* Raw-keyed chapter + cast for the no-aliases regression: the row key and
+     the sentence id are the same raw string, so they match directly with no
+     alias map — exactly as before #3440 step 4. */
+  const rawCast: Character[] = [
+    { id: 'the-torment', name: 'The Torment', role: 'main', color: 'magenta' },
+    { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' },
+  ];
+  const rawChapter: Chapter = {
+    id: 1,
+    title: 'Chapter 1',
+    duration: '00:30',
+    state: 'done',
+    progress: 1,
+    characters: { 'the-torment': 'done', narrator: 'done' },
+  };
+
+  function makeAliasStore(
+    chapters: Chapter[],
+    cast: Character[],
+    sents: Sentence[],
+    aliases: Record<string, string>,
+  ) {
+    const store = configureStore({
+      reducer: {
+        analysis: analysisSlice.reducer,
+        ui: uiSlice.reducer,
+        chapters: chaptersSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        cast: castSlice.reducer,
+        library: librarySlice.reducer,
+        queue: queueSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        account: accountSlice.reducer,
+      },
+      preloadedState: {
+        chapters: {
+          chapters: [],
+          lastError: null,
+          generationStartedAt: null,
+          lastTickAt: null,
+          currentBookId: null,
+          activeStreams: {},
+          scoringProgress: {},
+          renderedSpeakersByChapter: {},
+          renderedTextByChapter: {},
+          characterIdAliases: aliases,
+        },
+      },
+    });
+    store.dispatch(accountSlice.actions.setDefaultTtsModelKey('coqui-xtts-v2'));
+    store.dispatch(chaptersSlice.actions.setChapters(chapters));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromAnalysis({
+        bookId: 'b1',
+        characters: cast,
+        chapters,
+        sentences: sents,
+      } as any),
+    );
+    return store;
+  }
+
+  function renderAliasView(
+    chapters: Chapter[],
+    cast: Character[],
+    sents: Sentence[],
+    aliases: Record<string, string>,
+  ) {
+    const store = makeAliasStore(chapters, cast, sents, aliases);
+    const utils = render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={chapters}
+          characters={cast}
+          paused
+          title="the Coalfall Commission"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+    return { ...utils, store };
+  }
+
+  it('joins raw the-torment sentence ids to the canonical the_torment row via the alias map', () => {
+    renderAliasView([driftedChapter], driftedCast, driftedSentences, {
+      'the-torment': 'the_torment',
+    });
+    fireEvent.click(screen.getByText('Chapter 1'));
+    /* The row is keyed the_torment; the 3 manuscript lines carry the raw
+       the-torment. The alias rewrite feeds them to the stat builder keyed by
+       the_torment, so the lookup hits: 3 lines · 9 words. */
+    expect(screen.getByText(/3 lines · 9 words/)).toBeInTheDocument();
+    /* narrator already matches its canonical key — no alias needed, renders
+       exactly as before. */
+    expect(screen.getByText(/1 line · 3 words/)).toBeInTheDocument();
+  });
+
+  it('renders raw-keyed rows exactly as before when there are no aliases', () => {
+    renderAliasView([rawChapter], rawCast, driftedSentences, {});
+    fireEvent.click(screen.getByText('Chapter 1'));
+    /* No alias map → sentences keep their raw ids, the row is keyed by the
+       same raw ids, and the lookup hits directly. Identical to pre-step-4
+       behaviour. */
+    expect(screen.getByText(/3 lines · 9 words/)).toBeInTheDocument();
+    expect(screen.getByText(/1 line · 3 words/)).toBeInTheDocument();
+  });
+});
+
 describe('GenerationView — counters exclude ignored chapters (regression)', () => {
   /* Pre-fix the header counter and the "lines synthesised" sub-counter
      used `chapters.length` / iterated all chapters, so an excluded
