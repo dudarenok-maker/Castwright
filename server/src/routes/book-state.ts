@@ -34,7 +34,14 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withKeyLock, requestFailureMessage, isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { assertRevisionsResettable, resetRevisions } from '../workspace/revisions-store.js';
+import {
+  assertRevisionsResettable,
+  readRevisions,
+  resetRevisions,
+  revisionsFailureText,
+  toRevisionsState,
+  type RevisionsState,
+} from '../workspace/revisions-store.js';
 import { UnsupportedSchemaError } from '../workspace/schema-migrate.js';
 import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
@@ -275,16 +282,22 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     }
     const cast = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
     let edits = await readJson<{ sentences?: unknown[]; mergedAwayKeys?: string[] }>(manuscriptEditsJsonPath(bookDir));
-    const revs = await readJson<{
-      pending?: unknown[];
-      drift?: unknown[];
-      dismissed?: string[];
-      acceptedSelections?: Record<string, Record<number, 'A' | 'B'>>;
-      /* Plan 55 — per-chapter timeline. Persisted by the frontend; surfaced
-         on getBookState so the Revision History view can hydrate without an
-         extra round-trip. */
-      timeline?: Record<string, unknown[]>;
-    }>(revisionsJsonPath(bookDir));
+    /* Plan 286 — read through the store: normalised (legacy drift dropped,
+       stale legacy pending dropped), with fileId/rev for the client cache. An
+       unreadable file must not lock the user out of the book: serve null plus a
+       fixed, path-free revisionsError the client toasts once (OD2). */
+    let revs: RevisionsState | null;
+    let revisionsError: string | undefined;
+    try {
+      revs = toRevisionsState(req.params.bookId, await readRevisions(bookDir, state.chapters));
+    } catch (e) {
+      console.error('[book-state] revisions.json unreadable; serving the book without it', e);
+      revs = null;
+      revisionsError = revisionsFailureText(
+        e,
+        "This book's A/B review history couldn't be read, so its pending reviews aren't shown.",
+      );
+    }
     const changeLog = await readJson<{ events?: unknown[] }>(changeLogJsonPath(bookDir));
 
     /* Fallback for books whose stage 2 ran on older code (or hasn't fully
@@ -627,6 +640,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       manuscript,
       manuscriptEdits: edits,
       revisions: revs,
+      ...(revisionsError ? { revisionsError } : {}),
       completedSlugs,
       chapterCharacters,
       chapterLufs,

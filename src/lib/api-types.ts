@@ -6328,23 +6328,10 @@ export interface components {
             manuscriptEdits: {
                 sentences?: components["schemas"]["Sentence"][];
             } | null;
-            revisions: {
-                pending?: components["schemas"]["Revision"][];
-                drift?: components["schemas"]["DriftEvent"][];
-                dismissed?: string[];
-                /** @description revisionId → { segmentIndex → 'A' | 'B' } captured at accept time. */
-                acceptedSelections?: {
-                    [key: string]: unknown;
-                };
-                timeline?: {
-                    [key: string]: components["schemas"]["TimelineEntry"][];
-                };
-                /** @description Plan 285 — absent on a legacy file (PR 1 returns revisions.json raw). */
-                fileId?: string | null;
-                rev?: number;
-                /** @description Plan 285 — the file's schema stamp; present once the server has rewritten the file (reparse/replace or a store write), absent on a legacy file. */
-                schema?: number;
-            } | null;
+            /** @description Plan 286 — revisions.json read through the server store (normalised). Null when the file is unreadable (then `revisionsError` is set). */
+            revisions: components["schemas"]["RevisionsState"] | null;
+            /** @description Plan 286 — present only when revisions.json could not be read. A fixed, path-free user-facing sentence (or, for a newer-schema file, the server's own "upgrade the server" sentence); the client toasts it verbatim. */
+            revisionsError?: string;
             /** @description Slugs of chapters that already have an audio file on disk. */
             completedSlugs: string[];
             /**

@@ -8682,35 +8682,12 @@ components:
               type: array
               items: { $ref: '#/components/schemas/Sentence' }
         revisions:
-          type: object
+          description: Plan 286 — revisions.json read through the server store (normalised). Null when the file is unreadable (then `revisionsError` is set).
           nullable: true
-          properties:
-            pending:
-              type: array
-              items: { $ref: '#/components/schemas/Revision' }
-            drift:
-              type: array
-              items: { $ref: '#/components/schemas/DriftEvent' }
-            dismissed:
-              type: array
-              items: { type: string }
-            acceptedSelections:
-              type: object
-              additionalProperties: true
-              description: revisionId → { segmentIndex → 'A' | 'B' } captured at accept time.
-            timeline:
-              type: object
-              additionalProperties:
-                type: array
-                items: { $ref: '#/components/schemas/TimelineEntry' }
-            fileId:
-              type: string
-              nullable: true
-              description: Plan 285 — absent on a legacy file (PR 1 returns revisions.json raw).
-            rev: { type: integer }
-            schema:
-              type: integer
-              description: Plan 285 — the file's schema stamp; present once the server has rewritten the file (reparse/replace or a store write), absent on a legacy file.
+          allOf: [{ $ref: '#/components/schemas/RevisionsState' }]
+        revisionsError:
+          type: string
+          description: Plan 286 — present only when revisions.json could not be read. A fixed, path-free user-facing sentence (or, for a newer-schema file, the server's own "upgrade the server" sentence); the client toasts it verbatim.
         completedSlugs:
           type: array
           items: { type: string }
