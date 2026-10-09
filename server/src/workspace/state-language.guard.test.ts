@@ -189,8 +189,8 @@ const G1_ALLOWED = new Map<string, { writes: number; why: string }>([
   [
     'routes/book-state.ts',
     {
-      writes: 9,
-      why: 'writes cast.json, edits, revisions.json, change-log.json, carryover, log, listen-progress.json and listen-stats.json — all OTHER per-book .json, never state.json (its state writes route through writeStateJsonAtomic). One writeJsonAtomic( on :1070 is prose in a comment and is opaque, hence 9 not 10.',
+      writes: 8,
+      why: 'writes cast.json, edits, change-log.json, carryover, log, listen-progress.json and listen-stats.json — all OTHER per-book .json, never state.json (its state writes route through writeStateJsonAtomic). One writeJsonAtomic( on :1188 is prose in a comment and is opaque, hence 8 not 9.',
     },
   ],
   [

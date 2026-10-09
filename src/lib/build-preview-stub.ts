@@ -28,9 +28,9 @@ export function buildPreviewStub({
   hasPreviousAudio,
   triggeredBy,
 }: BuildArgs): Revision {
-  /* id encodes (chapterId, characterId) so enqueuePending's dedupe collapses
-     a regen-restart for the same target into the same slot. The trailing
-     epoch is intentionally NOT in the id — we want the dedupe to bite. */
+  /* id encodes (chapterId, characterId) so a regen-restart for the same
+     target collapses into the same slot. The trailing epoch is
+     intentionally NOT in the id — we want the dedupe to bite. */
   const id = `revision:${chapter.id}:${character.id}`;
   return {
     id,

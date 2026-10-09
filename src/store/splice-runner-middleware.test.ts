@@ -317,8 +317,8 @@ describe('spliceRunnerMiddleware', () => {
 
   /* The pre-286 '#3376' regression test ('never writes a splice revision into
      a book the user switched to mid-batch') asserted `revisions.pending`
-     changes driven by the runner's own `enqueuePending`/`markRevisionPlayable`
-     dispatches. Plan 286 Task 20 removes both — the runner never writes
+     changes driven by the runner's own now-removed pending-cache dispatches.
+     Plan 286 Task 20 removes both — the runner never writes
      pending, it refetches — so that test no longer has anything to pin and is
      deleted; the 'plan 286' tests above (particularly 'never writes pending'
      and 'does not refetch' for a book the user has left) cover the same

@@ -552,7 +552,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
    replay). The runner dispatches `chapters/previewChapterComplete` for
    ANY book on that tick (OD12: no refetch on a plain `chapter_complete`,
    so the dispatch alone must not fire for a tick without the flag), and
-   never the old `revisions/markRevisionPlayable`. */
+   and the deprecated preview-playable dispatch is gone. */
 describe('plan 286 — preview completion', () => {
   function recordingRunner() {
     const types: Array<{ type: string; payload?: unknown }> = [];

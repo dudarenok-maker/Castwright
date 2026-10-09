@@ -590,8 +590,8 @@ describe('Layout — revisions hydrate (plan 286)', () => {
    belongs to the book whose read failed; leaving that book must take the
    notice with it. Adapted to `bookStateFor`: the rest of the describe block
    this test came from (#3395 pass 3, R1/R1b/R2 — the revisions persistence
-   races) pinned `hydrateFromBookState`/`hydratedFor`/`windowActions`
-   machinery this task deletes from the layout effect; those cases are
+   races) pinned the pre-cutover per-book hydrate machinery this task
+   deletes from the layout effect; those cases are
    replaced by the revisions-slice cache tests (Task 12) and the thunk tests
    (Task 14). This one test exercises the FULL-LOAD retry/notice path, which
    Task 18 keeps unchanged (OD3). */
