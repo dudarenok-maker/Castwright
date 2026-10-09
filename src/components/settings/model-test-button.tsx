@@ -14,7 +14,17 @@ export function describeTestOutcome(entry: AnalyzerCatalogEntry): string | null 
      through `error` below instead, and the previous outcome keeps showing here. */
   const record = entry.capability;
   if (!record) return null;
-  return `${entry.structuredOutput.label} · tested ${record.testedAt.slice(0, 10)}`;
+  /* `structuredOutput.label` never says "rejected" by design (P7) — it answers "does this
+     mode need the schema adapter", not "did the last Test pass". A rejected configured
+     mode must say so here, or the line reads identically to a pass and the next analysis
+     refuses on a verdict this line never showed. `outcome` is the record's verdict for the
+     configured mode at the level a run sends: absent means that mode was never probed (a
+     'configured'-scope Test, then the endpoint switched mode), so the line must not claim
+     it was — `tested` here is the record's date, not the mode's. */
+  const { mode, outcome, label } = entry.structuredOutput;
+  const testedAt = record.testedAt.slice(0, 10);
+  if (!outcome) return `${mode} · not tested in this mode · last test ${testedAt}`;
+  return `${outcome === 'rejected' ? `${mode} · rejected` : label} · tested ${testedAt}`;
 }
 
 export function ModelTestButton({ entry, label }: { entry: AnalyzerCatalogEntry; label: string }) {

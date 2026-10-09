@@ -3837,6 +3837,11 @@ export interface components {
                 mode: "schema" | "json" | "off";
                 dropped: string[];
                 label: string;
+                /**
+                 * @description The Test action's recorded outcome for `mode` at the reasoning level actually sent (undefined when no record exists for it). `label` never says "rejected" by design (P7) — a refused mode still shows its plain structured-output label there — so a surface that must tell a rejection apart from a pass (the Settings Test result line) reads this instead.
+                 * @enum {string}
+                 */
+                outcome?: "enforced" | "ignored" | "rejected" | "accepted";
             };
             testPlan: {
                 configured: number;

@@ -9116,13 +9116,15 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
     const stored = capabilities[id];
     const record = stored && stored.serverUrl.replace(/\/+$/, '') === serverUrl ? stored : undefined;
     const dropped = mode === 'schema' ? droppedIfSchema : [];
+    const level = mockLevelKey(id);
+    const outcome = record?.structuredOutput[mode]?.[level];
     return {
       id,
       label: model,
       ...(record ? { capability: record } : {}),
       engine,
       model,
-      structuredOutput: { mode, dropped, label: structuredOutputLabel(mode, dropped, record, mockLevelKey(id)) },
+      structuredOutput: { mode, dropped, label: structuredOutputLabel(mode, dropped, record, level), ...(outcome ? { outcome } : {}) },
       testPlan: { configured: mode === 'off' ? 1 : 2, all: 3, attempts: engine === 'local' ? 1 : 3 },
     };
   };

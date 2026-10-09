@@ -32,6 +32,7 @@ describe('mockGetAnalyzerModels (#3084)', () => {
     const entry = catalog.groups.find((g) => g.kind === 'endpoint')?.models[0];
     expect(entry?.capability).toEqual(rec);
     expect(entry?.structuredOutput.label).toBe('schema (not enforced)');
+    expect(entry?.structuredOutput.outcome).toBe('ignored');
   });
 
   it('mockTestAnalyzerModel returns a record for the configured mode, filed under the level the engine sends', async () => {

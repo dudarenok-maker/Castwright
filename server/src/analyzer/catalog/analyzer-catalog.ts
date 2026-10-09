@@ -24,6 +24,7 @@ import {
   draft07,
   plannedTestRequestCount,
   type ModelCapabilityRecord,
+  type ProbeOutcome,
 } from '../capabilities.js';
 import {
   adaptSchemaForGemini,
@@ -47,7 +48,7 @@ export interface AnalyzerCatalogEntry {
   capability?: ModelCapabilityRecord;
   engine: 'local' | 'gemini' | 'openai';
   model: string;
-  structuredOutput: { mode: StructuredOutputMode; dropped: string[]; label: string };
+  structuredOutput: { mode: StructuredOutputMode; dropped: string[]; label: string; outcome?: ProbeOutcome };
   /** `attempts` (N6): the most attempts one Test request can take on this model's transport,
       retries included, so the confirm dialog can state the maximum. */
   testPlan: { configured: number; all: number; attempts: number };
@@ -270,6 +271,12 @@ function toEntry(
   const planDeps = { ...OFFERED, configuredMode: ctx.mode };
   /* P7: label from the record filed under the level a run of this model sends. */
   const level = defaultReasoningKey(ctx.kind === 'endpoint' ? 'openai' : ctx.kind);
+  /* `label` never says "rejected" by design (the fixture table pins this) — a mode
+     refused at the level a run sends still shows its plain structured-output label
+     there, because refusal is enforced by the pre-run check, not the label. A
+     surface that must tell a rejection apart from a pass (the Settings Test result
+     line) needs the raw per-level outcome instead. */
+  const outcome = capability?.structuredOutput[ctx.mode]?.[level];
   return {
     id: raw.id,
     label: raw.displayName ?? raw.model,
@@ -278,7 +285,12 @@ function toEntry(
     ...(capability ? { capability } : {}),
     engine: ctx.engine,
     model: raw.model,
-    structuredOutput: { mode: ctx.mode, dropped, label: structuredOutputLabel(ctx.mode, dropped, capability, level) },
+    structuredOutput: {
+      mode: ctx.mode,
+      dropped,
+      label: structuredOutputLabel(ctx.mode, dropped, capability, level),
+      ...(outcome ? { outcome } : {}),
+    },
     testPlan: {
       configured: plannedTestRequestCount({ modelId: raw.id, scope: 'configured' }, planDeps),
       all: plannedTestRequestCount({ modelId: raw.id, scope: 'all' }, planDeps),
