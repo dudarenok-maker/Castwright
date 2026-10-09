@@ -109,6 +109,135 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/analyzer/endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add a named OpenAI-compatible analyzer endpoint
+         * @description #3084 — adds an endpoint to user settings. `contextTokens` is required.
+         *     `gpu` defaults to `any` for a localhost / 127.0.0.1 / ::1 base URL,
+         *     else `none`. An `unloadUrl` must share the base URL's origin and may
+         *     contain `{model}`. The response is the GET /api/user/settings body;
+         *     API keys are never returned. Endpoints are NOT writable through
+         *     PUT /api/user/settings.
+         */
+        post: operations["createAnalyzerEndpoint"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analyzer/endpoints/detect-context": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Read a llama.cpp / llama-swap server's served context size
+         * @description #3084 decision 3b — runs only when the user clicks Detect. Reads
+         *     `GET <origin>/props` → `default_generation_settings.n_ctx`
+         *     (llama.cpp), or `GET <origin>/props?model=<model>` (llama-swap), which
+         *     loads the model and therefore requires `allowModelLoad: true`. A body
+         *     `apiKey` is sent to the body `baseUrl`; a stored key (`endpointId`) is
+         *     sent only when its saved origin matches, else 400 `auth` with no
+         *     request. Local-machine surface: no mock in src/lib/api.ts.
+         */
+        post: operations["detectAnalyzerEndpointContext"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analyzer/endpoints/{endpointId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpointId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace an analyzer endpoint's settings
+         * @description #3084 — the id cannot change. Changing `baseUrl` to another origin does
+         *     not move a saved key: its status becomes `origin-mismatch` and it is
+         *     not sent until re-entered.
+         */
+        put: operations["updateAnalyzerEndpoint"];
+        post?: never;
+        /**
+         * Delete an analyzer endpoint and its key
+         * @description #3084 — refused with 409 while a saved setting references the endpoint
+         *     (defaultAnalysisModel, or the analyzer.phase0.model /
+         *     analyzer.phase1.model / analyzer.personaGeneration.engine overrides);
+         *     `issues` lists them. The read-only effective `analyzerPhase0Model` /
+         *     `analyzerPhase1Model` response fields are not references.
+         */
+        delete: operations["deleteAnalyzerEndpoint"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analyzer/endpoints/{endpointId}/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpointId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save (or clear) an analyzer endpoint's API key
+         * @description #3084 decision 3c — stores the key bound to the endpoint base URL's
+         *     origin. Pass `{ "key": null }` to clear it. The key is never returned;
+         *     GET exposes `analyzerEndpointKeyStatus` only.
+         */
+        put: operations["putAnalyzerEndpointKey"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/user/settings/dropped-endpoint-entries/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge dropped analyzer endpoint entries
+         * @description #3084 F5 — marks each named archiveId acknowledged; it stops appearing
+         *     in droppedEndpointEntries. An unknown or already-acknowledged id is
+         *     ignored, not refused.
+         */
+        post: operations["acknowledgeDroppedEndpointEntries"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/backups": {
         parameters: {
             query?: never;
@@ -1786,6 +1915,75 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/revisions/{revisionId}/accept": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Accept a pending A/B revision — keep the new take (plan 285)
+         * @description One request runs the audio step (delete the chapter's `.previous.*`
+         *     pair — today's code) and then records the outcome in revisions.json
+         *     under the per-book revisions lock; the JSON is written only after the
+         *     audio step. Idempotent on the revision id. Refuses with 409
+         *     `live_audio_missing` when the chapter has no live audio but still has a
+         *     `.previous` take (accepting would delete the only copy — retry Reject).
+         *     No client caller until PR 2.
+         */
+        post: operations["acceptRevision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/revisions/{revisionId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject a pending A/B revision — restore the earlier take (plan 285)
+         * @description One request runs the audio step (promote `.previous.*` over the live
+         *     names — today's code) and then records the outcome. The JSON is
+         *     untouched when the request is refused as busy, finds no `.previous`, or
+         *     the audio step throws. No client caller until PR 2.
+         */
+        post: operations["rejectRevision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/drift/{driftId}/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Dismiss a drift event (plan 285)
+         * @description Adds the id to revisions.json's `dismissed`. Idempotent; touches no audio. No client caller until PR 2.
+         */
+        post: operations["dismissDrift"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/revisions": {
         parameters: {
             query?: never;
@@ -1799,6 +1997,7 @@ export interface paths {
          *     poll (120 s tick) — the active book keeps using `pollRevisions`
          *     above. Skips any bookId that doesn't exist on disk rather than
          *     404ing, so one removed book doesn't take down the whole poll.
+         *     Plan 285 — each value carries exactly `pending` (read through the server store, normalised) and `drift`.
          */
         get: operations["pollRevisionsBulk"];
         put?: never;
@@ -3455,6 +3654,20 @@ export interface components {
                 [key: string]: number;
             };
             /**
+             * @description #3084 — named OpenAI-compatible analyzer endpoints. Written only by
+             *     the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
+             */
+            analyzerEndpoints?: components["schemas"]["AnalyzerEndpoint"][];
+            /** @description Per endpoint id — whether a key is saved and still bound to its base URL's origin. Keys are never returned. */
+            readonly analyzerEndpointKeyStatus?: {
+                [key: string]: components["schemas"]["AnalyzerEndpointKeyStatus"];
+            };
+            /**
+             * @description #3084 F5 — every unacknowledged analyzer-endpoint entry dropped at
+             *     read time (Task 3b.6). Never a key or field value.
+             */
+            readonly droppedEndpointEntries?: components["schemas"]["DroppedEndpointEntrySummary"][];
+            /**
              * @description Number of chapters the generation queue synthesises concurrently
              *     (queue-worker concurrency). Default 1. Pulled from the flat queue
              *     across books; same-book chapters fan out within one stream via the
@@ -3548,6 +3761,15 @@ export interface components {
             analyzerKeepAliveByModel?: {
                 [key: string]: number;
             };
+            /**
+             * @description #3084 — named OpenAI-compatible analyzer endpoints. Written only by
+             *     the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
+             */
+            readonly analyzerEndpoints?: components["schemas"]["AnalyzerEndpoint"][];
+            /** @description Per endpoint id — whether a key is saved and still bound to its base URL's origin. Keys are never returned. */
+            readonly analyzerEndpointKeyStatus?: {
+                [key: string]: components["schemas"]["AnalyzerEndpointKeyStatus"];
+            };
             generationWorkers?: number;
             /** @description srv-2 — auto-snapshot this book's state.json on the cadence below. Default true. */
             backupEnabled?: boolean;
@@ -3558,6 +3780,100 @@ export interface components {
             backupCadence?: "daily" | "weekly";
             /** @description srv-2 — number of snapshots to keep; older ones are pruned. Default 14. */
             backupRetention?: number;
+        };
+        AnalyzerEndpoint: {
+            id: string;
+            name: string;
+            /** Format: uri */
+            baseUrl: string;
+            /** @description `none`, `any`, or a device key such as `cuda:0`. */
+            gpu: string;
+            /**
+             * Format: uri
+             * @description Same origin as baseUrl; may contain `{model}`.
+             */
+            unloadUrl?: string;
+            concurrency: number;
+            requestCeilingMs: number;
+            /** @enum {string} */
+            structuredOutput: "schema" | "json" | "off";
+            /** @enum {string} */
+            reasoningStyle: "reasoning_effort" | "enable_thinking" | "not_controllable";
+            reasoning: string;
+            /** @description 0 = Auto. */
+            maxOutputTokens: number;
+            contextTokens: number;
+            maxInputTokensPerRequest?: number;
+            extraParams?: {
+                [key: string]: unknown;
+            };
+        };
+        /** @description Same fields as AnalyzerEndpoint; everything but id, name, baseUrl and contextTokens has a server default. */
+        AnalyzerEndpointInput: {
+            id: string;
+            name: string;
+            /** Format: uri */
+            baseUrl: string;
+            gpu?: string;
+            /** Format: uri */
+            unloadUrl?: string;
+            concurrency?: number;
+            requestCeilingMs?: number;
+            /** @enum {string} */
+            structuredOutput?: "schema" | "json" | "off";
+            /** @enum {string} */
+            reasoningStyle?: "reasoning_effort" | "enable_thinking" | "not_controllable";
+            reasoning?: string;
+            maxOutputTokens?: number;
+            contextTokens: number;
+            maxInputTokensPerRequest?: number;
+            extraParams?: {
+                [key: string]: unknown;
+            };
+        };
+        /** @enum {string} */
+        AnalyzerEndpointKeyStatus: "set" | "unset" | "origin-mismatch";
+        /**
+         * @description #3084 F5 — issues are {path, message} pairs, never a field or key value:
+         *     a UI shows each one inline next to the named field. path is [] for a
+         *     refusal naming no single field (duplicate-id, not-found, referenced).
+         */
+        AnalyzerEndpointRefusal: {
+            error: string;
+            /** @enum {string} */
+            code: "invalid" | "duplicate-id" | "unload-off-origin" | "not-found" | "referenced";
+            issues: {
+                path: string[];
+                message: string;
+            }[];
+        };
+        AnalyzerEndpointDetectRequest: {
+            /** Format: uri */
+            baseUrl: string;
+            model?: string;
+            apiKey?: string;
+            endpointId?: string;
+            /** @enum {string} */
+            flavor: "llama.cpp" | "llama-swap";
+            allowModelLoad?: boolean;
+        };
+        AnalyzerEndpointDetectResult: {
+            contextTokens: number;
+            /** @enum {string} */
+            source: "llama.cpp /props" | "llama-swap /props";
+        };
+        DroppedEndpointEntrySummary: {
+            /** @description null while the archive append is still pending. */
+            archiveId?: string | null;
+            /** @enum {string} */
+            kind: "endpoint" | "key";
+            endpointId?: string;
+            name?: string;
+            origin?: string;
+            /** @description "path: code" strings, never a value. */
+            issues: string[];
+            /** Format: date-time */
+            droppedAt: string;
         };
         LibraryResponse: {
             authors: components["schemas"]["LibraryAuthor"][];
@@ -4056,9 +4372,14 @@ export interface components {
          *     analyzer failure carries `remediation` + `detail` (+ `fixes` when the
          *     classifier can name something actionable); the route's own terminal
          *     codes (`language_unset`, `cast_incomplete`, `stage1_shrink_refused`,
-         *     `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
-         *     `design_in_progress`, `bad_request`, `chapter_excluded`) carry `code`
-         *     and `message` only.
+         *     `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
+         *     `design_in_progress`, `bad_request`, `chapter_excluded`,
+         *     `main_analysis_running`, `subset_analysis_running`) carry `code`
+         *     and `message` only — `main_analysis_running` also carries
+         *     `draining` (#3435: the late refusal check, after the stream opened).
+         *     `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
+         *     the chapters it ran are done, but the book still needs a main
+         *     resume to attribute the rest; nothing was persisted as final.
          */
         AnalyseErrorEvent: {
             /** @enum {string} */
@@ -4075,6 +4396,8 @@ export interface components {
             remediation?: string;
             /** @description Collapsible diagnostic blob (engine, model, chapter id, reasoning tokens, upstream status/details). Absent when there is nothing to add. */
             detail?: string;
+            /** @description #3435 — on `main_analysis_running` only: false while the main run is live, true while a stopped run is still winding down. */
+            draining?: boolean;
             /**
              * @description #3084 F7 — structured "how to fix" entries, every actionable fix
              *     first and every `Read: …` wiki entry last. Present only for
@@ -4288,6 +4611,17 @@ export interface components {
              *     the Done pill flips without a state.json reload.
              */
             audioQa?: components["schemas"]["ChapterQaVerdict"];
+            /**
+             * @description Plan 285 — only on a live `chapter_complete` for the chapter actually
+             *     rendered with a request `review` (never on a replayed done chapter).
+             */
+            reviewChapter?: boolean;
+            /**
+             * @description Plan 285 — only on `chapter_complete` when finalize was asked to
+             *     record A/B review state; false when that record failed (the new take
+             *     is still live).
+             */
+            reviewRecorded?: boolean;
             errorReason?: string | null;
             /**
              * @description Only on `chapter_failed` — fs-19 stable machine code for the failure
@@ -4401,6 +4735,8 @@ export interface components {
              *     re-dispatch instead of re-parking it.
              */
             fallbackConfirmed?: boolean;
+            /** @description Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2. */
+            review?: components["schemas"]["ReviewRequest"];
             /**
              * Format: date-time
              * @description ISO 8601 timestamp stamped when the worker parks this entry on
@@ -4462,6 +4798,8 @@ export interface components {
              *     re-prompt for it.
              */
             fallbackConfirmed?: boolean;
+            /** @description Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2. */
+            review?: components["schemas"]["ReviewRequest"];
         };
         QueueReorderRequest: {
             /** @description Full list of entry ids in the desired final order. Server validates the list matches the current queue minus the in-flight pinned entry; mismatch returns 409 (concurrent enqueue happened; client refetches and retries). */
@@ -5005,14 +5343,23 @@ export interface components {
             timeline?: {
                 [key: string]: components["schemas"]["TimelineEntry"][];
             };
+            bookId?: string;
+            /** @description Plan 285 — see RevisionsState.fileId. Optional here; the bulk values omit it. */
+            fileId?: string | null;
+            rev?: number;
+            dismissed?: string[];
+            acceptedSelections?: {
+                [key: string]: {
+                    [key: string]: "A" | "B";
+                };
+            };
         };
         /**
-         * @description Response of `GET /api/revisions?bookIds=...` (plan 83). Each value
-         *     is the same per-book computation as `RevisionsResponse` — neither
-         *     the bulk route nor the single-book `GET /:bookId/revisions` route
-         *     computes or returns `timeline` (only the disk-hydrate response from
-         *     `GET /book-state` does) — bookIds that don't exist on disk are
-         *     simply omitted from the map.
+         * @description Response of `GET /api/revisions?bookIds=...` (plan 83). Each value is
+         *     `{ pending, drift }` for that book — pending read through the server
+         *     store (plan 285, normalised) — and bookIds that don't exist on disk are
+         *     simply omitted from the map. The single-book `GET /:bookId/revisions`
+         *     additionally returns the whole RevisionsState.
          */
         BulkRevisionsResponse: {
             byBookId: {
@@ -5058,6 +5405,11 @@ export interface components {
             playable?: boolean;
             /** @description False for legacy chapters that pre-date the rollback feature (no .previous.* pair was preserved). The a/b player renders "Original audio not preserved — review by metadata only" on the A card when this is false. */
             hasPreviousAudio?: boolean;
+            /**
+             * @description Plan 285 — present on entries the server recorded; absent on legacy client-written ones.
+             * @enum {string}
+             */
+            origin?: "server";
             segments: {
                 id?: number;
                 text?: string;
@@ -5066,6 +5418,44 @@ export interface components {
                 changed?: boolean;
                 narratorOnly?: boolean;
             }[];
+        };
+        /**
+         * @description Plan 285 — a book's revisions.json as the server store holds it,
+         *     answered by every revisions operation. `fileId` changes on every reset
+         *     (reparse / manuscript replace) and is null only for a legacy file the
+         *     store has never written; `rev` increments on every write within one
+         *     `fileId`.
+         */
+        RevisionsState: {
+            bookId: string;
+            /** @description `${epochMs zero-padded to 15 digits}-${random}`. */
+            fileId: string | null;
+            rev: number;
+            pending: components["schemas"]["Revision"][];
+            dismissed: string[];
+            acceptedSelections: {
+                [key: string]: {
+                    [key: string]: "A" | "B";
+                };
+            };
+            timeline: {
+                [key: string]: components["schemas"]["TimelineEntry"][];
+            };
+        };
+        RevisionOpError: {
+            /**
+             * @description A machine-readable code — `invalid_selection`, `book_not_found`,
+             *     `revision_not_found`, `chapter_busy`, `no_previous_audio`,
+             *     `live_audio_missing`, `revision_gone`, `restore_failed` — or, on an
+             *     unexpected 500, the curated failure message.
+             */
+            error: string;
+            message?: string;
+            state?: components["schemas"]["RevisionsState"];
+        };
+        ReviewRequest: {
+            characterId: string;
+            triggeredBy: string;
         };
         DriftEvent: {
             id: string;
@@ -5277,7 +5667,7 @@ export interface components {
          *     catch-all for an unmapped error (the raw message is surfaced verbatim).
          * @enum {string}
          */
-        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "analyzer-timeout" | "analyzer-reasoning-overflow" | "attribution-incomplete" | "attribution-collapse" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention" | "language-unset";
+        FailureCode: "vram-spill" | "sidecar-unreachable" | "analyzer-rate-limit" | "oom" | "disk-full" | "model-not-loaded" | "synth-timeout" | "xtts-speaker-desync" | "cuda-poisoned" | "auth" | "unknown" | "recycle-storm" | "analyzer-daily-quota" | "analyzer-truncated" | "analyzer-unreachable" | "analyzer-content-blocked" | "analyzer-timeout" | "analyzer-reasoning-overflow" | "attribution-incomplete" | "attribution-collapse" | "gpu-acceleration-unavailable" | "voice-not-designed" | "cloned-voice-broken" | "lock-contention" | "language-unset" | "analyzer-request-rejected" | "analyzer-invalid-output" | "analyzer-endpoint-missing";
         /**
          * @description srv-27 — advisory post-synthesis audio QA verdict for a rendered
          *     chapter. ADVISORY only: a `suspect` status drives a badge but never
@@ -5924,6 +6314,14 @@ export interface components {
                 acceptedSelections?: {
                     [key: string]: unknown;
                 };
+                timeline?: {
+                    [key: string]: components["schemas"]["TimelineEntry"][];
+                };
+                /** @description Plan 285 — absent on a legacy file (PR 1 returns revisions.json raw). */
+                fileId?: string | null;
+                rev?: number;
+                /** @description Plan 285 — the file's schema stamp; present once the server has rewritten the file (reparse/replace or a store write), absent on a legacy file. */
+                schema?: number;
             } | null;
             /** @description Slugs of chapters that already have an audio file on disk. */
             completedSlugs: string[];
@@ -6038,8 +6436,40 @@ export interface components {
                         code: components["schemas"]["FailureCode"];
                         message: string;
                         remediation: string;
+                        /**
+                         * @description Which phase failed — Phase 0a cast detection or Phase 1
+                         *     attribution. Always present on the wire; the server tags
+                         *     pre-existing untagged records when it loads the cache.
+                         * @enum {string}
+                         */
+                        phase: "cast" | "attribution";
                     };
                 };
+                /**
+                 * @description #3435 — the cast roster is final (the analysis cache holds
+                 *     stage1). While false, an attribution-failed chapter is
+                 *     attributed by a main resume, not by a per-chapter Retry.
+                 */
+                stage1Ready?: boolean;
+                /**
+                 * @description #3435 — the book has not reached Confirm, its roster is final,
+                 *     and some chapter still lacks a current take (or the takes were
+                 *     never persisted): a main resume is needed to finish it. Never
+                 *     true on a book that has reached Confirm.
+                 */
+                resumeRequired?: boolean;
+                /**
+                 * @description #3435 — the non-excluded chapters with no current take (no
+                 *     attribution, or one made against a stale roster). On a book
+                 *     past Confirm these show as Generate-view rows with Re-analyse.
+                 *     For a book that has reached Confirm the list omits any active
+                 *     chapter whose sentences are present in manuscript-edits.json
+                 *     (edits are what generation renders from), including a chapter
+                 *     whose take is still pending; a chapter with a failure record
+                 *     keeps its gap regardless. Before Confirm the list is every
+                 *     non-excluded chapter without a current take per the cache.
+                 */
+                unattributedChapterIds?: number[];
             };
         };
         /**
@@ -6568,6 +6998,266 @@ export interface operations {
             };
         };
     };
+    createAnalyzerEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyzerEndpointInput"];
+            };
+        };
+        responses: {
+            /** @description Created — updated settings (same shape as GET /api/user/settings) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Invalid endpoint (missing contextTokens, bad id, off-origin unload URL) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+            /** @description An endpoint with this id already exists */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+        };
+    };
+    detectAnalyzerEndpointContext: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyzerEndpointDetectRequest"];
+            };
+        };
+        responses: {
+            /** @description Served context size */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointDetectResult"];
+                };
+            };
+            /** @description Invalid body, missing model / load confirmation, or key origin mismatch (code auth) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code: "invalid" | "model-required" | "model-load-confirmation-required" | "auth";
+                        /** @description Present when `code` is `invalid` — one message per failed field, never a value. */
+                        details?: string[];
+                    };
+                };
+            };
+            /** @description The server could not be reached or did not report n_ctx */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        code: "detect-failed";
+                        upstreamStatus?: number;
+                    };
+                };
+            };
+        };
+    };
+    updateAnalyzerEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpointId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyzerEndpointInput"];
+            };
+        };
+        responses: {
+            /** @description Updated settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Invalid endpoint or a changed id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+            /** @description No endpoint with this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+        };
+    };
+    deleteAnalyzerEndpoint: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpointId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Updated settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description No endpoint with this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+            /** @description Still referenced by saved settings */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+        };
+    };
+    putAnalyzerEndpointKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                endpointId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    key: string | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Updated settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Malformed body, or a key with a control character (`code` is `invalid`) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+            /** @description No endpoint with this id */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+        };
+    };
+    acknowledgeDroppedEndpointEntries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    archiveIds: string[];
+                };
+            };
+        };
+        responses: {
+            /** @description Updated settings */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserSettings"];
+                };
+            };
+            /** @description Malformed body (archiveIds is not an array of strings) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointRefusal"];
+                };
+            };
+        };
+    };
     listBookBackups: {
         parameters: {
             query?: never;
@@ -7009,8 +7699,17 @@ export interface operations {
                 };
             };
             /**
-             * @description The manuscript's book has no language set. Set the book language
-             *     before requesting analysis.
+             * @description Refused before the stream opens. `language_unset`: the
+             *     manuscript's book has no language set — set the book language
+             *     before requesting analysis. `subset_analysis_running` (#3435): a
+             *     chapter retry is running on this book, so a request that would
+             *     start a run is refused (a request that joins a running analysis
+             *     never is). `main_analysis_running` with `draining: true`
+             *     (#3435): a previous analysis run on this book is still stopping
+             *     (its in-flight model calls are being aborted); a non-fresh start is refused until
+             *     it has. The same two refusal codes can also arrive as a terminal
+             *     SSE `error` event when the conflict appears after the stream
+             *     opened.
              */
             409: {
                 headers: {
@@ -7019,6 +7718,10 @@ export interface operations {
                 content: {
                     "application/json": {
                         error: string;
+                        /** @description User-facing reason (both #3435 refusals). */
+                        message?: string;
+                        /** @description Present on `main_analysis_running`: always true here. */
+                        draining?: boolean;
                     };
                 };
             };
@@ -7055,6 +7758,28 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": components["schemas"]["AnalysePhaseEvent"] | components["schemas"]["AnalyseWarningEvent"] | components["schemas"]["AnalyseErrorEvent"] | components["schemas"]["AnalyseResponse"];
+                };
+            };
+            /**
+             * @description #3435 — the book has a main analysis run, live or still stopping
+             *     (`draining`). Pause it (or wait for it
+             *     to stop), then try again. The same refusal can also arrive as a
+             *     terminal SSE `error` event (`code: main_analysis_running`, with
+             *     `draining` and `message`) when the main run registered after the
+             *     stream opened.
+             */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @enum {string} */
+                        error: "main_analysis_running";
+                        /** @description false while the main run is live; true while it is finishing after a pause or halt. */
+                        draining: boolean;
+                        message: string;
+                    };
                 };
             };
         };
@@ -7475,14 +8200,14 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Content type is not `image/jpeg` or `image/png` */
+            /** @description The declared content type is not `image/jpeg` or `image/png`, or the upload content is neither a PNG nor a JPEG (checked by its leading bytes; a valid PNG or JPEG with the other label is accepted) */
             415: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description PNG → JPEG transcode failed */
+            /** @description PNG → JPEG transcode failed, or the JPEG could not be decoded */
             502: {
                 headers: {
                     [name: string]: unknown;
@@ -8444,6 +9169,15 @@ export interface operations {
                     chapterIds?: number[];
                     /** @description Re-synthesise even if an audio file already exists on disk. */
                     force?: boolean;
+                    /**
+                     * @description Plan 285 — present only on a single-chapter A/B review render.
+                     *     A request carrying `review` that does not name exactly one
+                     *     chapter gets a 400 before any SSE header is sent. The chapter
+                     *     actually rendered with it gets `reviewChapter: true` on its
+                     *     `chapter_complete` (never a replayed done chapter). Not sent
+                     *     by the client until PR 2.
+                     */
+                    review?: components["schemas"]["ReviewRequest"];
                 };
             };
         };
@@ -8455,6 +9189,18 @@ export interface operations {
                 };
                 content: {
                     "text/event-stream": components["schemas"]["GenerationTick"];
+                };
+            };
+            /** @description `review` is malformed (`invalid_review`) or does not name exactly one chapter (`review_requires_single_chapter`). */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error?: string;
+                        message?: string;
+                    };
                 };
             };
         };
@@ -8508,6 +9254,8 @@ export interface operations {
                         durationSec?: number;
                         segmentCount?: number;
                         hasPreviousAudio?: boolean;
+                        /** @description Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live). */
+                        reviewRecorded?: boolean;
                         progress?: number;
                         errorReason?: string;
                         /**
@@ -8600,6 +9348,8 @@ export interface operations {
                         durationSec?: number;
                         segmentCount?: number;
                         hasPreviousAudio?: boolean;
+                        /** @description Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live). */
+                        reviewRecorded?: boolean;
                         progress?: number;
                         errorReason?: string;
                         /**
@@ -9648,6 +10398,165 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RevisionsResponse"];
+                };
+            };
+        };
+    };
+    acceptRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                revisionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description segmentIndex (a canonical non-negative integer key) → 'A' | 'B'. */
+                    selection?: {
+                        [key: string]: "A" | "B";
+                    };
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted (or already accepted). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionsState"];
+                };
+            };
+            /** @description `invalid_selection`. */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+            /** @description `book_not_found` or `revision_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+            /** @description `live_audio_missing` or `revision_gone`; the body carries the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+            /** @description Unexpected failure (a lock-acquisition timeout carries the curated contention message). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+        };
+    };
+    rejectRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                revisionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Rejected (or already rejected). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionsState"];
+                };
+            };
+            /** @description `book_not_found` or `revision_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+            /** @description `chapter_busy`, `no_previous_audio` or `revision_gone`; the body carries the current state. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+            /** @description `restore_failed` (the audio step threw — retry Reject), or an unexpected failure. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+        };
+    };
+    dismissDrift: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                driftId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The full revisions state after the dismiss. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionsState"];
+                };
+            };
+            /** @description `book_not_found`. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+            /** @description Unexpected failure (a lock-acquisition timeout carries the curated contention message). */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
                 };
             };
         };

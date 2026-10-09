@@ -378,6 +378,24 @@ function ThrottleRow({
   );
 }
 
+/* #3435 — the needs-action state used to be an icon only; this is its one line
+   of "what now", the server's message for a not-a-failure stop (or a refused
+   start). Rendered once under the phase list, not per card, so it also shows
+   when no card is in the needs-action state (a start the server refused leaves
+   every card idle). */
+export function NeedsActionLine({ message }: { message: string }) {
+  if (!message) return null;
+  return (
+    <p
+      role="status"
+      data-testid="analysis-needs-action-line"
+      className="mt-4 px-6 text-sm text-ink/70 text-center wrap-break-word"
+    >
+      {message}
+    </p>
+  );
+}
+
 interface PhaseCardProps {
   phase: AnalysisPhase;
   activePhaseId: number;

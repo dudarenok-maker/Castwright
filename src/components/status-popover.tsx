@@ -33,6 +33,7 @@ import {
   type ExportPillData,
 } from './top-bar';
 import { MODEL_OPTIONS } from '../lib/models';
+import { analyzerEngineName, type AnalysisEngine } from '../lib/model-id';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
 import { useElapsed } from '../hooks/use-elapsed';
 import type { BlockerDiagnosis, SetupReadiness } from '../lib/api';
@@ -71,7 +72,7 @@ interface StatusPopoverProps {
         warming up (loading/waiting) or streaming output — plan
         2026-07-14-script-review-progress-heartbeat-model-load-design. */
     model?: string;
-    engine?: 'local' | 'gemini';
+    engine?: AnalysisEngine;
     activityState?: 'loading' | 'waiting' | 'streaming';
     activitySince?: number;
     fallbackActive?: boolean;
@@ -161,7 +162,7 @@ function SubstageRow({
       )}
       {analysisSubstage.model && (
         <span data-testid="substage-engine-model" className="text-xs text-ink/50">
-          {analysisSubstage.engine === 'gemini' ? 'Gemini' : 'Ollama'} ·{' '}
+          {analyzerEngineName(analysisSubstage.engine)} ·{' '}
           {MODEL_OPTIONS.find((m) => m.id === analysisSubstage.model)?.label ?? analysisSubstage.model}
         </span>
       )}

@@ -132,9 +132,12 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
   };
 });
 
-vi.mock('../store/analysis-cache.js', () => {
+vi.mock('../store/analysis-cache.js', async (importOriginal) => {
   const mem = new Map<string, unknown>();
+  const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
   return {
+    /* #3435 — the run's "Resuming — N of M" count reads `hasCurrentTake`. */
+    hasCurrentTake: actual.hasCurrentTake,
     loadAnalysisCache: async (id: string) => mem.get(id) ?? { chapters: {} },
     saveAnalysisCache: async (id: string, cache: unknown) => {
       mem.set(id, cache);
@@ -147,6 +150,7 @@ vi.mock('../store/analysis-cache.js', () => {
 
 vi.mock('./ollama-health.js', () => ({
   detectOllamaDevice: async () => 'cuda',
+  unloadResidentOllama: vi.fn(async () => {}),
 }));
 
 vi.mock('../gpu/analyzer-device-state.js', () => ({
@@ -172,6 +176,10 @@ function buildStubJob(manuscriptId: string): AnalysisJob {
       warnings: new Map(),
     },
     lastDiskWriteAt: 0,
+    ended: false,
+    halting: false,
+    left: false,
+    liveWork: 0,
   };
 }
 

@@ -5,7 +5,7 @@
    cast slice so hydrateFromAnalysis's overlay has nothing to draw from, and the
    layout's confirm-stage hydration is skipped once the SSE stream filled the
    slice. ConfirmRoute therefore re-reads getBookState on entry and
-   setCharacters from the authoritative merged cast.json.
+   hydrateCharacters from the authoritative merged cast.json.
 
    Without the fix the slice keeps the voiceless roster and the confirm screen
    renders "No voice designed yet" for a character whose designed voice is on
@@ -27,15 +27,21 @@ import { voicesSlice } from '../store/voices-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
+import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
+import { settingsSlice } from '../store/settings-slice';
 import type { Character } from '../lib/types';
 
 const BOOK_ID = 'castwright__standalones__the-coalfall-commission';
 
-const getBookStateMock = vi.fn();
+const { getBookStateMock, putBookStateMock } = vi.hoisted(() => ({
+  getBookStateMock: vi.fn(),
+  putBookStateMock: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('../lib/api', () => ({
   api: {
     getBookState: (bookId: string) => getBookStateMock(bookId),
+    putBookState: (bookId: string, req: unknown) => putBookStateMock(bookId, req),
     matchVoices: () => new Promise(() => {}), // layout-style match probe; never resolves
   },
   AnalysisError: class extends Error {
@@ -79,7 +85,9 @@ function makeStore(preloadCharacters: Character[]) {
       account: accountSlice.reducer,
       bookMeta: bookMetaSlice.reducer,
       queue: queueSlice.reducer,
+      settings: settingsSlice.reducer,
     },
+    middleware: (gDM) => gDM().concat(persistenceMiddleware),
     preloadedState: {
       cast: { characters: preloadCharacters, renderedFallbackByCharacter: {} },
     },
@@ -88,6 +96,7 @@ function makeStore(preloadCharacters: Character[]) {
 
 beforeEach(() => {
   getBookStateMock.mockReset();
+  putBookStateMock.mockClear();
 });
 
 describe('ConfirmRoute — re-reads merged cast.json on entry', () => {
@@ -115,5 +124,38 @@ describe('ConfirmRoute — re-reads merged cast.json on entry', () => {
       const coalfall = store.getState().cast.characters.find((c) => c.id === 'coalfall');
       expect(coalfall?.overrideTtsVoices?.qwen?.name).toBe('qwen-coalfall');
     });
+  });
+
+  it('does not echo a cast putBookState after the re-read (hydrateCharacters is non-persisting)', async () => {
+    const store = makeStore([VOICELESS_COALFALL]);
+    getBookStateMock.mockResolvedValue({
+      state: { bookId: BOOK_ID, chapters: [] },
+      cast: { characters: [VOICED_COALFALL] },
+    });
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={[`/books/${BOOK_ID}/confirm`]}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    // Wait for the re-read to land — hydrateCharacters dispatches from the
+    // resolved getBookState promise.
+    await waitFor(() => {
+      const coalfall = store.getState().cast.characters.find((c) => c.id === 'coalfall');
+      expect(coalfall?.overrideTtsVoices?.qwen?.name).toBe('qwen-coalfall');
+    });
+
+    // Send any queued write now rather than sleeping out the debounce. If the
+    // route had dispatched setCharacters (in PERSIST_RULES) instead of
+    // hydrateCharacters, a putBookState for the cast slice would be queued
+    // and this flush would fire it.
+    await store.dispatch(flushBookPersistence(BOOK_ID) as never);
+
+    expect(putBookStateMock).not.toHaveBeenCalled();
   });
 });

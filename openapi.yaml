@@ -176,6 +176,216 @@ paths:
         '400':
           description: Malformed body (path missing, empty, or too long)
 
+  /api/analyzer/endpoints:
+    post:
+      summary: Add a named OpenAI-compatible analyzer endpoint
+      operationId: createAnalyzerEndpoint
+      description: |
+        #3084 — adds an endpoint to user settings. `contextTokens` is required.
+        `gpu` defaults to `any` for a localhost / 127.0.0.1 / ::1 base URL,
+        else `none`. An `unloadUrl` must share the base URL's origin and may
+        contain `{model}`. The response is the GET /api/user/settings body;
+        API keys are never returned. Endpoints are NOT writable through
+        PUT /api/user/settings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalyzerEndpointInput' }
+      responses:
+        '201':
+          description: Created — updated settings (same shape as GET /api/user/settings)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Invalid endpoint (missing contextTokens, bad id, off-origin unload URL)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+        '409':
+          description: An endpoint with this id already exists
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+
+  /api/analyzer/endpoints/detect-context:
+    post:
+      summary: Read a llama.cpp / llama-swap server's served context size
+      operationId: detectAnalyzerEndpointContext
+      description: |
+        #3084 decision 3b — runs only when the user clicks Detect. Reads
+        `GET <origin>/props` → `default_generation_settings.n_ctx`
+        (llama.cpp), or `GET <origin>/props?model=<model>` (llama-swap), which
+        loads the model and therefore requires `allowModelLoad: true`. A body
+        `apiKey` is sent to the body `baseUrl`; a stored key (`endpointId`) is
+        sent only when its saved origin matches, else 400 `auth` with no
+        request. Local-machine surface: no mock in src/lib/api.ts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalyzerEndpointDetectRequest' }
+      responses:
+        '200':
+          description: Served context size
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointDetectResult' }
+        '400':
+          description: Invalid body, missing model / load confirmation, or key origin mismatch (code auth)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [invalid, model-required, model-load-confirmation-required, auth] }
+                  details:
+                    type: array
+                    items: { type: string }
+                    description: 'Present when `code` is `invalid` — one message per failed field, never a value.'
+        '502':
+          description: The server could not be reached or did not report n_ctx
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, code]
+                properties:
+                  error: { type: string }
+                  code: { type: string, enum: [detect-failed] }
+                  upstreamStatus: { type: integer }
+
+  /api/analyzer/endpoints/{endpointId}:
+    parameters:
+      - in: path
+        name: endpointId
+        required: true
+        schema: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
+    put:
+      summary: Replace an analyzer endpoint's settings
+      operationId: updateAnalyzerEndpoint
+      description: |
+        #3084 — the id cannot change. Changing `baseUrl` to another origin does
+        not move a saved key: its status becomes `origin-mismatch` and it is
+        not sent until re-entered.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalyzerEndpointInput' }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Invalid endpoint or a changed id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+        '404':
+          description: No endpoint with this id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+    delete:
+      summary: Delete an analyzer endpoint and its key
+      operationId: deleteAnalyzerEndpoint
+      description: |
+        #3084 — refused with 409 while a saved setting references the endpoint
+        (defaultAnalysisModel, or the analyzer.phase0.model /
+        analyzer.phase1.model / analyzer.personaGeneration.engine overrides);
+        `issues` lists them. The read-only effective `analyzerPhase0Model` /
+        `analyzerPhase1Model` response fields are not references.
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '404':
+          description: No endpoint with this id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+        '409':
+          description: Still referenced by saved settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+
+  /api/analyzer/endpoints/{endpointId}/key:
+    parameters:
+      - in: path
+        name: endpointId
+        required: true
+        schema: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
+    put:
+      summary: Save (or clear) an analyzer endpoint's API key
+      operationId: putAnalyzerEndpointKey
+      description: |
+        #3084 decision 3c — stores the key bound to the endpoint base URL's
+        origin. Pass `{ "key": null }` to clear it. The key is never returned;
+        GET exposes `analyzerEndpointKeyStatus` only.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [key]
+              properties:
+                key: { type: string, nullable: true }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Malformed body, or a key with a control character (`code` is `invalid`)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+        '404':
+          description: No endpoint with this id
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+
+  /api/user/settings/dropped-endpoint-entries/acknowledge:
+    post:
+      summary: Acknowledge dropped analyzer endpoint entries
+      operationId: acknowledgeDroppedEndpointEntries
+      description: |
+        #3084 F5 — marks each named archiveId acknowledged; it stops appearing
+        in droppedEndpointEntries. An unknown or already-acknowledged id is
+        ignored, not refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [archiveIds]
+              properties:
+                archiveIds: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: Updated settings
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserSettings' }
+        '400':
+          description: Malformed body (archiveIds is not an array of strings)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyzerEndpointRefusal' }
+
   /api/books/{bookId}/backups:
     get:
       summary: List a book's state.json auto-backup snapshots
@@ -588,8 +798,17 @@ paths:
                   - $ref: '#/components/schemas/AnalyseResponse'
         '409':
           description: |
-            The manuscript's book has no language set. Set the book language
-            before requesting analysis.
+            Refused before the stream opens. `language_unset`: the
+            manuscript's book has no language set — set the book language
+            before requesting analysis. `subset_analysis_running` (#3435): a
+            chapter retry is running on this book, so a request that would
+            start a run is refused (a request that joins a running analysis
+            never is). `main_analysis_running` with `draining: true`
+            (#3435): a previous analysis run on this book is still stopping
+            (its in-flight model calls are being aborted); a non-fresh start is refused until
+            it has. The same two refusal codes can also arrive as a terminal
+            SSE `error` event when the conflict appears after the stream
+            opened.
           content:
             application/json:
               schema:
@@ -597,6 +816,10 @@ paths:
                 required: [error]
                 properties:
                   error: { type: string }
+                  message: { type: string, description: 'User-facing reason (both #3435 refusals).' }
+                  draining:
+                    type: boolean
+                    description: 'Present on `main_analysis_running`: always true here.'
 
   /api/manuscripts/{manuscriptId}/analysis/chapters:
     post:
@@ -647,6 +870,25 @@ paths:
                   - $ref: '#/components/schemas/AnalyseWarningEvent'
                   - $ref: '#/components/schemas/AnalyseErrorEvent'
                   - $ref: '#/components/schemas/AnalyseResponse'
+        '409':
+          description: |
+            #3435 — the book has a main analysis run, live or still stopping
+            (`draining`). Pause it (or wait for it
+            to stop), then try again. The same refusal can also arrive as a
+            terminal SSE `error` event (`code: main_analysis_running`, with
+            `draining` and `message`) when the main run registered after the
+            stream opened.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error, draining, message]
+                properties:
+                  error: { type: string, enum: [main_analysis_running] }
+                  draining:
+                    type: boolean
+                    description: 'false while the main run is live; true while it is finishing after a pause or halt.'
+                  message: { type: string }
 
   /api/books/{bookId}/chapters/{chapterId}/exclude:
     post:
@@ -980,8 +1222,8 @@ paths:
         '400': { description: Missing `image` field }
         '404': { description: Book not found }
         '413': { description: Upload exceeds 10 MB }
-        '415': { description: Content type is not `image/jpeg` or `image/png` }
-        '502': { description: PNG → JPEG transcode failed }
+        '415': { description: 'The declared content type is not `image/jpeg` or `image/png`, or the upload content is neither a PNG nor a JPEG (checked by its leading bytes; a valid PNG or JPEG with the other label is accepted)' }
+        '502': { description: 'PNG → JPEG transcode failed, or the JPEG could not be decoded' }
 
   /api/books/{bookId}/cover/framing:
     patch:
@@ -1789,12 +2031,31 @@ paths:
                 force:
                   type: boolean
                   description: Re-synthesise even if an audio file already exists on disk.
+                review:
+                  allOf:
+                    - $ref: '#/components/schemas/ReviewRequest'
+                  description: |
+                    Plan 285 — present only on a single-chapter A/B review render.
+                    A request carrying `review` that does not name exactly one
+                    chapter gets a 400 before any SSE header is sent. The chapter
+                    actually rendered with it gets `reviewChapter: true` on its
+                    `chapter_complete` (never a replayed done chapter). Not sent
+                    by the client until PR 2.
       responses:
         '200':
           description: Tick stream
           content:
             text/event-stream:
               schema: { $ref: '#/components/schemas/GenerationTick' }
+        '400':
+          description: '`review` is malformed (`invalid_review`) or does not name exactly one chapter (`review_requires_single_chapter`).'
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: string }
+                  message: { type: string }
 
   /api/books/{bookId}/chapters/{chapterId}/splice:
     post:
@@ -1856,6 +2117,9 @@ paths:
                   durationSec: { type: number }
                   segmentCount: { type: integer }
                   hasPreviousAudio: { type: boolean }
+                  reviewRecorded:
+                    type: boolean
+                    description: Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live).
                   progress: { type: number }
                   errorReason: { type: string }
                   code:
@@ -1952,6 +2216,9 @@ paths:
                   durationSec: { type: number }
                   segmentCount: { type: integer }
                   hasPreviousAudio: { type: boolean }
+                  reviewRecorded:
+                    type: boolean
+                    description: Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live).
                   progress: { type: number }
                   errorReason: { type: string }
                   code:
@@ -2830,6 +3097,118 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/RevisionsResponse' }
 
+  /api/books/{bookId}/revisions/{revisionId}/accept:
+    post:
+      summary: Accept a pending A/B revision — keep the new take (plan 285)
+      operationId: acceptRevision
+      description: |
+        One request runs the audio step (delete the chapter's `.previous.*`
+        pair — today's code) and then records the outcome in revisions.json
+        under the per-book revisions lock; the JSON is written only after the
+        audio step. Idempotent on the revision id. Refuses with 409
+        `live_audio_missing` when the chapter has no live audio but still has a
+        `.previous` take (accepting would delete the only copy — retry Reject).
+        No client caller until PR 2.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: revisionId, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                selection:
+                  type: object
+                  description: segmentIndex (a canonical non-negative integer key) → 'A' | 'B'.
+                  additionalProperties: { type: string, enum: [A, B] }
+      responses:
+        '200':
+          description: Accepted (or already accepted).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionsState' }
+        '400':
+          description: '`invalid_selection`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '404':
+          description: '`book_not_found` or `revision_not_found`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '409':
+          description: '`live_audio_missing` or `revision_gone`; the body carries the current state.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '500':
+          description: Unexpected failure (a lock-acquisition timeout carries the curated contention message).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+
+  /api/books/{bookId}/revisions/{revisionId}/reject:
+    post:
+      summary: Reject a pending A/B revision — restore the earlier take (plan 285)
+      operationId: rejectRevision
+      description: |
+        One request runs the audio step (promote `.previous.*` over the live
+        names — today's code) and then records the outcome. The JSON is
+        untouched when the request is refused as busy, finds no `.previous`, or
+        the audio step throws. No client caller until PR 2.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: revisionId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Rejected (or already rejected).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionsState' }
+        '404':
+          description: '`book_not_found` or `revision_not_found`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '409':
+          description: '`chapter_busy`, `no_previous_audio` or `revision_gone`; the body carries the current state.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '500':
+          description: '`restore_failed` (the audio step threw — retry Reject), or an unexpected failure.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+
+  /api/books/{bookId}/drift/{driftId}/dismiss:
+    post:
+      summary: Dismiss a drift event (plan 285)
+      operationId: dismissDrift
+      description: Adds the id to revisions.json's `dismissed`. Idempotent; touches no audio. No client caller until PR 2.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+        - { in: path, name: driftId, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: The full revisions state after the dismiss.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionsState' }
+        '404':
+          description: '`book_not_found`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+        '500':
+          description: Unexpected failure (a lock-acquisition timeout carries the curated contention message).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RevisionOpError' }
+
   /api/revisions:
     get:
       summary: Bulk pending A/B revisions + voice-drift events across books (plan 83)
@@ -2839,6 +3218,7 @@ paths:
         poll (120 s tick) — the active book keeps using `pollRevisions`
         above. Skips any bookId that doesn't exist on disk rather than
         404ing, so one removed book doesn't take down the whole poll.
+        Plan 285 — each value carries exactly `pending` (read through the server store, normalised) and `drift`.
       parameters:
         - in: query
           name: bookIds
@@ -4856,6 +5236,24 @@ components:
           additionalProperties:
             type: integer
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
+        analyzerEndpoints:
+          type: array
+          items: { $ref: '#/components/schemas/AnalyzerEndpoint' }
+          description: |
+            #3084 — named OpenAI-compatible analyzer endpoints. Written only by
+            the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
+        analyzerEndpointKeyStatus:
+          type: object
+          readOnly: true
+          additionalProperties: { $ref: '#/components/schemas/AnalyzerEndpointKeyStatus' }
+          description: Per endpoint id — whether a key is saved and still bound to its base URL's origin. Keys are never returned.
+        droppedEndpointEntries:
+          type: array
+          readOnly: true
+          items: { $ref: '#/components/schemas/DroppedEndpointEntrySummary' }
+          description: |
+            #3084 F5 — every unacknowledged analyzer-endpoint entry dropped at
+            read time (Task 3b.6). Never a key or field value.
         generationWorkers:
           type: integer
           minimum: 1
@@ -4972,6 +5370,18 @@ components:
           additionalProperties:
             type: integer
           description: Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin).
+        analyzerEndpoints:
+          type: array
+          readOnly: true
+          items: { $ref: '#/components/schemas/AnalyzerEndpoint' }
+          description: |
+            #3084 — named OpenAI-compatible analyzer endpoints. Written only by
+            the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
+        analyzerEndpointKeyStatus:
+          type: object
+          readOnly: true
+          additionalProperties: { $ref: '#/components/schemas/AnalyzerEndpointKeyStatus' }
+          description: Per endpoint id — whether a key is saved and still bound to its base URL's origin. Keys are never returned.
         generationWorkers:
           type: integer
           minimum: 1
@@ -4988,6 +5398,101 @@ components:
           minimum: 1
           maximum: 365
           description: srv-2 — number of snapshots to keep; older ones are pruned. Default 14.
+
+    AnalyzerEndpoint:
+      type: object
+      required: [id, name, baseUrl, gpu, concurrency, requestCeilingMs, structuredOutput, reasoningStyle, reasoning, maxOutputTokens, contextTokens]
+      properties:
+        id: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
+        name: { type: string, minLength: 1, maxLength: 80 }
+        baseUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://' }
+        gpu:
+          type: string
+          pattern: '^(none|any|[a-z]+:\d+)$'
+          description: '`none`, `any`, or a device key such as `cuda:0`.'
+        unloadUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://', description: 'Same origin as baseUrl; may contain `{model}`.' }
+        concurrency: { type: integer, minimum: 1, maximum: 16 }
+        requestCeilingMs: { type: integer, minimum: 60000, maximum: 14400000 }
+        structuredOutput: { type: string, enum: [schema, json, 'off'] }
+        reasoningStyle: { type: string, enum: [reasoning_effort, enable_thinking, not_controllable] }
+        reasoning: { type: string }
+        maxOutputTokens: { type: integer, minimum: 0, description: '0 = Auto.' }
+        contextTokens: { type: integer, minimum: 512 }
+        maxInputTokensPerRequest: { type: integer, minimum: 256 }
+        extraParams: { type: object, additionalProperties: true }
+
+    AnalyzerEndpointInput:
+      type: object
+      description: Same fields as AnalyzerEndpoint; everything but id, name, baseUrl and contextTokens has a server default.
+      required: [id, name, baseUrl, contextTokens]
+      properties:
+        id: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
+        name: { type: string, minLength: 1, maxLength: 80 }
+        baseUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://' }
+        gpu: { type: string, pattern: '^(none|any|[a-z]+:\d+)$' }
+        unloadUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://' }
+        concurrency: { type: integer, minimum: 1, maximum: 16 }
+        requestCeilingMs: { type: integer, minimum: 60000, maximum: 14400000 }
+        structuredOutput: { type: string, enum: [schema, json, 'off'] }
+        reasoningStyle: { type: string, enum: [reasoning_effort, enable_thinking, not_controllable] }
+        reasoning: { type: string }
+        maxOutputTokens: { type: integer, minimum: 0 }
+        contextTokens: { type: integer, minimum: 512 }
+        maxInputTokensPerRequest: { type: integer, minimum: 256 }
+        extraParams: { type: object, additionalProperties: true }
+
+    AnalyzerEndpointKeyStatus:
+      type: string
+      enum: [set, unset, origin-mismatch]
+
+    AnalyzerEndpointRefusal:
+      type: object
+      required: [error, code, issues]
+      description: |
+        #3084 F5 — issues are {path, message} pairs, never a field or key value:
+        a UI shows each one inline next to the named field. path is [] for a
+        refusal naming no single field (duplicate-id, not-found, referenced).
+      properties:
+        error: { type: string }
+        code: { type: string, enum: [invalid, duplicate-id, unload-off-origin, not-found, referenced] }
+        issues:
+          type: array
+          items:
+            type: object
+            required: [path, message]
+            properties:
+              path: { type: array, items: { type: string } }
+              message: { type: string }
+
+    AnalyzerEndpointDetectRequest:
+      type: object
+      required: [baseUrl, flavor]
+      properties:
+        baseUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://' }
+        model: { type: string }
+        apiKey: { type: string }
+        endpointId: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
+        flavor: { type: string, enum: [llama.cpp, llama-swap] }
+        allowModelLoad: { type: boolean }
+
+    AnalyzerEndpointDetectResult:
+      type: object
+      required: [contextTokens, source]
+      properties:
+        contextTokens: { type: integer }
+        source: { type: string, enum: [llama.cpp /props, llama-swap /props] }
+
+    DroppedEndpointEntrySummary:
+      type: object
+      required: [kind, issues, droppedAt]
+      properties:
+        archiveId: { type: string, nullable: true, description: 'null while the archive append is still pending.' }
+        kind: { type: string, enum: [endpoint, key] }
+        endpointId: { type: string }
+        name: { type: string }
+        origin: { type: string }
+        issues: { type: array, items: { type: string }, description: '"path: code" strings, never a value.' }
+        droppedAt: { type: string, format: date-time }
 
     # --- Library ----------------------------------------------------
     LibraryResponse:
@@ -5632,9 +6137,14 @@ components:
         analyzer failure carries `remediation` + `detail` (+ `fixes` when the
         classifier can name something actionable); the route's own terminal
         codes (`language_unset`, `cast_incomplete`, `stage1_shrink_refused`,
-        `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
-        `design_in_progress`, `bad_request`, `chapter_excluded`) carry `code`
-        and `message` only.
+        `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
+        `design_in_progress`, `bad_request`, `chapter_excluded`,
+        `main_analysis_running`, `subset_analysis_running`) carry `code`
+        and `message` only — `main_analysis_running` also carries
+        `draining` (#3435: the late refusal check, after the stream opened).
+        `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
+        the chapters it ran are done, but the book still needs a main
+        resume to attribute the rest; nothing was persisted as final.
       required: [kind, code, message]
       properties:
         kind: { type: string, enum: [error] }
@@ -5653,6 +6163,9 @@ components:
         detail:
           type: string
           description: Collapsible diagnostic blob (engine, model, chapter id, reasoning tokens, upstream status/details). Absent when there is nothing to add.
+        draining:
+          type: boolean
+          description: '#3435 — on `main_analysis_running` only: false while the main run is live, true while a stopped run is still winding down.'
         fixes:
           type: array
           description: |
@@ -5910,6 +6423,17 @@ components:
             srv-27 — Only on `chapter_complete` — the advisory post-synthesis
             QA verdict, so the frontend can stamp a "Suspect" badge the moment
             the Done pill flips without a state.json reload.
+        reviewChapter:
+          type: boolean
+          description: |
+            Plan 285 — only on a live `chapter_complete` for the chapter actually
+            rendered with a request `review` (never on a replayed done chapter).
+        reviewRecorded:
+          type: boolean
+          description: |
+            Plan 285 — only on `chapter_complete` when finalize was asked to
+            record A/B review state; false when that record failed (the new take
+            is still live).
         errorReason: { type: string, nullable: true }
         errorCode:
           allOf:
@@ -6041,6 +6565,10 @@ components:
             Loud-fallback gate — true once the user confirmed this entry's
             Qwen→Kokoro fallback, so the worker renders it straight through on
             re-dispatch instead of re-parking it.
+        review:
+          allOf:
+            - $ref: '#/components/schemas/ReviewRequest'
+          description: Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2.
         parkedAt:
           type: string
           format: date-time
@@ -6129,6 +6657,10 @@ components:
             Qwen→Kokoro fallback (e.g. the voice-readiness gate's "proceed
             anyway"), so the per-chapter `awaiting_confirm` gate doesn't
             re-prompt for it.
+        review:
+          allOf:
+            - $ref: '#/components/schemas/ReviewRequest'
+          description: Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2.
 
     QueueReorderRequest:
       type: object
@@ -6858,15 +7390,28 @@ components:
           additionalProperties:
             type: array
             items: { $ref: '#/components/schemas/TimelineEntry' }
+        bookId: { type: string }
+        fileId:
+          type: string
+          nullable: true
+          description: Plan 285 — see RevisionsState.fileId. Optional here; the bulk values omit it.
+        rev: { type: integer, minimum: 0 }
+        dismissed:
+          type: array
+          items: { type: string }
+        acceptedSelections:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: { type: string, enum: [A, B] }
 
     BulkRevisionsResponse:
       description: |
-        Response of `GET /api/revisions?bookIds=...` (plan 83). Each value
-        is the same per-book computation as `RevisionsResponse` — neither
-        the bulk route nor the single-book `GET /:bookId/revisions` route
-        computes or returns `timeline` (only the disk-hydrate response from
-        `GET /book-state` does) — bookIds that don't exist on disk are
-        simply omitted from the map.
+        Response of `GET /api/revisions?bookIds=...` (plan 83). Each value is
+        `{ pending, drift }` for that book — pending read through the server
+        store (plan 285, normalised) — and bookIds that don't exist on disk are
+        simply omitted from the map. The single-book `GET /:bookId/revisions`
+        additionally returns the whole RevisionsState.
       type: object
       required: [byBookId]
       properties:
@@ -6946,6 +7491,10 @@ components:
             (no .previous.* pair was preserved). The a/b player renders
             "Original audio not preserved — review by metadata only" on
             the A card when this is false.
+        origin:
+          type: string
+          enum: [server]
+          description: Plan 285 — present on entries the server recorded; absent on legacy client-written ones.
         segments:
           type: array
           items:
@@ -6957,6 +7506,60 @@ components:
               newDuration: { type: string }
               changed: { type: boolean }
               narratorOnly: { type: boolean }
+
+    RevisionsState:
+      type: object
+      description: |
+        Plan 285 — a book's revisions.json as the server store holds it,
+        answered by every revisions operation. `fileId` changes on every reset
+        (reparse / manuscript replace) and is null only for a legacy file the
+        store has never written; `rev` increments on every write within one
+        `fileId`.
+      required: [bookId, fileId, rev, pending, dismissed, acceptedSelections, timeline]
+      properties:
+        bookId: { type: string }
+        fileId:
+          type: string
+          nullable: true
+          description: '`${epochMs zero-padded to 15 digits}-${random}`.'
+        rev: { type: integer, minimum: 0 }
+        pending:
+          type: array
+          items: { $ref: '#/components/schemas/Revision' }
+        dismissed:
+          type: array
+          items: { type: string }
+        acceptedSelections:
+          type: object
+          additionalProperties:
+            type: object
+            additionalProperties: { type: string, enum: [A, B] }
+        timeline:
+          type: object
+          additionalProperties:
+            type: array
+            items: { $ref: '#/components/schemas/TimelineEntry' }
+
+    RevisionOpError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: |
+            A machine-readable code — `invalid_selection`, `book_not_found`,
+            `revision_not_found`, `chapter_busy`, `no_previous_audio`,
+            `live_audio_missing`, `revision_gone`, `restore_failed` — or, on an
+            unexpected 500, the curated failure message.
+        message: { type: string }
+        state: { $ref: '#/components/schemas/RevisionsState' }
+
+    ReviewRequest:
+      type: object
+      required: [characterId, triggeredBy]
+      properties:
+        characterId: { type: string }
+        triggeredBy: { type: string }
 
     DriftEvent:
       type: object
@@ -7256,6 +7859,9 @@ components:
         - cloned-voice-broken
         - lock-contention
         - language-unset
+        - analyzer-request-rejected
+        - analyzer-invalid-output
+        - analyzer-endpoint-missing
 
     ChapterQaVerdict:
       type: object
@@ -8102,6 +8708,19 @@ components:
               type: object
               additionalProperties: true
               description: revisionId → { segmentIndex → 'A' | 'B' } captured at accept time.
+            timeline:
+              type: object
+              additionalProperties:
+                type: array
+                items: { $ref: '#/components/schemas/TimelineEntry' }
+            fileId:
+              type: string
+              nullable: true
+              description: Plan 285 — absent on a legacy file (PR 1 returns revisions.json raw).
+            rev: { type: integer }
+            schema:
+              type: integer
+              description: Plan 285 — the file's schema stamp; present once the server has rewritten the file (reparse/replace or a store write), absent on a legacy file.
         completedSlugs:
           type: array
           items: { type: string }
@@ -8225,11 +8844,44 @@ components:
                 message + remediation after a reload instead of a generic line.
               additionalProperties:
                 type: object
-                required: [code, message, remediation]
+                required: [code, message, remediation, phase]
                 properties:
                   code: { $ref: '#/components/schemas/FailureCode' }
                   message: { type: string }
                   remediation: { type: string }
+                  phase:
+                    type: string
+                    enum: [cast, attribution]
+                    description: |
+                      Which phase failed — Phase 0a cast detection or Phase 1
+                      attribution. Always present on the wire; the server tags
+                      pre-existing untagged records when it loads the cache.
+            stage1Ready:
+              type: boolean
+              description: |
+                #3435 — the cast roster is final (the analysis cache holds
+                stage1). While false, an attribution-failed chapter is
+                attributed by a main resume, not by a per-chapter Retry.
+            resumeRequired:
+              type: boolean
+              description: |
+                #3435 — the book has not reached Confirm, its roster is final,
+                and some chapter still lacks a current take (or the takes were
+                never persisted): a main resume is needed to finish it. Never
+                true on a book that has reached Confirm.
+            unattributedChapterIds:
+              type: array
+              items: { type: integer }
+              description: |
+                #3435 — the non-excluded chapters with no current take (no
+                attribution, or one made against a stale roster). On a book
+                past Confirm these show as Generate-view rows with Re-analyse.
+                For a book that has reached Confirm the list omits any active
+                chapter whose sentences are present in manuscript-edits.json
+                (edits are what generation renders from), including a chapter
+                whose take is still pending; a chapter with a failure record
+                keeps its gap regardless. Before Confirm the list is every
+                non-excluded chapter without a current take per the cache.
 
     # --- Per-book QA report (fs-51) ---------------------------------
     BookQaReport:

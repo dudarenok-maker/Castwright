@@ -17,11 +17,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+import { dirname, join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { COQUI_RESIDENCY_POLICY_GUARD_SCAN_GLOBS } from './coqui-residency-policy.guard-targets.js';
 
 const TOKEN = 'COQUI-RESIDENCY-POLICY';
-const REPO_ROOT = join(process.cwd(), '..');
+const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 /* These three paths are the ACTUAL scan targets of this guard (what it reads
    at runtime). They are hardcoded independently so the test "scan scope matches

@@ -29,6 +29,7 @@ import { BOOKS_ROOT, analysisStateJsonPath, ensureWorkspace, stateJsonPath } fro
 import { readJson } from './state-io.js';
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import type { BookStateJson } from './scan.js';
+import type { AnalysisEngine } from '../analyzer/model-id.js';
 
 /** Shape sent over the wire. `AnalysisStateFile` augmented with the
  *  identifying fields the pill needs (`bookId`, `bookTitle`) so the
@@ -44,7 +45,7 @@ export interface ActiveAnalysisSummary {
       to `paused` because no live in-flight job means the analyzer
       didn't survive the restart that wiped the in-memory map. */
   state: 'paused' | 'halted';
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   kind?: 'main' | 'subset';
   subsetChapterIds?: number[];
   haltCode?: string;

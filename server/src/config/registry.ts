@@ -78,6 +78,26 @@ export const KNOBS: ConfigKnob[] = [
     apply: 'live', risk: 'medium',
   },
   {
+    key: 'analyzer.ollama.structuredOutput',
+    env: 'ANALYZER_OLLAMA_STRUCTURED_OUTPUT',
+    group: 'analyzer-sampling',
+    label: 'Ollama structured output',
+    help: '"schema" (default) sends the stage\'s JSON schema as Ollama `format`, so the model can only produce JSON of that shape. "json" asks only for syntactically valid JSON. "off" sends no format. Every reply is still validated against the full schema and retried once in every mode. A mode the server rejects fails the run as "analyzer rejected the request" — it is never dropped silently.',
+    type: 'enum', options: ['schema', 'json', 'off'],
+    default: 'schema', // ← today's Ollama request: format = the stage schema (ollama.ts:644 at 80be2f1d; Part 3 re-pin: every ollama.ts line +1 from 46e62a34, import hunk at :40)
+    apply: 'live', risk: 'medium',
+  },
+  {
+    key: 'analyzer.gemini.structuredOutput',
+    env: 'ANALYZER_GEMINI_STRUCTURED_OUTPUT',
+    group: 'analyzer-sampling',
+    label: 'Gemini structured output',
+    help: '"json" (default) sets responseMimeType application/json only — today\'s request. "schema" also sends the stage schema as responseJsonSchema, reduced to the keywords Gemini documents (length, pattern and non-integer exclusive-minimum constraints are dropped and listed in the debug log). "off" sends neither. Every reply is still validated against the full schema and retried once in every mode. The default moves to "schema" only after on-box measurement.',
+    type: 'enum', options: ['schema', 'json', 'off'],
+    default: 'json', // ← today's Gemini request: responseMimeType only (gemini.ts:729 on 46e62a34)
+    apply: 'live', risk: 'medium',
+  },
+  {
     key: 'analyzer.gemini.thinkingIdleTimeoutMs',
     env: 'GEMINI_THINKING_IDLE_MS',
     group: 'analyzer-sampling',

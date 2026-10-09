@@ -6,10 +6,10 @@
    Persistence: explicit save via thunk (not the per-book persistence
    middleware, which is keyed by bookId — account state is user-wide). */
 
-import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
-import type { UserSettings, UserSettingsPatch } from '../lib/types';
+import { createSlice, createAsyncThunk, isAnyOf, type PayloadAction } from '@reduxjs/toolkit';
+import type { AnalyzerEndpointInput, UserSettings, UserSettingsPatch } from '../lib/types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from '../lib/account-defaults';
-import { api } from '../lib/api';
+import { api, AnalyzerEndpointError } from '../lib/api';
 
 export type AccountStatus = 'idle' | 'loading' | 'saving' | 'error';
 
@@ -67,6 +67,80 @@ export const saveGeminiApiKey = createAsyncThunk<UserSettings, string | null>(
     return api.putGeminiKey(key);
   },
 );
+
+/* #3084 PR 3b — analyzer endpoint writes. Each response is the full settings
+   body, swapped in like saveGeminiApiKey. PR 3d's Settings form dispatches these.
+
+   F5 defect (found in review): a bare `(input) => api.createAnalyzerEndpoint(input)`
+   thunk lets a thrown AnalyzerEndpointError fall through to createAsyncThunk's
+   default rejection path, which RTK serialises via miniSerializeError — that
+   keeps only name/message/stack/code and drops the class and its `issues`
+   array. `.unwrap()` then rejects with a plain object with no `issues` at all,
+   so PR 3d's form has nothing to show inline next to a field. Each thunk
+   below is typed with `rejectValue: AnalyzerEndpointRejection` and explicitly
+   catches AnalyzerEndpointError to carry `issues` through `rejectWithValue`;
+   anything else is rethrown and takes RTK's normal (unrelated) rejection path. */
+export interface AnalyzerEndpointRejection {
+  error: string;
+  code: string;
+  issues: { path: string[]; message: string }[];
+}
+
+/* The payload creators `return` this call inside their `catch`, so it is typed
+   `never`: the thunk's declared success type stays `UserSettings` rather than
+   widening to include the rejection action's return type. */
+function rejectAnalyzerEndpointError(e: unknown, rejectWithValue: (v: AnalyzerEndpointRejection) => unknown): never {
+  if (e instanceof AnalyzerEndpointError) {
+    return rejectWithValue({ error: e.message, code: e.code, issues: e.issues }) as never;
+  }
+  throw e;
+}
+
+export const createAnalyzerEndpoint = createAsyncThunk<
+  UserSettings,
+  AnalyzerEndpointInput,
+  { rejectValue: AnalyzerEndpointRejection }
+>('account/createAnalyzerEndpoint', async (input, { rejectWithValue }) => {
+  try {
+    return await api.createAnalyzerEndpoint(input);
+  } catch (e) {
+    return rejectAnalyzerEndpointError(e, rejectWithValue);
+  }
+});
+export const updateAnalyzerEndpoint = createAsyncThunk<
+  UserSettings,
+  { endpointId: string; input: AnalyzerEndpointInput },
+  { rejectValue: AnalyzerEndpointRejection }
+>('account/updateAnalyzerEndpoint', async ({ endpointId, input }, { rejectWithValue }) => {
+  try {
+    return await api.updateAnalyzerEndpoint(endpointId, input);
+  } catch (e) {
+    return rejectAnalyzerEndpointError(e, rejectWithValue);
+  }
+});
+export const deleteAnalyzerEndpoint = createAsyncThunk<UserSettings, string, { rejectValue: AnalyzerEndpointRejection }>(
+  'account/deleteAnalyzerEndpoint',
+  async (endpointId, { rejectWithValue }) => {
+    try {
+      return await api.deleteAnalyzerEndpoint(endpointId);
+    } catch (e) {
+      return rejectAnalyzerEndpointError(e, rejectWithValue);
+    }
+  },
+);
+export const saveAnalyzerEndpointKey = createAsyncThunk<
+  UserSettings,
+  { endpointId: string; key: string | null },
+  { rejectValue: AnalyzerEndpointRejection }
+>('account/saveAnalyzerEndpointKey', async ({ endpointId, key }, { rejectWithValue }) => {
+  try {
+    return await api.putAnalyzerEndpointKey(endpointId, key);
+  } catch (e) {
+    return rejectAnalyzerEndpointError(e, rejectWithValue);
+  }
+});
+
+const endpointWrites = [createAnalyzerEndpoint, updateAnalyzerEndpoint, deleteAnalyzerEndpoint, saveAnalyzerEndpointKey] as const;
 
 /* Dynamic analyzer-model discovery — hits the mockable `api.getOllamaHealth()`
    so it works under VITE_USE_MOCKS + e2e. Splits the response into the live
@@ -188,6 +262,24 @@ export const accountSlice = createSlice({
       .addCase(fetchAnalyzerModels.fulfilled, (state, action) => {
         state.localAnalyzerModels = action.payload.localTags;
         state.pullableModels = action.payload.pullable;
+      })
+      .addMatcher(isAnyOf(...endpointWrites.map((t) => t.pending)), (s) => {
+        s.status = 'saving';
+        s.error = null;
+      })
+      .addMatcher(isAnyOf(...endpointWrites.map((t) => t.fulfilled)), (s, a) => {
+        Object.assign(s, a.payload);
+        s.status = 'idle';
+        s.error = null;
+        s.hydrated = true;
+      })
+      .addMatcher(isAnyOf(...endpointWrites.map((t) => t.rejected)), (s, a) => {
+        /* #3084 F5 — a.payload is set only via rejectWithValue (an
+           AnalyzerEndpointError); a non-refusal rejection (rethrown above)
+           carries no payload and falls back to RTK's own a.error.message,
+           same as before this task. */
+        s.status = 'error';
+        s.error = a.payload?.error ?? a.error.message ?? 'Failed to save the analyzer endpoint.';
       });
   },
 });

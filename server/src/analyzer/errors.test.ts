@@ -48,7 +48,7 @@ describe('analyzer error taxonomy (#3084 wave 1)', () => {
     expect('status' in err).toBe(false);
   });
 
-  it.each([400, 404, 500, 503])('AnalyzerHttpError %i classifies exactly like the plain Error it replaces', (status) => {
+  it.each([404, 500, 503])('AnalyzerHttpError %i classifies exactly like the plain Error it replaces', (status) => {
     const message = `Ollama http://localhost:11434 returned ${status} X: {"error":"boom"}`;
     const typed = classifyAnalysisFailure(
       new AnalyzerHttpError('ollama', status, '{"error":"boom"}', message),

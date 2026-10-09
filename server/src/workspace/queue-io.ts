@@ -82,6 +82,9 @@ export interface QueueEntry {
      here as server-only, on a false precedent copied from the equally-stale
      fallbackCharacters comment above). */
   parkedAt?: string;
+  /* Plan 285 — the A/B review intent, carried from enqueue to the generation
+     request. Mirrored in openapi.yaml's QueueEntry. Not set by the client until PR 2. */
+  review?: { characterId: string; triggeredBy: string };
 }
 
 export interface QueueFile {
@@ -108,6 +111,9 @@ export interface EnqueueInput {
      per-chapter `awaiting_fallback_confirm` gate doesn't re-prompt for these
      fresh entries. */
   fallbackConfirmed?: boolean;
+  /* Plan 285 — the A/B review intent, carried from enqueue to the generation
+     request. Mirrored in openapi.yaml's QueueEntry. Not set by the client until PR 2. */
+  review?: { characterId: string; triggeredBy: string };
 }
 
 /** Append entries to the bottom of the queue. Renumbers `order` to stay
@@ -136,6 +142,7 @@ export function enqueue(file: QueueFile, inputs: EnqueueInput[]): QueueFile {
       ...(input.requiredEngines ? { requiredEngines: input.requiredEngines } : {}),
       ...(input.multiTts != null ? { multiTts: input.multiTts } : {}),
       ...(input.fallbackConfirmed === true ? { fallbackConfirmed: true } : {}),
+      ...(input.review ? { review: input.review } : {}),
     });
   }
   return renumber({ ...file, entries: [...file.entries, ...fresh] });

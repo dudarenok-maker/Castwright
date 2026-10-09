@@ -1,15 +1,33 @@
 import { createSelector } from '@reduxjs/toolkit';
 import type { RootState } from './index';
 import type { SubstageEntry } from './prosody-slice';
+import type { AnalysisEngine } from '../lib/model-id';
 
-export const selectProsodyRunningForBook = (state: RootState, bookId: string): boolean =>
-  !!state.prosody?.activeStreams && bookId in state.prosody.activeStreams;
+/* #3435 — a `background` run (the layout's open-book re-run) is not counted:
+   it yields to the user instead of blocking them (selectBookHasForegroundWork). */
+export const selectProsodyRunningForBook = (state: RootState, bookId: string): boolean => {
+  const entry = state.prosody?.activeStreams?.[bookId];
+  return !!entry && !entry.background;
+};
 
 export const selectReviewRunningForBook = (state: RootState, bookId: string): boolean =>
   !!state.scriptReview?.activeStreams && bookId in state.scriptReview.activeStreams;
 
 export const selectAnalysisBusyForBook = (state: RootState, bookId: string): boolean =>
   selectProsodyRunningForBook(state, bookId) || selectReviewRunningForBook(state, bookId);
+
+/** #3435 — anything the user has started on this book: a manual analysis
+    pass, an analysis run (main or subset), generation queued or rendering,
+    or a cast-design run. The layout's background re-run of emotion detection
+    does not start while this holds and ends at once when it starts to. */
+export const selectBookHasForegroundWork = (state: RootState, bookId: string): boolean =>
+  selectAnalysisBusyForBook(state, bookId) ||
+  (state.analysis?.activeStream?.bookId === bookId && state.analysis.activeStream.state === 'running') ||
+  (state.queue?.entries ?? []).some(
+    (e) => e.bookId === bookId && (e.status === 'queued' || e.status === 'in_progress'),
+  ) ||
+  Object.values(state.chapters?.activeStreams ?? {}).some((st) => st.bookId === bookId) ||
+  (state.castDesign?.active?.bookId === bookId && state.castDesign.active.state === 'running');
 
 /** User-facing "why is Generate blocked" copy for a busy book — per-pass
     wording (spec copy). Returns null when the book isn't busy. */
@@ -40,7 +58,7 @@ export const selectAnalysisSubstage = createSelector(
     totalChapters?: number;
     estRemainingMs?: number;
     model?: string;
-    engine?: 'local' | 'gemini';
+    engine?: AnalysisEngine;
     activityState?: 'loading' | 'waiting' | 'streaming';
     activitySince?: number;
     fallbackActive?: boolean;

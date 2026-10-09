@@ -18,6 +18,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { type BookStateJson } from '../workspace/scan.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
+import { recordPending, dropPendingForChapter, type ChapterRef } from '../workspace/revisions-store.js';
 import { formatDuration } from './format-duration.js';
 import { measureLoudnessFile, type MeasuredLoudness } from './measure-loudness.js';
 import {
@@ -156,6 +157,13 @@ export interface FinalizeChapterAudioInput {
       re-embed failed simply has no row here and stays unembedded. Ignored
       when `embeddings` (a full render) is passed. */
   reembeddedRows?: EmbeddingRow[];
+  /** Plan 285 (#3400) — the A/B review intent for this render.
+      `undefined` (PR 1: every caller) — leave revisions.json alone.
+      `null` — a plain render: drop the chapter's pending entry (its A side was just overwritten).
+      object — a review render: upsert the chapter's single entry iff
+      preserveExistingAsPrevious actually preserved; otherwise (a first
+      render) drop any entry. Best-effort: never fails the render. */
+  review?: { characterId: string; triggeredBy: string } | null;
 }
 
 export interface FinalizeChapterAudioResult {
@@ -169,6 +177,9 @@ export interface FinalizeChapterAudioResult {
   /** Distinct speaking characters per engine they rendered in. Drives the
       mixed-engine "Kokoro (1), Qwen (6)" caption. */
   audioEngines: AudioEngineBreakdown;
+  /** Plan 285 — absent when `review` was undefined; true when the record/drop
+      landed; false when it failed (logged in full; the new take is live). */
+  reviewRecorded?: boolean;
 }
 
 export async function finalizeChapterAudioWrite(
@@ -701,7 +712,7 @@ export async function finalizeChapterAudioWrite(
   /* Rollback preservation: rename the live `<slug>.<ext>` + `.segments.json`
      to `.previous.*` BEFORE the new render lands. The revision-diff player
      auditions the preserved pair (A) vs this render (B). */
-  await preserveExistingAsPrevious(audioRoot, chapter.slug);
+  const preserve = await preserveExistingAsPrevious(audioRoot, chapter.slug);
   await writeJsonAtomic(segPath, segmentsFile);
   await rename(tmpAudio, audioPath);
   try {
@@ -739,11 +750,59 @@ export async function finalizeChapterAudioWrite(
     await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
   }
 
+  /* Plan 285 — AFTER the last disk write (audio rename, peaks, state.json):
+     a throw earlier in finalize therefore never leaves an entry for a
+     half-written take. */
+  const reviewRecorded = await applyReview(input, preserve.preserved, prev);
+
   return {
     durationSec,
     audioQa,
     segmentCount: segments.length,
     audioModelKey: effectiveModelKey,
     audioEngines,
+    ...(reviewRecorded === undefined ? {} : { reviewRecorded }),
   };
+}
+
+/** Plan 285 — best-effort with respect to the render, and a DELIBERATE
+    swallow of LockAcquisitionTimeoutError (CLAUDE.md's swallow list): the
+    take already landed, so an error is logged in full and surfaces ONLY as
+    `false` — no store text (whose lock key embeds the absolute workspace
+    path) may reach an SSE body. */
+async function applyReview(
+  input: FinalizeChapterAudioInput,
+  preserved: boolean,
+  prev: BookStateJson | null,
+): Promise<boolean | undefined> {
+  if (input.review === undefined) return undefined;
+  const { bookDir, chapter } = input;
+  const chapters: ChapterRef[] = prev?.chapters ?? [{ id: chapter.id, slug: chapter.slug }];
+  try {
+    if (input.review !== null && preserved) {
+      await recordPending(bookDir, chapters, {
+        id: `revision:${chapter.id}:${Date.now()}`,
+        chapterId: chapter.id,
+        characterId: input.review.characterId,
+        triggeredBy: input.review.triggeredBy,
+        triggeredAgo: 'just now',
+        oldDuration: prev?.chapters.find((c) => c.id === chapter.id)?.duration ?? '',
+        newDuration: formatDuration(input.durationSec),
+        confidence: 1,
+        playable: true,
+        hasPreviousAudio: true,
+        segments: [],
+        origin: 'server',
+      });
+    } else {
+      await dropPendingForChapter(bookDir, chapters, chapter.id);
+    }
+    return true;
+  } catch (err) {
+    console.error(
+      `[finalize] could not record A/B review state for ${chapter.slug}; the new take is live without its review entry`,
+      err,
+    );
+    return false;
+  }
 }

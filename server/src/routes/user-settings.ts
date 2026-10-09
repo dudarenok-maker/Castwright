@@ -24,11 +24,16 @@ import {
   getResolvedGenerationWorkers,
   getResolvedTtsModelKey,
   isUserSettingsFileCorrupt,
+  endpointModelIdRefusals,
+  listDroppedEndpointEntriesSync,
+  acknowledgeDroppedEndpointEntries,
+  type DroppedEndpointEntrySummary,
   type UserSettings,
 } from '../workspace/user-settings.js';
 import { configValue } from '../config/resolver.js';
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
+import { endpointKeyStatus, type EndpointKeyStatus } from '../workspace/analyzer-endpoints.js';
 
 export const userSettingsRouter = Router();
 
@@ -46,10 +51,15 @@ const RETIRED_ANALYZER_FIELDS = [
   'analyzerPhase1MinLagChapters',
 ] as const;
 
-interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
+interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey' | 'analyzerEndpointKeys'> {
   apiKeyStatus: 'set' | 'unset';
   workspaceRoot: string;
   workspaceSource: 'env' | 'default' | 'override';
+  /* #3084 — per endpoint id; the keys themselves are never returned. */
+  analyzerEndpointKeyStatus: Record<string, EndpointKeyStatus>;
+  /* #3084 F5 — every unacknowledged drop from Task 3b.6's read-time safety net.
+     Read-only; POST /dropped-endpoint-entries/acknowledge is the only writer. */
+  droppedEndpointEntries: DroppedEndpointEntrySummary[];
   /* The EFFECTIVE default TTS model after the Qwen-when-installed resolution
      (getResolvedTtsModelKey). Distinct from the STORED `defaultTtsModelKey`
      (which the Model Manager picker shows + round-trips): the frontend seeds the
@@ -67,15 +77,17 @@ interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey'> {
   corruptSettingsFile: boolean;
 }
 
-function envDerived(settings: UserSettings): UserSettingsResponse {
+export function envDerived(settings: UserSettings): UserSettingsResponse {
   /* Drop the plaintext key — frontend only ever sees apiKeyStatus. */
   const rest = { ...settings } as Partial<UserSettings>;
   delete rest.geminiApiKey;
+  delete rest.analyzerEndpointKeys; // #3084 — the keys are never returned, only their status
   const phase0Model = configValue<string>('analyzer.phase0.model');
   const phase1Model = configValue<string>('analyzer.phase1.model');
   return {
-    ...(rest as Omit<UserSettings, 'geminiApiKey'>),
+    ...(rest as Omit<UserSettings, 'geminiApiKey' | 'analyzerEndpointKeys'>),
     apiKeyStatus: getResolvedGeminiApiKey() ? 'set' : 'unset',
+    analyzerEndpointKeyStatus: endpointKeyStatus(settings),
     /* Surface the ENV-resolved worker count (GEN_WORKERS env > account setting >
        default 2), mirroring apiKeyStatus. The client queue-dispatcher reads
        `account.generationWorkers` from this response, so without this overlay
@@ -98,6 +110,7 @@ function envDerived(settings: UserSettings): UserSettingsResponse {
     workspaceRoot: WORKSPACE_ROOT,
     workspaceSource: WORKSPACE_SOURCE,
     corruptSettingsFile: isUserSettingsFileCorrupt(),
+    droppedEndpointEntries: listDroppedEndpointEntriesSync(),
   };
 }
 
@@ -109,6 +122,26 @@ userSettingsRouter.get('/', async (_req: Request, res: Response) => {
     console.error('[user-settings] GET failed', err);
     res.status(500).json({ error: 'Failed to read user settings.' });
   }
+});
+
+/* #3084 F5 — retire the dropped-endpoint entries the user has seen. Body is
+   the archiveIds that GET returned; an unknown or already-acknowledged id is
+   ignored, not refused (an ack racing an archive retry is not an error). */
+const acknowledgeSchema = z.object({ archiveIds: z.array(z.string()) });
+
+userSettingsRouter.post('/dropped-endpoint-entries/acknowledge', async (req: Request, res: Response) => {
+  const parsed = acknowledgeSchema.safeParse(req.body);
+  if (!parsed.success) {
+    /* Same shape and code as every other malformed-body 400 in this file
+       (Task 3b.7's key-payload refusal, AnalyzerEndpointRefusal's 'invalid'). */
+    return res.status(400).json({
+      error: 'Invalid payload.',
+      code: 'invalid',
+      issues: parsed.error.issues.map((i) => ({ path: i.path.map(String), message: i.message })),
+    });
+  }
+  await acknowledgeDroppedEndpointEntries(parsed.data.archiveIds);
+  res.json(envDerived(await readUserSettings()));
 });
 
 userSettingsRouter.put('/', async (req: Request, res: Response) => {
@@ -127,6 +160,14 @@ userSettingsRouter.put('/', async (req: Request, res: Response) => {
       return res.status(400).json({
         error: `${offending.join(', ')} ${offending.length > 1 ? 'are' : 'is'} managed in Advanced Settings and cannot be set here.`,
       });
+    }
+    /* #3084 P23 — PR 3d narrows this refusal to analyzer.ollama.model only
+       (coordinator ruling); it does not delete it. Runs after the
+       retired-field check above: that one is unconditional (any value),
+       this one only fires for a value shaped like an endpoint id. */
+    const refusals = endpointModelIdRefusals(req.body);
+    if (refusals.length > 0) {
+      return res.status(400).json({ error: 'Invalid user settings.', issues: refusals });
     }
     const updated = await writeUserSettings(req.body);
     res.json(envDerived(updated));

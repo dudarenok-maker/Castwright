@@ -792,6 +792,23 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
       expect((call![0] as { fallbackConfirmed?: boolean }).fallbackConfirmed).toBe(true);
     });
 
+    it('plan 285 — threads an entry review into the stream open; omits it otherwise', async () => {
+      const review = { characterId: 'amy', triggeredBy: 'Amy voice change' };
+      const store = makeStore(2);
+      seed(store, [
+        entry({ id: 'a1', bookId: 'book-A', chapterId: 1, review }),
+        entry({ id: 'a2', bookId: 'book-B', chapterId: 2 }),
+      ]);
+      await flushMicro();
+      const byBook = (b: string) =>
+        streamGenerationMock.mock.calls.find((c) => (c[0] as { bookId?: string }).bookId === b)?.[0] as
+          | { review?: unknown }
+          | undefined;
+      expect(byBook('book-A')?.review).toEqual(review);
+      expect(byBook('book-B')).toBeDefined();
+      expect(byBook('book-B')).not.toHaveProperty('review');
+    });
+
     it('threads the entry modelKey override into the stream open (regenerate at a chosen tier)', async () => {
       const store = makeStore(2);
       store.dispatch(uiSlice.actions.setTtsModelKey('qwen3-tts-0.6b')); // session default

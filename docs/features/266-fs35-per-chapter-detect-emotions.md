@@ -43,8 +43,9 @@ Source spec: [`docs/superpowers/specs/2026-07-24-fs35-per-chapter-detect-emotion
 - **Invariants preserved:**
   - The eager auto-trigger (`layout.tsx`'s prosody-watermark path) calls
     `runProsodyPasses` **without** `chapterId` — unaffected, and per-chapter
-    runs **never** write the `prosodyAnnotated` disk watermark. Per-chapter
-    is a manual, targeted action only.
+    runs **never** write `prosodyAnnotated: true`; a manual run of either scope
+    that skipped lines writes `false` (#3435), so the book is re-run on its next
+    open. Per-chapter is a manual, targeted action only.
   - `manuscript.tsx` is byte-identical — it keeps rendering
     `<DetectEmotionsButton disabled={sentences.length === 0} />`; the
     `disabled` prop remains the book-level/whole-book availability signal.

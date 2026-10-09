@@ -15,7 +15,7 @@
  * here goes through the function's normal return path. */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fsckOrphanAudio } from './fsck-orphan-audio.js';
@@ -94,6 +94,30 @@ describe('fsckOrphanAudio', () => {
     expect(existsSync(join(audioRoot, '04-chapter-4.previous.mp3'))).toBe(true);
     expect(existsSync(join(audioRoot, '04-chapter-4.previous.segments.json'))).toBe(true);
   });
+
+  /* #3457: the live take on an m4a/ogg book is `<slug>.m4a`/`.ogg`, never
+     `<slug>.mp3`. A `.previous.mp3` beside it is a valid pending revision,
+     not an orphan — promoting it would revert the chapter on every boot. */
+  for (const ext of ['m4a', 'ogg'] as const) {
+    it(`leaves a pending revision alone when the live take is .${ext} (#3457)`, async () => {
+      seedFile(`10-chapter-10.${ext}`, 'live bytes');
+      seedFile('10-chapter-10.segments.json', '{"live":true}');
+      seedFile('10-chapter-10.previous.mp3', 'preserved bytes');
+      seedFile('10-chapter-10.previous.segments.json', '{"live":false}');
+
+      const result = await fsckOrphanAudio(audioRoot);
+
+      expect(result.errors).toEqual([]);
+      expect(result.recovered).toEqual([]);
+      expect(readFileSync(join(audioRoot, `10-chapter-10.${ext}`), 'utf8')).toBe('live bytes');
+      expect(readFileSync(join(audioRoot, '10-chapter-10.segments.json'), 'utf8')).toBe(
+        '{"live":true}',
+      );
+      expect(existsSync(join(audioRoot, '10-chapter-10.mp3'))).toBe(false);
+      expect(existsSync(join(audioRoot, '10-chapter-10.previous.mp3'))).toBe(true);
+      expect(existsSync(join(audioRoot, '10-chapter-10.previous.segments.json'))).toBe(true);
+    });
+  }
 
   it('is a no-op on a fresh book with only live files', async () => {
     seedFile('05-chapter-5.mp3', 'live bytes');

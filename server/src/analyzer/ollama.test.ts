@@ -192,6 +192,8 @@ const { configValueMock } = vi.hoisted(() => ({
         return 999;
       case 'analyzer.ollama.numPredict':
         return -1;
+      case 'analyzer.ollama.structuredOutput':
+        return 'schema';
       case 'analyzer.evalStats.enabled':
         // Check the env var that backs this config key
         return process.env.CASTWRIGHT_EVAL_SAMPLE !== '0';

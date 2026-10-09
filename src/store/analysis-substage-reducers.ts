@@ -10,6 +10,7 @@
    matching this codebase's "RTK immer" convention. */
 
 import type { SubstageEntry } from './prosody-slice';
+import type { AnalysisEngine } from '../lib/model-id';
 
 export interface SetActiveSubstagePayload {
   bookId: string;
@@ -18,6 +19,9 @@ export interface SetActiveSubstagePayload {
   chapterIndex?: number;
   totalChapters?: number;
   estRemainingMs?: number;
+  /** #3435 — background work (the layout's open-book re-run): shown, but it
+      never makes the book busy. See analysis-substage-selectors. */
+  background?: boolean;
 }
 
 export interface UpdateSubstageProgressPayload {
@@ -28,7 +32,7 @@ export interface UpdateSubstageProgressPayload {
   totalChapters?: number;
   estRemainingMs?: number;
   model?: string;
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   activityState?: 'loading' | 'waiting' | 'streaming';
   fallbackActive?: boolean;
   /** Client timestamp used to stamp activitySince when activityState changes. */
@@ -42,13 +46,14 @@ export function setActiveSubstage(
   state: Record<string, SubstageEntry>,
   payload: SetActiveSubstagePayload,
 ): void {
-  const { bookId, progress, label, chapterIndex, totalChapters, estRemainingMs } = payload;
+  const { bookId, progress, label, chapterIndex, totalChapters, estRemainingMs, background } = payload;
   state[bookId] = {
     progress: Math.round(progress * 100),
     label,
     ...(chapterIndex !== undefined ? { chapterIndex } : {}),
     ...(totalChapters !== undefined ? { totalChapters } : {}),
     ...(estRemainingMs !== undefined ? { estRemainingMs } : {}),
+    ...(background ? { background: true } : {}),
   };
 }
 

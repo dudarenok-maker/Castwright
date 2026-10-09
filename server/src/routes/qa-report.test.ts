@@ -21,6 +21,10 @@ vi.mock('../workspace/scan.js', async (importOriginal) => {
       if (bookId === 'THROW_TRIGGER') {
         throw new Error('disk read failed');
       }
+      if (bookId === 'LOCK_TRIGGER') {
+        const { LockAcquisitionTimeoutError } = await import('../workspace/file-lock.js');
+        throw new LockAcquisitionTimeoutError('revisions:C:/SECRET-WORKSPACE/book', 10_000);
+      }
       return actual.findBookByBookId(bookId);
     },
   };
@@ -148,6 +152,33 @@ describe('GET /api/books/:bookId/qa-report', () => {
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: 'disk read failed' });
   });
+
+  it('plan 285 — a lock timeout answers the curated 500 (no lock-key path)', async () => {
+    const { LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const res = await request(app).get('/api/books/LOCK_TRIGGER/qa-report');
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    expect(res.text).not.toContain('SECRET-WORKSPACE');
+  });
+
+  it('plan 285 — configDrift is built from drift only; a pending revision never reaches it', async () => {
+    const p = join(bookDir, '.audiobook', 'revisions.json');
+    writeFileSync(
+      p,
+      JSON.stringify({
+        schema: 1,
+        fileId: 'f-1',
+        rev: 1,
+        pending: [
+          { id: 'revision:1:1', chapterId: 1, characterId: 'n', severity: 'severe', playable: true, hasPreviousAudio: true, segments: [], origin: 'server' },
+        ],
+      }),
+    );
+    const res = await request(app).get(`/api/books/${bookId}/qa-report`);
+    rmSync(p, { force: true });
+    expect(res.status).toBe(200);
+    expect(res.body.configDrift).toEqual({ counts: { mild: 0, moderate: 0, severe: 0 }, events: [] });
+  });
 });
 
 describe('POST /:bookId/resume-scoring', () => {
@@ -181,5 +212,19 @@ describe('POST /:bookId/resume-scoring', () => {
   it('returns 404 for an unknown bookId', async () => {
     const res = await request(app).post('/api/books/does-not-exist/resume-scoring');
     expect(res.status).toBe(404);
+  });
+
+  it('a lock timeout answers the curated 500 (no lock-key path)', async () => {
+    const { LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const res = await request(app).post('/api/books/LOCK_TRIGGER/resume-scoring');
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    expect(res.text).not.toContain('SECRET-WORKSPACE');
+  });
+
+  it('a non-lock failure keeps its own message', async () => {
+    const res = await request(app).post('/api/books/THROW_TRIGGER/resume-scoring');
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'disk read failed' });
   });
 });

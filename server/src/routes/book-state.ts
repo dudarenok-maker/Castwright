@@ -34,6 +34,7 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withKeyLock, requestFailureMessage } from '../workspace/file-lock.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { assertRevisionsResettable, resetRevisions } from '../workspace/revisions-store.js';
 import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
 import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile, type StatsPutBody } from '../workspace/listen-stats.js';
@@ -49,7 +50,14 @@ import {
   getOrHydrateManuscript,
   type ManuscriptRecord,
 } from '../store/manuscripts.js';
-import { clearAnalysisCache, loadAnalysisCache, type ChapterErrorRecord } from '../store/analysis-cache.js';
+import {
+  analysisCompleteFor,
+  clearAnalysisCache,
+  loadAnalysisCache,
+  reachedConfirm,
+  unattributedChapterIds,
+  type ChapterErrorRecord,
+} from '../store/analysis-cache.js';
 import { readAnalysisState, type AnalysisStateFile } from '../store/analysis-state.js';
 import { loadDroppedQuotes } from '../store/dropped-quotes.js';
 import { loadCastIdHistory, type CastIdHistory } from '../store/cast-id-history.js';
@@ -387,10 +395,36 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        populated in analysis.ts:913 (full route) and the subset route. */
     let failedChapterIds: number[] = [];
     let failedChapterErrors: Record<string, ChapterErrorRecord> = {};
+    /* Plan 286 §3.4 (C18, C20, F) — server facts the analysing view reads
+       after a reload or a dropped snapshot: the roster is final
+       (`stage1Ready`); the book has not reached Confirm and still needs a main
+       resume (`resumeRequired` — never true past Confirm, so no Resume is
+       offered on a confirmed book); and the non-excluded chapters without a
+       current take (`unattributedChapterIds`, the Generate view's analysis gaps). */
+    let stage1Ready = false;
+    let resumeRequired = false;
+    let unattributed: number[] = [];
     if (state.manuscriptId) {
       const cache = await loadAnalysisCache(state.manuscriptId);
       failedChapterIds = cache.failedChapterIds ?? [];
       failedChapterErrors = cache.failedChapterErrors ?? {};
+      const activeIds = (state.chapters ?? []).filter((c) => !c.excluded).map((c) => c.id);
+      stage1Ready = !!cache.stage1;
+      resumeRequired = !reachedConfirm(state, cache) && stage1Ready && !analysisCompleteFor(cache, activeIds);
+      unattributed = unattributedChapterIds(cache, activeIds);
+      /* Spec §3.4 book-state row, amended by PR #3505 gate pass 1 — past
+         Confirm, manuscript-edits.json is authoritative downstream (generation
+         rebuilds the cache from it), so a chapter whose sentences it carries
+         is attributed even when the cache has no take for it (a sample /
+         handoff-less book) or only a pending one. A chapter in
+         failedChapterErrors keeps its gap. */
+      if (reachedConfirm(state, cache) && Array.isArray(edits?.sentences)) {
+        const editedChapters = new Set<number>();
+        for (const s of edits.sentences as Array<{ chapterId?: unknown }>) {
+          if (typeof s?.chapterId === 'number') editedChapters.add(s.chapterId);
+        }
+        unattributed = unattributed.filter((id) => !editedChapters.has(id) || Object.hasOwn(failedChapterErrors, String(id)));
+      }
       const cachedSentences = Object.values(cache.chapters ?? {}).flat();
       if (edits && Array.isArray(edits.sentences) && edits.sentences.length > 0) {
         if (cachedSentences.length > 0) {
@@ -689,7 +723,13 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       renderedTextByChapter,
       renderedInstructByChapter,
       changeLog: changeLog?.events ?? null,
-      analysis: { failedChapterIds, failedChapterErrors },
+      analysis: {
+        failedChapterIds,
+        failedChapterErrors,
+        stage1Ready,
+        resumeRequired,
+        unattributedChapterIds: unattributed,
+      },
     });
   } catch (e) {
     console.error('[book-state] GET failed', e);
@@ -1197,11 +1237,13 @@ async function applyReparse(
        today. This arm's rm(cast.json) is unguarded (no existsSync check):
        the read and the delete decision now live inside the lock together, so
        there is no longer an out-of-lock existsSync to desync from the
-       in-lock reality — of the three sibling arms below, only the revisions
-       and audio arms keep an existsSync guard (they gate an already-
-       idempotent rm and acquire no lock, so no decision of theirs crosses a
-       lock boundary); clearAnalysisCache's rm is unguarded too, same as this
-       arm's.
+       in-lock reality — of the three sibling arms below, only the audio arm
+       keeps an existsSync guard (it gates an already-idempotent rm and
+       acquires no lock, so no decision of its crosses a lock boundary); the
+       revisions arm resets revisions.json through the store under the
+       per-book revisions leaf lock (plan 285), held beside this cast lock,
+       never nested in it; clearAnalysisCache's rm is unguarded too, same as
+       this arm's.
 
        Behaviour change vs. main: readJson's bare JSON.parse throws on a
        corrupt (not just missing) cast.json. On main that throw happened
@@ -1253,9 +1295,13 @@ async function applyReparse(
       await rm(castJsonPath(bookDir), { force: true });
     }),
     clearAnalysisCache(state.manuscriptId),
-    existsSync(revisionsJsonPath(bookDir))
-      ? rm(revisionsJsonPath(bookDir), { force: true })
-      : Promise.resolve(),
+    /* Plan 285 — RESET (new fileId, rev 0) through the store under its own
+       leaf lock, never delete: a deleted file would read back fileId:null,
+       which the PR 2 client cache treats as "older than any id". A corrupt
+       file is replaced (as the rm did); a newer-schema one was already
+       refused by the route's preflight. This arm sits BESIDE the
+       withCastLock arm, never inside it. */
+    resetRevisions(bookDir),
     existsSync(ad) ? rm(ad, { recursive: true, force: true }) : Promise.resolve(),
   ]);
 
@@ -1341,6 +1387,10 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
     if (!located) return res.status(404).json({ error: 'Book not found.' });
     const { bookDir, state } = located;
 
+    /* Plan 285 — refuse a newer-schema revisions.json BEFORE anything is
+       deleted or rewritten (applyReparse's state write + Promise.all). */
+    await assertRevisionsResettable(bookDir);
+
     const manuscriptPath = join(bookDir, safeSegment(state.manuscriptFile));
     if (!existsSync(manuscriptPath)) {
       return res
@@ -1422,6 +1472,10 @@ bookStateRouter.post(
       const located = await findBookByBookId(req.params.bookId);
       if (!located) return res.status(404).json({ error: 'Book not found.' });
       const { bookDir, state } = located;
+
+      /* Plan 285 — refuse a newer-schema revisions.json BEFORE this route
+         writes the new manuscript, unlinks the old one, or sets manuscriptFile. */
+      await assertRevisionsResettable(bookDir);
 
       const parsed = await parseManuscript({
         buffer: req.file.buffer,

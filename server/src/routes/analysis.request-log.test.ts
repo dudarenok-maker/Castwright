@@ -24,7 +24,7 @@
 
    Same pair, `[analysis-subset]`-prefixed, for the chapter-subset route. */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeAll } from 'vitest';
 import http from 'node:http';
 import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.js';
 import type { Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
@@ -231,6 +231,12 @@ function postAndWaitForLogLine(
     state.server.on('error', reject);
   });
 }
+
+/* Warm the cold `./analysis.js` import once, with a generous budget, so the
+   first case doesn't pay it inside its own timeout (flaky under CPU load). */
+beforeAll(async () => {
+  await import('./analysis.js');
+}, 120_000);
 
 describe('D2/F2 (#3169) — every POST that reaches the server logs under [analysis]', () => {
   it('(a) an unregistered manuscript id still gets the unconditional "request received" line, printed before hydration', async () => {

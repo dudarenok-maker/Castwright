@@ -31,8 +31,13 @@ const { detectOllamaDeviceMock, setLastKnownAnalyzerDeviceMock } = vi.hoisted(()
   detectOllamaDeviceMock: vi.fn(async (): Promise<'cuda' | 'cpu' | 'unknown'> => 'cuda'),
   setLastKnownAnalyzerDeviceMock: vi.fn(),
 }));
-vi.mock('./ollama-health.js', () => ({ detectOllamaDevice: detectOllamaDeviceMock }));
-vi.mock('../gpu/analyzer-device-state.js', () => ({
+vi.mock('./ollama-health.js', () => ({
+  detectOllamaDevice: detectOllamaDeviceMock,
+  /* endJob calls this for engine:'local' jobs; stub it so it can never make a real HTTP unload. */
+  unloadResidentOllama: vi.fn(async () => {}),
+}));
+vi.mock('../gpu/analyzer-device-state.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../gpu/analyzer-device-state.js')>()),
   setLastKnownAnalyzerDevice: setLastKnownAnalyzerDeviceMock,
 }));
 vi.mock('../analyzer/select-analyzer.js', async () => {
@@ -88,7 +93,7 @@ let workspaceRoot: string;
       character would be folded even with a fully completed run. We write a
       throwaway user-settings file (pointed at via USER_SETTINGS_FILE) whose
       extra pin flips only this knob. Set at module scope so it lands before the
-      lazy `await import('./analysis.js')` inside each test forces
+      `await import('./analysis.js')` in the beforeAll below forces
       user-settings.ts to resolve USER_SETTINGS_PATH; test-setup.ts already
       redirects user settings to a throwaway temp file, so this file's override
       stays out of the developer's real settings. */
@@ -101,6 +106,15 @@ beforeAll(() => {
   process.env.WORKSPACE_DIR = workspaceRoot;
   process.env.STRUCTURE_ENGINE = '0';
 });
+
+/* The first case lazily imports ./analysis.js inside its own 30s budget, and a
+   cold transform of that module takes ~20s alone and longer under CPU
+   contention (a second vitest process) — the first case then timed out for
+   reasons unrelated to the rename. Pay for the import here instead. Placed
+   after the settings env above so USER_SETTINGS_FILE still lands first. */
+beforeAll(async () => {
+  await import('./analysis.js');
+}, 120_000);
 
 afterAll(() => {
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
@@ -138,22 +152,6 @@ function buildPhase1Analyzer(): Analyzer {
        the stub's own `Error: not used` — pre-empting the book-dir guard's
        STALE_BOOK_DIR terminal halt that these #2196 tests exist to observe. */
     runAttributionEscalation: () => Promise.resolve(null),
-  };
-}
-
-/* #2165 — a Phase-1 analyzer that FAILS stage-2 attribution, ending the run in
-   a real terminal error (state `'halted'`). The #2165 analysis-state test
-   asserts the cold-boot snapshot FOLLOWS the rename; that `halted` snapshot is
-   only written for a genuine run error. Before srv-59 the run naturally ended
-   on a Phase-1 error; once structure+escalation landed, a REJECTING
-   runAttributionEscalation stub supplied that error implicitly (and also broke
-   the #2196 halt-path tests by crashing before the persist gate). With the
-   escalation stub now a no-op, tests that want a halted terminal supply it
-   explicitly via this analyzer instead of leaning on the crash. */
-function buildFailingPhase1Analyzer(): Analyzer {
-  return {
-    ...buildPhase1Analyzer(),
-    runStage2Chapter: () => Promise.reject(new Error('simulated stage-2 attribution failure')),
   };
 }
 
@@ -295,17 +293,32 @@ async function seedRunnableBook(): Promise<{
   };
 }
 
-/* Exactly what book-state.ts:846-858 does: move the folder (with the same
-   OneDrive/cloud-sync-friendly retry — a raw sync rename was observed
-   flaking with EPERM here under full-suite load, exactly the class of
-   transient failure renameWithRetry exists to absorb), then point the
-   in-memory record at the new path. */
-async function renameLikeBookState(manuscriptId: string, oldDir: string, newDir: string) {
+/* Exactly what the rename handler in book-state.ts does (the
+   `renameWithRetry` + `if (rec) { rec.bookDir = newDir; putManuscript(rec) }`
+   block): move the folder (with the same OneDrive/cloud-sync-friendly retry —
+   a raw sync rename was observed flaking with EPERM here under full-suite
+   load, exactly the class of transient failure renameWithRetry exists to
+   absorb), then point the in-memory record at the new path IF there is one.
+   The `if (rec)` is load-bearing (#3459): the book-dir guard's slow path
+   (workspace/book-dir-guard.ts) removes the record and awaits a re-hydrate,
+   and a rename landing in that window sees no record — production tolerates
+   that (the re-hydrate then finds the moved folder), so the helper must too.
+   `afterRename` runs synchronously between the move and the record lookup,
+   i.e. exactly where that window lands. */
+async function renameLikeBookState(
+  manuscriptId: string,
+  oldDir: string,
+  newDir: string,
+  afterRename?: () => void,
+) {
   const { getManuscript, putManuscript } = await import('../store/manuscripts.js');
   await renameWithRetry(oldDir, newDir);
-  const rec = getManuscript(manuscriptId)!;
-  rec.bookDir = newDir;
-  putManuscript(rec);
+  afterRename?.();
+  const rec = getManuscript(manuscriptId);
+  if (rec) {
+    rec.bookDir = newDir;
+    putManuscript(rec);
+  }
 }
 
 describe('#2165 — a rename that reaches a live analysis run does not resurrect the old directory', () => {
@@ -371,15 +384,6 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
       const originalCoverageRetries = process.env.STAGE2_COVERAGE_RETRIES;
       process.env.STAGE2_COVERAGE_RETRIES = '0';
 
-      /* This case wants the terminal SNAPSHOT to follow the rename, and a
-         `halted` snapshot exists only for a run that ends in a genuine error.
-         Give it a Phase-1 analyzer that fails stage-2 attribution (rather than
-         leaning on the escalation-stub crash that used to supply the error) so
-         the run halts and its `halted` cold-boot snapshot lands at newDir. */
-      (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection =
-        buildSelection(buildFailingPhase1Analyzer(), 'phase1-model');
-
-
       let jobPromise: Promise<void> | undefined;
       try {
         jobPromise = runMainAnalyzerJob(
@@ -415,12 +419,14 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
          BEFORE the rename and renameWithRetry carries it across — existence
          at newDir is therefore satisfied even with persistTerminalSnapshot
          deleted outright. The running snapshot writes state:'running'; only
-         the TERMINAL one writes 'halted' (this run ends on a Phase-1 error,
-         not an abort, so it halts rather than pausing). Asserting 'halted' is
+         the TERMINAL one writes 'paused' (this run ends on the abort above,
+         which the post-cast-join abort check in runMainAnalyzerJob surfaces as
+         AnalysisAbortedError, since the abort lands while the Phase-0 cast call
+         is held on phase0Gate; so it pauses rather than halting). Asserting 'paused' is
          what separates "the terminal snapshot followed the rename" from "some
          earlier file rode along with it". */
       const after = readFileSync(analysisStateJsonPath(seed.newDir), 'utf8');
-      expect(JSON.parse(after).state).toBe('halted');
+      expect(JSON.parse(after).state).toBe('paused');
 
       /* Per-mechanism assertion — the write did NOT also go to the old path. */
       expect(existsSync(analysisStateJsonPath(seed.oldDir))).toBe(false);
@@ -705,6 +711,35 @@ describe('#2165 — a rename that reaches a live analysis run does not resurrect
         await expect(assertWriteTargetStable(seed.job, writeDir)).rejects.toBeInstanceOf(
           BookDirUnresolvedError,
         );
+      } finally {
+        removeManuscript(seed.manuscriptId);
+      }
+    },
+    30_000,
+  );
+
+  it(
+    "#3459 a rename landing in the book-dir guard's remove→re-hydrate window finds no record, and the guard re-hydrates to the new path",
+    async () => {
+      const seed = await seedRunnableBook();
+      const { tryResolveVerifiedBookDir } = await import('../workspace/book-dir-guard.js');
+      const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+
+      try {
+        let guard: ReturnType<typeof tryResolveVerifiedBookDir> | undefined;
+        /* oldDir is gone by the time the hook runs, so the guard takes its slow
+           path: it removes the record synchronously, then awaits the re-hydrate
+           — the rename helper's record lookup lands in between. */
+        await renameLikeBookState(seed.manuscriptId, seed.oldDir, seed.newDir, () => {
+          guard = tryResolveVerifiedBookDir({
+            manuscriptId: seed.manuscriptId,
+            candidateBookDir: seed.oldDir,
+          });
+          expect(getManuscript(seed.manuscriptId)).toBeUndefined();
+        });
+
+        expect(await guard).toBe(seed.newDir);
+        expect(getManuscript(seed.manuscriptId)?.bookDir).toBe(seed.newDir);
       } finally {
         removeManuscript(seed.manuscriptId);
       }

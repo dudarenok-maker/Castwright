@@ -166,10 +166,22 @@ export class AnalyzerTimeoutError extends Error {
    AnalyzerTruncatedError. */
 export class AnalyzerReasoningOverflowError extends Error {
   readonly code = 'ANALYZER_REASONING_OVERFLOW';
+  /* #3084 F7 (Task 3b.1b) — the endpoint whose request overflowed. The runner
+     that raises this (wave 2's mapFinish) is transport-agnostic and has no
+     concept of an endpoint; only `OpenAIAnalyzer` holds one, so it is the layer
+     that sets this. Deliberately MUTABLE (not a `readonly` constructor field):
+     the escalation path reports the error through `StageCall.onReasoningOverflow`
+     and stores it, so `OpenAIAnalyzer` must be able to stamp the id onto the SAME
+     object after construction, before wave 2's route-level `throwIfReasoningOverflowed`
+     rethrows it outside the analyzer entirely. `opts` is purely additive: every
+     existing 3-arg call site (Ollama/Gemini paths, mapFinish) compiles and behaves
+     unchanged, and `endpointId` stays `undefined` for them. */
+  endpointId?: string;
   constructor(
     public readonly transport: TransportKind,
     public readonly model: string,
     public readonly reasoningTokens: number | undefined,
+    opts?: { endpointId?: string },
   ) {
     super(
       `${transport} ${model} used its whole output budget on reasoning` +
@@ -177,5 +189,136 @@ export class AnalyzerReasoningOverflowError extends Error {
         ' and returned no answer — splitting the chunk cannot shrink reasoning.',
     );
     this.name = 'AnalyzerReasoningOverflowError';
+    this.endpointId = opts?.endpointId;
+  }
+}
+
+/* ── #3084 — analyzer endpoint ids (P23) ─────────────────────────────────── */
+
+const ENDPOINT_SOURCE_LABEL: Record<'settings' | 'env' | 'run-pick' | 'persona', string> = {
+  settings: 'a saved setting',
+  env: 'ANALYZER_PHASE0_MODEL / ANALYZER_PHASE1_MODEL',
+  'run-pick': "this run's model pick",
+  persona: 'the persona generation engine',
+};
+
+/** A model id names an OpenAI-compatible endpoint this build cannot run: until
+    PR 3d every endpoint id (P23), from PR 3d an id whose endpoint is not in
+    saved settings. Thrown by selection (PR 3a) and PR 3c's pre-run checks,
+    before the first call. FailureCode `analyzer-endpoint-missing` (PR 3b). */
+export class AnalyzerEndpointMissingError extends Error {
+  readonly code = 'ANALYZER_ENDPOINT_MISSING';
+  constructor(
+    readonly endpointId: string,
+    readonly source: 'settings' | 'env' | 'run-pick' | 'persona',
+  ) {
+    super(`Analyzer endpoint "${endpointId}" (from ${ENDPOINT_SOURCE_LABEL[source]}) cannot be used for analysis yet.`);
+    this.name = 'AnalyzerEndpointMissingError';
+  }
+}
+
+/* ── #3084 PR 3b — wave-3 analyzer errors ───────────────────────────────── */
+
+const TRANSPORT_LABEL: Record<TransportKind, string> = {
+  ollama: 'Ollama',
+  gemini: 'Gemini',
+  openai: 'Endpoint',
+};
+
+/** #3084 P22 — the one shape every message we build uses for a sanitized cause code:
+    ` (CODE)`, or nothing. The same suffix as PR 3c's catalog listing error
+    (`Endpoint model listing failed (CODE).`). */
+export function causeCodeSuffix(causeCode: string | undefined): string {
+  return causeCode ? ` (${causeCode})` : '';
+}
+
+/** A stream that ended — cleanly, by socket drop, or by the idle watchdog —
+    after response headers but before a finish reason (`phase: 'mid-stream'`); or
+    (P21) a connection reset or DNS hiccup before headers (ECONNRESET,
+    UND_ERR_SOCKET, EAI_AGAIN) from a server that may be up
+    (`phase: 'before-response'`). Retried like an idle stream; never a fallback.
+    #3084 P22 — the pre-header case names its sanitized `causeCode` in its message,
+    so a persistent DNS failure never reads as a mid-answer drop. */
+export class AnalyzerStreamIncompleteError extends Error {
+  readonly code = 'ANALYZER_STREAM_INCOMPLETE';
+  readonly phase: 'before-response' | 'mid-stream';
+  readonly causeCode: string | undefined;
+  constructor(
+    readonly transport: TransportKind,
+    readonly model: string,
+    beforeResponse?: { causeCode: string | undefined },
+  ) {
+    super(
+      beforeResponse
+        ? `${TRANSPORT_LABEL[transport]} ${model} dropped the connection before a response${causeCodeSuffix(beforeResponse.causeCode)}.`
+        : `${TRANSPORT_LABEL[transport]} ${model} dropped the connection or ended its stream before a finish reason.`,
+    );
+    this.name = 'AnalyzerStreamIncompleteError';
+    this.phase = beforeResponse ? 'before-response' : 'mid-stream';
+    this.causeCode = beforeResponse?.causeCode;
+  }
+}
+
+/** #3084 P22 — a system error code safe to carry on an error we build: upper-case
+    letters, digits and underscores only (ECONNRESET, UND_ERR_SOCKET), and never one
+    containing a known secret. Anything else is dropped. */
+export function sanitizeCauseCode(value: unknown, secrets: readonly string[]): string | undefined {
+  if (typeof value !== 'string' || !/^[A-Z][A-Z0-9_]{1,63}$/.test(value)) return undefined;
+  return secrets.some((s) => s.length >= 8 && value.includes(s)) ? undefined : value;
+}
+
+/** #3084 P22 — what the OpenAI transport rebuilds an error it does not recognise
+    into, instead of rethrowing the SDK's. The message is built only from error
+    NAMES and the sanitized code (shown with causeCodeSuffix, so the user can
+    diagnose ERR_SSL_WRONG_VERSION_NUMBER and friends), never from upstream text,
+    and there is no `cause`:
+    a logged error prints its cause chain, and undici's header errors embed the
+    header value (`Headers.append: "Bearer <key>" is an invalid header value.`). */
+export class AnalyzerTransportError extends Error {
+  readonly code = 'ANALYZER_TRANSPORT';
+  constructor(
+    readonly transport: TransportKind,
+    readonly model: string,
+    message: string,
+    readonly causeCode: string | undefined,
+  ) {
+    super(message);
+    this.name = 'AnalyzerTransportError';
+  }
+}
+
+/** The saved key for an endpoint was bound to a different origin than the URL
+    about to be called (decision 3c). No request was sent. Maps to `auth`. */
+export class AnalyzerKeyOriginError extends Error {
+  readonly code = 'ANALYZER_KEY_ORIGIN';
+  constructor(
+    readonly endpointId: string,
+    readonly endpointName: string,
+  ) {
+    super(
+      `The API key saved for ${endpointName} was entered for a different host — re-enter the key for ${endpointName}.`,
+    );
+    this.name = 'AnalyzerKeyOriginError';
+  }
+}
+
+/** Validation failed after the retry. The message is exactly today's text
+    (ollama.ts:609-611, gemini.ts:515-517); `detail` is the
+    "<kind> — <summarised detail>" string the runner builds. */
+export class AnalyzerInvalidOutputError extends Error {
+  readonly code = 'ANALYZER_INVALID_OUTPUT';
+  constructor(
+    readonly transport: TransportKind,
+    readonly model: string,
+    readonly key: string,
+    readonly detail: string,
+    readonly structuredOutputMode: 'schema' | 'json' | 'off',
+  ) {
+    super(
+      transport === 'gemini'
+        ? `Gemini ${key} failed validation after retry: ${detail}`
+        : `${TRANSPORT_LABEL[transport]} ${model} ${key} failed validation after retry: ${detail}`,
+    );
+    this.name = 'AnalyzerInvalidOutputError';
   }
 }

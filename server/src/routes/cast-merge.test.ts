@@ -477,6 +477,40 @@ describe('cast-merge router', () => {
     }
   });
 
+  it('cast-merge round trip keeps phase', async () => {
+    const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const sourceId = `phase-src-${unique}`;
+    const targetId = `phase-tgt-${unique}`;
+    const cast = readDisk<{ characters: Array<Record<string, unknown>> }>('cast.json');
+    cast.characters.push(
+      { id: sourceId, name: 'Phase Source', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+      { id: targetId, name: 'Phase Target', role: 'minor', color: 'halloran', lines: 1, scenes: 1 },
+    );
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify(cast));
+    /* An UNTAGGED legacy failure record (stage1 present, attribution-* code) plus
+       a cached take that names the source, so the merge re-saves the cache. */
+    const cache = JSON.parse(readFileSync(cachePath, 'utf8')) as Record<string, unknown>;
+    (cache.chapters as Record<string, unknown[]>)['3'] = [
+      { id: 900, chapterId: 3, characterId: sourceId, text: 'Phase line.' },
+    ];
+    cache.failedChapterIds = [3];
+    cache.failedChapterErrors = {
+      '3': { code: 'attribution-incomplete', message: 'm', remediation: 'r' },
+    };
+    writeFileSync(cachePath, JSON.stringify(cache));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/merge`)
+      .set('Content-Type', 'application/json')
+      .send({ sourceId, targetId });
+    expect(res.status).toBe(200);
+
+    const after = JSON.parse(readFileSync(cachePath, 'utf8')) as {
+      failedChapterErrors: Record<string, { phase?: string }>;
+    };
+    expect(after.failedChapterErrors['3'].phase).toBe('attribution');
+  });
+
   it('400s when sourceId equals targetId', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/cast/merge`)

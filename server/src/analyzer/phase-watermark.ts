@@ -54,6 +54,10 @@ export interface PhaseWatermark {
       time, resolves on the next microtask. Otherwise parks on an
       internal listener; re-evaluated on every watermark advance. */
   awaitPhase1Dispatch(chapterIndex: number): Promise<void>;
+  /** #3435 — the job has ended: resolve every parked Phase 1 waiter now, and
+      every later `awaitPhase1Dispatch` at once. Does not mark Phase 0 done —
+      the woken worker checks the job's own state and starts nothing. */
+  releaseAll(): void;
   /** Current watermark value — handy for telemetry / log lines. */
   readonly watermark: number;
   /** True once `markPhase0AllDone()` has fired. */
@@ -67,6 +71,7 @@ export function createPhaseWatermark(opts: PhaseWatermarkOptions): PhaseWatermar
      is isolated from every other job. No process globals. */
   let watermark = -1; // before any chapter completes; -1 < 0 + lag for any lag>=1
   let phase0Done = false;
+  let released = false;
   const waiters = new Set<() => void>();
 
   const minLag = opts.minLagChapters;
@@ -99,12 +104,17 @@ export function createPhaseWatermark(opts: PhaseWatermarkOptions): PhaseWatermar
       notifyAll();
     },
 
+    releaseAll(): void {
+      released = true;
+      notifyAll();
+    },
+
     awaitPhase1Dispatch(chapterIndex: number): Promise<void> {
       /* Predicate captured per-call so each waiter checks its own
          chapter's lag requirement. `phase0Done === true` shortcuts —
          once Phase 0b has finalised, ALL remaining Phase 1 chapters
          can dispatch against the final roster. */
-      const ready = (): boolean => phase0Done || watermark >= chapterIndex + minLag;
+      const ready = (): boolean => released || phase0Done || watermark >= chapterIndex + minLag;
 
       if (ready()) {
         /* Resolve on next microtask so the caller always gets an async
@@ -143,7 +153,12 @@ export function createPhaseWatermark(opts: PhaseWatermarkOptions): PhaseWatermar
     watermark so the route layer doesn't branch on engine. */
 export function createSequentialWatermark(): PhaseWatermark {
   let phase0Done = false;
+  let released = false;
   const waiters = new Set<() => void>();
+  const wakeAll = (): void => {
+    const snapshot = Array.from(waiters);
+    for (const wake of snapshot) wake();
+  };
 
   return {
     markPhase0ChapterComplete(_chapterIndex: number): number {
@@ -154,14 +169,17 @@ export function createSequentialWatermark(): PhaseWatermark {
     markPhase0AllDone(): void {
       if (phase0Done) return;
       phase0Done = true;
-      const snapshot = Array.from(waiters);
-      for (const wake of snapshot) wake();
+      wakeAll();
+    },
+    releaseAll(): void {
+      released = true;
+      wakeAll();
     },
     awaitPhase1Dispatch(_chapterIndex: number): Promise<void> {
-      if (phase0Done) return Promise.resolve();
+      if (phase0Done || released) return Promise.resolve();
       return new Promise<void>((resolve) => {
         const wake = (): void => {
-          if (phase0Done) {
+          if (phase0Done || released) {
             waiters.delete(wake);
             resolve();
           }

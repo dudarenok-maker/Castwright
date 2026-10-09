@@ -438,3 +438,19 @@ describe('analysisSlice — activeStream snapshot reducers', () => {
     });
   });
 });
+
+describe('selectMainAnalysisLive (#3435 decision A)', () => {
+  it.each([
+    ['no snapshot', null, false],
+    ['another manuscript', { ...baseSnapshot, manuscriptId: 'm2' }, false],
+    ['a subset run', { ...baseSnapshot, kind: 'subset' as const, subsetChapterIds: [3] }, false],
+    ['a paused main run', { ...baseSnapshot, state: 'paused' as const }, false],
+    ['a halted main run', { ...baseSnapshot, state: 'halted' as const }, false],
+    ['a running main run (kind main)', { ...baseSnapshot, kind: 'main' as const }, true],
+    ['a running main run (legacy, no kind)', baseSnapshot, true],
+  ])('%s', async (_label, activeStream, expected) => {
+    const { selectMainAnalysisLive } = await import('./analysis-slice');
+    const state = { analysis: { ...analysisSlice.getInitialState(), activeStream } };
+    expect(selectMainAnalysisLive(state, 'm1')).toBe(expected);
+  });
+});

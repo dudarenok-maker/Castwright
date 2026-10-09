@@ -1,4 +1,5 @@
 import type { components } from './api-types';
+import type { AnalysisEngine } from './model-id';
 
 export type Character = components['schemas']['Character'] & {
   matchFactors?: components['schemas']['MatchFactor'][];
@@ -78,6 +79,8 @@ export type AnalyseResponse = components['schemas']['AnalyseResponse'];
 export type VoiceMatchResponse = components['schemas']['VoiceMatchResponse'];
 export type RevisionsResponse = components['schemas']['RevisionsResponse'];
 export type BulkRevisionsResponse = components['schemas']['BulkRevisionsResponse'];
+/** Plan 285 — the A/B review intent a queue entry / generation request carries. */
+export type ReviewRequest = components['schemas']['ReviewRequest'];
 export type VoiceSample = components['schemas']['VoiceSample'];
 export type VoiceSampleRequest = components['schemas']['VoiceSampleRequest'];
 export type TtsModelKey = NonNullable<VoiceSampleRequest['modelKey']>;
@@ -134,6 +137,13 @@ export type TtsEngine = NonNullable<BaseVoice['engine']>;
    are available to the slice + Account view even before `openapi:types`
    regenerates `api-types.ts`. Mirrors the server's userSettingsSchema. */
 export type BackupCadence = 'daily' | 'weekly';
+/* #3084 PR 3a — `analysisEngine` stays on the OpenAPI-generated narrow enum
+   (`'local' | 'gemini'`) here deliberately: it is a persisted/validated field,
+   and nothing can select an endpoint before PR 3d (see the plan's "Which
+   engine-literal sites widen in 3a" table). Widening it to the internal
+   3-value `AnalysisEngine` would let an `'openai'` value flow into a save
+   call with no compile-time check — exactly the gap PR 3d is supposed to
+   close deliberately, not by accident. */
 export type UserSettings = components['schemas']['UserSettings'] & {
   backupEnabled?: boolean;
   backupCadence?: BackupCadence;
@@ -144,6 +154,13 @@ export type UserSettingsPatch = components['schemas']['UserSettingsPatch'] & {
   backupCadence?: BackupCadence;
   backupRetention?: number;
 };
+
+/* #3084 — analyzer endpoints (generated shapes). */
+export type AnalyzerEndpoint = components['schemas']['AnalyzerEndpoint'];
+export type AnalyzerEndpointInput = components['schemas']['AnalyzerEndpointInput'];
+export type AnalyzerEndpointKeyStatus = components['schemas']['AnalyzerEndpointKeyStatus'];
+export type AnalyzerEndpointDetectRequest = components['schemas']['AnalyzerEndpointDetectRequest'];
+export type AnalyzerEndpointDetectResult = components['schemas']['AnalyzerEndpointDetectResult'];
 
 /* srv-2 — one auto-backup snapshot of a book's state.json, newest first.
    Mirrors server/src/routes/backup.ts BackupSnapshot. */
@@ -520,8 +537,17 @@ export interface BookStateResponse {
       render per-chapter Retry buttons after reload. failedChapterIds is
       the set of chapters whose Phase 0a cast detection threw across the
       analyzer's built-in retry — server-side they live in the analysis
-      cache. */
-  analysis?: { failedChapterIds: number[]; failedChapterErrors?: Record<string, { code: string; message: string; remediation: string }> };
+      cache. #3435 — `stage1Ready` (the roster is final), `resumeRequired`
+      (an unfinished book that has not reached Confirm needs a main resume) and
+      `unattributedChapterIds` (non-excluded chapters with no current take)
+      survive a reload and a dropped snapshot. */
+  analysis?: {
+    failedChapterIds: number[];
+    failedChapterErrors?: Record<string, { code: string; message: string; remediation: string; phase: 'cast' | 'attribution' }>;
+    stage1Ready?: boolean;
+    resumeRequired?: boolean;
+    unattributedChapterIds?: number[];
+  };
 }
 
 /** Drop-reason enum mirrored from server/src/store/dropped-quotes.ts.
@@ -584,7 +610,7 @@ export interface ActiveAnalysisSummary {
   phaseLabel: string;
   phaseProgress: number;
   state: 'paused' | 'halted';
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   kind?: 'main' | 'subset';
   subsetChapterIds?: number[];
   haltCode?: string;
@@ -612,7 +638,7 @@ export interface AnalysisStateResponse {
       (`src/hooks/use-reverse-local-analyzer-guard.tsx`) sees the
       right engine on a cold-boot rehydrated pill. Undefined for
       pre-E1 snapshots — guard defaults to "do not prompt". */
-  engine?: 'local' | 'gemini';
+  engine?: AnalysisEngine;
   /** Discriminator for the in-flight job's shape (plan 32 D1).
       `'main'` = full-book sticky run; `'subset'` = per-chapter retry
       via POST /:id/analysis/chapters. Optional — pre-D1 snapshots

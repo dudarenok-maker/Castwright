@@ -21,14 +21,16 @@ import type {
 } from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { OllamaAnalyzer } from './ollama.js';
-import { AnalysisAbortedError, AnalyzerUnreachableError, type TransportKind } from './errors.js';
+import { AnalysisAbortedError, AnalyzerUnreachableError, AnalyzerEndpointMissingError, type TransportKind } from './errors.js';
 import {
   getResolvedAnalysisEngine,
   getResolvedGeminiApiKey,
   getResolvedAllowCloudFallback,
+  getCachedUserSettings,
 } from '../workspace/user-settings.js';
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { configValue } from '../config/resolver.js';
+import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
 
 export type { StageChunkInfo, StageCall, Analyzer } from './types.js';
 import type { Analyzer, StageCall } from './types.js';
@@ -40,6 +42,10 @@ export interface SelectAnalyzerOptions {
       shape, so the route layer is responsible for keeping override and
       engine in sync. */
   model?: string;
+  /** #3084 P23 — where `model` came from, named by AnalyzerEndpointMissingError.
+      selectAnalyzerForPhase sets it; any other caller passing `model` means a
+      run pick. */
+  modelSource?: 'env' | 'run-pick' | 'settings';
 }
 
 /** Resolved analyzer plus the metadata the route layer needs to label
@@ -47,7 +53,7 @@ export interface SelectAnalyzerOptions {
     Replaces the old bare-Analyzer return value. */
 export interface AnalyzerSelection {
   analyzer: Analyzer;
-  engine: 'local' | 'gemini';
+  engine: AnalysisEngine;
   /** Model id actually being used by the primary analyzer. */
   model: string;
   /** Resolved fallback model when local is wrapped in FallbackAnalyzer.
@@ -55,15 +61,9 @@ export interface AnalyzerSelection {
   fallbackModel: string | null;
 }
 
-/* Ollama tags always contain ':' (e.g. `qwen3.5:9b`); Gemini ids never do
-   (`gemma-4-31b-it`, `gemini-2.5-flash`). When the route layer passes a
-   per-request `model` override, we infer the engine from its shape — that
-   way the UI dropdown can offer both engines and the user's pick drives
-   both engine and model in one event. Without an override, fall back to
-   the user-settings/env-default engine. */
-function inferEngineFromModelId(modelId: string): 'local' | 'gemini' {
-  return modelId.includes(':') ? 'local' : 'gemini';
-}
+/* Engine inference from a per-request model id lives in ./model-id.ts
+   (shared case table with the frontend): `openai:<endpointId>::<model>` →
+   openai, contains ':' → local (Ollama), else gemini. */
 
 export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelection {
   const engine = opts.model ? inferEngineFromModelId(opts.model) : getResolvedAnalysisEngine();
@@ -72,7 +72,23 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
      The previous `process.env.GEMINI_API_KEY` read missed the latter. */
   const apiKey = getResolvedGeminiApiKey() ?? '';
 
+  if (engine === 'openai') {
+    /* #3084 P23 — endpoint ids have a grammar but no analyzer until PR 3d,
+       which builds OpenAIAnalyzer here. Refusing is what keeps an `openai:`
+       id out of the Ollama branch below (it contains ':'). `engine` is
+       'openai' only for an explicit `opts.model`: the saved engine enum
+       cannot hold it before PR 3d. */
+    const parsed = parseEndpointModelId(opts.model ?? '');
+    throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? String(opts.model), opts.modelSource ?? 'run-pick');
+  }
+
   if (engine === 'local') {
+    /* #3084 P23 — a saved endpoint default must fail the run with a code,
+       not be swapped silently for getResolvedOllamaModel()'s Ollama default. */
+    if (!opts.model) {
+      const savedEndpoint = parseEndpointModelId(getCachedUserSettings().defaultAnalysisModel);
+      if (savedEndpoint) throw new AnalyzerEndpointMissingError(savedEndpoint.endpointId, 'settings');
+    }
     const ollamaUrl = getResolvedOllamaUrl();
     const ollamaModel = opts.model ?? getResolvedOllamaModel();
     const primary = new OllamaAnalyzer({ url: ollamaUrl, model: ollamaModel });

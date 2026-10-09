@@ -62,6 +62,7 @@ import { requireSameOrigin } from './csrf-origin.js';
 import { portableExportRouter, portableImportRouter } from './routes/exports-portable.js';
 import { shareRouter, sharePublicRouter } from './routes/share.js';
 import { revisionsRouter, revisionsBulkRouter } from './routes/revisions.js';
+import { revisionOpsRouter } from './routes/revision-ops.js';
 import { qaReportRouter } from './routes/qa-report.js';
 import { sidecarHealthRouter } from './routes/sidecar-health.js';
 import { ollamaHealthRouter } from './routes/ollama-health.js';
@@ -80,6 +81,7 @@ import { modelsStatusRouter } from './routes/models-status.js';
 import { tourRouter } from './routes/tour.js';
 import { workspaceRouter } from './routes/workspace.js';
 import { userSettingsRouter } from './routes/user-settings.js';
+import { analyzerEndpointsRouter } from './routes/analyzer-endpoints.js';
 import { configRouter } from './routes/config.js';
 import { acceleratorProfileRouter } from './routes/accelerator-profile.js';
 import { upgradeRouter } from './routes/upgrade.js';
@@ -250,6 +252,7 @@ app.get('/api/health', (_req, res) => {
 
 app.use('/api/workspace', workspaceRouter); // GET / (metadata) + GET /changelog (cross-book aggregator)
 app.use('/api/user/settings', userSettingsRouter); // GET + PUT — account defaults + non-secret env overrides
+app.use('/api/analyzer/endpoints', analyzerEndpointsRouter); // #3084 — analyzer endpoint CRUD, key write, Detect
 app.use('/api/config', configRouter); // GET descriptors+values, PUT override, POST reset
 app.use('/api/accelerator', acceleratorProfileRouter); // AMD phase 2 — job-guarded profile switch
 app.use('/api/upgrade', upgradeRouter); // fs-1 — in-app upgrade: stage/apply/abort/state
@@ -310,6 +313,7 @@ app.use('/api/books', shareRouter); // mounts /:bookId/share (POST — mint a sl
 app.use('/', sharePublicRouter); // mounts /share/:slug (public-facing M4B proxy — plan 67)
 app.use('/api/books', revisionsRouter); // mounts /:bookId/revisions (drift diff over segments snapshots)
 app.use('/api', revisionsBulkRouter); // plan 83 — bulk /revisions?bookIds=... for cross-book fan-out
+app.use('/api/books', revisionOpsRouter); // plan 285 — server-owned accept / reject / dismiss (no client caller until PR 2)
 app.use('/api/books', qaReportRouter); // fs-51 — mounts /:bookId/qa-report
 app.use('/api', worktreesRouter); // plan 86 — dev-only GET /worktrees (404s in production)
 app.use('/api/voices', voicesRouter); // mounts GET / + PUT /:voiceId/pin

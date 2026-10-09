@@ -3,20 +3,24 @@
    character snapshots against the current cast.json. Emits drift events
    for hard signals (voice / engine / gender / ageRange changed) and for
    meaningful tone deltas (warmth/pace/authority/emotion). Dismissed event
-   ids — persisted under `revisions.json` by the frontend's dismissDrift
-   reducer — are filtered out so a poll after a dismiss doesn't re-surface
-   the same event.
+   ids are read from revisions.json and filtered out so a poll after a
+   dismiss doesn't re-surface the same event.
 
-   `pending` revisions (regen-modal-driven A/B diffs) are not produced by
-   this detector. They're written to `revisions.json` by the regen flow on
-   the frontend and surfaced verbatim. Keeping the two streams separate
-   means a chapter with a severe drift event doesn't automatically queue a
-   regen — the user still chooses. */
+   Plan 285 — revisions.json is read through workspace/revisions-store.ts
+   (lock-free, normalised: legacy drift dropped, stale legacy pending
+   dropped; a corrupt, newer-schema or non-object file throws → 500, cast or
+   not — main answered 200 for a newer-schema file and for a corrupt file in
+   a book with no cast). The
+   single-book poll answers the whole RevisionsState plus live `drift`, and
+   returns `pending` even when the cast is empty (D8). The drift detector
+   never creates pending — the user still chooses. */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { castJsonPath, revisionsJsonPath } from '../workspace/paths.js';
+import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
+import { readRevisions, toRevisionsState, type RevisionsState, type StoredRevision } from '../workspace/revisions-store.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { pickVoiceForEngine } from '../tts/voice-mapping.js';
@@ -30,17 +34,6 @@ import { loadCastIdHistory } from '../store/cast-id-history.js';
    resolved-voice drift comparison below can reuse toVoiceLike +
    buildHintFromCast on the live cast row — it needs the override / evidence /
    ttsEngine fields the old narrow local shape lacked. */
-
-interface RevisionsPersisted {
-  pending?: unknown[];
-  drift?: unknown[];
-  /** Drift event ids the user has dismissed. Persisted by the frontend so
-      a dismiss survives a reload. The detector treats them as a denylist —
-      a dismissed event will not be re-emitted even if the underlying signal
-      still holds. To "un-dismiss", the user regenerates the chapter (which
-      will eventually overwrite the snapshot via a future synthesis). */
-  dismissed?: string[];
-}
 
 export interface DriftEvent {
   id: string;
@@ -109,9 +102,12 @@ export const revisionsRouter = Router();
    route so both that route AND the new bulk `GET /api/revisions?bookIds=...`
    endpoint can share one codepath. Returns `null` when the book doesn't
    exist on disk (caller decides whether to 404 or skip it in a fan-out). */
+/** Plan 285 — the single-book poll's shape: the store's RevisionsState plus live drift. */
+export type RevisionsPoll = RevisionsState & { drift: DriftEvent[] };
+
 export async function getRevisionsForBook(
   bookId: string,
-): Promise<{ pending: unknown[]; drift: DriftEvent[] } | null> {
+): Promise<RevisionsPoll | null> {
   const located = await findBookByBookId(bookId);
   if (!located) return null;
   return computeRevisionsForBook(bookId, located.bookDir, located.state);
@@ -126,12 +122,14 @@ export async function computeRevisionsForBook(
   bookId: string,
   bookDir: string,
   state: BookStateJson,
-): Promise<{ pending: unknown[]; drift: DriftEvent[] }> {
+): Promise<RevisionsPoll> {
+  const file = await readRevisions(bookDir, state.chapters);
+  const base = toRevisionsState(bookId, file);
   const castFile = await readJson<{ characters: CastCharacter[] }>(castJsonPath(bookDir));
   const cast: CastCharacter[] = castFile?.characters ?? [];
   if (cast.length === 0) {
-    // No cast confirmed yet — nothing to compare against.
-    return { pending: [], drift: [] };
+    // No cast confirmed yet — no drift to compute, but pending still surfaces (D8).
+    return { ...base, drift: [] };
   }
   /* #2040 — resolve a snapshot's characterId through the cast + the book's
      retired-id history, so a chapter rendered under a since-superseded id
@@ -145,12 +143,7 @@ export async function computeRevisionsForBook(
   const castIdHistory = await loadCastIdHistory(bookDir);
   const castResolver = buildCastResolver(cast, castIdHistory);
 
-  const persisted = await readJson<RevisionsPersisted>(revisionsJsonPath(bookDir));
-  const dismissed = new Set(Array.isArray(persisted?.dismissed) ? persisted!.dismissed! : []);
-  /* #3376 part 1 — the `pending` array the frontend's regen flow persists is
-     echoed verbatim (the server never interprets it). Guard mirrors
-     `dismissed` exactly so a malformed file falls back to []. */
-  const pending = Array.isArray(persisted?.pending) ? persisted!.pending! : [];
+  const dismissed = new Set(file.dismissed);
 
   const segmentsByChapter = await loadSegmentsFiles(bookDir, state.chapters);
   /* Build a chapterId -> scan title fallback map once. `seg.chapterTitle`
@@ -231,7 +224,7 @@ export async function computeRevisionsForBook(
   }
 
   const filtered = drift.filter((d) => !dismissed.has(d.id));
-  return { pending, drift: filtered };
+  return { ...base, drift: filtered };
 }
 
 revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) => {
@@ -241,7 +234,8 @@ revisionsRouter.get('/:bookId/revisions', async (req: Request, res: Response) =>
     res.json(result);
   } catch (e) {
     console.error('[revisions] GET failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to compute revisions.' });
+    /* Plan 285 — curated: a store failure may carry a lock-key path. */
+    res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to compute revisions.') });
   }
 });
 
@@ -267,14 +261,14 @@ revisionsBulkRouter.get('/revisions', async (req: Request, res: Response) => {
     const entries = await Promise.all(
       bookIds.map(async (id) => [id, await getRevisionsForBook(id)] as const),
     );
-    const byBookId: Record<string, { pending: unknown[]; drift: DriftEvent[] }> = {};
+    const byBookId: Record<string, { pending: StoredRevision[]; drift: DriftEvent[] }> = {};
     for (const [id, result] of entries) {
-      if (result) byBookId[id] = result;
+      if (result) byBookId[id] = { pending: result.pending, drift: result.drift };
     }
     res.json({ byBookId });
   } catch (e) {
     console.error('[revisions] bulk GET failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to compute bulk revisions.' });
+    res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to compute bulk revisions.') });
   }
 });
 

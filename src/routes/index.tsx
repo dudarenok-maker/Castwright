@@ -21,6 +21,7 @@ import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
+import { selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
@@ -583,36 +584,69 @@ export function AnalysingRoute() {
   useHydrateStage({ kind: 'analysing', bookId, manuscriptId: null }, [bookId]);
 
   const dispatch = useAppDispatch();
+  const reduxStore = useStore<RootState>();
   const stage = useAppSelector((s) => s.ui.stage);
   const manuscript = useAppSelector((s) => s.manuscript);
   const library = useAppSelector((s) => s.library);
   const ui = useAppSelector((s) => s.ui);
   const activeBook = library.books.find((b) => b.bookId === bookId);
+  /* #3435 — title and word count come from the slice only while it names this
+     book; mid-switch it still holds the previous one. */
+  const ownManuscript =
+    manuscript.bookId === bookId ||
+    /* A fresh upload clears the slice's bookId (uploadComplete) until its read
+       lands; the stage names the upload's own book and manuscript id. */
+    (manuscript.bookId == null &&
+      stage.kind === 'analysing' &&
+      stage.bookId === bookId &&
+      stage.manuscriptId != null &&
+      stage.manuscriptId === manuscript.manuscriptId);
   /* Stage.manuscriptId is set when the user goes through Upload → Analyse, but
      it's null on page refresh, deep links, or confirm→reanalyse — none of
      those carry the id through ui.stage. Layout's book-state hydration always
      repopulates manuscript.manuscriptId from disk, so prefer that (and fall
-     back to the library entry for the brief window before disk hydrate lands). */
+     back to the library entry for the brief window before disk hydrate lands).
+     #3435 (PR #3505 review pass 4) — each source counts only when it names
+     THIS route's book. On a direct A -> B switch the stage still names A for a
+     render and the slices hold A until B's read lands; read unchecked, B's view
+     adopted A's running run and POSTed it. A fresh upload clears the slice's
+     bookId (uploadComplete), so the slice names no book until its read lands,
+     and the stage, which names the upload's own book, covers it. */
   const manuscriptId =
     stage.kind === 'analysing'
-      ? (stage.manuscriptId ?? manuscript.manuscriptId ?? activeBook?.manuscriptId ?? null)
+      ? ((stage.bookId === bookId ? stage.manuscriptId : null) ??
+        (manuscript.bookId === bookId ? manuscript.manuscriptId : null) ??
+        activeBook?.manuscriptId ??
+        null)
       : null;
 
   return (
     <AnalysingView
+      /* #3435 — failed rows, refusal text and banners are view state; a direct
+         A -> B switch reuses this element, so key it by book. */
+      key={bookId}
       manuscriptId={manuscriptId}
       bookId={bookId || null}
-      title={manuscript.title || activeBook?.title || null}
-      wordCount={manuscript.wordCount}
+      title={(ownManuscript ? manuscript.title : null) || activeBook?.title || null}
+      wordCount={ownManuscript ? manuscript.wordCount : undefined}
       model={ui.selectedModel}
       onComplete={(payload) => {
-        dispatch(castActions.hydrateFromAnalysis(payload));
-        /* hydrateFromAnalysis atomically pins the chapters slice to
-           payload.bookId via its currentBookId reducer field, so the
-           cross-book tick guard in applyGenerationTick has a truthful
-           frame the instant chapter rows land. */
-        dispatch(chaptersActions.hydrateFromAnalysis(payload));
-        dispatch(manuscriptActions.hydrateFromAnalysis(payload));
+        /* #3435 (PR #3505 review pass 4) — load the result only into slices
+           that hold this book (store/open-book.ts). The stage names the book
+           before its read lands, so on a quick return the slices can still
+           hold another one; loading into them would mix the two books and
+           stamp this book's id on the other's manuscript, so the layout would
+           never read this one. Skipped, the slices keep the other book's id
+           and the layout reads this one from disk on the way to Confirm. */
+        if (selectIsOpenBook(reduxStore.getState(), payload)) {
+          dispatch(castActions.hydrateFromAnalysis(payload));
+          /* hydrateFromAnalysis atomically pins the chapters slice to
+             payload.bookId via its currentBookId reducer field, so the
+             cross-book tick guard in applyGenerationTick has a truthful
+             frame the instant chapter rows land. */
+          dispatch(chaptersActions.hydrateFromAnalysis(payload));
+          dispatch(manuscriptActions.hydrateFromAnalysis(payload));
+        }
         dispatch(uiActions.analysisComplete({ bookId: payload.bookId }));
         /* NOTE: designed voices the carryover restored into cast.json but the
            analysis payload omits are re-read on the confirm screen itself
@@ -658,6 +692,14 @@ export function ConfirmRoute() {
           /* hydrate, not an edit: setCharacters is persisted and would echo
              this disk snapshot straight back as a cast.json PUT (#3376). */
           dispatch(castActions.hydrateCharacters(res.cast.characters));
+        }
+        /* #3435 — the same skipped hydrate left the Generate view's analysis
+           gaps as they were before the run; take them from the server (a main
+           result can still carry a flagged chapter, decision B). */
+        if (!cancelled && res) {
+          dispatch(
+            chaptersActions.setAnalysisGapsFromBookState({ chapters: res.state.chapters, analysis: res.analysis }),
+          );
         }
       })
       .catch(() => {
@@ -870,6 +912,9 @@ function ReadyViewSwitch({
     case 'generate':
       return (
         <GenerationView
+          /* #3435 — in-flight subset rows live in the view's own state; a
+             direct A -> B switch reuses this element, so key it by book. */
+          key={bookId}
           chapters={chapters}
           characters={characters}
           paused={paused}

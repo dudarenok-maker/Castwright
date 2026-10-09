@@ -101,6 +101,7 @@ import { configValue } from '../config/resolver.js';
 import { scoreBook } from '../audio/render-integrity/aggregate.js';
 import { setActiveGenerationBooksProvider } from '../gpu/active-generation-gate.js';
 import { writeAttempted, attemptedPath } from '../audio/render-integrity/verdicts-io.js';
+import { parseReviewRequest, INVALID_REVIEW, type ReviewRequest } from './review-request.js';
 
 export const generationRouter = Router();
 
@@ -383,6 +384,10 @@ interface RunningJob {
       gate (renders straight through) for a confirmed entry, so a confirm →
       re-claim → re-enter cycle doesn't re-prompt. Default false. */
   fallbackConfirmed: boolean;
+  /** Plan 285 — the request's A/B review intent (null when absent). Stamps
+      `reviewChapter: true` on THIS job's live chapter_complete. Not yet passed
+      to finalize (PR 2). */
+  review: ReviewRequest | null;
   /** The chapter the loop is currently synthesising. Set at the top of
       each loop iteration and cleared on chapter_complete / break. Used
       by the catch-up replay so a post-reload subscriber's UI immediately
@@ -580,6 +585,7 @@ export function __registerFakeJobForTest(
     chapterId: null,
     queueEntryId: null,
     fallbackConfirmed: false,
+    review: null,
     currentChapterId: null,
     lastProgressTick: null,
     runTotal: 0,
@@ -711,11 +717,33 @@ interface GenerationRequestBody {
       the user has CONFIRMED for Qwen→Kokoro fallback, so the worker renders
       straight through instead of re-parking it. Optional / back-compat. */
   fallbackConfirmed?: unknown;
+  /** Plan 285 — see ReviewRequest. */
+  review?: unknown;
 }
 
 generationRouter.post('/:bookId/generation', async (req: Request, res: Response) => {
   const { bookId } = req.params;
   const body = (req.body ?? {}) as GenerationRequestBody;
+
+  /* Plan 285 — a review render must name exactly one chapter. Rejected with a
+     JSON 400 BEFORE the SSE headers flush; the client already turns a non-OK
+     response into chapter_failed + idle (api.ts realStreamGeneration). */
+  const parsedReview = parseReviewRequest(body.review);
+  if (parsedReview === INVALID_REVIEW) {
+    return res
+      .status(400)
+      .json({ error: 'invalid_review', message: 'review must be { characterId, triggeredBy }.' });
+  }
+  if (parsedReview !== undefined) {
+    const ids = Array.isArray(body.chapterIds) ? body.chapterIds : [];
+    if (ids.length !== 1 || typeof ids[0] !== 'number' || !Number.isInteger(ids[0])) {
+      return res.status(400).json({
+        error: 'review_requires_single_chapter',
+        message: 'A review render must name exactly one chapter.',
+      });
+    }
+  }
+  const review: ReviewRequest | null = parsedReview ?? null;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -1017,7 +1045,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
   const hasEdits = Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0;
   if (hasEdits) {
-    await rebuildCacheFromEdits(state.manuscriptId, editsPath).catch((e) => {
+    /* Plan 286 — overlay: keeps a `[]` take and an excluded chapter's take. */
+    await rebuildCacheFromEdits(state.manuscriptId, editsPath, {
+      excludedChapterIds: state.chapters.filter((c) => c.excluded).map((c) => c.id),
+    }).catch((e) => {
       console.error('[generation] rebuild cache from edits failed', e);
     });
   }
@@ -1286,6 +1317,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     chapterId: jobChapterId,
     queueEntryId,
     fallbackConfirmed,
+    review,
     currentChapterId: null,
     lastProgressTick: null,
     runTotal: nonExcluded.length,
@@ -1395,10 +1427,20 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       /* Bug E: drop from in-flight before continuing so the aggregate
          stays accurate when the next chapter is added. */
       job.runInProgress.delete(chapter.id);
+      /* Plan 286 decision C — a `[]` take is a finished analysis (decision B),
+         so say why it produced no audio. With no failure record the chapter
+         had no words to attribute; with one, attribution ran and found no
+         lines. No own key at all is the incomplete-cache case. */
+      const hasKey = Object.hasOwn(analysis.chapters, chapter.id);
+      const flagged = analysis.failedChapterIds?.includes(chapter.id) === true;
       broadcast(job, {
         type: 'chapter_failed',
         chapterId: chapter.id,
-        errorReason: 'No sentences available for this chapter — analysis cache is incomplete.',
+        errorReason: !hasKey
+          ? 'No sentences available for this chapter — analysis cache is incomplete.'
+          : flagged
+            ? 'Speaker attribution found no lines in this chapter. Re-analyse it, or exclude it.'
+            : 'This chapter has no text to narrate — exclude it to finish the book.',
       });
       return;
     }
@@ -1858,6 +1900,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         audioQa,
         audioModelKey: renderedModelKey,
         audioEngines,
+        reviewRecorded,
       } = await finalizeChapterAudioWrite({
         bookId,
         bookDir,
@@ -2062,6 +2105,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         /* srv-27 — advisory QA verdict so the frontend can stamp a "Suspect"
            badge the moment the Done pill flips, without a state.json reload. */
         audioQa,
+        /* Plan 285 — present only when finalize was asked to record review state. */
+        ...(reviewRecorded === undefined ? {} : { reviewRecorded }),
+        /* Plan 285 — only the chapter actually rendered with `review`; the
+           replay loop above never carries it. */
+        ...(job.review !== null && job.chapterId === chapter.id ? { reviewChapter: true } : {}),
       });
 
       /* srv-16 — server-authoritative completion. The chapter is rendered +

@@ -24,6 +24,8 @@ import {
   scopeDriftGroupsByBook,
 } from '../store/revisions-slice';
 import { flushBookPersistence } from '../store/persistence-middleware';
+import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
+import { chapterHoldsAudio } from '../store/chapter-holds-audio';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions, findSeriesBookIds } from '../store/library-slice';
 import { voicesActions } from '../store/voices-slice';
@@ -104,7 +106,7 @@ import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
 import { runProsodyPasses, buildProsodyProgressPayload } from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
-import { selectAnalysisSubstage } from '../store/analysis-substage-selectors';
+import { selectAnalysisSubstage, selectBookHasForegroundWork } from '../store/analysis-substage-selectors';
 import { shouldAutoTriggerProsody } from '../store/should-auto-trigger-prosody';
 import { ToastStack } from './toast-stack';
 import { TourOverlay } from './tour/tour-overlay';
@@ -165,6 +167,20 @@ export interface LayoutContext {
 const REVISIONS_HYDRATE_FAILED_KEY = 'revisions-hydrate-failed';
 const REVISIONS_HYDRATE_RETRY_BASE_MS = 1000;
 const REVISIONS_HYDRATE_RETRY_MAX_MS = 15000;
+
+/* #3435 — the book the emotion-detection open trigger serves: the book open
+   on Confirm or a Ready view, once the slices hold it (the manuscript slice
+   names it and carries its manuscriptId). Null on any other stage. */
+function selectOpenProsodyBookId(s: RootState): string | null {
+  const stage = s.ui.stage as { kind: string; bookId?: string };
+  const id = stage.bookId ?? null;
+  return (stage.kind === 'confirm' || stage.kind === 'ready') &&
+    id &&
+    s.manuscript.bookId === id &&
+    s.manuscript.manuscriptId
+    ? id
+    : null;
+}
 
 export function Layout() {
   const dispatch = useAppDispatch();
@@ -902,6 +918,10 @@ export function Layout() {
                    view falls back to the time-based heuristic for text edits. */
                 renderedTextByChapter: res.renderedTextByChapter,
                 renderedInstructByChapter: res.renderedInstructByChapter,
+                /* #3435 (decision F, O2) — the chapters whose analysis did not
+                   finish, so the Generate view (which never reads book-state
+                   itself) can give each its note and a Re-analyse control. */
+                analysis: res.analysis,
               }),
             );
           }
@@ -1082,7 +1102,13 @@ export function Layout() {
      the new `bookId` / `characterId` fields the override flow depends
      on. The ref guard then stops re-firing on every subsequent cast
      mutation (Phase 0a snapshots, applyVoiceMatches itself, profile
-     edits). */
+     edits). The `manuscript.bookId` check closes the same race one level
+     up: until the per-book read lands, the slices can still hold ANOTHER
+     book's cast (a skipped analysis result, a library open after viewing
+     book B), and applyVoiceMatches is a persisted action — it would PUT
+     that cast to this book's cast.json. Returning before the ref is set
+     leaves the once-guard unspent, so the real match runs once the slices
+     hold this book. */
   const voiceMatchFiredFor = useRef<string | null>(null);
   useEffect(() => {
     if (stageKind !== 'confirm') {
@@ -1096,6 +1122,7 @@ export function Layout() {
     }
     if (!bookId) return;
     if (characters.length === 0) return;
+    if (manuscript.bookId !== bookId) return;
     if (voiceMatchFiredFor.current === bookId) return;
     voiceMatchFiredFor.current = bookId;
     let cancelled = false;
@@ -1106,7 +1133,7 @@ export function Layout() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageKind, bookId, characters.length]);
+  }, [stageKind, bookId, characters.length, manuscript.bookId]);
 
   /* Revisions + drift poll — active book on a 30 s tick (existing behavior).
      Plan 83 layered a 120 s background fan-out across non-active books past
@@ -1187,15 +1214,175 @@ export function Layout() {
      - Detached job: void (async () => {...})() NOT tied to effect cleanup
        (survives a book-switch, round-1 H2).
      - Partial-aware watermark: writes prosodyAnnotated:true only when
-       failed === 0; on partial failure removes the book from considered so
-       a subsequent fill-only re-run can top it up (round-2 #6).
-     - Retry-safe: try/catch removes the book from considered on throw
-       (round-1 H3). */
+       failed === 0 and nothing was skipped.
+     - Retry-safe: a run that never started (its book-state read threw)
+       removes the book from considered (round-1 H3). A run that started
+       does not — see the next point.
+     - Re-run on open (#3435): a run writes prosodyAnnotated:false for its
+       own book as it STARTS (a reload or app close mid-run leaves it
+       marked), and true only at a clean end. So a run that did not finish —
+       skipped work (see below), a failed chapter, a throw, a reload, or a
+       background run that yielded — leaves the book marked unfinished, and
+       a book so marked is run again, fill-only, when it is next opened — the
+       open trigger after this effect — and only then: a started run stays in
+       `considered`, so this trigger never restarts it (the open trigger's
+       run yields to the user's work and holds audio; this one does not). A
+       book whose watermark is unset (the seed passed over it) is not run:
+       pre-existing books are not retro-annotated (fs-65). */
   const isAnalysisComplete = (s: string) =>
     s !== 'not_analysed' && s !== 'analysing' && s !== 'unreadable' && s !== 'orphaned';
 
   const prosodyConsidered = useRef<Set<string>>(new Set());
   const prosodySeeded = useRef(false);
+  /* #3435 — books with a run started here still in flight. Set before the
+     first await, so the library trigger and the open trigger never start a
+     second, concurrent run for one book. */
+  const prosodyInFlight = useRef<Set<string>>(new Set());
+  /* #3435 — the open book the open trigger has already run during this visit
+     (or left to a run already in flight), the book it left to an in-flight
+     run, and a tick that re-arms it. */
+  const prosodyOpenHandled = useRef<string | null>(null);
+  const prosodyOpenDeferred = useRef<string | null>(null);
+  const [prosodyRerunTick, setProsodyRerunTick] = useState(0);
+  /* #3435 (PR #3505 CI) — the open trigger's run is BACKGROUND work: its pill
+     shows, but it never makes the book busy (analysis-substage-selectors), so
+     Generate / Resume / Design / Detect and the queue stay open while it runs.
+     It yields instead: the moment the user starts work of their own on the
+     book (selectBookHasForegroundWork, which counts an analysis run), or the
+     book stops being the open trigger's book (another book or a non-book
+     view opens), it is aborted and its pill cleared; the book stays marked
+     unfinished, so it is run again the next time it is opened. So at most
+     one background run at a time: the open book's. The run in flight, if
+     any. */
+  const prosodyBackground = useRef<{ id: string; ctrl: AbortController } | null>(null);
+  useEffect(
+    () =>
+      store.subscribe(() => {
+        const bg = prosodyBackground.current;
+        if (!bg || bg.ctrl.signal.aborted) return;
+        const s = store.getState();
+        if (selectOpenProsodyBookId(s) === bg.id && !selectBookHasForegroundWork(s, bg.id)) return;
+        bg.ctrl.abort();
+        if (s.prosody.activeStreams[bg.id]?.background) dispatch(prosodyActions.clear({ bookId: bg.id }));
+      }),
+    [store, dispatch],
+  );
+  const runAutoProsody = (id: string, { background = false }: { background?: boolean } = {}) => {
+    if (prosodyInFlight.current.has(id)) return; // already running here
+    if (!shouldAutoTriggerProsody(store.getState(), id)) return; // already running here / cross-tab
+    prosodyInFlight.current.add(id);
+    void (async () => {
+      // Detached: not tied to effect cleanup — survives a book-switch.
+      let pillActive = false;
+      let skippedWork = false;
+      let ctrl: AbortController | null = null;
+      try {
+        const st = await api.getBookState(id);
+        if (!st || st.state.prosodyEnabled === false) return; // authoritative opt-out
+        if (st.state.prosodyAnnotated) return;               // watermark → no-op
+        /* The open trigger re-runs only a book marked unfinished — never one
+           whose watermark is unset (fs-65: no retro-annotation on upgrade). */
+        if (background && st.state.prosodyAnnotated !== false) return;
+        const book = { bookId: id, manuscriptId: st.state.manuscriptId };
+        const isOpen = () => {
+          const s = store.getState();
+          return selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true;
+        };
+        if (background) {
+          /* Never start a run that could apply nothing (the slices hold the
+             book under another manuscriptId than its read reports, or it is no
+             longer open), nor one the user's own work would end at once — the
+             open trigger looks again when that work is gone. */
+          if (!isOpen() || selectOpenProsodyBookId(store.getState()) !== id) return;
+          if (selectBookHasForegroundWork(store.getState(), id)) {
+            if (prosodyOpenHandled.current === id) prosodyOpenHandled.current = null;
+            return;
+          }
+          ctrl = new AbortController();
+          prosodyBackground.current = { id, ctrl };
+        }
+        dispatch(
+          prosodyActions.setActive({
+            bookId: id,
+            progress: 0,
+            label: 'Detecting emotions',
+            ...(background ? { background: true } : {}),
+          }),
+        );
+        pillActive = true;
+        /* #3435 — marks THIS run's book (by id, never the book the slices or the
+           stage hold) unfinished as the run STARTS, before its first pass: a
+           run cut off by a reload or app close then leaves the mark, and the
+           open trigger re-runs the book on its next open. Only a clean end
+           below replaces it with true. */
+        await api
+          .putBookState(id, { slice: 'state', patch: { prosodyAnnotated: false } })
+          .catch(() => {});
+        /* #3435 — the run outlives the book on screen, and the server never
+           writes these annotations: they land in the manuscript slice, which
+           holds ONE book and is saved into the book the stage names. Apply
+           them only while the slices hold this book (store/open-book.ts) AND
+           the stage names it — the stage moves before the next book's read
+           lands, and a write in that window would be saved into the next
+           book. A skipped annotation leaves the start mark in place (the
+           book never reaches true), like a partial failure, and the open
+           trigger below runs it again (fill-only) the next time the book is
+           open — at once, if it is open again by the time this run ends. A
+           background run that yielded applies nothing more and leaves the
+           start mark too. */
+        const signal = ctrl?.signal;
+        /* A re-run never rewrites the text of a chapter with rendered audio
+           (done, rendering, a render stamp, or a render map on disk — a chapter
+           that failed before it ever rendered has none) — that would leave its
+           audio stale. The book this run targets is the one the chapters slice
+           holds whenever an annotation may apply at all (isOpen). */
+        const holdsAudio = background
+          ? (chapterId: number) => chapterHoldsAudio(store.getState().chapters, chapterId)
+          : undefined;
+        const { failed, skipped } = await runProsodyPasses(id, {
+          dispatch,
+          ...(signal ? { signal } : {}),
+          ...(holdsAudio ? { holdsAudio } : {}),
+          onProgress: (f, d) => {
+            if (!signal?.aborted)
+              dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(id, f, d)));
+          },
+          canApply: () => !signal?.aborted && isOpen(),
+        });
+        /* Yielded, partial or skipped: the start mark stays, and the open
+           trigger owns the fill-only re-run — the book stays in `considered`. */
+        if (!signal?.aborted) {
+          if (failed === 0 && skipped === 0)
+            await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
+          else skippedWork = skipped > 0;
+        }
+      } catch {
+        /* A run that never started (its read threw) retries on the next
+           transition; one that started keeps its mark for the open trigger. */
+        if (!pillActive) prosodyConsidered.current.delete(id);
+      } finally {
+        if (ctrl) {
+          // Only its own pill: a manual run may have taken the book's entry.
+          if (prosodyBackground.current?.ctrl === ctrl) prosodyBackground.current = null;
+          if (pillActive && store.getState().prosody.activeStreams[id]?.background)
+            dispatch(prosodyActions.clear({ bookId: id }));
+        } else if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
+        prosodyInFlight.current.delete(id);
+        /* The open trigger left this visit to this run: re-arm it so the
+           skipped work is filled now, while the book is open. Only then — a
+           run the open trigger started itself that still skipped work (the
+           slices hold the book under another manuscriptId than its read
+           reports) would skip again, so re-arming it would loop. */
+        if (prosodyOpenDeferred.current === id) {
+          prosodyOpenDeferred.current = null;
+          if (skippedWork && prosodyOpenHandled.current === id) {
+            prosodyOpenHandled.current = null;
+            setProsodyRerunTick((n) => n + 1);
+          }
+        }
+      }
+    })();
+  };
   const completeIds = useMemo(
     () => library.books.filter((b) => isAnalysisComplete(b.status)).map((b) => b.bookId),
     [library.books],
@@ -1222,35 +1409,47 @@ export function Layout() {
     for (const id of completeIds) {
       if (prosodyConsidered.current.has(id)) continue; // already handled this session
       prosodyConsidered.current.add(id);
-      void (async () => {
-        // Detached: not tied to effect cleanup — survives a book-switch.
-        if (!shouldAutoTriggerProsody(store.getState(), id)) return; // already running here / cross-tab
-        let pillActive = false;
-        try {
-          const st = await api.getBookState(id);
-          if (!st || st.state.prosodyEnabled === false) return; // authoritative opt-out
-          if (st.state.prosodyAnnotated) return;               // watermark → no-op
-          dispatch(prosodyActions.setActive({ bookId: id, progress: 0, label: 'Detecting emotions' }));
-          pillActive = true;
-          const { failed } = await runProsodyPasses(id, {
-            dispatch,
-            onProgress: (f, d) =>
-              dispatch(prosodyActions.updateProgress(buildProsodyProgressPayload(id, f, d))),
-          });
-          if (failed === 0) {
-            await api.putBookState(id, { slice: 'state', patch: { prosodyAnnotated: true } });
-          } else {
-            prosodyConsidered.current.delete(id); // partial → allow fill-only re-run
-          }
-        } catch {
-          prosodyConsidered.current.delete(id); // transient error → retry on next transition
-        } finally {
-          if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
-        }
-      })();
+      runAutoProsody(id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [completeKey, library.loaded]);
+
+  /* #3435 (PR #3505 review passes 6-7) — re-run on open. The trigger above
+     keys on library.books, which refreshes on the Library: a book analysed in
+     the foreground is usually first seen complete there, where its
+     annotations cannot land, and that run leaves it marked unfinished. So when an
+     analysis-complete book is open (the stage names it and the slices hold
+     it) and its watermark is explicitly false, run it again: once per visit,
+     fill-only (applyDetectedEmotions / applyDetectedInstruct never overwrite
+     a filled emotion or instruct, and a chapter with rendered audio keeps its
+     text), never alongside a run already in flight for it, and gated by the
+     same getBookState read. An unset watermark is left alone (fs-65). */
+  const openProsodyBookId = useAppSelector(selectOpenProsodyBookId);
+  const openProsodyBusy = useAppSelector((s) =>
+    openProsodyBookId
+      ? !shouldAutoTriggerProsody(s, openProsodyBookId) ||
+        selectBookHasForegroundWork(s, openProsodyBookId)
+      : false,
+  );
+  useEffect(() => {
+    const id = openProsodyBookId;
+    if (!id) {
+      prosodyOpenHandled.current = null;
+      prosodyOpenDeferred.current = null;
+      return;
+    }
+    if (prosodyOpenHandled.current === id) return;
+    if (!completeIds.includes(id)) return;
+    if (prosodyInFlight.current.has(id)) {
+      prosodyOpenHandled.current = id; // that run covers this visit (re-arms if it skipped work)
+      prosodyOpenDeferred.current = id;
+      return;
+    }
+    if (openProsodyBusy) return; // the user's own work on the book — looked at again when it ends
+    prosodyOpenHandled.current = id;
+    runAutoProsody(id, { background: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openProsodyBookId, completeKey, openProsodyBusy, prosodyRerunTick]);
 
   if (ui.previewMode) {
     return (

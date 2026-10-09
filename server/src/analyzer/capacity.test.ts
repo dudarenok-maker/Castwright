@@ -4,6 +4,7 @@
    (#3084 wave 2b). */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { resolveCapacity, resolveGeminiMaxOutputTokens, TODAY_LOCAL_CAPACITY, GEMINI_FALLBACK_MAX_OUTPUT_TOKENS } from './capacity.js';
+import { AnalyzerEndpointMissingError } from './errors.js';
 import { resolveStage1ChunkCharBudget } from './stage1-chunk.js';
 import { listGeminiModels, _resetGeminiCatalogForTest, type GeminiModelsClient } from './catalog/gemini-catalog.js';
 import { allKnobs } from '../config/registry.js';
@@ -43,6 +44,17 @@ describe('resolveCapacity — Ollama', () => {
   it('TODAY_LOCAL_CAPACITY defaults to the live knob and accepts an explicit num_ctx', () => {
     expect(TODAY_LOCAL_CAPACITY()).toEqual(resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }));
     expect(TODAY_LOCAL_CAPACITY(16384).contextTokens).toBe(16384);
+  });
+});
+
+describe('resolveCapacity — openai refusal (rework #3464 Fix 1)', () => {
+  it('throws AnalyzerEndpointMissingError and never reaches the Gemini branch', () => {
+    expect(() => resolveCapacity({ engine: 'openai', model: 'openai:lab::m' })).toThrow(AnalyzerEndpointMissingError);
+  });
+
+  it('throws for any openai engine selection regardless of model shape', () => {
+    expect(() => resolveCapacity({ engine: 'openai', model: 'openai:my-endpoint::gpt-4o' })).toThrow(AnalyzerEndpointMissingError);
+    expect(() => resolveCapacity({ engine: 'openai', model: 'anything' })).toThrow(AnalyzerEndpointMissingError);
   });
 });
 

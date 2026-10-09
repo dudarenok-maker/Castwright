@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="45" data-publish-id="c13fd9e612ec"></div>
+  <div hidden data-published-as="49" data-publish-id="1c1be3ce11fe"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">57</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">63</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,11 +209,11 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->33<!-- END GENERATED:glance:A --></td></tr>
-      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->3<!-- END GENERATED:glance:B --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->34<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->7<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->13<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->14<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">33 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">34 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -753,6 +753,21 @@
         <p class="src">A real installed release built from this change (its natural moment is the next release cut), Windows for the sleep-prevention leg &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3406">Castwright#3406</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3404">#3404</a> &#183; no separate run sheet &#183; the three observations above; issue #3406 and PR #3404&#39;s manifest-guard section for the exact defect each leg closes</p>
       </div>
     </details>
+    <details class="item">
+      <summary><span class="num">A112</span><span class="iname">The qa-repair repair pass stops judging a new take against a reassigned character's stale audition centroid</span><span class="risk">a real sidecar with a real speaker-embedding (ECAPA) model, a Qwen or Coqui character (scoreBook skips Kokoro), Render-integrity QA (voice match) and Auto-fix voice mismatches both switched on, a book with at least two already-rendered chapters</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p><code>chapter-qa-repair.ts</code>&#39;s centroid filter derived its comparison voice from the chapter&#39;s last full-render snapshot (<code>snap?.resolvedVoiceName</code>) rather than the cast&#39;s live voice, so a character reassigned to a new voice since that render still had their <em>old</em> voice&#39;s audition centroid treated as usable &#8212; silently judging a repair against the wrong reference. The fix derives the comparison voice the same way the re-render itself does (<code>pickVoiceForEngine(resolveCharacterEngine(current, engine), ...)</code>, keyed off the live cast entry), and the regression suite (#3449, #3460) exercises both the stale-drop and the kept/gate paths against a mocked embedder. Neither test touches a real sidecar or a real ECAPA model.</p>
+        <p>Preconditions, all required: a <strong>Qwen or Coqui</strong> character &#8212; <code>scoreBook</code> skips Kokoro characters (<code>render-integrity/aggregate.ts</code>), so a Kokoro character observes nothing &#8212; whose row in <code>&lt;bookDir&gt;/audio/render-integrity.centroids.json</code> has <code>referenceKind: "audition"</code>; <strong>two</strong> already-rendered chapters (X and Y), each with a line of that character carrying a <code>voice-mismatch</code> / <code>fixable: true</code> row in its <code>&lt;slug&gt;.render-integrity.json</code>; the centroids row&#39;s <code>auditionVoice.voiceName</code> equal to the character&#39;s snapshot voice in <strong>both</strong> X and Y (<code>scoreBook</code> takes it from the character&#39;s FIRST chapter in book order, <code>aggregate.ts</code>, so after a partial re-render or voice change they can differ &#8212; the control then correctly drops the reference, misreading as a Fail; re-render so they match); <strong>Render-integrity QA (voice match)</strong> (<code>qa.speaker.enabled</code>, env <code>SEG_SPK_ENABLED</code>) switched <strong>on</strong> <em>before the chapters are rendered</em> &#8212; it defaults off and is what makes <code>scoreBook</code> run at all, writing the centroids and verdict files; scoring runs from chapter completion (and the resume path), so turn it on first and then render, rather than expecting files for already-finished chapters; <strong>Auto-fix voice mismatches</strong> (<code>qa.speaker.autoRepair</code>, env <code>SEG_SPK_AUTO_REPAIR</code>) switched <strong>on</strong> &#8212; it defaults off, and while off the route never merges a verdict-file row into its candidates; that character&#39;s engine ready (for Qwen: installed and loaded) and no analysis edits since the render &#8212; an unavailable Qwen engine or a diverged segment also lands a line in <code>stillSuspect</code> without re-rendering it, masquerading as the failure the control guards.</p>
+        <p>Getting a book into that state: a <code>fixable: true</code> row needs a <em>severe</em> voice-mismatch on a stochastic engine (<code>aggregate.ts</code>), and an <code>audition</code>-referenced (thin) character with severe misfires in two separate chapters is rare in a healthy book. Nothing in the app manufactures one. Either hunt: with Render-integrity QA on, render a book and inspect each <code>&lt;slug&gt;.render-integrity.json</code> for <code>fixable: true</code> rows of a character whose centroids row says <code>referenceKind: "audition"</code>; or set one up deliberately &#8212; a thin character (few lines, so the centroid falls back to audition) whose voice or engine settings you vary between renders so some lines come out in a clearly different voice. This may take several attempts; if no such character turns up, record the row as not yet runnable rather than as passed.</p>
+        <p>How to trigger it: the route is <code>POST /api/books/&lt;bookId&gt;/chapters/&lt;chapterId&gt;/audio-qa-repair</code> (an SSE stream). Its UI trigger is the Listen view&#39;s chapter-row button &#8220;Re-record the flagged lines in this chapter&#8221; &#8212; <strong>not</strong> Fix audio, which is the per-character re-record modal and posts to <code>&#8230;/splice</code>. That button renders only when the chapter&#39;s <code>audioQa.status</code> is <code>suspect</code>, derived from signal QA (<code>finalize-chapter-write.ts</code>), not from voice-match verdicts &#8212; so for an acoustic-only chapter it usually will not appear. Then send it directly: <code>curl.exe -N -X POST -H "Content-Type: application/json" -d '{"dryRun":false}' http://localhost:8080/api/books/&lt;bookId&gt;/chapters/&lt;chapterId&gt;/audio-qa-repair</code> (omitting <code>dryRun</code> runs a read-only scan). Use <code>curl.exe</code>, not <code>curl</code>: in Windows PowerShell 5.1 <code>curl</code> is an alias for <code>Invoke-WebRequest</code> and rejects these flags (PowerShell quoting may need the body as <code>'{\"dryRun\":false}'</code>). <code>http://localhost:8080</code> is the default <code>npm start</code> address, and loopback requests bypass the LAN token (<code>server/src/lan-auth.ts</code>); only in LAN HTTPS mode with a <code>LAN_AUTH_TOKEN</code> set, from another device, use <code>https://&lt;host&gt;:&lt;port&gt;</code> and present the token. Read every observation from the stream&#39;s <code>data:</code> frames &#8212; in the curl output, or in the browser devtools Network tab (that request &#8594; EventStream/Response) when the button was used.</p>
+        <ul>
+          <li><strong>Pick the line.</strong> In the <code>qa_scan</code> frame, the chosen line&#39;s entry in <code>flagged</code> must show <code>acousticOnly: true</code>. A line also flagged by signal QA or ASR (a union candidate, <code>acoustic: true</code> without <code>acousticOnly</code>) is re-rendered and can be accepted on signal QA alone, so it proves nothing about the centroid filter in either step.</li>
+          <li><strong>Control (unchanged voice), chapter X.</strong> Run the repair on X without touching the character&#39;s voice. <strong>Pass:</strong> the stream carries at least one <code>progress</code> frame with that line&#39;s <code>segmentIndex</code> &#8212; it was re-rendered and voice-checked against the audition centroid &#8212; whether <code>qa_repair_complete</code> then lists it in <code>repaired</code> or (a genuinely poor new take) in <code>stillSuspect</code>. <strong>Fail:</strong> no <code>progress</code> frame for that <code>segmentIndex</code> and the line in <code>stillSuspect</code> &#8212; the centroid was wrongly dropped. This is the part only hardware can prove: the real <code>pickVoiceForEngine</code> output must equal the real stamped <code>auditionVoice.voiceName</code>.</li>
+          <li><strong>Reassign, no re-render, chapter Y.</strong> Change that character&#39;s voice (keep the same engine and tier), do NOT re-render anything, then run the repair on <strong>Y</strong> &#8212; not X: an accepted take on X rewrites its verdict row to <code>voice-match</code> / <code>fixable: false</code>, so re-running X would give <code>flagged: []</code>. Centroids are book-wide, so the reassignment applies to Y&#39;s line too. <strong>Pass:</strong> that line (<code>acousticOnly: true</code> in <code>qa_scan</code>) gets <strong>no</strong> <code>progress</code> frame and appears in <code>qa_repair_complete</code>&#39;s <code>stillSuspect</code> &#8212; the stale <code>audition</code> centroid was dropped, not reused. An inconclusive verdict here is the designed outcome, not a regression. Known limit: an in-book centroid is still judged against the old voice (#3517) &#8212; do not expect it to switch.</li>
+        </ul>
+        <p class="src">a real GPU box with the speech sidecar and a real ECAPA speaker-embedding model running &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3414">Castwright#3414</a> &#183; no separate run sheet &#183; the observations above; issue #3414 and the mutation-tested regression split (#3449 stale-drop, #3460 kept-and-gates) for the exact defect this closes</p>
+      </div>
+    </details>
 
 
 </section>
@@ -760,7 +775,7 @@
   <!-- B -->
   <section class="group" id="gb">
     <header>
-      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">3 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">7 rows</span></h3>
       <p class="setup">
         A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a
         <strong>CPU-only sub-case</strong> — the analogous B2-step-7 CPU-only case retired to
@@ -805,6 +820,56 @@
           <li><b>Short-context tags:</b> for at least two tags, <code>num_ctx</code> sent (32768) against <code>/api/show</code> native context, and one chapter's truncation count.</li>
         </ul>
         <p class="src">The 16 GB card, Ollama only, no TTS engine · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B103</span><span class="iname">Abort and drain on a local Ollama analyzer — a stopped main run releases the model before a chapter Retry starts (#3435)</span><span class="risk low">2 runs</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Every analysis ending (Pause, an error, an overflow, a quota stop) now aborts the run's in-flight model calls, and Retry / Re-analyse / Include are refused with a 409 until the stopped run has drained. Mock mode has no server, so none of it is visible there.</p>
+        <ul>
+          <li><b>(a) Pause:</b> start a pipelined analysis, Pause mid-Phase 1, click Retry on a failed row at once — refused with the “still stopping” message; a few seconds later it runs.</li>
+          <li><b>(b) Halt:</b> same, but stop the model mid-Phase 1 so one chapter throws.</li>
+          <li>In both: <code>[analysis] main run drained manuscript=&lt;id&gt;</code> appears <b>before</b> <code>[analysis-subset] start manuscript=&lt;id&gt;</code>, no cache or edits write from the main job after it, no <code>drain deadline exceeded</code> line, and <code>ollama ps</code> shows the model released. Note each drain's duration.</li>
+        </ul>
+        <p class="src">Local Ollama, a pipelined main run, no TTS engine · plan <code>287</code> “On-box acceptance owed” item 1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3435">#3435</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B104</span><span class="iname">A Resume on a cast-confirmed book with designed voices leaves every designed voice intact (#3435)</span><span class="risk low">1 diff</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The 2026-07-14 voice-strip incident class (invariant 6). On a confirmed book with at least one designed voice, note its <code>cast.json</code> voice fields (<code>designModel</code>, <code>instruct</code>, <code>baseModel</code>, the <code>.pt</code> reference), Pause a Resume part-way, Resume it to the end, then diff <code>cast.json</code>.</p>
+        <ul>
+          <li>Every designed voice field is byte-identical after the run.</li>
+        </ul>
+        <p class="src">Local Ollama, a real book with a confirmed cast · plan <code>287</code> “On-box acceptance owed” item 2 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3435">#3435</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B105</span><span class="iname">Ollama structured-output modes on a real model (#3084 PR 3b)</span><span class="risk low">Owed · local Ollama</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>With <code>analyzer.ollama.structuredOutput</code> set to <code>json</code>, then <code>off</code>, analyse one real chapter each on <code>qwen3.5:4b</code>. Observe the inbox request's <code>format</code> key, whether the chapter validates, and how a rejecting daemon is reported.</p>
+        <ul>
+          <li>Request carried <code>format: "json"</code>, then no <code>format</code> key.</li>
+          <li>The chapter still validates, or fails as "analyzer reply failed validation", never as <code>unknown</code>.</li>
+          <li>A daemon that rejects a mode fails as "analyzer rejected the request" naming <code>analyzer.ollama.structuredOutput</code>.</li>
+        </ul>
+        <p>Record the validation-retry count for each mode against the default <code>schema</code> run on the same chapter.</p>
+        <p class="src">Real Ollama daemon, <code>qwen3.5:4b</code> · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §4 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B106</span><span class="iname">The background emotion re-run yields to and is aborted by real work on a real analyzer (#3435)</span><span class="risk low">5 observations</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Opening an analysed book whose <code>state.json</code> has <code>prosodyAnnotated: false</code> re-runs emotion detection in the background; the run should stop the moment the user starts real work. Mock mode has no analyzer, so only the box shows the requests actually stop.</p>
+        <ul>
+          <li><b>Starts:</b> the “Detecting emotions” pill shows and prosody requests reach the analyzer.</li>
+          <li><b>(a) Analysis:</b> mid-run, start an analysis for the book — the server log shows no further prosody calls for it, and the book stays <code>prosodyAnnotated: false</code>.</li>
+          <li><b>(b) Switch book:</b> same, but open another book instead.</li>
+          <li><b>(c) Generation:</b> same, but queue a chapter render for the book while the run is active — the prosody requests stop, the pill clears, Generate is never disabled, and the book stays <code>prosodyAnnotated: false</code>.</li>
+          <li><b>Resumes:</b> reopen the book and the run starts again.</li>
+          <li><b>Reload:</b> reload (or close and reopen the app) mid-run, then open the book again — the run starts again, because it marked the book <code>false</code> as it started.</li>
+        </ul>
+        <p class="src">Local Ollama, a real analysed book, a TTS engine only for (c) · plan <code>287</code> “On-box acceptance owed” item 3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3435">#3435</a></p>
       </div>
     </details>
   </section>
@@ -1075,7 +1140,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">13 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">14 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1216,7 +1281,19 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">E112</span><span class="iname">Drifted attribution id resolves correctly on the real Playing with Fire book (#3440)</span><span class="risk low">No GPU needed; a real book with a drifted cast id</span><span class="chev">›</span></summary>
+      <summary><span class="num">E112</span><span class="iname">Gemini schema mode on a real key (#3084 PR 3b)</span><span class="risk low">Owed · any Gemini key</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>With a Gemini key and <code>analyzer.gemini.structuredOutput</code> = <code>schema</code>, analyse one real chapter on <code>gemma-4-31b-it</code> and one on <code>gemini-3.5-flash-lite</code>. This row does not by itself move Gemini's default.</p>
+        <ul>
+          <li>Whether Gemini returns HTTP 400 for the adapted <code>responseJsonSchema</code>, or accepts it.</li>
+          <li>The debug log's "schema adapter dropped" list must match the PR's <code>gemini / *</code> snapshot.</li>
+          <li>Whether replies conform on the first attempt.</li>
+        </ul>
+        <p class="src">Gemini key, no GPU · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §5 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E113</span><span class="iname">Drifted attribution id resolves correctly on the real Playing with Fire book (#3440)</span><span class="risk low">No GPU needed; a real book with a drifted cast id</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Server-side <code>book-state</code> canonicalisation (<code>buildCastResolver</code>) now resolves attribution ids that drift from the cast's own spelling (e.g. a hyphen vs. an underscore) before building line counts and chapter-character maps, and the client follows the same <code>characterIdAliases</code> map for live SSE ticks and sentence-derived stats. Unit, integration and e2e coverage (mock-mode Playwright) all pass and are mutation-verified; this row is the one thing they cannot prove — that the real book this bug was filed against now resolves correctly.</p>
         <ul>
