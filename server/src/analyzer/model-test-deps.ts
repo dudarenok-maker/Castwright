@@ -50,9 +50,12 @@ export function modelTestDepsFor(modelId: string, settings: UserSettings): Model
       serverUrl: endpoint.baseUrl,
       configuredMode: endpoint.structuredOutput,
       adaptSchema: adaptSchemaForOpenAI,
-      /* The saved context and manual cap. Task 3c.9 replaces this with resolveCapacity, which
-         also clamps to the served limit prepare() warms. */
-      probeLimits: () => ({ contextTokens: endpoint.contextTokens, maxOutputTokens: endpoint.maxOutputTokens > 0 ? endpoint.maxOutputTokens : null }),
+      /* P7/P15: the same capacity a run resolves — the saved context, and the manual cap
+         clamped to the served limit transport.prepare() warms (runModelTest calls it first). */
+      probeLimits: () => {
+        const capacity = resolveCapacity({ engine: 'openai', model: parsed.model, endpoint });
+        return { contextTokens: capacity.contextTokens, maxOutputTokens: capacity.maxOutputTokens };
+      },
     };
   }
   if (engine === 'gemini') {

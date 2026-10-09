@@ -27,7 +27,7 @@ import type { SentenceOutput } from '../handoff/schemas.js';
 import type { EngineReport } from './dialogue-structure/types.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import { configValue } from '../config/resolver.js';
-import { cloudBodyCharBudget } from './token-budget.js';
+import { cloudBodyCharBudget, cloudBodyCharBudgetForCap } from './token-budget.js';
 import type { EngineCapacity } from './capacity.js';
 import {
   runStage2WithCoverageGuard,
@@ -74,12 +74,14 @@ export function resolveStage2ChunkCharBudget(capacity: EngineCapacity | undefine
     // Request-cap family (and an omitted capacity): min(configured, token-cap-derived).
     return Math.min(configured, cloudBodyCharBudget(body ?? '', 0, 0, capacity?.perRequestInputCap));
   }
-  return stage2ChunkBudgetForEngine(
+  const contextBudget = stage2ChunkBudgetForEngine(
     configured,
     capacity.contextTokens,
     'local',
     configValue<number>('analyzer.stage2.localInputFraction'),
   );
+  if (capacity.perRequestInputCap === undefined) return contextBudget;
+  return Math.min(contextBudget, cloudBodyCharBudgetForCap(capacity.perRequestInputCap, body ?? ''));
 }
 
 /* A fragment must be short in CHARS too, not only in words: a chunk can be

@@ -85,7 +85,8 @@ export interface CatalogDeps {
   /** A3: each tag with its digest, so an entry drops a Test record for another build. */
   listOllamaTags(url: string): Promise<Array<{ name: string; digest?: string }>>;
   listGemini(apiKey: string, refresh: boolean): Promise<GeminiModelInfo[]>;
-  listEndpoint(baseUrl: string, apiKey: string | null): Promise<Array<Record<string, unknown>>>;
+  /** P26: `signal` bounds and cancels the listing (the served-limits warm-up passes one; the catalog does not). */
+  listEndpoint(baseUrl: string, apiKey: string | null, signal?: AbortSignal): Promise<Array<Record<string, unknown>>>;
   now(): number;
 }
 
@@ -112,7 +113,7 @@ async function listOllamaTags(url: string): Promise<Array<{ name: string; digest
 
 type OpenAIClientOptions = NonNullable<ConstructorParameters<typeof OpenAI>[0]>;
 
-async function listEndpoint(baseUrl: string, apiKey: string | null): Promise<Array<Record<string, unknown>>> {
+async function listEndpoint(baseUrl: string, apiKey: string | null, signal?: AbortSignal): Promise<Array<Record<string, unknown>>> {
   const client = new OpenAI({
     baseURL: baseUrl,
     /* As 3b's transport: a placeholder only, so the SDK never reads OPENAI_API_KEY.
@@ -130,7 +131,7 @@ async function listEndpoint(baseUrl: string, apiKey: string | null): Promise<Arr
   });
   const out: Array<Record<string, unknown>> = [];
   try {
-    for await (const model of client.models.list()) out.push(model as unknown as Record<string, unknown>);
+    for await (const model of client.models.list(signal ? { signal } : undefined)) out.push(model as unknown as Record<string, unknown>);
   } catch (err) {
     throw rebuildListingError(err, apiKey);
   }

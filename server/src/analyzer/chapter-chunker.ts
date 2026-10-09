@@ -19,7 +19,7 @@
 
 import { resolveStage1ChunkCharBudget } from './stage1-chunk.js';
 import { configValue } from '../config/resolver.js';
-import { cloudBodyCharBudget } from './token-budget.js';
+import { cloudBodyCharBudget, cloudBodyCharBudgetForCap } from './token-budget.js';
 import type { EngineCapacity } from './capacity.js';
 
 export interface SentenceChunk<S> {
@@ -134,7 +134,11 @@ export function chapterChunkBudget(
   sampleText = '',
   reservedTokens = 0,
 ): number {
-  if (capacity.family === 'context') return resolveStage1ChunkCharBudget(capacity); // roster rides on num_ctx; local truncation is the stage-2 fraction knob's domain
+  if (capacity.family === 'context') {
+    const contextBudget = resolveStage1ChunkCharBudget({ ...capacity, perRequestInputCap: undefined });
+    if (capacity.perRequestInputCap === undefined) return contextBudget;
+    return Math.min(contextBudget, cloudBodyCharBudgetForCap(capacity.perRequestInputCap, sampleText, reservedChars, reservedTokens));
+  }
   const outputCap = configValue<number>('analyzer.gemini.outputHeavyChunkChars');
   return Math.min(
     outputCap,
