@@ -19,8 +19,11 @@ export function stripThink(raw: string): { text: string; unterminated: boolean }
 
 /** The candidate strings parseAndValidate tries to JSON.parse, in its order (see its comment):
     fence strip, trailing-prose trim, structural-punctuation repair, the quote walker, and the
-    combinations. Exported so the Test action's marker probe (#3084 P7) accepts exactly the
-    outputs a run accepts. The caller dedupes, as parseAndValidate's loop does. */
+    combinations. Exported so the Test action's marker probe (#3084 P7, `classifyMarkerProbe`)
+    tries the same repair pipeline parseAndValidate does. NOT exactly the same acceptance,
+    though: the probe also retries from the first `{` in the answer (a second seed
+    `parseAndValidate` never tries), so it can call a reply "enforced" that a real run would
+    fail to parse. The caller dedupes, as parseAndValidate's loop does. */
 export function jsonParseCandidates(raw: string): string[] {
   const stripped = stripCodeFences(raw);
   const trimmed = trimTrailingProse(stripped);
@@ -76,7 +79,9 @@ export function parseAndValidate<T>(raw: string, schema: z.ZodType<T>): ParseRes
 
   /* Build the candidate list and dedupe so each parse is attempted at
      most once. The list itself lives in `jsonParseCandidates` so the Test
-     action's marker probe accepts exactly the outputs a run accepts (P7). */
+     action's marker probe (P7) shares this repair pipeline — see that
+     function's own comment for where the probe's acceptance still widens
+     on top of it. */
   const candidates = jsonParseCandidates(afterThink);
   const seen = new Set<string>();
   let parsed: unknown;
