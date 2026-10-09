@@ -78,6 +78,7 @@ export type UploadResponse = components['schemas']['UploadResponse'];
 export type AnalyseResponse = components['schemas']['AnalyseResponse'];
 export type VoiceMatchResponse = components['schemas']['VoiceMatchResponse'];
 export type RevisionsResponse = components['schemas']['RevisionsResponse'];
+export type RevisionsState = components['schemas']['RevisionsState'];
 export type BulkRevisionsResponse = components['schemas']['BulkRevisionsResponse'];
 /** Plan 285 — the A/B review intent a queue entry / generation request carries. */
 export type ReviewRequest = components['schemas']['ReviewRequest'];
