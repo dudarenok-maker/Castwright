@@ -307,6 +307,8 @@ export interface MergeCharactersResponse {
 }
 /* Tier-2b diminutive merge-suggestions (Task 12). Sourced from api-types.ts. */
 export type MergeSuggestion = ApiComponents['schemas']['MergeSuggestion'];
+/* Plan 286 (OD29) — what finalize did with A/B review state (Task 7). */
+type ReviewOutcome = ApiComponents['schemas']['ReviewOutcome'];
 /* POST /api/books/:bookId/cast/:characterId/series-patch — cross-book
    Compare save propagation. Applies the patch to the source character
    AND every series-sibling cast.json row that the plan-94 dedup rule
@@ -669,8 +671,8 @@ export type SpliceTick =
       durationSec: number;
       segmentCount: number;
       hasPreviousAudio: boolean;
-      /** Plan 285 — present only when finalize recorded (or failed to record) A/B review state. */
-      reviewRecorded?: boolean;
+      /** Plan 285/286 — present only when finalize was asked to record A/B review state. */
+      reviewOutcome?: ReviewOutcome;
     }
   | { type: 'chapter_failed'; chapterId?: number; errorReason: string };
 
@@ -714,8 +716,8 @@ export type QaRepairTick =
       repaired?: number[];
       stillSuspect?: number[];
       durationSec?: number;
-      /** Plan 285 — present only when finalize recorded (or failed to record) A/B review state. */
-      reviewRecorded?: boolean;
+      /** Plan 285/286 — present only when finalize was asked to record A/B review state. */
+      reviewOutcome?: ReviewOutcome;
     }
   | { type: 'chapter_failed'; chapterId?: number; errorReason: string };
 

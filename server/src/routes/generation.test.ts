@@ -118,7 +118,7 @@ vi.mock('../tts/language.js', async (importOriginal) => {
 });
 
 /* Plan 285 — passthrough spy so a test can (1) assert generation passes NO
-   `review` to finalize in PR 1 and (2) force `reviewRecorded:false` to prove
+   `review` to finalize in PR 1 and (2) force `reviewOutcome:'failed'` to prove
    it reaches chapter_complete. Every other test still runs the real write. */
 vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../audio/finalize-chapter-write.js')>();
@@ -2366,14 +2366,14 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
       .split('\n')
       .find((l) => l.startsWith('data: ') && l.includes(`"type":"chapter_complete","chapterId":${chapterId},`));
 
-  it('passes no `review` to finalize and threads reviewRecorded onto the live chapter_complete', async () => {
+  it('passes no `review` to finalize and threads reviewOutcome onto the live chapter_complete', async () => {
     const fin = await import('../audio/finalize-chapter-write.js');
     const real = (
       await vi.importActual<typeof import('../audio/finalize-chapter-write.js')>('../audio/finalize-chapter-write.js')
     ).finalizeChapterAudioWrite;
     const spy = vi.mocked(fin.finalizeChapterAudioWrite);
     spy.mockClear();
-    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewRecorded: false }));
+    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewOutcome: 'failed' as const }));
 
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)
@@ -2384,15 +2384,16 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
     expect('review' in spy.mock.calls[0][0]).toBe(false);
     const done = parseTicks(res.text).find((t) => t.type === 'chapter_complete' && t.chapterId === 1);
     expect(done, `expected chapter_complete ch1, got ${res.text}`).toBeTruthy();
-    expect(done!.reviewRecorded).toBe(false);
+    expect(done!.reviewOutcome).toBe('failed');
   });
 
-  it('the chapter_complete line carries no reviewRecorded when finalize returns none', async () => {
+  it('the chapter_complete line carries no reviewOutcome when finalize returns none', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)
       .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
     const line = completeLine(res.text, 1);
     expect(line, res.text).toBeTruthy();
+    expect(line).not.toContain('reviewOutcome');
     expect(line).not.toContain('reviewRecorded');
   });
 

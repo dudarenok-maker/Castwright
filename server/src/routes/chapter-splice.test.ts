@@ -278,14 +278,14 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
     expect(Array.from(call.resynthesizedIndices as Iterable<number>)).toEqual([]);
   });
 
-  it('plan 285 — passes no `review` to finalize (PR 1 dark) and threads reviewRecorded onto splice_complete', async () => {
+  it('plan 285 — passes no `review` to finalize (PR 1 dark) and threads reviewOutcome onto splice_complete', async () => {
     const fin = await import('../audio/finalize-chapter-write.js');
     const real = (
       await vi.importActual<typeof import('../audio/finalize-chapter-write.js')>('../audio/finalize-chapter-write.js')
     ).finalizeChapterAudioWrite;
     const spy = vi.mocked(fin.finalizeChapterAudioWrite);
     spy.mockClear();
-    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewRecorded: false }));
+    spy.mockImplementationOnce(async (input) => ({ ...(await real(input)), reviewOutcome: 'failed' as const }));
 
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
@@ -295,15 +295,16 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
     expect('review' in spy.mock.calls[0][0]).toBe(false);
     const done = parseSse(res.text).find((e) => e.type === 'splice_complete');
     expect(done, `expected splice_complete, got ${res.text}`).toBeTruthy();
-    expect(done!.reviewRecorded).toBe(false);
+    expect(done!.reviewOutcome).toBe('failed');
   });
 
-  it('plan 285 — the splice_complete line carries no reviewRecorded when finalize returns none', async () => {
+  it('plan 285 — the splice_complete line carries no reviewOutcome when finalize returns none', async () => {
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
       .send({ mode: 'remix', characterId: 'castor', gainDb: 3 });
     const line = res.text.split('\n').find((l) => l.startsWith('data: ') && l.includes('"splice_complete"'));
     expect(line, res.text).toBeTruthy();
+    expect(line).not.toContain('reviewOutcome');
     expect(line).not.toContain('reviewRecorded');
   });
 

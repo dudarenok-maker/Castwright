@@ -1887,7 +1887,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         audioQa,
         audioModelKey: renderedModelKey,
         audioEngines,
-        reviewRecorded,
+        reviewOutcome,
       } = await finalizeChapterAudioWrite({
         bookId,
         bookDir,
@@ -2092,8 +2092,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         /* srv-27 — advisory QA verdict so the frontend can stamp a "Suspect"
            badge the moment the Done pill flips, without a state.json reload. */
         audioQa,
-        /* Plan 285 — present only when finalize was asked to record review state. */
-        ...(reviewRecorded === undefined ? {} : { reviewRecorded }),
+        /* Plan 285/286 — present only when finalize was asked to record review state. */
+        ...(reviewOutcome === undefined ? {} : { reviewOutcome }),
         /* Plan 285 — only the chapter actually rendered with `review`; the
            replay loop above never carries it. */
         ...(job.review !== null && job.chapterId === chapter.id ? { reviewChapter: true } : {}),

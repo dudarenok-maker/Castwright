@@ -902,8 +902,8 @@ chapterQaRepairRouter.post(
         durationSec: result.durationSec,
         segmentCount: result.segmentCount,
         hasPreviousAudio: true,
-        /* Plan 285 — present only when finalize was asked to record review state. */
-        ...(result.reviewRecorded === undefined ? {} : { reviewRecorded: result.reviewRecorded }),
+        /* Plan 285/286 — present only when finalize was asked to record review state. */
+        ...(result.reviewOutcome === undefined ? {} : { reviewOutcome: result.reviewOutcome }),
       });
       res.end();
     } catch (err) {

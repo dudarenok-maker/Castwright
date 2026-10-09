@@ -619,7 +619,7 @@ Design rationale:
   (`server/src/audio/finalize-chapter-write.ts`, plan 285), whose A/B
   review record on the per-book revisions lock is best-effort with respect
   to a render that has already landed — it logs in full and surfaces only
-  `reviewRecorded: false`, never the lock key. A NINTH site fails loud in a
+  `reviewOutcome: 'failed'`, never the lock key. A NINTH site fails loud in a
   different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,

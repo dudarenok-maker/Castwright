@@ -4634,11 +4634,10 @@ export interface components {
              */
             reviewChapter?: boolean;
             /**
-             * @description Plan 285 — only on `chapter_complete` when finalize was asked to
-             *     record A/B review state; false when that record failed (the new take
-             *     is still live).
+             * @description Plan 285/286 — only on `chapter_complete` when finalize was asked to
+             *     record A/B review state.
              */
-            reviewRecorded?: boolean;
+            reviewOutcome?: components["schemas"]["ReviewOutcome"];
             errorReason?: string | null;
             /**
              * @description Only on `chapter_failed` — fs-19 stable machine code for the failure
@@ -5481,6 +5480,11 @@ export interface components {
             characterId: string;
             triggeredBy: string;
         };
+        /**
+         * @description Plan 286 (OD29) — what finalize did with A/B review state, on a completion frame only when it was asked to: `recorded` (a pending entry now exists for the chapter), `none` (nothing to review — a first render, or a render without review; any entry for the chapter was dropped), `failed` (the store call failed; the new take is live without its review entry). Replaces plan 285's boolean flag.
+         * @enum {string}
+         */
+        ReviewOutcome: "recorded" | "none" | "failed";
         DriftEvent: {
             id: string;
             /** @description Book the event belongs to. Server stamps this at emit time from the request path; included in the event id for global uniqueness across concurrently-active books. Lets the Drift Report group events by book in a single modal even when the user has multiple books generating in parallel. */
@@ -9185,8 +9189,7 @@ export interface operations {
                         durationSec?: number;
                         segmentCount?: number;
                         hasPreviousAudio?: boolean;
-                        /** @description Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live). */
-                        reviewRecorded?: boolean;
+                        reviewOutcome?: components["schemas"]["ReviewOutcome"];
                         progress?: number;
                         errorReason?: string;
                         /**
@@ -9279,8 +9282,7 @@ export interface operations {
                         durationSec?: number;
                         segmentCount?: number;
                         hasPreviousAudio?: boolean;
-                        /** @description Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live). */
-                        reviewRecorded?: boolean;
+                        reviewOutcome?: components["schemas"]["ReviewOutcome"];
                         progress?: number;
                         errorReason?: string;
                         /**

@@ -59,7 +59,7 @@ describe('openapi: plan 285 PR 1', () => {
     expect([poll, tick, rev, q]).toHaveLength(4);
     expectTypeOf<S['RevisionsResponse']['fileId']>().toEqualTypeOf<string | null | undefined>();
     expectTypeOf<S['GenerationTick']['reviewChapter']>().toEqualTypeOf<boolean | undefined>();
-    expectTypeOf<S['GenerationTick']['reviewRecorded']>().toEqualTypeOf<boolean | undefined>();
+    expectTypeOf<S['GenerationTick']['reviewOutcome']>().toEqualTypeOf<'recorded' | 'none' | 'failed' | undefined>();
     expectTypeOf<S['Revision']['origin']>().toEqualTypeOf<'server' | undefined>();
     expectTypeOf<S['QueueEntry']['review']>().toEqualTypeOf<ReviewRequest | undefined>();
     expectTypeOf<S['QueueEnqueueEntry']['review']>().toEqualTypeOf<ReviewRequest | undefined>();
@@ -71,13 +71,13 @@ describe('openapi: plan 285 PR 1', () => {
     expectTypeOf<ReviewRequest>().toEqualTypeOf<{ characterId: string; triggeredBy: string }>();
   });
 
-  it('the hand-written splice / qa-repair completion ticks carry an optional reviewRecorded', () => {
+  it('the hand-written splice / qa-repair completion ticks carry an optional reviewOutcome', () => {
     expectTypeOf<
-      Extract<SpliceTick, { type: 'splice_complete' }>['reviewRecorded']
-    >().toEqualTypeOf<boolean | undefined>();
+      Extract<SpliceTick, { type: 'splice_complete' }>['reviewOutcome']
+    >().toEqualTypeOf<'recorded' | 'none' | 'failed' | undefined>();
     expectTypeOf<
-      Extract<QaRepairTick, { type: 'qa_repair_complete' }>['reviewRecorded']
-    >().toEqualTypeOf<boolean | undefined>();
+      Extract<QaRepairTick, { type: 'qa_repair_complete' }>['reviewOutcome']
+    >().toEqualTypeOf<'recorded' | 'none' | 'failed' | undefined>();
   });
 });
 

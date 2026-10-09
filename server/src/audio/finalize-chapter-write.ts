@@ -177,10 +177,12 @@ export interface FinalizeChapterAudioResult {
   /** Distinct speaking characters per engine they rendered in. Drives the
       mixed-engine "Kokoro (1), Qwen (6)" caption. */
   audioEngines: AudioEngineBreakdown;
-  /** Plan 285 — absent when `review` was undefined; true when the record/drop
-      landed; false when it failed (logged in full; the new take is live). */
-  reviewRecorded?: boolean;
+  /** Plan 285/286 — absent when `review` was undefined; see ReviewOutcome. */
+  reviewOutcome?: ReviewOutcome;
 }
+
+/** Plan 286 (OD29) — what finalize did with A/B review state. */
+export type ReviewOutcome = 'recorded' | 'none' | 'failed';
 
 export async function finalizeChapterAudioWrite(
   input: FinalizeChapterAudioInput,
@@ -753,7 +755,7 @@ export async function finalizeChapterAudioWrite(
   /* Plan 285 — AFTER the last disk write (audio rename, peaks, state.json):
      a throw earlier in finalize therefore never leaves an entry for a
      half-written take. */
-  const reviewRecorded = await applyReview(input, preserve.preserved, prev);
+  const reviewOutcome = await applyReview(input, preserve.preserved, prev);
 
   return {
     durationSec,
@@ -761,20 +763,21 @@ export async function finalizeChapterAudioWrite(
     segmentCount: segments.length,
     audioModelKey: effectiveModelKey,
     audioEngines,
-    ...(reviewRecorded === undefined ? {} : { reviewRecorded }),
+    ...(reviewOutcome === undefined ? {} : { reviewOutcome }),
   };
 }
 
-/** Plan 285 — best-effort with respect to the render, and a DELIBERATE
-    swallow of LockAcquisitionTimeoutError (CLAUDE.md's swallow list): the
-    take already landed, so an error is logged in full and surfaces ONLY as
-    `false` — no store text (whose lock key embeds the absolute workspace
-    path) may reach an SSE body. */
+/** Plan 285 — best-effort with respect to the render that has already
+    landed, and a DELIBERATE swallow of LockAcquisitionTimeoutError
+    (CLAUDE.md's swallow list): an error is logged in full and surfaces
+    ONLY as `'failed'` — no store text (whose lock key embeds the absolute
+    workspace path) may reach an SSE body. Plan 286 (OD29) — three outcomes,
+    so a client can tell a recorded entry from "nothing to review". */
 async function applyReview(
   input: FinalizeChapterAudioInput,
   preserved: boolean,
   prev: BookStateJson | null,
-): Promise<boolean | undefined> {
+): Promise<ReviewOutcome | undefined> {
   if (input.review === undefined) return undefined;
   const { bookDir, chapter } = input;
   const chapters: ChapterRef[] = prev?.chapters ?? [{ id: chapter.id, slug: chapter.slug }];
@@ -794,15 +797,15 @@ async function applyReview(
         segments: [],
         origin: 'server',
       });
-    } else {
-      await dropPendingForChapter(bookDir, chapters, chapter.id);
+      return 'recorded';
     }
-    return true;
+    await dropPendingForChapter(bookDir, chapters, chapter.id);
+    return 'none';
   } catch (err) {
     console.error(
       `[finalize] could not record A/B review state for ${chapter.slug}; the new take is live without its review entry`,
       err,
     );
-    return false;
+    return 'failed';
   }
 }

@@ -2085,9 +2085,7 @@ paths:
                   durationSec: { type: number }
                   segmentCount: { type: integer }
                   hasPreviousAudio: { type: boolean }
-                  reviewRecorded:
-                    type: boolean
-                    description: Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live).
+                  reviewOutcome: { $ref: '#/components/schemas/ReviewOutcome' }
                   progress: { type: number }
                   errorReason: { type: string }
                   code:
@@ -2184,9 +2182,7 @@ paths:
                   durationSec: { type: number }
                   segmentCount: { type: integer }
                   hasPreviousAudio: { type: boolean }
-                  reviewRecorded:
-                    type: boolean
-                    description: Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live).
+                  reviewOutcome: { $ref: '#/components/schemas/ReviewOutcome' }
                   progress: { type: number }
                   errorReason: { type: string }
                   code:
@@ -6413,12 +6409,12 @@ components:
           description: |
             Plan 285 — only on a live `chapter_complete` for the chapter actually
             rendered with a request `review` (never on a replayed done chapter).
-        reviewRecorded:
-          type: boolean
+        reviewOutcome:
+          allOf:
+            - $ref: '#/components/schemas/ReviewOutcome'
           description: |
-            Plan 285 — only on `chapter_complete` when finalize was asked to
-            record A/B review state; false when that record failed (the new take
-            is still live).
+            Plan 285/286 — only on `chapter_complete` when finalize was asked to
+            record A/B review state.
         errorReason: { type: string, nullable: true }
         errorCode:
           allOf:
@@ -7558,6 +7554,17 @@ components:
       properties:
         characterId: { type: string }
         triggeredBy: { type: string }
+
+    ReviewOutcome:
+      type: string
+      enum: [recorded, none, failed]
+      description: >-
+        Plan 286 (OD29) — what finalize did with A/B review state, on a
+        completion frame only when it was asked to: `recorded` (a pending
+        entry now exists for the chapter), `none` (nothing to review — a
+        first render, or a render without review; any entry for the chapter
+        was dropped), `failed` (the store call failed; the new take is live
+        without its review entry). Replaces plan 285's boolean flag.
 
     DriftEvent:
       type: object
