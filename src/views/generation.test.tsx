@@ -355,6 +355,7 @@ describe('GenerationView — #3440 step 4: aliased sentences join drifted attrib
   ) {
     const store = configureStore({
       reducer: {
+        analysis: analysisSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         manuscript: manuscriptSlice.reducer,
