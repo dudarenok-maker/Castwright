@@ -5,6 +5,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('../workspace/user-settings.js', () => ({
   readConfigOverrides: vi.fn(() => ({})),
+  getCachedUserSettings: vi.fn(() => ({ analyzerEndpointKeys: {}, analyzerEndpoints: [], analyzerRateLimitsByModel: {} })),
+  getResolvedGeminiApiKey: vi.fn(() => null),
 }));
 
 import { resolveOllamaTemperature, resolveNumPredict } from './ollama.js';

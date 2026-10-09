@@ -8,7 +8,7 @@ import { buildAnalyzerCatalog, previewEndpointModels } from '../analyzer/catalog
 import { ModelTestControlFailedError, runModelTest } from '../analyzer/capabilities.js';
 import { modelTestDepsFor, GeminiKeyMissingForTestError } from '../analyzer/model-test-deps.js';
 import { AnalyzerEndpointMissingError, AnalyzerKeyOriginError } from '../analyzer/errors.js';
-import { keyOriginMatches } from '../workspace/analyzer-endpoints.js';
+import { keyOriginMatches, httpUrlSchema } from '../workspace/analyzer-endpoints.js';
 import { readUserSettings, writeAnalyzerCapabilityRecord, type UserSettings } from '../workspace/user-settings.js';
 /* Known secrets come through 3b's leaf gate, never from user-settings.ts (A9). */
 import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
@@ -73,7 +73,7 @@ analyzerModelsRouter.post('/models/test', async (req: Request, res: Response) =>
 });
 
 const previewBodySchema = z.object({
-  baseUrl: z.string().url().max(2000),
+  baseUrl: httpUrlSchema,
   endpointId: z.string().regex(/^[a-z0-9-]{1,40}$/).optional(),
   apiKey: z.string().min(1).max(4000).optional(),
 });

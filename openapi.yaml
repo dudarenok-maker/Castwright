@@ -5462,7 +5462,7 @@ components:
       type: object
       required: [baseUrl]
       properties:
-        baseUrl: { type: string, format: uri }
+        baseUrl: { type: string, format: uri, pattern: '^[Hh][Tt][Tt][Pp][Ss]?://' }
         endpointId: { type: string, pattern: '^[a-z0-9-]{1,40}$' }
         apiKey: { type: string, writeOnly: true }
     AnalyzerEndpointModelsPreview:

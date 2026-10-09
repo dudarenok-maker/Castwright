@@ -36,9 +36,11 @@ let mockApiKey: string | null = 'test-key';
 vi.mock('../workspace/user-settings.js', () => ({
   getResolvedGeminiApiKey: () => mockApiKey,
   readConfigOverrides: () => ({}),
+  getCachedUserSettings: vi.fn(() => ({ analyzerEndpointKeys: {}, analyzerEndpoints: [], analyzerRateLimitsByModel: {} })),
 }));
 vi.mock('../config/ollama-resolved.js', () => ({
   getResolvedOllamaModel: () => 'llama2',
+  getResolvedOllamaUrl: () => 'http://127.0.0.1:11434',
 }));
 
 // vi.hoisted: this test file has a static top-level `import ... from './voice-style.js'`

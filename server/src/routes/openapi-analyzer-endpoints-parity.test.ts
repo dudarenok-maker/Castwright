@@ -63,7 +63,7 @@ describe('openapi.yaml analyzer-endpoint contract', () => {
     /* httpUrlSchema tests the scheme case-insensitively (HTTP://LAB/v1 is stored as typed), and JSON
        Schema patterns have no flags, so the contract spells the case-folding out. */
     const urlLines = yaml.split('\n').filter((l) => /^\s+(?:baseUrl|unloadUrl): \{ type: string, format: uri/.test(l));
-    expect(urlLines).toHaveLength(5);
+    expect(urlLines).toHaveLength(6);
     for (const line of urlLines) expect(line).toContain("pattern: '^[Hh][Tt][Tt][Pp][Ss]?://'");
     expect(yaml).not.toContain("pattern: '^https?://'");
   });
