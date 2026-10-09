@@ -384,9 +384,11 @@ interface RunningJob {
       gate (renders straight through) for a confirmed entry, so a confirm →
       re-claim → re-enter cycle doesn't re-prompt. Default false. */
   fallbackConfirmed: boolean;
-  /** Plan 285 — the request's A/B review intent (null when absent). Stamps
-      `reviewChapter: true` on THIS job's live chapter_complete. Not yet passed
-      to finalize (PR 2). */
+  /** Plan 285/286 — the request's A/B review intent (null when absent). Stamps
+      `reviewChapter: true` on THIS job's live chapter_complete, and is passed
+      to finalize for the chapter actually rendered with review (a job with
+      `review` renders exactly one chapter; replayed chapters never finalize,
+      so no per-chapter guard is needed). */
   review: ReviewRequest | null;
   /** The chapter the loop is currently synthesising. Set at the top of
       each loop iteration and cleared on chapter_complete / break. Used
@@ -1931,6 +1933,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            fail-closed, the same direction `isAudioCurrent` takes everywhere
            else. */
         castHistorySeq: castIdHistory.seq ?? 0,
+        // Plan 286 — null when absent; a reviewed job renders exactly one chapter.
+        review: job.review,
       });
       if (audioQa.status === 'suspect') {
         console.warn(

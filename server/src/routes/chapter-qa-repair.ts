@@ -824,6 +824,8 @@ chapterQaRepairRouter.post(
            would clear the whole chapter's row on the strength of a one-sentence
            repair. Fail-closed and deliberate — see plan 280's known limit 1. */
         castHistorySeq: segFile.castHistorySeq,
+        // Plan 286 — QA repair never reviews a take (not a user-triggered A/B choice).
+        review: null,
       });
 
       /* Edit 6b (srv-36): for accepted acoustic takes, write their new embeddings

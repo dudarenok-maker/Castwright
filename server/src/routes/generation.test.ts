@@ -2366,7 +2366,7 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
       .split('\n')
       .find((l) => l.startsWith('data: ') && l.includes(`"type":"chapter_complete","chapterId":${chapterId},`));
 
-  it('passes no `review` to finalize and threads reviewOutcome onto the live chapter_complete', async () => {
+  it('plan 286 — passes review:null to finalize without review', async () => {
     const fin = await import('../audio/finalize-chapter-write.js');
     const real = (
       await vi.importActual<typeof import('../audio/finalize-chapter-write.js')>('../audio/finalize-chapter-write.js')
@@ -2381,19 +2381,19 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
     expect(res.status).toBe(200);
 
     expect(spy).toHaveBeenCalledTimes(1);
-    expect('review' in spy.mock.calls[0][0]).toBe(false);
+    expect(spy.mock.calls[0][0].review).toBeNull();
     const done = parseTicks(res.text).find((t) => t.type === 'chapter_complete' && t.chapterId === 1);
     expect(done, `expected chapter_complete ch1, got ${res.text}`).toBeTruthy();
     expect(done!.reviewOutcome).toBe('failed');
   });
 
-  it('the chapter_complete line carries no reviewOutcome when finalize returns none', async () => {
+  it('plan 286 — a plain chapter_complete carries reviewOutcome none (review:null drops the chapter entry)', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/generation`)
       .send({ modelKey: 'gemini-2.5-flash', force: true, chapterIds: [1] });
     const line = completeLine(res.text, 1);
     expect(line, res.text).toBeTruthy();
-    expect(line).not.toContain('reviewOutcome');
+    expect(JSON.parse(line!.slice('data: '.length)).reviewOutcome).toBe('none');
     expect(line).not.toContain('reviewRecorded');
   });
 
@@ -2412,7 +2412,7 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
     }
   });
 
-  it('reviewChapter:true only on the chapter rendered with review — never a replay — and finalize still gets no review', async () => {
+  it('reviewChapter:true only on the chapter rendered with review — never a replay — and finalize gets the job review', async () => {
     const fs = await import('node:fs');
     const audioRoot = join(bookDir, 'audio');
     fs.mkdirSync(audioRoot, { recursive: true });
@@ -2432,7 +2432,7 @@ describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
     expect(ch2, `expected replayed chapter_complete ch2, got ${res.text}`).toBeTruthy();
     expect(ch1!.reviewChapter).toBe(true);
     expect(ch2).not.toHaveProperty('reviewChapter');
-    expect('review' in spy.mock.calls[0][0]).toBe(false);
+    expect(spy.mock.calls[0][0].review).toEqual(REVIEW);
   });
 
   it('the chapter_complete line carries no reviewChapter without review', async () => {

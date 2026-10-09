@@ -437,7 +437,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
     expect(finalizeSpy.mock.calls[0][0].reembeddedRows).toEqual([row]);
   });
 
-  it('plan 285 — passes no `review` to finalize (PR 1 dark) and threads reviewOutcome onto qa_repair_complete', async () => {
+  it('plan 286 — passes review:null to finalize and threads reviewOutcome onto qa_repair_complete', async () => {
     synthesiseChapterMock.mockReset();
     synthesiseChapterMock.mockImplementation(async () => ({ pcm: tone(0.5, 12000), sampleRate: SR }));
     const fin = await import('../audio/finalize-chapter-write.js');
@@ -454,7 +454,7 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (fs-51 verdict persi
       .send({ dryRun: false, modelKey: 'kokoro-v1' });
 
     expect(spy).toHaveBeenCalledTimes(1);
-    expect('review' in spy.mock.calls[0][0]).toBe(false);
+    expect(spy.mock.calls[0][0].review).toBeNull();
     const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
     expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
     expect(done!.reviewOutcome).toBe('failed');

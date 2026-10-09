@@ -36,6 +36,7 @@ import { applyGainToPcm } from '../tts/gain-pcm.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import { synthesiseChapter, type CastCharacter } from '../tts/synthesise-chapter.js';
 import { loadCastIdHistory } from '../store/cast-id-history.js';
+import { buildCastResolver } from '../store/cast-resolve.js';
 import { resolveCharacterEngine } from '../tts/per-character-engine.js';
 import { resolveClonedRetargetEngine } from '../tts/clone-engines.js';
 import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
@@ -87,6 +88,12 @@ interface SpliceRequestBody {
   gainDb?: unknown;
   segmentIndices?: unknown;
   modelKey?: unknown;
+}
+
+/** Plan 286 (OD13) — the A/B review `triggeredBy` label for a splice,
+    keyed by the first name of the character the user acted on. */
+export function spliceTriggeredBy(mode: 'remix' | 'rerecord', name: string): string {
+  return `${mode === 'remix' ? 'Loudness fix' : 'Re-record'} (${name.split(' ')[0] || name})`;
 }
 
 /** Collapse a sorted list of segment indices into contiguous runs. */
@@ -227,6 +234,12 @@ chapterSpliceRouter.post(
        own doc comment). Passed through WHOLE (fix round 1), not just
        `.supersededBy`. */
     const castIdHistory = await loadCastIdHistory(bookDir);
+
+    /* Plan 286 (OD13) — the A/B review's displayed name, resolved through
+       the cast resolver so a superseded characterId still shows the live
+       character's name; falls back to the raw id when unresolved. */
+    const reviewName =
+      buildCastResolver(cast.characters, castIdHistory).resolve(characterId)?.character.name ?? characterId;
 
     /* M2 (#1972 follow-up) — resolve + validate a re-record against the
        CURRENT analysis BEFORE any side effect: displacing a concurrent
@@ -553,6 +566,8 @@ chapterSpliceRouter.post(
            would clear the whole chapter's row on the strength of a one-sentence
            repair. Fail-closed and deliberate — see plan 280's known limit 1. */
         castHistorySeq: segFile.castHistorySeq,
+        // Plan 286 — every splice is an A/B review candidate (OD13).
+        review: { characterId, triggeredBy: spliceTriggeredBy(mode, reviewName) },
       });
 
       send({

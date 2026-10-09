@@ -25,6 +25,7 @@ let audioRoot: string;
 let app: Express;
 let bookId: string;
 let decodeAudioToPcm: (b: Buffer, sr: number) => Promise<Buffer>;
+let spliceTriggeredBy: (mode: 'remix' | 'rerecord', name: string) => string;
 
 /** Constant-amplitude int16 mono PCM. */
 function tone(durationSec: number, amp: number): Buffer {
@@ -142,7 +143,8 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-splice-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const { chapterSpliceRouter } = await import('./chapter-splice.js');
+  const { chapterSpliceRouter, spliceTriggeredBy: fn } = await import('./chapter-splice.js');
+  spliceTriggeredBy = fn;
   const { makeBookId } = await import('../workspace/paths.js');
   const mp3 = await import('../tts/mp3.js');
   decodeAudioToPcm = mp3.decodeAudioToPcm;
@@ -278,7 +280,7 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
     expect(Array.from(call.resynthesizedIndices as Iterable<number>)).toEqual([]);
   });
 
-  it('plan 285 — passes no `review` to finalize (PR 1 dark) and threads reviewOutcome onto splice_complete', async () => {
+  it('plan 286 — passes the splice review to finalize and threads reviewOutcome onto splice_complete', async () => {
     const fin = await import('../audio/finalize-chapter-write.js');
     const real = (
       await vi.importActual<typeof import('../audio/finalize-chapter-write.js')>('../audio/finalize-chapter-write.js')
@@ -292,20 +294,25 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
       .send({ mode: 'remix', characterId: 'castor', gainDb: 3 });
 
     expect(spy).toHaveBeenCalledTimes(1);
-    expect('review' in spy.mock.calls[0][0]).toBe(false);
-    const done = parseSse(res.text).find((e) => e.type === 'splice_complete');
-    expect(done, `expected splice_complete, got ${res.text}`).toBeTruthy();
-    expect(done!.reviewOutcome).toBe('failed');
+    expect(spy.mock.calls[0][0].review).toEqual({ characterId: 'castor', triggeredBy: 'Loudness fix (Castor)' });
+    expect(parseSse(res.text).find((e) => e.type === 'splice_complete')!.reviewOutcome).toBe('failed');
   });
 
-  it('plan 285 — the splice_complete line carries no reviewOutcome when finalize returns none', async () => {
+  it('plan 286 — spliceTriggeredBy uses the first name', () => {
+    expect(spliceTriggeredBy('remix', 'Eliza Carrick')).toBe('Loudness fix (Eliza)');
+    expect(spliceTriggeredBy('rerecord', 'narrator')).toBe('Re-record (narrator)');
+  });
+
+  it('plan 286 — the splice_complete line always carries reviewOutcome: a splice records its review', async () => {
     const res = await request(app)
       .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
       .send({ mode: 'remix', characterId: 'castor', gainDb: 3 });
     const line = res.text.split('\n').find((l) => l.startsWith('data: ') && l.includes('"splice_complete"'));
     expect(line, res.text).toBeTruthy();
-    expect(line).not.toContain('reviewOutcome');
-    expect(line).not.toContain('reviewRecorded');
+    /* A splice always has live audio to preserve (this file's own remix test asserts the
+       .previous.mp3), so finalize records the entry. */
+    expect(JSON.parse(line!.slice('data: '.length)).reviewOutcome).toBe('recorded');
+    expect(line).not.toContain('reviewRecorded'); // the wire guard Task 7 kept
   });
 
   it('rejects a remix for a character with no segments', async () => {
