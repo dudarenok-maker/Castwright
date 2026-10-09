@@ -187,6 +187,7 @@ export function Layout() {
   const activeStreams = useAppSelectorShallow(selectActiveStreams);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
   const analysisSubstage = useAppSelector(selectAnalysisSubstage);
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog ?? null);
   const designSnapshot = useAppSelector((s) => s.castDesign.active);
   const exportsByBookId = useAppSelector((s) => s.exports.byBookId);
   const exportsLinger = useAppSelector((s) => s.exports.linger);
@@ -1749,6 +1750,7 @@ export function Layout() {
       : null,
     readiness: setupReadiness,
     onDiagnosisRefetch: refetchSetupDiagnosis,
+    analyzerCatalog,
   };
 
   /* fs-21 — boot-splash. Gates the first paint until the readiness probe

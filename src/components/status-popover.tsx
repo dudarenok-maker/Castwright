@@ -35,6 +35,7 @@ import {
 import { modelLabel } from '../lib/model-label';
 import { analyzerEngineName, type AnalysisEngine } from '../lib/model-id';
 import { formatSubstageDetail } from '../lib/substage-progress-text';
+import type { AnalyzerCatalog } from '../lib/types';
 import { useElapsed } from '../hooks/use-elapsed';
 import type { BlockerDiagnosis, SetupReadiness } from '../lib/api';
 import { BlockerFixAction } from './blocker-fix-action';
@@ -93,6 +94,9 @@ interface StatusPopoverProps {
       diagnosis blocks render. */
   readiness?: SetupReadiness | null;
   onDiagnosisRefetch?: () => void;
+  /** The analyzer model catalog, so an endpoint model id labels as
+      `<endpoint name> · <model>`. Optional — absent, ids fall back to their raw form. */
+  analyzerCatalog?: AnalyzerCatalog | null;
   onGoToExport: () => void;
 }
 
@@ -141,9 +145,11 @@ function SubstageTimer({
 function SubstageRow({
   analysisSubstage,
   fullWidth,
+  analyzerCatalog,
 }: {
   analysisSubstage: NonNullable<StatusPopoverProps['analysisSubstage']>;
   fullWidth: boolean;
+  analyzerCatalog: AnalyzerCatalog | null;
 }) {
   const substageDetailText = formatSubstageDetail(analysisSubstage);
   return (
@@ -163,7 +169,7 @@ function SubstageRow({
       {analysisSubstage.model && (
         <span data-testid="substage-engine-model" className="text-xs text-ink/50">
           {analyzerEngineName(analysisSubstage.engine)} ·{' '}
-          {modelLabel(analysisSubstage.model)}
+          {modelLabel(analysisSubstage.model, analyzerCatalog)}
         </span>
       )}
       <SubstageTimer state={analysisSubstage.activityState} since={analysisSubstage.activitySince} />
@@ -216,6 +222,7 @@ export function StatusPopover({
   onGoToDesign,
   readiness,
   onDiagnosisRefetch,
+  analyzerCatalog = null,
   onGoToExport,
 }: StatusPopoverProps) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
@@ -305,16 +312,22 @@ export function StatusPopover({
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-ink/30" />
                 <span className="tabular-nums">
-                  {modelLabel(analysis.model)}
+                  {modelLabel(analysis.model, analyzerCatalog)}
                 </span>
               </span>
             )}
-            {analysisSubstage && <SubstageRow analysisSubstage={analysisSubstage} fullWidth />}
+            {analysisSubstage && (
+              <SubstageRow analysisSubstage={analysisSubstage} fullWidth analyzerCatalog={analyzerCatalog} />
+            )}
           </div>
         ) : (
           <>
             {analysisSubstage ? (
-              <SubstageRow analysisSubstage={analysisSubstage} fullWidth={false} />
+              <SubstageRow
+                analysisSubstage={analysisSubstage}
+                fullWidth={false}
+                analyzerCatalog={analyzerCatalog}
+              />
             ) : (
               <p className="text-sm text-ink/60">No analysis running.</p>
             )}

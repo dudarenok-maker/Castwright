@@ -351,7 +351,8 @@ function ThrottleRow({
     return () => clearInterval(id);
   }, []);
   const remainingSec = Math.max(0, Math.ceil((until - now) / 1000));
-  const modelLabelText = modelLabel(model);
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog ?? null);
+  const modelLabelText = modelLabel(model, analyzerCatalog);
   const reasonText = (() => {
     switch (reason) {
       case 'rpm':

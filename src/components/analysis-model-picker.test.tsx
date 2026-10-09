@@ -6,6 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within, fireEvent } from '@testing-library/react';
 import { AnalysisModelPicker } from './analysis-model-picker';
 import { MODEL_OPTION_GROUPS } from '../lib/models';
+import type { AnalyzerCatalog } from '../lib/types';
 
 describe('AnalysisModelPicker', () => {
   const defaultModel = MODEL_OPTION_GROUPS[0].models[0].id;
@@ -54,5 +55,15 @@ describe('AnalysisModelPicker', () => {
       <AnalysisModelPicker selectedModel={defaultModel} onChange={vi.fn()} disabled />,
     );
     expect(screen.getByRole('button', { name: /Analysis model/i })).toBeDisabled();
+  });
+
+  it('falls back to the catalog label for an endpoint model not in `groups` (#3084 W3c pr-review-gate finding 7) — dropping the `catalog` prop reddens this to the bare id', () => {
+    const catalog: AnalyzerCatalog = {
+      groups: [{ kind: 'endpoint', id: 'lab', label: 'Lab server', status: 'ok', models: [] }],
+    };
+    render(
+      <AnalysisModelPicker selectedModel="openai:lab::qwen3-30b" onChange={vi.fn()} catalog={catalog} />,
+    );
+    expect(screen.getByRole('button', { name: /Analysis model/i })).toHaveTextContent('Lab server · qwen3-30b');
   });
 });

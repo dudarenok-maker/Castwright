@@ -8,7 +8,7 @@ import { useDismissedVersion, shouldShowUpdateNotice } from '../lib/update-notic
 import { buildInfo } from '../lib/build-info';
 import { StatusPopover } from './status-popover';
 import { AdminPill } from './admin-pill';
-import type { Stage, View } from '../lib/types';
+import type { AnalyzerCatalog, Stage, View } from '../lib/types';
 import { useAppDispatch } from '../store';
 import { startLinearTour, startScreenTour } from '../store/tour-slice';
 import { screenForStage } from '../lib/tour-steps';
@@ -241,6 +241,9 @@ export interface StatusDetail {
       to the popover so it can render the four blocker diagnosis blocks. */
   readiness?: SetupReadiness | null;
   onDiagnosisRefetch?: () => void;
+  /** The analyzer model catalog, forwarded to the popover so endpoint model ids
+      label as `<endpoint name> · <model>`. */
+  analyzerCatalog?: AnalyzerCatalog | null;
 }
 
 interface TopBarProps {
@@ -910,6 +913,7 @@ function StatusPill({ summary, detail }: { summary: StatusSummary; detail: Statu
         analysisSubstage={detail.analysisSubstage}
         readiness={detail.readiness}
         onDiagnosisRefetch={detail.onDiagnosisRefetch}
+        analyzerCatalog={detail.analyzerCatalog}
         onOpenRevisions={() => {
           detail.onOpenRevisions();
           closeAll();

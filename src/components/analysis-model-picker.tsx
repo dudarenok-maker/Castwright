@@ -15,6 +15,7 @@ import {
 } from '../lib/models';
 import { SearchablePicker, type PickerGroup } from './searchable-picker';
 import { modelLabel } from '../lib/model-label';
+import type { AnalyzerCatalog } from '../lib/types';
 
 interface AnalysisModelPickerProps {
   selectedModel: string;
@@ -24,6 +25,13 @@ interface AnalysisModelPickerProps {
       groups for store-less callers; the upload view passes the dynamic
       curated ∪ live-Ollama-tag union so pulled tags are selectable. */
   groups?: typeof MODEL_OPTION_GROUPS;
+  /** The live `GET /api/analyzer/models` catalog, if the caller has one — only
+      consulted when `selectedModel` is missing from `groups` (an endpoint model
+      not in the curated/Ollama union), so an endpoint id falls back to its
+      catalog label instead of the bare id (#3084 W3c). Optional and omitted by
+      every store-less caller, which keeps the id fallback `modelLabel` already
+      had. */
+  catalog?: AnalyzerCatalog | null;
 }
 
 export function AnalysisModelPicker({
@@ -31,6 +39,7 @@ export function AnalysisModelPicker({
   onChange,
   disabled = false,
   groups: groupsProp = MODEL_OPTION_GROUPS,
+  catalog = null,
 }: AnalysisModelPickerProps) {
   const triggerRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
@@ -41,7 +50,7 @@ export function AnalysisModelPicker({
   const selectedOption = groupsProp.flatMap((g) => g.models).find(
     (m) => m.id === selectedModel,
   );
-  const triggerLabel = selectedOption?.label ?? modelLabel(selectedModel);
+  const triggerLabel = selectedOption?.label ?? modelLabel(selectedModel, catalog);
 
   const groups: PickerGroup<ModelOption>[] = groupsProp.map((g) => ({
     label: g.label,
