@@ -11,6 +11,10 @@ describe('shouldAutoTriggerProsody', () => {
     expect(shouldAutoTriggerProsody(mk({ b1: { progress: 0, label: 'x' } }), 'b1')).toBe(false));
   it('false when review runs for the book', () =>
     expect(shouldAutoTriggerProsody(mk({}, { b1: { progress: 0, label: 'x' } }), 'b1')).toBe(false));
+  it('false while a background run (#3435 open re-run) holds the book — no second run', () =>
+    expect(
+      shouldAutoTriggerProsody(mk({ b1: { progress: 0, label: 'x', background: true } }), 'b1'),
+    ).toBe(false));
   it('true when another book is busy', () =>
     expect(shouldAutoTriggerProsody(mk({ b2: { progress: 0, label: 'x' } }), 'b1')).toBe(true));
 });

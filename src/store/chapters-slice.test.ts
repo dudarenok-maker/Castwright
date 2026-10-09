@@ -33,6 +33,7 @@ const baseState = (chapters: Chapter[]): ChaptersState => ({
   renderedSpeakersByChapter: {},
   renderedTextByChapter: {},
   scoringProgress: {},
+  characterIdAliases: {},
 });
 
 const tick = (t: Partial<GenerationTick> & { type: GenerationTick['type'] }): GenerationTick =>
@@ -1112,6 +1113,157 @@ describe('chaptersSlice — hydrateFromBookState', () => {
   });
 });
 
+/* #3440 step 3 — book-state hands the slice `characterIdAliases` (raw
+   attribution id → canonical cast id, drifted ids only). SSE ticks still
+   carry the RAW id; `keyFor` maps it onto whichever key the chapter row
+   actually uses, so a drifted character's live highlight and voice-prepare
+   caption keep matching a canonical-keyed row while raw-keyed rows
+   (hydrateFromAnalysis) keep working unchanged. */
+describe('chaptersSlice — characterIdAliases raw→canonical tick mapping (#3440)', () => {
+  const cast = [
+    { id: 'the_torment', name: 'The Torment', role: 'main', color: 'magenta', lines: 0, scenes: 0 },
+    { id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator', lines: 0, scenes: 0 },
+  ] as never;
+
+  const chapters = [{ id: 17, title: 'Chapter 17', slug: '17-chapter-seventeen' }];
+
+  const bookState = (bookId: string, aliases?: Record<string, string>) =>
+    chaptersActions.hydrateFromBookState({
+      bookId,
+      chapters,
+      completedSlugs: [],
+      characters: cast,
+      chapterCharacters: { 17: ['the_torment', 'narrator'] },
+      ...(aliases ? { characterIdAliases: aliases } : {}),
+    });
+
+  const driftAliases = { 'the-torment': 'the_torment' };
+
+  it('progress tick with the raw id promotes the canonical key, demotes the prior speaker, creates no raw key', () => {
+    let state = chaptersSlice.reducer(baseState([]), bookState('book-A', driftAliases));
+    state = chaptersSlice.reducer(
+      state,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'progress', chapterId: 17, characterId: 'narrator' }),
+      ),
+    );
+    expect(state.chapters[0].characters.narrator).toBe('in_progress');
+    /* The server sends the raw attribution id on the tick
+       (server/src/routes/generation.ts:1678). */
+    state = chaptersSlice.reducer(
+      state,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'progress', chapterId: 17, characterId: 'the-torment' }),
+      ),
+    );
+    expect(state.chapters[0].characters.the_torment).toBe('in_progress');
+    expect(state.chapters[0].characters.narrator).toBe('queued');
+    expect('the-torment' in state.chapters[0].characters).toBe(false);
+  });
+
+  it('chapter_preparing_voice stores the canonical id for a drifted raw id', () => {
+    const hydrated = chaptersSlice.reducer(baseState([]), bookState('book-A', driftAliases));
+    const next = chaptersSlice.reducer(
+      hydrated,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'chapter_preparing_voice', chapterId: 17, characterId: 'the-torment' }),
+      ),
+    );
+    expect(next.chapters[0].preparingVoiceCharacterId).toBe('the_torment');
+  });
+
+  it('raw-keyed row seeded by hydrateFromAnalysis still highlights the raw id', () => {
+    /* hydrateFromAnalysis rebuilds rows from RAW sentence ids and clears the
+       alias map, so keyFor must fall through to the raw id. */
+    let state = chaptersSlice.reducer(baseState([]), bookState('book-A', driftAliases));
+    state = chaptersSlice.reducer(
+      state,
+      chaptersActions.hydrateFromAnalysis({
+        bookId: 'book-A',
+        manuscriptId: 'm',
+        title: 'Bonus',
+        phaseTimings: [],
+        characters: [] as never,
+        chapters: [
+          {
+            id: 17,
+            title: 'Chapter 17',
+            duration: '00:00',
+            state: 'in_progress',
+            progress: 0.1,
+            characters: {},
+          },
+        ],
+        sentences: [
+          { id: 1, chapterId: 17, characterId: 'the-torment', text: 'a' },
+          { id: 2, chapterId: 17, characterId: 'narrator', text: 'b' },
+        ] as never,
+        libraryMatches: [],
+      }),
+    );
+    expect(state.characterIdAliases).toEqual({});
+    expect(state.chapters[0].characters).toEqual({ 'the-torment': 'queued', narrator: 'queued' });
+    const next = chaptersSlice.reducer(
+      state,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'progress', chapterId: 17, characterId: 'the-torment' }),
+      ),
+    );
+    expect(next.chapters[0].characters['the-torment']).toBe('in_progress');
+    expect('the_torment' in next.chapters[0].characters).toBe(false);
+  });
+
+  it('switching books clears the alias map (hydrate without the field → empty)', () => {
+    const bookA = chaptersSlice.reducer(baseState([]), bookState('book-A', driftAliases));
+    expect(bookA.characterIdAliases).toEqual(driftAliases);
+    const bookB = chaptersSlice.reducer(bookA, bookState('book-B'));
+    expect(bookB.characterIdAliases).toEqual({});
+    expect(bookB.currentBookId).toBe('book-B');
+  });
+
+  /* mergeSubsetAnalysis rebuilds a re-analyzed chapter's `characters` map
+     from the subset response's RAW sentence ids. The Generate view's
+     aliasedSentences memo (generation.tsx:804) always rewrites sentences to
+     their canonical id regardless of which key the chapter row uses, so a
+     row left keyed raw here would silently lose that character's line count
+     and drop out of the Fix-audio modal's candidate list after a re-analyze
+     or un-exclude, even though the pre-rework row was keyed canonical.
+
+     The initial hydrate seeds chapter 17 with ONLY `narrator` (not
+     `the_torment`), so `the_torment` is a NEW speaker introduced solely by
+     this merge — a no-op reducer would leave the row at `{ narrator:
+     'queued' }` and fail the assertion below, rather than coincidentally
+     matching because the pre-existing row already had the right keys. */
+  it('mergeSubsetAnalysis canonicalises the raw speaker id, keeping the row keyed consistently with hydrateFromBookState', () => {
+    const state = chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.hydrateFromBookState({
+        bookId: 'book-A',
+        chapters,
+        completedSlugs: [],
+        characters: cast,
+        chapterCharacters: { 17: ['narrator'] },
+        characterIdAliases: driftAliases,
+      }),
+    );
+    expect(state.chapters[0].characters).toEqual({ narrator: 'queued' });
+    const next = chaptersSlice.reducer(
+      state,
+      chaptersActions.mergeSubsetAnalysis({
+        response: {
+          sentences: [
+            { id: 1, chapterId: 17, characterId: 'the-torment', text: 'a' },
+            { id: 2, chapterId: 17, characterId: 'narrator', text: 'b' },
+          ],
+        } as never,
+        chapterIds: [17],
+      }),
+    );
+    expect(next.chapters[0].characters).toEqual({ the_torment: 'queued', narrator: 'queued' });
+    expect('the-torment' in next.chapters[0].characters).toBe(false);
+  });
+});
+
 describe('chaptersSlice — misc reducers', () => {
   it('requestStreamHalt is a no-op on slice state (the middleware reacts to the action)', () => {
     /* Plan 102 Should #5 — the analyzer "stop the stream NOW" signal carries
@@ -1775,5 +1927,97 @@ describe('forwardRegenChapters', () => {
 
   it('includes the anchor itself when it is not excluded', () => {
     expect(forwardRegenChapters(chapters, 4).map((c) => c.id)).toEqual([4]);
+  });
+});
+
+describe('chaptersSlice — analysisGapById (#3435 decision F / O2)', () => {
+  const chapters = [
+    { id: 1, title: 'Chapter 1', slug: '01-chapter-one' },
+    { id: 2, title: 'Chapter 2', slug: '02-chapter-two' },
+    { id: 3, title: 'Chapter 3', slug: '03-chapter-three', excluded: true },
+  ];
+  const hydrate = (analysis?: {
+    unattributedChapterIds?: number[];
+    failedChapterErrors?: Record<string, { message: string }>;
+  }) =>
+    chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters,
+        completedSlugs: [],
+        characters: [],
+        analysis,
+      }),
+    );
+
+  it("the book-state hydrate carries unattributedChapterIds and failedChapterErrors; a record's message wins", () => {
+    const next = hydrate({
+      unattributedChapterIds: [2],
+      failedChapterErrors: { '1': { message: 'Attribution broke.' }, '2': { message: 'Timed out.' } },
+    });
+    expect(next.analysisGapById).toEqual({
+      1: { message: 'Attribution broke.' },
+      2: { message: 'Timed out.' },
+    });
+  });
+
+  it("an unattributed chapter with no record reads \"Analysis didn't finish for this chapter.\"; an excluded chapter gets no entry", () => {
+    const next = hydrate({
+      unattributedChapterIds: [2],
+      failedChapterErrors: { '3': { message: 'Excluded and failed.' } },
+    });
+    expect(next.analysisGapById).toEqual({ 2: { message: "Analysis didn't finish for this chapter." } });
+  });
+
+  it('a hydrate with no analysis leaves the map empty', () => {
+    expect(hydrate(undefined).analysisGapById).toEqual({});
+  });
+
+  it('setAnalysisGap sets an entry; clearAnalysisGap removes it', () => {
+    const set = chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.setAnalysisGap({ chapterId: 4, message: 'It failed.' }),
+    );
+    expect(set.analysisGapById).toEqual({ 4: { message: 'It failed.' } });
+    const cleared = chaptersSlice.reducer(set, chaptersActions.clearAnalysisGap(4));
+    expect(cleared.analysisGapById).toEqual({});
+    /* Clearing an absent entry is a no-op. */
+    expect(chaptersSlice.reducer(baseState([]), chaptersActions.clearAnalysisGap(9)).analysisGapById ?? {}).toEqual({});
+  });
+
+  /* #3435 final review I1 — after a main `result` the Generate view's gaps come
+     from the server: a result can still carry a flagged chapter (decision B:
+     an attribution-collapse record on a chapter with a take), so the result
+     itself clears nothing, and the Confirm route's book-state re-read replaces
+     the map. */
+  it('a main analysis result leaves the gaps for the book-state re-read', () => {
+    const st = chaptersSlice.reducer(baseState([]), chaptersActions.setAnalysisGap({ chapterId: 2, message: 'Gap 2.' }));
+    const next = chaptersSlice.reducer(
+      st,
+      chaptersActions.hydrateFromAnalysis({
+        bookId: 'b',
+        manuscriptId: 'm',
+        title: 'T',
+        phaseTimings: [],
+        characters: [],
+        chapters: [{ id: 2, title: 'Chapter 2', duration: '00:00', state: 'queued', progress: 0, characters: {} }],
+        sentences: [],
+      } as never),
+    );
+    expect(next.analysisGapById).toEqual({ 2: { message: 'Gap 2.' } });
+  });
+
+  it('setAnalysisGapsFromBookState: a gap backed by an attribution-collapse record survives; a current, unflagged chapter clears', () => {
+    let st = chaptersSlice.reducer(baseState([]), chaptersActions.setAnalysisGap({ chapterId: 1, message: 'Old 1.' }));
+    st = chaptersSlice.reducer(st, chaptersActions.setAnalysisGap({ chapterId: 2, message: 'Old 2.' }));
+    const next = chaptersSlice.reducer(
+      st,
+      chaptersActions.setAnalysisGapsFromBookState({
+        chapters: [{ id: 1 }, { id: 2 }],
+        analysis: { failedChapterErrors: { '2': { message: 'Speaker attribution collapsed.' } } },
+      }),
+    );
+    expect(next.analysisGapById).toEqual({ 2: { message: 'Speaker attribution collapsed.' } });
   });
 });

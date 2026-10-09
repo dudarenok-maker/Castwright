@@ -8,12 +8,18 @@
    Scope comes from the store (ui.stage.currentChapterId + manuscript.sentences),
    as bookId already does — so manuscript.tsx needs no new props. Both scopes
    share one AbortController + the bookId-keyed prosody substage lock, so only
-   one runs at a time. Per-chapter is manual only and never writes the
-   prosodyAnnotated watermark (that stays the layout.tsx auto-trigger's job). */
+   one runs at a time. Per-chapter is manual only; neither scope ever writes
+   the prosodyAnnotated watermark true (that stays the layout.tsx
+   auto-trigger's job), and it does not write false as a run starts. A run of
+   either scope that skipped lines writes it false, which is what makes the
+   layout re-run the book on its next open (#3435). */
 
 import { useEffect, useRef, useState } from 'react';
-import { useAppDispatch, useAppSelector } from '../store';
-import { DetectEmotionsError, DetectInstructError } from '../lib/api';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
+import { api, DetectEmotionsError, DetectInstructError } from '../lib/api';
+import { notificationsActions } from '../store/notifications-slice';
 import {
   runProsodyPasses,
   buildProsodyProgressPayload,
@@ -29,6 +35,7 @@ type Phase = 'idle' | 'confirm' | 'running';
 
 export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean }) {
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const stage = useAppSelector(
     (s) => s.ui?.stage as { bookId?: string; currentChapterId?: number | null } | undefined,
   );
@@ -48,6 +55,11 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   const abortRef = useRef<AbortController | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const busy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
+  /* #3435 — the slices hold the stage's book. While its read is slow or
+     failing they still hold the previous book, whose sentences the Manuscript
+     view shows under this one: a run bound then would write that book's
+     sentences and save them into this book. */
+  const holdsBook = useAppSelector((s) => bookId != null && s.manuscript.bookId === bookId);
 
   // Close the ⌄ menu on an outside click or Escape (mirrors the Review Script menu).
   useEffect(() => {
@@ -69,6 +81,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   if (!bookId) return null;
 
   const run = async (scope: { chapterId?: number }) => {
+    if (store.getState().manuscript.bookId !== bookId) return; // #3435 — see holdsBook
     setMenuOpen(false);
     setPhase('running');
     setProgress(0);
@@ -78,11 +91,21 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
     const controller = new AbortController();
     abortRef.current = controller;
     dispatch(prosodyActions.setActive({ bookId, progress: 0, label: 'Detecting emotions' }));
+    /* #3435 — the run is not aborted when the user leaves the book, and the
+       server never writes these annotations: they land in the manuscript slice,
+       which holds ONE book and is saved into the book the stage names. Bind the
+       gate to the book at click time and apply only while the slices hold it
+       AND the stage names it (same gate as the layout's auto-trigger). */
+    const book = { bookId, manuscriptId: store.getState().manuscript.manuscriptId as string };
     try {
-      const { totalAnnotations, totalChapters } = await runProsodyPasses(bookId, {
+      const { totalAnnotations, totalChapters, skipped } = await runProsodyPasses(bookId, {
         dispatch,
         signal: controller.signal,
         chapterId: scope.chapterId,
+        canApply: () => {
+          const s = store.getState();
+          return selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true;
+        },
         onProgress: (fraction, d) => {
           setProgress(fraction);
           setDetail(d);
@@ -92,11 +115,30 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
       });
       const lines = `${totalAnnotations} line${totalAnnotations === 1 ? '' : 's'}`;
-      setStatus(
-        scope.chapterId != null
-          ? `Tagged ${lines} in this chapter.`
-          : `Tagged ${lines} across ${totalChapters} chapter${totalChapters === 1 ? '' : 's'}.`,
-      );
+      if (skipped > 0) {
+        /* #3435 (PR #3505 review passes 6-7) — mark the book unfinished
+           (false, not cleared: the layout re-runs only an explicit false) so
+           it is re-run (fill-only) the next time it is opened, and say so
+           in a toast: leaving the book unmounts this button, so a status line
+           here would never be seen. */
+        void api
+          .putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: false } })
+          .catch(() => {});
+        dispatch(
+          notificationsActions.pushToast({
+            kind: 'warn',
+            message:
+              'Some detected emotions were not saved because you left the book — they will be filled in the next time you open it.',
+          }),
+        );
+        setStatus(null);
+      } else {
+        setStatus(
+          scope.chapterId != null
+            ? `Tagged ${lines} in this chapter.`
+            : `Tagged ${lines} across ${totalChapters} chapter${totalChapters === 1 ? '' : 's'}.`,
+        );
+      }
       setPhase('idle');
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
@@ -134,8 +176,8 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   }
 
   const primaryDisabled =
-    disabled || busy || currentChapterId == null || !currentChapterHasSentences;
-  const wholeBookDisabled = disabled || busy;
+    disabled || busy || !holdsBook || currentChapterId == null || !currentChapterHasSentences;
+  const wholeBookDisabled = disabled || busy || !holdsBook;
 
   return (
     <div ref={menuRef} className="relative shrink-0 inline-flex items-stretch">

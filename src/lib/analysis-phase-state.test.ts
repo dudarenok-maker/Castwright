@@ -270,6 +270,10 @@ describe('isNotAFailureHaltCode', () => {
     expect(isNotAFailureHaltCode('stage1_shrink_refused')).toBe(true);
   });
 
+  it('returns true for resume_required (#3435)', () => {
+    expect(isNotAFailureHaltCode('resume_required')).toBe(true);
+  });
+
   it('returns false for a failure halt code like attribution_drift', () => {
     expect(isNotAFailureHaltCode('attribution_drift')).toBe(false);
   });

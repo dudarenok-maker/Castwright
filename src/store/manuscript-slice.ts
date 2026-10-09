@@ -115,6 +115,10 @@ export const manuscriptSlice = createSlice({
     uploadComplete: (s, a: PayloadAction<UploadResponse>) => {
       const { manuscriptId, title, format, wordCount, sourceText } = a.payload;
       s.manuscriptId = manuscriptId;
+      /* The upload's manuscript must never sit beside the previous book's id
+         (the layout/route "already loaded" checks would pass on the mix).
+         hydrateFromAnalysis stamps the new book's id once it lands. */
+      s.bookId = null;
       s.title = title;
       s.format = format;
       s.wordCount = wordCount;

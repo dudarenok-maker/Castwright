@@ -72,6 +72,8 @@ function buildFixture({ registerText, liveViewHtml }) {
   // from publish-token.mjs (for --stamped-since) — a local dep this fixture's
   // relative layout has to mirror, same as git-env.mjs and is-main-module.mjs.
   cpSync(join(SCRIPTS_DIR, 'publish-token.mjs'), join(root, 'scripts', 'publish-token.mjs'));
+  // #3529: and gh.mjs, the gh chokepoint its retirement-record check imports.
+  cpSync(join(SCRIPTS_DIR, 'gh.mjs'), join(root, 'scripts', 'gh.mjs'));
   cpSync(join(SCRIPTS_DIR, 'lib', 'is-main-module.mjs'), join(root, 'scripts', 'lib', 'is-main-module.mjs'));
   writeFileSync(join(root, 'docs', 'testing', 'onbox-acceptance-register.md'), registerText, 'utf8');
   writeFileSync(

@@ -19,6 +19,9 @@ export interface SetActiveSubstagePayload {
   chapterIndex?: number;
   totalChapters?: number;
   estRemainingMs?: number;
+  /** #3435 — background work (the layout's open-book re-run): shown, but it
+      never makes the book busy. See analysis-substage-selectors. */
+  background?: boolean;
 }
 
 export interface UpdateSubstageProgressPayload {
@@ -43,13 +46,14 @@ export function setActiveSubstage(
   state: Record<string, SubstageEntry>,
   payload: SetActiveSubstagePayload,
 ): void {
-  const { bookId, progress, label, chapterIndex, totalChapters, estRemainingMs } = payload;
+  const { bookId, progress, label, chapterIndex, totalChapters, estRemainingMs, background } = payload;
   state[bookId] = {
     progress: Math.round(progress * 100),
     label,
     ...(chapterIndex !== undefined ? { chapterIndex } : {}),
     ...(totalChapters !== undefined ? { totalChapters } : {}),
     ...(estRemainingMs !== undefined ? { estRemainingMs } : {}),
+    ...(background ? { background: true } : {}),
   };
 }
 

@@ -50,7 +50,7 @@ vi.mock('../workspace/scan.js', async (importOriginal) => {
   };
 });
 
-const { analysisRouter, __testRegisterJobForTest, endJob } = await import('./analysis.js');
+const { analysisRouter, __testRegisterJobForTest, endJob, snapshotInFlightAnalysis } = await import('./analysis.js');
 type AnalysisJob = import('./analysis.js').AnalysisJob;
 
 afterEach(() => {
@@ -254,6 +254,35 @@ describe('analysis POSTs — digest read on the new-job path only, live job re-c
     expect(joined).toBe(false);
     expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'subset_in_progress' }));
     expect(phase0Selections()).toBe(0);
+  });
+
+  /* #3435 decision A's late check sits after the digest read, in the synchronous block that
+     registers: a conflicting writer registered while the POST waits refuses it. The other
+     kind of job is the conflicting writer — a subset for the main POST, a main for the subset. */
+  it.each([
+    { route: 'main' as const, other: 'subset' as const, code: 'subset_analysis_running' },
+    { route: 'subset' as const, other: 'main' as const, code: 'main_analysis_running' },
+  ])('$route: a $other job registered during the digest read refuses the POST with $code; no job is registered (#3435)', async ({ route, other, code }) => {
+    seedManuscript();
+    selectOverride.fn = stubSelection;
+    const digestRead = deferred<string | undefined>();
+    digest.answer = () => digestRead.promise;
+    const post = ROUTES.find((r) => r.route === route)!.post;
+    const done = post(makeApp()).then((r) => r);
+    /* Past the early check and the first live-job check (no job existed), parked on the read. */
+    await vi.waitFor(() => expect(digest.models).toHaveLength(1));
+    const writer = { ...liveJob(other), ended: false, halting: false, left: false, liveWork: 0 } as unknown as AnalysisJob;
+    __testRegisterJobForTest(writer);
+    try {
+      digestRead.resolve('sha256:q');
+      const events = parseSse((await done).text);
+      expect(events.filter((e) => e.kind === 'error')).toEqual([expect.objectContaining({ kind: 'error', code })]);
+      expect(snapshotInFlightAnalysis('m_preflight')?.kind).toBe(other);
+      expect(writer.subscribers.size).toBe(0);
+      expect(phase0Selections()).toBe(0);
+    } finally {
+      endJob(writer, { kind: 'error', code: 'cancelled', message: 'test over' });
+    }
   });
 
   const rejectedAtOff = {
