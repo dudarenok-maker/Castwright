@@ -3,7 +3,7 @@
    runtime `expect`s exist so vitest also reports each case. */
 import { describe, it, expect, expectTypeOf } from 'vitest';
 import type { components, paths } from './api-types';
-import type { SpliceTick, QaRepairTick } from './api';
+import type { SpliceTick, QaRepairTick, __MockApi, __RealApi } from './api';
 import type { ReviewRequest } from './types';
 
 type S = components['schemas'];
@@ -89,5 +89,10 @@ describe('openapi: plan 286 PR 2', () => {
 
   it('plan 286 (OD20) — Revision carries an optional recovered flag', () => {
     expectTypeOf<S['Revision']['recovered']>().toEqualTypeOf<boolean | undefined>();
+  });
+
+  it('plan 286 — mock and real revisions functions have identical signatures', () => {
+    type K = 'acceptRevision' | 'rejectRevision' | 'dismissDrift' | 'restorePreviousUnrecorded';
+    expectTypeOf<Pick<__MockApi, K>>().toEqualTypeOf<Pick<__RealApi, K>>();
   });
 });

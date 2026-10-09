@@ -65,8 +65,10 @@ import type {
   AnalyzerGpuSplitResponse,
   BookQaReport,
   ReviewRequest,
+  RevisionsState,
 } from './types';
 import type { components as ApiComponents, paths as ApiPaths } from './api-types';
+import { revisionOpFailureFrom } from './revision-op-failure';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
@@ -95,6 +97,12 @@ import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
 import { MOCK_VOICE_LIBRARY_ENTRIES, MOCK_VOICE_LIBRARY_USAGE } from '../mocks/voice-library';
 import { MATCH_FACTORS } from '../data/match-factors';
 import { PENDING_REVISIONS } from '../data/revisions';
+import {
+  mockAcceptRevision,
+  mockRejectRevision,
+  mockDismissDrift,
+  mockRestoreUnrecorded,
+} from '../mocks/mock-revisions';
 import { VOICE_DRIFT_EVENTS } from '../data/drift';
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import { MOCK_QA_REPORT } from '../data/qa-report';
@@ -10569,6 +10577,70 @@ const real = {
       throw new Error(`Reject revision failed (${res.status}): ${detail || res.statusText}`);
     }
   },
+  /* Plan 286 — server-owned revisions operations (plan 285 routes). */
+  acceptRevision: async ({
+    bookId,
+    revisionId,
+    selection,
+  }: {
+    bookId: string;
+    revisionId: string;
+    selection?: Record<number, 'A' | 'B'>;
+  }): Promise<RevisionsState> => {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/revisions/${encodeURIComponent(revisionId)}/accept`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selection ? { selection } : {}),
+      },
+    );
+    if (!res.ok) throw await revisionOpFailureFrom(res, `Accept failed (${res.status}).`);
+    return res.json();
+  },
+  rejectRevision: async ({
+    bookId,
+    revisionId,
+  }: {
+    bookId: string;
+    revisionId: string;
+  }): Promise<RevisionsState> => {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/revisions/${encodeURIComponent(revisionId)}/reject`,
+      { method: 'POST' },
+    );
+    if (!res.ok) throw await revisionOpFailureFrom(res, `Reject failed (${res.status}).`);
+    return res.json();
+  },
+  dismissDrift: async ({
+    bookId,
+    driftId,
+  }: {
+    bookId: string;
+    driftId: string;
+  }): Promise<RevisionsState> => {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/drift/${encodeURIComponent(driftId)}/dismiss`,
+      { method: 'POST' },
+    );
+    if (!res.ok) throw await revisionOpFailureFrom(res, `Dismiss failed (${res.status}).`);
+    return res.json();
+  },
+  restorePreviousUnrecorded: async ({
+    bookId,
+    chapterId,
+  }: {
+    bookId: string;
+    chapterId: number;
+  }): Promise<'restored' | 'none'> => {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous/restore-unrecorded`,
+      { method: 'POST' },
+    );
+    if (res.status === 204) return 'restored';
+    if (res.status === 404) return 'none';
+    throw await revisionOpFailureFrom(res, `Restore failed (${res.status}).`);
+  },
   pollRevisions: async ({ bookId }: PollArgs): Promise<RevisionsResponse> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/revisions`);
     if (!res.ok) {
@@ -10830,6 +10902,48 @@ const mock = {
   getChapterAudioPrevious: mockGetChapterAudioPrevious,
   acceptChapterRevision: mockAcceptChapterRevision,
   rejectChapterRevision: mockRejectChapterRevision,
+  acceptRevision: async ({
+    bookId,
+    revisionId,
+    selection,
+  }: {
+    bookId: string;
+    revisionId: string;
+    selection?: Record<number, 'A' | 'B'>;
+  }): Promise<RevisionsState> => {
+    await wait(100);
+    return mockAcceptRevision(bookId, revisionId, selection);
+  },
+  rejectRevision: async ({
+    bookId,
+    revisionId,
+  }: {
+    bookId: string;
+    revisionId: string;
+  }): Promise<RevisionsState> => {
+    await wait(100);
+    return mockRejectRevision(bookId, revisionId);
+  },
+  dismissDrift: async ({
+    bookId,
+    driftId,
+  }: {
+    bookId: string;
+    driftId: string;
+  }): Promise<RevisionsState> => {
+    await wait(60);
+    return mockDismissDrift(bookId, driftId);
+  },
+  restorePreviousUnrecorded: async ({
+    bookId,
+    chapterId,
+  }: {
+    bookId: string;
+    chapterId: number;
+  }): Promise<'restored' | 'none'> => {
+    await wait(60);
+    return mockRestoreUnrecorded(bookId, chapterId);
+  },
   pollRevisions: mockPollRevisions,
   /* Plan 83 — mock fans out via the existing single-book mock for each id.
      Real server runs the per-book helper in parallel; the mock can do the
@@ -10985,6 +11099,9 @@ const mock = {
   cloneVoice: mockCloneVoice,
   revokeVoiceLibraryEntry: mockRevokeVoiceLibraryEntry,
 };
+
+export type __MockApi = typeof mock;
+export type __RealApi = typeof real;
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
    record type from the same `../lib/api` surface as the other admin types. */
