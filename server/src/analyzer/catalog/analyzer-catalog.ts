@@ -30,9 +30,8 @@ import {
   adaptSchemaForOllama,
   adaptSchemaForOpenAI,
   structuredOutputLabel,
-  type AdaptedSchema,
 } from '../runner/schema-adapters.js';
-import type { StructuredOutputMode } from '../runner/transport.js';
+import type { AdaptedSchema, StructuredOutputMode } from '../runner/transport.js';
 
 export type CatalogGroupKind = 'ollama' | 'gemini' | 'endpoint';
 

@@ -19,6 +19,14 @@ export type StructuredOutputRequest =
   | { mode: 'json' }
   | { mode: 'off' };
 
+/** A provider-adapted draft-07 schema plus the paths of any constraints it
+    could not carry (schema-adapters.ts, capabilities.ts — lifted here so
+    neither has to import the other and form a cycle). */
+export interface AdaptedSchema {
+  schema: Record<string, unknown>;
+  dropped: string[];
+}
+
 export interface TransportRequest {
   system: string;
   messages: ChatMessage[];

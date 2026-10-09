@@ -4,8 +4,7 @@
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
 import type { UserSettings } from '../workspace/user-settings.js';
-import type { ChatTransport, StructuredOutputMode, TransportRequest, TransportResult } from './runner/transport.js';
-import type { AdaptedSchema } from './runner/schema-adapters.js';
+import type { AdaptedSchema, ChatTransport, StructuredOutputMode, TransportRequest, TransportResult } from './runner/transport.js';
 import { jsonParseCandidates, stripThink } from './runner/parse.js';
 import { AnalysisAbortedError, AnalyzerCapabilityRejectedError, AnalyzerHttpError, type TransportKind } from './errors.js';
 import { estimateInputTokens } from './runner/prompt.js';
