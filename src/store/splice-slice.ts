@@ -42,9 +42,13 @@ export interface SpliceBatch {
 
 export interface SpliceState {
   batches: Record<string, SpliceBatch>;
+  /* Plan 286 Task 20 — the chapter currently mid-splice per book, tracked so
+     the UI can show a rendering state without the runner writing to the
+     revisions cache (that's server-owned now). */
+  inFlightChapters: Array<{ bookId: string; chapterId: number }>;
 }
 
-const initialState: SpliceState = { batches: {} };
+const initialState: SpliceState = { batches: {}, inFlightChapters: [] };
 
 export const spliceSlice = createSlice({
   name: 'splice',
@@ -83,6 +87,20 @@ export const spliceSlice = createSlice({
     clearBatch: (s, a: PayloadAction<{ id: string }>) => {
       delete s.batches[a.payload.id];
     },
+    /** A chapter's splice SSE call has started. Added if not already present. */
+    chapterStarted: (s, a: PayloadAction<{ bookId: string; chapterId: number }>) => {
+      const { bookId, chapterId } = a.payload;
+      if (!s.inFlightChapters.some((c) => c.bookId === bookId && c.chapterId === chapterId)) {
+        s.inFlightChapters.push({ bookId, chapterId });
+      }
+    },
+    /** A chapter's splice SSE call has settled (succeeded or failed). */
+    chapterSettled: (s, a: PayloadAction<{ bookId: string; chapterId: number }>) => {
+      const { bookId, chapterId } = a.payload;
+      s.inFlightChapters = s.inFlightChapters.filter(
+        (c) => !(c.bookId === bookId && c.chapterId === chapterId),
+      );
+    },
   },
 });
 
@@ -95,3 +113,11 @@ export const selectActiveSpliceBatch =
     Object.values(s.splice?.batches ?? {}).find(
       (b) => b.bookId === bookId && b.characterId === characterId && b.status === 'running',
     ) ?? null;
+
+/** Whether a chapter is currently mid-splice for a book. */
+export const selectChapterRendering = (
+  s: { splice: SpliceState },
+  bookId: string,
+  chapterId: number,
+): boolean =>
+  s.splice.inFlightChapters.some((c) => c.bookId === bookId && c.chapterId === chapterId);

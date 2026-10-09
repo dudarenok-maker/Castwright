@@ -1,16 +1,22 @@
 import type { Middleware, MiddlewareAPI } from '@reduxjs/toolkit';
 import { api, type SpliceTick } from '../lib/api';
 import { spliceActions, type SpliceBatchRequest } from './splice-slice';
-import { revisionsActions } from './revisions-slice';
+import { refetchActiveRevisions } from './revisions-thunks';
 import { chaptersActions } from './chapters-slice';
 import { notificationsActions } from './notifications-slice';
+import type { AppDispatch } from './index';
 
 /* fs-26 — drives a per-character splice batch in the background: one splice SSE
    per chapter, sequentially, so the work survives the Fix-audio modal closing.
-   Per chapter it enqueues a pending A/B revision, and on completion flips it
-   playable + refreshes the Listen row (duration + cache-bust). A best-effort
-   progress toast gives an at-a-glance global readout; the `splice` slice is the
-   durable source the modal reads while open. */
+   Plan 286 (#3400) — the client no longer writes pending revisions: the server
+   records them for every render, so a completed chapter just refetches the
+   active book's revisions from the server (skipped if the user has navigated
+   elsewhere). `splice.inFlightChapters` tracks which chapter is mid-splice so
+   the UI can show a rendering state without touching the revisions cache.
+   Chapter audio (duration + cache-bust) is still refreshed locally on
+   completion. A best-effort progress toast gives an at-a-glance global
+   readout; the `splice` slice is the durable source the modal reads while
+   open. */
 
 const controllers = new Map<string, AbortController>();
 
@@ -30,7 +36,7 @@ export function spliceRunnerMiddleware(): Middleware {
 }
 
 async function runBatch(mw: MiddlewareAPI, req: SpliceBatchRequest): Promise<void> {
-  const dispatch = mw.dispatch;
+  const dispatch = mw.dispatch as AppDispatch;
   const controller = new AbortController();
   controllers.set(req.id, controller);
 
@@ -52,95 +58,77 @@ async function runBatch(mw: MiddlewareAPI, req: SpliceBatchRequest): Promise<voi
 
   for (const chapterId of req.chapterIds) {
     if (controller.signal.aborted) break;
-    const revisionId = `splice-${req.bookId}-${chapterId}-${req.characterId}`;
-    /* Guarded on `revisions.bookId` (kept in lockstep with the active book by
-       revisions-scope-middleware), NOT `chapters.currentBookId`: `pending` is
-       a single list for whichever book `revisions` currently tracks
-       (persistence-middleware writes it to THAT book's revisions.json),
-       never keyed per-book. `chapters.currentBookId` only moves on a
-       successful per-book hydrate — never on navigation itself — so a splice
-       write guarded on it could still land in the wrong book's `pending`
-       between the user navigating away and the new book's chapters
-       finishing their hydrate (#3395 pass 2, N2). If the user has navigated
-       to a different book mid-batch, dispatching here would enqueue book A's
-       splice revision into book B's `pending` list and it would persist
-       there permanently (#3376 finding 2). */
-    if (mw.getState().revisions.bookId === req.bookId) {
-      dispatch(
-        revisionsActions.enqueuePending({
-          id: revisionId,
-          chapterId,
-          characterId: req.characterId,
-          playable: false,
-          hasPreviousAudio: true,
-          triggeredBy:
-            req.mode === 'remix' ? `Loudness fix (${firstName})` : `Re-record (${firstName})`,
-          segments: [],
-        }),
-      );
-    }
 
     let ok = false;
-    await api.streamSplice({
-      bookId: req.bookId,
-      chapterId,
-      mode: req.mode,
-      characterId: req.characterId,
-      ...(req.mode === 'remix'
-        ? { gainDb: req.gainDb }
-        : {
-            modelKey: req.modelKey,
-            ...(req.segmentIndices ? { segmentIndices: req.segmentIndices } : {}),
-          }),
-      signal: controller.signal,
-      onTick: (ev: SpliceTick) => {
-        if (ev.type === 'warning' && ev.message) {
-          /* Non-fatal run-setup advisory (today: a non-English book's reused
-             designed voices were cleared because their baked manifest language
-             differs from the book's). The splice still proceeds, but the user
-             MUST see it — a silently cleared voice re-records the line in a
-             voice the user never chose. Same shape and dedupe strategy as
-             generation-stream-runner's `warning` arm; deduped by code so a
-             multi-chapter batch can't stack one toast per chapter. */
-          dispatch(
-            notificationsActions.pushToast({
-              kind: 'warn',
-              message: ev.message,
-              dedupeKey: `splice-warning:${ev.code ?? ev.message}`,
+    dispatch(spliceActions.chapterStarted({ bookId: req.bookId, chapterId }));
+    try {
+      await api.streamSplice({
+        bookId: req.bookId,
+        chapterId,
+        mode: req.mode,
+        characterId: req.characterId,
+        ...(req.mode === 'remix'
+          ? { gainDb: req.gainDb }
+          : {
+              modelKey: req.modelKey,
+              ...(req.segmentIndices ? { segmentIndices: req.segmentIndices } : {}),
             }),
-          );
-        }
-        if (ev.type === 'splice_complete') {
-          ok = true;
-          const state = mw.getState();
-          /* `markRevisionPlayable` is guarded on `revisions.bookId`, not
-             `chapters.currentBookId` — see the enqueue guard above for why
-             (#3395 pass 2, N2): `pending` belongs to whichever book
-             `revisions` currently tracks, which can diverge from chapters'
-             hydrate-gated `currentBookId` mid-navigation. Flipping it here
-             unguarded would mark a same-numbered revision playable in a book
-             the splice never touched (#3376 finding 2). */
-          if (state.revisions.bookId === req.bookId) {
-            dispatch(revisionsActions.markRevisionPlayable({ chapterId }));
-          }
-          /* Refresh the Listen row: re-record changes duration, a gain remix
-             doesn't — the renderedAt stamp is what cache-busts the audio. Guarded on
-             `currentBookId`, matching qa-repair-runner-middleware: `chapters` is keyed by
-             bare `chapterId` alone (ids repeat 1..N across every book), so a splice that
-             finishes after the user has navigated to a DIFFERENT book would otherwise
-             stamp that other book's same-numbered chapter with this splice's duration. */
-          if (state.chapters.currentBookId === req.bookId) {
+        signal: controller.signal,
+        onTick: (ev: SpliceTick) => {
+          if (ev.type === 'warning' && ev.message) {
+            /* Non-fatal run-setup advisory (today: a non-English book's reused
+               designed voices were cleared because their baked manifest language
+               differs from the book's). The splice still proceeds, but the user
+               MUST see it — a silently cleared voice re-records the line in a
+               voice the user never chose. Same shape and dedupe strategy as
+               generation-stream-runner's `warning` arm; deduped by code so a
+               multi-chapter batch can't stack one toast per chapter. */
             dispatch(
-              chaptersActions.markChapterAudioUpdated({
-                chapterId,
-                durationSec: ev.durationSec,
-                renderedAt: String(Date.now()),
+              notificationsActions.pushToast({
+                kind: 'warn',
+                message: ev.message,
+                dedupeKey: `splice-warning:${ev.code ?? ev.message}`,
               }),
             );
           }
-        }
-      },
-    });
+          if (ev.type === 'splice_complete') {
+            ok = true;
+            /* The server recorded the pending entry for this render; refetch
+               the active book's revisions from it instead of writing locally.
+               The thunk itself skips a non-active book, so no guard is needed
+               here. */
+            void dispatch(refetchActiveRevisions(req.bookId));
+            if (ev.reviewOutcome === 'failed') {
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'warn',
+                  message: "The new take is live, but its A/B review couldn't be saved",
+                  dedupeKey: `splice-review-unsaved-${req.bookId}`,
+                }),
+              );
+            }
+            const state = mw.getState();
+            /* Refresh the Listen row: re-record changes duration, a gain remix
+               doesn't — the renderedAt stamp is what cache-busts the audio. Guarded on
+               `currentBookId`, matching qa-repair-runner-middleware: `chapters` is keyed by
+               bare `chapterId` alone (ids repeat 1..N across every book), so a splice that
+               finishes after the user has navigated to a DIFFERENT book would otherwise
+               stamp that other book's same-numbered chapter with this splice's duration. */
+            if (state.chapters.currentBookId === req.bookId) {
+              dispatch(
+                chaptersActions.markChapterAudioUpdated({
+                  chapterId,
+                  durationSec: ev.durationSec,
+                  renderedAt: String(Date.now()),
+                }),
+              );
+            }
+          }
+        },
+      });
+    } finally {
+      dispatch(spliceActions.chapterSettled({ bookId: req.bookId, chapterId }));
+    }
 
     dispatch(spliceActions.recordChapterResult({ id: req.id, ok }));
     if (ok) succeeded += 1;
