@@ -92,7 +92,14 @@ describe('openapi: plan 286 PR 2', () => {
   });
 
   it('plan 286 — mock and real revisions functions have identical signatures', () => {
-    type K = 'acceptRevision' | 'rejectRevision' | 'dismissDrift' | 'restorePreviousUnrecorded';
+    type K =
+      | 'acceptRevision'
+      | 'rejectRevision'
+      | 'dismissDrift'
+      | 'restorePreviousUnrecorded'
+      | 'pollRevisions'
+      | 'pollRevisionsBulk'
+      | 'getChapterAudioPrevious';
     expectTypeOf<Pick<__MockApi, K>>().toEqualTypeOf<Pick<__RealApi, K>>();
   });
 });

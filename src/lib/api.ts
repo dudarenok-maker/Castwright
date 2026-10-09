@@ -102,6 +102,11 @@ import {
   mockRejectRevision,
   mockDismissDrift,
   mockRestoreUnrecorded,
+  getMockRevisions,
+  hasMockRevisions,
+  mockHasPrevious,
+  resetMockRevisions,
+  seedMockRevisions,
 } from '../mocks/mock-revisions';
 import { VOICE_DRIFT_EVENTS } from '../data/drift';
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
@@ -1054,15 +1059,7 @@ function buildSolwayBayMockState(): BookStateResponse {
        ANALYSIS_NORTHERN_STAR, so it goes through the normal
        hydrateFromBookState path rather than an empty manuscript. */
     manuscriptEdits: { sentences: initialSentences, mergedAwayKeys: [] },
-    /* #3376 — `pending` is client-owned, seeded only by this disk hydrate
-       (hydrateFromBookState), never by a poll. The e2e a/b-audition spec
-       (revision-diff.spec.ts) needs a pending revision on book-open to
-       reach the Status popover's "N revisions" button, so it has to live
-       here now rather than in mockPollRevisions' PENDING_REVISIONS, which
-       the poll paths no longer write into the slice. Mirrors the real
-       server's getBookState, which reads revisions.json's `pending`
-       straight off disk. */
-    revisions: { pending: PENDING_REVISIONS },
+    revisions: null,
     /* Every chapter is rendered (matches the library card's
        completedChapters: 18). hydrateFromBookState then flips each
        chapter row to state: 'done', which makes them appear as
@@ -1203,6 +1200,12 @@ function seedDefaultMockBookStates(): void {
   MOCK_BOOK_STATES.set('sb', buildSolwayBayMockState());
   MOCK_BOOK_STATES.set('ns', buildNorthernStarMockState());
   MOCK_BOOK_STATES.set('cc', buildCarricksCompassMockState());
+  resetMockRevisions();
+  seedMockRevisions('sb', {
+    state: { pending: [PENDING_REVISIONS[0]] },
+    previousChapterIds: [3],
+    liveChapterIds: SB_CHAPTERS.map((c) => c.id),
+  });
 }
 seedDefaultMockBookStates();
 
@@ -1302,10 +1305,14 @@ function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): Boo
    time — flipping the env in a test file is too late). */
 export async function mockGetBookState(bookId: string): Promise<BookStateResponse | null> {
   await wait(60);
-  if (DEMO_CAPTURE && HOLLOW_TIDE_BOOK_STATES.has(bookId)) {
-    return HOLLOW_TIDE_BOOK_STATES.get(bookId) ?? null;
+  const stored =
+    DEMO_CAPTURE && HOLLOW_TIDE_BOOK_STATES.has(bookId)
+      ? HOLLOW_TIDE_BOOK_STATES.get(bookId) ?? null
+      : MOCK_BOOK_STATES.get(bookId) ?? null;
+  if (stored && hasMockRevisions(bookId)) {
+    return { ...stored, revisions: getMockRevisions(bookId) };
   }
-  return MOCK_BOOK_STATES.get(bookId) ?? null;
+  return stored;
 }
 
 export async function mockPutBookState(bookId: string, req: PutStateRequest): Promise<void> {
@@ -1909,10 +1916,16 @@ async function mockGetChapterAudio({ bookId, chapterId, duration }: AudioArgs): 
   };
 }
 
-/* Previous (A) audio for the revision-diff a/b player. Mock mode always
-   resolves — the real backend 404s when no preserved pair exists. */
-async function mockGetChapterAudioPrevious({ duration }: AudioArgs): Promise<ChapterAudio> {
+/* Previous (A) audio for the revision-diff a/b player. Resolves only when
+   the mock store mirrors a `.previous` for this chapter (plan 286, D7) —
+   the real backend 404s (→ null) under the same condition. */
+async function mockGetChapterAudioPrevious({
+  bookId,
+  chapterId,
+  duration,
+}: AudioArgs): Promise<ChapterAudio | null> {
   await wait(120);
+  if (!mockHasPrevious(bookId, chapterId)) return null;
   const totalSec = parseDuration(duration || '10:00');
   return {
     url: stubAudioA,
@@ -1956,44 +1969,21 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
      per-book endpoint shape. The dev fixture seeds events for two
      books — the modal's multi-book grouping only renders if the slice
      accumulates entries from each book separately, which is what
-     happens when `applyPoll` is called once per book.
-
-     NOTE: `pending` is returned for every book, but as of #3376 round 2
-     neither poll path writes it — `pending` is client-owned once a book is
-     open (seeded only by the one-shot disk hydrate on book-open), and both
-     the active book's 30 s `applyPoll` and the 120 s background fan-out's
-     `applyBackgroundPoll` merge drift only. `pending` here is inert for
-     both; the every-book shape is kept so the mock mirrors the server's
-     per-book endpoint. The fe-15 profile-regen-preview spec clears
-     `pending` itself before opening its preview stub to avoid the
-     phantom-revision collision. */
-  /* Quality Gate marketing/wiki screenshots (#1286) — under DEMO_CAPTURE,
-     stop the dev-only PENDING_REVISIONS fixture (an Eliza/book-`sb` revision
-     with no bookId field, so it always matched every book before) from
-     bleeding into the marketing books' poll response. Scoped to the
-     DEMO_CAPTURE flag for EVERY book, not specific book ids — the background
-     bulk poll (layout.tsx) reaches every non-active marketing book, and
-     `applyPoll` (which the bulk fan-out used before #3376 moved it to
-     `applyBackgroundPoll`) replaced `pending` wholesale regardless of
-     bookId at the time, so a partial scope wouldn't have fully closed the
-     bleed (adversarial review round 2 caught this when an earlier fix
-     scoped it to hollow-tide-* only). Since #3376 round 2 neither poll path
-     writes `pending` at all, but the every-book filter is kept so both poll
-     paths see the same scoped mock shape regardless. */
-  if (DEMO_CAPTURE) {
-    return {
-      pending: [],
-      drift: [
+     happens when `applyPoll` is called once per book. */
+  const drift = DEMO_CAPTURE
+    ? [
         ...VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
         ...HOLLOW_TIDE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
-      ],
-    };
-  }
-  return {
-    pending: PENDING_REVISIONS,
-    drift: VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
-  };
+      ]
+    : VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId);
+  /* Plan 286 — pending, dismissed etc. come from the per-book mock store (D7);
+     drift the store has dismissed is filtered, as the server does. */
+  const state = getMockRevisions(args.bookId);
+  const dismissed = new Set(state.dismissed);
+  return { ...state, drift: drift.filter((d) => !dismissed.has(d.id)) };
 }
+
+export { mockPollRevisions as _mockPollRevisions, mockGetChapterAudioPrevious as _mockGetChapterAudioPrevious };
 
 /* ── real fetch-based implementations ────────────────────────────────── */
 
