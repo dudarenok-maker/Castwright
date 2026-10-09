@@ -553,7 +553,7 @@ setup rather than repeatedly loading and evicting models.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 34 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -563,11 +563,17 @@ setup rather than repeatedly loading and evicting models.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**59 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**60 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-06 (#3084 wave 3b, PR 3b), 57 → 59.** Rows **B105**
+> **Last change: 2026-10-10 (#3084 W3c, PR 3c), 59 → 60.** Row **A113** (live
+> structured output — Test action records match real model behaviour) added
+> from #3084 PR 3c's run sheet (`3084-openai-analyzer-onbox-acceptance.md`
+> § "Live structured output"). Group A 34 → 35. `next-id` bumped A113 → A114
+> in the same change. Row is owed; not run here.
+>
+> **Prior change: 2026-10-06 (#3084 wave 3b, PR 3b), 57 → 59.** Rows **B105**
 > (Ollama `format` modes on a real model: `json`, then `off`, against `schema`)
 > and **E112** (Gemini `schema` mode, `responseJsonSchema` accepted or rejected
 > on a real key) added from #3084 PR 3b's run sheet
@@ -1610,7 +1616,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A113 -->
+<!-- next-id: A114 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -5878,6 +5884,39 @@ speaker-embedding model running (the mocked unit tests cover the logic branch
 but never the real embedding path). *Criteria:* the observations above; issue
 #3414 and the mutation-tested regression split (#3449 stale-drop, #3460
 kept-and-gates) for the exact defect this closes.
+
+### A113 · Live structured output — Test action ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #NNNN) · **GPU box with Ollama + a llama-swap endpoint on one card; a Gemini key; a small-context vLLM or an OpenRouter endpoint**
+
+The Test action (Advanced Settings → Analyzer rate limits → **Test**) runs a ladder: a
+control request with no structured output, then one request per mode (`schema` with a
+marker key the prompt never mentions, `json`). Every request carries the same prompt and
+the same output cap: the model's resolved Auto cap clamped to context minus input. A 400
+that names a context, token or length limit is inconclusive rather than `rejected`, and
+records are keyed by the reasoning level actually sent. Unit tests use fake transports;
+only real servers show whether real models finish the probes and whether the recorded
+outcome matches what the model does.
+
+- Run **Test** (configured) and **Test every mode** on `qwen3.5:4b` (Ollama), a `gemma-*`
+  and a `gemini-*` model, and a llama-swap endpoint model with thinking on and off.
+- Record each outcome and compare it with a hand request in the same mode: an `ignored`
+  record must correspond to output without the marker; `enforced` to output with it.
+- **Thinking models produce a record:** `gemini-3.6-flash` in its default `json` mode, and
+  the llama-swap Qwen3 model with thinking on, each end with a saved record (not a 502 that
+  says `finish=length`). Note the cap the requests carried (server log / request dump).
+- **Small context never records `rejected` by size:** on a vLLM endpoint whose served
+  context is small (e.g. `--max-model-len 8192`) or an OpenRouter model whose
+  `max_completion_tokens` exceeds what is left of its context, run **Test every mode**. The
+  record must not show `rejected` for a mode the model accepts; a size-limit 400, if one
+  still happens, answers 502 "inconclusive" and saves nothing.
+- A failed test keeps the earlier record: stop the llama-swap server, run **Test**, and
+  confirm the Settings row still shows the previous outcome and date.
+- Record what the Gemini adapter drops (the entry's `structuredOutput.dropped` in
+  `GET /api/analyzer/models`).
+- Change the endpoint's base URL: the record disappears from the catalog entry.
+- **Re-pulled Ollama model:** with a saved record for `qwen3.5:4b` (note its `digest`), pull a
+  different build of that tag so `ollama list` shows a new digest: the catalog entry loses the
+  record, and an analysis on that model starts instead of refusing on the old verdict.
+- Criteria: `docs/testing/openai-analyzer-onbox-acceptance.md` § "Live structured output".
 
 ## Group B — local Ollama analyzer only
 

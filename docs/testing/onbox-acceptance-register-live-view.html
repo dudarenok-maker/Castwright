@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="46" data-publish-id="e3f9516cf43d"></div>
+  <div hidden data-published-as="47" data-publish-id="23ae3b9e6a06"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">59</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">60</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->34<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->35<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->4<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">34 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">35 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -766,6 +766,13 @@
           <li><strong>Reassign, no re-render, chapter Y.</strong> Change that character&#39;s voice (keep the same engine and tier), do NOT re-render anything, then run the repair on <strong>Y</strong> &#8212; not X: an accepted take on X rewrites its verdict row to <code>voice-match</code> / <code>fixable: false</code>, so re-running X would give <code>flagged: []</code>. Centroids are book-wide, so the reassignment applies to Y&#39;s line too. <strong>Pass:</strong> that line (<code>acousticOnly: true</code> in <code>qa_scan</code>) gets <strong>no</strong> <code>progress</code> frame and appears in <code>qa_repair_complete</code>&#39;s <code>stillSuspect</code> &#8212; the stale <code>audition</code> centroid was dropped, not reused. An inconclusive verdict here is the designed outcome, not a regression. Known limit: an in-book centroid is still judged against the old voice (#3517) &#8212; do not expect it to switch.</li>
         </ul>
         <p class="src">a real GPU box with the speech sidecar and a real ECAPA speaker-embedding model running &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3414">Castwright#3414</a> &#183; no separate run sheet &#183; the observations above; issue #3414 and the mutation-tested regression split (#3449 stale-drop, #3460 kept-and-gates) for the exact defect this closes</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A113</span><span class="iname">Live structured output — Test action records match real model behaviour</span><span class="risk">GPU box, Ollama + llama-swap endpoint on one card, Gemini key, small-context vLLM or OpenRouter</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Run Test (configured, then every mode) on qwen3.5:4b, a gemma-* and a gemini-* model, and a llama-swap endpoint model with thinking on and off. Each <code>enforced</code>/<code>ignored</code> outcome must match a hand request (marker present/absent). Thinking models (gemini-3.6-flash default json, llama-swap Qwen3 thinking on) must save a record, not end <code>length</code>. A small-context vLLM or OpenRouter endpoint must never record <code>rejected</code> because of size. A failed test keeps the earlier record; record the Gemini adapter's <code>dropped</code> list; a base-URL change discards the record, and so does re-pulling an Ollama model to a new digest (the run then starts instead of refusing).</p>
+        <p>Criteria: <code>docs/testing/openai-analyzer-onbox-acceptance.md</code> § Live structured output. #3084.</p>
       </div>
     </details>
 
