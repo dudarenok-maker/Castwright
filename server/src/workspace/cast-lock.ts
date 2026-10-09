@@ -27,7 +27,7 @@
  *      revisions-store.ts, plan 285) is a LEAF outside this order: its holder
  *      writes only revisions.json and acquires no other lock, so it can never
  *      be one half of a cycle. Never take any lock while holding it.
- *      Accept/reject (and the legacy `…/audio/previous` routes) additionally
+ *      Accept/reject and `restore-unrecorded` additionally
  *      serialise per chapter on a `revision-op:<bookDir>:<chapterId>` key held
  *      across the whole audio step; its order is `revision-op` -> `revisions`
  *      — never take `revision-op` while holding `revisions`.

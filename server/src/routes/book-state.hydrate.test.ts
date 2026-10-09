@@ -206,6 +206,15 @@ describe('PUT /:bookId/state slice=manuscript → GET round-trip', () => {
   });
 });
 
+describe('PUT /:bookId/state slice=revisions is refused (plan 286)', () => {
+  it('plan 286 — PUT slice=revisions is refused with 400 and writes nothing', async () => {
+    const res = await request(app).put(`/api/books/${bookId}/state`).send({ slice: 'revisions', patch: { pending: [] } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('revisions_server_owned');
+    expect(existsSync(join(bookDir, '.audiobook', 'revisions.json'))).toBe(false);
+  });
+});
+
 describe('GET /state — revisions read through the store (plan 286)', () => {
   const revPath = () => join(bookDir, '.audiobook', 'revisions.json');
   it('normalises: drops drift and a legacy entry with no .previous.mp3, adds fileId/rev/bookId', async () => {

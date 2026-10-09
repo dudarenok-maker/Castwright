@@ -82,8 +82,8 @@ export function revisionsLockKey(bookDir: string): string {
   return `revisions:${resolve(bookDir)}`;
 }
 
-/** Per-chapter key serialising accept/reject (and the legacy previous-audio
-    routes) across their whole audio step. Distinct from the revisions lock:
+/** Per-chapter key serialising accept/reject (and restore-unrecorded)
+    across their whole audio step. Distinct from the revisions lock:
     lock order is `revision-op` -> `revisions`, never the reverse. */
 export function revisionOpLockKey(bookDir: string, chapterId: number): string {
   return `revision-op:${resolve(bookDir)}:${chapterId}`;

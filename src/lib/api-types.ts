@@ -1557,10 +1557,12 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Accept the new render — discard the preserved prior audio
-         * @description Deletes `audio/<slug>.previous.mp3` and
-         *     `audio/<slug>.previous.segments.json`. Idempotent: missing files
-         *     are skipped. 404 only when no preserved pair existed to begin with.
+         * Moved (plan 286): use POST …/revisions/{revisionId}/accept
+         * @deprecated
+         * @description Plan 286 retired this route in favour of the server-owned revision
+         *     operations. Always answers 410 `moved`; never touches audio or
+         *     revisions.json. Never 404, so an old client's accept — which treats
+         *     404 as success — does not read a retired route as a silent accept.
          */
         delete: operations["acceptChapterRevision"];
         options?: never;
@@ -1578,11 +1580,12 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Reject the new render — restore the preserved prior audio
-         * @description Renames `audio/<slug>.previous.*` over the live names, clobbering
-         *     the freshly-rendered audio. The user has chosen the prior take.
-         *     409 when a generation is in flight for the book (the rename would
-         *     race the write path).
+         * Moved (plan 286): use POST …/revisions/{revisionId}/reject
+         * @deprecated
+         * @description Plan 286 retired this route in favour of the server-owned revision
+         *     operations. Always answers 410 `moved`; never touches audio or
+         *     revisions.json. Never 404, so an old client's accept — which treats
+         *     404 as success — does not read a retired route as a silent accept.
          */
         post: operations["rejectChapterRevision"];
         delete?: never;
@@ -2583,8 +2586,11 @@ export interface paths {
          * Persist one slice of a book's on-disk state
          * @description The generic wholesale write the persistence middleware funnels every
          *     slice through: `cast` (cast.json), `manuscript` (manuscript-edits.json),
-         *     `revisions`, `changeLog`, and `state` (state.json's editorial fields).
-         *     `patch` is the whole slice, not a delta — the named file is replaced.
+         *     `changeLog`, and `state` (state.json's editorial fields). `patch` is
+         *     the whole slice, not a delta — the named file is replaced. Plan 286:
+         *     `revisions` is server-owned; this route always refuses that slice
+         *     with `400 revisions_server_owned` and writes nothing — use the
+         *     revision operations instead.
          *
          *     The `cast` slice is guarded on the way in (fs-38 Wave 3c / #1899): a
          *     character's stored **cloned** voice slot cannot be planted, restamped,
@@ -5469,8 +5475,9 @@ export interface components {
              * @description A machine-readable code — `invalid_selection`, `book_not_found`,
              *     `not_found`, `revision_not_found`, `chapter_busy`,
              *     `no_previous_audio`, `has_revision`, `live_audio_missing`,
-             *     `revision_gone`, `lock_contention`, `restore_failed` — or, on an
-             *     unexpected 500, the curated failure message.
+             *     `revision_gone`, `lock_contention`, `restore_failed`, `moved`
+             *     (410, legacy routes only) — or, on an unexpected 500, the
+             *     curated failure message.
              */
             error: string;
             message?: string;
@@ -9434,19 +9441,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Preserved pair removed */
-            204: {
+            /** @description Moved to `POST /api/books/{bookId}/revisions/{revisionId}/accept` or `/reject`. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No preserved audio to delete */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
                 };
-                content?: never;
             };
         };
     };
@@ -9462,26 +9464,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Preserved pair restored over live names */
-            204: {
+            /** @description Moved to `POST /api/books/{bookId}/revisions/{revisionId}/accept` or `/reject`. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No preserved audio to restore */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
                 };
-                content?: never;
-            };
-            /** @description Generation is in flight for this book — restore would race the write path */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };
@@ -11272,8 +11262,9 @@ export interface operations {
                      *     (title, author, series, tags, notes, audioFormat,
                      *     prosodyEnabled, castConfirmed, chapters, and more);
                      *     the same endpoint also serves the `cast`,
-                     *     `manuscript`, `revisions`, and `changeLog` slices
-                     *     with entirely different payloads.
+                     *     `manuscript`, and `changeLog` slices with entirely
+                     *     different payloads. A `revisions` slice is always
+                     *     refused (plan 286) regardless of `patch`.
                      *     #2246 Task 9 — BCP-47 `language` field on the `state`
                      *     slice: string | null. `null` is "stated absence" (a
                      *     book whose language the user has not set), distinct
@@ -11295,7 +11286,11 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Missing/unknown `slice` or `patch`, or a malformed manuscript patch */
+            /**
+             * @description Missing/unknown `slice` or `patch`, a malformed manuscript patch,
+             *     or (plan 286) `revisions_server_owned` — the `revisions` slice is
+             *     server-owned and this route never writes it.
+             */
             400: {
                 headers: {
                     [name: string]: unknown;

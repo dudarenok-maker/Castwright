@@ -27,7 +27,6 @@ import {
   listenStatsJsonPath,
   manuscriptEditsJsonPath,
   queueJsonPath,
-  revisionsJsonPath,
   slug,
   stateJsonPath,
 } from '../workspace/paths.js';
@@ -803,8 +802,10 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         break;
       }
       case 'revisions':
-        await writeJsonAtomic(revisionsJsonPath(bookDir), body.patch);
-        break;
+        return res.status(400).json({
+          error: 'revisions_server_owned',
+          message: 'revisions.json is written by the server; use the revision operations.',
+        });
       case 'changeLog':
         await writeJsonAtomic(changeLogJsonPath(bookDir), body.patch);
         break;

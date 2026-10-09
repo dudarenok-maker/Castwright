@@ -1,9 +1,10 @@
 /* Plan 285 (#3400) — the A/B take audio steps, MOVED UNCHANGED from
-   routes/chapter-audio.ts so the old routes (DELETE …/audio/previous,
-   POST …/audio/previous/restore) and the new revision-ops routes run the same
-   code. Behaviour is today's, residuals included (filed as #3456 "Chapter take
-   lifecycle"): restore deletes the live take BEFORE the rename, swallows a
-   failed segments rename, and `.previous` is always `.mp3`.
+   routes/chapter-audio.ts so the revision-ops routes and
+   restore-unrecorded run the same code the old (now-410, plan 286) legacy
+   routes used to. Behaviour is today's, residuals included (filed as #3456
+   "Chapter take lifecycle"): restore deletes the live take BEFORE the
+   rename, swallows a failed segments rename, and `.previous` is always
+   `.mp3`.
 
    No import of routes/generation.ts: the isGenerationActive 409 stays in the
    routes, in today's order. */

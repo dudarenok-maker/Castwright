@@ -586,8 +586,8 @@ Design rationale:
   class while holding a later one, or two requests deadlock. The per-book
   `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
   outside that order: nothing but revisions.json is written under it and no
-  other lock is taken while it is held. Accept/reject (and the legacy
-  `…/audio/previous` routes) additionally serialise per chapter on a
+  other lock is taken while it is held. Accept/reject and `restore-unrecorded`
+  additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
   while holding `revisions`. Since #2260 that
@@ -649,9 +649,9 @@ Design rationale:
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET and `resume-scoring`), `voices`,
   `qwen-voice`, `voice-style`, `single-design`, `script-review`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
-  merge routes and of the two legacy `…/audio/previous` routes in
-  `chapter-audio.ts` (`DELETE` and `…/restore`), and of `restore-unrecorded`
-  in `chapter-audio.ts`; and
+  merge routes and of `restore-unrecorded` in `chapter-audio.ts` (the two
+  legacy `…/audio/previous` routes there answer 410 unconditionally since
+  plan 286 and no longer acquire a lock); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
   `detail` blob (that blob renders in the UI's collapsible). The raw error goes
