@@ -16,6 +16,9 @@ function makeStore(timeline: Record<number, TimelineEntry[]>) {
     },
     preloadedState: {
       revisions: {
+        fileId: null,
+        rev: 0,
+        adoptSeq: 0,
         pending: [],
         drift: [],
         dismissed: [],

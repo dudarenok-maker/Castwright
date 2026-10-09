@@ -34,6 +34,9 @@ const drift = (id: string, overrides: Partial<DriftEvent> = {}): DriftEvent => (
 describe('revisionsSlice — initial state', () => {
   it('starts empty and not loaded', () => {
     expect(revisionsSlice.getInitialState()).toEqual({
+      fileId: null,
+      rev: 0,
+      adoptSeq: 0,
       pending: [],
       drift: [],
       dismissed: [],

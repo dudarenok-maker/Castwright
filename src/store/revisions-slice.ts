@@ -1,9 +1,27 @@
 /* Revisions slice — pending A/B diffs awaiting accept/reject, plus drift events. */
 
 import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { Revision, DriftEvent, RevisionsResponse, TimelineEntry } from '../lib/types';
+import type {
+  Revision,
+  DriftEvent,
+  RevisionsResponse,
+  TimelineEntry,
+  RevisionsState as WireRevisionsState,
+} from '../lib/types';
 
 export interface RevisionsState {
+  /** Plan 286 — the server file identity this cache last adopted. `null`
+      until the first server state lands for a book (a legacy book never
+      written through the server-owned store reads `fileId: null` too). */
+  fileId: string | null;
+  /** Plan 286 — the server file version this cache last adopted. */
+  rev: number;
+  /** Plan 286 — increments on every adoption that changes `(bookId, fileId,
+      rev)`; a hydrate whose read started before the latest such adoption
+      (`requestSeq < adoptSeq`) is stale and dropped (the sequence guard). An
+      equal-version adoption (same book/fileId/rev — a routine poll) does not
+      bump this, so it cannot make an in-flight hydrate look stale. */
+  adoptSeq: number;
   pending: Revision[];
   drift: DriftEvent[];
   /** Ids of drift events the user has dismissed. The backend revisions
@@ -84,6 +102,9 @@ interface DispatchedAt {
 }
 
 const initialState: RevisionsState = {
+  fileId: null,
+  rev: 0,
+  adoptSeq: 0,
   pending: [],
   drift: [],
   dismissed: [],
@@ -131,10 +152,82 @@ function mergeDriftForBook(
   }
 }
 
+/** Plan 286 — null (a legacy file never written through the store) is
+    older than any id; ids are `${epoch 15-padded}-${random}`, so string
+    order is epoch order with the suffix breaking a same-ms tie. */
+export function compareFileIds(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (a === null) return -1;
+  if (b === null) return 1;
+  return a < b ? -1 : 1;
+}
+type IncomingRevisions = Partial<WireRevisionsState> & { bookId: string };
+function adopt(s: RevisionsState, p: IncomingRevisions): void {
+  /* Only a version change counts for the sequence guard: an equal-version
+     poll must not make an in-flight hydrate look stale. */
+  const changed = s.bookId !== p.bookId || s.fileId !== (p.fileId ?? null) || s.rev !== (p.rev ?? 0);
+  s.bookId = p.bookId;
+  s.fileId = p.fileId ?? null;
+  s.rev = p.rev ?? 0;
+  s.pending = p.pending ?? [];
+  s.dismissed = p.dismissed ?? [];
+  s.acceptedSelections = p.acceptedSelections ?? {};
+  s.timeline = normaliseTimelineKeys(p.timeline);
+  if (changed) s.adoptSeq += 1;
+}
+/** Plan 286 — the cache rule for polls and op responses (spec §4). */
+function shouldAdoptOrdered(s: RevisionsState, p: IncomingRevisions): boolean {
+  if (s.bookId !== p.bookId) return true;
+  const c = compareFileIds(p.fileId ?? null, s.fileId);
+  if (c !== 0) return c > 0;
+  return (p.rev ?? 0) >= s.rev;
+}
+
 export const revisionsSlice = createSlice({
   name: 'revisions',
   initialState,
   reducers: {
+    /** Plan 286 — book open / reopen hydrate from GET /state. ANY fileId
+        difference adopts (null included: a book deleted and re-imported under
+        its deterministic id reads fileId:null) — except a read that started
+        before the latest op/poll adoption (sequence guard). */
+    hydrate: (
+      s,
+      a: PayloadAction<{
+        bookId: string;
+        state: Partial<WireRevisionsState> | null;
+        requestSeq?: number;
+      }>,
+    ) => {
+      const { bookId, requestSeq } = a.payload;
+      s.loaded = true;
+      /* Transitional (Task 26 deletes the field): keeps the old persistence gate open. */
+      s.hydratedFor = bookId;
+      if (bookId === s.bookId && requestSeq !== undefined && requestSeq < s.adoptSeq) return;
+      const p: IncomingRevisions = { ...(a.payload.state ?? {}), bookId };
+      const differs = s.bookId !== bookId || (p.fileId ?? null) !== s.fileId;
+      if (differs || (p.rev ?? 0) >= s.rev) adopt(s, p);
+    },
+    applyServerState: (s, a: PayloadAction<WireRevisionsState>) => {
+      if (shouldAdoptOrdered(s, a.payload)) adopt(s, a.payload);
+    },
+    applyDismiss: (
+      s,
+      a: PayloadAction<{ driftId: string; state?: WireRevisionsState }>,
+    ) => {
+      s.drift = s.drift.filter((d) => d.id !== a.payload.driftId);
+      if (a.payload.state && shouldAdoptOrdered(s, a.payload.state)) adopt(s, a.payload.state);
+    },
+    forgetBook: (s, a: PayloadAction<string>) => {
+      if (s.bookId !== a.payload) return;
+      s.bookId = null;
+      s.fileId = null;
+      s.rev = 0;
+      s.pending = [];
+      s.dismissed = [];
+      s.acceptedSelections = {};
+      s.timeline = {};
+    },
     acceptAllPending: (s, a: PayloadAction) => {
       recordIfUnhydrated(s, a);
       s.pending = [];
@@ -249,6 +342,8 @@ export const revisionsSlice = createSlice({
     bookScopeChanged: (s, a: PayloadAction<string | null>) => {
       if (s.bookId === a.payload) return;
       s.bookId = a.payload;
+      s.fileId = null;
+      s.rev = 0;
       s.pending = [];
       s.dismissed = [];
       s.acceptedSelections = {};
@@ -465,6 +560,22 @@ replayRecorded = (s, a) => {
 };
 
 export const revisionsActions = revisionsSlice.actions;
+
+type ActiveRoot = { revisions: RevisionsState; ui: { stage: unknown } };
+const EMPTY_PENDING: Revision[] = [];
+const EMPTY_TIMELINE: Record<number, TimelineEntry[]> = {};
+const EMPTY_SELECTIONS: Record<string, Record<number, 'A' | 'B'>> = {};
+const holdsActive = (s: ActiveRoot): boolean => {
+  const active = (s.ui.stage as { bookId?: string } | undefined)?.bookId ?? null;
+  return s.revisions.bookId !== null && s.revisions.bookId === active;
+};
+/** Plan 286 — read the cache only for the active book (spec §4). */
+export const selectActivePending = (s: ActiveRoot): Revision[] =>
+  holdsActive(s) ? s.revisions.pending : EMPTY_PENDING;
+export const selectActiveTimeline = (s: ActiveRoot) =>
+  holdsActive(s) ? s.revisions.timeline : EMPTY_TIMELINE;
+export const selectActiveAcceptedSelections = (s: ActiveRoot) =>
+  holdsActive(s) ? s.revisions.acceptedSelections : EMPTY_SELECTIONS;
 
 /* `createSelector` input — the flat drift array. Both grouped selectors
    memoise on this reference, so any reducer that returns a fresh array
