@@ -102,6 +102,7 @@ import {
   mockRejectRevision,
   mockDismissDrift,
   mockRestoreUnrecorded,
+  mockRecordRender,
   getMockRevisions,
   hasMockRevisions,
   mockHasPrevious,
@@ -1652,6 +1653,9 @@ function safeOnTick(onTick: StreamArgs['onTick']): StreamArgs['onTick'] {
 }
 
 function mockStreamGeneration({
+  bookId,
+  chapterIds,
+  review,
   getChapters,
   onTick: rawOnTick,
   mockGenConcurrency,
@@ -1705,6 +1709,9 @@ function mockStreamGeneration({
       : undefined) ??
     1;
   const targetK = Math.max(1, Math.floor(requestedK));
+  /* Plan 286 (Task 11) — a single-chapter A/B review intent names its one
+     chapter; only that chapter's completion is asked about review. */
+  const reviewChapterId = review && chapterIds?.length === 1 ? chapterIds[0] : null;
 
   const tick = () => {
     const chapters = getChapters?.() ?? [];
@@ -1740,6 +1747,25 @@ function mockStreamGeneration({
         active.duration && active.duration !== '00:00'
           ? parseDuration(active.duration)
           : totalLines * 5;
+      /* Plan 286 (Task 11) — mirror the server's parity contract (Task 27):
+         the reviewed chapter's completion is asked about review and stamped
+         `reviewChapter`; every other completion reports `reviewOutcome: 'none'`
+         with no `reviewChapter` key, the same as a real finalize with
+         `review: null`. */
+      let reviewFields: { reviewChapter?: true; reviewOutcome?: ReviewOutcome } = {};
+      if (isComplete) {
+        if (active.id === reviewChapterId) {
+          const recorded = mockRecordRender(bookId, active.id, {
+            ...review!,
+            oldDuration: active.duration,
+            newDuration: active.duration,
+          });
+          reviewFields = { reviewChapter: true, reviewOutcome: recorded ? 'recorded' : 'none' };
+        } else {
+          mockRecordRender(bookId, active.id, null);
+          reviewFields = { reviewOutcome: 'none' };
+        }
+      }
       onTick({
         type: isComplete ? 'chapter_complete' : 'progress',
         chapterId: active.id,
@@ -1748,6 +1774,7 @@ function mockStreamGeneration({
         currentLine,
         totalLines,
         ...(isComplete ? { durationSec: mockDurationSec } : {}),
+        ...reviewFields,
       });
     }
 
@@ -1779,15 +1806,29 @@ function mockStreamGeneration({
 /* fs-26 mock — emits the start → assembling → complete arc synchronously so
    mock-mode (e2e / unit) drives the splice flow without a backend. */
 async function mockStreamSplice({
+  bookId,
   chapterId,
   mode,
   characterId,
   onTick,
 }: SpliceArgs): Promise<void> {
+  /* Plan 286 (Task 11) — e2e specs tune the delay via
+     `window.__mockSpliceDelayMs` (character-splice.spec.ts leaves a book
+     mid-splice to exercise the cross-book "Fix audio" race). */
+  const delayMs =
+    (typeof window !== 'undefined'
+      ? (window as unknown as { __mockSpliceDelayMs?: number }).__mockSpliceDelayMs
+      : undefined) ?? 80;
   onTick({ type: 'splice_start', chapterId, mode, characterId });
-  await wait(80);
+  await wait(delayMs);
   onTick({ type: 'chapter_assembling', chapterId, progress: 0.99 });
-  await wait(80);
+  await wait(delayMs);
+  /* A splice always has audio (it operates on an existing take), so the
+     chapter is treated as live regardless of the mock store's own record. */
+  const cast = MOCK_BOOK_STATES.get(bookId)?.cast?.characters;
+  const firstName = (cast?.find((c) => c.id === characterId)?.name ?? characterId).split(' ')[0];
+  const triggeredBy = `${mode === 'remix' ? 'Loudness fix' : 'Re-record'} (${firstName})`;
+  mockRecordRender(bookId, chapterId, { characterId, triggeredBy }, { assumeLive: true });
   onTick({
     type: 'splice_complete',
     chapterId,
@@ -1796,6 +1837,7 @@ async function mockStreamSplice({
     durationSec: 120,
     segmentCount: 1,
     hasPreviousAudio: true,
+    reviewOutcome: 'recorded',
   });
 }
 
@@ -1807,7 +1849,7 @@ async function mockStreamSplice({
    cleared, which mock mode has no way to reach, and this is the only frame
    whose whole point is that it must reach the user. Emitting it here keeps the
    frontend advisory path exercised in mock mode and in the e2e spec. */
-async function mockStreamQaRepair({ chapterId, onTick }: QaRepairArgs): Promise<void> {
+async function mockStreamQaRepair({ bookId, chapterId, onTick }: QaRepairArgs): Promise<void> {
   onTick({ type: 'qa_scan', chapterId, flaggedCount: 2 });
   await wait(60);
   onTick({ type: 'splice_start', chapterId });
@@ -1821,6 +1863,10 @@ async function mockStreamQaRepair({ chapterId, onTick }: QaRepairArgs): Promise<
   await wait(60);
   onTick({ type: 'chapter_assembling', chapterId, progress: 0.99 });
   await wait(60);
+  /* Plan 286 (Task 11, parity with Task 27) — a QA repair's finalize always
+     passes review: null, so the chapter's entry is dropped and the frame
+     reports reviewOutcome: 'none', the same as the server. */
+  mockRecordRender(bookId, chapterId, null);
   onTick({
     type: 'qa_repair_complete',
     chapterId,
@@ -1828,6 +1874,7 @@ async function mockStreamQaRepair({ chapterId, onTick }: QaRepairArgs): Promise<
     repaired: [3, 7],
     stillSuspect: [],
     durationSec: 222,
+    reviewOutcome: 'none',
   });
 }
 
@@ -1983,7 +2030,13 @@ async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
   return { ...state, drift: drift.filter((d) => !dismissed.has(d.id)) };
 }
 
-export { mockPollRevisions as _mockPollRevisions, mockGetChapterAudioPrevious as _mockGetChapterAudioPrevious };
+export {
+  mockPollRevisions as _mockPollRevisions,
+  mockGetChapterAudioPrevious as _mockGetChapterAudioPrevious,
+  mockStreamSplice as _mockStreamSplice,
+  mockStreamGeneration as _mockStreamGeneration,
+  mockStreamQaRepair as _mockStreamQaRepair,
+};
 
 /* ── real fetch-based implementations ────────────────────────────────── */
 
