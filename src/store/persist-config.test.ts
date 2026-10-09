@@ -45,7 +45,6 @@ describe('UI_PERSIST_WHITELIST', () => {
       'regenCharacterCtx',
       'previewRegen',
       'staleAudio',
-      'showRevisionPlayer',
       'showDriftReport',
       'driftReportCharacterFilter',
       'driftReportScope',

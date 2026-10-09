@@ -91,7 +91,6 @@ export interface UiState {
     characterName: string;
     chapterIds: number[];
   } | null;
-  showRevisionPlayer: boolean;
   /** Plan 55 — when truthy, the revision-history modal is mounted. The
       value carries `chapterId` (null = cross-chapter view) so the modal
       can scope its list. */
@@ -189,7 +188,6 @@ const initialState: UiState = {
   openRevision: null,
   revisionOpInFlight: false,
   staleAudio: null,
-  showRevisionPlayer: false,
   revisionHistoryFor: null,
   showDriftReport: false,
   driftReportCharacterFilter: null,
@@ -418,9 +416,6 @@ export const uiSlice = createSlice({
     },
     setRevisionHistoryFor: (s, a: PayloadAction<{ chapterId: number | null } | null>) => {
       s.revisionHistoryFor = a.payload;
-    },
-    setShowRevisionPlayer: (s, a: PayloadAction<boolean>) => {
-      s.showRevisionPlayer = a.payload;
     },
     setShowDriftReport: (s, a: PayloadAction<boolean>) => {
       s.showDriftReport = a.payload;

@@ -25,7 +25,6 @@ const baseState = (stage: Stage): UiState => ({
   openRevision: null,
   revisionOpInFlight: false,
   staleAudio: null,
-  showRevisionPlayer: false,
   revisionHistoryFor: null,
   showDriftReport: false,
   driftReportCharacterFilter: null,
@@ -579,5 +578,11 @@ describe('uiSlice — #3141 step 5: per-run phase-model picks', () => {
     const s = baseState({ kind: 'books' });
     expect(selectPhaseModelPick(s, null, 0)).toBeUndefined();
     expect(selectPhaseModelPick(s, undefined, 1)).toBeUndefined();
+  });
+
+  it('plan 286 — showRevisionPlayer is gone; openRevision replaced it', () => {
+    const s = uiSlice.reducer(undefined, { type: '@@init' });
+    expect(s).not.toHaveProperty('showRevisionPlayer');
+    expect('setShowRevisionPlayer' in uiActions).toBe(false);
   });
 });

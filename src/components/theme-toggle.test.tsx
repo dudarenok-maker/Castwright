@@ -34,7 +34,6 @@ function makeStore({
     openRevision: null,
     revisionOpInFlight: false,
     staleAudio: null,
-    showRevisionPlayer: false,
     revisionHistoryFor: null,
     showDriftReport: false,
     driftReportCharacterFilter: null,
