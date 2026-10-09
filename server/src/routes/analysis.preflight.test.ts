@@ -5,6 +5,7 @@ import express from 'express';
 import request from 'supertest';
 import { putManuscript, removeManuscript, type ChapterHint } from '../store/manuscripts.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
+import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 
 const { selectSpy, selectOverride, digest, bookLookup } = vi.hoisted(() => ({
   selectSpy: vi.fn(),
@@ -286,7 +287,7 @@ describe('analysis POSTs — digest read on the new-job path only, live job re-c
   });
 
   const rejectedAtOff = {
-    serverUrl: 'http://localhost:11434', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true as const },
+    serverUrl: getResolvedOllamaUrl(), testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true as const },
     structuredOutput: { schema: { off: 'rejected' as const } }, reasoning: {}, digest: 'sha256:old',
   };
 

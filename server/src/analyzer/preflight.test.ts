@@ -3,6 +3,7 @@ import { runAnalyzerPreflight, preflightTargets, resolvePreflightDigests } from 
 import { AnalyzerCapabilityRejectedError, AnalyzerEndpointMissingError, AnalyzerKeyOriginError } from './errors.js';
 import { DEFAULT_USER_SETTINGS, _resetUserSettingsCache, _setUserSettingsCacheForTest, type UserSettings } from '../workspace/user-settings.js';
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 
 const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab server', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 });
 const rejectedSchema = {
@@ -97,14 +98,14 @@ describe('runAnalyzerPreflight (#3084)', () => {
   it('an Ollama model whose schema mode was rejected at off (the level Ollama sends) at the Ollama URL is refused', () => {
     const s = settings({
       analyzerCapabilitiesByModel: {
-        'qwen3.5:4b': { ...rejectedSchema, serverUrl: 'http://localhost:11434', structuredOutput: { schema: { off: 'rejected' as const } } },
+        'qwen3.5:4b': { ...rejectedSchema, serverUrl: getResolvedOllamaUrl(), structuredOutput: { schema: { off: 'rejected' as const } } },
       },
     });
     expect(thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'qwen3.5:4b', s), s))).toBeInstanceOf(AnalyzerCapabilityRejectedError);
   });
 
   it('A3 — an Ollama rejection recorded for another installed digest no longer refuses; the same digest, or an unknown one, still does', () => {
-    const rec = { ...rejectedSchema, serverUrl: 'http://localhost:11434', structuredOutput: { schema: { off: 'rejected' as const } }, digest: 'sha256:old' };
+    const rec = { ...rejectedSchema, serverUrl: getResolvedOllamaUrl(), structuredOutput: { schema: { off: 'rejected' as const } }, digest: 'sha256:old' };
     const s = settings({ analyzerCapabilitiesByModel: { 'qwen3.5:4b': rec } });
     const targets = preflightTargets(['phase0'], 'qwen3.5:4b', s);
     expect(() => runAnalyzerPreflight(targets, s, new Map([['qwen3.5:4b', 'sha256:new']]))).not.toThrow();

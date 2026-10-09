@@ -9,6 +9,7 @@ import { endpointSemaphore, servedModels, _resetEndpointRuntimeForTest } from '.
 import { resolveCapacity } from './capacity.js';
 import { DEFAULT_USER_SETTINGS, type UserSettings } from '../workspace/user-settings.js';
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 
 const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768, structuredOutput: 'json' });
 const settings = (over: Partial<UserSettings> = {}): UserSettings => ({ ...DEFAULT_USER_SETTINGS, analyzerEndpoints: [lab], analyzerEndpointKeys: {}, ...over });
@@ -124,7 +125,7 @@ describe('modelTestDepsFor (#3084)', () => {
   it('Ollama model → OllamaTransport and the Ollama URL', () => {
     const d = modelTestDepsFor('qwen3.5:4b', settings());
     expect(d.transport).toBeInstanceOf(OllamaTransport);
-    expect(d.serverUrl).toBe('http://localhost:11434');
+    expect(d.serverUrl).toBe(getResolvedOllamaUrl());
   });
 
   it("a Gemini model's Test record is filed under serverUrl 'gemini' — the key preflight and the catalog look it up by (#3084)", () => {
