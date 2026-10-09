@@ -20,6 +20,7 @@ import { analysisActions } from '../store/analysis-slice';
 import { castDesignActions } from '../store/cast-design-slice';
 import {
   revisionsActions,
+  selectActivePending,
   selectDriftGroupsByBook,
   scopeDriftGroupsByBook,
 } from '../store/revisions-slice';
@@ -166,6 +167,15 @@ const REVISIONS_HYDRATE_FAILED_KEY = 'revisions-hydrate-failed';
 const REVISIONS_HYDRATE_RETRY_BASE_MS = 1000;
 const REVISIONS_HYDRATE_RETRY_MAX_MS = 15000;
 
+/* Plan 286, OD2 — the unreadable-revisions.json toast fires at most once per
+   book per session. Module-level so it survives across every book-open
+   effect run, not reset by a remount. */
+const revisionsErrorToasted = new Set<string>();
+/** Test-only. */
+export function _resetRevisionsErrorToastedForTests(): void {
+  revisionsErrorToasted.clear();
+}
+
 export function Layout() {
   const dispatch = useAppDispatch();
   const store = useStore<RootState>();
@@ -192,14 +202,7 @@ export function Layout() {
   const exportsLinger = useAppSelector((s) => s.exports.linger);
   const driftGroupsByBook = useAppSelector(selectDriftGroupsByBook);
   const bookMetaSaved = useAppSelector((s) => s.bookMeta.saved);
-  const pending = useAppSelector((s) => s.revisions.pending);
-  /* #3395 pass 3, R1 — whether THIS book's disk revisions snapshot has
-     actually landed (distinct from `revisions.bookId`, which flips the
-     instant navigation targets a new book). Read here, alongside `manuscript`
-     just below, so the per-book hydration effect can gate its reload
-     short-circuit on it without adding it to that effect's own dep array
-     (same established pattern as the existing manuscript/characters reads). */
-  const revisionsHydratedFor = useAppSelector((s) => s.revisions.hydratedFor);
+  const pending = useAppSelector(selectActivePending);
   const manuscript = useAppSelector((s) => s.manuscript);
   const library = useAppSelector((s) => s.library);
   const voices = useAppSelector((s) => s.voices.voices);
@@ -751,6 +754,19 @@ export function Layout() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* Plan 286, Task 18 (A7) — which book's arrival has already had its
+     revisions re-read land, so the hydration effect below doesn't re-issue
+     a `GET /state` for every stage change within the same book visit. Set
+     only when a read actually lands (never on a cancelled one); cleared on
+     every book change, declared ABOVE the hydration effect so it runs
+     first on a book change (React runs a component's effects in
+     declaration order) — a return to a book clears any old arrival's read
+     and the hydration effect below always re-reads it. */
+  const revisionsReadFor = useRef<string | null>(null);
+  useEffect(() => {
+    revisionsReadFor.current = null;
+  }, [bookId]);
+
   /* Per-book hydration. When the user opens a book whose redux state isn't
      populated (page refresh, library click on a previously analysed book, or
      library click on a book mid-analysis), fetch the on-disk .audiobook/*.json
@@ -777,54 +793,24 @@ export function Layout() {
     const castReady = !needsCast || characters.length > 0;
     const manuscriptReady =
       !!(manuscript.bookId === bookId && manuscript.manuscriptId && manuscript.title) && castReady;
-    /* #3395 pass 3, R1/R1b: manuscript/cast/chapters can stay correctly
-       hydrated for this book across a trip to a non-book view (Library,
-       Voices, Admin, Settings, Help, New book — any stage with no bookId) —
-       `revisionsScopeMiddleware` only resets the `revisions` slice's four
-       per-book fields on that trip, not these slices — so `manuscriptReady`
-       alone would skip the reload below and the book would reopen with
-       everything but its pending/timeline. Same gap covers a quick
-       A → B → A: A's `hydratedFor` was cleared by the trip through B even
-       though A's own manuscript/cast never actually changed (B's fetch got
-       cancelled before it could dispatch anything). `hydratedFor` tracks
-       whether THIS book's disk snapshot has actually reached the revisions
-       slice — reset to null by the same scope-change that resets
-       `revisions.pending` (see revisions-slice.ts). */
-    const revisionsReady = revisionsHydratedFor === bookId;
-    if (manuscriptReady && revisionsReady) return;
-    /* When only revisions needs a refill, skip the full slice-by-slice
-       reload below entirely — avoids a flicker of manuscript/cast/chapters/
-       bookMeta that are already correct for this book — but still hit
-       getBookState (the only endpoint that serves revisions.json) and
-       dispatch just the revisions hydrate. */
-    const revisionsOnly = manuscriptReady && !revisionsReady;
-    /* Read the CURRENT recorded window writes right before dispatching the
-       hydrate — not once at effect-mount time. Any revisions write for this
-       book dispatched before its disk snapshot lands (a splice/regen
-       enqueue or playable flip, a dismiss, an accept/reject, a rollback) is
-       recorded in `revisions.windowActions` and replayed by
-       `hydrateFromBookState` on top of the snapshot (#3395 pass 4, S1). It
-       can land any time between this effect starting and `getBookState`
-       resolving, so capturing it up front would miss one that arrives
-       during the fetch itself. This tells us whether the hydrate will
-       replay anything, so we know to persist the result once —
-       `hydrateFromBookState` itself is never persisted (would create a
-       write-loop), so nothing else carries it to disk. */
-    const hasWindowWrites = (): boolean =>
-      (store.getState().revisions.windowActions[bookId]?.length ?? 0) > 0;
+    /* Plan 286 — revisions are server-owned: every arrival at a book re-reads
+       them (one GET), so a take recorded while the user was away (#3397) — or a
+       delete + re-import in another tab — is picked up. A stage change within
+       the same book does not re-read (revisionsReadFor). The other slices keep
+       their short-circuit. */
+    if (manuscriptReady && revisionsReadFor.current === bookId) return;
+    const revisionsOnly = manuscriptReady;
     let cancelled = false;
-    /* #3395 pass 4, S2 — a failed read leaves `hydratedFor` behind, and the
-       persist gate then refuses every revisions write for this book; with
-       no retry that lasted the whole visit, silently (on the revisions-only
-       path everything else looks loaded from memory). So a failed GET is
-       retried with bounded backoff until it lands, a notice shows while it
-       can't, and the writes made meanwhile are recorded and replayed when
-       it does (see `windowActions`, revisions-slice.ts). */
+    /* #3395 pass 4, S2 (OD3) — a failed FULL load is retried with bounded
+       backoff until it lands, with a notice shown while it can't. A failed
+       revisions-only re-read is dropped silently instead (Task 18): the next
+       30 s poll repairs it, and nothing else on this book was waiting on it. */
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
     /* The notice belongs to this book's read: dismissed on cleanup, so it
        never carries over onto the next book (#3395 pass 5, minor c). */
     let failureNoticeShown = false;
     const load = (attempt: number): void => {
+      const requestSeq = store.getState().revisions.adoptSeq;
       api
         .getBookState(bookId)
         .then((res) => {
@@ -834,16 +820,13 @@ export function Layout() {
              real backend hasn't seen this book yet). */
           if (res === null) {
             if (revisionsOnly) {
-              /* Still confirm the (empty) read so `hydratedFor` catches up to
-                 `bookId` and this effect doesn't refetch on every render. For
-                 a full reload, leave every per-book slice on its in-memory
-                 defaults as before — the library-fallback hydrate below seeds
-                 bookMeta from the library entry. */
-              const hadWindowWrites = hasWindowWrites();
-              dispatch(revisionsActions.hydrateFromBookState({ bookId }));
-              if (hadWindowWrites) {
-                dispatch(revisionsActions.persistPendingAfterHydrateMerge());
-              }
+              /* Still confirm the (empty) read so this effect doesn't refetch
+                 on every render. For a full reload, leave every per-book
+                 slice on its in-memory defaults as before — the
+                 library-fallback hydrate below seeds bookMeta from the
+                 library entry. */
+              dispatch(revisionsActions.hydrate({ bookId, state: null, requestSeq }));
+              revisionsReadFor.current = bookId;
             }
             return;
           }
@@ -911,10 +894,19 @@ export function Layout() {
              fetch), so a null `res.revisions` landing here is a confirmation,
              not the only thing standing between books' pending lists
              (#3395 pass 2, N1). */
-          const hadWindowWrites = hasWindowWrites();
-          dispatch(revisionsActions.hydrateFromBookState({ bookId, ...(res.revisions ?? {}) }));
-          if (hadWindowWrites) {
-            dispatch(revisionsActions.persistPendingAfterHydrateMerge());
+          dispatch(revisionsActions.hydrate({ bookId, state: res.revisions ?? null, requestSeq }));
+          revisionsReadFor.current = bookId;
+          if (res.revisionsError && !revisionsErrorToasted.has(bookId)) {
+            revisionsErrorToasted.add(bookId);
+            /* Path-free by construction (Task 5: a fixed sentence, or the
+               newer-schema upgrade sentence), so it is shown verbatim. */
+            dispatch(
+              notificationsActions.pushToast({
+                kind: 'warn',
+                message: res.revisionsError,
+                dedupeKey: `revisions-unreadable-${bookId}`,
+              }),
+            );
           }
           if (revisionsOnly) return;
           dispatch(changeLogActions.hydrateFromBookState(res.changeLog ?? null));
@@ -998,14 +990,14 @@ export function Layout() {
         }, (err) => {
           console.warn('[book-state] hydrate failed, retrying:', err?.message);
           if (cancelled) return;
-          /* Only the revisions are missing on the revisions-only path; on a
-             full load the whole book is (#3395 pass 5, minor c). */
+          if (revisionsOnly) {
+            console.warn('[book-state] revisions re-read failed; the next poll repairs it:', err?.message);
+            return;
+          }
           dispatch(
             notificationsActions.pushToast({
               kind: 'warn',
-              message: revisionsOnly
-                ? "Couldn't load this book's revisions. Retrying — changes to takes will save once it loads."
-                : "Couldn't load this book. Retrying — it will appear once it loads.",
+              message: "Couldn't load this book. Retrying — it will appear once it loads.",
               dedupeKey: REVISIONS_HYDRATE_FAILED_KEY,
             }),
           );
