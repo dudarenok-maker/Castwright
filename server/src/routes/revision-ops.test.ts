@@ -337,6 +337,17 @@ describe('legacy (origin-less) pending entries commit like server ones (#3400)',
     expect(again.status).toBe(200);
     expect(again.body.timeline['1']).toHaveLength(1);
   });
+
+  it('plan 286 (OD20) — a stuck legacy entry (playable:false) is rejected: the kept take returns and the outcome is recorded', async () => {
+    writeFileSync(live(), 'LIVE');
+    writeFileSync(prev(), 'PREV');
+    seed([{ ...legacyEntry(1), playable: false }]);
+    const res = await reject(LEGACY_ID);
+    expect(res.status).toBe(200);
+    expect(readFileSync(live(), 'utf8')).toBe('PREV');
+    expect(res.body.timeline['1']).toMatchObject([{ id: LEGACY_ID, eventKind: 'rejected' }]);
+    expect(disk().pending).toEqual([]);
+  });
 });
 
 describe('POST …/revisions/:revisionId/reject', () => {

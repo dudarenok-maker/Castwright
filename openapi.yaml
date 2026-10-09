@@ -7484,6 +7484,14 @@ components:
           type: string
           enum: [server]
           description: Plan 285 — present on entries the server recorded; absent on legacy client-written ones.
+        recovered:
+          type: boolean
+          description: >-
+            Plan 286 (OD20) — a legacy entry left stuck "Rendering…" by the
+            pre-server client, surfaced because a preserved take exists. The
+            A side is the take kept before the chapter's last render, which
+            may not be the take this entry was recorded against; the player
+            labels it "Recovered from before the update".
         segments:
           type: array
           items:

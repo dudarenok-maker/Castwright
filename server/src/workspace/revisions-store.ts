@@ -45,6 +45,8 @@ export interface StoredRevision {
   segments: unknown[];
   /** Present (`'server'`) on entries the server recorded; absent on legacy client-written ones. */
   origin?: 'server';
+  /** Plan 286 OD20 — a legacy entry the old client never flipped (stuck "Rendering…"), surfaced because .previous.mp3 exists. Its A side is the take kept before the chapter's last render, which may not be the take this entry was recorded against. */
+  recovered?: true;
 }
 export interface StoredTimelineEntry {
   id: string; chapterId: number; characterId?: string;
@@ -110,10 +112,12 @@ const EVENT_KINDS = new Set(['accepted', 'rejected', 'rolled-back']);
 
 /** Pure. Never writes. `previousExists(chapterId)` answers whether
     `audio/<slug>.previous.mp3` exists for that chapter. Rules (spec §1):
-    drop the legacy `drift` copy; default missing fields; drop legacy
-    (origin-less) entries with `playable:false`; keep a legacy entry whose
-    `playable` is true OR absent only if `.previous.mp3` exists; keep the LAST
-    entry when a chapter has several. */
+    drop the legacy `drift` copy; default missing fields; keep a legacy
+    (origin-less) entry — whatever its `playable` flag — only while
+    `.previous.mp3` exists, surfaced as playable, and stamped
+    `recovered: true` when it was stored `playable:false` (plan 286 OD20);
+    keep the LAST entry per chapter, except that a recovered entry never
+    replaces a non-recovered one (plan 286, pass 3 #5). */
 export function normaliseRevisions(
   raw: unknown,
   previousExists: (chapterId: number) => boolean,
@@ -128,15 +132,22 @@ export function normaliseRevisions(
     if (typeof e.id !== 'string' || typeof e.characterId !== 'string') continue;
     if (typeof e.chapterId !== 'number' || !Number.isInteger(e.chapterId)) continue;
     if (e.origin !== 'server') {
-      if (e.playable === false) continue;
       if (!previousExists(e.chapterId)) continue;
     }
+    const recovered = e.origin !== 'server' && (e.playable === false || e.recovered === true);
+    /* Plan 286 (OD20, pass 3 #5) — a recovered entry never replaces a non-recovered
+       one for its chapter, whatever their order: a failed splice appended
+       after a playable take must not shadow it (it would show as "Recovered"
+       with no segments, and the next store write would persist the loss). */
+    const held = byChapter.get(e.chapterId);
+    if (recovered && held && !held.recovered) continue;
     byChapter.delete(e.chapterId);
     byChapter.set(e.chapterId, {
       ...(e as unknown as StoredRevision),
       segments: Array.isArray(e.segments) ? e.segments : [],
       playable: true,
       hasPreviousAudio: typeof e.hasPreviousAudio === 'boolean' ? e.hasPreviousAudio : true,
+      ...(recovered ? { recovered: true as const } : {}),
     });
   }
 

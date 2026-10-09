@@ -86,4 +86,8 @@ describe('openapi: plan 286 PR 2', () => {
     type Op = paths['/api/books/{bookId}/chapters/{chapterId}/audio/previous/restore-unrecorded']['post'];
     expectTypeOf<keyof Op['responses']>().toEqualTypeOf<204 | 404 | 409 | 500>();
   });
+
+  it('plan 286 (OD20) — Revision carries an optional recovered flag', () => {
+    expectTypeOf<S['Revision']['recovered']>().toEqualTypeOf<boolean | undefined>();
+  });
 });
