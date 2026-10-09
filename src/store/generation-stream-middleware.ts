@@ -30,7 +30,6 @@
 
 import type { Middleware } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
-import { revisionsActions } from './revisions-slice';
 import { buildPendingRevisionStub } from '../lib/build-pending-revision';
 import { enqueueQueueEntries, type EnqueueInput } from './queue-thunks';
 import type { AppDispatch } from './index';
@@ -176,12 +175,11 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
             const chapter = after.chapters.chapters.find((c) => c.id === payload.chapterId);
             if (character && chapter) {
               dispatch(
-                revisionsActions.enqueuePending(
+                uiActions.openPreviewStub(
                   buildPendingRevisionStub({ chapter, character, playable: true }),
                 ),
               );
             }
-            dispatch(uiActions.setShowRevisionPlayer(true));
           }
         }
       }

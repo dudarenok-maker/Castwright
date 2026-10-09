@@ -24,7 +24,10 @@ import {
   selectDriftGroupsByBook,
   scopeDriftGroupsByBook,
 } from '../store/revisions-slice';
-import { dismissDriftOp } from '../store/revisions-thunks';
+import { dismissDriftOp, acceptRevisionOp, rejectRevisionOp } from '../store/revisions-thunks';
+import { startPreviewRegen, approvePreviewSideEffects, restoreUnrecordedPreview } from '../store/preview-thunks';
+import { selectActivePreviewStub } from '../store/ui-slice';
+import { selectChapterRendering } from '../store/splice-slice';
 import { flushBookPersistence } from '../store/persistence-middleware';
 import { selectUndesignedQwenCharacters } from '../store/voice-readiness-selectors';
 import { libraryActions, findSeriesBookIds } from '../store/library-slice';
@@ -42,7 +45,7 @@ import {
   buildNameChangeEvent,
 } from '../lib/change-log';
 import { api, ApiError, type SeriesRosterEntry } from '../lib/api';
-import type { Character, BookExportJob } from '../lib/types';
+import type { Character, BookExportJob, Revision } from '../lib/types';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { computeReanalyseProgress } from '../lib/reanalyse-progress';
@@ -233,6 +236,26 @@ export function Layout() {
      it from either stage variant. */
   const openProfileId =
     stage.kind === 'ready' || stage.kind === 'confirm' ? stage.openProfileId : null;
+
+  /* Plan 286, Task 22 — which A/B player entry is open (server-owned
+     revision or the client-only preview stub), and the revision it shows.
+     Hooks at the component's top level, never inside the player's
+     conditional render — a hook there would change the hook order whenever
+     the player mounts (React's rules of hooks). */
+  const openRevision = useAppSelector((s) => s.ui.openRevision);
+  const shownRevision = useAppSelector((s): Revision | undefined => {
+    const open = s.ui.openRevision;
+    if (open?.kind === 'server') return selectActivePending(s).find((p) => p.id === open.revisionId);
+    /* Pass 3 #1 — only the active book's stub; a stub for another book never renders. */
+    if (open?.kind === 'preview-stub') return selectActivePreviewStub(s);
+    return undefined;
+  });
+  const shownRendering = useAppSelector((s) =>
+    bookId && shownRevision ? selectChapterRendering(s, bookId, shownRevision.chapterId) : false);
+  /* Status pill and popover (OD28; pass 4 #6) — the stub stays reachable
+     from the popover without entering the revisions cache (Invariant 6). */
+  const previewStub = useAppSelector(selectActivePreviewStub);
+  const revisionsCount = pending.length + (previewStub ? 1 : 0);
 
   /* Prefetch the lazy GenerationView chunk (routes/index.tsx loads it via
      React.lazy) once the user is inside a book OR any generation run is live,
@@ -462,6 +485,10 @@ export function Layout() {
      points (source.kind === 'character' | 'selection'). Closing resets to
      null. */
   const [reassignSource, setReassignSource] = useState<ReassignSource | null>(null);
+  /* Plan 286, Task 22 — A's audio is known to be gone for the SHOWN
+     revision (a live-audio-missing op response), keyed by revision id so a
+     stale flag never follows the player onto a different revision. */
+  const [previousMissingFor, setPreviousMissingFor] = useState<string | null>(null);
   /* fs-26 — per-character "Fix audio" (loudness/re-record splice) modal.
      Holds the characterId opened from the ProfileDrawer; null = closed. */
   const [fixAudioFor, setFixAudioFor] = useState<string | null>(null);
@@ -1727,14 +1754,14 @@ export function Layout() {
     designPill !== null ||
     exportPill !== null ||
     analysisSubstage !== null ||
-    pending.length > 0;
+    revisionsCount > 0;
   const statusSummary = showStatus
     ? summarizeStatus({
         analysis: analysisPill,
         generation: generationPill,
         design: designPill,
         exportPill,
-        pendingRevisionsCount: pending.length,
+        pendingRevisionsCount: revisionsCount,
         anyModelLoading,
         analysisSubstage: analysisSubstage
           ? {
@@ -1756,8 +1783,18 @@ export function Layout() {
     generation: generationPill,
     design: designPill,
     exportPill,
-    pendingRevisionsCount: pending.length,
-    onOpenRevisions: () => dispatch(uiActions.setShowRevisionPlayer(true)),
+    pendingRevisionsCount: revisionsCount,
+    /* OD15, amended by OD28 — the active book's preview comes first, because
+       it is the take the user was just reviewing and closing it must not
+       bury it behind older takes. Otherwise this is pending[0]. */
+    onOpenRevisions: () => {
+      if (previewStub) {
+        dispatch(uiActions.setOpenRevision({ kind: 'preview-stub' }));
+        return;
+      }
+      const first = pending[0];
+      if (first) dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: first.id, chapterId: first.chapterId }));
+    },
     onGoToAnalysing: () => analysisPill?.onClick(),
     onGoToGeneration: () => generationPill?.onClick(),
     onGoToDesign: () => designPill?.onClick(),
@@ -2087,29 +2124,19 @@ export function Layout() {
                 /* Opt-in A/B preview: render ONLY the first affected chapter
                    and stash the rest in ui.previewRegen. On chapter_complete
                    the generation-stream middleware opens the diff player;
-                   Approve fans the rest out (RevisionDiffPlayer onAccept),
-                   Reject restores the preview chapter. The change-log entry +
-                   the rest of the chapters wait until Approve. */
-                const [previewChapterId, ...remainingChapterIds] = chapterIds;
-                dispatch(
-                  uiActions.setPreviewRegen({
+                   Approve fans the rest out (approvePreviewSideEffects via
+                   RevisionDiffPlayer onAccept), Reject restores the preview
+                   chapter. The change-log entry + the rest of the chapters
+                   wait until Approve. */
+                void dispatch(
+                  startPreviewRegen({
+                    bookId,
                     characterId,
-                    previewChapterId,
-                    remainingChapterIds,
+                    characterName: regenCharacter?.name ?? characterId,
+                    chapterIds,
                     reason,
                     note,
-                    bookId,
                   }),
-                );
-                void dispatch(
-                  enqueueQueueEntries([
-                    {
-                      id: `regen-preview-${bookId}-${characterId}-${previewChapterId}-${rand}`,
-                      bookId,
-                      chapterId: previewChapterId,
-                      scope: 'this',
-                    },
-                  ]),
                 );
               } else {
                 /* Regenerate every affected chapter now — whole-chapter
@@ -2501,98 +2528,74 @@ export function Layout() {
       )}
       <QueueModalContainer />
 
-      {ui.showRevisionPlayer && pending[0] && bookId && (
+      {shownRevision && openRevision && bookId && (
         <RevisionDiffPlayer
-          revision={pending[0]}
+          revision={shownRevision}
           bookId={bookId}
-          mode={ui.previewRegen ? 'preview' : 'review'}
-          chapter={chapters.find((c) => c.id === pending[0].chapterId)}
-          character={characters.find((c) => c.id === pending[0].characterId)}
-          onOpenHistory={() =>
-            dispatch(uiActions.setRevisionHistoryFor({ chapterId: pending[0].chapterId }))
+          /* D6, spec §4 — the player shows preview mode only when the
+             SHOWN revision is the preview's own chapter on the preview's
+             own book; a server entry for some other chapter opened while a
+             preview is active stays in plain review mode. */
+          mode={
+            ui.previewRegen &&
+            ui.previewRegen.bookId === bookId &&
+            ui.previewRegen.previewChapterId === shownRevision.chapterId
+              ? 'preview'
+              : 'review'
           }
-          onClose={() => dispatch(uiActions.setShowRevisionPlayer(false))}
-          onAccept={(selection) => {
-            /* Accept = the new (B) render wins. Persist the user's
-               per-segment selection on the slice (write-only; future
-               per-segment regen will consume), drop the revision from
-               pending, AND fire the server-side delete of the preserved
-               `.previous.*` pair. Mock mode no-ops on the network call;
-               real mode tells the server the prior take is dead. */
-            const id = pending[0].id;
-            const chapterId = pending[0].chapterId;
+          chapter={chapters.find((c) => c.id === shownRevision.chapterId)}
+          character={characters.find((c) => c.id === shownRevision.characterId)}
+          busy={ui.revisionOpInFlight}
+          rendering={shownRendering}
+          previousMissing={previousMissingFor === shownRevision.id}
+          onOpenHistory={() =>
+            dispatch(uiActions.setRevisionHistoryFor({ chapterId: shownRevision.chapterId }))
+          }
+          onClose={() => dispatch(uiActions.setOpenRevision(null))}
+          onKeepNew={
+            openRevision.kind === 'server'
+              ? () => {
+                  void dispatch(
+                    acceptRevisionOp({ bookId, revisionId: shownRevision.id, chapterId: shownRevision.chapterId }),
+                  );
+                }
+              : undefined
+          }
+          onAccept={async (selection) => {
             const preview = ui.previewRegen;
-            dispatch(revisionsActions.acceptRevision({ revisionId: id, selection }));
-            dispatch(uiActions.setShowRevisionPlayer(false));
-            api.acceptChapterRevision({ bookId, chapterId }).catch((err) => {
-              dispatch(
-                notificationsActions.pushToast({
-                  kind: 'warn',
-                  message: `Couldn't accept the revision — ${(err as Error).message ?? 'network error'}.`,
-                  dedupeKey: 'revision-accept-failed',
-                }),
-              );
-            });
+            if (openRevision.kind === 'preview-stub') {
+              /* Stub Approve fans the preview's side effects out directly —
+                 no server entry exists to accept. */
+              if (preview) await dispatch(approvePreviewSideEffects(preview));
+              dispatch(uiActions.setOpenRevision(null));
+              return;
+            }
+            const chapterId = shownRevision.chapterId;
+            const out = await dispatch(
+              acceptRevisionOp({ bookId, revisionId: shownRevision.id, chapterId, selection }),
+            );
             /* Profile-regen preview Approved → fan the remaining affected
-               chapters out as straight whole-chapter regens (no further A/B).
-               The change-log entry covers the full set the user committed to. */
-            if (preview && preview.previewChapterId === chapterId) {
-              dispatch(uiActions.setPreviewRegen(null));
-              const character = characters.find((c) => c.id === preview.characterId);
-              if (character) {
-                dispatch(
-                  changeLogActions.appendLogEvent(
-                    buildCharacterRegenEvent({
-                      character,
-                      chapterIds: [chapterId, ...preview.remainingChapterIds],
-                      reason: preview.reason,
-                      note: preview.note,
-                    }),
-                  ),
-                );
-              }
-              if (preview.remainingChapterIds.length > 0) {
-                const rand = Math.random().toString(36).slice(2, 8);
-                void dispatch(
-                  enqueueQueueEntries(
-                    preview.remainingChapterIds.map((chId) => ({
-                      id: `regen-rest-${bookId}-${preview.characterId}-${chId}-${rand}`,
-                      bookId,
-                      chapterId: chId,
-                      scope: 'this' as const,
-                    })),
-                  ),
-                );
-                dispatch(uiActions.changeView('generate'));
-              }
+               chapters out as straight whole-chapter regens (no further A/B),
+               but only once the server confirmed the accept. */
+            if (out.ok && preview && preview.bookId === bookId && preview.previewChapterId === chapterId) {
+              await dispatch(approvePreviewSideEffects(preview));
             }
           }}
-          onReject={() => {
-            /* Reject = the prior (A) render wins. Drop the pending
-               revision and ask the server to promote `.previous.*` over
-               the live render. 409 surfaces as an error toast so the
-               user knows to wait if a generation is mid-flight. A preview
-               Reject also drops the stashed remaining chapters — the user
-               re-adjusts the profile and starts over. */
-            const id = pending[0].id;
-            const chapterId = pending[0].chapterId;
-            dispatch(revisionsActions.rejectRevision(id));
-            dispatch(uiActions.setShowRevisionPlayer(false));
-            if (ui.previewRegen) dispatch(uiActions.setPreviewRegen(null));
-            api.rejectChapterRevision({ bookId, chapterId }).catch((err) => {
-              /* Plan 20 — mid-flight Reject lands here when the server
-                 returns 409 (generation in progress, can't promote the
-                 previous take over a live render). Surface via the toast
-                 surface so the user knows to wait + retry instead of
-                 staring at a silent UI. dedupeKey collapses rapid retries. */
-              dispatch(
-                notificationsActions.pushToast({
-                  kind: 'warn',
-                  message: `Couldn't reject the revision — ${(err as Error).message ?? 'try again once generation pauses'}.`,
-                  dedupeKey: 'revision-reject-failed',
-                }),
-              );
-            });
+          onReject={async () => {
+            if (openRevision.kind === 'preview-stub') {
+              /* Stub Reject restores the preserved previous take when one
+                 exists; otherwise it's just a close. No server entry to
+                 reject. */
+              const preview = ui.previewRegen;
+              if (preview) void dispatch(restoreUnrecordedPreview(preview));
+              return;
+            }
+            const chapterId = shownRevision.chapterId;
+            const out = await dispatch(rejectRevisionOp({ bookId, revisionId: shownRevision.id, chapterId }));
+            if (out.ok && ui.previewRegen?.bookId === bookId && ui.previewRegen.previewChapterId === chapterId) {
+              dispatch(uiActions.setPreviewRegen(null));
+            }
+            if (!out.ok && out.code === 'no_previous_audio') setPreviousMissingFor(shownRevision.id);
           }}
         />
       )}

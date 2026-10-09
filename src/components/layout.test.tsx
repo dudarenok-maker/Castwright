@@ -15,7 +15,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { Provider } from 'react-redux';
-import { configureStore } from '@reduxjs/toolkit';
+import { configureStore, type Middleware } from '@reduxjs/toolkit';
 import { MemoryRouter, Routes, Route } from 'react-router';
 
 import { uiSlice } from '../store/ui-slice';
@@ -39,11 +39,17 @@ import { continueListeningSlice } from '../store/continue-listening-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
+import { spliceSlice } from '../store/splice-slice';
 
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
 const pollRevisionsBulkMock = vi.fn();
 const putBookStateMock = vi.fn();
+/* Task 22 — the A/B player's per-op routes. */
+const acceptRevisionMock = vi.fn();
+const rejectRevisionMock = vi.fn();
+const restorePreviousUnrecordedMock = vi.fn();
+const getChapterAudioPreviousMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -135,6 +141,12 @@ vi.mock('../lib/api', async (importOriginal) => {
         sampleRate: 44100,
         segments: [],
       })),
+      /* Task 22 — the A/B player's per-op routes, configured per-test via
+         the matching Mock above. */
+      acceptRevision: (...a: unknown[]) => acceptRevisionMock(...a),
+      rejectRevision: (...a: unknown[]) => rejectRevisionMock(...a),
+      restorePreviousUnrecorded: (...a: unknown[]) => restorePreviousUnrecordedMock(...a),
+      getChapterAudioPrevious: (...a: unknown[]) => getChapterAudioPreviousMock(...a),
       getListenProgress: vi.fn(async () => null),
       putListenProgress: vi.fn(async () => ({
         chapterId: 1,
@@ -178,6 +190,9 @@ import { Layout, _resetRevisionsErrorToastedForTests, _resetRevisionPollWarnings
 import { api, ApiError } from '../lib/api';
 import { uiActions } from '../store/ui-slice';
 import { revisionsActions } from '../store/revisions-slice';
+import { revisionPlayerMiddleware } from '../store/revision-player-middleware';
+import { castActions } from '../store/cast-slice';
+import { RevisionOpFailure } from '../lib/revision-op-failure';
 import { bookMetaActions } from '../store/book-meta-slice';
 import { exportsActions } from '../store/exports-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -189,8 +204,9 @@ import {
 } from '../store/voice-readiness-selectors';
 import type { RootState } from '../store';
 
-function makeStore() {
+function makeStore(extraMiddleware: Middleware[] = []) {
   return configureStore({
+    middleware: (getDefault) => getDefault().concat(...extraMiddleware),
     reducer: {
       ui: uiSlice.reducer,
       account: accountSlice.reducer,
@@ -213,6 +229,7 @@ function makeStore() {
       notifications: notificationsSlice.reducer,
       prosody: prosodySlice.reducer,
       scriptReview: scriptReviewSlice.reducer,
+      splice: spliceSlice.reducer,
     },
   });
 }
@@ -257,6 +274,10 @@ beforeEach(() => {
   pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
   putBookStateMock.mockReset();
   putBookStateMock.mockResolvedValue(undefined);
+  acceptRevisionMock.mockReset();
+  rejectRevisionMock.mockReset();
+  restorePreviousUnrecordedMock.mockReset();
+  getChapterAudioPreviousMock.mockReset();
 });
 
 describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
@@ -2109,6 +2130,168 @@ describe('Layout — revisions polls (plan 286)', () => {
       (c) => (c[0] as { bookIds: string[] }).bookIds.length,
     );
     expect(sizes).toEqual([50, 50, 20]);
+  });
+});
+
+describe('Layout — A/B player routing (plan 286)', () => {
+  const entry = (id: string, ch: number, triggeredBy: string, extra = {}) => ({ id, chapterId: ch, characterId: 'eliza', triggeredBy, segments: [], playable: true, hasPreviousAudio: true, ...extra });
+  const S = (ids: ReturnType<typeof entry>[], rev = 1) => ({ bookId: 'b1', fileId: F1, rev, pending: ids, dismissed: [], acceptedSelections: {}, timeline: {} });
+  /* RevisionDiffPlayer requires a resolved `chapter` to render (its own
+     tests always pass one); getBookState resolves null below so Layout
+     never hydrates chapters from the server, so seed them directly. */
+  const testChapter = (id: number): Chapter =>
+    ({ id, title: `Chapter ${id}`, duration: '00:05:00', state: 'done', progress: 1, characters: {} } as Chapter);
+  async function mounted(pending: ReturnType<typeof entry>[], middleware: Middleware[] = [revisionPlayerMiddleware]) {
+    getBookStateMock.mockResolvedValue(null);
+    pollRevisionsBulkMock.mockResolvedValue({ byBookId: {} });
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    const store = makeStore(middleware); // the production watcher by default, so toast assertions can fail
+    openAt(store, 'b1');
+    store.dispatch(chaptersSlice.actions.setChapters([testChapter(3), testChapter(5)]));
+    renderLayoutAt(store, 'b1');
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); // let the null hydrate land first
+    act(() => { store.dispatch(revisionsActions.applyServerState(S(pending))); });
+    return store;
+  }
+
+  it('D6 — the player opens the requested entry, not pending[0]', async () => {
+    const store = await mounted([entry('r-a', 3, 'Ay change'), entry('r-b', 5, 'Bee change')]);
+    act(() => { store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'r-b', chapterId: 5 })); });
+    const player = await screen.findByTestId('revision-diff-player');
+    expect(within(player).getByText('Bee change')).toBeInTheDocument();
+    expect(within(player).queryByText('Ay change')).toBeNull();
+  });
+  it('Commit selection accepts through the route and closes on success', async () => {
+    acceptRevisionMock.mockResolvedValueOnce(S([], 2));
+    const store = await mounted([entry('r-a', 3, 'Ay change')]);
+    act(() => { store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'r-a', chapterId: 3 })); });
+    fireEvent.click(await screen.findByRole('button', { name: /Commit selection/i }));
+    await waitFor(() => expect(screen.queryByTestId('revision-diff-player')).toBeNull());
+    expect(acceptRevisionMock).toHaveBeenCalledTimes(1);
+    expect(acceptRevisionMock.mock.calls[0][0]).toEqual({ bookId: 'b1', revisionId: 'r-a', selection: {} });
+    expect(store.getState().ui.openRevision).toBeNull();
+  });
+  it('a double-click on Commit selection sends one request', async () => {
+    let release!: (v: unknown) => void;
+    acceptRevisionMock.mockReturnValueOnce(new Promise((r) => (release = r)));
+    const store = await mounted([entry('r-a', 3, 'Ay change')]);
+    act(() => { store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'r-a', chapterId: 3 })); });
+    const btn = await screen.findByRole('button', { name: /Commit selection/i });
+    fireEvent.click(btn); fireEvent.click(btn);
+    expect(acceptRevisionMock).toHaveBeenCalledTimes(1);
+    await act(async () => { release(S([], 2)); });
+  });
+  it('a preview Approve fans out only after the accept succeeded', async () => {
+    const store = await mounted([entry('r-a', 3, 'Ay change')]);
+    act(() => {
+      store.dispatch(castActions.hydrateCharacters([{ id: 'eliza', name: 'Eliza', role: '', color: 'narrator' } as never]));
+      store.dispatch(uiActions.setPreviewRegen({ bookId: 'b1', characterId: 'eliza', previewChapterId: 3, remainingChapterIds: [], reason: 'voice', note: '' }));
+      store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'r-a', chapterId: 3 }));
+    });
+    acceptRevisionMock.mockRejectedValueOnce(new RevisionOpFailure('gone', 409, 'revision_gone', S([], 2)));
+    fireEvent.click(await screen.findByRole('button', { name: /Approve.*regenerate the rest/i }));
+    await waitFor(() => expect(acceptRevisionMock).toHaveBeenCalled());
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(store.getState().changeLog.events.some((e) => e.type === 'regenerate')).toBe(false);
+  });
+  it('a successful preview Approve logs the regenerate, and the watcher fires no "resolved elsewhere" toast', async () => {
+    acceptRevisionMock.mockResolvedValueOnce(S([], 2));
+    const store = await mounted([entry('r-a', 3, 'Ay change')]);
+    act(() => {
+      store.dispatch(castActions.hydrateCharacters([{ id: 'eliza', name: 'Eliza', role: '', color: 'narrator' } as never]));
+      store.dispatch(uiActions.setPreviewRegen({ bookId: 'b1', characterId: 'eliza', previewChapterId: 3, remainingChapterIds: [], reason: 'voice', note: '' }));
+      store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'r-a', chapterId: 3 }));
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /Approve.*regenerate the rest/i }));
+    await waitFor(() => expect(store.getState().changeLog.events.some((e) => e.type === 'regenerate')).toBe(true));
+    expect(store.getState().ui.previewRegen).toBeNull();
+    /* Non-vacuous only because `mounted` installs revisionPlayerMiddleware and a
+       preview IS tied to chapter 3: the entry leaves the cache on this accept, and
+       only revisionOpInFlight keeps the watcher from treating it as resolved
+       elsewhere (mutation 5). */
+    expect(store.getState().notifications.toasts.map((t) => t.message)).not.toContain('This preview was resolved elsewhere');
+  });
+  it('a legacy entry (no origin) opens as a server entry and is accepted through the route', async () => {
+    acceptRevisionMock.mockResolvedValueOnce(S([], 2));
+    const store = await mounted([entry('revision:3:eliza', 3, 'Legacy take')]);
+    act(() => { store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'revision:3:eliza', chapterId: 3 })); });
+    fireEvent.click(await screen.findByRole('button', { name: /Commit selection/i }));
+    await waitFor(() => expect(acceptRevisionMock).toHaveBeenCalledWith({ bookId: 'b1', revisionId: 'revision:3:eliza', selection: {} }));
+  });
+  it('a reject answering no_previous_audio switches the footer to Keep new take', async () => {
+    rejectRevisionMock.mockRejectedValueOnce(new RevisionOpFailure('x', 409, 'no_previous_audio', S([entry('r-a', 3, 'Ay change')])));
+    const store = await mounted([entry('r-a', 3, 'Ay change')]);
+    act(() => { store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'r-a', chapterId: 3 })); });
+    fireEvent.click(await screen.findByRole('button', { name: /Reject draft/i }));
+    expect(await screen.findByRole('button', { name: /Keep new take/i })).toBeInTheDocument();
+  });
+  it('stub Approve fans out and makes no revisions call', async () => {
+    const store = await mounted([]);
+    act(() => {
+      store.dispatch(castActions.hydrateCharacters([{ id: 'eliza', name: 'Eliza', role: '', color: 'narrator' } as never]));
+      store.dispatch(uiActions.setPreviewRegen({ bookId: 'b1', characterId: 'eliza', previewChapterId: 3, remainingChapterIds: [], reason: 'voice', note: '',
+        stub: entry('revision:3:eliza', 3, 'Eliza voice change', { hasPreviousAudio: false }) }));
+      store.dispatch(uiActions.setOpenRevision({ kind: 'preview-stub' }));
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /Approve.*regenerate the rest/i }));
+    await waitFor(() => expect(store.getState().changeLog.events.some((e) => e.type === 'regenerate')).toBe(true));
+    expect(acceptRevisionMock).not.toHaveBeenCalled();
+    expect(restorePreviousUnrecordedMock).not.toHaveBeenCalled();
+  });
+  it('stub Reject with preserved audio calls restore-unrecorded', async () => {
+    restorePreviousUnrecordedMock.mockResolvedValueOnce('restored');
+    const store = await mounted([]);
+    act(() => {
+      store.dispatch(uiActions.setPreviewRegen({ bookId: 'b1', characterId: 'eliza', previewChapterId: 3, remainingChapterIds: [], reason: 'voice', note: '',
+        stub: entry('revision:3:eliza', 3, 'Eliza voice change', { hasPreviousAudio: true }) }));
+      store.dispatch(uiActions.setOpenRevision({ kind: 'preview-stub' }));
+    });
+    fireEvent.click(await screen.findByRole('button', { name: /Reject.*re-adjust/i }));
+    await waitFor(() => expect(restorePreviousUnrecordedMock).toHaveBeenCalledWith({ bookId: 'b1', chapterId: 3 }));
+    await waitFor(() => expect(store.getState().ui.previewRegen).toBeNull());
+  });
+  it('#1 — a preview stub for another book never renders, even with openRevision set', async () => {
+    /* No watcher here: this pins the layout's own gate, not the watcher's hide rule (Task 21). */
+    const store = await mounted([], []);
+    act(() => {
+      store.dispatch(uiActions.setPreviewRegen({ bookId: 'b2', characterId: 'eliza', previewChapterId: 3, remainingChapterIds: [], reason: 'voice', note: '',
+        stub: entry('revision:3:eliza', 3, 'Eliza voice change', { hasPreviousAudio: true }) }));
+      store.dispatch(uiActions.setOpenRevision({ kind: 'preview-stub' }));
+    });
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(screen.queryByTestId('revision-diff-player')).toBeNull();
+    expect(store.getState().ui.previewRegen?.stub?.id).toBe('revision:3:eliza'); // hidden, not cleared
+  });
+  it('OD28 — closing a stub player only hides it; with nothing else pending and no engine pinned, the Status pill still counts and re-opens it', async () => {
+    const store = await mounted([]);
+    /* Pass 4 #6 — a STUB-ONLY state: no cache entry, and no TTS control to keep
+       the pill up. The FRONTEND_ACCOUNT_DEFAULTS key is 'kokoro-v1', and any key
+       (Gemini included) puts its engine into enginesToShow on a ready stage, so
+       only an unset key leaves showTtsControls false (selectDefaultTtsEngine:
+       "null when no default key has hydrated yet"). */
+    act(() => { store.dispatch(accountSlice.actions.setDefaultTtsModelKey(null as never)); });
+    /* Precondition: nothing else shows the pill, so only the stub can bring it
+       back. If this fails, neutralise whatever else shows it in THIS test;
+       never drop the precondition — without it the test cannot fail. */
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+    expect(screen.queryByTestId('status-pill')).toBeNull();
+    act(() => {
+      store.dispatch(uiActions.setPreviewRegen({ bookId: 'b1', characterId: 'eliza', previewChapterId: 3, remainingChapterIds: [], reason: 'voice', note: '',
+        stub: entry('revision:3:eliza', 3, 'Eliza voice change', { hasPreviousAudio: true }), completed: { reviewOutcome: 'none', stubFallback: true } }));
+      store.dispatch(uiActions.setOpenRevision({ kind: 'preview-stub' }));
+    });
+    await screen.findByTestId('revision-diff-player');
+    act(() => { store.dispatch(uiActions.setOpenRevision(null)); }); // exactly what the player's back-arrow onClose dispatches
+    await waitFor(() => expect(screen.queryByTestId('revision-diff-player')).toBeNull());
+    expect(store.getState().ui.previewRegen?.stub?.id).toBe('revision:3:eliza');
+    const pill = await screen.findByTestId('status-pill');
+    expect(pill).toHaveAttribute('aria-label', 'Status — Revisions 1'); // top-bar.tsx summarizeStatus: label 'Revisions', detail '1'
+    fireEvent.click(pill);
+    const section = await screen.findByTestId('status-popover-revisions');
+    fireEvent.click(within(section).getByRole('button', { name: /1 revision pending · Open/ }));
+    expect(await screen.findByTestId('revision-diff-player')).toBeInTheDocument();
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' });
   });
 });
 

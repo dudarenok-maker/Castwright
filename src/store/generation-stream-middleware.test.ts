@@ -438,11 +438,11 @@ describe('generationStreamMiddleware — halt + preview gate', () => {
     /* chapter_complete for the preview chapter → markRevisionPlayable. The
        middleware builds the playable stub fresh and opens the diff player. */
     store.dispatch(revisionsSlice.actions.markRevisionPlayable({ chapterId: 3 }));
-    const pending = store.getState().revisions.pending;
-    expect(pending.some((p) => p.chapterId === 3 && p.characterId === 'marlow' && p.playable)).toBe(
-      true,
-    );
-    expect(store.getState().ui.showRevisionPlayer).toBe(true);
+    const stub = store.getState().ui.previewRegen?.stub;
+    expect(stub?.chapterId).toBe(3);
+    expect(stub?.characterId).toBe('marlow');
+    expect(stub?.playable).toBe(true);
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' });
   });
 
   it('does NOT open a preview when a chapter completes outside a preview (plain regen, no A/B gate)', () => {
@@ -453,6 +453,6 @@ describe('generationStreamMiddleware — halt + preview gate', () => {
     /* No previewRegen → a completing chapter just lands; no stub, no player. */
     store.dispatch(revisionsSlice.actions.markRevisionPlayable({ chapterId: 3 }));
     expect(store.getState().revisions.pending).toHaveLength(0);
-    expect(store.getState().ui.showRevisionPlayer).toBe(false);
+    expect(store.getState().ui.openRevision).toBeNull();
   });
 });
