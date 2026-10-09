@@ -4,10 +4,12 @@
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
 import type { UserSettings } from '../workspace/user-settings.js';
-import type { ChatTransport, StructuredOutputMode } from './runner/transport.js';
+import type { ChatTransport, StructuredOutputMode, TransportRequest, TransportResult } from './runner/transport.js';
 import type { AdaptedSchema } from './runner/schema-adapters.js';
 import { jsonParseCandidates, stripThink } from './runner/parse.js';
-import { AnalyzerCapabilityRejectedError, type TransportKind } from './errors.js';
+import { AnalysisAbortedError, AnalyzerCapabilityRejectedError, AnalyzerHttpError, type TransportKind } from './errors.js';
+import { estimateInputTokens } from './runner/prompt.js';
+import { namesContextOrTokenLimit } from './limit-400-patterns.js';
 import {
   emotionAnnotationSchema,
   escalationSchema,
@@ -193,4 +195,161 @@ export function plannedTestRequestCount(
      mode step per `schema` / `json` mode. An `off` mode step is the control itself. */
   const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
   return 1 + modes.filter((mode) => mode !== 'off').length;
+}
+
+/** The control request failed, so nothing could be attributed. Nothing is saved; an
+    earlier record stays (spec §2). */
+export class ModelTestControlFailedError extends Error {
+  constructor(
+    readonly modelId: string,
+    detail: string,
+  ) {
+    super(`The control request to ${modelId} failed, so nothing could be tested: ${detail} Nothing was recorded; any earlier test result is kept.`);
+    this.name = 'ModelTestControlFailedError';
+  }
+}
+
+/** A step's outcome cannot be attributed to the field it changed. Nothing is saved. */
+export class ModelTestInconclusiveError extends Error {
+  constructor(
+    readonly modelId: string,
+    readonly step: StructuredOutputMode,
+    detail: string,
+  ) {
+    super(`The ${step} check for ${modelId} was inconclusive (${detail}). Nothing was recorded; any earlier test result is kept. Run the test again.`);
+    this.name = 'ModelTestInconclusiveError';
+  }
+}
+
+/* P7 — a 400 whose provider text names a context, token or length limit is about the request's
+   size, not about the field the step changed, so it is inconclusive. The table and
+   namesContextOrTokenLimit live in the leaf ./limit-400-patterns.ts (3b Task 3b.1), shared with
+   the failure taxonomy's max-output hint (P24); add rows there, never here. */
+
+const PROBE_SYSTEM = 'You are a JSON generator. Output only JSON.';
+/** P7: the one prompt every step sends. It names no key, so only an enforced schema yields the marker. */
+export const PROBE_PROMPT =
+  'Return one JSON object. If you were given a response format, satisfy it; otherwise return {"ok": true}. Use empty arrays, zeros and short placeholder strings wherever a value is required.';
+
+type ProbeFormat = TransportRequest['structuredOutput'];
+
+/** P7: the one output cap every step uses — the model's resolved Auto cap clamped to the
+    context minus the largest step's estimated input. */
+export function probeOutputCap(limits: { contextTokens: number; maxOutputTokens: number | null }, estimatedInputTokens: number): number {
+  const room = Math.max(1, limits.contextTokens - estimatedInputTokens);
+  return limits.maxOutputTokens !== null && limits.maxOutputTokens > 0 ? Math.min(limits.maxOutputTokens, room) : room;
+}
+
+function estimateProbeInput(format: ProbeFormat): number {
+  /* An enforced schema is input on every provider that enforces it: charge its JSON as prompt text. */
+  const formatText = format.mode === 'schema' ? `\n${JSON.stringify(format.schema)}` : '';
+  return estimateInputTokens(PROBE_SYSTEM, [{ role: 'user', parts: [{ text: `${PROBE_PROMPT}${formatText}` }] }]);
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw new AnalysisAbortedError('Model test cancelled: the client left.');
+}
+
+function isHttp400(err: unknown): boolean {
+  if (err instanceof AnalyzerHttpError) return err.httpStatus === 400;
+  return (err as { status?: unknown } | null)?.status === 400; // @google/genai ApiError
+}
+
+/** The provider's own words: the error message plus, for a transport HTTP error, its body excerpt. */
+function providerText(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return err instanceof AnalyzerHttpError ? `${message} ${err.bodyExcerpt}` : message;
+}
+
+function sendStep(deps: ModelTestDeps, format: ProbeFormat, maxOutputTokens: number): Promise<TransportResult> {
+  throwIfAborted(deps.signal);
+  return deps.transport.send({
+    system: PROBE_SYSTEM,
+    messages: [{ role: 'user', content: PROBE_PROMPT }],
+    structuredOutput: format,
+    temperature: 0,
+    maxOutputTokens,
+    estimatedInputTokens: estimateProbeInput(format),
+    signal: deps.signal,
+    call: {},
+  });
+}
+
+function formatFor(mode: Exclude<StructuredOutputMode, 'off'>, marker: string, deps: ModelTestDeps): ProbeFormat {
+  if (mode === 'json') return { mode: 'json' };
+  const largest = largestStageSchema();
+  return { mode: 'schema', name: `castwright_probe_${largest.name}`, schema: deps.adaptSchema(withMarker(largest.schema, marker)).schema };
+}
+
+async function modeStep(
+  modelId: string,
+  mode: Exclude<StructuredOutputMode, 'off'>,
+  format: ProbeFormat,
+  marker: string,
+  cap: number,
+  deps: ModelTestDeps,
+  redact: (text: string) => string,
+): Promise<ProbeOutcome> {
+  let result: TransportResult;
+  try {
+    result = await sendStep(deps, format, cap);
+  } catch (err) {
+    if (err instanceof AnalysisAbortedError) throw err;
+    if (isHttp400(err)) {
+      if (!namesContextOrTokenLimit(providerText(err))) return 'rejected';
+      throw new ModelTestInconclusiveError(modelId, mode, 'the provider refused the request size, not the mode');
+    }
+    throw new ModelTestInconclusiveError(modelId, mode, redact(err instanceof Error ? err.message : String(err)).slice(0, 300));
+  }
+  /* Only a `stop` finish is evidence: a `length` or `blocked` finish says nothing about the mode. */
+  if (result.finish !== 'stop') throw new ModelTestInconclusiveError(modelId, mode, `finish=${result.finish}`);
+  return mode === 'schema' ? classifyMarkerProbe(result.text, marker) : 'accepted';
+}
+
+export async function runModelTest(
+  input: { modelId: string; scope: 'configured' | 'all' },
+  deps: ModelTestDeps,
+): Promise<ModelCapabilityRecord> {
+  const redact = deps.redact ?? ((t: string) => t);
+  const testedAt = (deps.now ?? (() => new Date()))().toISOString();
+  /* P7: a record is keyed by the level its requests actually sent. */
+  const level = defaultReasoningKey(deps.transport.kind);
+  const modes = input.scope === 'all' ? deps.offeredModes : [deps.configuredMode];
+  const marker = (deps.markerValue ?? newMarkerValue)();
+  const control: ProbeFormat = { mode: 'off' };
+  const stepFormats = new Map<StructuredOutputMode, ProbeFormat>(
+    modes.filter((m): m is Exclude<StructuredOutputMode, 'off'> => m !== 'off').map((m) => [m, formatFor(m, marker, deps)]),
+  );
+
+  throwIfAborted(deps.signal);
+  await deps.transport.prepare?.(deps.signal); // P15: served limits are warm before the cap is read; P26: leaving releases the warm-up
+  const largestInput = Math.max(estimateProbeInput(control), ...[...stepFormats.values()].map(estimateProbeInput));
+  const cap = probeOutputCap(deps.probeLimits(), largestInput);
+
+  /* Step 1 — control: `off` mode at the engine's default level. Any finish passes. */
+  try {
+    await sendStep(deps, control, cap);
+  } catch (err) {
+    if (err instanceof AnalysisAbortedError) throw err;
+    throw new ModelTestControlFailedError(input.modelId, redact(err instanceof Error ? err.message : String(err)).slice(0, 500));
+  }
+
+  /* Step 2 — WAVE 5 (Task 5a) INSERTS THE LEVEL STEP HERE: `off` mode at the configured
+     reasoning level, differing from the control only in that level. It records
+     `reasoning[configuredLevel]`, skips step 3 when that level is rejected, and changes
+     `level` below to the configured level. W3 sends no reasoning field, so the control's
+     level is the only level there is. */
+
+  /* Step 3 — one mode step per tested mode. An `off` step is the control, already sent. */
+  const structuredOutput: ModelCapabilityRecord['structuredOutput'] = {};
+  for (const mode of modes) {
+    const format = stepFormats.get(mode);
+    structuredOutput[mode] = {
+      [level]: format && mode !== 'off' ? await modeStep(input.modelId, mode, format, marker, cap, deps, redact) : 'accepted',
+    };
+  }
+  /* A3: stamp the installed build, so a later `ollama pull` discards this record rather than
+     letting a stale verdict refuse runs. Best-effort: no digest, no stamp. */
+  const digest = deps.modelDigest ? await deps.modelDigest().catch(() => undefined) : undefined;
+  return { serverUrl: deps.serverUrl, testedAt, control: { ok: true }, structuredOutput, reasoning: {}, ...(digest ? { digest } : {}) };
 }
