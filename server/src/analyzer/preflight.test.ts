@@ -85,6 +85,15 @@ describe('runAnalyzerPreflight (#3084)', () => {
     expect(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'openai:lab::m', s), s)).not.toThrow();
   });
 
+  it('a Gemini model whose configured mode was rejected at the level Gemini sends is refused — changing the "gemini" serverUrl literal in runAnalyzerPreflight to any other string reddens this (#3084)', () => {
+    const s = settings({
+      analyzerCapabilitiesByModel: {
+        'gemini-3.5-flash-lite': { ...rejectedSchema, serverUrl: 'gemini', structuredOutput: { json: { 'model-default': 'rejected' as const } } },
+      },
+    });
+    expect(thrown(() => runAnalyzerPreflight(preflightTargets(['phase0'], 'gemini-3.5-flash-lite', s), s))).toBeInstanceOf(AnalyzerCapabilityRejectedError);
+  });
+
   it('an Ollama model whose schema mode was rejected at off (the level Ollama sends) at the Ollama URL is refused', () => {
     const s = settings({
       analyzerCapabilitiesByModel: {

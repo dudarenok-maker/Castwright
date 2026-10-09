@@ -194,6 +194,46 @@ describe('buildAnalyzerCatalog', () => {
     expect(entry.structuredOutput.label).toBe('schema (not enforced)');
   });
 
+  it('carries structuredOutput.outcome from the record at the configured mode and the level a run sends, and omits it when unprobed (#3084 W3c)', async () => {
+    const rec = {
+      serverUrl: 'http://localhost:11434',
+      testedAt: '2026-09-11T10:00:00.000Z',
+      control: { ok: true as const },
+      structuredOutput: { schema: { off: 'rejected' as const, 'model-default': 'enforced' as const }, json: { 'model-default': 'accepted' as const } },
+      reasoning: {},
+    };
+    const d = deps({ settings: () => settings({ analyzerCapabilitiesByModel: { 'qwen3.5:4b': rec } }) });
+    const entry = (await buildAnalyzerCatalog({ refresh: false }, d)).groups[0].models[0];
+    // Ollama sends the 'off' level: the 'rejected' there wins over the 'enforced' filed under another level.
+    expect(entry.structuredOutput.outcome).toBe('rejected');
+
+    _resetCatalogCacheForTest();
+    const unprobed = deps({
+      settings: () => settings({ analyzerCapabilitiesByModel: { 'qwen3.5:4b': { ...rec, structuredOutput: { json: { off: 'accepted' as const } } } } }),
+    });
+    const bare = (await buildAnalyzerCatalog({ refresh: false }, unprobed)).groups[0].models[0];
+    expect(bare.capability).toBeDefined();
+    expect('outcome' in bare.structuredOutput).toBe(false);
+  });
+
+  it("attaches a Gemini entry's Test record only when it is filed under serverUrl 'gemini' (#3084)", async () => {
+    const rec = {
+      serverUrl: 'gemini',
+      testedAt: '2026-09-11T10:00:00.000Z',
+      control: { ok: true as const },
+      structuredOutput: { json: { 'model-default': 'rejected' as const } },
+      reasoning: {},
+    };
+    const withRec = (r: typeof rec) => deps({ geminiApiKey: () => 'k', settings: () => settings({ analyzerCapabilitiesByModel: { 'gemini-3.6-flash': r } }) });
+    const entry = (await buildAnalyzerCatalog({ refresh: true }, withRec(rec))).groups[1].models[0];
+    expect(entry.capability).toEqual(rec);
+    expect(entry.structuredOutput.outcome).toBe('rejected');
+
+    _resetCatalogCacheForTest();
+    const other = (await buildAnalyzerCatalog({ refresh: true }, withRec({ ...rec, serverUrl: 'http://localhost:11434' }))).groups[1].models[0];
+    expect(other.capability).toBeUndefined();
+  });
+
   it('A3 — drops an Ollama Test record once the installed digest differs, and keeps it while it matches', async () => {
     const rec = {
       serverUrl: 'http://localhost:11434',

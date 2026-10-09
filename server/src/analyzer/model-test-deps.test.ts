@@ -127,6 +127,11 @@ describe('modelTestDepsFor (#3084)', () => {
     expect(d.serverUrl).toBe('http://localhost:11434');
   });
 
+  it("a Gemini model's Test record is filed under serverUrl 'gemini' — the key preflight and the catalog look it up by (#3084)", () => {
+    process.env.GEMINI_API_KEY = 'k';
+    expect(modelTestDepsFor('gemini-3.6-flash', settings()).serverUrl).toBe('gemini');
+  });
+
   it('Gemini model without a key throws GeminiKeyMissingForTestError', () => {
     expect(() => modelTestDepsFor('gemini-3.6-flash', settings())).toThrow(GeminiKeyMissingForTestError);
   });
