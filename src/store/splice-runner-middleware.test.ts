@@ -23,7 +23,6 @@ import { chaptersSlice } from './chapters-slice';
 import { revisionsSlice } from './revisions-slice';
 import { notificationsSlice } from './notifications-slice';
 import { uiSlice, uiActions } from './ui-slice';
-import { revisionsScopeMiddleware } from './revisions-scope-middleware';
 import { persistenceMiddleware } from './persistence-middleware';
 import { spliceRunnerMiddleware } from './splice-runner-middleware';
 import type { Chapter } from '../lib/types';
@@ -46,8 +45,8 @@ function makeStore(currentBookId = 'bk1') {
       chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS, currentBookId },
       /* `revisions.bookId` starts already scoped to `currentBookId`, matching
          the real app: by the time a splice batch can start, the active book
-         has already been opened (and its hydrate, real or null, has landed)
-         so revisions-scope-middleware has already synced the two. */
+         has already been opened and its hydrate (real or null) has landed,
+         scoping the two together. */
       revisions: { ...revisionsSlice.getInitialState(), bookId: currentBookId },
       ui: {
         ...uiSlice.getInitialState(),
@@ -61,7 +60,7 @@ function makeStore(currentBookId = 'bk1') {
       },
     },
     middleware: (getDefault) =>
-      getDefault().concat(revisionsScopeMiddleware, persistenceMiddleware, spliceRunnerMiddleware()),
+      getDefault().concat(persistenceMiddleware, spliceRunnerMiddleware()),
   });
 }
 
@@ -103,7 +102,6 @@ function makeStoreWithRecorder(currentBookId = 'bk1') {
     },
     middleware: (getDefault) =>
       getDefault().concat(
-        revisionsScopeMiddleware,
         persistenceMiddleware,
         spliceRunnerMiddleware(),
         () => (next: (a: unknown) => unknown) => (a: unknown) => {

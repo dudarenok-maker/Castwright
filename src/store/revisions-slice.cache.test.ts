@@ -147,10 +147,3 @@ describe('selectors', () => {
   });
 });
 
-describe('bookScopeChanged (transitional, deleted in Task 26)', () => {
-  it('resets fileId and rev', () => {
-    let s = reduce(init(), a.applyServerState(st({ bookId: 'A', fileId: F1, rev: 2 })));
-    s = reduce(s, a.bookScopeChanged('B'));
-    expect(s.fileId).toBeNull(); expect(s.rev).toBe(0);
-  });
-});

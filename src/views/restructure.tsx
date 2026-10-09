@@ -39,6 +39,9 @@ export function RestructureView({ bookId }: Props) {
 
   const applyResponse = useCallback(
     async (res: ChapterRestructureResponse) => {
+      // OD31 — the restructure dropped any pending entry for the touched
+      // chapters, so the preview's book can't resume it: clear it here.
+      dispatch(uiActions.clearPreviewForBook(bookId));
       // Re-fetch book-state so chaptersActions.hydrateFromBookState gets
       // a coherent payload: completedSlugs derived from the post-rewrite
       // audio dir, chapterCharacters re-derived from the remapped

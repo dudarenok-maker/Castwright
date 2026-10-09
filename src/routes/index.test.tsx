@@ -709,39 +709,58 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     });
   });
 
-  /* #3395 pass 5, N1 — a revisions write recorded for b1 before its disk
-     read landed (the user left first) is replayed on b1's next hydrate. The
-     server has wiped b1 by then, so each handler that mirrors a wipe must
-     drop the record too, or the stale take comes back on the wiped book. */
-  describe('drops the book\'s recorded pre-hydrate revisions writes', () => {
-    function seedRecordedWrites(store: ReturnType<typeof makeStore>) {
-      store.dispatch(revisionsSlice.actions.bookScopeChanged('b1'));
-      store.dispatch(revisionsSlice.actions.markRevisionPlayable({ chapterId: 3 }));
-      store.dispatch(revisionsSlice.actions.bookScopeChanged(null));
-      expect(store.getState().revisions.windowActions.b1).toHaveLength(1);
-    }
-
+  describe("forgets a wiped book's revisions cache and clears its preview (plan 286, OD31)", () => {
     beforeEach(() => {
       getLibraryMock.mockResolvedValue({ authors: [] });
       getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
     });
-
-    it('after a re-parse', async () => {
+    const held = { bookId: 'b1', fileId: '000000000000002-a', rev: 2, pending: [{ id: 'p', chapterId: 1, characterId: 'c', segments: [] }], dismissed: [], acceptedSelections: {}, timeline: {} };
+    /* OD31 — a finished, unresolved preview of b1 (marker set, stub built). */
+    const previewOfB1 = { bookId: 'b1', characterId: 'c', previewChapterId: 1, remainingChapterIds: [2], reason: '', note: '',
+      stub: { id: 'revision:1:c', chapterId: 1, characterId: 'c', segments: [] }, completed: { reviewOutcome: 'none' as const, stubFallback: true } };
+    async function deleteB1(store: ReturnType<typeof makeStore>) {
+      deleteBookMock.mockResolvedValue(undefined);
+      renderBooks(store);
+      fireEvent.click(screen.getByLabelText('Book options'));
+      fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
+      const confirm = screen.getAllByRole('button', { name: /Delete book/i });
+      fireEvent.click(confirm[confirm.length - 1]);
+      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('b1'));
+    }
+    it('deleting a book forgets its revisions cache and clears its preview', async () => {
       const store = makePopulatedStore();
-      seedRecordedWrites(store);
+      store.dispatch(revisionsSlice.actions.applyServerState(held));
+      store.dispatch(uiActions.setPreviewRegen(previewOfB1));
+      await deleteB1(store);
+      await waitFor(() => expect(store.getState().revisions).toMatchObject({ bookId: null, fileId: null, rev: 0, pending: [] }));
+      expect(store.getState().ui.previewRegen).toBeNull();
+    });
+    it('delete then re-import under the same id shows a clean cache', async () => {
+      const store = makePopulatedStore();
+      store.dispatch(revisionsSlice.actions.applyServerState(held));
+      await deleteB1(store);
+      await waitFor(() => expect(store.getState().revisions.bookId).toBeNull());
+      store.dispatch(revisionsSlice.actions.hydrate({ bookId: 'b1', state: { ...held, fileId: null, rev: 0, pending: [] }, requestSeq: store.getState().revisions.adoptSeq }));
+      expect(store.getState().revisions).toMatchObject({ bookId: 'b1', fileId: null, pending: [] });
+    });
+    it('a reparse forgets the cache and clears the preview', async () => {
+      const store = makePopulatedStore();
+      store.dispatch(revisionsSlice.actions.applyServerState(held));
+      store.dispatch(uiActions.setPreviewRegen(previewOfB1));
       reparseBookMock.mockResolvedValue({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
       renderBooks(store);
       fireEvent.click(screen.getByLabelText('Book options'));
       fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
       const confirm = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
       fireEvent.click(confirm[confirm.length - 1]);
-      await waitFor(() => expect(store.getState().cast.characters).toHaveLength(0));
-      expect(store.getState().revisions.windowActions.b1).toBeUndefined();
+      await waitFor(() => expect(reparseBookMock).toHaveBeenCalledWith('b1'));
+      await waitFor(() => expect(store.getState().revisions).toMatchObject({ bookId: null, fileId: null, rev: 0, pending: [] }));
+      expect(store.getState().ui.previewRegen).toBeNull();
     });
-
-    it('after a manuscript replace', async () => {
+    it('a manuscript replace forgets the cache and clears the preview', async () => {
       const store = makePopulatedStore();
-      seedRecordedWrites(store);
+      store.dispatch(revisionsSlice.actions.applyServerState(held));
+      store.dispatch(uiActions.setPreviewRegen(previewOfB1));
       replaceManuscriptMock.mockResolvedValue({ chapterCount: 1 });
       renderBooks(store);
       fireEvent.click(screen.getByLabelText('Book options'));
@@ -751,24 +770,8 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
       const confirm = screen.getAllByRole('button', { name: /Replace manuscript/i });
       fireEvent.click(confirm[confirm.length - 1]);
       await waitFor(() => expect(replaceManuscriptMock).toHaveBeenCalledWith('b1', expect.any(File)));
-      await waitFor(() => expect(store.getState().cast.characters).toHaveLength(0));
-      expect(store.getState().revisions.windowActions.b1).toBeUndefined();
-    });
-
-    it('after a delete', async () => {
-      const store = makePopulatedStore();
-      seedRecordedWrites(store);
-      deleteBookMock.mockResolvedValue(undefined);
-      renderBooks(store);
-      fireEvent.click(screen.getByLabelText('Book options'));
-      fireEvent.click(screen.getByRole('button', { name: /Delete book/i }));
-      const confirm = screen.getAllByRole('button', { name: /Delete book/i });
-      fireEvent.click(confirm[confirm.length - 1]);
-      await waitFor(() => expect(deleteBookMock).toHaveBeenCalledWith('b1'));
-      /* Let the handler's library refresh settle before asserting. */
-      await waitFor(() => expect(getLibraryMock).toHaveBeenCalled());
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      expect(store.getState().revisions.windowActions.b1).toBeUndefined();
+      await waitFor(() => expect(store.getState().revisions).toMatchObject({ bookId: null, fileId: null, rev: 0, pending: [] }));
+      expect(store.getState().ui.previewRegen).toBeNull();
     });
   });
 });

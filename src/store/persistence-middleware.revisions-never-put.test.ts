@@ -28,17 +28,22 @@ describe('no revisions PUT (plan 286)', () => {
   it('StateSlice cannot name revisions', () => {
     expectTypeOf<'revisions'>().not.toMatchTypeOf<StateSlice>();
   });
-  it("none of today's revisions actions schedules a PUT, even with the book hydrated", async () => {
+  /* One payload per action creator. `satisfies` makes a new revisions action
+     without an entry here a compile error, so it cannot dodge this test. */
+  const PAYLOADS = {
+    hydrate: { bookId: 'A', state: STATE },
+    applyServerState: STATE,
+    applyPoll: { ...STATE, drift: [] },
+    applyBackgroundPoll: { bookId: 'B', drift: [] },
+    applyDismiss: { driftId: 'd', state: STATE },
+    forgetBook: 'A',
+  } satisfies { [K in keyof typeof revisionsActions]: Parameters<(typeof revisionsActions)[K]>[0] };
+
+  it('no revisions action ever reaches putBookState', async () => {
     const store = hydratedStore();
-    store.dispatch(revisionsActions.acceptAllPending());
-    store.dispatch(revisionsActions.rejectAllPending());
-    store.dispatch(revisionsActions.dismissDrift('d'));
-    store.dispatch(revisionsActions.acceptRevision({ revisionId: 'r', selection: {} }));
-    store.dispatch(revisionsActions.rejectRevision('r'));
-    store.dispatch(revisionsActions.rolledBack({ chapterId: 1, timelineEntryId: 't', rolledBackId: 'x' }));
-    store.dispatch(revisionsActions.enqueuePending({ id: 'p', chapterId: 1, characterId: 'c', segments: [] }));
-    store.dispatch(revisionsActions.markRevisionPlayable({ chapterId: 1 }));
-    store.dispatch(revisionsActions.persistPendingAfterHydrateMerge());
+    for (const [name, payload] of Object.entries(PAYLOADS)) {
+      store.dispatch((revisionsActions as unknown as Record<string, (p: unknown) => { type: string }>)[name](payload));
+    }
     await store.dispatch(flushBookPersistence('A') as never);
     expect(putBookState.mock.calls.filter((c) => (c[1] as { slice: string }).slice === 'revisions')).toEqual([]);
   });

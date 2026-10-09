@@ -926,14 +926,11 @@ export function Layout() {
           }
           /* Always carry `bookId` — even when `res.revisions` is null (no
              revisions.json yet for a freshly-imported book) — so the slice's
-             belt-and-braces mismatch guard has something to check and its
-             bookId stays authoritative. `revisions-scope-middleware` has
-             already reset pending/dismissed/acceptedSelections/timeline for
-             this book by the time this fetch resolves (it fires synchronously
-             off the navigation that changed `ui.stage`'s bookId, not off this
-             fetch), so a null `res.revisions` landing here is a confirmation,
-             not the only thing standing between books' pending lists
-             (#3395 pass 2, N1). */
+             `hydrate` reducer has a bookId to adopt against. A null
+             `res.revisions` still adopts: a different book (or a legacy
+             book never written through the server-owned store) reads
+             `fileId: null`, which the slice's ordering rule treats as the
+             oldest possible value (#3395 pass 2, N1). */
           dispatch(revisionsActions.hydrate({ bookId, state: res.revisions ?? null, requestSeq }));
           revisionsReadFor.current = bookId;
           if (res.revisionsError && !revisionsErrorToasted.has(bookId)) {

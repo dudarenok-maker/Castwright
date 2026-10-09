@@ -389,6 +389,16 @@ export const uiSlice = createSlice({
     setPreviewRegen: (s, a: PayloadAction<PreviewRegenCtx | null>) => {
       s.previewRegen = a.payload;
     },
+    /** Plan 286 (OD31) — the preview's book was re-parsed, its manuscript
+        replaced, its chapters restructured, or the book deleted. Chapter ids
+        may now mean different chapters, and the server dropped any pending
+        entry for the touched chapters, so the preview cannot be resumed: drop it.
+        The new take stays as the chapter's audio (nothing is restored). Only a
+        preview of THAT book; a no-op otherwise. An open stub player is closed by
+        the watcher's rule 2 (Task 21), since its stub is gone. */
+    clearPreviewForBook: (s, a: PayloadAction<string>) => {
+      if (s.previewRegen?.bookId === a.payload) s.previewRegen = null;
+    },
     setOpenRevision: (s, a: PayloadAction<OpenRevision | null>) => {
       s.openRevision = a.payload;
     },

@@ -2,7 +2,7 @@
 
    Pins the per-book hydration effect's revisions branch: when the user
    lands on a book stage and `getBookState` resolves with a `revisions`
-   payload, Layout dispatches `revisionsActions.hydrateFromBookState`
+   payload, Layout dispatches `revisionsActions.hydrate`
    BEFORE the 30s `pollRevisions` interval starts. This is the cold-load
    path that closes the brief empty-state flash window that used to
    render between mount and the first poll tick.
@@ -820,11 +820,15 @@ describe('Layout — drift modal book-title fallback (plan 91)', () => {
        expands scope to the series; book-A is the only book on screen by
        default (fixes the "375 chapters across 10 books" hang). */
     store.dispatch(
-      revisionsActions.hydrateFromBookState({
-        drift: [
-          makeDriftEvent({ id: 'drift:book-A-slug:1:eliza:voice', bookId: 'book-A-slug' }),
-          makeDriftEvent({ id: 'drift:book-B-slug:1:eliza:voice', bookId: 'book-B-slug' }),
-        ],
+      revisionsActions.applyBackgroundPoll({
+        bookId: 'book-A-slug',
+        drift: [makeDriftEvent({ id: 'drift:book-A-slug:1:eliza:voice', bookId: 'book-A-slug' })],
+      }),
+    );
+    store.dispatch(
+      revisionsActions.applyBackgroundPoll({
+        bookId: 'book-B-slug',
+        drift: [makeDriftEvent({ id: 'drift:book-B-slug:1:eliza:voice', bookId: 'book-B-slug' })],
       }),
     );
 

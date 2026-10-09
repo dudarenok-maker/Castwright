@@ -1,4 +1,12 @@
-/* Revisions slice — pending A/B diffs awaiting accept/reject, plus drift events. */
+/* Revisions slice — plan 286: a cache of the server-owned revisions.json,
+   ordered by `fileId`/`rev` with a hydrate sequence guard (spec §4). The
+   server is the only writer; this slice only adopts what it returns from a
+   hydrate (`hydrate`), a poll (`applyPoll`/`applyBackgroundPoll`) or a per-op
+   route response (`applyServerState`, via the revisions thunks). `#3395`'s
+   client-side guard machinery (window-replay, scope-reset middleware, the
+   old whole-cache write path) is gone — plan 285 made the server authoritative
+   for accept/reject/dismiss, so there is nothing left for the client to
+   guard against racing its own writes. */
 
 import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type {
@@ -42,63 +50,17 @@ export interface RevisionsState {
       recent reversible entry calls plan 20's existing restore endpoint. */
   timeline: Record<number, TimelineEntry[]>;
   loaded: boolean;
-  /** The book `pending`/`dismissed`/`acceptedSelections`/`timeline` belong to
-      — null when no book is active. `revisions-scope-middleware` keeps this
-      in lockstep with `ui.stage`'s bookId, resetting the four per-book
-      fields the instant the active book changes (before that book's own
-      disk hydrate, or lack of one, arrives) — closing the window where a
-      leftover book A `pending` could be read, actioned against, and
-      persisted into book B's revisions.json (#3395 pass 2, N1). `drift` is
-      NOT reset here — it's already multi-book-aware (each event carries its
-      own `bookId`, see `mergeDriftForBook`), unlike the four fields above
-      which are single-book like `pending`. */
+  /** The book `pending`/`dismissed`/`acceptedSelections`/`timeline` belong
+      to — null when no book is active. Plan 286 — the server is the only
+      writer, so there is no window where this cache could be actioned
+      against and persisted into the wrong book's revisions.json; the
+      selectors below (`selectActivePending` et al.) additionally return
+      empty for any book that isn't `ui.stage`'s active one, so a stale
+      `bookId` here between navigating away and the next book's hydrate
+      landing is never shown. `drift` is NOT reset on a book change — it's
+      already multi-book-aware (each event carries its own `bookId`, see
+      `mergeDriftForBook`), unlike the other per-book fields. */
   bookId: string | null;
-  /** The book whose DISK snapshot has actually landed via
-      `hydrateFromBookState` — distinct from `bookId`, which flips the
-      instant navigation targets a new book, before that book's own
-      `getBookState` round-trip resolves. `bookScopeChanged` clears this to
-      `null` on every book change; `hydrateFromBookState` sets it once the
-      payload's bookId is adopted. `persistence-middleware` refuses to write
-      a revisions patch until this matches the book being persisted — so a
-      write can never reach disk before the disk has been READ at least once
-      for that book (#3395 pass 3, R1/R2). Layout's per-book reload effect
-      also gates its "already loaded, skip the fetch" short-circuit on this,
-      not just on manuscript/cast being present — those can stay populated
-      across a trip to a non-book view (Library, Voices, Admin, …) that
-      resets this slice's `pending`/etc, so without this field the reload
-      would be skipped and the reset four fields would never get their disk
-      snapshot back. */
-  hydratedFor: string | null;
-  /** #3395 pass 4, S1 — the per-book revisions writes dispatched while that
-      book was active but not yet hydrated (`bookId` set, `hydratedFor`
-      behind). Each is still applied to in-memory state at once, but
-      `persistence-middleware` refuses to write it to disk until the
-      hydrate lands, and the hydrate then replaces every per-book field with
-      the disk snapshot. So the hydrate REPLAYS these recorded actions, in
-      dispatch order, on top of that snapshot, and Layout persists the result
-      once. One uniform mechanism for every write (enqueue, playable flip,
-      dismiss, accept, reject, rollback), with no per-field merge. Keyed by
-      book so a write recorded for a book the user leaves before its hydrate
-      lands is replayed when that book does hydrate, rather than dropped.
-      Dropped by `bookWiped` when the server wipes the book (#3395 pass 5,
-      N1). */
-  windowActions: Record<string, RecordedRevisionsAction[]>;
-}
-
-/** A plain-object copy of a recorded revisions action (type + payload +
-    meta) — serializable, so it can live on the slice. `meta` carries the
-    dispatch time of an accept/reject, so a replay stamps the time the user
-    acted (#3395 pass 5, minor a). */
-export interface RecordedRevisionsAction {
-  type: string;
-  payload?: unknown;
-  meta?: unknown;
-}
-
-/** `meta` of the actions whose timeline entry is stamped with the time they
-    were dispatched (see `RecordedRevisionsAction`). */
-interface DispatchedAt {
-  at: string;
 }
 
 const initialState: RevisionsState = {
@@ -112,26 +74,7 @@ const initialState: RevisionsState = {
   timeline: {},
   loaded: false,
   bookId: null,
-  hydratedFor: null,
-  windowActions: {},
 };
-
-/** Record a per-book write dispatched while the active book is not yet
-    hydrated (see `windowActions`). A no-op once hydrated, and when no book is
-    active (there is no disk snapshot it could be replayed onto). */
-function recordIfUnhydrated(
-  s: RevisionsState,
-  a: { type: string; payload?: unknown; meta?: unknown },
-): void {
-  if (s.bookId === null || s.hydratedFor === s.bookId) return;
-  (s.windowActions[s.bookId] ??= []).push({ type: a.type, payload: a.payload, meta: a.meta });
-}
-
-/* Assigned once the slice exists, below: `hydrateFromBookState` replays the
-   recorded actions through the slice's own reducer. A module-level binding
-   rather than a direct `revisionsSlice` reference so the slice's initializer
-   doesn't refer to itself. */
-let replayRecorded: (s: RevisionsState, a: RecordedRevisionsAction) => void = () => {};
 
 /* Multi-book-aware drift merge shared by applyPoll and applyBackgroundPoll
    (#3376). When the caller stamps `bookId` onto the payload, only that book's
@@ -201,8 +144,6 @@ export const revisionsSlice = createSlice({
     ) => {
       const { bookId, requestSeq } = a.payload;
       s.loaded = true;
-      /* Transitional (Task 26 deletes the field): keeps the old persistence gate open. */
-      s.hydratedFor = bookId;
       if (bookId === s.bookId && requestSeq !== undefined && requestSeq < s.adoptSeq) return;
       const p: IncomingRevisions = { ...(a.payload.state ?? {}), bookId };
       const differs = s.bookId !== bookId || (p.fileId ?? null) !== s.fileId;
@@ -228,166 +169,6 @@ export const revisionsSlice = createSlice({
       s.acceptedSelections = {};
       s.timeline = {};
     },
-    acceptAllPending: (s, a: PayloadAction) => {
-      recordIfUnhydrated(s, a);
-      s.pending = [];
-    },
-    rejectAllPending: (s, a: PayloadAction) => {
-      recordIfUnhydrated(s, a);
-      s.pending = [];
-    },
-    /** Per-item accept: drops one revision from pending and records the
-        user's segment selection. The selection is parked on the slice and
-        rides the persistence patch out to revisions.json — no in-app
-        consumer reads it yet (future TTS regen will). Also appends a plan 55
-        timeline entry for the chapter; the new entry is marked `reversible`
-        (plan 20 preserved the prior take as `.previous.mp3`) and any prior
-        `reversible` entry on the same chapter is flipped to non-reversible
-        — only the most-recent reversible accept/reject on a chapter rolls
-        back via plan 20's single-previous chain. The entry is stamped in
-        `prepare`, so a pre-hydrate-window replay keeps the click's time. */
-    acceptRevision: {
-      reducer: (
-        s,
-        a: PayloadAction<
-          { revisionId: string; selection: Record<number, 'A' | 'B'> },
-          string,
-          DispatchedAt
-        >,
-      ) => {
-        recordIfUnhydrated(s, a);
-        const rev = s.pending.find((r) => r.id === a.payload.revisionId);
-        s.pending = s.pending.filter((r) => r.id !== a.payload.revisionId);
-        s.acceptedSelections[a.payload.revisionId] = a.payload.selection;
-        if (rev) {
-          appendTimelineEntryHelper(s, {
-            id: a.payload.revisionId,
-            chapterId: rev.chapterId,
-            characterId: rev.characterId,
-            eventKind: 'accepted',
-            timestamp: a.meta.at,
-            status: 'active',
-            reversible: true,
-          });
-        }
-      },
-      prepare: (payload: { revisionId: string; selection: Record<number, 'A' | 'B'> }) => ({
-        payload,
-        meta: { at: nowIso() },
-      }),
-    },
-    /** Per-item reject: drops one revision from pending. No selection
-        captured — reject means "this revision is unwelcome, throw it away
-        wholesale", not "I have feelings about specific segments." Like
-        accept, a rejection is reversible via plan 20's restore (the
-        previous take, untouched by the regen, is still on disk). Stamped in
-        `prepare`, like accept. */
-    rejectRevision: {
-      reducer: (s, a: PayloadAction<string, string, DispatchedAt>) => {
-        recordIfUnhydrated(s, a);
-        const rev = s.pending.find((r) => r.id === a.payload);
-        s.pending = s.pending.filter((r) => r.id !== a.payload);
-        if (rev) {
-          appendTimelineEntryHelper(s, {
-            id: a.payload,
-            chapterId: rev.chapterId,
-            characterId: rev.characterId,
-            eventKind: 'rejected',
-            timestamp: a.meta.at,
-            status: 'active',
-            reversible: true,
-          });
-        }
-      },
-      prepare: (revisionId: string) => ({ payload: revisionId, meta: { at: nowIso() } }),
-    },
-    /** Plan 55 rollback. Flips the targeted entry's status to
-        `rolled-back-from` and appends a new `rolled-back` entry marking the
-        action. The new entry is NOT itself reversible — plan 20's single
-        `.previous.mp3` chain is consumed by the rollback. Multi-step
-        rollback (snapshot-per-entry) graduates to v1.4.0. */
-    rolledBack: (
-      s,
-      a: PayloadAction<{ chapterId: number; timelineEntryId: string; rolledBackId: string }>,
-    ) => {
-      recordIfUnhydrated(s, a);
-      const list = s.timeline[a.payload.chapterId];
-      if (!list) return;
-      for (const entry of list) {
-        if (entry.id === a.payload.timelineEntryId) {
-          entry.status = 'rolled-back-from';
-        }
-        // No prior reversible entry remains on this chapter — clearing
-        // reversibility prevents double-rollback against a consumed chain.
-        entry.reversible = false;
-      }
-      list.push({
-        id: a.payload.rolledBackId,
-        chapterId: a.payload.chapterId,
-        eventKind: 'rolled-back',
-        timestamp: nowIso(),
-        status: 'active',
-        revisionId: a.payload.timelineEntryId,
-        reversible: false,
-      });
-    },
-    /** Dispatched by `revisions-scope-middleware` whenever `ui.stage`'s
-        bookId changes (openBook, hydrateFromUrl/router nav, goHome, leaving
-        to a non-book view, ...) — watched generically off the derived
-        active-book value rather than off each individual ui-slice action, so
-        a future book-changing action doesn't need to remember to wire this
-        up too (that's exactly how N2's `chapters.currentBookId` proxy went
-        stale). Resets the four per-book fields to empty and adopts the new
-        bookId; a no-op if the book hasn't actually changed. */
-    bookScopeChanged: (s, a: PayloadAction<string | null>) => {
-      if (s.bookId === a.payload) return;
-      s.bookId = a.payload;
-      s.fileId = null;
-      s.rev = 0;
-      s.pending = [];
-      s.dismissed = [];
-      s.acceptedSelections = {};
-      s.timeline = {};
-      /* The new book's disk snapshot hasn't been read yet — belongs to
-         `hydrateFromBookState` alone (#3395 pass 3, R1/R2). */
-      s.hydratedFor = null;
-    },
-    /** #3395 pass 5, N1 — the server wiped this book (re-parse, manuscript
-        replace, delete), so writes recorded for it before its read landed
-        describe a book that no longer exists and must not be replayed onto
-        its next hydrate. Dispatched wherever the client mirrors that wipe
-        (routes/index.tsx). */
-    bookWiped: (s, a: PayloadAction<string>) => {
-      delete s.windowActions[a.payload];
-    },
-    dismissDrift: (s, a: PayloadAction<string>) => {
-      recordIfUnhydrated(s, a);
-      s.drift = s.drift.filter((e) => e.id !== a.payload);
-      if (!s.dismissed.includes(a.payload)) s.dismissed.push(a.payload);
-    },
-    /* Enqueue a pending revision when a regen kicks off. The
-       generation-stream middleware fires this on every
-       `chapters/regenerateCharacter` dispatch so the toolbar pending
-       count surfaces the regen-in-flight immediately — without waiting
-       for the 30s revisions poll cycle. `playable: false` until
-       chapter_complete arrives; the a/b player renders a "Rendering…"
-       state until then. Dedupe by id so a regen restart replaces the
-       prior stub rather than queueing duplicates. */
-    enqueuePending: (s, a: PayloadAction<Revision>) => {
-      recordIfUnhydrated(s, a);
-      s.pending = [...s.pending.filter((r) => r.id !== a.payload.id), a.payload];
-    },
-    /* Flip `playable: true` for every pending revision whose chapterId
-       matches. Fired from the generation-stream chapter_complete handler
-       once the new render is on disk. Multiple in-flight revisions can
-       target the same chapter (e.g. parallel character regens) — flip
-       them all. */
-    markRevisionPlayable: (s, a: PayloadAction<{ chapterId: number }>) => {
-      recordIfUnhydrated(s, a);
-      s.pending = s.pending.map((r) =>
-        r.chapterId === a.payload.chapterId ? { ...r, playable: true } : r,
-      );
-    },
     /* Plan 286 — the server owns pending. The poll carries the whole
        RevisionsState plus live drift: drift always merges (per book); the rest
        is adopted by the ordered rule, so a slow poll cannot revert a newer op
@@ -406,114 +187,8 @@ export const revisionsSlice = createSlice({
     applyBackgroundPoll: (s, a: PayloadAction<{ bookId: string; drift?: DriftEvent[] }>) => {
       mergeDriftForBook(s, a.payload.bookId, a.payload.drift);
     },
-    /* Disk hydrate on book open. Carries dismissed + acceptedSelections so
-       subsequent edits union with prior persisted state rather than
-       overwriting it in revisions.json. Plan 55 adds `timeline`.
-
-       Multi-book aware: when `bookId` is provided, drift events for that
-       book are merged in (replacing any prior events with that bookId),
-       while other books' events are preserved. Without bookId the slice
-       falls back to the legacy whole-slice replace for callers that
-       haven't migrated. */
-    hydrateFromBookState: (
-      s,
-      a: PayloadAction<
-        | {
-            bookId?: string;
-            pending?: Revision[];
-            drift?: DriftEvent[];
-            dismissed?: string[];
-            acceptedSelections?: Record<string, Record<number, 'A' | 'B'>>;
-            timeline?: Record<string, TimelineEntry[]> | Record<number, TimelineEntry[]>;
-          }
-        | null
-        | undefined
-      >,
-    ) => {
-      const payload = a.payload;
-      if (!payload) {
-        /* No disk state at all for this fetch (mock fresh boot, or a book the
-           server hasn't seen). `bookScopeChanged` already reset these on
-           navigation, so in practice this is a no-op re-affirming empty —
-           but a defensive reset here too means a bare null payload can never
-           read back as "still holding the PREVIOUS book's pending" even if
-           dispatched some other way (#3395 pass 2, N1). Deliberately doesn't
-           touch `bookId` — a null payload doesn't tell us which book it was
-           for, so scope tracking stays owned by `bookScopeChanged` alone. */
-        s.pending = [];
-        s.dismissed = [];
-        s.acceptedSelections = {};
-        s.timeline = {};
-        s.loaded = true;
-        return;
-      }
-      /* Belt-and-braces: ignore a hydrate response for a book we've since
-         navigated away from. `bookScopeChanged` already resets on
-         navigation and Layout's own per-book effect cancels a stale
-         in-flight fetch, so this should be unreachable in practice — but a
-         stray call bypassing both (a direct dispatch, a future caller) must
-         not let an old book's disk snapshot overwrite the book actually in
-         view. Only guards when both sides know a bookId; a payload with no
-         bookId (existing callers/tests) is applied unconditionally as
-         before. */
-      if (payload.bookId && s.bookId !== null && payload.bookId !== s.bookId) return;
-      if (payload.bookId) {
-        s.bookId = payload.bookId;
-        /* This book's disk snapshot has now landed — including when the
-           payload carries no `revisions` fields at all (a book with no
-           revisions.json yet): the disk was still READ, there was just
-           nothing on it, and `persistence-middleware`'s gate cares about the
-           read having happened, not about it finding anything (#3395 pass 3,
-           R1/R2). */
-        s.hydratedFor = payload.bookId;
-      }
-      s.pending = payload.pending ?? [];
-      if (payload.bookId) {
-        const bid = payload.bookId;
-        const incoming = payload.drift ?? [];
-        s.drift = [
-          ...s.drift.filter((d) => d.bookId !== bid),
-          ...incoming.map((d) => ({ ...d, bookId: d.bookId || bid })),
-        ];
-      } else {
-        s.drift = payload.drift ?? [];
-      }
-      s.dismissed = payload.dismissed ?? [];
-      s.acceptedSelections = payload.acceptedSelections ?? {};
-      s.timeline = normaliseTimelineKeys(payload.timeline);
-      s.loaded = true;
-      /* #3395 pass 4, S1 — replay this book's pre-hydrate-window writes on
-         top of the snapshot just applied. `hydratedFor` already matches, so
-         the replay itself records nothing. */
-      if (payload.bookId) {
-        const recorded = s.windowActions[payload.bookId];
-        delete s.windowActions[payload.bookId];
-        for (const r of recorded ?? []) replayRecorded(s, r);
-      }
-    },
-    /** No-op state transition whose only job is to be a `PERSIST_RULES`-
-        recognised action type (#3395 pass 3, R2). `hydrateFromBookState`
-        itself is deliberately absent from `PERSIST_RULES` — persisting a
-        hydrate response would create a write-loop — but when that hydrate
-        replayed recorded pre-hydrate-window writes (`windowActions`) on top
-        of the disk snapshot, the result needs to reach disk once; otherwise
-        it lives only in memory until the next ordinary mutation.
-        `layout.tsx` dispatches this immediately after a hydrate that had
-        recorded writes to replay. */
-    persistPendingAfterHydrateMerge: (_s) => {},
   },
 });
-
-/** Internal — append a timeline entry, flipping any prior reversible entry
-    on the same chapter to non-reversible. Keeps `reversible: true` as a
-    one-per-chapter invariant matching plan 20's single `.previous.mp3`. */
-function appendTimelineEntryHelper(s: RevisionsState, entry: TimelineEntry): void {
-  const chapterEntries = (s.timeline[entry.chapterId] ??= []);
-  if (entry.reversible) {
-    for (const prior of chapterEntries) prior.reversible = false;
-  }
-  chapterEntries.push(entry);
-}
 
 /** JSON keys are strings; on-disk timeline is `Record<string, TimelineEntry[]>`
     but the slice uses numeric chapterIds. Defensive coercion preserves both
@@ -529,16 +204,6 @@ function normaliseTimelineKeys(
   }
   return out;
 }
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-/* RTK's reducer applies a case reducer to an Immer draft in place, so the
-   replay mutates the hydrate's own draft. */
-replayRecorded = (s, a) => {
-  revisionsSlice.reducer(s, a as Parameters<typeof revisionsSlice.reducer>[1]);
-};
 
 export const revisionsActions = revisionsSlice.actions;
 

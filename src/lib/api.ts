@@ -1991,23 +1991,6 @@ async function mockGetBaseVoiceSample({ modelKey }: BaseVoiceSampleArgs): Promis
   return { url: stubAudioA, durationSec: 12, cached: false, modelKey };
 }
 
-/* Mock accept (DELETE /audio/previous) and reject (POST /audio/previous/restore)
-   for the revision-diff a/b player. Both no-op in mock mode — the slice is
-   the source of truth, the disk state is fictional. */
-async function mockAcceptChapterRevision(_args: {
-  bookId: string;
-  chapterId: number;
-}): Promise<void> {
-  await wait(100);
-}
-
-async function mockRejectChapterRevision(_args: {
-  bookId: string;
-  chapterId: number;
-}): Promise<void> {
-  await wait(100);
-}
-
 async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
   await wait(200);
   /* Filter drift to the requested book so the mock mirrors the server's
@@ -10583,41 +10566,6 @@ const real = {
     }
     return res.json();
   },
-  acceptChapterRevision: async ({
-    bookId,
-    chapterId,
-  }: {
-    bookId: string;
-    chapterId: number;
-  }): Promise<void> => {
-    const res = await fetch(
-      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous`,
-      { method: 'DELETE' },
-    );
-    if (!res.ok && res.status !== 404) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`Accept revision failed (${res.status}): ${detail || res.statusText}`);
-    }
-  },
-  rejectChapterRevision: async ({
-    bookId,
-    chapterId,
-  }: {
-    bookId: string;
-    chapterId: number;
-  }): Promise<void> => {
-    const res = await fetch(
-      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous/restore`,
-      { method: 'POST' },
-    );
-    if (res.status === 409) {
-      throw new Error('Generation is in flight. Wait for the render to finish before rejecting.');
-    }
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`Reject revision failed (${res.status}): ${detail || res.statusText}`);
-    }
-  },
   /* Plan 286 — server-owned revisions operations (plan 285 routes). */
   acceptRevision: async ({
     bookId,
@@ -10941,8 +10889,6 @@ const mock = {
   redeemBrowserPair: mockRedeemBrowserPair,
   getChapterAudio: mockGetChapterAudio,
   getChapterAudioPrevious: mockGetChapterAudioPrevious,
-  acceptChapterRevision: mockAcceptChapterRevision,
-  rejectChapterRevision: mockRejectChapterRevision,
   acceptRevision: async ({
     bookId,
     revisionId,

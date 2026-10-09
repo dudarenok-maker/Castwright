@@ -508,6 +508,14 @@ describe('uiSlice — plan 286: openRevision, revisionOpInFlight, preview stub',
     expect(s.previewRegen?.stub).toEqual(stub);
     expect(s.openRevision).toEqual({ kind: 'preview-stub' });
   });
+
+  it('plan 286 (OD31) — clearPreviewForBook clears only that book\'s preview', () => {
+    let s = uiSlice.reducer(undefined, uiActions.setPreviewRegen({ bookId: 'b1', characterId: 'c', previewChapterId: 1, remainingChapterIds: [], reason: '', note: '' }));
+    s = uiSlice.reducer(s, uiActions.clearPreviewForBook('b2'));
+    expect(s.previewRegen?.bookId).toBe('b1');
+    s = uiSlice.reducer(s, uiActions.clearPreviewForBook('b1'));
+    expect(s.previewRegen).toBeNull();
+  });
 });
 
 describe('uiSlice — #3141 step 5: per-run phase-model picks', () => {

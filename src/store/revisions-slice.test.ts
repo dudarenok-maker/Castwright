@@ -1,6 +1,6 @@
 // Pairs with docs/features/archive/20-revisions-and-drift.md
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
   revisionsSlice,
   revisionsActions,
@@ -43,9 +43,7 @@ describe('revisionsSlice — initial state', () => {
       acceptedSelections: {},
       timeline: {},
       loaded: false,
-      hydratedFor: null,
       bookId: null,
-      windowActions: {},
     });
   });
 });
@@ -143,13 +141,25 @@ describe('applyPoll adopts server state (plan 286)', () => {
 });
 
 describe('revisionsSlice — applyBackgroundPoll (#3376)', () => {
-  it('leaves an existing pending list unchanged', () => {
-    const start = revisionsSlice.reducer(
+  const seed = (overrides: { pending?: Revision[]; drift?: DriftEvent[] } = {}) =>
+    revisionsSlice.reducer(
       undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1'), rev('r2')],
-        drift: [drift('a1')],
+      revisionsActions.applyServerState({
+        bookId: 'book-A',
+        fileId: null,
+        rev: 0,
+        pending: overrides.pending ?? [],
+        dismissed: [],
+        acceptedSelections: {},
+        timeline: {},
       }),
+    );
+
+  it('leaves an existing pending list unchanged', () => {
+    let start = seed({ pending: [rev('r1'), rev('r2')] });
+    start = revisionsSlice.reducer(
+      start,
+      revisionsActions.applyBackgroundPoll({ bookId: 'book-A', drift: [drift('a1')] }),
     );
     const next = revisionsSlice.reducer(
       start,
@@ -159,10 +169,11 @@ describe('revisionsSlice — applyBackgroundPoll (#3376)', () => {
   });
 
   it('replaces only the polled bookId drift and keeps other books drift', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1')],
+    let start = seed({ pending: [rev('r1')] });
+    start = revisionsSlice.reducer(
+      start,
+      revisionsActions.applyBackgroundPoll({
+        bookId: 'book-A',
         drift: [drift('a1', { bookId: 'book-A' }), drift('b1', { bookId: 'book-B' })],
       }),
     );
@@ -202,663 +213,19 @@ describe('revisionsSlice — applyBackgroundPoll (#3376)', () => {
   });
 });
 
-describe('revisionsSlice — acceptRevision / rejectRevision (per-item)', () => {
-  it('acceptRevision removes only the named revision from pending', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1'), rev('r2'), rev('r3')],
-        drift: [],
-      }),
-    );
-    const next = revisionsSlice.reducer(
-      start,
-      revisionsActions.acceptRevision({ revisionId: 'r2', selection: { 7: 'B', 8: 'A' } }),
-    );
-    expect(next.pending.map((r) => r.id)).toEqual(['r1', 'r3']);
-  });
-
-  it('acceptRevision records the per-segment selection map keyed by revision id', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1')],
-        drift: [],
-      }),
-    );
-    const selection = { 12: 'B' as const, 13: 'A' as const };
-    const next = revisionsSlice.reducer(
-      start,
-      revisionsActions.acceptRevision({ revisionId: 'r1', selection }),
-    );
-    expect(next.acceptedSelections).toEqual({ r1: selection });
-  });
-
-  it('rejectRevision removes only the named revision from pending and records no selection', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1'), rev('r2')],
-        drift: [],
-      }),
-    );
-    const next = revisionsSlice.reducer(start, revisionsActions.rejectRevision('r1'));
-    expect(next.pending.map((r) => r.id)).toEqual(['r2']);
-    /* Reject is wholesale "throw this away" — no selection to remember. */
-    expect(next.acceptedSelections).toEqual({});
-  });
-
-  it('acceptRevision is a no-op on pending when the id is unknown but still records the selection', () => {
-    /* If the user's last poll didn't carry r-stale but they're acting on an
-       in-memory copy they had before, the reducer should leave pending alone
-       and still record the selection (so a future PUT carries it). Belt-and-
-       braces — happens in practice if the modal stays open across a poll. */
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1')],
-        drift: [],
-      }),
-    );
-    const next = revisionsSlice.reducer(
-      start,
-      revisionsActions.acceptRevision({ revisionId: 'r-stale', selection: { 1: 'A' } }),
-    );
-    expect(next.pending.map((r) => r.id)).toEqual(['r1']);
-    expect(next.acceptedSelections).toEqual({ 'r-stale': { 1: 'A' } });
-  });
-});
-
-describe('revisionsSlice — acceptAllPending / rejectAllPending', () => {
-  it('acceptAllPending clears the pending queue', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1'), rev('r2')],
-        drift: [drift('d1')],
-      }),
-    );
-    const next = revisionsSlice.reducer(start, revisionsActions.acceptAllPending());
-    expect(next.pending).toEqual([]);
-    // drift untouched
-    expect(next.drift).toEqual(start.drift);
-  });
-
-  it('rejectAllPending clears the pending queue', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1')],
-        drift: [drift('d1')],
-      }),
-    );
-    const next = revisionsSlice.reducer(start, revisionsActions.rejectAllPending());
-    expect(next.pending).toEqual([]);
-    expect(next.drift).toEqual(start.drift);
-  });
-});
-
-describe('revisionsSlice — dismissDrift', () => {
-  it('removes the matching drift event by id', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.applyPoll({
-        bookId: 'book-A',
-        drift: [drift('d1'), drift('d2'), drift('d3')],
-      }),
-    );
-    const next = revisionsSlice.reducer(start, revisionsActions.dismissDrift('d2'));
-    expect(next.drift.map((d) => d.id)).toEqual(['d1', 'd3']);
-  });
-
-  it('records the dismissed id so the persistence patch carries it through', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.applyPoll({
-        bookId: 'book-A',
-        drift: [drift('d1'), drift('d2')],
-      }),
-    );
-    const next = revisionsSlice.reducer(start, revisionsActions.dismissDrift('d2'));
-    expect(next.dismissed).toEqual(['d2']);
-  });
-
-  it('does not duplicate an id that is dismissed twice', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.applyPoll({
-        bookId: 'book-A',
-        drift: [drift('d1')],
-      }),
-    );
-    s = revisionsSlice.reducer(s, revisionsActions.dismissDrift('d1'));
-    s = revisionsSlice.reducer(s, revisionsActions.dismissDrift('d1'));
-    expect(s.dismissed).toEqual(['d1']);
-  });
-
-  it('is a no-op for an unknown id (still records dismissal so persistence stays consistent)', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.applyPoll({
-        bookId: 'book-A',
-        drift: [drift('d1')],
-      }),
-    );
-    const next = revisionsSlice.reducer(start, revisionsActions.dismissDrift('not-real'));
-    expect(next.drift).toEqual(start.drift);
-    /* "not-real" still lands in dismissed — the reducer can't tell whether
-       an unknown id is a typo or an event that already aged out of the poll.
-       Persisting it is harmless: the backend's drift detector only emits ids
-       it knows, so a stray entry can never resurrect a real drift. */
-    expect(next.dismissed).toEqual(['not-real']);
-  });
-});
-
-describe('revisionsSlice — hydrateFromBookState', () => {
-  it('loads pending, drift, dismissed, and acceptedSelections from disk', () => {
-    const next = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1')],
-        drift: [drift('d1')],
-        dismissed: ['old-id'],
-        acceptedSelections: { 'r-prev': { 4: 'B', 5: 'A' } },
-      }),
-    );
-    expect(next.pending.map((r) => r.id)).toEqual(['r1']);
-    expect(next.drift.map((d) => d.id)).toEqual(['d1']);
-    expect(next.dismissed).toEqual(['old-id']);
-    expect(next.acceptedSelections).toEqual({ 'r-prev': { 4: 'B', 5: 'A' } });
-    expect(next.loaded).toBe(true);
-  });
-
-  it('a null payload flips loaded but leaves slice fields empty', () => {
-    const next = revisionsSlice.reducer(undefined, revisionsActions.hydrateFromBookState(null));
-    expect(next.pending).toEqual([]);
-    expect(next.drift).toEqual([]);
-    expect(next.dismissed).toEqual([]);
-    expect(next.acceptedSelections).toEqual({});
-    expect(next.loaded).toBe(true);
-  });
-
-  it('absent dismissed and acceptedSelections default to empty', () => {
-    const next = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [],
-        drift: [],
-      }),
-    );
-    expect(next.dismissed).toEqual([]);
-    expect(next.acceptedSelections).toEqual({});
-  });
-
-  it('ignores a hydrate response for a book already navigated away from (#3395 pass 2, N1)', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        bookId: 'book-A',
-        pending: [rev('rA')],
-        drift: [],
-      }),
-    );
-    /* Navigation moved on to book-C before book-A's own (stale, late) fetch
-       resolved — bookScopeChanged already re-scoped the slice. */
-    s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-C'));
-    const stale = revisionsSlice.reducer(
-      s,
-      revisionsActions.hydrateFromBookState({
-        bookId: 'book-A',
-        pending: [rev('rA')],
-        drift: [],
-      }),
-    );
-    expect(stale.bookId).toBe('book-C');
-    expect(stale.pending).toEqual([]);
-  });
-
-  it('applies a bookId-carrying payload unconditionally when no book was previously scoped', () => {
-    const next = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({ bookId: 'book-A', pending: [rev('r1')], drift: [] }),
-    );
-    expect(next.bookId).toBe('book-A');
-    expect(next.pending.map((r) => r.id)).toEqual(['r1']);
-  });
-
-  /* #3395 pass 3 — hydratedFor. */
-  it('sets hydratedFor to the payload bookId, even when the disk carried no revisions fields (R1/R2)', () => {
-    const next = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({ bookId: 'book-A' }),
-    );
-    expect(next.hydratedFor).toBe('book-A');
-    expect(next.pending).toEqual([]);
-  });
-
-  it('leaves hydratedFor untouched for a stale hydrate ignored by the bookId mismatch guard', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({ bookId: 'book-A', pending: [], drift: [] }),
-    );
-    expect(s.hydratedFor).toBe('book-A');
-    s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-C'));
-    expect(s.hydratedFor).toBeNull();
-    const stale = revisionsSlice.reducer(
-      s,
-      revisionsActions.hydrateFromBookState({ bookId: 'book-A', pending: [rev('rA')], drift: [] }),
-    );
-    expect(stale.hydratedFor).toBeNull();
-  });
-
-  it('replays a pre-hydrate-window enqueuePending on top of the disk snapshot (R2)', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.bookScopeChanged('book-B'),
-    );
-    /* A splice/regen write lands for book-B while its own getBookState is
-       still in flight — gated on revisions.bookId already matching
-       (see splice-runner-middleware / generation-stream-runner), not on
-       hydratedFor. */
-    s = revisionsSlice.reducer(
-      s,
-      revisionsActions.enqueuePending(rev('window-only', { playable: false })),
-    );
-    const disk = revisionsSlice.reducer(
-      s,
-      revisionsActions.hydrateFromBookState({
-        bookId: 'book-B',
-        pending: [rev('disk-only')],
-        drift: [],
-      }),
-    );
-    expect(disk.hydratedFor).toBe('book-B');
-    expect(disk.pending.map((r) => r.id).sort()).toEqual(['disk-only', 'window-only']);
-    expect(disk.windowActions).toEqual({});
-  });
-
-  /* #3395 pass 4, S1 — every revisions write in the window, not only an
-     enqueue, survives the hydrate: it is recorded while unhydrated and
-     replayed on top of the disk snapshot. */
-  describe('pre-hydrate window replay (#3395 pass 4, S1)', () => {
-    const unhydratedB = () =>
-      revisionsSlice.reducer(undefined, revisionsActions.bookScopeChanged('book-B'));
-
-    it('Repro A: a window markRevisionPlayable flips an entry that only the disk knows about', () => {
-      let s = unhydratedB();
-      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 3 }));
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.hydrateFromBookState({
-          bookId: 'book-B',
-          pending: [rev('splice-book-B-3-nora', { chapterId: 3, playable: false })],
-          drift: [],
-        }),
-      );
-      expect(s.pending).toEqual([
-        expect.objectContaining({ id: 'splice-book-B-3-nora', playable: true }),
-      ]);
-    });
-
-    it('Repro B: a window dismissDrift survives the hydrate replacing dismissed/drift from disk', () => {
-      let s = revisionsSlice.reducer(
-        undefined,
-        revisionsActions.applyBackgroundPoll({ bookId: 'book-B', drift: [drift('d1', { bookId: 'book-B' })] }),
-      );
-      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-B'));
-      s = revisionsSlice.reducer(s, revisionsActions.dismissDrift('d1'));
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.hydrateFromBookState({
-          bookId: 'book-B',
-          pending: [],
-          drift: [drift('d1', { bookId: 'book-B' })],
-          dismissed: [],
-        }),
-      );
-      expect(s.dismissed).toEqual(['d1']);
-      expect(s.drift.map((d) => d.id)).toEqual([]);
-    });
-
-    it('a window acceptRevision of a disk-only take records its timeline entry and selection', () => {
-      let s = unhydratedB();
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.acceptRevision({ revisionId: 'rA', selection: { 0: 'B' } }),
-      );
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.hydrateFromBookState({
-          bookId: 'book-B',
-          pending: [rev('rA', { chapterId: 7 })],
-          drift: [],
-        }),
-      );
-      expect(s.pending).toEqual([]);
-      expect(s.acceptedSelections).toEqual({ rA: { 0: 'B' } });
-      expect(s.timeline[7]?.map((e) => e.eventKind)).toEqual(['accepted']);
-    });
-
-    it('a window rejectRevision of a disk-only take records its timeline entry', () => {
-      let s = unhydratedB();
-      s = revisionsSlice.reducer(s, revisionsActions.rejectRevision('rA'));
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.hydrateFromBookState({
-          bookId: 'book-B',
-          pending: [rev('rA', { chapterId: 7 })],
-          drift: [],
-        }),
-      );
-      expect(s.pending).toEqual([]);
-      expect(s.timeline[7]?.map((e) => e.eventKind)).toEqual(['rejected']);
-    });
-
-    it('a window rolledBack applies to the disk timeline', () => {
-      let s = unhydratedB();
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.rolledBack({ chapterId: 7, timelineEntryId: 't1', rolledBackId: 'rb1' }),
-      );
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.hydrateFromBookState({
-          bookId: 'book-B',
-          pending: [],
-          drift: [],
-          timeline: {
-            7: [
-              {
-                id: 't1',
-                chapterId: 7,
-                eventKind: 'accepted',
-                timestamp: '2026-01-01T00:00:00Z',
-                status: 'active',
-                reversible: true,
-              },
-            ],
-          },
-        }),
-      );
-      expect(s.timeline[7]?.map((e) => [e.id, e.status])).toEqual([
-        ['t1', 'rolled-back-from'],
-        ['rb1', 'active'],
-      ]);
-    });
-
-    it('replays in dispatch order (enqueue then flip)', () => {
-      let s = unhydratedB();
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.enqueuePending(rev('w', { chapterId: 4, playable: false })),
-      );
-      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 4 }));
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.hydrateFromBookState({ bookId: 'book-B', pending: [], drift: [] }),
-      );
-      expect(s.pending).toEqual([expect.objectContaining({ id: 'w', playable: true })]);
-    });
-
-    it('records nothing once the book is hydrated', () => {
-      let s = revisionsSlice.reducer(
-        undefined,
-        revisionsActions.hydrateFromBookState({ bookId: 'book-B', pending: [], drift: [] }),
-      );
-      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 4 }));
-      expect(s.windowActions).toEqual({});
-    });
-
-    it('keeps a book\'s recorded writes across a trip to another book and replays them on return', () => {
-      let s = unhydratedB();
-      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 3 }));
-      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged(null));
-      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-B'));
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.hydrateFromBookState({
-          bookId: 'book-B',
-          pending: [rev('r3', { chapterId: 3, playable: false })],
-          drift: [],
-        }),
-      );
-      expect(s.pending).toEqual([expect.objectContaining({ id: 'r3', playable: true })]);
-    });
-
-    /* #3395 pass 5, minor a — the hydrate can land long after the click
-       (a slow or retried read), and Revision History shows the stamp. */
-    it('a replayed accept/reject keeps the time it was dispatched, not the replay time', () => {
-      vi.useFakeTimers();
-      try {
-        vi.setSystemTime(new Date('2026-10-01T10:00:00.000Z'));
-        let s = unhydratedB();
-        s = revisionsSlice.reducer(
-          s,
-          revisionsActions.acceptRevision({ revisionId: 'rA', selection: { 0: 'B' } }),
-        );
-        s = revisionsSlice.reducer(s, revisionsActions.rejectRevision('rB'));
-        vi.setSystemTime(new Date('2026-10-01T10:05:00.000Z'));
-        s = revisionsSlice.reducer(
-          s,
-          revisionsActions.hydrateFromBookState({
-            bookId: 'book-B',
-            pending: [rev('rA', { chapterId: 7 }), rev('rB', { chapterId: 8 })],
-            drift: [],
-          }),
-        );
-        expect(s.timeline[7]?.map((e) => e.timestamp)).toEqual(['2026-10-01T10:00:00.000Z']);
-        expect(s.timeline[8]?.map((e) => e.timestamp)).toEqual(['2026-10-01T10:00:00.000Z']);
-      } finally {
-        vi.useRealTimers();
-      }
-    });
-
-    /* #3395 pass 5, N1 — a record outlives a server-side wipe of its book
-       unless the client drops it when it mirrors that wipe. */
-    it('bookWiped drops only that book\'s recorded writes', () => {
-      let s = unhydratedB();
-      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 3 }));
-      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-C'));
-      s = revisionsSlice.reducer(s, revisionsActions.markRevisionPlayable({ chapterId: 4 }));
-      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged(null));
-      s = revisionsSlice.reducer(s, revisionsActions.bookWiped('book-B'));
-      expect(Object.keys(s.windowActions)).toEqual(['book-C']);
-      s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-B'));
-      s = revisionsSlice.reducer(
-        s,
-        revisionsActions.hydrateFromBookState({
-          bookId: 'book-B',
-          pending: [rev('r3', { chapterId: 3, playable: false })],
-          drift: [],
-        }),
-      );
-      expect(s.pending).toEqual([expect.objectContaining({ id: 'r3', playable: false })]);
-    });
-  });
-
-  it('keeps the disk pending list untouched when there was no pre-hydrate window write', () => {
-    const next = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        bookId: 'book-A',
-        pending: [rev('disk-only')],
-        drift: [],
-      }),
-    );
-    expect(next.pending.map((r) => r.id)).toEqual(['disk-only']);
-  });
-});
-
-describe('revisionsSlice — persistPendingAfterHydrateMerge (#3395 pass 3, R2)', () => {
-  it('is a no-op reducer — exists only as a PERSIST_RULES-recognised action type', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({ bookId: 'book-A', pending: [rev('r1')], drift: [] }),
-    );
-    const next = revisionsSlice.reducer(start, revisionsActions.persistPendingAfterHydrateMerge());
-    expect(next).toEqual(start);
-  });
-});
-
-describe('revisionsSlice — bookScopeChanged (#3395 pass 2, N1)', () => {
-  it('resets pending/dismissed/acceptedSelections/timeline and adopts the new bookId', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        bookId: 'book-A',
-        pending: [rev('rA')],
-        drift: [],
-        dismissed: ['d1'],
-        acceptedSelections: { rA: { 1: 'A' } },
-      }),
-    );
-    s = revisionsSlice.reducer(
-      s,
-      revisionsActions.acceptRevision({ revisionId: 'rA', selection: { 1: 'A' } }),
-    );
-    expect(s.timeline[1]).toHaveLength(1);
-
-    s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-B'));
-    expect(s.bookId).toBe('book-B');
-    expect(s.pending).toEqual([]);
-    expect(s.dismissed).toEqual([]);
-    expect(s.acceptedSelections).toEqual({});
-    expect(s.timeline).toEqual({});
-  });
-
-  it('leaves drift untouched — it is already multi-book-aware', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.applyPoll({
-        bookId: 'book-A',
-        drift: [drift('d-A1', { bookId: 'book-A' })],
-      }),
-    );
-    s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-B'));
-    expect(s.drift.map((d) => d.id)).toEqual(['d-A1']);
-  });
-
-  it('is a no-op when the bookId has not actually changed', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({ bookId: 'book-A', pending: [rev('rA')], drift: [] }),
-    );
-    s = revisionsSlice.reducer(s, revisionsActions.bookScopeChanged('book-A'));
-    expect(s.pending.map((r) => r.id)).toEqual(['rA']);
-  });
-});
-
-describe('revisionsSlice — plan 55 timeline', () => {
-  it('acceptRevision appends an `accepted` timeline entry keyed by chapterId', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1', { chapterId: 3, characterId: 'halloran' })],
-        drift: [],
-      }),
-    );
-    s = revisionsSlice.reducer(
-      s,
-      revisionsActions.acceptRevision({ revisionId: 'r1', selection: { 1: 'B' } }),
-    );
-    expect(s.timeline[3]).toHaveLength(1);
-    expect(s.timeline[3][0]).toMatchObject({
-      id: 'r1',
-      chapterId: 3,
-      characterId: 'halloran',
-      eventKind: 'accepted',
-      status: 'active',
-    });
-    expect(typeof s.timeline[3][0].timestamp).toBe('string');
-  });
-
-  it('rejectRevision appends a `rejected` timeline entry', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r2', { chapterId: 5, characterId: 'wren' })],
-        drift: [],
-      }),
-    );
-    s = revisionsSlice.reducer(s, revisionsActions.rejectRevision('r2'));
-    expect(s.timeline[5]).toHaveLength(1);
-    expect(s.timeline[5][0]).toMatchObject({
-      id: 'r2',
-      chapterId: 5,
-      characterId: 'wren',
-      eventKind: 'rejected',
-      status: 'active',
-    });
-  });
-
-  it('subsequent accept on the same chapter flips the prior reversible entry off', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [
-          rev('r1', { chapterId: 3, characterId: 'a' }),
-          rev('r2', { chapterId: 3, characterId: 'b' }),
-        ],
-        drift: [],
-      }),
-    );
-    s = revisionsSlice.reducer(
-      s,
-      revisionsActions.acceptRevision({ revisionId: 'r1', selection: {} }),
-    );
-    s = revisionsSlice.reducer(
-      s,
-      revisionsActions.acceptRevision({ revisionId: 'r2', selection: {} }),
-    );
-    expect(s.timeline[3]).toHaveLength(2);
-    expect(s.timeline[3][0].reversible).toBe(false);
-    expect(s.timeline[3][1].reversible).toBe(true);
-  });
-
-  it('accept on an unknown revisionId is a no-op for timeline (no pending to read chapter from)', () => {
-    const s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.acceptRevision({ revisionId: 'never-existed', selection: {} }),
-    );
-    expect(s.timeline).toEqual({});
-  });
-
-  it('rolledBack flips the targeted entry to `rolled-back-from` and appends a new `rolled-back` entry', () => {
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1', { chapterId: 2 })],
-        drift: [],
-      }),
-    );
-    s = revisionsSlice.reducer(
-      s,
-      revisionsActions.acceptRevision({ revisionId: 'r1', selection: {} }),
-    );
-    s = revisionsSlice.reducer(
-      s,
-      revisionsActions.rolledBack({
-        chapterId: 2,
-        timelineEntryId: 'r1',
-        rolledBackId: 'rb-1',
-      }),
-    );
-    expect(s.timeline[2]).toHaveLength(2);
-    expect(s.timeline[2][0].status).toBe('rolled-back-from');
-    expect(s.timeline[2][1]).toMatchObject({
-      id: 'rb-1',
-      eventKind: 'rolled-back',
-      status: 'active',
-      reversible: false,
-    });
-  });
-
-  it('hydrateFromBookState normalises string-keyed timeline (JSON serialisation)', () => {
+describe('revisionsSlice — timeline (plan 55, server-owned as of plan 286)', () => {
+  it('applyServerState normalises string-keyed timeline (JSON serialisation)', () => {
     /* On-disk JSON keys are strings; the slice carries numeric chapterIds.
-       Defensive normalisation preserves both shapes on hydrate. */
+       Defensive normalisation preserves both shapes on adopt. */
     const s = revisionsSlice.reducer(
       undefined,
-      revisionsActions.hydrateFromBookState({
+      revisionsActions.applyServerState({
+        bookId: 'book-A',
+        fileId: null,
+        rev: 1,
+        pending: [],
+        dismissed: [],
+        acceptedSelections: {},
         timeline: {
           '7': [
             {
@@ -934,29 +301,6 @@ describe('revisionsSlice — multi-book drift (plan: drift-report-fidelity)', ()
       }),
     );
     expect(s.drift.map((d) => d.id).sort()).toEqual(['d-A-new', 'd-B1']);
-  });
-
-  it('hydrateFromBookState with bookId merges into the flat drift list', () => {
-    /* Seeded via applyBackgroundPoll (drift-only, never adopts `bookId` —
-       plan 286's applyPoll now owns the single-book cache identity, which
-       would make a later hydrateFromBookState for a DIFFERENT book trip the
-       stale-hydrate guard at revisions-slice.ts `payload.bookId !== s.bookId`). */
-    let s = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.applyBackgroundPoll({
-        bookId: 'book-A',
-        drift: [drift('d-A1', { bookId: 'book-A' })],
-      }),
-    );
-    s = revisionsSlice.reducer(
-      s,
-      revisionsActions.hydrateFromBookState({
-        bookId: 'book-B',
-        drift: [drift('d-B1', { bookId: 'book-B' })],
-        dismissed: [],
-      }),
-    );
-    expect(s.drift.map((d) => d.id).sort()).toEqual(['d-A1', 'd-B1']);
   });
 
   it('selectDriftByBook groups flat drift events by bookId', () => {
@@ -1285,96 +629,6 @@ describe('selectDriftGroupsByBook — per-chapter rollup (multi-factor dedup)', 
     const g = selectDriftGroupsByBook({ revisions: s })[0].groups[0];
     /* CH 1 top = severe; CH 2 top = moderate. */
     expect(g.severityCounts).toEqual({ severe: 1, moderate: 1, mild: 0 });
-  });
-});
-
-describe('revisionsSlice — enqueuePending', () => {
-  it('appends a new pending revision', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({ pending: [rev('r1')], drift: [] }),
-    );
-    const next = revisionsSlice.reducer(
-      start,
-      revisionsActions.enqueuePending(rev('r2', { playable: false, hasPreviousAudio: true })),
-    );
-    expect(next.pending.map((r) => r.id)).toEqual(['r1', 'r2']);
-    expect(next.pending[1].playable).toBe(false);
-    expect(next.pending[1].hasPreviousAudio).toBe(true);
-  });
-
-  it('replaces (dedupes) when the same id is enqueued again', () => {
-    /* Regen restart for the same character + chapter rebuilds the stub
-       with a fresh playable=false. The dedupe is by id, so the slice
-       carries exactly one entry per (chapterId, characterId) tuple as
-       long as the id encodes both. */
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.enqueuePending(rev('r1', { playable: true })),
-    );
-    const next = revisionsSlice.reducer(
-      start,
-      revisionsActions.enqueuePending(rev('r1', { playable: false })),
-    );
-    expect(next.pending).toHaveLength(1);
-    expect(next.pending[0].playable).toBe(false);
-  });
-});
-
-describe('revisionsSlice — markRevisionPlayable', () => {
-  it('flips playable=true for matching chapterId', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [
-          rev('r1', { chapterId: 1, playable: false }),
-          rev('r2', { chapterId: 2, playable: false }),
-        ],
-        drift: [],
-      }),
-    );
-    const next = revisionsSlice.reducer(
-      start,
-      revisionsActions.markRevisionPlayable({ chapterId: 1 }),
-    );
-    expect(next.pending.find((r) => r.id === 'r1')?.playable).toBe(true);
-    expect(next.pending.find((r) => r.id === 'r2')?.playable).toBe(false);
-  });
-
-  it('flips all pending revisions targeting the same chapter (parallel regens)', () => {
-    /* Two characters regenerated in the same chapter → two pending
-       revisions with the same chapterId. chapter_complete fires once
-       per chapter; both should flip. */
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [
-          rev('r1', { chapterId: 3, characterId: 'a', playable: false }),
-          rev('r2', { chapterId: 3, characterId: 'b', playable: false }),
-        ],
-        drift: [],
-      }),
-    );
-    const next = revisionsSlice.reducer(
-      start,
-      revisionsActions.markRevisionPlayable({ chapterId: 3 }),
-    );
-    expect(next.pending.every((r) => r.playable === true)).toBe(true);
-  });
-
-  it('is a no-op when no revision targets the chapter', () => {
-    const start = revisionsSlice.reducer(
-      undefined,
-      revisionsActions.hydrateFromBookState({
-        pending: [rev('r1', { chapterId: 1, playable: false })],
-        drift: [],
-      }),
-    );
-    const next = revisionsSlice.reducer(
-      start,
-      revisionsActions.markRevisionPlayable({ chapterId: 99 }),
-    );
-    expect(next.pending).toEqual(start.pending);
   });
 });
 
