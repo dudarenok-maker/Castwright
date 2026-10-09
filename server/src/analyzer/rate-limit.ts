@@ -109,6 +109,29 @@ export function resolveLimits(model: string): ModelLimits {
   };
 }
 
+/** `acquire()` (below) now gates both Gemini AND OpenAI-compatible endpoint
+    models through the same limiter (`analyzerRateLimiter` in
+    `transports/openai-transport.ts`), so these two error messages can no
+    longer hardcode "Gemini" — an endpoint model hits them too, and a
+    message naming the wrong provider or a Gemini-only knob sends the user
+    to a setting that doesn't exist for their model. */
+function engineLabel(model: string): string {
+  switch (inferEngineFromModelId(model)) {
+    case 'gemini':
+      return 'Gemini';
+    case 'openai':
+      return 'Endpoint model';
+    default:
+      return 'Model';
+  }
+}
+
+function tpmCapHint(model: string): string {
+  return inferEngineFromModelId(model) === 'gemini'
+    ? 'Lower analyzer.gemini.maxInputTokensPerRequest or raise TPM.'
+    : "Lower the endpoint's saved max input tokens per request, or raise its saved TPM limit.";
+}
+
 /** Daily-quota exhausted for the given model. The route layer catches
     this and surfaces it to the UI as `code: 'daily_quota'` with the
     `resetAt` time in the detail blob. Distinct from a per-minute 429 —
@@ -119,7 +142,7 @@ export class DailyQuotaExhaustedError extends Error {
     public readonly model: string,
     public readonly resetAt: Date,
   ) {
-    super(`Gemini ${model} daily quota exhausted — resets at ${resetAt.toISOString()}.`);
+    super(`${engineLabel(model)} ${model} daily quota exhausted — resets at ${resetAt.toISOString()}.`);
     this.name = 'DailyQuotaExhaustedError';
   }
 }
@@ -136,8 +159,8 @@ export class RequestExceedsTpmError extends Error {
     public readonly cap: number,
   ) {
     super(
-      `Gemini ${model}: request estimate ${estimated} tokens exceeds the ${cap} tokens/min cap — ` +
-        `no single request can fit. Lower analyzer.gemini.maxInputTokensPerRequest or raise TPM.`,
+      `${engineLabel(model)} ${model}: request estimate ${estimated} tokens exceeds the ${cap} tokens/min cap — ` +
+        `no single request can fit. ${tpmCapHint(model)}`,
     );
     this.name = 'RequestExceedsTpmError';
   }

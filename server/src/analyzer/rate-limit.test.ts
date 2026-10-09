@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   GeminiRateLimiter,
   DailyQuotaExhaustedError,
+  RequestExceedsTpmError,
   computeTpmWait,
   resolveLimits,
 } from './rate-limit.js';
@@ -148,6 +149,21 @@ describe('GeminiRateLimiter', () => {
     delete process.env.GEMINI_RPM_FAKE_MODEL;
     delete process.env.GEMINI_TPM_FAKE_MODEL;
     delete process.env.GEMINI_RPD_FAKE_MODEL;
+  });
+
+  it('names the endpoint, not Gemini, for an OpenAI-compatible model hitting its own saved RPD or TPM cap (#3084 — this limiter now gates endpoint traffic too, in openai-transport.ts)', async () => {
+    _setUserSettingsCacheForTest({ analyzerRateLimitsByModel: { 'openai:lab::m': { rpd: 1 } } });
+    await limiter.acquire('openai:lab::m', 1_000);
+    const rpdErr = await limiter.acquire('openai:lab::m', 1_000).catch((e) => e);
+    expect(rpdErr).toBeInstanceOf(DailyQuotaExhaustedError);
+    expect((rpdErr as Error).message).not.toContain('Gemini');
+    expect((rpdErr as Error).message).toContain('Endpoint model openai:lab::m');
+
+    _setUserSettingsCacheForTest({ analyzerRateLimitsByModel: { 'openai:lab::m2': { tpm: 500 } } });
+    const tpmErr = await limiter.acquire('openai:lab::m2', 1_000).catch((e) => e);
+    expect(tpmErr).toBeInstanceOf(RequestExceedsTpmError);
+    expect((tpmErr as Error).message).not.toContain('Gemini');
+    expect((tpmErr as Error).message).toContain("endpoint's saved max input tokens per request");
   });
 
   it('recordRejection(model, ms) blocks the next acquire for at least that long', async () => {
