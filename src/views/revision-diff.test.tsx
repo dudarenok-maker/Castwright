@@ -13,7 +13,7 @@
    `play` / `pause` to assert mutual exclusion. */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup, act } from '@testing-library/react';
 import { RevisionDiffPlayer } from './revision-diff';
 import type { Revision, Chapter, Character, ChapterAudio } from '../lib/types';
 
@@ -94,7 +94,10 @@ afterEach(() => {
   basePause.mockRestore();
 });
 
-function renderPlayer(revision: Revision = makeRevision()) {
+function renderPlayer(
+  revision: Revision = makeRevision(),
+  extra: Partial<React.ComponentProps<typeof RevisionDiffPlayer>> = {},
+) {
   const onClose = vi.fn();
   const onAccept = vi.fn();
   const onReject = vi.fn();
@@ -107,6 +110,7 @@ function renderPlayer(revision: Revision = makeRevision()) {
       onClose={onClose}
       onAccept={onAccept}
       onReject={onReject}
+      {...extra}
     />,
   );
   return { ...result, onClose, onAccept, onReject };
@@ -230,5 +234,62 @@ describe('RevisionDiffPlayer', () => {
     await waitFor(() => {
       expect(api.getChapterAudio).toHaveBeenCalled();
     });
+  });
+
+  it('plan 286 — busy disables every footer action', () => {
+    renderPlayer(makeRevision(), { busy: true });
+    expect(screen.getByRole('button', { name: /Reject draft/i })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Commit selection/i })).toBeDisabled();
+  });
+  it('plan 286 — rendering shows the rendering copy and disables B', () => {
+    renderPlayer(makeRevision(), { rendering: true });
+    expect(screen.getByText(/Rendering new take/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Play B · New draft/i)).toBeDisabled();
+  });
+  it('plan 286 — A unavailable: Keep new take replaces Commit selection; Reject is disabled', () => {
+    const onKeepNew = vi.fn();
+    renderPlayer(makeRevision(), { previousMissing: true, onKeepNew });
+    expect(screen.queryByRole('button', { name: /Commit selection/i })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Keep new take/i }));
+    expect(onKeepNew).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: /Reject draft/i })).toBeDisabled();
+  });
+  it('plan 286 — preview mode never shows Keep new take', () => {
+    render(<RevisionDiffPlayer revision={makeRevision({ hasPreviousAudio: false })} bookId="book-1" chapter={chapter} character={character}
+      onClose={vi.fn()} onAccept={vi.fn()} onReject={vi.fn()} onKeepNew={vi.fn()} mode="preview" />);
+    expect(screen.queryByRole('button', { name: /Keep new take/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /Approve.*regenerate the rest/i })).toBeEnabled();
+  });
+  it('plan 286 — releases both audio elements before calling onReject', () => {
+    const order: string[] = [];
+    basePause.mockImplementation(function (this: HTMLMediaElement) { order.push('pause'); });
+    const onReject = vi.fn(() => { order.push('reject'); });
+    renderPlayer(makeRevision(), { onReject });
+    fireEvent.click(screen.getByRole('button', { name: /Reject draft/i }));
+    expect(order.filter((o) => o === 'pause').length).toBeGreaterThanOrEqual(2);
+    expect(order.lastIndexOf('pause')).toBeLessThan(order.indexOf('reject'));
+  });
+  it('plan 286 — after a refused reject (player still open), A and B still play from their URLs', async () => {
+    const played: Array<string | null> = [];
+    basePlay.mockImplementation(function (this: HTMLMediaElement) { played.push(this.getAttribute('src')); return Promise.resolve(); });
+    renderPlayer(makeRevision());
+    await waitFor(() => expect(api.getChapterAudio).toHaveBeenCalled());
+    await waitFor(() => expect(api.getChapterAudioPrevious).toHaveBeenCalled());
+    await act(async () => { await Promise.resolve(); }); // let setAudioA/setAudioB land so the hook has both URLs
+    fireEvent.click(screen.getByRole('button', { name: /Reject draft/i })); // release; onReject is a no-op mock = refused
+    fireEvent.click(screen.getByLabelText(/Play A · Current/i));
+    fireEvent.click(screen.getByLabelText(/Play B · New draft/i));
+    await waitFor(() => expect(played).toEqual(['blob:a', 'blob:b']));
+  });
+  it('plan 286 (OD20) — a recovered entry is labelled, and its A side is described as the kept take', () => {
+    renderPlayer(makeRevision({ recovered: true }));
+    expect(screen.getByTestId('revision-recovered-badge')).toHaveTextContent('Recovered from before the update');
+    expect(screen.getByText("The take kept before this chapter's last render")).toBeInTheDocument();
+    expect(screen.queryByText('Already in your audiobook')).toBeNull();
+  });
+  it('plan 286 (OD20) — an ordinary entry shows no recovered label', () => {
+    renderPlayer(makeRevision());
+    expect(screen.queryByTestId('revision-recovered-badge')).toBeNull();
+    expect(screen.getByText('Already in your audiobook')).toBeInTheDocument();
   });
 });

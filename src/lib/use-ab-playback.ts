@@ -46,6 +46,10 @@ export interface UseAbPlaybackResult {
   /** Lazy refs to the underlying audio elements — exposed for tests so
       they can spy on `.play()` / `.pause()` without coupling to internals. */
   audioRefs: { A: HTMLAudioElement | null; B: HTMLAudioElement | null };
+  /** Plan 286 — free both elements' file handles. playA/playB re-attach
+      `src` lazily on next play, so a refused op still leaves a working
+      player. */
+  release: () => void;
 }
 
 interface Args {
@@ -60,6 +64,10 @@ export function useAbPlayback({ urlA, urlB }: Args): UseAbPlaybackResult {
   const refA = useRef<HTMLAudioElement | null>(null);
   const refB = useRef<HTMLAudioElement | null>(null);
   const [snap, setSnap] = useState<PlaybackSnapshot>({ playing: null, segmentId: null });
+  const urlARef = useRef(urlA);
+  urlARef.current = urlA;
+  const urlBRef = useRef(urlB);
+  urlBRef.current = urlB;
 
   /* Lazy-init audio elements so SSR + the initial render don't pay the
      cost; React Strict-Mode double-effect doesn't create two pairs. */
@@ -110,8 +118,23 @@ export function useAbPlayback({ urlA, urlB }: Args): UseAbPlaybackResult {
     setSnap({ playing: null, segmentId: null });
   }, []);
 
+  /** Plan 286 — free both elements' file handles BEFORE an accept/reject
+      reaches the server (Windows refuses to unlink/rename an open file).
+      playA/playB re-attach lazily, so a refused op leaves a working player. */
+  const release = useCallback(() => {
+    for (const el of [refA.current, refB.current]) {
+      if (!el) continue;
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+    }
+    setSnap({ playing: null, segmentId: null });
+  }, []);
+
   const playVersion = useCallback(async (version: AbVersion, opts: PlayOptions = {}) => {
     const target = ensureAudio(version);
+    const latestUrl = version === 'A' ? urlARef.current : urlBRef.current;
+    if (!target.getAttribute('src') && latestUrl) target.src = latestUrl;
     const other = ensureAudio(version === 'A' ? 'B' : 'A');
     /* Mutual exclusion: pause the other element first so its
        `timeupdate` auto-pause handler doesn't keep racing past the
@@ -174,6 +197,7 @@ export function useAbPlayback({ urlA, urlB }: Args): UseAbPlaybackResult {
     playA,
     playB,
     pause,
+    release,
     audioRefs: { A: refA.current, B: refB.current },
   };
 }

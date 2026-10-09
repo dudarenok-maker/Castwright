@@ -37,6 +37,19 @@ interface Props {
       Accept fans the remaining chapters out, Reject reverts + re-adjusts.
       Defaults to `'review'` (the standalone A/B accept flow). */
   mode?: 'preview' | 'review';
+  /** Plan 286 — disables every footer action while an op is in flight. */
+  busy?: boolean;
+  /** Plan 286 — B is still rendering; overrides `playable` for copy/disabled
+      purposes even if the revision itself says otherwise. */
+  rendering?: boolean;
+  /** Plan 286 — A's audio is known to be gone even though
+      `hasPreviousAudio` may say otherwise (e.g. a live-audio-missing op
+      response). */
+  previousMissing?: boolean;
+  /** Plan 286 (OD11) — review mode only: when A is unavailable, the
+      footer's primary button becomes "Keep new take" and calls this
+      instead of `onAccept`, with "Reject draft" disabled. */
+  onKeepNew?: () => void;
 }
 
 export function RevisionDiffPlayer({
@@ -49,6 +62,10 @@ export function RevisionDiffPlayer({
   onReject,
   onOpenHistory,
   mode = 'review',
+  busy = false,
+  rendering = false,
+  previousMissing = false,
+  onKeepNew,
 }: Props) {
   const isPreview = mode === 'preview';
   const [selected, setSelected] = useState<Record<number, 'A' | 'B'>>(() => {
@@ -70,6 +87,9 @@ export function RevisionDiffPlayer({
   const [audioBError, setAudioBError] = useState<string | null>(null);
   const hasPreviousAudio = revision.hasPreviousAudio !== false;
   const playable = revision.playable !== false;
+  const aUnavailable = !hasPreviousAudio || previousMissing === true;
+  const bAvailable = playable && !rendering;
+  const recovered = revision.recovered === true;
 
   useEffect(() => {
     if (!chapter) return;
@@ -157,6 +177,8 @@ export function RevisionDiffPlayer({
 
   if (!revision || !chapter) return null;
 
+  const keepNewOnly = !isPreview && aUnavailable && onKeepNew !== undefined;
+
   const c = CHAR_COLORS[(character?.color as CharColor) || 'narrator'];
   const totalChanged = revision.segments.filter((s) => s.changed).length;
   const acceptedNew = revision.segments.filter(
@@ -183,8 +205,8 @@ export function RevisionDiffPlayer({
       return;
     }
     /* Disable B when not playable; disable A when not preserved. */
-    if (version === 'A' && !hasPreviousAudio) return;
-    if (version === 'B' && !playable) return;
+    if (version === 'A' && aUnavailable) return;
+    if (version === 'B' && !bAvailable) return;
     const fn = version === 'A' ? ab.playA : ab.playB;
     fn(opts).catch((err) => {
       console.warn('[revision-diff] play failed:', err);
@@ -214,6 +236,14 @@ export function RevisionDiffPlayer({
               {character ? ` · ${character.name}` : ''}
             </h1>
           </div>
+          {recovered && (
+            <span
+              data-testid="revision-recovered-badge"
+              className="px-2.5 py-1 rounded-full bg-peach/15 text-magenta text-xs font-semibold"
+            >
+              Recovered from before the update
+            </span>
+          )}
           <span className="text-xs text-ink/55 hidden md:inline-flex items-center gap-1.5">
             <IconClock className="w-3.5 h-3.5" />
             Triggered {revision.triggeredAgo}
@@ -241,23 +271,25 @@ export function RevisionDiffPlayer({
             <ABCard
               label="A · Current"
               sub={
-                hasPreviousAudio
-                  ? 'Already in your audiobook'
-                  : 'Original audio not preserved — review by metadata only'
+                aUnavailable
+                  ? 'Original audio not preserved — review by metadata only'
+                  : recovered
+                    ? "The take kept before this chapter's last render"
+                    : 'Already in your audiobook'
               }
               duration={revision.oldDuration}
               variant="current"
-              available={hasPreviousAudio}
+              available={!aUnavailable}
               isPlaying={ab.playing === 'A' && ab.segmentId === null}
               onPlay={() => handlePlay('A')}
             />
             <ABCard
               label="B · New draft"
-              sub={playable ? (revision.triggeredBy ?? '') : 'Rendering new take…'}
+              sub={bAvailable ? (revision.triggeredBy ?? '') : 'Rendering new take…'}
               duration={revision.newDuration}
               variant="new"
               character={character}
-              available={playable}
+              available={bAvailable}
               error={audioBError ?? undefined}
               isPlaying={ab.playing === 'B' && ab.segmentId === null}
               onPlay={() => handlePlay('B')}
@@ -278,7 +310,7 @@ export function RevisionDiffPlayer({
             </div>
             <button
               onClick={() => setAutoCompare(!autoCompare)}
-              disabled={!playable || !hasPreviousAudio || totalChanged === 0}
+              disabled={!bAvailable || aUnavailable || totalChanged === 0}
               className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${autoCompare ? 'bg-peach text-ink' : 'bg-ink/4 text-ink hover:bg-ink/8'}`}
             >
               {autoCompare ? (
@@ -320,8 +352,8 @@ export function RevisionDiffPlayer({
                       onSelect={(v) => seg.id != null && setSelected({ ...selected, [seg.id]: v })}
                       isPlayingA={ab.playing === 'A' && ab.segmentId === seg.id}
                       isPlayingB={ab.playing === 'B' && ab.segmentId === seg.id}
-                      aDisabled={!hasPreviousAudio}
-                      bDisabled={!playable}
+                      aDisabled={aUnavailable}
+                      bDisabled={!bAvailable}
                       onPlayA={() =>
                         handlePlay('A', {
                           segmentId: seg.id ?? undefined,
@@ -414,14 +446,38 @@ export function RevisionDiffPlayer({
           </span>
           <span className="ml-auto flex items-center gap-3">
             <button
-              onClick={onReject}
-              className="px-4 py-2.5 text-sm font-medium text-ink/70 hover:text-ink"
+              onClick={() => {
+                ab.release();
+                onReject();
+              }}
+              disabled={busy || keepNewOnly}
+              className="px-4 py-2.5 text-sm font-medium text-ink/70 hover:text-ink disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isPreview ? 'Reject & re-adjust' : 'Reject draft'}
             </button>
-            <PrimaryButton variant="dark" onClick={() => onAccept(selected)}>
-              {isPreview ? 'Approve — regenerate the rest' : 'Commit selection'}
-            </PrimaryButton>
+            {keepNewOnly ? (
+              <PrimaryButton
+                variant="dark"
+                disabled={busy}
+                onClick={() => {
+                  ab.release();
+                  onKeepNew!();
+                }}
+              >
+                Keep new take
+              </PrimaryButton>
+            ) : (
+              <PrimaryButton
+                variant="dark"
+                disabled={busy}
+                onClick={() => {
+                  ab.release();
+                  onAccept(selected);
+                }}
+              >
+                {isPreview ? 'Approve — regenerate the rest' : 'Commit selection'}
+              </PrimaryButton>
+            )}
           </span>
         </div>
       </footer>
