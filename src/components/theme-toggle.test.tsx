@@ -31,6 +31,8 @@ function makeStore({
     regenInitialScope: null,
     regenCharacterCtx: null,
     previewRegen: null,
+    openRevision: null,
+    revisionOpInFlight: false,
     staleAudio: null,
     showRevisionPlayer: false,
     revisionHistoryFor: null,

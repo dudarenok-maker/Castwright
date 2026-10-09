@@ -2069,6 +2069,7 @@ export function Layout() {
                     remainingChapterIds,
                     reason,
                     note,
+                    bookId,
                   }),
                 );
                 void dispatch(

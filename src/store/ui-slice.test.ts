@@ -1,7 +1,13 @@
 // Pairs with docs/features/archive/00-stage-machine.md, docs/features/archive/01-hash-router.md
 
 import { describe, expect, it } from 'vitest';
-import { uiSlice, uiActions, selectPhaseModelPick, type UiState } from './ui-slice';
+import {
+  uiSlice,
+  uiActions,
+  selectPhaseModelPick,
+  selectActivePreviewStub,
+  type UiState,
+} from './ui-slice';
 import { stageToHash } from '../lib/router';
 import type { Stage } from '../lib/types';
 
@@ -16,6 +22,8 @@ const baseState = (stage: Stage): UiState => ({
   regenInitialScope: null,
   regenCharacterCtx: null,
   previewRegen: null,
+  openRevision: null,
+  revisionOpInFlight: false,
   staleAudio: null,
   showRevisionPlayer: false,
   revisionHistoryFor: null,
@@ -429,6 +437,77 @@ describe('uiSlice — driftReportScope (drift modal book/series toggle)', () => 
     );
     const closed = uiSlice.reducer(opened, uiActions.setShowDriftReport(false));
     expect(closed.driftReportScope).toBe('book');
+  });
+});
+
+describe('uiSlice — plan 286: openRevision, revisionOpInFlight, preview stub', () => {
+  it('openRevision and revisionOpInFlight round-trip and start empty', () => {
+    let s = uiSlice.reducer(undefined, { type: '@@init' });
+    expect(s.openRevision).toBeNull();
+    expect(s.revisionOpInFlight).toBe(false);
+    s = uiSlice.reducer(s, uiActions.setOpenRevision({ kind: 'server', revisionId: 'r', chapterId: 3 }));
+    s = uiSlice.reducer(s, uiActions.setRevisionOpInFlight(true));
+    expect(s.openRevision).toEqual({ kind: 'server', revisionId: 'r', chapterId: 3 });
+    expect(s.revisionOpInFlight).toBe(true);
+  });
+
+  it('previewRegen carries its bookId and an optional stub', () => {
+    const s = uiSlice.reducer(
+      undefined,
+      uiActions.setPreviewRegen({
+        bookId: 'b',
+        characterId: 'c',
+        previewChapterId: 1,
+        remainingChapterIds: [],
+        reason: '',
+        note: '',
+        stub: { id: 'revision:1:c', chapterId: 1, characterId: 'c', segments: [] },
+      }),
+    );
+    expect(s.previewRegen?.bookId).toBe('b');
+    expect(s.previewRegen?.stub?.id).toBe('revision:1:c');
+  });
+
+  it('(OD28) selectActivePreviewStub returns the stub only on its own book', () => {
+    const stub = { id: 'revision:1:c', chapterId: 1, characterId: 'c', segments: [] };
+    let s = uiSlice.reducer(undefined, uiActions.openBook({ id: 'b', status: 'complete' } as never));
+    s = uiSlice.reducer(
+      s,
+      uiActions.setPreviewRegen({
+        bookId: 'b',
+        characterId: 'c',
+        previewChapterId: 1,
+        remainingChapterIds: [],
+        reason: '',
+        note: '',
+        stub,
+      }),
+    );
+    expect(selectActivePreviewStub({ ui: s })).toEqual(stub);
+    s = uiSlice.reducer(s, uiActions.openBook({ id: 'other', status: 'complete' } as never));
+    expect(selectActivePreviewStub({ ui: s })).toBeUndefined();
+    expect(s.previewRegen?.stub).toEqual(stub); // hidden, never cleared
+  });
+
+  it('(OD30) openPreviewStub sets the stub and opens it in one action; a no-op without a preview', () => {
+    const stub = { id: 'revision:1:c', chapterId: 1, characterId: 'c', segments: [] };
+    let s = uiSlice.reducer(undefined, uiActions.openPreviewStub(stub));
+    expect(s.previewRegen).toBeNull();
+    expect(s.openRevision).toBeNull();
+    s = uiSlice.reducer(
+      s,
+      uiActions.setPreviewRegen({
+        bookId: 'b',
+        characterId: 'c',
+        previewChapterId: 1,
+        remainingChapterIds: [],
+        reason: '',
+        note: '',
+      }),
+    );
+    s = uiSlice.reducer(s, uiActions.openPreviewStub(stub));
+    expect(s.previewRegen?.stub).toEqual(stub);
+    expect(s.openRevision).toEqual({ kind: 'preview-stub' });
   });
 });
 

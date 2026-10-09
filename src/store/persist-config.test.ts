@@ -75,6 +75,11 @@ describe('UI_PERSIST_WHITELIST', () => {
       );
     }
   });
+
+  it('plan 286 — openRevision and revisionOpInFlight are not persisted', () => {
+    expect(UI_PERSIST_WHITELIST).not.toContain('openRevision');
+    expect(UI_PERSIST_WHITELIST).not.toContain('revisionOpInFlight');
+  });
 });
 
 describe('MANUSCRIPT_PERSIST_WHITELIST', () => {

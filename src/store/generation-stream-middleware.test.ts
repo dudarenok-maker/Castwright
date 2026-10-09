@@ -432,6 +432,7 @@ describe('generationStreamMiddleware — halt + preview gate', () => {
         remainingChapterIds: [4, 5],
         reason: 'voice',
         note: '',
+        bookId: 'b1',
       }),
     );
     /* chapter_complete for the preview chapter → markRevisionPlayable. The
