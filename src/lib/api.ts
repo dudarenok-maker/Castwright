@@ -9169,7 +9169,7 @@ export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalo
     const record = stored && stored.serverUrl.replace(/\/+$/, '') === serverUrl ? stored : undefined;
     const dropped = mode === 'schema' ? droppedIfSchema : [];
     const level = mockLevelKey(id);
-    const outcome = record?.structuredOutput[mode]?.[level];
+    const outcome = record?.structuredOutput[mode]?.[level] ?? (mode === 'off' && record?.control.ok ? 'accepted' : undefined);
     return {
       id,
       label: model,

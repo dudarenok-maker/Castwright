@@ -216,6 +216,25 @@ describe('buildAnalyzerCatalog', () => {
     expect('outcome' in bare.structuredOutput).toBe(false);
   });
 
+  it('reports off mode as accepted when the control passed and the record has no off entry; an explicit off entry wins (#3570)', async () => {
+    const rec = {
+      serverUrl: 'http://127.0.0.1:8080/v1',
+      testedAt: '2026-09-11T10:00:00.000Z',
+      control: { ok: true as const },
+      structuredOutput: { schema: { 'model-default': 'enforced' as const } },
+      reasoning: {},
+    };
+    const offLab = { ...lab, structuredOutput: 'off' as const };
+    const run = async (r: unknown) => {
+      _resetCatalogCacheForTest();
+      const d = deps({ settings: () => settings({ analyzerEndpoints: [offLab], analyzerCapabilitiesByModel: { 'openai:lab::qwen3-30b': r as typeof rec } }) });
+      return (await buildAnalyzerCatalog({ refresh: true }, d)).groups.find((g) => g.kind === 'endpoint')!.models[0].structuredOutput;
+    };
+    expect((await run(rec)).outcome).toBe('accepted');
+    expect((await run({ ...rec, control: { ok: false, error: 'x' } })).outcome).toBeUndefined();
+    expect((await run({ ...rec, structuredOutput: { off: { 'model-default': 'rejected' } } })).outcome).toBe('rejected');
+  });
+
   it("attaches a Gemini entry's Test record only when it is filed under serverUrl 'gemini' (#3084)", async () => {
     const rec = {
       serverUrl: 'gemini',

@@ -35,6 +35,14 @@ describe('mockGetAnalyzerModels (#3084)', () => {
     expect(entry?.structuredOutput.outcome).toBe('ignored');
   });
 
+  it('reports an off-mode endpoint as accepted after a passing Test with no off entry (#3570)', async () => {
+    const rec: ModelCapabilityRecord = { serverUrl: 'http://127.0.0.1:8080/v1', testedAt: '2026-09-11T10:00:00.000Z', control: { ok: true }, structuredOutput: { schema: { 'model-default': 'enforced' } }, reasoning: {} };
+    (globalThis as Record<string, unknown>).__SEED_ENDPOINT_MODELS__ = { 'lab-server': ['qwen3-30b'] };
+    (globalThis as Record<string, unknown>).__SEED_ANALYZER_CAPABILITIES__ = { 'openai:lab-server::qwen3-30b': rec };
+    const catalog = await mockGetAnalyzerModels(false, { analyzerEndpoints: [{ ...endpoint, structuredOutput: 'off' }], analyzerCapabilitiesByModel: {}, apiKeyStatus: 'unset' });
+    expect(catalog.groups.find((g) => g.kind === 'endpoint')?.models[0].structuredOutput.outcome).toBe('accepted');
+  });
+
   it('mockTestAnalyzerModel returns a record for the configured mode, filed under the level the engine sends', async () => {
     const local = await mockTestAnalyzerModel({ modelId: 'qwen3.5:4b', scope: 'configured' });
     expect(local.control).toEqual({ ok: true });

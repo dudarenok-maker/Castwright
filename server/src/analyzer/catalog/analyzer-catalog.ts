@@ -276,7 +276,10 @@ function toEntry(
      there, because refusal is enforced by the pre-run check, not the label. A
      surface that must tell a rejection apart from a pass (the Settings Test result
      line) needs the raw per-level outcome instead. */
-  const outcome = capability?.structuredOutput[ctx.mode]?.[level];
+  /* `off` mode is the Test's control request, which the ladder never files as an `off`
+     entry unless `off` was a tested mode: a passing control IS an accepted `off`. An
+     explicit entry wins. */
+  const outcome = capability?.structuredOutput[ctx.mode]?.[level] ?? (ctx.mode === 'off' && capability?.control.ok ? 'accepted' : undefined);
   return {
     id: raw.id,
     label: raw.displayName ?? raw.model,
