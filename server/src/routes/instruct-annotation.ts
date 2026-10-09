@@ -23,6 +23,8 @@ import type { StageCall, AnalyzerSelection } from '../analyzer/index.js';
 import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
 import type { SentenceOutput } from '../handoff/schemas.js';
 import { analyzerSelectionErrorEvent } from './failure-taxonomy.js';
+import { readUserSettings } from '../workspace/user-settings.js';
+import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight } from '../analyzer/preflight.js';
 import {
   chunkSentencesByBudget,
   chunkWithContext,
@@ -147,6 +149,19 @@ instructAnnotationRouter.post(
     }
 
     const heartbeat = makeThrottledHeartbeat(send, 2000);
+    try {
+      /* N7 — from disk, as the analysis POSTs do: a cold cache after a restart would make
+         every saved endpoint look missing. */
+      const settings = await readUserSettings();
+      const targets = preflightTargets(['phase1'], req.body?.model, settings);
+      runAnalyzerPreflight(targets, settings, await resolvePreflightDigests(targets)); // A3: Ollama only, fail-open
+    } catch (err) {
+      /* #3084 P23/P14 — the one coded event every selection call site sends (3b Task 3b.1a). */
+      send(analyzerSelectionErrorEvent(err));
+      clearInterval(keepAlive);
+      res.end();
+      return;
+    }
     let selection: AnalyzerSelection;
     try {
       selection = selectAnalyzerForPhase({ phase: 'phase1', model: req.body?.model });

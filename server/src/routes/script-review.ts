@@ -33,7 +33,8 @@ import { selectAnalyzer, type StageCall, type AnalyzerSelection } from '../analy
 import { markReviewBusy, clearReviewBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { unloadResidentOllama } from './ollama-health.js';
 import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
-import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback } from '../workspace/user-settings.js';
+import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback, readUserSettings } from '../workspace/user-settings.js';
+import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight } from '../analyzer/preflight.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { warmOllamaModel } from './ollama-health.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
@@ -712,6 +713,18 @@ async function runScriptReviewJob(
     broadcast(job, record);
   };
   const heartbeat = makeThrottledHeartbeat(send, 2000);
+  try {
+    /* N7 — from disk, as the analysis POSTs do. The cache can still be cold after a restart,
+       and getCachedUserSettings() would then report every saved endpoint as missing. */
+    const settings = await readUserSettings();
+    const targets = preflightTargets(['phase1'], model, settings);
+    runAnalyzerPreflight(targets, settings, await resolvePreflightDigests(targets)); // A3: Ollama only, fail-open
+  } catch (e) {
+    /* #3084 P23/P14 — the one coded event every selection call site sends (3b Task 3b.1a). */
+    send(analyzerSelectionErrorEvent(e));
+    for (const sub of job.subscribers) sub.res.end();
+    return;
+  }
   let selection: AnalyzerSelection;
   try {
     selection = selectAnalyzerForPhase({ phase: 'phase1', model });
