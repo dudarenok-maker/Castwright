@@ -772,7 +772,7 @@
       <summary><span class="num">A113</span><span class="iname">Live structured output — Test action records match real model behaviour</span><span class="risk">GPU box, Ollama + llama-swap endpoint on one card, Gemini key, small-context vLLM or OpenRouter</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Run Test (configured, then every mode) on qwen3.5:4b, a gemma-* and a gemini-* model, and a llama-swap endpoint model with thinking on and off. Each <code>enforced</code>/<code>ignored</code> outcome must match a hand request (marker present/absent). Thinking models (gemini-3.6-flash default json, llama-swap Qwen3 thinking on) must save a record, not end <code>length</code>. A small-context vLLM or OpenRouter endpoint must never record <code>rejected</code> because of size. A failed test keeps the earlier record; record the Gemini adapter's <code>dropped</code> list; a base-URL change discards the record, and so does re-pulling an Ollama model to a new digest (the run then starts instead of refusing).</p>
-        <p>Criteria: <code>docs/testing/openai-analyzer-onbox-acceptance.md</code> § Live structured output. #3084.</p>
+        <p>Criteria: <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §6 Live structured output. #3084.</p>
       </div>
     </details>
 

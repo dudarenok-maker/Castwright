@@ -5916,7 +5916,7 @@ outcome matches what the model does.
 - **Re-pulled Ollama model:** with a saved record for `qwen3.5:4b` (note its `digest`), pull a
   different build of that tag so `ollama list` shows a new digest: the catalog entry loses the
   record, and an analysis on that model starts instead of refusing on the old verdict.
-- Criteria: `docs/testing/openai-analyzer-onbox-acceptance.md` § "Live structured output".
+- Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` §6 "Live structured output".
 
 ## Group B — local Ollama analyzer only
 
