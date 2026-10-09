@@ -25,12 +25,13 @@
 // which contradicts the shipped ruling that the register tracks state, not
 // history — so it stays open, deliberately.
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { scrubGitEnv } from './git-env.mjs';
+import { ghSpawn } from './gh.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { parsePublishToken, publishTokenRegex } from './publish-token.mjs';
 
@@ -323,6 +324,252 @@ function hashRowContent(plainText) {
   return createHash('sha256').update(plainText).digest('hex');
 }
 
+// #3529: row ID -> normalised title (the `<span class="iname">` in each
+// `<details class="item">` summary), read the same way
+// `parseLiveViewRowBodies` reads rows. Normalised with `htmlCellText` (tags
+// and whitespace) plus the handful of entities a hand-authored page uses, so
+// only a genuinely different title compares unequal. Rows whose ID is not a
+// plain `<Letter><N>` (Blocked/Unconfirmed use `—`) are skipped, as there.
+const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+function rowTitleKey(html) {
+  return htmlCellText(html)
+    .replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (m, dec, hex, name) => {
+      if (dec) return String.fromCodePoint(Number(dec));
+      if (hex) return String.fromCodePoint(parseInt(hex, 16));
+      return HTML_ENTITIES[name.toLowerCase()] ?? m;
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+export function parseLiveViewRowTitles(liveViewHtml) {
+  const titles = new Map();
+  for (const block of liveViewHtml.split(/<details\b[^>]*\bclass="item"[^>]*>/).slice(1)) {
+    const idMatch = block.match(/<span class="num">([^<]*)<\/span>/);
+    const nameMatch = block.match(/<span class="iname">([\s\S]*?)<\/span>/);
+    if (!idMatch || !nameMatch) continue;
+    const id = idMatch[1].trim();
+    if (/^[A-Z]\d+$/.test(id)) titles.set(id, rowTitleKey(nameMatch[1]));
+  }
+  return titles;
+}
+
+// #3529: row ID -> its whole `<details class="item">…</details>` block, raw
+// except for line endings — the unit `--publishing` compares byte-for-byte
+// against the live page, so a union file carries another lane's row exactly
+// as that lane published it.
+export function parseLiveViewRowBlocks(liveViewHtml) {
+  const blocks = new Map();
+  for (const m of liveViewHtml.matchAll(/<details\b[^>]*\bclass="item"[^>]*>[\s\S]*?<\/details>/g)) {
+    const idMatch = m[0].match(/<span class="num">([^<]*)<\/span>/);
+    if (!idMatch) continue;
+    const id = idMatch[1].trim();
+    if (/^[A-Z]\d+$/.test(id)) blocks.set(id, m[0].replace(/\r\n/g, '\n'));
+  }
+  return blocks;
+}
+
+// #3529 (PR #3532 review pass 2, 🟠3): THE union a lane publishes when the
+// live page carries rows of a lane that has not merged — your tracked live
+// view, plus each carried row's live `<details>` block copied verbatim, with
+// the derived figures regenerated. It is deterministic, so `--publishing`
+// can require the file about to be published to BE this, byte for byte (line
+// endings aside), and `--build-union <out>` writes it. That is the simpler of
+// the two sound options the review named: a union register (and so
+// `register:build` itself) cannot be built, because the other lane's
+// markdown rows are not on this branch.
+//
+// - Each block goes into its group's section, before the first row with a
+//   higher number (else after the last row), at that row's indentation.
+// - The derived figures are what `register:build` writes for a register
+//   holding your rows plus the carried ones: the owed count, the group's
+//   glance-table count and its section's `gcount`, each raised by the number
+//   of rows carried. The strip's other tiles — groups, Blocked, Unconfirmed,
+//   A1, oldest debt — are your register's: a carried row is another lane's
+//   numbered row in a group your page already has, and the oldest debt stays
+//   yours (a carried row's own date is not on this branch to compare).
+// - A carried row whose group has no section in your live view is refused
+//   (that lane added a new group: let it merge first), as is a row already
+//   in your view or absent from the live page.
+// Throws an Error with an operator-facing message on any refusal.
+const ROW_BLOCK_REGEX = /<details\b[^>]*\bclass="item"[^>]*>[\s\S]*?<\/details>/g;
+const GROUP_SECTION_REGEX = /<section\b[^>]*\bclass=\u0022group(?:\s[^\u0022]*)?\u0022[^>]*>/g;
+function findGroupSection(html, letter) {
+  for (const m of html.matchAll(GROUP_SECTION_REGEX)) {
+    const end = html.indexOf('</section>', m.index);
+    if (end === -1) continue;
+    const tag = html.slice(m.index, end).match(/<span class="gtag">([^<]*)<\/span>/);
+    if (tag && tag[1].trim() === letter) return { start: m.index, end };
+  }
+  return null;
+}
+function indentBefore(html, index) {
+  const lineStart = html.lastIndexOf('\n', index - 1) + 1;
+  const indent = html.slice(lineStart, index);
+  return /^[ \t]*$/.test(indent) ? indent : '';
+}
+export function buildUnionLiveView(trackedHtml, liveHtml, carriedIds) {
+  const liveBlocks = parseLiveViewRowBlocks(stripHtmlComments(liveHtml.replace(/\r\n/g, '\n')));
+  let html = trackedHtml.replace(/\r\n/g, '\n');
+  const ids = [...new Set(carriedIds)].sort((a, b) =>
+    a[0] === b[0] ? Number(a.slice(1)) - Number(b.slice(1)) : a < b ? -1 : 1,
+  );
+  const added = new Map();
+  for (const id of ids) {
+    const block = liveBlocks.get(id);
+    if (block === undefined) throw new Error(`row ${id} is not on the live page, so there is no live block to carry.`);
+    const letter = id[0];
+    const section = findGroupSection(html, letter);
+    if (!section) {
+      throw new Error(
+        `row ${id} belongs to Group ${letter}, which has no section in your live view — the lane that owns it added a new group. Let that lane merge first rather than carrying a whole group.`,
+      );
+    }
+    const rows = [...html.slice(section.start, section.end).matchAll(ROW_BLOCK_REGEX)].map((m) => ({
+      index: section.start + m.index,
+      end: section.start + m.index + m[0].length,
+      id: (m[0].match(/<span class="num">([^<]*)<\/span>/)?.[1] ?? '').trim(),
+    }));
+    if (rows.some((r) => r.id === id)) throw new Error(`row ${id} is already in your live view; only carry rows it lacks.`);
+    const next = rows.find((r) => /^[A-Z]\d+$/.test(r.id) && r.id[0] === letter && Number(r.id.slice(1)) > Number(id.slice(1)));
+    if (next) {
+      html = `${html.slice(0, next.index)}${block}\n${indentBefore(html, next.index)}${html.slice(next.index)}`;
+    } else if (rows.length > 0) {
+      const last = rows[rows.length - 1];
+      html = `${html.slice(0, last.end)}\n${indentBefore(html, last.index)}${block}${html.slice(last.end)}`;
+    } else {
+      const headerEnd = html.indexOf('\n', html.indexOf('</h3>', section.start));
+      if (headerEnd === -1 || headerEnd > section.end) throw new Error(`Group ${letter}'s section in your live view has no header to place row ${id} after.`);
+      html = `${html.slice(0, headerEnd)}\n    ${block}${html.slice(headerEnd)}`;
+    }
+    added.set(letter, (added.get(letter) ?? 0) + 1);
+  }
+  if (ids.length === 0) return html;
+  const owed = html.match(/<div class="n owed">(\d+)<\/div>/);
+  if (!owed) throw new Error('your live view has no `<div class="n owed">N</div>` to raise.');
+  html = html.replace(owed[0], () => `<div class="n owed">${Number(owed[1]) + ids.length}</div>`);
+  for (const [letter, count] of added) {
+    const table = html.match(/<table class="glance">[\s\S]*?<\/table>/);
+    const row = table && [...table[0].matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/g)].find((tr) => {
+      const first = tr[0].match(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/);
+      return first && htmlCellText(first[1]) === letter;
+    });
+    const cells = row ? [...row[0].matchAll(/(<t[dh][^>]*>)([\s\S]*?)(<\/t[dh]>)/g)] : [];
+    const lastCell = cells[cells.length - 1];
+    const numberMatch = lastCell?.[2].match(/(^|>)(\s*)(\d+)(\s*)(<|$)/);
+    if (!numberMatch) throw new Error(`your live view's glance table has no count for Group ${letter} to raise.`);
+    const newCell = `${lastCell[1]}${lastCell[2].replace(numberMatch[0], () => `${numberMatch[1]}${numberMatch[2]}${Number(numberMatch[3]) + count}${numberMatch[4]}${numberMatch[5]}`)}${lastCell[3]}`;
+    const newRow = row[0].replace(lastCell[0], () => newCell);
+    html = html.replace(table[0], () => table[0].replace(row[0], () => newRow));
+    const section = findGroupSection(html, letter);
+    const sectionHtml = html.slice(section.start, section.end);
+    const gcount = sectionHtml.match(/<span class="gcount">(\d+) rows?<\/span>/);
+    if (!gcount) throw new Error(`Group ${letter}'s section in your live view has no gcount to raise.`);
+    const n = Number(gcount[1]) + count;
+    html = `${html.slice(0, section.start)}${sectionHtml.replace(gcount[0], () => `<span class="gcount">${n} ${n === 1 ? 'row' : 'rows'}</span>`)}${html.slice(section.end)}`;
+  }
+  return html;
+}
+
+// #3529: every `<Letter><N>` row ID a live-view file carries, anywhere in it.
+function liveViewRowIdSet(liveViewHtml) {
+  const ids = new Set();
+  for (const m of stripHtmlComments(liveViewHtml).matchAll(/<span class="num">([^<]*)<\/span>/g)) {
+    const id = m[1].trim();
+    if (/^[A-Z]\d+$/.test(id)) ids.add(id);
+  }
+  return ids;
+}
+
+// #3529: row ID -> the rest of its `### <Letter><N> …` register heading,
+// whitespace-collapsed. Register-to-register only, so both sides share one
+// markdown convention and no HTML normalisation is needed.
+export function parseRegisterRowTitles(registerText) {
+  const titles = new Map();
+  const { text } = stripFences(registerText);
+  for (const m of text.matchAll(/^### ([A-Z]\d+)(?=\s|\r?$)([^\r\n]*)\r?$/gm)) {
+    titles.set(m[1], m[2].replace(/\s+/g, ' ').trim());
+  }
+  return titles;
+}
+
+// #3529 (PR #3532 review pass 2, 🟠2; operator decision 3 on #3529): the
+// "Retired carried rows" record. A row another lane published whose PR was
+// closed without merging would otherwise have to be carried by every later
+// publish forever. Listing it here drops it from that must-carry set; the
+// `--against-published` run confirms through `gh` that the PR really is
+// closed and unmerged and (operator decision 5, replacing decision 4's
+// branch-name match) that the commit which introduced the live row is one of
+// that PR's own commits. That binds an entry to the PR whose commits carry
+// the row, not to a branch name or a PR number: a closed PR with none of
+// those commits cannot mute a lane. It does not prove that no OPEN PR also
+// carries the commit — a closed PR stacked on the owner's branch but opened
+// against main lists the owner's commits too, and so does a PR closed and
+// re-opened as a new PR from the owner's branch.
+//
+// The section is OPTIONAL: `checkRegister` is retro-applied to origin/main's
+// copy (see this file's header), so requiring it would break every
+// `--against-published` run until the section reached main. When present it
+// must hold the table below, which a reason cell cannot contain a `|` in.
+// Returns `{ entries: [{ id, pr, date, reason }], errors }`.
+export const RETIRED_SECTION_TITLE = 'Retired carried rows';
+const RETIRED_TABLE_HEADER = ['Row', 'Owning PR', 'Closed unmerged', 'Reason'];
+export function parseRetiredCarriedRows(registerText) {
+  const { text } = stripFences(registerText);
+  const section = splitSections(text).find((s) => s.title === RETIRED_SECTION_TITLE);
+  if (!section) return { entries: [], errors: [] };
+  const where = `The "## ${RETIRED_SECTION_TITLE}" section`;
+  const tableLines = section.body
+    .split('\n')
+    .map((l) => l.replace(/\r$/, ''))
+    .filter((l) => /^\|.*\|\s*$/.test(l));
+  const cellsOf = (line) =>
+    line
+      .trim()
+      .slice(1, -1)
+      .split('|')
+      .map((c) => c.trim());
+  const header = tableLines[0] ? cellsOf(tableLines[0]) : [];
+  if (
+    header.join('|') !== RETIRED_TABLE_HEADER.join('|') ||
+    !tableLines[1] ||
+    !cellsOf(tableLines[1]).every((c) => /^:?-+:?$/.test(c))
+  ) {
+    return {
+      entries: [],
+      errors: [
+        `${where} has no "| ${RETIRED_TABLE_HEADER.join(' | ')} |" table (a header row and its separator row). Keep the table even when it is empty.`,
+      ],
+    };
+  }
+  const entries = [];
+  const errors = [];
+  const seen = new Set();
+  for (const line of tableLines.slice(2)) {
+    const cells = cellsOf(line);
+    if (cells.length !== 4) {
+      errors.push(`${where}: "${line.trim()}" must have exactly four cells — row ID, owning PR, closed-unmerged date, reason.`);
+      continue;
+    }
+    const [id, pr, date, reason] = cells;
+    const problems = [];
+    if (!/^[A-Z]\d+$/.test(id)) problems.push(`"${id}" is not a row ID (a letter and a number, e.g. B103)`);
+    if (!/^#\d+$/.test(pr)) problems.push(`the owning PR "${pr}" must be a PR reference such as #3505`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) problems.push(`the closed-unmerged date "${date}" must be YYYY-MM-DD`);
+    if (!reason) problems.push('the reason is empty');
+    if (problems.length > 0) {
+      errors.push(`${where}: "${line.trim()}": ${problems.join('; ')}.`);
+      continue;
+    }
+    if (seen.has(id)) {
+      errors.push(`${where} lists ${id} more than once — one entry per row.`);
+      continue;
+    }
+    seen.add(id);
+    entries.push({ id, pr: Number(pr.slice(1)), date, reason });
+  }
+  return { entries, errors };
+}
+
 // Runs all checks and returns a list of human-readable error strings — empty
 // when the register is internally coherent.
 export function checkRegister(text) {
@@ -463,6 +710,18 @@ export function checkRegister(text) {
     if (count > 1) {
       errors.push(
         `Row ID ${id} appears more than once (${count} headings). Row IDs are allocated once and never reused — give the newer row its group's next-id instead.`,
+      );
+    }
+  }
+
+  // #3529: the "Retired carried rows" record's shape, and no entry for a row
+  // this register still has — a retired row is one whose lane never merged.
+  const retired = parseRetiredCarriedRows(text);
+  errors.push(...retired.errors);
+  for (const { id } of retired.entries) {
+    if (seenRowIds.has(id)) {
+      errors.push(
+        `The "## ${RETIRED_SECTION_TITLE}" section lists ${id}, which is still a row in this register. A retired carried row is one whose lane closed without merging — remove the entry or the row.`,
       );
     }
   }
@@ -775,7 +1034,24 @@ function resolveBaselineGroups(baselineText) {
   if (!baselineGlanceSection) return null;
   const { groups: baselineTableGroups } = parseGlanceTable(baselineGlanceSection.body);
   const { groups: baselineBodyGroups } = parseBodyGroups(baselineSections);
-  return { tableLetters: new Set(baselineTableGroups.keys()), bodyGroups: baselineBodyGroups };
+  // #3529: origin/main's own next-id marker per group — an allocation surface
+  // a collision's renumber target must clear (allocate-once), NOT a provenance
+  // signal: an open lane's rows drop below it as soon as another lane minting
+  // in the same group merges first. `checkRegister` already vouched that
+  // every group has a marker. `rowTitles` feeds the merged-lane collision
+  // check (same ID on main and here, absent at the merge-base).
+  const nextIds = new Map();
+  for (const section of baselineSections) {
+    const titleMatch = section.title.match(/^Group ([A-Z])\b/);
+    if (!titleMatch) continue;
+    nextIds.set(titleMatch[1], parseNextIdMarker(section.body, titleMatch[1]));
+  }
+  return {
+    tableLetters: new Set(baselineTableGroups.keys()),
+    bodyGroups: baselineBodyGroups,
+    nextIds,
+    rowTitles: parseRegisterRowTitles(baselineText),
+  };
 }
 
 // The single-error array `checkLiveView` returns when `extraOnly` can't
@@ -836,6 +1112,25 @@ export const EXTRACTION_ERROR_PREFIX = 'extraction-error: ';
 // must not hard-fail.
 export const THREE_WAY_CONTENT_WARNING_PREFIX = 'three-way-warning: ';
 
+// #3529: four failure classes the structural BEHIND remedy ("merge the rows
+// named above") is wrong for, so the CLI routes them to their own buckets —
+// same reason as the prefixes above. A row-ID collision's fix is to RENUMBER
+// your row; an unmerged lane's live-only row's fix is to publish a file that
+// carries it (`--publishing`) or coordinate with that lane; an unknown
+// provenance's fix is to fetch the publishing branch or confirm it by hand;
+// a `--publishing` file whose copy of a row differs from the live block's
+// fix is to copy that block verbatim. None of them is "merge it in".
+export const ROW_ID_COLLISION_ERROR_PREFIX = 'row-id-collision: ';
+export const UNMERGED_LANE_ROW_ERROR_PREFIX = 'unmerged-lane-row: ';
+export const UNKNOWN_PROVENANCE_ERROR_PREFIX = 'unknown-provenance: ';
+export const PUBLISHING_FILE_ERROR_PREFIX = 'publishing-file: ';
+// #3529 (PR #3532 review pass 2, 🟠2): a "Retired carried rows" entry the
+// check will not honour (its PR is open, merged or unreadable, or the table
+// is malformed) — and the advisory, non-blocking warning printed when `gh`
+// cannot confirm an entry, which is then accepted.
+export const RETIRED_ROW_ERROR_PREFIX = 'retired-carried-row: ';
+export const RETIRED_ROW_WARNING_PREFIX = 'retired-row-warning: ';
+
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
 //
@@ -881,22 +1176,75 @@ export const THREE_WAY_CONTENT_WARNING_PREFIX = 'three-way-warning: ';
 //     "baseline lacks it too", which would let a discharge-shaped bug pass
 //     unnoticed for the same reason a real competing-lane row would.
 //
-//     Residual limitation, deliberately not fixed here (#2199 review round
-//     3, A3): a row that is LIVE and still genuinely OWED but never actually
-//     landed on `origin/main` at all — e.g. published straight from a
-//     branch that never merged, or from a PR that was later reverted — now
-//     reads as "discharged" too, identically to a row someone legitimately
-//     removed: both are "absent from origin/main, absent from the working
-//     register". The `'both'`-mode message this replaces already names this
-//     exact cause ("A row published from an unmerged branch ... is the
-//     usual cause"); `extraOnly` has no way left to distinguish "removed on
-//     purpose" from "never merged in the first place", because the ONLY
-//     signal it has is origin/main's content, and both cases agree on what
-//     that says. This is an intentional narrowing of the guard's envelope,
-//     not an oversight: the alternative — treating any row absent from
-//     origin/main as suspect — is the exact false positive #2199 exists to
-//     fix, just with the roles of "register" and "origin/main" swapped. See
-//     the register's own "Live view" step 3 for the operator-facing note.
+//     #3529: "origin/main lacks it" alone does NOT prove a discharge — a row
+//     an UNMERGED lane published has the same shape (#2199 review round 3,
+//     A3, accepted that as a residual; the 2026-10-07 #3525/#3505 incident
+//     showed it is the common case, not an edge). Content cannot separate
+//     them, so `options.publishedProvenance` supplies PROVENANCE instead: the
+//     commit that stamped the live page's `data-publish-id`, resolved by the
+//     CLI layer (`resolvePublishedProvenance`) as one of
+//       - 'merged'   — that commit is reachable from origin/main;
+//       - 'own'      — it is in this branch's HEAD history, not main's;
+//       - 'unmerged' — it exists only on another branch;
+//       - 'unknown'  — no history this checkout has contains it (or the
+//                      page carries no token, or the lookup failed).
+//     plus `stampedRowIds`, the rows the live view AT that commit carried.
+//     A live-only row origin/main lacks is then silent only when the page is
+//     a merged or own publish AND that commit carried the row (a discharge,
+//     or your own row you since dropped). Every other such row belongs to a
+//     lane that has not merged — the whole page for 'unmerged', and a row a
+//     union publish carried in on top of its own commit for 'merged'/'own' —
+//     and fails as `unmerged-lane-row`. 'unknown' fails closed, but only when
+//     a verdict actually depends on it. An earlier draft of #3529 used
+//     origin/main's `next-id` instead ("below it ⇒ discharged"); it failed
+//     open as soon as another lane minting in the same group merged first,
+//     and never saw a brand-new group letter at all (PR #3532 review pass 1).
+//     A caller that passes no provenance gets 'unknown'.
+//
+//     The stamping commit is the OLDEST commit that introduced the nonce, not
+//     the merge commit that later brought it to main (PR #3532 review pass 2).
+//
+//     #3529 (review pass 2): two more ways a live-only row is silent.
+//     `options.mainEverCarried(id)` answers whether origin/main's register
+//     has EVER carried the row on main's own first-parent line — a row main
+//     held and dropped was discharged there (CLI: `resolveMainEverCarried`;
+//     review pass 3 narrowed it from every reachable commit, see there). And
+//     a row listed in the register's "Retired carried rows" record (this
+//     register's or origin/main's) is no longer carried, provided
+//     `options.retiredPrStates` (CLI: `resolveRetiredPrStates`) confirms its
+//     PR is closed unmerged and (review pass 4, operator decision 5) that the
+//     commit `options.rowOwnerLookup(id, prCommits)` finds introducing the
+//     live row is one of that PR's own commits; an open or merged PR, an
+//     introducing commit the PR lacks, an owner that cannot be found, or
+//     commits gh did not report fail as `retired-carried-row`, and `gh` being
+//     unavailable is a warning that accepts the entry.
+//     `options.rowOwnerLookup` (CLI: `resolveRowOwner`) also names an
+//     `unmerged-lane-row`'s owner; without
+//     it the error says the owner is unknown and that the publish id names
+//     the page's publisher, not necessarily the row's owner.
+//     `options.carryOut`, a Set, receives every live row this run found that
+//     publishing would drop and that is not yours to drop — what
+//     `--build-union` carries.
+//
+//     #3529: `options.publishingHtml` is the file actually about to be
+//     published, when it is not the tracked live view — a union carrying
+//     another lane's rows. A row that would otherwise fail as BEHIND or
+//     `unmerged-lane-row` passes when that file carries the live page's block
+//     for it byte-for-byte (line endings aside); a different copy fails as
+//     `publishing-file`. Rows the check already treats as discharges are not
+//     consulted against it. The file as a whole must be exactly
+//     `buildUnionLiveView(tracked, live, <the rows it carries>)` (review pass
+//     2, 🟠3): every tracked row byte-for-byte, every other row a verbatim
+//     live block, and the derived figures regenerated — anything else fails
+//     as `publishing-file`.
+//
+//     #3529: `options.mergeBaseText` is the register at merge-base(HEAD,
+//     origin/main). A row ID origin/main and this register BOTH carry under
+//     different titles, which the merge-base lacks, was minted independently
+//     by two lanes and the other merged first — a `row-id-collision`. `null`
+//     (unresolvable) fails closed, but only for such a shared ID — the one
+//     case the merge-base decides (review pass 2, 🟡3); `undefined` skips
+//     that one check.
 //
 //     #2272: `options.dischargingIds` closes a narrower gap the baseline
 //     above cannot — it can only recognise a discharge that has ALREADY
@@ -944,7 +1292,20 @@ export const THREE_WAY_CONTENT_WARNING_PREFIX = 'three-way-warning: ';
 export function checkLiveView(
   markdownText,
   rawLiveViewHtml,
-  { direction = 'both', baselineText, dischargingIds = [], trackedLiveViewHtml, baselineLiveViewText } = {},
+  {
+    direction = 'both',
+    baselineText,
+    dischargingIds = [],
+    trackedLiveViewHtml,
+    baselineLiveViewText,
+    publishedProvenance,
+    publishingHtml,
+    mergeBaseText,
+    mainEverCarried,
+    rowOwnerLookup,
+    retiredPrStates,
+    carryOut,
+  } = {},
 ) {
   const errors = [];
   const dischargingSet = new Set(dischargingIds);
@@ -977,6 +1338,8 @@ export function checkLiveView(
   // itself, not fewer.
   let baselineTableLetters = null;
   let baselineBodyGroups = null;
+  let baselineNextIds = null;
+  let baselineRowTitles = null;
   if (direction === 'extraOnly') {
     const baseline = resolveBaselineGroups(baselineText);
     if (!baseline) {
@@ -995,7 +1358,197 @@ export function checkLiveView(
     }
     baselineTableLetters = baseline.tableLetters;
     baselineBodyGroups = baseline.bodyGroups;
+    baselineNextIds = baseline.nextIds;
+    baselineRowTitles = baseline.rowTitles;
   }
+
+  // #3529: provenance of the published page — see the header comment.
+  const provenance = publishedProvenance ?? {
+    kind: 'unknown',
+    nonce: null,
+    reason: 'no provenance was supplied for the published page',
+  };
+  const stampedRowIds = new Set(provenance.stampedRowIds ?? []);
+  const isOwnRow = (id) =>
+    (provenance.kind === 'merged' || provenance.kind === 'own') && stampedRowIds.has(id);
+  // Rows whose verdict needed a provenance this run does not have; reported
+  // once, at the end.
+  const unknownProvenanceIds = [];
+  // Live rows publishing would drop that are not this lane's to drop.
+  const carry = carryOut instanceof Set ? carryOut : new Set();
+
+  // #3529 (review pass 2, 🟠2): the "Retired carried rows" record — this
+  // register's entries plus origin/main's, so a branch that predates a
+  // retirement still honours it. An entry is honoured only for a PR `gh`
+  // confirms is closed unmerged AND (review pass 4, operator decision 5)
+  // whose own commits include the commit that introduced the live row
+  // (`rowOwnerLookup`); without `gh` it is accepted with a warning. The
+  // owner is checked lazily, only for a retired row the live page still
+  // carries: once a retirement has been published, that row and its lane's
+  // branch may both be gone, and the entry must not start failing.
+  const retiredIds = new Set();
+  const retiredCandidates = new Map();
+  if (direction === 'extraOnly') {
+    const entries = new Map();
+    for (const entry of parseRetiredCarriedRows(baselineText).entries) entries.set(entry.id, entry);
+    const mine = parseRetiredCarriedRows(markdownText);
+    for (const e of mine.errors) errors.push(`${RETIRED_ROW_ERROR_PREFIX}${e}`);
+    for (const entry of mine.entries) entries.set(entry.id, entry);
+    for (const { id, pr } of entries.values()) {
+      if (!retiredPrStates || !retiredPrStates.available) {
+        retiredIds.add(id);
+        errors.push(
+          `${RETIRED_ROW_WARNING_PREFIX}${id} is retired as PR #${pr}'s row without confirming that #${pr} is closed and unmerged, or that it owns ${id} (${retiredPrStates?.reason ?? 'no gh lookup was made'}). Confirm both by hand — gh pr view ${pr} --json state,mergedAt (its commit list stops at 100 — use gh api graphql --paginate for the rest), and that one of #${pr}'s commits introduced the live page's ${id} — before you publish.`,
+        );
+        continue;
+      }
+      const st = retiredPrStates.states.get(pr);
+      if (!st || st.error) {
+        errors.push(
+          `${RETIRED_ROW_ERROR_PREFIX}${id}: the register retires it as PR #${pr}'s row, but gh could not read #${pr} (${st?.error ?? 'no answer'}). A retirement is honoured only for a PR confirmed closed without merging — fix the PR reference, or re-run once gh can read it.`,
+        );
+      } else if (st.state === 'CLOSED' && !st.mergedAt) {
+        retiredCandidates.set(id, {
+          pr,
+          commits: Array.isArray(st.commits) ? st.commits : null,
+          incompleteCommits: st.incompleteCommits ?? null,
+        });
+      } else {
+        const state = st.state === 'MERGED' || st.mergedAt ? 'MERGED' : st.state;
+        errors.push(
+          `${RETIRED_ROW_ERROR_PREFIX}${id}: the register retires it as PR #${pr}'s row, closed without merging, but #${pr} is ${state}. ${state === 'MERGED' ? 'A merged lane is not one whose rows need retiring' : 'An open lane still owns that row, and the record cannot retire it'} — remove the entry; until then the row must still be carried.`,
+        );
+      }
+    }
+  }
+  // Decision 5: a closed-unmerged retirement is honoured only once the commit
+  // that introduced the live row is confirmed to be one of that PR's own
+  // commits. The lookup is handed those commits, so one no fetched branch
+  // holds any more (a deleted branch, a fork's) still counts while this
+  // checkout has the object. Memoised; a refusal is reported once, and the
+  // row then still has to be carried.
+  const retiredOwnerMemo = new Map();
+  const isRetired = (id) => {
+    if (retiredIds.has(id)) return true;
+    const candidate = retiredCandidates.get(id);
+    if (!candidate) return false;
+    if (retiredOwnerMemo.has(id)) return retiredOwnerMemo.get(id);
+    const { pr, commits, incompleteCommits } = candidate;
+    let reason = null;
+    if (incompleteCommits) {
+      reason = `gh returned an incomplete commit list for #${pr} (${incompleteCommits.have} of ${incompleteCommits.total} commits), so the commit that introduced the live ${id} cannot be matched against it. Re-run once gh can read the whole list.`;
+    } else if (commits === null) {
+      reason = `gh did not report #${pr}'s commits, so the commit that introduced the live ${id} cannot be matched against them. Re-run once gh can read it.`;
+    } else {
+      const owner = typeof rowOwnerLookup === 'function' ? rowOwnerLookup(id, commits) : null;
+      const missing = owner?.missingCommits ?? [];
+      const n = `${commits.length} commit${commits.length === 1 ? '' : 's'}`;
+      const fetch = missing.length
+        ? ` This checkout lacks ${missing.length} of them (${missing.map((c) => String(c).slice(0, 12)).join(', ')}): run git fetch origin and re-run.`
+        : '';
+      if (!owner?.commit) {
+        reason = `no commit this checkout has — on a fetched branch or among #${pr}'s ${n} — introduced the live page's ${id}, so its owner cannot be determined${fetch ? `.${fetch}` : ': run git fetch origin and re-run.'}`;
+      } else if (!commits.some((c) => String(c).toLowerCase() === String(owner.commit).toLowerCase())) {
+        reason = `the live ${id} was introduced by ${owner.commit}, which is not one of #${pr}'s ${n}. The record names the wrong PR — find the owner's with gh pr list --state all --search ${owner.commit}.${fetch}`;
+      }
+    }
+    if (reason !== null) {
+      errors.push(
+        `${RETIRED_ROW_ERROR_PREFIX}${id}: the register retires it as PR #${pr}'s row, and a retirement is honoured only for the PR that owns the row, but ${reason} Until then the row must still be carried.`,
+      );
+    }
+    retiredOwnerMemo.set(id, reason === null);
+    return reason === null;
+  };
+  const everCarriedMemo = new Map();
+  const everOnMain = (id) => {
+    if (typeof mainEverCarried !== 'function') return false;
+    if (!everCarriedMemo.has(id)) everCarriedMemo.set(id, mainEverCarried(id) === true);
+    return everCarriedMemo.get(id);
+  };
+  const publishingBlocks =
+    typeof publishingHtml === 'string'
+      ? parseLiveViewRowBlocks(stripHtmlComments(publishingHtml))
+      : null;
+  const publishedBlocks = publishingBlocks ? parseLiveViewRowBlocks(liveViewHtml) : null;
+  // A row that would fail because publishing drops it passes when the file
+  // being published carries the live block verbatim ('carried'). A different
+  // copy is its own failure, reported here ('differs'); none at all leaves
+  // the original verdict standing ('absent').
+  // Memoised: the whole-group checks consult the same row from both the
+  // glance table and the section list, and a 'differs' is reported once.
+  const publishingVerdicts = new Map();
+  const publishingCarries = (id) => {
+    if (publishingVerdicts.has(id)) return publishingVerdicts.get(id);
+    const block = publishingBlocks?.get(id);
+    let verdict = 'carried';
+    if (block === undefined) verdict = 'absent';
+    else if (publishedBlocks.get(id) === undefined) {
+      verdict = 'notLive';
+      errors.push(
+        `${PUBLISHING_FILE_ERROR_PREFIX}${id}: the file passed to --publishing carries row ${id}, which is neither in your tracked live view nor on the live page. A union carries only live rows, verbatim — build it with --build-union <out>.`,
+      );
+    } else if (block !== publishedBlocks.get(id)) {
+      verdict = 'differs';
+      errors.push(
+        `${PUBLISHING_FILE_ERROR_PREFIX}${id}: the file passed to --publishing carries row ${id}, but its block differs from the live page's. Copy the live page's <details> block for ${id} into that file verbatim (another lane's row is that lane's to edit), then re-run.`,
+      );
+    }
+    publishingVerdicts.set(id, verdict);
+    return verdict;
+  };
+  const stillDropped = (id) => publishingCarries(id) === 'absent';
+  // A colliding row's new ID must clear every allocation surface: this
+  // register's next-id, the live page's highest ID, and origin/main's next-id
+  // (an ID main minted and since dropped is still spent — allocate-once).
+  const renumberAdvice = (letter) => {
+    const mineNext = parseNextIdMarker(
+      sections.find((s) => s.title.startsWith(`Group ${letter}`))?.body ?? '',
+      letter,
+    );
+    const liveNumbers = (lvSections.get(letter)?.rowIds ?? []).map((r) => Number(r.slice(1)));
+    const liveNext = liveNumbers.length > 0 ? Math.max(...liveNumbers) + 1 : 0;
+    const target = Math.max(mineNext ?? 0, liveNext, baselineNextIds?.get(letter) ?? 0);
+    return `Renumber your row to ${letter}${target} (the highest of your next-id, the live page's highest ID + 1 and origin/main's next-id), then re-run.`;
+  };
+  // Review pass 2, 🟠2: name the row's OWNER — the lane that first committed
+  // it — never the page's publisher, which for a union is only its carrier.
+  // Review pass 4: its PR is found by that commit, never by a branch name.
+  const ownerText = (id) => {
+    const owner = typeof rowOwnerLookup === 'function' ? rowOwnerLookup(id) : null;
+    if (owner && owner.commit) {
+      return `It was first committed in ${String(owner.commit).slice(0, 12)}${owner.refs?.length ? ` (on ${owner.refs.join(', ')})` : ''}, by the lane that owns it — find its PR with \`gh pr list --state all --search ${owner.commit}\`.`;
+    }
+    return `No branch this checkout has fetched committed it, so its owner cannot be named here — fetch every branch (git fetch origin '+refs/heads/*:refs/remotes/origin/*') and re-run to name it. The page's publish id "${provenance.nonce}" names whoever PUBLISHED the page, which for a union publish is not the row's owner.`;
+  };
+  const unmergedLaneError = (id, letter) =>
+    `${UNMERGED_LANE_ROW_ERROR_PREFIX}${id}: the live page's Group ${letter} section has row ${id}, which origin/main lacks; it belongs to a lane that has not merged. ${ownerText(id)} Publishing a file without it drops it: carry its live block verbatim in the file you publish (--build-union <out> builds it) and name that file with --publishing <file>; if that lane's PR was closed without merging, retire the row in the register's "Retired carried rows" table instead.`;
+  // A live-only row origin/main lacks: 'yours' (silent: your own or a
+  // merged publish's row, a row main's register has ever carried, or a
+  // retired one), 'foreign' (another unmerged lane's) or 'unknown'.
+  const classifyUnbaselined = (id) => {
+    if (isRetired(id) || isOwnRow(id) || everOnMain(id)) return 'yours';
+    return provenance.kind === 'unknown' ? 'unknown' : 'foreign';
+  };
+  // A live-only row origin/main lacks that publishing would drop and that is
+  // not yours to drop: 'foreign' for the caller to report, or null (silent,
+  // or queued as an unknown-provenance row).
+  // The cheap --publishing test runs first: classifying can cost git calls.
+  const liveOnlyVerdict = (id) => {
+    if (!stillDropped(id)) return null;
+    const verdict = classifyUnbaselined(id);
+    if (verdict === 'yours') return null;
+    carry.add(id);
+    if (verdict === 'unknown') {
+      unknownProvenanceIds.push(id);
+      return null;
+    }
+    return 'foreign';
+  };
+  const baselineHasRow = (id) => {
+    const [, idLetter, idNumber] = id.match(/^([A-Z])(\d+)$/);
+    return (baselineBodyGroups.get(idLetter) ?? []).includes(Number(idNumber));
+  };
 
   // The owed total, as the summary strip states it.
   const owedMatch = liveViewHtml.match(/<div class="n owed">(\d+)<\/div>/);
@@ -1069,8 +1622,15 @@ export function checkLiveView(
             // PARTIALLY-named one still fails — naming only the leftover,
             // unnamed IDs, not just "add the group back".
             const liveRowIds = lvSections.get(letter)?.rowIds ?? [];
-            const namedIds = liveRowIds.filter((id) => dischargingSet.has(id));
-            const unnamedIds = liveRowIds.filter((id) => !dischargingSet.has(id));
+            // #3529 (review pass 2, 🟠4): only rows origin/main still has are
+            // a BEHIND/--discharging question. A row it lacks is classified by
+            // provenance in the section loop below, like every other live-only
+            // row, so --discharging can never silence another lane's row here.
+            const behindRowIds = liveRowIds.filter(baselineHasRow);
+            const namedIds = behindRowIds.filter((id) => dischargingSet.has(id));
+            // #3529: a row the --publishing file carries verbatim is not
+            // dropped by this publish.
+            const unnamedIds = behindRowIds.filter((id) => !dischargingSet.has(id) && stillDropped(id));
             // Every named id genuinely IS live-only for this letter, whether
             // it ends up fully discharging the group or not — consumed
             // unconditionally so a partial match isn't ALSO reported as an
@@ -1168,6 +1728,14 @@ export function checkLiveView(
         if (dischargingSet.has(id)) consumedDischargingIds.add(id);
       }
     }
+    // #3529: "origin/main lacks it" alone is NOT proof of a discharge — a row
+    // an UNMERGED lane added has the same shape. Provenance decides (see the
+    // header comment): only a row the page's own merged/own publish committed
+    // is silent. (Only rows with numeric IDs reach here: Blocked/Unconfirmed
+    // rows use `—` and are never in `rowIds`, so their handling is
+    // unchanged.) `--discharging` does NOT suppress another lane's row: it
+    // names rows THIS change discharged, and those are already silent.
+    const unmergedExtra = [];
     const staleExtra =
       direction === 'extraOnly'
         ? extra.filter((id) => {
@@ -1175,12 +1743,15 @@ export function checkLiveView(
             if (!idMatch) return true; // shouldn't happen — rowIds is pre-filtered to this shape
             const [, idLetter, idNumber] = idMatch;
             const baselineNumbers = baselineBodyGroups.get(idLetter) ?? [];
-            if (!baselineNumbers.includes(Number(idNumber))) return false;
+            if (!baselineNumbers.includes(Number(idNumber))) {
+              if (liveOnlyVerdict(id) === 'foreign') unmergedExtra.push(id);
+              return false;
+            }
             // #2272: a named id suppresses exactly this BEHIND verdict — the
             // baseline (pre-merge origin/main) hasn't caught up yet because
             // this run is BEFORE merge, not because the row is a genuine
             // competing-lane addition.
-            return !dischargingSet.has(id);
+            return !dischargingSet.has(id) && stillDropped(id);
           })
         : extra;
     if (staleExtra.length > 0) {
@@ -1190,6 +1761,7 @@ export function checkLiveView(
           : `Live view's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's Group ${letter} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
       );
     }
+    for (const id of unmergedExtra) errors.push(unmergedLaneError(id, letter));
     if (section.rowIds.length !== found.size) {
       const seen = new Set();
       const dupes = [...new Set(section.rowIds.filter((id) => seen.has(id) || !seen.add(id)))];
@@ -1207,8 +1779,17 @@ export function checkLiveView(
           // discharge needs its own handling rather than falling through to
           // the per-row `extra` logic above.
           const liveRowIds = lvSections.get(letter)?.rowIds ?? [];
-          const namedIds = liveRowIds.filter((id) => dischargingSet.has(id));
-          const unnamedIds = liveRowIds.filter((id) => !dischargingSet.has(id));
+          // #3529 (review pass 2, 🟠4): see the glance-table loop above. A
+          // row origin/main lacks is classified here, one by one; naming it
+          // in --discharging consumes the name but silences nothing.
+          const behindRowIds = liveRowIds.filter(baselineHasRow);
+          for (const id of liveRowIds.filter((rowId) => !baselineHasRow(rowId))) {
+            if (dischargingSet.has(id)) consumedDischargingIds.add(id);
+            if (liveOnlyVerdict(id) === 'foreign') errors.push(unmergedLaneError(id, letter));
+          }
+          const namedIds = behindRowIds.filter((id) => dischargingSet.has(id));
+          // #3529: a row the --publishing file carries verbatim is not dropped.
+          const unnamedIds = behindRowIds.filter((id) => !dischargingSet.has(id) && stillDropped(id));
           // Every named id genuinely IS live-only for this letter, whether it
           // ends up fully discharging the group or not — consumed
           // unconditionally so a partial match isn't ALSO reported as an
@@ -1229,6 +1810,14 @@ export function checkLiveView(
             errors.push(
               `The live page has a Group ${letter} section that this register's body does not — the register is BEHIND what is already published. Add the section before publishing.`,
             );
+          }
+        } else {
+          // #3529: a group origin/main has never had — a brand-new letter.
+          // Its rows are classified one by one, exactly like a live-only row
+          // in a group both sides have: nothing here is keyed on a marker.
+          for (const id of lvSections.get(letter)?.rowIds ?? []) {
+            if (dischargingSet.has(id)) consumedDischargingIds.add(id);
+            if (liveOnlyVerdict(id) === 'foreign') errors.push(unmergedLaneError(id, letter));
           }
         }
         continue;
@@ -1325,6 +1914,27 @@ export function checkLiveView(
     const taggedPublishedErrors = publishedErrors.map((e) => `${EXTRACTION_ERROR_PREFIX}[published] ${e.substring(EXTRACTION_ERROR_PREFIX.length)}`);
     const taggedBaselineErrors = baselineErrors.map((e) => `${EXTRACTION_ERROR_PREFIX}[baseline] ${e.substring(EXTRACTION_ERROR_PREFIX.length)}`);
     errors.push(...taggedTrackedErrors, ...taggedPublishedErrors, ...taggedBaselineErrors);
+    // #3529: same ID, genuinely different title, and origin/main has no such
+    // row — two lanes each allocated it, so the by-ID comparison would call
+    // them equal. Not when the live page is this lane's OWN earlier publish
+    // and its commit carried the row: that is a retitle. A row origin/main
+    // DOES have is the merge-base check's business (after this block).
+    const trackedTitles = parseLiveViewRowTitles(stripHtmlComments(trackedLiveViewHtml));
+    const publishedTitles = parseLiveViewRowTitles(liveViewHtml);
+    for (const [id, trackedTitle] of trackedTitles) {
+      const publishedTitle = publishedTitles.get(id);
+      if (publishedTitle === undefined || publishedTitle === trackedTitle) continue;
+      const [, idLetter, idNumber] = id.match(/^([A-Z])(\d+)$/);
+      if ((baselineBodyGroups.get(idLetter) ?? []).includes(Number(idNumber))) continue;
+      if (provenance.kind === 'own' && stampedRowIds.has(id)) continue;
+      if (provenance.kind === 'unknown') {
+        unknownProvenanceIds.push(id);
+        continue;
+      }
+      errors.push(
+        `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${trackedTitle}" but the live page's ${id} is "${publishedTitle}" — two lanes allocated the same ID. ${renumberAdvice(idLetter)}`,
+      );
+    }
     for (const [id, trackedBody] of trackedRowBodies) {
       const publishedBody = publishedRowBodies.get(id);
       if (publishedBody === undefined) continue;
@@ -1377,6 +1987,105 @@ export function checkLiveView(
           `${THREE_WAY_CONTENT_WARNING_PREFIX}${id}: content differs in three-way comparison (local vs published vs origin/main) — this is usually an ordinary multi-step edit before merging, not investigated further; if this row's content seems wrong, check manually`,
         );
       }
+    }
+  }
+
+  // #3529 (review pass 2, 🟠3): the file about to be published, as a whole.
+  // It must be exactly the union `buildUnionLiveView` builds from your
+  // tracked live view and the rows it carries — so it cannot drop one of
+  // your rows (S6), carry a stale copy of one, carry a row that is not live,
+  // or publish hand-edited derived figures. The specific failures are named
+  // first; the whole-file comparison runs only once they are clear.
+  if (direction === 'extraOnly' && publishingBlocks) {
+    if (typeof trackedLiveViewHtml !== 'string') {
+      errors.push(
+        `${PUBLISHING_FILE_ERROR_PREFIX}--publishing needs your tracked live view to compare the file against, and none was supplied.`,
+      );
+    } else {
+      const trackedBlocks = parseLiveViewRowBlocks(stripHtmlComments(trackedLiveViewHtml));
+      let comparable = true;
+      for (const [id, block] of trackedBlocks) {
+        const copy = publishingBlocks.get(id);
+        if (copy === block) continue;
+        comparable = false;
+        errors.push(
+          copy === undefined
+            ? `${PUBLISHING_FILE_ERROR_PREFIX}${id}: the file passed to --publishing drops your own row ${id}, which your tracked live view carries — publishing it would delete that row from the live page. A union is your tracked live view PLUS other lanes' rows: build it with --build-union <out>.`
+            : `${PUBLISHING_FILE_ERROR_PREFIX}${id}: the file passed to --publishing carries your row ${id}, but not as your tracked live view has it (a stale copy?). Rebuild the union from your current tracked live view with --build-union <out>.`,
+        );
+      }
+      const carriedIds = [...publishingBlocks.keys()].filter((id) => !trackedBlocks.has(id));
+      for (const id of carriedIds) {
+        if (publishingCarries(id) !== 'carried') comparable = false;
+      }
+      if (comparable) {
+        let expected = null;
+        try {
+          expected = buildUnionLiveView(trackedLiveViewHtml, rawLiveViewHtml, carriedIds);
+        } catch (err) {
+          errors.push(`${PUBLISHING_FILE_ERROR_PREFIX}the file passed to --publishing cannot be a valid union: ${err.message}`);
+        }
+        const actual = publishingHtml.replace(/\r\n/g, '\n');
+        if (expected !== null && actual !== expected) {
+          const a = actual.split('\n');
+          const b = expected.split('\n');
+          let i = 0;
+          while (i < a.length && i < b.length && a[i] === b[i]) i++;
+          const show = (line) => (line === undefined ? '<end of file>' : `"${line.trim().slice(0, 160)}"`);
+          errors.push(
+            `${PUBLISHING_FILE_ERROR_PREFIX}the file passed to --publishing is not your tracked live view plus the rows it carries${carriedIds.length > 0 ? ` (${carriedIds.join(', ')})` : ''}: its line ${i + 1} reads ${show(a[i])} where the union has ${show(b[i])}. The derived figures (the owed count, each carried row's group counts) are your register's plus one per carried row and are never hand-edited — build the file with --build-union <out> instead of by hand.`,
+          );
+        }
+      }
+    }
+  }
+
+  if (direction === 'extraOnly') {
+    // #3529 (review pass 1): a collision with a lane that has ALREADY merged.
+    // origin/main has the row, so the checks above treat it as main's; but if
+    // the merge-base this branch forked from lacks it while this register
+    // carries it under another title, both lanes minted it independently.
+    // An unreadable merge-base fails closed only for such a shared ID, the
+    // one case it decides (review pass 2, 🟡3): it is not a provenance
+    // failure for any other row.
+    if (typeof mergeBaseText === 'string' || mergeBaseText === null) {
+      const mergeBaseIds = mergeBaseText === null ? null : new Set(parseRegisterRowTitles(mergeBaseText).keys());
+      const undecidable = [];
+      for (const [id, mineTitle] of parseRegisterRowTitles(markdownText)) {
+        const mainTitle = baselineRowTitles.get(id);
+        if (mainTitle === undefined || mainTitle === mineTitle) continue;
+        if (mergeBaseIds === null) {
+          undecidable.push(id);
+          continue;
+        }
+        if (mergeBaseIds.has(id)) continue;
+        errors.push(
+          `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${mineTitle}" but origin/main's ${id} is "${mainTitle}", and the merge-base your branch forked from has no ${id} — two lanes allocated the same ID and the other merged first. ${renumberAdvice(id[0])}`,
+        );
+      }
+      if (undecidable.length > 0) {
+        errors.push(
+          `${UNKNOWN_PROVENANCE_ERROR_PREFIX}${undecidable.join(', ')}: origin/main carries ${undecidable.length === 1 ? 'this ID' : 'these IDs'} under a different title than this register, and the register at merge-base(HEAD, origin/main) could not be read, so whether that is your retitle or another lane's row under the same ID cannot be decided. Check that HEAD and origin/main share history (an unshallowed clone), then re-run. Do not publish until this passes.`,
+        );
+      }
+    }
+    if (unknownProvenanceIds.length > 0) {
+      const ids = [...new Set(unknownProvenanceIds)];
+      // A live-only row can be carried; a row you share with the live page
+      // under another title (the collision check) cannot — it is in your file.
+      const carryable = ids.filter((id) => carry.has(id));
+      const titled = ids.filter((id) => !carry.has(id));
+      const them = (list) => (list.length === 1 ? 'it' : 'them');
+      errors.push(
+        `${UNKNOWN_PROVENANCE_ERROR_PREFIX}cannot tell who published the live page — ${provenance.reason}${provenance.nonce ? ` (publish id "${provenance.nonce}")` : ''} — so whether ${ids.join(', ')} ${ids.length === 1 ? 'is' : 'are'} yours, discharged, or another unmerged lane's cannot be decided. Fetch every branch (git fetch origin '+refs/heads/*:refs/remotes/origin/*') and re-run.` +
+          (carryable.length > 0
+            ? ` If that does not settle ${carryable.join(', ')}, do not drop ${them(carryable)}: carry ${them(carryable)} in the file you publish — --build-union <out> builds it — and re-run with --publishing <out>.`
+            : '') +
+          (titled.length > 0
+            ? ` ${titled.join(', ')} ${titled.length === 1 ? 'is' : 'are'} titled differently on the live page than in your live view: establish whose row ${titled.length === 1 ? 'that is' : 'each is'} by hand (your retitle, or another lane's row under the same ID — then renumber yours).`
+            : '') +
+          ' Do not publish until this passes.',
+      );
     }
   }
 
@@ -1511,7 +2220,271 @@ export function resolveBaselineTexts(
     registerText: registerResult.stdout,
     liveViewText: liveViewResult.stdout,
     failedStep: null,
+    // #3529: the frozen SHA, so provenance and the merge-base are resolved
+    // against the same commit the baseline texts came from.
+    fetchedSha,
   };
+}
+
+// #3529: the OLDEST commit in `ref`'s history whose live view carries
+// `data-publish-id="<nonce>"` — the stamp itself — with that file's text. The
+// pickaxe flags are `nonceInHistory`'s (scripts/publish-token.mjs), for the
+// same three reasons its header gives — `--full-history`, the anchored `-S`,
+// and `--diff-merges=first-parent` (a re-stamp made while resolving a merge
+// conflict is born in the merge commit itself) — plus `-s`, without which that
+// last flag streams a full patch. Pickaxe lists every commit that CHANGED the
+// anchor's count. That includes the commit that later re-stamped it away and,
+// on main, the PR's merge commit: along main's first parent the merge is
+// where the nonce appears. So the newest hit is not the stamp. PR #3532 review
+// pass 2 found it returning "Merge pull request #3501" for main's own page,
+// whose rows are main's after the merge, not the publish's. Oldest-first,
+// keeping the first commit that carries the anchor, is the commit step 3's
+// `git log --all -S` names. `{ failed: true }` when git itself failed, so a
+// failed lookup is never read as "not found".
+function findStampingCommit(repoRoot, liveViewPath, nonce, ref, gitRunner) {
+  const anchored = `data-publish-id="${nonce}"`;
+  const log = gitRunner(
+    ['log', '--format=%H', '-s', '--full-history', '--diff-merges=first-parent', '-S', anchored, ref, '--', liveViewPath],
+    repoRoot,
+  );
+  if (log.error || log.status !== 0 || typeof log.stdout !== 'string') return { failed: true };
+  for (const sha of log.stdout.split(/\s+/).filter(Boolean).reverse()) {
+    const show = gitRunner(['show', `${sha}:${liveViewPath}`], repoRoot);
+    if (show.error || show.status !== 0 || typeof show.stdout !== 'string') continue;
+    if (show.stdout.includes(anchored)) return { sha, html: show.stdout };
+  }
+  return { sha: null };
+}
+
+// #3529: who published the live page — the provenance `checkLiveView`'s
+// `options.publishedProvenance` consumes (see that function's header for what
+// each kind means and why content alone cannot answer this). Searched in
+// order: origin/main (`mainRef`, the frozen FETCH_HEAD SHA), then HEAD, then
+// every ref this checkout has (`--all` — deliberately, unlike
+// `nonceInHistory`: the question here is "which branch stamped it", and a
+// fetched-but-unmerged lane is exactly the answer being looked for). A nonce
+// in none of them, a page with no token, and a failed lookup are all
+// 'unknown' — never a default to any other kind.
+export function resolvePublishedProvenance(
+  repoRoot,
+  liveViewPath,
+  publishedHtml,
+  mainRef,
+  gitRunner = runGitCommand,
+) {
+  const token = parsePublishToken(publishedHtml);
+  if (token === null) {
+    return { kind: 'unknown', nonce: null, reason: 'the live page carries no publish token' };
+  }
+  if (token.malformed) {
+    return { kind: 'unknown', nonce: null, reason: `the live page's publish token is malformed: ${token.malformed}` };
+  }
+  const { nonce } = token;
+  const lookupFailed = (ref) => ({
+    kind: 'unknown',
+    nonce,
+    reason: `could not search ${ref}'s history for the page's publish id (a git call failed)`,
+  });
+  for (const [kind, ref, label] of [
+    ['merged', mainRef, 'origin/main'],
+    ['own', 'HEAD', 'HEAD'],
+  ]) {
+    const found = findStampingCommit(repoRoot, liveViewPath, nonce, ref, gitRunner);
+    if (found.failed) return lookupFailed(label);
+    if (found.sha) {
+      return { kind, nonce, commit: found.sha, stampedRowIds: liveViewRowIdSet(found.html) };
+    }
+  }
+  const anywhere = findStampingCommit(repoRoot, liveViewPath, nonce, '--all', gitRunner);
+  if (anywhere.failed) return lookupFailed('every branch');
+  if (anywhere.sha) return { kind: 'unmerged', nonce, commit: anywhere.sha };
+  return {
+    kind: 'unknown',
+    nonce,
+    reason: 'its publish id is not in any git history this checkout has (an unfetched branch, or a hand-published page)',
+  };
+}
+
+// #3529: the register at merge-base(HEAD, `mainRef`), for the merged-lane
+// collision check. '' when the register did not exist there yet (no rows);
+// null when git could not answer, which `checkLiveView` fails closed on.
+export function resolveMergeBaseRegister(repoRoot, registerPath, mainRef, gitRunner = runGitCommand) {
+  const mergeBase = gitRunner(['merge-base', 'HEAD', mainRef], repoRoot);
+  if (mergeBase.error || mergeBase.status !== 0 || typeof mergeBase.stdout !== 'string') return null;
+  const show = gitRunner(['show', `${mergeBase.stdout.trim()}:${registerPath}`], repoRoot);
+  if (show.error) return null;
+  if (show.status !== 0) {
+    const stderr = typeof show.stderr === 'string' ? show.stderr : '';
+    return stderr.includes('does not exist in') || stderr.includes('exists on disk, but not in') ? '' : null;
+  }
+  return typeof show.stdout === 'string' ? show.stdout : null;
+}
+
+// #3529 (PR #3532 review pass 2, 🟠1): whether origin/main's register has
+// EVER carried row `id` — any commit on `mainRef`'s FIRST-PARENT line whose
+// register diff adds or removes its `### <id> ` heading. A row main held and
+// dropped was discharged there, whoever published the page. `--first-parent`
+// (review pass 3, 🔴): what main's register carried is what its own line
+// held. Every reachable commit, as pass 2 had it, includes a merged PR
+// branch's transient rows: #3525 minted B103 in f980d2c8 and renumbered it
+// before merging, which made #3505's still-live B103 read as discharged.
+// Main's first-parent line is mostly merge commits, so
+// `--diff-merges=first-parent` is what lets `-G` see a merge's register
+// change at all. `-G` is anchored to the heading and to the end of the
+// number, so B10 never matches B101. Two residuals read as carried: a
+// colliding ID that reached main and was discharged while the other lane's
+// copy is still live (both lanes must have escaped both collision checks —
+// not allocate-once-proof), and a row main merged and then reverted while a
+// re-landing lane's copy is live, until that re-land merges (review pass 4,
+// P4f — not revert-proof).
+// `checkLiveView` asks only for a row that would otherwise fail, so the
+// common run makes no call. `true`/`false`, or `null` when git failed,
+// which grants no exemption.
+export function resolveMainEverCarried(repoRoot, registerPath, mainRef, id, gitRunner = runGitCommand) {
+  if (!/^[A-Z]\d+$/.test(id)) return false;
+  const log = gitRunner(
+    ['log', '--format=%H', '-s', '-n', '1', '--first-parent', '--diff-merges=first-parent', '-G', `^### ${id}[^0-9]`, mainRef, '--', registerPath],
+    repoRoot,
+  );
+  if (log.error || log.status !== 0 || typeof log.stdout !== 'string') return null;
+  return log.stdout.trim() !== '';
+}
+
+// #3529 (PR #3532 review pass 2, 🟠2; review pass 4, operator decision 5):
+// the lane that OWNS a live row — the oldest commit whose live view
+// introduced the row's own summary, its ID AND its title (`title`, the
+// normalised key `parseLiveViewRowTitles` gives for the live page), on any
+// branch but never one `mainRef` contains — with the branches that contain
+// it, main excluded. A union publish carries another lane's row under the
+// carrier's own publish id, so the page's provenance names the carrier, never
+// the owner. The bare ID is not enough (review pass 4): in a row-ID collision
+// it is exactly what two lanes share, so the oldest commit carrying it was
+// another lane's row; and main never carried the live row on its first-parent
+// line, so a commit main contains (a merged lane's renumbered copy) owns
+// nothing. `-G` on the ID anchor lists every commit that touched the row's
+// summary line, so a retitle is found too; the snapshot's normalised title
+// then decides, and a commit counts only when none of its parents already
+// carried that summary (a lane's merge of main, which brings main's rows in
+// through its first-parent diff, introduces none of them). Two lanes that wrote the same ID and the same title after
+// normalisation (tags stripped, entities decoded, whitespace collapsed) cannot be
+// told apart, and the older is named.
+// `extraCommits` (a retirement's PR commits, from gh) join the search roots,
+// so an introducing commit no fetched branch holds any more is still found
+// while this checkout has the object; the ones it lacks are returned as
+// `missingCommits`. `null` when no commit introduced the row and none was
+// missing, when the title or `mainRef` is unknown, or when git failed.
+export function resolveRowOwner(repoRoot, liveViewPath, id, { title, mainRef, extraCommits } = {}, gitRunner = runGitCommand) {
+  if (typeof title !== 'string' || typeof mainRef !== 'string' || !mainRef || !/^[A-Z]\d+$/.test(id)) return null;
+  const roots = [];
+  const missingCommits = [];
+  for (const oid of Array.isArray(extraCommits) ? extraCommits : []) {
+    const present = /^[0-9a-f]{7,64}$/i.test(String(oid)) && gitRunner(['cat-file', '-e', `${oid}^{commit}`], repoRoot);
+    if (present && !present.error && present.status === 0) roots.push(String(oid));
+    else missingCommits.push(String(oid));
+  }
+  const anchored = `<span class="num">${id}</span>`;
+  const log = gitRunner(
+    ['log', '--format=%H', '-s', '--full-history', '--diff-merges=first-parent', '-G', anchored, '--all', ...roots, '--not', mainRef, '--', liveViewPath],
+    repoRoot,
+  );
+  if (log.error || log.status !== 0 || typeof log.stdout !== 'string') return null;
+  const carries = (rev) => {
+    const show = gitRunner(['show', `${rev}:${liveViewPath}`], repoRoot);
+    if (show.error || show.status !== 0 || typeof show.stdout !== 'string') return false;
+    return parseLiveViewRowTitles(stripHtmlComments(show.stdout)).get(id) === title;
+  };
+  let commit = null;
+  for (const sha of log.stdout.split(/\s+/).filter(Boolean).reverse()) {
+    if (!carries(sha)) continue;
+    // Introduced HERE only if no parent already carried it: a lane's merge of
+    // main brings main's rows in through its first-parent diff, and owns none.
+    const parents = gitRunner(['rev-list', '--parents', '-n', '1', sha], repoRoot);
+    if (parents.error || parents.status !== 0 || typeof parents.stdout !== 'string') continue;
+    if (parents.stdout.trim().split(/\s+/).slice(1).some(carries)) continue;
+    commit = sha;
+    break;
+  }
+  if (commit === null) return missingCommits.length > 0 ? { commit: null, refs: [], missingCommits } : null;
+  const branches = gitRunner(['branch', '-a', '--contains', commit, '--format=%(refname:short)'], repoRoot);
+  const refs =
+    branches.error || branches.status !== 0 || typeof branches.stdout !== 'string'
+      ? []
+      : branches.stdout
+          .split(/\r?\n/)
+          .map((r) => r.trim())
+          .filter((r) => r && r !== 'origin' && !r.startsWith('(') && !/^(origin\/)?(main|HEAD)$/.test(r));
+  return { commit, refs, missingCommits };
+}
+
+// #3529 (PR #3532 review pass 2, 🟠2): the state of each PR the "Retired
+// carried rows" record names, from `gh`. `{ available: false, reason }` when
+// gh is missing or not authenticated — the record is then accepted with a
+// warning, since the check cannot confirm it. Otherwise `states` maps each PR
+// number to `{ state, mergedAt, commits }` (the PR's own commit SHAs, for
+// the ownership check of operator decision 5; `null` when gh's answer had no
+// usable list), or `{ error }` when gh could not read it.
+// `ghRunner` is injectable so tests never touch the network; the default
+// goes through the repo's `gh` chokepoint (scripts/gh.mjs, #2184).
+function runGhCommand(args, cwd) {
+  return ghSpawn(args, { cwd, timeout: GIT_TIMEOUT_MS, env: { ...process.env, GH_PROMPT_DISABLED: '1' } });
+}
+// The PR's FULL commit list: `gh pr view --json commits` reports only the first
+// 100 (#3505 has 120), and REST `pulls/N/commits` caps at 250. GraphQL pages
+// with `--paginate` (which needs the $endCursor variable) have no cap; the
+// `totalCount` lets the caller prove the list it assembled is whole.
+const PR_COMMITS_QUERY =
+  'query($owner: String!, $name: String!, $number: Int!, $endCursor: String) { ' +
+  'repository(owner: $owner, name: $name) { pullRequest(number: $number) { state mergedAt ' +
+  'commits(first: 100, after: $endCursor) { totalCount pageInfo { hasNextPage endCursor } nodes { commit { oid } } } } } }';
+export function resolveRetiredPrStates(repoRoot, prNumbers, ghRunner = runGhCommand) {
+  const states = new Map();
+  if (prNumbers.length === 0) return { available: true, states };
+  const auth = ghRunner(['auth', 'status'], repoRoot);
+  if (auth.error) {
+    return {
+      available: false,
+      reason: auth.error.code === 'ENOENT' ? 'gh is not installed' : `gh could not run (${auth.error.message})`,
+    };
+  }
+  if (auth.status !== 0) {
+    const detail = String(auth.stderr ?? '').trim().split(/\r?\n/)[0];
+    return { available: false, reason: `gh is not authenticated${detail ? ` (${detail})` : ''}` };
+  }
+  for (const pr of prNumbers) {
+    const r = ghRunner(
+      [
+        'api', 'graphql', '--paginate', '--slurp',
+        '-F', 'owner={owner}', '-F', 'name={repo}', '-F', `number=${pr}`,
+        '-f', `query=${PR_COMMITS_QUERY}`,
+      ],
+      repoRoot,
+    );
+    if (r.error || r.status !== 0) {
+      states.set(pr, { error: String(r.stderr ?? '').trim().split(/\r?\n/)[0] || r.error?.message || `gh exited ${r.status}` });
+      continue;
+    }
+    try {
+      const raw = JSON.parse(r.stdout);
+      const pages = Array.isArray(raw) ? raw : [raw];
+      const pull = pages[0]?.data?.repository?.pullRequest;
+      if (!pull) {
+        states.set(pr, { error: `gh found no pull request #${pr}` });
+        continue;
+      }
+      const nodes = pages.flatMap((page) => page?.data?.repository?.pullRequest?.commits?.nodes ?? []);
+      const total = pull.commits?.totalCount;
+      const oids = nodes.every((n) => typeof n?.commit?.oid === 'string') ? nodes.map((n) => n.commit.oid) : null;
+      const entry = { state: pull.state, mergedAt: pull.mergedAt ?? null, commits: oids };
+      if (oids !== null && Number.isInteger(total) && oids.length !== total) {
+        entry.commits = null;
+        entry.incompleteCommits = { have: oids.length, total };
+      }
+      states.set(pr, entry);
+    } catch {
+      states.set(pr, { error: 'gh printed output that is not JSON' });
+    }
+  }
+  return { available: true, states };
 }
 
 // #3116: reads the live view AT an arbitrary ref (the PR base, in CI) for
@@ -1672,10 +2645,14 @@ function runCheckOnboxRegisterCli() {
     // Refuse explicitly rather than silently ignoring them.
     const againstPublishedIdx = process.argv.indexOf('--against-published');
     const dischargingIdx = process.argv.indexOf('--discharging');
-    if (againstPublishedIdx !== -1 || dischargingIdx !== -1) {
+    const publishingIdx = process.argv.indexOf('--publishing');
+    const buildUnionIdx = process.argv.indexOf('--build-union');
+    if (againstPublishedIdx !== -1 || dischargingIdx !== -1 || publishingIdx !== -1 || buildUnionIdx !== -1) {
       const conflicting = [];
       if (againstPublishedIdx !== -1) conflicting.push('--against-published');
       if (dischargingIdx !== -1) conflicting.push('--discharging');
+      if (publishingIdx !== -1) conflicting.push('--publishing');
+      if (buildUnionIdx !== -1) conflicting.push('--build-union');
       console.error(
         `--stamped-since cannot be combined with ${conflicting.join(' and ')}. ` +
           `--stamped-since is for CI (checks if content moved without a stamp); ` +
@@ -1823,6 +2800,72 @@ function runCheckOnboxRegisterCli() {
         `--discharging ${dischargingArg} has no usable row ID in it after splitting on ` +
           'commas — pass at least one, e.g. --discharging E10 or --discharging E10,E11.',
       );
+      throw new CliExitError(1);
+    }
+  }
+
+  // --publishing <file> (#3529): the file actually about to be published, when
+  // it is not the tracked live view — a union carrying another lane's rows.
+  // Same single-value, only-with-`--against-published` contract as
+  // --discharging above.
+  const publishingIdx = process.argv.indexOf('--publishing');
+  let publishingHtml;
+  if (publishingIdx !== -1) {
+    if (process.argv.lastIndexOf('--publishing') !== publishingIdx) {
+      console.error('--publishing was passed more than once — pass exactly one file.');
+      throw new CliExitError(1);
+    }
+    if (againstPublishedIdx === -1) {
+      console.error(
+        '--publishing only makes sense alongside --against-published — it names the file you ' +
+          'are about to publish, so it is compared against the page currently live.',
+      );
+      throw new CliExitError(1);
+    }
+    const publishingPath = process.argv[publishingIdx + 1];
+    if (!publishingPath) {
+      console.error('--publishing requires a value: the path of the file you are about to publish.');
+      throw new CliExitError(1);
+    }
+    try {
+      publishingHtml = readFileSync(resolve(publishingPath), 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT' || err.code === 'EISDIR' || err.code === 'EACCES') {
+        console.error(`Cannot read --publishing ${publishingPath} (${err.code}) — pass a readable file path.`);
+        throw new CliExitError(1);
+      }
+      throw err;
+    }
+  }
+
+  // --build-union <out> (#3529, PR #3532 review pass 2): writes the union —
+  // your tracked live view plus every live row this run finds you must not
+  // drop (`buildUnionLiveView`) — to <out>, then checks <out> exactly as
+  // --publishing would. The way to build a union file; never by hand.
+  const buildUnionIdx = process.argv.indexOf('--build-union');
+  let buildUnionPath;
+  if (buildUnionIdx !== -1) {
+    if (process.argv.lastIndexOf('--build-union') !== buildUnionIdx) {
+      console.error('--build-union was passed more than once — pass exactly one output file.');
+      throw new CliExitError(1);
+    }
+    if (againstPublishedIdx === -1) {
+      console.error(
+        "--build-union only makes sense alongside --against-published — it carries the live page's rows " +
+          'that publishing your tracked file would drop.',
+      );
+      throw new CliExitError(1);
+    }
+    if (publishingIdx !== -1) {
+      console.error(
+        '--build-union cannot be combined with --publishing: --build-union writes the union and checks it; ' +
+          '--publishing checks a union you already have. Pass one.',
+      );
+      throw new CliExitError(1);
+    }
+    buildUnionPath = process.argv[buildUnionIdx + 1];
+    if (!buildUnionPath) {
+      console.error('--build-union requires a value: the path to write the union file to.');
       throw new CliExitError(1);
     }
   }
@@ -1979,13 +3022,132 @@ function runCheckOnboxRegisterCli() {
     const trackedLiveViewHtml = trackedLiveViewFileOverride
       ? readFileSync(resolve(trackedLiveViewFileOverride), 'utf8')
       : read(LIVE_VIEW);
-    const publishedErrors = checkLiveView(text, publishedHtml, {
+    // #3529: who published the live page, and the register at the merge-base
+    // — see `checkLiveView`'s header. Resolved against the SAME frozen SHA the
+    // baseline texts came from. TEST-ONLY override, mirroring the ones above:
+    // `ONBOX_TEST_PUBLISHED_PROVENANCE` (merged | own | unmerged | unknown)
+    // replaces the git lookup, with the published page's own rows standing in
+    // for the stamping commit's; under `ONBOX_TEST_BASELINE_FILE` (no git
+    // SHA to search) it defaults to 'merged', #2199's original reading, and
+    // the merge-base check is skipped.
+    const provenanceOverride =
+      process.env.ONBOX_TEST_PUBLISHED_PROVENANCE ?? (baselineFileOverride ? 'merged' : undefined);
+    if (process.env.ONBOX_TEST_PUBLISHED_PROVENANCE) {
+      console.error(
+        `WARNING: published-page provenance injected from ONBOX_TEST_PUBLISHED_PROVENANCE=${provenanceOverride}; ` +
+          'this is NOT a real git lookup and must never be used to gate a publish.',
+      );
+    }
+    let publishedProvenance;
+    let mergeBaseText;
+    let mainEverCarried;
+    let rowOwnerLookup;
+    if (provenanceOverride) {
+      const token = parsePublishToken(publishedHtml);
+      publishedProvenance = {
+        kind: provenanceOverride,
+        nonce: token && !token.malformed ? token.nonce : null,
+        reason: 'injected by ONBOX_TEST_PUBLISHED_PROVENANCE',
+        stampedRowIds: liveViewRowIdSet(publishedHtml),
+      };
+    } else if (baseline.fetchedSha) {
+      publishedProvenance = resolvePublishedProvenance(repoRoot, LIVE_VIEW, publishedHtml, baseline.fetchedSha);
+      mergeBaseText = resolveMergeBaseRegister(repoRoot, REGISTER, baseline.fetchedSha);
+      // #3529 (review pass 2): asked only for a row that would otherwise fail.
+      mainEverCarried = (id) => resolveMainEverCarried(repoRoot, REGISTER, baseline.fetchedSha, id);
+      // Decision 5: the owner of the LIVE row — its own summary, never a
+      // commit main contains — searched also from a retirement's PR commits.
+      const liveTitles = parseLiveViewRowTitles(stripHtmlComments(publishedHtml));
+      rowOwnerLookup = (id, prCommits) =>
+        resolveRowOwner(repoRoot, LIVE_VIEW, id, {
+          title: liveTitles.get(id),
+          mainRef: baseline.fetchedSha,
+          extraCommits: prCommits,
+        });
+    }
+    // #3529 (review pass 2, 🟠2): the PRs the "Retired carried rows" record
+    // names, confirmed through gh (no call at all when the record is empty).
+    // TEST-ONLY override, mirroring the ones above: ONBOX_TEST_GH_PR_STATES is
+    // a JSON object of PR number -> OPEN | CLOSED | MERGED, or
+    // { state, commits: [sha, ...] }, or `unavailable`. It stands in for gh itself,
+    // not for the lookup, so only the PRs this run asks about are answered
+    // and a PR it does not list reads as one gh could not resolve.
+    const retiredPrs = [
+      ...new Set(
+        [...parseRetiredCarriedRows(text).entries, ...parseRetiredCarriedRows(baseline.registerText ?? '').entries].map(
+          (e) => e.pr,
+        ),
+      ),
+    ];
+    const ghOverride = process.env.ONBOX_TEST_GH_PR_STATES;
+    let retiredPrStates;
+    if (ghOverride) {
+      console.error(
+        `WARNING: gh PR states injected from ONBOX_TEST_GH_PR_STATES=${ghOverride}; ` +
+          'this is NOT a real gh lookup and must never be used to gate a publish.',
+      );
+      const injected = ghOverride === 'unavailable' ? {} : JSON.parse(ghOverride);
+      retiredPrStates = resolveRetiredPrStates(repoRoot, retiredPrs, (args) => {
+        if (args[0] === 'auth') {
+          return ghOverride === 'unavailable'
+            ? { status: 1, stdout: '', stderr: 'injected as unavailable by ONBOX_TEST_GH_PR_STATES' }
+            : { status: 0, stdout: '', stderr: '' };
+        }
+        const number = args.find((a) => String(a).startsWith('number='))?.slice('number='.length);
+        const answer = injected[number];
+        if (answer === undefined) {
+          return { status: 1, stdout: '', stderr: `Could not resolve to a PullRequest (#${number} is not in ONBOX_TEST_GH_PR_STATES)` };
+        }
+        const { state, commits = [] } = typeof answer === 'string' ? { state: answer } : answer;
+        const pullRequest = {
+          state,
+          mergedAt: state === 'MERGED' ? 'injected' : null,
+          commits: { totalCount: commits.length, pageInfo: { hasNextPage: false, endCursor: null }, nodes: commits.map((oid) => ({ commit: { oid } })) },
+        };
+        return { status: 0, stdout: JSON.stringify([{ data: { repository: { pullRequest } } }]), stderr: '' };
+      });
+    } else {
+      retiredPrStates = resolveRetiredPrStates(repoRoot, retiredPrs);
+    }
+    const checkOptions = {
       direction: 'extraOnly',
       baselineText: baseline.registerText,
       dischargingIds,
       trackedLiveViewHtml,
       baselineLiveViewText: baseline.liveViewText,
-    });
+      publishedProvenance,
+      publishingHtml,
+      mergeBaseText,
+      mainEverCarried,
+      rowOwnerLookup,
+      retiredPrStates,
+    };
+    const carryOut = new Set();
+    let publishedErrors = checkLiveView(text, publishedHtml, { ...checkOptions, carryOut });
+    // --build-union: write the union of what this run found must be carried,
+    // then judge THAT file, exactly as --publishing would.
+    if (buildUnionPath && publishedErrors[0] !== CANNOT_VERIFY_BASELINE_ERROR) {
+      if (carryOut.size === 0) {
+        console.log(
+          `--build-union: no live row needs carrying, so ${buildUnionPath} was not written — publish ${LIVE_VIEW} itself.`,
+        );
+      } else {
+        let union;
+        try {
+          union = buildUnionLiveView(trackedLiveViewHtml, publishedHtml, [...carryOut]);
+        } catch (err) {
+          console.error(`--build-union: cannot build the union — ${err.message}`);
+          throw new CliExitError(1);
+        }
+        writeFileSync(resolve(buildUnionPath), union, 'utf8');
+        console.log(
+          `--build-union: wrote ${buildUnionPath} — ${LIVE_VIEW} plus ${[...carryOut].sort().join(', ')}, copied ` +
+            'verbatim from the live page. It is checked below exactly as --publishing would; if it passes, ' +
+            'publish THAT file in step 4, not the tracked one.',
+        );
+        publishedErrors = checkLiveView(text, publishedHtml, { ...checkOptions, publishingHtml: union });
+      }
+    }
     // The fail-closed "cannot verify" case (#2199) does not mean the
     // register IS behind (that's unknown), so it gets its own label rather
     // than the "shows the register is BEHIND" framing below, which would
@@ -2031,6 +3193,24 @@ function runCheckOnboxRegisterCli() {
     // pending-publish (edit, publish, edit again before merge) looks like a
     // 3-way disagreement to hash-only comparison, but is ordinarily not a
     // conflict — the operator can investigate manually if needed.
+    const collisionErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX));
+    const unmergedLaneErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(UNMERGED_LANE_ROW_ERROR_PREFIX));
+    const unknownProvenanceErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(UNKNOWN_PROVENANCE_ERROR_PREFIX));
+    const publishingFileErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(PUBLISHING_FILE_ERROR_PREFIX));
+    const retiredErrors = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(RETIRED_ROW_ERROR_PREFIX));
+    const retiredWarnings = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(RETIRED_ROW_WARNING_PREFIX));
     const threeWayWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX));
@@ -2039,6 +3219,12 @@ function runCheckOnboxRegisterCli() {
       : publishedErrors.filter(
           (e) =>
             !e.startsWith(DISCHARGE_NAME_ERROR_PREFIX) &&
+            !e.startsWith(ROW_ID_COLLISION_ERROR_PREFIX) &&
+            !e.startsWith(UNMERGED_LANE_ROW_ERROR_PREFIX) &&
+            !e.startsWith(UNKNOWN_PROVENANCE_ERROR_PREFIX) &&
+            !e.startsWith(PUBLISHING_FILE_ERROR_PREFIX) &&
+            !e.startsWith(RETIRED_ROW_ERROR_PREFIX) &&
+            !e.startsWith(RETIRED_ROW_WARNING_PREFIX) &&
             !e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX) &&
             !e.startsWith(EXTRACTION_ERROR_PREFIX) &&
             !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX),
@@ -2058,6 +3244,54 @@ function runCheckOnboxRegisterCli() {
           'Fix the --discharging value(s) named above — each error explains why that ID ' +
             "didn't match — then re-run this command against the SAME saved copy from step 1.",
         );
+      }
+      if (collisionErrors.length > 0) {
+        publishedFailed =
+          report(
+            `Another lane (on ${publishedPath} or already on origin/main) uses a row ID that ` +
+              `${LIVE_VIEW} also uses for a different row`,
+            collisionErrors,
+          ) || publishedFailed;
+        console.error('Do not publish. Renumber your row as each error above says.');
+      }
+      if (unmergedLaneErrors.length > 0) {
+        publishedFailed =
+          report(
+            `${publishedPath} (the currently-PUBLISHED page) has rows from another unmerged lane`,
+            unmergedLaneErrors,
+          ) || publishedFailed;
+        console.error(
+          "Do not publish this file: it would drop that lane's rows. Publish a file that carries " +
+            'each row named above verbatim and pass it via --publishing <file>, or coordinate with ' +
+            'that lane first.',
+        );
+      }
+      if (publishingFileErrors.length > 0) {
+        publishedFailed =
+          report('The --publishing file does not carry the live page\'s rows verbatim', publishingFileErrors) ||
+          publishedFailed;
+        console.error(
+          'Do not publish. Build the union with --build-union <out> rather than by hand: it is your tracked ' +
+            "live view plus each carried row's live block, unchanged, with the derived figures regenerated.",
+        );
+      }
+      if (retiredErrors.length > 0) {
+        publishedFailed =
+          report(`The register's "${RETIRED_SECTION_TITLE}" record names an entry the check will not honour`, retiredErrors) ||
+          publishedFailed;
+        console.error(
+          'Do not publish. A retirement is honoured only for a PR confirmed closed without merging — fix or ' +
+            "remove each entry named above (an open lane's row must still be carried).",
+        );
+      }
+      if (retiredWarnings.length > 0) {
+        console.warn(`\n${RETIRED_SECTION_TITLE} accepted WITHOUT a gh check (not blocking — confirm each by hand):`);
+        for (const warning of retiredWarnings) console.warn(`  ${warning}`);
+      }
+      if (unknownProvenanceErrors.length > 0) {
+        publishedFailed =
+          report(`Who published ${publishedPath} could not be established`, unknownProvenanceErrors) ||
+          publishedFailed;
       }
       if (contentDriftErrors.length > 0) {
         publishedFailed =

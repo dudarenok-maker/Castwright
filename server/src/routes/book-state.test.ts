@@ -1377,6 +1377,141 @@ describe('book-state router — backfills missing cast.lines from attribution', 
   });
 });
 
+describe('book-state router — #3440 canonicalises drift-spelled attribution ids', () => {
+  /* Regression (#3440 step 1 — The Floodmark "the_torment" case): a
+     manuscript attribution spelled as a DRIFT VARIANT of a live cast id
+     (`the-torment` vs the cast row `the_torment` — the two mintings
+     normaliseIdKey exists for, #2040 RC2) previously bucketed under its
+     own raw spelling: the cast row read 0 lines and the Fix-audio modal
+     could not find the character's chapters. The GET handler now joins
+     every manuscript characterId through buildCastResolver — the same
+     resolver the drift detector and the orphan collector use (CLAUDE.md:
+     cast.json is the identity of record) — before bucketing. An id that
+     resolves to NOTHING keeps its raw spelling: canonicalisation must
+     never drop an attribution. */
+  const DRIFT_TITLE = 'Drift Canon Test';
+  const DRIFT_MANUSCRIPT_ID = 'm_drift_canon_test';
+  let driftBookId: string;
+  let driftBookDir: string;
+
+  const DRIFT_SENTENCES = [
+    { id: 1, chapterId: 71, characterId: 'the-torment', text: 'Let it out.' },
+    { id: 2, chapterId: 71, characterId: 'the_torment', text: 'It is out.' },
+    { id: 3, chapterId: 72, characterId: 'the-torment', text: 'Again.' },
+    { id: 4, chapterId: 72, characterId: 'spectre-9x', text: 'Nobody mints me.' },
+  ];
+
+  beforeAll(async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    driftBookId = makeBookId(AUTHOR, SERIES, DRIFT_TITLE);
+    driftBookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, DRIFT_TITLE);
+    mkdirSync(join(driftBookDir, '.audiobook'), { recursive: true });
+
+    writeFileSync(join(driftBookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(driftBookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: driftBookId,
+        manuscriptId: DRIFT_MANUSCRIPT_ID,
+        title: DRIFT_TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [
+          { id: 71, title: 'Chapter 71', slug: '71-chapter' },
+          { id: 72, title: 'Chapter 72', slug: '72-chapter' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+
+    /* The cast row is the UNDERSCORE minting (cast-create.ts shape); the
+       manuscript attributes the HYPHEN spelling (analyzer shape) plus the
+       underscore spelling once. No cast-id-history.json on disk — the
+       normalised-id tier is exactly what maps one onto the other. */
+    writeFileSync(
+      join(driftBookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'narrator', name: 'Narrator', lines: 40 },
+          { id: 'the_torment', name: 'The Torment' },
+        ],
+      }),
+    );
+  });
+
+  afterAll(async () => {
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    await clearAnalysisCache(DRIFT_MANUSCRIPT_ID);
+  });
+
+  const expectCanonicalised = (body: {
+    cast?: { characters?: Array<{ id: string; lines?: number }> };
+    chapterCharacters?: Record<string, string[]>;
+    characterIdAliases?: Record<string, string>;
+  }) => {
+    const chars = body.cast!.characters!;
+    const byId = Object.fromEntries(chars.map((c) => [c.id, c.lines]));
+    /* All three `the-torment`/`the_torment` attributions count onto the
+       SINGLE cast row — before the fix the row read 0 (blank lines →
+       derive-always clobbered it to 0) and the raw spelling owned 3. */
+    expect(byId['the_torment']).toBe(3);
+    const ch71 = body.chapterCharacters?.[71] ?? [];
+    const ch72 = body.chapterCharacters?.[72] ?? [];
+    /* Chapter buckets key on the CANONICAL id; the drift spelling is gone
+       (it would render a phantom second speaker pill in Generate). */
+    expect(ch71).toContain('the_torment');
+    expect(ch71).not.toContain('the-torment');
+    expect(ch72).toContain('the_torment');
+    expect(ch72).not.toContain('the-torment');
+    /* An id no cast row resolves keeps its raw spelling and stays
+       visible. */
+    expect(ch72).toContain('spectre-9x');
+    /* #3440 step 2 — the response ships the raw→canonical alias map so the
+       client can join raw ids against the canonical chapter rows without
+       re-implementing the resolver. Only the drifted id appears: `the-torment`
+       (raw) → `the_torment` (canonical). The non-drifted id (`the_torment`,
+       spelled the same in both manuscript and cast) and the unresolvable id
+       (`spectre-9x`, no cast row) are both ABSENT. */
+    expect(body.characterIdAliases).toEqual({ 'the-torment': 'the_torment' });
+  };
+
+  it('manuscript-edits.json branch: drift spellings count onto the cast row', async () => {
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    await clearAnalysisCache(DRIFT_MANUSCRIPT_ID);
+    writeFileSync(
+      join(driftBookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({ sentences: DRIFT_SENTENCES }),
+    );
+
+    const res = await request(app).get(`/api/books/${driftBookId}/state`);
+    expect(res.status).toBe(200);
+    expectCanonicalised(res.body);
+  });
+
+  it('analysis-cache fallback branch: same canonicalisation when edits are absent', async () => {
+    /* Analysis in flight: no manuscript-edits.json on disk — the
+       cache-derived sentence list feeds the same bucketing path. */
+    rmSync(join(driftBookDir, '.audiobook', 'manuscript-edits.json'), { force: true });
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    await saveAnalysisCache(DRIFT_MANUSCRIPT_ID, {
+      chapters: {
+        71: DRIFT_SENTENCES.filter((s) => s.chapterId === 71),
+        72: DRIFT_SENTENCES.filter((s) => s.chapterId === 72),
+      },
+    });
+
+    const res = await request(app).get(`/api/books/${driftBookId}/state`);
+    expect(res.status).toBe(200);
+    expectCanonicalised(res.body);
+  });
+});
+
 describe('book-state router — state slice series-membership + on-disk rename', () => {
   /* Each case in this block creates its own book on disk so the test
      observing the post-rename layout doesn't tread on the shared bookId
@@ -2632,5 +2767,172 @@ describe('book-state router — clonedElsewhereInSeries (#2006 Task 9)', () => {
     };
     expect(onDisk.characters[0].clonedElsewhereInSeries).toBeUndefined();
     expect('clonedElsewhereInSeries' in onDisk.characters[0]).toBe(false);
+  });
+});
+
+describe('book-state router — analysis.failedChapterErrors phase (plan 287 T1)', () => {
+  it('GET book-state returns phase on failedChapterErrors', async () => {
+    const { saveAnalysisCache, clearAnalysisCache } = await import('../store/analysis-cache.js');
+    /* Seeded UNTAGGED (a pre-287 cache): the load-time normaliser must tag it. */
+    await saveAnalysisCache('m_test', {
+      chapters: {},
+      chapterCast: { 1: [] },
+      failedChapterIds: [1],
+      failedChapterErrors: { '1': { code: 'analyzer-timeout', message: 'm', remediation: 'r' } },
+    });
+    try {
+      const res = await request(app).get(`/api/books/${bookId}/state`);
+      expect(res.status).toBe(200);
+      expect(res.body.analysis.failedChapterErrors['1'].phase).toBe('cast');
+    } finally {
+      await clearAnalysisCache('m_test');
+    }
+  });
+});
+
+describe('book-state router — analysis completeness fields (plan 287 T6)', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  let originalState: string;
+  beforeEach(() => {
+    originalState = readFileSync(statePath(), 'utf8');
+  });
+  afterEach(async () => {
+    writeFileSync(statePath(), originalState);
+    const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+    await clearAnalysisCache('m_test');
+  });
+
+  /** Two chapters; `castConfirmed` as given. */
+  function seedState(castConfirmed: boolean): void {
+    const s = JSON.parse(originalState);
+    writeFileSync(
+      statePath(),
+      JSON.stringify({
+        ...s,
+        castConfirmed,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: 'chapter-one' },
+          { id: 2, title: 'Chapter 2', slug: 'chapter-two' },
+        ],
+      }),
+    );
+  }
+  const take = (id: number) => [{ id: id * 100 + 1, chapterId: id, characterId: 'narrator', confidence: 0.9, text: 'x' }];
+  const stage1 = {
+    characters: [{ id: 'narrator', name: 'Narrator', role: 'narrator', color: 'narrator' }],
+    chapters: [
+      { id: 1, title: 'Chapter 1' },
+      { id: 2, title: 'Chapter 2' },
+    ],
+  };
+  async function get(cache: Record<string, unknown>) {
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    await saveAnalysisCache('m_test', cache as never);
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    return res.body.analysis as {
+      stage1Ready: boolean;
+      resumeRequired: boolean;
+      unattributedChapterIds: number[];
+      failedChapterErrors: Record<string, unknown>;
+    };
+  }
+
+  it('GET book-state: stage1Ready, resumeRequired, unattributedChapterIds — no stage1', async () => {
+    seedState(false);
+    const a = await get({ chapters: { 1: take(1) }, chapterCast: { 1: stage1.characters } });
+    expect(a).toMatchObject({ stage1Ready: false, resumeRequired: false, unattributedChapterIds: [2] });
+  });
+
+  it('GET book-state: stage1Ready, resumeRequired, unattributedChapterIds — a pending chapter', async () => {
+    seedState(false);
+    const a = await get({ stage1, chapters: { 1: take(1), 2: take(2) }, pendingAttributionChapterIds: [2] });
+    expect(a).toMatchObject({ stage1Ready: true, resumeRequired: true, unattributedChapterIds: [2] });
+  });
+
+  it('GET book-state: stage1Ready, resumeRequired, unattributedChapterIds — complete', async () => {
+    seedState(false);
+    const a = await get({ stage1, chapters: { 1: take(1), 2: take(2) }, takesPersisted: true });
+    expect(a).toMatchObject({ stage1Ready: true, resumeRequired: false, unattributedChapterIds: [] });
+  });
+
+  it('GET book-state: stage1Ready, resumeRequired, unattributedChapterIds — reached Confirm → resumeRequired false', async () => {
+    seedState(false);
+    const a = await get({ stage1, chapters: { 1: take(1) }, takesPersisted: false, confirmReached: true });
+    expect(a).toMatchObject({ stage1Ready: true, resumeRequired: false, unattributedChapterIds: [2] });
+    seedState(true);
+    const b = await get({ stage1, chapters: { 1: take(1) }, takesPersisted: false });
+    expect(b).toMatchObject({ stage1Ready: true, resumeRequired: false, unattributedChapterIds: [2] });
+  });
+
+  it('decision F: an interrupted Re-analyse on a castConfirmed book (S11) leaves the library status unchanged and lists the chapter in unattributedChapterIds or failedChapterErrors', async () => {
+    seedState(true);
+    const a = await get({
+      stage1,
+      chapters: { 1: take(1), 2: take(2) },
+      takesPersisted: false,
+      confirmReached: true,
+      failedChapterIds: [2],
+      failedChapterErrors: { '2': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'attribution' } },
+    });
+    expect(a.resumeRequired).toBe(false);
+    expect(a.unattributedChapterIds.includes(2) || Object.hasOwn(a.failedChapterErrors, '2')).toBe(true);
+    /* The library side of decision F (never demoted) is pinned in scan.test.ts's
+       'decision F' block. */
+  });
+
+  describe('edits count as attributed on a confirmed book (spec §3.4, PR #3505 gate pass 1)', () => {
+    const editsPath = () => join(bookDir, '.audiobook', 'manuscript-edits.json');
+    let originalEdits: string | null;
+    beforeEach(() => {
+      originalEdits = existsSync(editsPath()) ? readFileSync(editsPath(), 'utf8') : null;
+    });
+    afterEach(() => {
+      if (originalEdits === null) rmSync(editsPath(), { force: true });
+      else writeFileSync(editsPath(), originalEdits);
+    });
+    const writeEdits = (chapterIds: number[]) =>
+      writeFileSync(editsPath(), JSON.stringify({ sentences: chapterIds.flatMap((id) => take(id)) }));
+    /** No cache file on disk (a sample / handoff-less book): loads as `{ chapters: {} }`. */
+    async function getNoCache() {
+      const res = await request(app).get(`/api/books/${bookId}/state`);
+      expect(res.status).toBe(200);
+      return res.body.analysis as { resumeRequired: boolean; unattributedChapterIds: number[] };
+    }
+
+    it('a confirmed book with no cache and edits for every active chapter lists no gaps', async () => {
+      seedState(true);
+      writeEdits([1, 2]);
+      const a = await getNoCache();
+      expect(a.unattributedChapterIds).toEqual([]);
+      expect(a.resumeRequired).toBe(false);
+    });
+
+    it('a confirmed book with no cache still lists an active chapter absent from edits', async () => {
+      seedState(true);
+      writeEdits([1]);
+      const a = await getNoCache();
+      expect(a.unattributedChapterIds).toEqual([2]);
+    });
+
+    it('a confirmed book keeps the gap for a chapter in failedChapterErrors even with edits', async () => {
+      seedState(true);
+      writeEdits([1, 2]);
+      const a = await get({
+        stage1,
+        chapters: { 1: take(1) },
+        confirmReached: true,
+        failedChapterIds: [2],
+        failedChapterErrors: { '2': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'attribution' } },
+      });
+      expect(a.unattributedChapterIds).toEqual([2]);
+    });
+
+    it('an unconfirmed book with no cache is unchanged: every active chapter is listed', async () => {
+      seedState(false);
+      writeEdits([1, 2]);
+      const a = await getNoCache();
+      expect(a.unattributedChapterIds).toEqual([1, 2]);
+    });
   });
 });

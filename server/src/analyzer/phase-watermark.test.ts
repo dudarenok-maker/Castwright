@@ -229,3 +229,20 @@ describe('createSequentialWatermark — non-pipelined sequential gate', () => {
     expect(wm.phase0Done).toBe(true);
   });
 });
+
+describe('releaseAll (#3435)', () => {
+  it('releaseAll resolves every waiter on both implementations', async () => {
+    for (const wm of [createPhaseWatermark({ minLagChapters: 10 }), createSequentialWatermark()]) {
+      let resolved = 0;
+      const waiters = [0, 3, 7].map((i) => wm.awaitPhase1Dispatch(i).then(() => resolved++));
+      await new Promise((r) => setTimeout(r, 10));
+      expect(resolved).toBe(0);
+      wm.releaseAll();
+      await Promise.all(waiters);
+      expect(resolved).toBe(3);
+      /* A worker that arrives after the release does not park either. */
+      await wm.awaitPhase1Dispatch(9);
+      expect(wm.phase0Done).toBe(false);
+    }
+  });
+});

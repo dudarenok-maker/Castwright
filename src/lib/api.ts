@@ -256,6 +256,8 @@ export interface AnalyseOpts {
     message: string;
     code?: string;
     remediation?: string;
+    /** Which phase failed (plan 287). Absent only from a pre-287 server. */
+    phase?: 'cast' | 'attribution';
   }) => void;
   /** A previously-failed chapter just had its Phase 0a re-run succeed
       (either via the main route re-queueing failedChapterIds on resume,
@@ -1308,10 +1310,18 @@ export async function mockGetBookState(bookId: string): Promise<BookStateRespons
     DEMO_CAPTURE && HOLLOW_TIDE_BOOK_STATES.has(bookId)
       ? HOLLOW_TIDE_BOOK_STATES.get(bookId) ?? null
       : MOCK_BOOK_STATES.get(bookId) ?? null;
-  if (stored && hasMockRevisions(bookId)) {
-    return { ...stored, revisions: getMockRevisions(bookId) };
-  }
-  return stored;
+  const withRevisions =
+    stored && hasMockRevisions(bookId) ? { ...stored, revisions: getMockRevisions(bookId) } : stored;
+  /* e2e seam: a spec can prime a book's prosodyAnnotated watermark via
+     `page.addInitScript` BEFORE the app boots (mock PUTs never write it), so
+     the open-time emotion re-run sees an explicit `false`. Undefined in
+     normal dev/prod. */
+  const seeded = (
+    globalThis as unknown as { __SEED_PROSODY_ANNOTATED__?: Record<string, boolean> }
+  ).__SEED_PROSODY_ANNOTATED__?.[bookId];
+  return withRevisions && seeded !== undefined
+    ? { ...withRevisions, state: { ...withRevisions.state, prosodyAnnotated: seeded } }
+    : withRevisions;
 }
 
 export async function mockPutBookState(bookId: string, req: PutStateRequest): Promise<void> {
@@ -1519,7 +1529,7 @@ async function mockUploadManuscript({
   };
 }
 
-async function mockAnalyseManuscript(
+export async function mockAnalyseManuscript(
   manuscriptId: string,
   { onPhase, onHeartbeat }: AnalyseOpts = {},
 ): Promise<AnalyseResponse> {
@@ -1589,6 +1599,14 @@ async function mockAnalyseManuscript(
         }
       }, 60);
     });
+  }
+  /* The real server mints the manuscript id once at confirm and writes it to
+     state.json, so the analysed book's state always reports the id the
+     client holds. The mock resolves every upload to the one fixture book,
+     so stamp the id it was analysed under onto that book's state. */
+  const analysed = MOCK_BOOK_STATES.get(res.bookId);
+  if (analysed) {
+    MOCK_BOOK_STATES.set(res.bookId, { ...analysed, state: { ...analysed.state, manuscriptId } });
   }
   return {
     bookId: res.bookId,
@@ -2867,6 +2885,8 @@ interface AnalysisStreamEvent {
   message?: string;
   code?: string;
   remediation?: string;
+  /** `chapter-failed` — which phase failed (plan 287). */
+  phase?: 'cast' | 'attribution';
   /** #3084 F7 — terminal `error` frames on the analysis streams carry a
       structured "how to fix" list when the classifier can name something
       actionable (e.g. the settings that bound a reasoning overflow). Absent
@@ -2951,6 +2971,23 @@ export class AnalysisError extends Error {
 }
 
 
+/* #3435 decision A — a 409 refusal body (`{ error, message, draining? }`) as the
+   same AnalysisError(message, code) the late-check SSE `error` frame becomes
+   through each reader's `kind: 'error'` branch, so callers handle one shape.
+   Null for any other body. */
+function analysisRefusalFromBody(status: number, body: string, codes: readonly string[]): AnalysisError | null {
+  if (status !== 409) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const { error, message } = (parsed ?? {}) as { error?: unknown; message?: unknown };
+  if (typeof error !== 'string' || !codes.includes(error)) return null;
+  return new AnalysisError(typeof message === 'string' && message ? message : 'Analysis refused.', error);
+}
+
 async function realAnalyseManuscript(
   manuscriptId: string,
   opts: AnalyseOpts = {},
@@ -3007,6 +3044,10 @@ async function realAnalyseManuscript(
         if (!accepted) reject(new AnalysisError(msg, ANALYSIS_STREAM_FAILED));
       });
     }
+    /* #3435 — a start refused because a chapter retry is running, or because
+       the previous run is still stopping. */
+    const refusal = analysisRefusalFromBody(res.status, body, ['subset_analysis_running', 'main_analysis_running']);
+    if (refusal) throw refusal;
     throw new AnalysisError(msg, ANALYSIS_STREAM_FAILED);
   }
   if (!res.body) throw new AnalysisError(`Analysis stream failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
@@ -3062,6 +3103,7 @@ async function realAnalyseManuscript(
           message: payload.message,
           code: payload.code,
           remediation: payload.remediation,
+          phase: payload.phase,
         });
       }
     } else if (payload.kind === 'chapter-resolved') {
@@ -5723,8 +5765,15 @@ async function realRunAnalysisForChapters(
      middleware subscribes through this reader too (kind: 'subset') and
      classifies on `code`, so a plain Error here would land in its generic
      terminal branch and paint a designed no-result exit as a dead run. */
-  if (!res.ok || !res.body)
+  if (!res.ok) {
+    /* #3435 — refused while the book has a main analysis run, live or still
+       stopping; the server's message goes on the row. */
+    const body = await res.text().catch(() => '');
+    const refusal = analysisRefusalFromBody(res.status, body, ['main_analysis_running']);
+    if (refusal) throw refusal;
     throw new AnalysisError(`Subset analysis failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
+  }
+  if (!res.body) throw new AnalysisError(`Subset analysis failed (${res.status}).`, ANALYSIS_STREAM_FAILED);
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -5779,6 +5828,7 @@ async function realRunAnalysisForChapters(
           message: payload.message,
           code: payload.code,
           remediation: payload.remediation,
+          phase: payload.phase,
         });
       }
     } else if (payload.kind === 'chapter-resolved') {

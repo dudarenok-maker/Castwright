@@ -216,12 +216,56 @@ comparison, see the edge list above). The merge step that closes this, run
    content drift (per-row body text hash comparison). Your register having rows
    the live page doesn't have yet is the normal reason you're publishing, not a
    defect, so it is never reported here. A row (or group) the live page has that
-   your register lacks is reported ONLY when `origin/main`'s own copy of this
+   your register lacks is reported when `origin/main`'s own copy of this
    register still has it too — the signature of another lane having already
-   published ahead of you. When `origin/main` also lacks it, the row was a
-   deliberate discharge (by this change or an already-merged one), not a race,
-   and is not reported: discharging a row always makes the still-live page look
-   "ahead" of your working copy in this exact shape, and that is expected.
+   published ahead of you. When `origin/main` also lacks it, it is not
+   reported if `origin/main`'s register has **ever** carried that row ID on
+   `main`'s own first-parent line, or if the row is listed under "Retired
+   carried rows" below. "Ever carried" means a register `main` itself held:
+   a commit on a merged PR's branch does not count, so a lane that minted an
+   ID and renumbered it before merging (#3525's B103) never exempts the other
+   lane's live copy. A row `main` held and then dropped was discharged there,
+   whoever published the page. Two rare cases still read as a discharge.
+   Two lanes mint the same ID, one reaches `main` and is discharged there,
+   and the other's copy is still live; both lanes must have slipped past the
+   live-collision and merged-lane collision checks for that to happen. And
+   `main` merges a lane's row and then reverts that merge, and a lane
+   re-landing the row publishes it: its live copy reads as discharged until
+   the re-land merges.
+   Otherwise **who published the live page decides** (#3529). The check finds the commit that stamped the page's
+   `data-publish-id`: the **oldest** commit that introduced it, which is the
+   commit step 3's `git log --all -S` names, never the merge commit that later
+   brought it to `main`:
+   - **reachable from `origin/main`** (a merged publish), or **in your own
+     branch's history** (your earlier publish): a row that commit's live view
+     carried is a deliberate discharge, or your own row you have since
+     dropped, and is not reported. A row that commit did NOT carry rode in on
+     a union publish for another lane, and FAILS as `unmerged-lane-row`.
+   - **on another branch only** (an unmerged lane published): every such row
+     is that lane's and FAILS as `unmerged-lane-row` — a brand-new group
+     letter included, and so does a row in a group this register has dropped
+     entirely, where `--discharging` silences only rows `origin/main` still
+     has.
+   - **in no history this checkout has**: FAILS as `unknown-provenance`.
+
+   **Not covered: the Blocked and Unconfirmed sections.** Their rows carry no
+   ID (`—`), so this comparison does not check them at all. Another lane's
+   Blocked or Unconfirmed row on the live page is dropped silently when you
+   publish, and `--build-union` cannot carry one. Compare those two sections
+   with the saved live page by eye before you publish. Tracked in #3587; the
+   design decision owed there is what identifies a title-keyed row, which has
+   no allocate-once ID.
+
+   A row ID you share with the live page under a different title FAILS as
+   `row-id-collision` (unless the page is your own earlier publish and its
+   stamp carried that row — then it is your retitle), and so does one you
+   share with `origin/main` under a different title when the merge-base your
+   branch forked from lacks it (the other lane merged first). To publish a
+   **union** — your rows plus another lane's — build it with
+   `--build-union <out>` (see step 3) and pass the file you are actually
+   publishing with `--publishing <file>`: the check then requires that file to
+   be exactly your tracked `.html` plus the carried rows' live blocks, with
+   the derived figures regenerated.
    **The command fetches `origin/main` itself, fresh, every run — you do not
    need to `git fetch` by hand first.** It then reads `FETCH_HEAD`, deliberately
    NOT the local `origin/main` ref: `git fetch origin main` only guarantees it
@@ -237,7 +281,7 @@ comparison, see the edge list above). The merge step that closes this, run
    `origin`, with no offline fallback: you're about to publish to a remote URL
    anyway, so an operator who can't reach the network here can't complete step 4
    either.
-3. **If it fails**, do NOT publish. There are two distinct failure shapes,
+3. **If it fails**, do NOT publish. There are several distinct failure shapes,
    named in the error text:
    - **A row/group named as already live and BEHIND** — this message has TWO
      different causes, and they need opposite fixes; check which one applies
@@ -295,6 +339,72 @@ comparison, see the edge list above). The merge step that closes this, run
        copied from the wrong discharge) is itself a refusal, not a silent
        no-op — the point is to keep a genuinely competing-lane row from
        slipping through unreported, not to mute the check wholesale.
+   - **`unmerged-lane-row: <ID>`** (#3529) — the live page carries a row that
+     belongs to a lane `origin/main` has not merged. The error names the row's
+     **owner**: the oldest commit that introduced the live row itself, found
+     by its ID and title (never a commit `origin/main` already contains, and
+     never another lane's row under the same ID), with the branches that hold
+     it and the `gh pr list --state all --search <commit>` that finds its PR.
+     It never names whoever merely carried the row in a union. Publishing your
+     tracked file would delete the row. It is not yours, so **never name it in
+     `--discharging`**. Do one of three things. **The exception:** a row in a
+     group your live view has no section for (that lane added a new group
+     letter) cannot be carried. `--build-union` refuses it and `--publishing`
+     refuses a hand-carried copy, so only the last two options apply, and no
+     other lane can publish until one of them happens.
+     - **Build the union and publish that.** Re-run step 2 with
+       `--build-union <out>`, e.g. `npm run check:onbox-register --
+       --against-published <saved-file> --build-union <scratch>/union.html`.
+       It writes your tracked `.html` plus each such row's live block, copied
+       verbatim and placed in ID order, with the derived figures (owed count,
+       the group's glance-table count and `gcount`) raised by one per carried
+       row. It then checks that file exactly as `--publishing` would. If that
+       passes, publish **that file** in step 4. Never hand-build or hand-edit
+       a union: `--publishing` refuses anything but this exact file. On
+       2026-10-07 the union was assembled by hand in a throwaway worktree and
+       its strip figures were edited by hand. That file happens to equal what
+       `--build-union` writes, but nothing checked it at the time.
+     - **Let that lane merge first.** Coordinate through its PR.
+     - **Retire the row.** If its PR was closed without merging, add the row
+       to "Retired carried rows" below, under that PR.
+   - **`publishing-file: <ID>`** — the `--publishing` file is not exactly the
+     union: it drops or alters one of your tracked rows, carries a row that
+     is not on the live page, carries a live row with changes (another lane's
+     row is that lane's to edit), or its derived figures differ from the
+     regenerated ones. Rebuild it with `--build-union <out>`.
+   - **`retired-carried-row: <ID>`** — a "Retired carried rows" entry the
+     check will not honour: its PR is open or merged (an open lane's row must
+     still be carried), `gh` could not read it or did not report its whole
+     commit list, the PR does not own the row, or the table is malformed. The PR
+     owns the row when the commit that introduced the live row, the one
+     `unmerged-lane-row` names, is one of the PR's own commits. The list is
+     read through paginated GraphQL (`gh api graphql --paginate`), because
+     `gh pr view <N> --json commits` stops at the first 100 commits (#3505 has
+     120); a list shorter than the PR's `totalCount` is refused as
+     incomplete, not as "names the wrong PR". Branch names play no part. The
+     PR's own commits are searched too, so a deleted branch or a fork's
+     needs no local ref. When this checkout has neither that commit nor the
+     PR's commits, the owner cannot be determined and the entry is refused:
+     run `git fetch origin` and re-run. Fix or remove the entry. When `gh`
+     is unavailable, the entry is accepted with a **`retired-row-warning`**
+     instead. Confirm by hand that the PR is closed unmerged (`gh pr view <N>
+     --json state,mergedAt`) and that one of its commits introduced the row
+     (all of them, not `gh pr view`'s first 100) before you publish.
+   - **`row-id-collision: <ID>`** (#3529) — another lane allocated the same ID
+     for a different row: either it is live under another title, or it is on
+     `origin/main` under another title and absent from the merge-base you
+     forked from. Renumber YOUR row to the ID the error names (it clears your
+     `next-id`, the live page's highest ID and `origin/main`'s `next-id`),
+     bump your `next-id`, and re-run.
+   - **`unknown-provenance`** (#3529) — the live page's publish id is in no git
+     history this checkout has (an unfetched branch, or a hand-published page),
+     or the page has no token, and a live row's verdict depended on it; or the
+     merge-base could not be read while `origin/main` carries one of your row
+     IDs under another title. The check refuses to guess. Fetch every branch —
+     `git fetch origin '+refs/heads/*:refs/remotes/origin/*'` — and re-run.
+     If a live row is still undecided, do not drop it: carry it with
+     `--build-union <out>` (as for `unmerged-lane-row`) and publish that file.
+     For the merge-base case, run from a clone with full history.
    - **"Cannot verify"** — the check refuses to guess whether an extra row
      is a discharge or a race, and fails closed instead. This is NOT the
      same as the register being behind: pulling `main` on your own machine
@@ -383,13 +493,27 @@ comparison, see the edge list above). The merge step that closes this, run
        conflicts. If the content seems wrong, investigate manually; otherwise,
        you can proceed to publish.
 
-   **Known limitation:** a row that's live and still genuinely owed but was
-   never actually merged into `main` at all (e.g. published straight from a
-   branch that never merged, or from a PR later reverted) is not
-   distinguishable from a deliberate discharge — it silently reads as
-   discharged rather than being flagged. Accepted trade-off, not an
-   oversight; see `checkLiveView`'s own header comment in
-   `scripts/check-onbox-register.mjs` (#2199 review round 3, A3).
+   **Known limitations** (#3529): provenance is the stamping commit's, so it
+   is only as good as the history this checkout has. A page published by a
+   branch you have not fetched reads as `unknown-provenance` until you fetch
+   it, and an `unmerged-lane-row`'s owner reads as unknown the same way. A row
+   carried on a merged publish that its stamping commit also committed reads
+   as discharged even if a later revert on `main` removed it. "`origin/main`
+   has ever carried it" reads `main`'s first-parent history of the register,
+   including a `### <ID>` heading inside a fenced example. It is not
+   allocate-once-proof: the colliding ID that reached `main` and was
+   discharged while the other lane's copy is still live (step 2) reads as a
+   discharge. Nor is it revert-proof: a row `main` merged and then reverted
+   reads as discharged while a re-landing lane's copy is live, until the
+   re-land merges (step 2). A row's owner is found by its summary line, so
+   two lanes that wrote the same ID and the same title after normalisation
+   (tags stripped, entities decoded, whitespace collapsed) cannot be told
+   apart, and the older is named. Each lookup that a failing row needs costs a few seconds of
+   `git log` on this repo: the ever-carried one, and the owner one, which a
+   retired row the live page still carries also needs. A run with several
+   such rows takes a minute or more.
+   See `checkLiveView`'s own header comment in
+   `scripts/check-onbox-register.mjs`.
 
    **A live version of this same limitation: the Artifact tool's own publish
    loop (2026-08-26).** This whole procedure assumes the race is between PRs
@@ -413,8 +537,12 @@ comparison, see the edge list above). The merge step that closes this, run
    live, and only then run the four-step procedure above from that synced
    copy. Two lanes should never be mid-publish on this URL at once — if you
    find one, that is the thing to fix, not the loop.
-4. Only once step 2 passes, publish the tracked `.html`, with the canonical
-   URL above as `url` **and `favicon` set to 📋**.
+4. Only once step 2 passes, publish the file step 2 passed on, with the
+   canonical URL above as `url` **and `favicon` set to 📋**. That is the
+   tracked `.html`, **unless step 2 needed a union**: then publish the union
+   file that `--build-union` wrote (or the one you passed with
+   `--publishing`), never the tracked file. Publishing the tracked file there
+   drops the other lane's rows, which is the #3529 incident itself.
 
    **Provenance, so you can weigh it:** 📋 is the value the 2026-08-23 publish
    set, recorded here at that moment. It is **not** a recovered original — if
@@ -547,6 +675,40 @@ setup rather than repeatedly loading and evicting models.
 > available **to this run**," never "does not exist" — leave the actual
 > existence question to whoever runs from an environment that can see it.
 
+## Retired carried rows
+
+When another lane publishes a row to the live view, every later publish has to
+carry that row until the lane merges (step 3's `unmerged-lane-row`). If that
+lane's PR is closed without merging, it never will, and the row would have to be
+carried forever. Record such a row here, with the owning PR, the date the PR
+was closed unmerged, and the reason (no `|` in it). The change goes through a PR
+like any other register edit. `--against-published` then drops the row from the
+set that must be carried, so a publish without it goes green. When `gh` is
+installed and authenticated, the check first confirms two things. The PR must
+be CLOSED and not merged. And it must **own** the row: the commit that
+introduced the live row, found by the row's ID and title and never a commit
+`main` already contains, must be one of the PR's own commits (#3529 decision
+5). An open or merged PR fails the check, naming that PR. So does a PR whose
+commits do not include that commit, naming the PR and the commit, and a row
+whose introducing commit this checkout cannot find (run `git fetch origin`
+and re-run), and one whose commit list `gh` returned incomplete. Branch names
+play no part, so an older closed PR that reused the owner's branch name but
+lacks the owner's commits, or one stacked on the owner's branch and opened
+against it, cannot mute the owner's live row. The check does not prove that no
+other PR carries the commit, though: a closed PR opened against `main` from a
+branch stacked on the owner's lists the owner's commits too, and is honoured;
+so is a PR closed and re-opened as a new PR from the same branch, which
+carries the same commits. **Without `gh`, the check prints a warning and
+accepts the entry,** so confirm both by hand (`gh pr view <N> --json
+state,mergedAt`, and the PR's whole commit list, which `gh pr view` cuts off at
+100) before you publish. `npm run
+check:onbox-register` validates the table's shape: a row ID, a `#<N>` PR
+reference, a `YYYY-MM-DD` date, a non-empty reason, one entry per row, and no
+row this register still carries. Keep the table even when it is empty.
+
+| Row | Owning PR | Closed unmerged | Reason |
+|---|---|---|---|
+
 ---
 
 ## At a glance
@@ -554,20 +716,20 @@ setup rather than repeatedly loading and evicting models.
 | Group | Setup | Rows |
 |---|---|---|
 | **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 4 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 7 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 13 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 14 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**60 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**64 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-09 (plan 286, #3400/#3397), 59 → 60.** Added **A113** —
+> **Last change: 2026-10-09 (plan 286, #3400/#3397), 63 → 64.** Added **A113** —
 > the revisions server-ownership cutover: accept/reject/dismiss move to
 > per-op server routes, pending comes only from the server, and every render
 > records or drops a chapter's A/B state itself, closing the #3397 gap A9's
@@ -576,12 +738,28 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > now point here instead of restating the gap as open. Group A 34 → 35.
 > `next-id` bumped A113 → A114 in the same change.
 >
-> **Prior change: 2026-10-06 (#3084 wave 3b, PR 3b), 57 → 59.** Rows **B105**
+> **Prior change: 2026-10-09 (#3440), 62 → 63.** Row **E113** added — the real-book
+> line-count and Fix-audio check for the drifted-attribution-id fix, owed because
+> unit/integration/e2e coverage all run in mock mode and nobody has yet confirmed the
+> real Playing with Fire book against it. Group E `next-id` marker bumped E113 → E114.
+>
+> **Prior change: 2026-10-08 (#3435, plan 287), 61 → 62.** Row **B106** (the
+> background emotion re-run yields to and is aborted by real work on a real
+> analyzer) added from plan 287's "On-box acceptance owed" item 3. Group B
+> 6 → 7. `next-id` bumped B106 → B107 in the same change. Owed; not run here.
+>
+> **Prior change: 2026-10-06 (#3084 wave 3b, PR 3b), 59 → 61 on this branch (57 → 59 on `main`).** Rows **B105**
 > (Ollama `format` modes on a real model: `json`, then `off`, against `schema`)
 > and **E112** (Gemini `schema` mode, `responseJsonSchema` accepted or rejected
 > on a real key) added from #3084 PR 3b's run sheet
 > (`3084-openai-analyzer-onbox-acceptance.md` §4–§5). Group B `next-id` marker
 > bumped by one, Group E by one. Both rows are owed; neither was run here.
+>
+> **Prior change: 2026-10-04 (#3435, plan 287), 57 → 59.** Rows **B103** (abort
+> and drain on a local Ollama analyzer: a stopped main run releases the model
+> before a chapter Retry starts) and **B104** (a Resume on a cast-confirmed book
+> keeps every designed voice) added from plan 287's "On-box acceptance owed".
+> Group B 3 → 5. `next-id` bumped B103 → B105 in the same change.
 >
 > **Prior change: 2026-10-03 (#3414), 56 → 57.** Added **A112** — the
 > qa-repair centroid filter now drops an audition centroid whose recorded
@@ -595,6 +773,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > accept/reject decision against a real sidecar's ECAPA embedding on real
 > hardware. Group A 33 → 34. `next-id` bumped A112 → A113 in the same
 > change.
+>
 >
 > **Prior change: 2026-09-27 (#3084 wave 2b), 53 → 56.** Rows **B102** (capacity
 > recalibration — the measurement owed before any capacity default changes),
@@ -5940,7 +6119,7 @@ OD28, OD29, OD30, OD31.
 
 ## Group B — local Ollama analyzer only
 
-<!-- next-id: B106 -->
+<!-- next-id: B107 -->
 
 A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a **CPU-only sub-case** — the only check here that wants the analyzer *off* the GPU (the analogous B2-step-7 CPU-only case retired to "Blocked — hardware not available" this wave). Consider folding in E4.
 
@@ -6042,6 +6221,23 @@ For at least two short-context tags, also record `num_ctx` sent (32768) against 
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §3](3084-openai-analyzer-onbox-acceptance.md). Clears when §3's three `Result:` lines are filled.
 
+### B103 · Abort and drain on a local Ollama analyzer — a stopped main run releases the model before a chapter Retry starts ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama, a pipelined main run; no TTS engine**
+
+Every analysis ending (Pause, an error, an overflow, a quota stop) now aborts the run's in-flight model calls, and Retry / Re-analyse / Include are refused with a 409 until the stopped run has drained. Mock mode has no server, so none of that is visible there. Run it twice on a book big enough to be in Phase 1 for a while:
+
+- **(a) Pause.** Start a pipelined analysis, Pause mid-Phase 1, click Retry on a failed row at once. Retry is refused with the "still stopping" message; a few seconds later it runs.
+- **(b) Halt.** Same, but force a halt instead of a pause: stop the model mid-Phase 1 so one chapter throws.
+
+In both, observe in the server log `[analysis] main run drained manuscript=<id>` **before** `[analysis-subset] start manuscript=<id>`, no cache or edits write from the main job after the drained line, no `drain deadline exceeded` line, and `ollama ps` showing the model released after the drain. Note each drain's duration.
+
+Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 1 and the walkthroughs under it. Clears when both runs are recorded with their drain durations.
+
+### B104 · A Resume on a cast-confirmed book with designed voices leaves every designed voice intact ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama; a real book with a confirmed cast and at least one designed voice**
+
+The 2026-07-14 voice-strip incident class (invariant 6). Plan 287 changed what a stopped run persists and what a Resume re-merges, so a real confirmed cast is the only honest test that a Resume does not strip a designed voice. Take a confirmed book with at least one designed voice, note its `cast.json` voice fields (`designModel`, `instruct`, `baseModel`, the `.pt` reference), Pause a Resume part-way, Resume it to the end, then diff `cast.json`. Every designed voice field must be byte-identical.
+
+Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 2. Clears when the diff is recorded as empty for the designed voices.
+
 ### B105 · Ollama structured-output modes on a real model (#3084 PR 3b) · **local Ollama; `qwen3.5:4b`**
 
 With `analyzer.ollama.structuredOutput` set to `json`, then `off`, analyse one real chapter each on `qwen3.5:4b`. Observe:
@@ -6050,6 +6246,19 @@ With `analyzer.ollama.structuredOutput` set to `json`, then `off`, analyse one r
 - a daemon that rejects a mode fails as "analyzer rejected the request" naming `analyzer.ollama.structuredOutput`.
 
 Record the validation-retry count for each mode against the default `schema` run on the same chapter. Criteria: [`3084-openai-analyzer-onbox-acceptance.md` §4](3084-openai-analyzer-onbox-acceptance.md).
+
+### B106 · The background emotion re-run yields to and is aborted by real work on a real analyzer ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama; a real analysed book; a TTS engine only for (c)**
+
+Opening an analysed book whose `state.json` has `prosodyAnnotated: false` re-runs emotion detection in the background; the run is meant to stop the moment the user starts real work. Mock mode has no analyzer, so only the box can show the requests actually stop. Take such a book (or set the flag by hand on a copy) and open it:
+
+- **Starts.** The "Detecting emotions" pill shows and prosody requests reach the analyzer.
+- **(a) Analysis.** Mid-run, start an analysis for the book. In the server log the prosody requests for that book stop (no further prosody calls for it), and the book stays `prosodyAnnotated: false`.
+- **(b) Switch book.** Same, but open another book instead. Same observation.
+- **(c) Generation.** Same, but queue a chapter render for the book while the run is active. The prosody requests stop, the pill clears, Generate was never disabled at any point, and the book stays `prosodyAnnotated: false`.
+- **Resumes.** Reopen the book: the run starts again.
+- **Reload.** Reload (or close and reopen the app) mid-run, then open the book again. The run starts again, because the run marked the book `false` as it started.
+
+Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 3. Clears when (a), (b), (c), the resume and the reload are recorded with the last prosody log line for each abort.
 
 ---
 
@@ -6456,7 +6665,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E113 -->
+<!-- next-id: E114 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -7102,6 +7311,15 @@ With a Gemini key and `analyzer.gemini.structuredOutput` = `schema`, analyse one
 - whether replies conform on the first attempt.
 
 This row does not by itself move Gemini's default: the spec gates that on attribution quality, which PR 3c's Test-action row records. Criteria: [`3084-openai-analyzer-onbox-acceptance.md` §5](3084-openai-analyzer-onbox-acceptance.md).
+
+### E113 · Drifted attribution id resolves correctly on the real Playing with Fire book ([#3440](https://github.com/dudarenok-maker/Castwright/issues/3440)) · **no GPU needed; a real book with a drifted cast id**
+
+Server-side `book-state` canonicalisation (`buildCastResolver`) now resolves attribution ids that drift between the manuscript's spelling and the cast's spelling (e.g. a hyphen vs. an underscore) before building line counts and chapter-character maps, and the client (chapters slice, Generate view) follows the same `characterIdAliases` map for live SSE ticks, re-analyzed chapters and sentence-derived stats. Unit, integration and e2e coverage (mock-mode Playwright) all pass; the line-count and live-SSE client paths are mutation-verified against the client-side fix, and the Fix-audio case is covered by confirming correct rendering from server-supplied canonical data. This row is the one thing none of that coverage can prove — that the real book this bug was filed against now resolves correctly.
+
+On the real Playing with Fire book, open the Generate view: the `the_torment` cast row should show **67 lines** (not fewer, which is the drifted-undercounting symptom), and opening Fix audio for that character should list chapters **17, 19, 20, 38 and 40** with Re-record enabled on each.
+
+*Needs:* no GPU, just the real manuscript and a running server. *Cost:* ~5 minutes.
+*Criteria:* the line count and chapter list above; #3440's original bug report for what "wrong" looked like before the fix.
 
 ## Group G — GitHub Actions itself
 

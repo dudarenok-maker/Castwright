@@ -445,6 +445,45 @@ function makeReduxStore() {
   });
 }
 
+describe('detected-instruct persistence (#3435)', () => {
+  it('the prosody second pass (applyDetectedInstruct) PUTs the instruction with no later edit', async () => {
+    const store = configureStore({
+      reducer: {
+        manuscript: manuscriptSlice.reducer,
+        ui: uiSlice.reducer,
+        notifications: notificationsSlice.reducer,
+        cast: (s: unknown = { characters: [] }) => s,
+        revisions: (s: unknown = {}) => s,
+        changeLog: (s: unknown = { events: [] }) => s,
+        bookMeta: (s: unknown = { saved: {} }) => s,
+      } as never,
+      preloadedState: {
+        ui: { stage: { kind: 'ready', bookId: 'b1', view: 'cast', currentChapterId: 3, openProfileId: null } },
+        manuscript: {
+          sentences: [{ id: 1, chapterId: 3, text: 'Hello.', characterId: 'narrator' }],
+          mergedAwayKeys: [],
+        },
+      } as never,
+      middleware: (gDM) => gDM().concat(persistenceMiddleware),
+    });
+    store.dispatch(
+      manuscriptActions.applyDetectedInstruct({
+        chapterId: 3,
+        annotations: [{ sentenceId: 1, instruct: 'whispering, urgent' }],
+      }),
+    );
+    await vi.runAllTimersAsync();
+    expect(putBookState).toHaveBeenCalledTimes(1);
+    const [bookId, body] = putBookState.mock.calls[0] as [
+      string,
+      { slice: string; patch: { sentences: Array<{ instruct?: string }> } },
+    ];
+    expect(bookId).toBe('b1');
+    expect(body.slice).toBe('manuscript');
+    expect(body.patch.sentences[0].instruct).toBe('whispering, urgent');
+  });
+});
+
 describe('bulk-reassign persistence', () => {
   it('flushes the full {sentences, mergedAwayKeys} patch for setSentencesCharacterBulk', async () => {
     const store = makeReduxStore();

@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="46" data-publish-id="e3f9516cf43d"></div>
+  <div hidden data-published-as="51" data-publish-id="f9fed4ea1780"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">60</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">64</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -210,10 +210,10 @@
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
       <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->35<!-- END GENERATED:glance:A --></td></tr>
-      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->4<!-- END GENERATED:glance:B --></td></tr>
+      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->7<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->13<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->14<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -794,7 +794,7 @@
   <!-- B -->
   <section class="group" id="gb">
     <header>
-      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">4 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">7 rows</span></h3>
       <p class="setup">
         A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a
         <strong>CPU-only sub-case</strong> — the analogous B2-step-7 CPU-only case retired to
@@ -842,6 +842,28 @@
       </div>
     </details>
     <details class="item">
+      <summary><span class="num">B103</span><span class="iname">Abort and drain on a local Ollama analyzer — a stopped main run releases the model before a chapter Retry starts (#3435)</span><span class="risk low">2 runs</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Every analysis ending (Pause, an error, an overflow, a quota stop) now aborts the run's in-flight model calls, and Retry / Re-analyse / Include are refused with a 409 until the stopped run has drained. Mock mode has no server, so none of it is visible there.</p>
+        <ul>
+          <li><b>(a) Pause:</b> start a pipelined analysis, Pause mid-Phase 1, click Retry on a failed row at once — refused with the “still stopping” message; a few seconds later it runs.</li>
+          <li><b>(b) Halt:</b> same, but stop the model mid-Phase 1 so one chapter throws.</li>
+          <li>In both: <code>[analysis] main run drained manuscript=&lt;id&gt;</code> appears <b>before</b> <code>[analysis-subset] start manuscript=&lt;id&gt;</code>, no cache or edits write from the main job after it, no <code>drain deadline exceeded</code> line, and <code>ollama ps</code> shows the model released. Note each drain's duration.</li>
+        </ul>
+        <p class="src">Local Ollama, a pipelined main run, no TTS engine · plan <code>287</code> “On-box acceptance owed” item 1 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3435">#3435</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B104</span><span class="iname">A Resume on a cast-confirmed book with designed voices leaves every designed voice intact (#3435)</span><span class="risk low">1 diff</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The 2026-07-14 voice-strip incident class (invariant 6). On a confirmed book with at least one designed voice, note its <code>cast.json</code> voice fields (<code>designModel</code>, <code>instruct</code>, <code>baseModel</code>, the <code>.pt</code> reference), Pause a Resume part-way, Resume it to the end, then diff <code>cast.json</code>.</p>
+        <ul>
+          <li>Every designed voice field is byte-identical after the run.</li>
+        </ul>
+        <p class="src">Local Ollama, a real book with a confirmed cast · plan <code>287</code> “On-box acceptance owed” item 2 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3435">#3435</a></p>
+      </div>
+    </details>
+    <details class="item">
       <summary><span class="num">B105</span><span class="iname">Ollama structured-output modes on a real model (#3084 PR 3b)</span><span class="risk low">Owed · local Ollama</span><span class="chev">›</span></summary>
       <div class="body">
         <p>With <code>analyzer.ollama.structuredOutput</code> set to <code>json</code>, then <code>off</code>, analyse one real chapter each on <code>qwen3.5:4b</code>. Observe the inbox request's <code>format</code> key, whether the chapter validates, and how a rejecting daemon is reported.</p>
@@ -852,6 +874,21 @@
         </ul>
         <p>Record the validation-retry count for each mode against the default <code>schema</code> run on the same chapter.</p>
         <p class="src">Real Ollama daemon, <code>qwen3.5:4b</code> · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §4 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">B106</span><span class="iname">The background emotion re-run yields to and is aborted by real work on a real analyzer (#3435)</span><span class="risk low">5 observations</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Opening an analysed book whose <code>state.json</code> has <code>prosodyAnnotated: false</code> re-runs emotion detection in the background; the run should stop the moment the user starts real work. Mock mode has no analyzer, so only the box shows the requests actually stop.</p>
+        <ul>
+          <li><b>Starts:</b> the “Detecting emotions” pill shows and prosody requests reach the analyzer.</li>
+          <li><b>(a) Analysis:</b> mid-run, start an analysis for the book — the server log shows no further prosody calls for it, and the book stays <code>prosodyAnnotated: false</code>.</li>
+          <li><b>(b) Switch book:</b> same, but open another book instead.</li>
+          <li><b>(c) Generation:</b> same, but queue a chapter render for the book while the run is active — the prosody requests stop, the pill clears, Generate is never disabled, and the book stays <code>prosodyAnnotated: false</code>.</li>
+          <li><b>Resumes:</b> reopen the book and the run starts again.</li>
+          <li><b>Reload:</b> reload (or close and reopen the app) mid-run, then open the book again — the run starts again, because it marked the book <code>false</code> as it started.</li>
+        </ul>
+        <p class="src">Local Ollama, a real analysed book, a TTS engine only for (c) · plan <code>287</code> “On-box acceptance owed” item 3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3435">#3435</a></p>
       </div>
     </details>
   </section>
@@ -1122,7 +1159,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">13 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">14 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1272,6 +1309,17 @@
           <li>Whether replies conform on the first attempt.</li>
         </ul>
         <p class="src">Gemini key, no GPU · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §5 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E113</span><span class="iname">Drifted attribution id resolves correctly on the real Playing with Fire book (#3440)</span><span class="risk low">No GPU needed; a real book with a drifted cast id</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Server-side <code>book-state</code> canonicalisation (<code>buildCastResolver</code>) now resolves attribution ids that drift from the cast's own spelling (e.g. a hyphen vs. an underscore) before building line counts and chapter-character maps, and the client follows the same <code>characterIdAliases</code> map for live SSE ticks and sentence-derived stats. Unit, integration and e2e coverage (mock-mode Playwright) all pass and are mutation-verified; this row is the one thing they cannot prove — that the real book this bug was filed against now resolves correctly.</p>
+        <ul>
+          <li>On the real Playing with Fire book, open the Generate view: the <code>the_torment</code> cast row should show <b>67 lines</b> (not fewer, the drifted-undercounting symptom).</li>
+          <li>Open Fix audio for that character: it should list chapters <b>17, 19, 20, 38 and 40</b> with Re-record enabled on each.</li>
+        </ul>
+        <p class="src">No GPU, just the real manuscript and a running server · ~5 minutes · the line count and chapter list above; <a href="https://github.com/dudarenok-maker/Castwright/issues/3440">#3440</a>'s original bug report for what "wrong" looked like before the fix</p>
       </div>
     </details>
 

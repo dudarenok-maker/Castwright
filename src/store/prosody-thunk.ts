@@ -91,6 +91,16 @@ export interface RunProsodyPassesOpts {
   /** Called when either pass emits an onThrottle event (rate-limit wait). Optional —
    *  Task 13 does not pass this. */
   onThrottle?: () => void;
+  /** #3435 — asked before each annotation is applied. The manuscript slice
+   *  holds ONE book and is saved into the book the stage names, so an
+   *  annotation for a book that is not the open one is skipped (and counted in
+   *  `skipped`) rather than written into another book. Omitted: always apply. */
+  canApply?: () => boolean;
+  /** #3435 — chapters whose instruct-pass annotations are dropped (and not
+   *  counted in `skipped`). The layout's re-run passes the chapters with
+   *  rendered audio: a vocalization annotation rewrites the line's text,
+   *  which would leave that audio stale. Omitted: no chapter is held. */
+  holdsAudio?: (chapterId: number) => boolean;
 }
 
 export interface RunProsodyPassesResult {
@@ -98,6 +108,8 @@ export interface RunProsodyPassesResult {
   totalChapters: number;
   /** Number of chapters that failed (emitted a chapter-failed event). */
   failed: number;
+  /** #3435 — annotation events dropped because `canApply` returned false. */
+  skipped: number;
 }
 
 /**
@@ -107,9 +119,14 @@ export interface RunProsodyPassesResult {
  */
 export async function runProsodyPasses(
   bookId: string,
-  { dispatch, signal, chapterId, onProgress, onStatus, onThrottle }: RunProsodyPassesOpts,
+  { dispatch, signal, chapterId, onProgress, onStatus, onThrottle, canApply, holdsAudio }: RunProsodyPassesOpts,
 ): Promise<RunProsodyPassesResult> {
   let failed = 0;
+  let skipped = 0;
+  const apply = (action: Parameters<AppDispatch>[0]) => {
+    if (canApply && !canApply()) skipped++;
+    else dispatch(action);
+  };
   let combinedEstRemainingMs: number | undefined;
   // Pinned across both passes so the displayed chapter-of-total counter
   // never visibly jumps or shrinks if excludedChapterIds changes between
@@ -141,7 +158,7 @@ export async function runProsodyPasses(
       if (e.label) onStatus?.(e.label);
     },
     onThrottle: () => onThrottle?.(),
-    onAnnotation: (e) => dispatch(manuscriptActions.applyDetectedEmotions(e)),
+    onAnnotation: (e) => apply(manuscriptActions.applyDetectedEmotions(e)),
     onChapterFailed: () => {
       failed++;
     },
@@ -172,7 +189,10 @@ export async function runProsodyPasses(
       if (e.label) onStatus?.(e.label);
     },
     onThrottle: () => onThrottle?.(),
-    onAnnotation: (e) => dispatch(manuscriptActions.applyDetectedInstruct(e)),
+    onAnnotation: (e) => {
+      if (holdsAudio?.(e.chapterId)) return;
+      apply(manuscriptActions.applyDetectedInstruct(e));
+    },
     onChapterFailed: () => {
       failed++;
     },
@@ -184,5 +204,5 @@ export async function runProsodyPasses(
     instructResult.annotatedChapters,
   );
 
-  return { totalAnnotations, totalChapters, failed };
+  return { totalAnnotations, totalChapters, failed, skipped };
 }

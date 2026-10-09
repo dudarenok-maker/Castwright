@@ -287,3 +287,13 @@ export const analysisSlice = createSlice({
 });
 
 export const analysisActions = analysisSlice.actions;
+
+/** #3435 decision A — true while this manuscript's MAIN analysis run is live:
+    the snapshot is for this manuscript, is not a subset run, and is running.
+    Retry, Re-analyse and Include are disabled ("Pause the analysis first")
+    while it is, because the server refuses a subset run beside a main one.
+    Typed structurally so this module needn't import the store's RootState. */
+export function selectMainAnalysisLive(state: { analysis: AnalysisState }, manuscriptId: string | null | undefined): boolean {
+  const snap = state.analysis.activeStream;
+  return !!snap && !!manuscriptId && snap.manuscriptId === manuscriptId && snap.kind !== 'subset' && snap.state === 'running';
+}

@@ -66,11 +66,14 @@ const TITLE_LED_MANUSCRIPT_ID = 'm_title_led';
 const DIVERGENT_MANUSCRIPT_ID = 'm_divergent';
 /* #3362 🟠B — one cast character spelled two ways across a chapter's segments. */
 const MIXED_SPELLING_MANUSCRIPT_ID = 'm_mixed_spelling';
+/* plan 287 T5 — the real, disk-backed cache, so the edits rebuild is observable. */
+const REBUILD_MANUSCRIPT_ID = 'm_splice_rebuild';
 vi.mock('../store/analysis-cache.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../store/analysis-cache.js')>();
   return {
     ...actual,
     loadAnalysisCache: vi.fn(async (manuscriptId: string) => {
+      if (manuscriptId === REBUILD_MANUSCRIPT_ID) return actual.loadAnalysisCache(manuscriptId);
       if (manuscriptId === TITLE_LED_MANUSCRIPT_ID) {
         return { chapters: { 1: [{ id: 1, characterId: 'amy', text: 'The first body line.' }] } };
       }
@@ -353,6 +356,41 @@ describe('POST /:bookId/chapters/:chapterId/splice (remix)', () => {
     const events = parseSse(res.text);
     expect(events.some((e) => e.type === 'splice_start')).toBe(false);
     expect(events.some((e) => e.type === 'chapter_failed')).toBe(true);
+  });
+});
+
+describe('POST /:bookId/chapters/:chapterId/splice (rerecord) — the edits rebuild keeps an excluded take (plan 287)', () => {
+  it("a re-record keeps an excluded chapter's cached take (the route passes state.json's excluded ids)", async () => {
+    const { saveAnalysisCache, loadAnalysisCache, clearAnalysisCache } = await vi.importActual<
+      typeof import('../store/analysis-cache.js')
+    >('../store/analysis-cache.js');
+    const bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const editsPath = join(bookDir, '.audiobook', 'manuscript-edits.json');
+    const original = readFileSync(statePath, 'utf8');
+    const state = JSON.parse(original);
+    state.manuscriptId = REBUILD_MANUSCRIPT_ID;
+    state.chapters = [...state.chapters, { id: 2, title: 'Chapter 2', slug: '02-two', excluded: true }];
+    writeFileSync(statePath, JSON.stringify(state));
+    const line = { id: 1, chapterId: 1, characterId: 'amy', text: 'The first body line.' };
+    const excludedTake = [{ id: 9, chapterId: 2, characterId: 'amy', text: 'Front matter.' }];
+    await saveAnalysisCache(REBUILD_MANUSCRIPT_ID, { chapters: { 1: [line], 2: excludedTake } });
+    /* The edits never carry an excluded chapter. */
+    writeFileSync(editsPath, JSON.stringify({ sentences: [line] }));
+    try {
+      await request(app)
+        .post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/splice`)
+        /* Castor's sentence (id 2) is not in the rebuilt analysis: the route
+           refuses after the rebuild and before any side effect (M2), so the
+           shared audio fixture is untouched. */
+        .send({ mode: 'rerecord', characterId: 'castor', modelKey: 'kokoro-v1' });
+      const after = await loadAnalysisCache(REBUILD_MANUSCRIPT_ID);
+      expect(after.chapters[2]).toEqual(excludedTake);
+    } finally {
+      writeFileSync(statePath, original);
+      rmSync(editsPath, { force: true });
+      await clearAnalysisCache(REBUILD_MANUSCRIPT_ID);
+    }
   });
 });
 

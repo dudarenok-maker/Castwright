@@ -6,8 +6,8 @@
    api module locks USE_MOCKS at import time; flipping the env in a test
    file is too late to swap api.* over to the mock branch. */
 
-import { describe, it, expect, beforeEach } from 'vitest';
-import { mockGetBookState, mockPutBookState, _resetMockBookStates } from './api';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mockGetBookState, mockPutBookState, mockAnalyseManuscript, _resetMockBookStates } from './api';
 import type { Character } from './types';
 
 beforeEach(() => {
@@ -76,5 +76,38 @@ describe('mock book-state round-trip', () => {
     /* genre stays null after a write that doesn't touch it. */
     const res = await mockGetBookState('book-n');
     expect(res!.state.genre).toBeNull();
+  });
+});
+
+describe('mock e2e seam: __SEED_PROSODY_ANNOTATED__', () => {
+  const seed = globalThis as unknown as { __SEED_PROSODY_ANNOTATED__?: Record<string, boolean> };
+  afterEach(() => {
+    delete seed.__SEED_PROSODY_ANNOTATED__;
+  });
+
+  it('overlays the seeded watermark on a book that has state, and only that book', async () => {
+    seed.__SEED_PROSODY_ANNOTATED__ = { sb: false };
+    expect((await mockGetBookState('sb'))!.state.prosodyAnnotated).toBe(false);
+    expect((await mockGetBookState('ns'))!.state.prosodyAnnotated).toBeUndefined();
+  });
+
+  it('leaves the watermark unset when nothing is seeded', async () => {
+    expect((await mockGetBookState('sb'))!.state.prosodyAnnotated).toBeUndefined();
+  });
+});
+
+describe('mock analyse keeps book state in step with the manuscript id', () => {
+  it('reports the analysed manuscript id from getBookState, like the real server', async () => {
+    vi.useFakeTimers();
+    try {
+      const pending = mockAnalyseManuscript('mns_confirmed1');
+      await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+      const analysed = await pending;
+      const res = mockGetBookState(analysed.bookId);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await res)?.state.manuscriptId).toBe('mns_confirmed1');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

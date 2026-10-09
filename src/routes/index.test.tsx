@@ -12,7 +12,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { MemoryRouter, Outlet, Routes, Route } from 'react-router';
+import { MemoryRouter, Outlet, Routes, Route, useNavigate } from 'react-router';
 import { uiSlice, uiActions } from '../store/ui-slice';
 import { castSlice, castActions } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
@@ -25,6 +25,7 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { tourSlice } from '../store/tour-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { persistenceMiddleware, flushBookPersistence } from '../store/persistence-middleware';
 import { router as appRouter } from './index';
 import {
@@ -32,6 +33,7 @@ import {
   AdvancedRoute,
   BooksRoute,
   ChangelogRoute,
+  ConfirmRoute,
   ReadyRoute,
   SetupRoute,
 } from './index';
@@ -49,6 +51,9 @@ const putBookStateMock = vi.fn();
 const getBookStateMock = vi.fn();
 const getWorkspaceInfoMock = vi.fn();
 const completeSetupMock = vi.fn();
+const setChapterExcludedMock = vi.fn();
+const runAnalysisForChaptersMock = vi.fn();
+let analyseResult: unknown = undefined;
 
 /* #3195 R2 — SetupRoute's onFinish is what the "corruptSettingsFile sync"
    test below exercises; the five-step wizard behind SetupView is pinned by
@@ -73,11 +78,14 @@ vi.mock('../views/advanced', () => ({
 vi.mock('../lib/api', () => ({
   api: {
     completeSetup: () => completeSetupMock(),
+    setChapterExcluded: (...a: unknown[]) => setChapterExcludedMock(...a),
+    runAnalysisForChapters: (...a: unknown[]) => runAnalysisForChaptersMock(...a),
     analyseManuscript: (manuscriptId: string, opts: unknown) => {
       analyseMock(manuscriptId, opts);
-      /* Never resolves — keeps the AnalysingView effect parked in its
-         loading state without flushing a setState after the test asserts. */
-      return new Promise(() => {});
+      /* Never resolves by default — keeps the AnalysingView effect parked in
+         its loading state without flushing a setState after the test asserts.
+         A test that needs the run's `result` sets analyseResult. */
+      return analyseResult ? Promise.resolve(analyseResult) : new Promise(() => {});
     },
     getWorkspaceChangelog: () => workspaceChangelogMock(),
     reparseBook: (bookId: string) => reparseBookMock(bookId),
@@ -172,6 +180,7 @@ function makeStore(opts: { persist?: boolean } = {}) {
       bookMeta: bookMetaSlice.reducer,
       queue: queueSlice.reducer,
       tour: tourSlice.reducer,
+      analysis: analysisSlice.reducer,
     },
     ...(opts.persist
       ? { middleware: (getDefault) => getDefault().concat(persistenceMiddleware) }
@@ -218,6 +227,7 @@ function renderAtAnalysing(store: ReturnType<typeof makeStore>) {
 
 beforeEach(() => {
   analyseMock.mockClear();
+  analyseResult = undefined;
   workspaceChangelogMock.mockReset();
   reparseBookMock.mockReset();
   getLibraryMock.mockReset();
@@ -347,9 +357,12 @@ describe('AnalysingRoute manuscriptId derivation', () => {
        before useHydrateStage's useEffect dispatched its url-derived
        stage update that resets stage.manuscriptId to null for routes
        whose URL has no id in it. The isAnalyzerReady gate added in
-       2026-05 lets the probe round-trip first, so useHydrateStage's
-       clobber lands first and the fallback to manuscript.manuscriptId
-       now matters. In real usage both ids ARE the same — the upload
+       2026-05 lets the probe round-trip first, so that reset lands
+       first and the fallback to manuscript.manuscriptId now matters.
+       (The reset happens only under test: the hook compares against the
+       module-level app store, not this test's store, so it always sees a
+       difference. In the app the stage keeps its id — stageEqual ignores
+       manuscriptId.) In real usage both ids ARE the same — the upload
        seeds both — so we test the realistic shape here. The
        precedence-when-divergent question is captured as a follow-up
        TODO in docs/features/archive/00-stage-machine.md.) */
@@ -384,6 +397,207 @@ describe('AnalysingRoute manuscriptId derivation', () => {
 
     expect(screen.getByText(/No manuscript loaded/i)).toBeInTheDocument();
     expect(analyseMock).not.toHaveBeenCalled();
+  });
+});
+
+/* #3435 (PR #3505 review pass 4) — the route takes a manuscript id only from
+   a source that names its own book. The stage names a book before the slices
+   hold it, and on a direct switch the stage still names the previous book for
+   one render, so neither may be read without checking the book it names. */
+describe('AnalysingRoute — the manuscript id comes only from its own book', () => {
+  function holdSlices(store: ReturnType<typeof makeStore>, bookId: string, manuscriptId: string) {
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: { bookId, manuscriptId, title: `Book ${bookId}` } as any,
+        sentences: null,
+        wordCount: 100,
+        format: 'plaintext',
+      }),
+    );
+  }
+  function libraryOf(store: ReturnType<typeof makeStore>, books: LibraryBook[]) {
+    store.dispatch(
+      libraryActions.hydrate({
+        authors: [{ name: 'Della Renwick', series: [{ name: 'Standalones', books }] }],
+      }),
+    );
+  }
+
+  it("P4b: a direct switch from A's running Analysing view to B's never POSTs A's run from B, nor starts B", async () => {
+    getBookStateMock.mockResolvedValue({ state: { chapters: [], castConfirmed: false } });
+    const store = makeStore();
+    libraryOf(store, [
+      makeBook({ bookId: 'b1', manuscriptId: 'mA' }),
+      makeBook({ bookId: 'b2', manuscriptId: 'mB', title: 'Book B' }),
+    ]);
+    holdSlices(store, 'b1', 'mA');
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'mA' }));
+    store.dispatch(
+      analysisActions.setActiveStream({
+        bookId: 'b1',
+        manuscriptId: 'mA',
+        phaseId: 1,
+        phaseLabel: 'Parsing and attribution',
+        phaseProgress: 0.3,
+        remainingMs: null,
+        lastTickAt: Date.now(),
+        state: 'running',
+        kind: 'main',
+      }),
+    );
+    function GoTo() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate('/books/b2/analysing')}>go-b2</button>;
+    }
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/analysing']}>
+          <GoTo />
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route path="/books/:bookId/analysing" element={<AnalysingRoute />} />
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+    /* Control: A's own view re-attaches to A's running run without a click. */
+    await waitFor(() => expect(analyseMock).toHaveBeenCalledWith('mA', expect.any(Object)));
+    analyseMock.mockClear();
+
+    fireEvent.click(screen.getByText('go-b2'));
+    /* useHydrateStage compares against the app's own store, so under test it
+       resets the stage on the switch; in the app the stage keeps naming A for
+       a render (stageEqual ignores manuscriptId). Put A's stage back so the
+       route's stage-side id check is what is under test. */
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b1', manuscriptId: 'mA' }));
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b2'));
+    /* B's read lands: the slices now hold B. */
+    holdSlices(store, 'b2', 'mB');
+    await new Promise((r) => setTimeout(r, 100));
+    /* B has no running snapshot, so B's view waits for a click. */
+    expect(analyseMock.mock.calls.map((c) => c[0])).toEqual([]);
+    expect(await screen.findByRole('button', { name: /start analysis/i })).toBeInTheDocument();
+  });
+
+  it('a refresh with no stage id while the slices hold another book starts its own manuscript', async () => {
+    const store = makeStore();
+    holdSlices(store, 'b2', 'm-other');
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-own' })]);
+
+    renderAtAnalysing(store);
+
+    fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+    await waitFor(() => expect(analyseMock).toHaveBeenCalledTimes(1));
+    expect(analyseMock).toHaveBeenCalledWith('m-own', expect.any(Object));
+  });
+
+  it("shows its own book's title, never the other book's the slices hold", async () => {
+    const store = makeStore();
+    holdSlices(store, 'b2', 'm-other');
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-own', title: 'Own Title' })]);
+
+    renderAtAnalysing(store);
+
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Own Title');
+    expect(screen.queryByText(/Book b2/)).toBeNull();
+  });
+
+  it("a refresh with no stage id or library entry never analyses the other book the slices hold", async () => {
+    const store = makeStore();
+    holdSlices(store, 'b2', 'm-other');
+
+    renderAtAnalysing(store);
+
+    expect(await screen.findByText(/No manuscript loaded/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /start analysis/i })).toBeNull();
+    expect(analyseMock).not.toHaveBeenCalled();
+  });
+
+  it("control: a fresh upload's Start analyses the upload while the slices still name the previous book", async () => {
+    /* uploadComplete sets the manuscript id and clears the slice's bookId (it
+       must not keep the previous book's); the stage manuscriptUploaded set
+       names the new book, so the route takes the id from there. */
+    const store = makeStore();
+    holdSlices(store, 'b2', 'm-other');
+    store.dispatch(
+      manuscriptActions.uploadComplete({
+        bookId: 'b1',
+        manuscriptId: 'm-upload',
+        title: 'New',
+        format: 'plaintext',
+        wordCount: 100,
+        sourceText: '',
+      } as any),
+    );
+    expect(store.getState().manuscript.bookId).toBeNull();
+    store.dispatch(uiActions.startNewBook());
+    store.dispatch(uiActions.manuscriptUploaded({ bookId: 'b1', manuscriptId: 'm-upload' }));
+
+    renderAtAnalysing(store);
+    /* useHydrateStage compares against the app's own store, not this one, so
+       under test it always resets the stage's id on mount; in the app the
+       stage keeps it (stageEqual ignores manuscriptId). Put it back. */
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b1', manuscriptId: 'm-upload' }));
+
+    fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+    await waitFor(() => expect(analyseMock).toHaveBeenCalledWith('m-upload', expect.any(Object)));
+  });
+
+  function uploadFresh(store: ReturnType<typeof makeStore>, stageBookId: string) {
+    store.dispatch(
+      manuscriptActions.uploadComplete({
+        bookId: 'b1',
+        manuscriptId: 'm-upload',
+        title: 'Uploaded Title',
+        format: 'plaintext',
+        wordCount: 12345,
+        sourceText: '',
+      } as any),
+    );
+    store.dispatch(uiActions.startNewBook());
+    store.dispatch(uiActions.manuscriptUploaded({ bookId: stageBookId, manuscriptId: 'm-upload' }));
+  }
+
+  it('a fresh upload shows its own title and size before the book-state read lands', async () => {
+    const store = makeStore();
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-upload', title: 'Library Title' })]);
+    uploadFresh(store, 'b1');
+
+    renderAtAnalysing(store);
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b1', manuscriptId: 'm-upload' }));
+
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Uploaded Title');
+    expect(screen.getByText(/12,345/)).toBeInTheDocument();
+  });
+
+  it("control: an unattributed slice is not used when the stage names a different book", async () => {
+    const store = makeStore();
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-own', title: 'Own Title' })]);
+    uploadFresh(store, 'b9');
+
+    renderAtAnalysing(store);
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b9', manuscriptId: 'm-upload' }));
+
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Own Title');
+    expect(screen.queryByText(/Uploaded Title/)).toBeNull();
+    expect(screen.queryByText(/12,345/)).toBeNull();
+  });
+
+  it("an unattributed upload slice is not used when the stage names the same book with a different manuscript", async () => {
+    /* Upload N, then open X from the Library while it is analysing, before N's
+       read lands: the slice still holds N's (bookId-less) upload and the stage
+       names X's analysis, so X's view must not show N's title or size. */
+    const store = makeStore();
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-x', title: 'Own Title' })]);
+    uploadFresh(store, 'b1');
+
+    renderAtAnalysing(store);
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b1', manuscriptId: 'm-x' }));
+
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent('Own Title');
+    expect(screen.queryByText(/Uploaded Title/)).toBeNull();
+    expect(screen.queryByText(/12,345/)).toBeNull();
   });
 });
 
@@ -1044,6 +1258,51 @@ describe('ChangelogRoute', () => {
   });
 });
 
+/* #3435 final review I1 — a main `result` lands on Confirm with the layout's
+   book-state hydrate skipped, so the Confirm route's own re-read is where the
+   Generate view's analysis gaps come back from the server. A main result can
+   still carry a flagged chapter (decision B), so a gap backed by a failure
+   record survives, and one for a current, unflagged chapter clears. */
+describe('ConfirmRoute — analysis gaps from the server after a main result', () => {
+  it('replaces the gaps from book-state: the attribution-collapse gap stays, the resolved one clears', async () => {
+    const store = makeStore();
+    store.dispatch(chaptersActions.setAnalysisGap({ chapterId: 1, message: 'Old 1.' }));
+    store.dispatch(chaptersActions.setAnalysisGap({ chapterId: 2, message: 'Old 2.' }));
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'm1',
+        title: 'T',
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', duration: '0:00' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', duration: '0:00' },
+        ],
+      },
+      cast: null,
+      analysis: {
+        failedChapterIds: [2],
+        failedChapterErrors: {
+          '2': { code: 'attribution-collapse', message: 'Speaker attribution collapsed.', remediation: '', phase: 'attribution' },
+        },
+      },
+    });
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route path="/books/:bookId/confirm" element={<ConfirmRoute />} />
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() =>
+      expect(store.getState().chapters.analysisGapById).toEqual({ 2: { message: 'Speaker attribution collapsed.' } }),
+    );
+  });
+});
+
 describe('ReadyRoute — cross-book Generate view title (regression)', () => {
   /* Bug: user analysing Book A clicks the global generation pill to jump
      to Book B's Generate view (still streaming). The manuscript slice is
@@ -1173,5 +1432,251 @@ describe('ReadyRoute — cross-book Generate view title (regression)', () => {
     const heading = await screen.findByRole('heading', { level: 1 });
     expect(heading.textContent).toContain('Mystery Novel');
     expect(heading.textContent).not.toContain('the Coalfall Commission');
+  });
+});
+
+describe('ReadyRoute — Generate view local state is per book (#3435)', () => {
+  /* GenerationView keeps its in-flight subset rows (progress, Cancel, error)
+     in component state. ReadyRoute is the same route element for
+     /books/a/generate and /books/b/generate, so without a per-book key a
+     direct A -> B switch kept the instance and A's row showed on B's chapter
+     with the same number. */
+  function setup() {
+    const store = makeStore();
+    store.dispatch(
+      libraryActions.hydrate({
+        authors: [
+          {
+            name: 'Demo Author',
+            series: [
+              {
+                name: 'Standalones',
+                books: [
+                  makeBook({ bookId: 'b1', title: 'Book One', manuscriptId: 'mns-a', status: 'generating' }),
+                  makeBook({ bookId: 'b2', title: 'Book Two', manuscriptId: 'mns-b', status: 'generating' }),
+                ],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'mns-a', title: 'Book One' } as any,
+        sentences: null,
+        wordCount: 1000,
+        format: 'plaintext',
+      }),
+    );
+    store.dispatch(
+      chaptersActions.setChapters([
+        {
+          id: 1,
+          title: 'Chapter 1',
+          duration: '00:00',
+          state: 'queued',
+          progress: 0,
+          excluded: true,
+          characters: {},
+        } as Chapter,
+        { id: 2, title: 'Chapter 2', duration: '00:30', state: 'queued', progress: 0, characters: {} },
+      ]),
+    );
+    const layoutCtx = {
+      showInfo: vi.fn(),
+      showError: vi.fn(),
+      pushToast: vi.fn(),
+      ttsLifecycle: {
+        coqui: { state: 'unreachable', onLoad: vi.fn(), onStop: vi.fn() },
+        kokoro: { state: 'unreachable', onLoad: vi.fn(), onStop: vi.fn() },
+        qwen: { state: 'unreachable', onLoad: vi.fn(), onStop: vi.fn() },
+        qwen1_7b: { state: 'unreachable', onLoad: vi.fn(), onStop: vi.fn() },
+        asr: { enabled: false, state: 'idle', device: null },
+        qwen1_7bInstalled: false,
+        evictionNotice: null,
+        loadErrorNotice: null,
+        tripNotice: null,
+        dismissNotices: vi.fn(),
+      },
+      priorRoster: [],
+      openFixCharacterAudio: vi.fn(),
+    } as unknown as LayoutContext;
+    function LayoutShim() {
+      return (
+        <>
+          <GoTo />
+          <Outlet context={layoutCtx} />
+        </>
+      );
+    }
+    function GoTo() {
+      const navigate = useNavigate();
+      return (
+        <>
+          <button onClick={() => navigate('/books/b2/generate')}>go-b2</button>
+          <button onClick={() => navigate('/books/b1/generate?same=1')}>go-b1-again</button>
+        </>
+      );
+    }
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/generate']}>
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route element={<LayoutShim />}>
+                <Route path="/books/:bookId/:view" element={<ReadyRoute />} />
+              </Route>
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+    return store;
+  }
+
+  async function startInclude() {
+    setChapterExcludedMock.mockResolvedValue({ id: 1, excluded: false });
+    runAnalysisForChaptersMock.mockReturnValue(new Promise(() => {}));
+    fireEvent.click(await screen.findByRole('button', { name: /\+ Include in book/i }));
+    await screen.findByRole('button', { name: 'Cancel' });
+  }
+
+  beforeEach(() => {
+    setChapterExcludedMock.mockReset();
+    runAnalysisForChaptersMock.mockReset();
+  });
+
+  it("a direct switch to another book does not show the first book's in-flight row", async () => {
+    setup();
+    await startInclude();
+    fireEvent.click(screen.getByText('go-b2'));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull());
+  });
+
+  it('control: staying on the same book keeps the in-flight row', async () => {
+    setup();
+    await startInclude();
+    fireEvent.click(screen.getByText('go-b1-again'));
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+  });
+});
+
+describe('AnalysingRoute — local state is per book (#3435)', () => {
+  /* AnalysingView's failed-row list is seeded from the book-state GET and
+     never emptied by a book with no failures (the mount read returns early),
+     so without a per-book key a direct A -> B switch kept A's rows. */
+  function stateFor(failed: number[]) {
+    return {
+      state: { chapters: [{ id: 2, title: 'Chapter 2' }], castConfirmed: false },
+      analysis: { failedChapterIds: failed },
+    };
+  }
+
+  it("a direct switch to another book does not show the first book's failed rows", async () => {
+    getBookStateMock.mockImplementation((id: string) =>
+      Promise.resolve(stateFor(id === 'b1' ? [2] : [])),
+    );
+    const store = makeStore();
+    function GoTo() {
+      const navigate = useNavigate();
+      return <button onClick={() => navigate('/books/b2/analysing')}>go-b2</button>;
+    }
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/analysing']}>
+          <GoTo />
+          <Suspense fallback={<div data-testid="suspense-loading" />}>
+            <Routes>
+              <Route path="/books/:bookId/analysing" element={<AnalysingRoute />} />
+            </Routes>
+          </Suspense>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await screen.findByText(/Analysis failed on a previous attempt/i);
+    fireEvent.click(screen.getByText('go-b2'));
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b2'));
+    await waitFor(() =>
+      expect(screen.queryByText(/Analysis failed on a previous attempt/i)).toBeNull(),
+    );
+  });
+});
+
+/* #3435 (PR #3505 review pass 4, P4c) — the stage names a book at once; the
+   cast, chapters and manuscript slices hold a book only once its read lands.
+   A `result` for book A that arrives on A's analysing stage while the slices
+   still hold book B must not be loaded into them: they would mix the two
+   books, and the layout (which keys its "already loaded" check on
+   manuscript.bookId) would then never reload A. */
+describe('AnalysingRoute — a result loads only into the slices of its own book', () => {
+  const hero = { id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'peach' } as Character;
+  const villain = { id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' } as Character;
+  const chapterA = { id: 1, title: 'A one', slug: '01', duration: '0:00', characters: {} } as unknown as Chapter;
+  const payloadA = {
+    bookId: 'b1',
+    manuscriptId: 'm1',
+    title: 'Book A',
+    phaseTimings: [],
+    characters: [villain],
+    chapters: [chapterA],
+    sentences: [{ id: 1, chapterId: 1, characterId: 'a-villain', text: 'A speaks.' }],
+    libraryMatches: [],
+  };
+
+  function hold(store: ReturnType<typeof makeStore>, book: { bookId: string; manuscriptId: string; title: string }, who: Character, text: string) {
+    store.dispatch(
+      manuscriptActions.hydrateFromBookState({
+        state: book as any,
+        sentences: [{ id: 1, chapterId: 1, characterId: who.id, text }] as any,
+      }),
+    );
+    store.dispatch(castActions.hydrateCharacters([who]));
+    store.dispatch(chaptersActions.setChapters([{ ...chapterA, title: `${book.title} one` }]));
+    store.dispatch(chaptersActions.setCurrentBookId(book.bookId));
+  }
+
+  async function finishRun(store: ReturnType<typeof makeStore>) {
+    analyseResult = payloadA;
+    renderAtAnalysing(store);
+    /* useHydrateStage resets the stage's id under test (it compares against
+       the app's own store); in the app openBook's id survives. Put it back. */
+    store.dispatch(uiActions.hydrateFromUrl({ kind: 'analysing', bookId: 'b1', manuscriptId: 'm1' }));
+    fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+    await waitFor(() => expect(analyseMock).toHaveBeenCalledWith('m1', expect.any(Object)));
+    await waitFor(() => expect(store.getState().ui.stage).toMatchObject({ kind: 'confirm', bookId: 'b1' }));
+  }
+
+  it("A's result while the slices still hold book B leaves them B's whole, so A reloads from disk", async () => {
+    const store = makeStore();
+    hold(store, { bookId: 'b2', manuscriptId: 'm2', title: 'Book B' }, hero, 'B speaks.');
+    /* Back on A's analysing stage (the Retrying pill) before A's read lands. */
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+    await finishRun(store);
+    const s = store.getState();
+    /* Never one book's bookId over another's manuscriptId: manuscript.bookId
+       still names B, which is what sends the layout to read A from disk. */
+    expect({ bookId: s.manuscript.bookId, manuscriptId: s.manuscript.manuscriptId, title: s.manuscript.title }).toEqual({
+      bookId: 'b2',
+      manuscriptId: 'm2',
+      title: 'Book B',
+    });
+    expect(s.manuscript.sentences.map((x: { text: string }) => x.text)).toEqual(['B speaks.']);
+    expect(s.cast.characters.map((c: Character) => c.id)).toEqual(['b-hero']);
+    expect(s.chapters.currentBookId).toBe('b2');
+    expect(s.chapters.chapters.map((c: Chapter) => c.title)).toEqual(['Book B one']);
+  });
+
+  it("control: A's result while the slices hold A loads into them", async () => {
+    const store = makeStore();
+    hold(store, { bookId: 'b1', manuscriptId: 'm1', title: 'Book A' }, hero, 'Old A.');
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+    await finishRun(store);
+    const s = store.getState();
+    expect(s.manuscript.bookId).toBe('b1');
+    expect(s.manuscript.manuscriptId).toBe('m1');
+    expect(s.cast.characters.map((c: Character) => c.id)).toEqual(['a-villain']);
+    expect(s.chapters.currentBookId).toBe('b1');
+    expect(s.chapters.chapters.map((c: Chapter) => c.title)).toEqual(['A one']);
   });
 });

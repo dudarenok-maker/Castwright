@@ -3,13 +3,14 @@ import type { AnalysisLiveInfo } from './api';
 /** Coarse render state of one analysis phase card. */
 export type PhaseRenderState = 'pending' | 'active' | 'done' | 'paused' | 'halted' | 'needs-action';
 
-/** Predicate: is this halt code one of the two "not a failure" codes?
+/** Predicate: is this halt code one of the "not a failure" codes?
  * @param haltCode The halt code from a stream snapshot (or undefined).
- * @returns true if the code is cast_incomplete or stage1_shrink_refused, indicating
- *   a state that requires user action but is not an error (#3203).
+ * @returns true if the code is cast_incomplete, stage1_shrink_refused (#3203) or
+ *   resume_required (#3435), indicating a state that requires user action but is
+ *   not an error.
  */
 export function isNotAFailureHaltCode(haltCode: string | undefined): boolean {
-  return haltCode === 'cast_incomplete' || haltCode === 'stage1_shrink_refused';
+  return haltCode === 'cast_incomplete' || haltCode === 'stage1_shrink_refused' || haltCode === 'resume_required';
 }
 
 /** Inputs needed to decide one phase's render state, all keyed by phase id. */
@@ -22,8 +23,8 @@ export interface PhaseStateInputs {
   maxPhase: number;
   /** Overall run state, mirroring `AnalysisStreamSnapshot.state` (analysis-slice.ts),
       widened with 'needs-action' — the caller's own resolution of a `halted` state
-      whose `haltCode` is one of the two not-a-failure codes (cast_incomplete,
-      stage1_shrink_refused), distinguishing them from a genuine halt (#3203). */
+      whose `haltCode` is one of the not-a-failure codes (cast_incomplete,
+      stage1_shrink_refused, resume_required), distinguishing them from a genuine halt (#3203). */
   runState: 'running' | 'paused' | 'halted' | 'needs-action';
   /** Whether a run has actually started (explicit click, retry, cold-boot
       rehydrate of a running/paused/halted snapshot, …). When false, the

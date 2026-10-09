@@ -182,6 +182,13 @@ const PERSIST_RULES: Record<
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
+  /* fs-57 — the prosody second pass (detected instruct / vocalization text)
+     persists like the detected emotions above; without a rule it reached disk
+     only when some later manuscript edit happened to trigger a save (#3435). */
+  'manuscript/applyDetectedInstruct': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
+  },
   'manuscript/splitSentence': {
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),

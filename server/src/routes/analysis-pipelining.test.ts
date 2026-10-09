@@ -323,6 +323,10 @@ function buildStubJob(manuscriptId: string): AnalysisJob {
       warnings: new Map(),
     },
     lastDiskWriteAt: 0,
+    ended: false,
+    halting: false,
+    left: false,
+    liveWork: 0,
   };
 }
 
@@ -360,9 +364,14 @@ vi.mock('../analyzer/select-analyzer.js', async () => {
    scheduling tests have zero real I/O and no shared CACHE_DIR coupling.
    Empty-cache miss shape MUST match the real loadAnalysisCache return:
    `{ chapters: {} }` (analysis-cache.ts ~L117). */
-vi.mock('../store/analysis-cache.js', () => {
+vi.mock('../store/analysis-cache.js', async () => {
+  const actual = await vi.importActual<typeof import('../store/analysis-cache.js')>('../store/analysis-cache.js');
   const mem = new Map<string, unknown>();
   return {
+    /* The pure predicates (plan 287) need no I/O. */
+    hasCurrentTake: actual.hasCurrentTake,
+    analysisCompleteFor: actual.analysisCompleteFor,
+    reachedConfirm: actual.reachedConfirm,
     loadAnalysisCache: async (id: string) => mem.get(id) ?? { chapters: {} },
     saveAnalysisCache: async (id: string, cache: unknown) => { mem.set(id, cache); },
     clearAnalysisCache: async (id: string) => { mem.delete(id); },
@@ -765,6 +774,209 @@ describe('runMainAnalyzerJob — Phase 1 resolves via selectAnalyzerForPhase eve
       });
       const phase1Calls = fixture.trace.filter((t) => t.phase === 1);
       expect(phase1Calls.length).toBe(4);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  });
+});
+
+/* ───────────────────────────────────────────────────────────────────
+   plan 287 T5 — a take made against the rolling roster while the
+   chapter's cast record stood is pending (M8c), and a pending take is
+   never stitched: the run re-attributes it after the join (M8d).
+   ─────────────────────────────────────────────────────────────────── */
+describe('runMainAnalyzerJob — pending takes in pipelined mode (plan 287 T5)', () => {
+  async function cacheOf(manuscriptId: string) {
+    const { loadAnalysisCache } = await import('../store/analysis-cache.js');
+    return loadAnalysisCache(manuscriptId);
+  }
+
+  it('pipelined: a chapter dispatched before Phase 0b while its cast record stands goes into P, not out', async () => {
+    const manuscriptId = `test-m8c-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 3);
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '1';
+    const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
+    const failingPhase0: Analyzer = {
+      ...phase0Analyzer,
+      runStage1Chapter: async (m, id, p, call) => {
+        if (id === 1) throw new Error('cast model exploded');
+        return phase0Analyzer.runStage1Chapter(m, id, p, call);
+      },
+    };
+    /* Chapter 3's cast is held until chapter 1's Phase 1 has finished, so the
+       Phase-0 pool (and with it phase0FailedCount) cannot drain first. */
+    fixture.holdPhase0.set(3, () => {});
+    setPipelinedMode({
+      pipelined: true,
+      phase1Selection: buildSpyAnalyzerSelection(phase1Analyzer, 'gemini-3.1-flash-lite'),
+      minLag: 0,
+    });
+    const job = buildStubJob(manuscriptId);
+    try {
+      const recordRef = (await import('../store/manuscripts.js')).getManuscript(manuscriptId);
+      const run = runMainAnalyzerJob(job, recordRef as never, buildSpyAnalyzerSelection(failingPhase0, 'gemma-4-31b-it'), {
+        requestedFresh: true,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      await fixture.whenDispatched(1, 1);
+      await new Promise((r) => setTimeout(r, 200));
+      await fixture.whenDispatched(0, 3);
+      fixture.releasePhase0(3);
+      await run;
+      const cache = await cacheOf(manuscriptId);
+      /* Control: chapter 1's cast really failed and its take really was made. */
+      expect(cache.failedChapterIds).toContain(1);
+      expect(cache.failedChapterErrors?.['1']?.phase).toBe('cast');
+      expect(Object.hasOwn(cache.chapters, 1)).toBe(true);
+      expect(cache.pendingAttributionChapterIds).toEqual([1]);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  });
+
+  it('pipelined: a chapter dispatched before Phase 0b while its re-cast was queued, whose re-cast then succeeds, is re-attributed after the join; the result carries the second take and the chapter is not in P', async () => {
+    const manuscriptId = `test-m8d-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '2';
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    /* A resume: chapter 1's cast failed on an earlier run (cast record, the `[]`
+       marker, no take). */
+    await saveAnalysisCache(manuscriptId, {
+      chapters: {},
+      chapterCast: { 1: [] },
+      failedChapterIds: [1],
+      failedChapterErrors: { '1': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'cast' } },
+    });
+    const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
+    let ch1Calls = 0;
+    const countingPhase1: Analyzer = {
+      ...phase1Analyzer,
+      runStage2Chapter: async (m, id, p, call) => {
+        const out = await phase1Analyzer.runStage2Chapter(m, id, p, call);
+        if (id !== 1) return out;
+        ch1Calls += 1;
+        return ch1Calls === 1 ? out : { sentences: [{ ...out.sentences[0], text: 'Second take.' }] };
+      },
+    };
+    /* Hold chapter 1's re-cast: chapter 2's cast advances the watermark, so
+       chapter 1's Phase 1 dispatches against the rolling roster while its cast
+       record still stands. */
+    fixture.holdPhase0.set(1, () => {});
+    setPipelinedMode({
+      pipelined: true,
+      phase1Selection: buildSpyAnalyzerSelection(countingPhase1, 'gemini-3.1-flash-lite'),
+      minLag: 0,
+    });
+    const job = buildStubJob(manuscriptId);
+    const events: Array<{ kind: string; response?: { sentences: Array<{ chapterId: number; text: string }> } }> = [];
+    const keepAlive = setInterval(() => {}, 1);
+    clearInterval(keepAlive);
+    job.subscribers.add({
+      send: (p: unknown) => events.push(p as (typeof events)[number]),
+      res: { end: () => {} } as never,
+      keepAlive,
+    });
+    try {
+      const recordRef = (await import('../store/manuscripts.js')).getManuscript(manuscriptId);
+      const run = runMainAnalyzerJob(job, recordRef as never, buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it'), {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      await fixture.whenDispatched(1, 1);
+      await new Promise((r) => setTimeout(r, 200));
+      await fixture.whenDispatched(0, 1);
+      fixture.releasePhase0(1);
+      await run;
+      /* Control: the first take really was made before the re-cast landed. */
+      expect(ch1Calls).toBe(2);
+      const result = events.find((e) => e.kind === 'result');
+      expect(result, `ended with ${JSON.stringify(events.filter((e) => e.kind === 'error'))}`).toBeDefined();
+      expect(result!.response!.sentences.filter((s) => s.chapterId === 1).map((s) => s.text)).toEqual(['Second take.']);
+      const cache = await cacheOf(manuscriptId);
+      expect(cache.pendingAttributionChapterIds ?? []).not.toContain(1);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+    }
+  });
+
+  /* #3435 final review M1 — the pool checks for a recorded reasoning overflow
+     before each chapter it dispatches; the M8d pass must too, or an overflow
+     recorded by the first pending chapter's re-attribution (an escalation
+     window, reported through StageCall.onReasoningOverflow and swallowed) does
+     not stop the next one's model call. */
+  it('pipelined: an overflow recorded in the first M8d re-attribution starts no second one', async () => {
+    const manuscriptId = `test-m8d-overflow-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 3);
+    process.env.ANALYZER_OLLAMA_CONCURRENCY = '3';
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    const { AnalyzerReasoningOverflowError } = await import('../analyzer/errors.js');
+    /* A resume: chapters 1 and 2 had their cast fail on an earlier run. */
+    await saveAnalysisCache(manuscriptId, {
+      chapters: {},
+      chapterCast: { 1: [], 2: [] },
+      failedChapterIds: [1, 2],
+      failedChapterErrors: {
+        '1': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'cast' },
+        '2': { code: 'analyzer-timeout', message: 'm', remediation: 'r', phase: 'cast' },
+      },
+    });
+    const { fixture, phase0Analyzer, phase1Analyzer } = makePipelineFixture();
+    const calls: Record<number, number> = {};
+    const overflowingPhase1: Analyzer = {
+      ...phase1Analyzer,
+      runStage2Chapter: async (m, id, p, call) => {
+        const out = await phase1Analyzer.runStage2Chapter(m, id, p, call);
+        calls[id] = (calls[id] ?? 0) + 1;
+        /* The first M8d re-attribution (a pending chapter's second take)
+           records an overflow and returns normally, as a swallowed escalation
+           window does. */
+        if ((id === 1 || id === 2) && calls[id] === 2 && (calls[1] ?? 0) + (calls[2] ?? 0) === 3) {
+          call.onReasoningOverflow?.(new AnalyzerReasoningOverflowError('gemini', 'gemini-3.1-flash-lite', 8100));
+        }
+        return out;
+      },
+    };
+    /* Hold both re-casts: chapter 3's cast advances the watermark, so chapters
+       1 and 2 are attributed against the rolling roster while their cast
+       records stand (both go into P). */
+    fixture.holdPhase0.set(1, () => {});
+    fixture.holdPhase0.set(2, () => {});
+    setPipelinedMode({
+      pipelined: true,
+      phase1Selection: buildSpyAnalyzerSelection(overflowingPhase1, 'gemini-3.1-flash-lite'),
+      minLag: 0,
+    });
+    const job = buildStubJob(manuscriptId);
+    const events: Array<{ kind: string; code?: string }> = [];
+    const keepAlive = setInterval(() => {}, 1);
+    clearInterval(keepAlive);
+    job.subscribers.add({
+      send: (p: unknown) => events.push(p as (typeof events)[number]),
+      res: { end: () => {} } as never,
+      keepAlive,
+    });
+    try {
+      const recordRef = (await import('../store/manuscripts.js')).getManuscript(manuscriptId);
+      const run = runMainAnalyzerJob(job, recordRef as never, buildSpyAnalyzerSelection(phase0Analyzer, 'gemma-4-31b-it'), {
+        requestedFresh: false,
+        allowStage1Shrink: true,
+        requestedModel: undefined,
+      });
+      await fixture.whenDispatched(1, 1);
+      await fixture.whenDispatched(1, 2);
+      await new Promise((r) => setTimeout(r, 200));
+      fixture.releasePhase0(1);
+      fixture.releasePhase0(2);
+      await run.catch(() => {});
+      /* Control: both chapters were attributed before the re-casts landed, and
+         the M8d pass did re-attribute one of them. */
+      expect((calls[1] ?? 0) + (calls[2] ?? 0)).toBe(3);
+      expect(events.filter((e) => e.kind === 'error').map((e) => e.code)).toEqual(['analyzer-reasoning-overflow']);
     } finally {
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);

@@ -36,6 +36,7 @@ import { tourSlice } from '../store/tour-slice';
 import { listenProgressSlice } from '../store/listen-progress-slice';
 import { settingsSlice } from '../store/settings-slice';
 import { continueListeningSlice } from '../store/continue-listening-slice';
+import { persistenceMiddleware } from '../store/persistence-middleware';
 import { notificationsSlice } from '../store/notifications-slice';
 import { prosodySlice } from '../store/prosody-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
@@ -50,6 +51,7 @@ const acceptRevisionMock = vi.fn();
 const rejectRevisionMock = vi.fn();
 const restorePreviousUnrecordedMock = vi.fn();
 const getChapterAudioPreviousMock = vi.fn();
+const matchVoicesMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -107,7 +109,7 @@ vi.mock('../lib/api', async (importOriginal) => {
       /* Voice matching fires on the confirm stage only; we render at
          'ready' here so it shouldn't trigger, but keep a stub so any
          drift in that guard doesn't crash the test. */
-      matchVoices: vi.fn(async () => ({ matches: [] })),
+      matchVoices: (...args: unknown[]) => matchVoicesMock(...args),
       /* Plan 90 — Layout fetches the series roster on bookId change so
          the manuscript-view reassign picker has roster entries to surface.
          Return empty so the effect's catch path doesn't fire and these
@@ -183,7 +185,7 @@ vi.mock('../routes/prefetch', () => ({
 }));
 
 vi.mock('../store/prosody-thunk', () => ({
-  runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0 })),
+  runProsodyPasses: vi.fn(() => Promise.resolve({ totalAnnotations: 0, totalChapters: 0, failed: 0, skipped: 0 })),
 }));
 
 import { Layout, _resetRevisionsErrorToastedForTests, _resetRevisionPollWarningsForTests } from './layout';
@@ -266,6 +268,41 @@ function renderLayoutAt(store: ReturnType<typeof makeStore>, bookId: string) {
 const openAt = (store: ReturnType<typeof makeStore>, id: string) =>
   act(() => { store.dispatch({ type: 'ui/openBook', payload: { id, status: 'cast_pending' } }); });
 
+/** Same shape as `makeStore()`, plus `persistenceMiddleware` — the
+    production store's real debounced PUT-on-mutation behaviour. Needed by
+    the #3395 pass 3 R1/R2 tests below, which assert on the actual patch
+    `api.putBookState` receives after a book reopens or a write races a
+    hydrate. Kept separate from the plain `makeStore()` so the many tests that
+    don't care about persistence aren't dragged through the debounce timers. */
+function makeStoreWithScopeAndPersistence() {
+  return configureStore({
+    reducer: {
+      ui: uiSlice.reducer,
+      account: accountSlice.reducer,
+      cast: castSlice.reducer,
+      chapters: chaptersSlice.reducer,
+      revisions: revisionsSlice.reducer,
+      manuscript: manuscriptSlice.reducer,
+      library: librarySlice.reducer,
+      voices: voicesSlice.reducer,
+      changeLog: changeLogSlice.reducer,
+      bookMeta: bookMetaSlice.reducer,
+      exports: exportsSlice.reducer,
+      analysis: analysisSlice.reducer,
+      castDesign: castDesignSlice.reducer,
+      queue: queueSlice.reducer,
+      tour: tourSlice.reducer,
+      listenProgress: listenProgressSlice.reducer,
+      settings: settingsSlice.reducer,
+      continueListening: continueListeningSlice.reducer,
+      notifications: notificationsSlice.reducer,
+      prosody: prosodySlice.reducer,
+      scriptReview: scriptReviewSlice.reducer,
+    },
+    middleware: (getDefault) => getDefault().concat(persistenceMiddleware),
+  });
+}
+
 beforeEach(() => {
   getBookStateMock.mockReset();
   pollRevisionsMock.mockReset();
@@ -278,6 +315,8 @@ beforeEach(() => {
   rejectRevisionMock.mockReset();
   restorePreviousUnrecordedMock.mockReset();
   getChapterAudioPreviousMock.mockReset();
+  matchVoicesMock.mockReset();
+  matchVoicesMock.mockResolvedValue({ matches: [] });
 });
 
 describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
@@ -431,6 +470,108 @@ describe('Layout — per-book hydration: revisions branch (plan 27)', () => {
       expect(s.revisions.pending).toEqual([]);
       expect(s.revisions.drift).toEqual([]);
       expect(s.revisions.bookId).toBe('b1');
+    });
+  });
+
+  /* #3435 (PR #3505 review pass 4, P4c) — a result for book A skipped
+     because the slices held book B leaves them B's, ids and all
+     (routes/index.tsx AnalysingRoute). Confirm for A must then read A from
+     disk rather than take B's slices as A's. */
+  it("Confirm for a book whose result was skipped reads it from disk while the slices still hold another book", async () => {
+    getBookStateMock.mockImplementation(async (bookId: string) => ({
+      state: {
+        bookId,
+        manuscriptId: bookId === 'b1' ? 'm1' : 'm2',
+        title: bookId === 'b1' ? 'Book A' : 'Book B',
+        castConfirmed: false,
+        chapters: [],
+      },
+      cast: { characters: [{ id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' }] },
+      manuscript: null,
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    }));
+    const store = makeStore();
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b2', manuscriptId: 'm2', title: 'Book B' } as never,
+        sentences: null,
+      }),
+    );
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'peach' }]));
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+    store.dispatch(uiActions.analysisComplete({ bookId: 'b1' }));
+    expect(store.getState().ui.stage).toMatchObject({ kind: 'confirm', bookId: 'b1' });
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+    await waitFor(() => {
+      const s = store.getState();
+      expect([s.manuscript.bookId, s.manuscript.manuscriptId, s.manuscript.title]).toEqual(['b1', 'm1', 'Book A']);
+      expect(s.cast.characters.map((c) => c.id)).toEqual(['a-villain']);
+    });
+  });
+});
+
+describe("Layout — an upload never leaves the old book's id on its manuscript (#3435)", () => {
+  it('reopening the previous book after uploadComplete reads it from disk instead of treating it as loaded', async () => {
+    getBookStateMock.mockImplementation(async (bookId: string) => ({
+      state: { bookId, manuscriptId: 'm1', title: 'Book A', castConfirmed: false, chapters: [] },
+      cast: { characters: [{ id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' }] },
+      manuscript: null,
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+    }));
+    const store = makeStore();
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'Book A' } as never,
+        sentences: null,
+      }),
+    );
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' }]));
+    store.dispatch(
+      manuscriptSlice.actions.uploadComplete({
+        bookId: 'b2',
+        manuscriptId: 'm2',
+        title: 'Book B',
+        format: 'plaintext',
+        wordCount: 10,
+        sourceText: '',
+      } as never),
+    );
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+    store.dispatch(uiActions.analysisComplete({ bookId: 'b1' }));
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+    await waitFor(() => {
+      const s = store.getState();
+      expect([s.manuscript.bookId, s.manuscript.manuscriptId]).toEqual(['b1', 'm1']);
     });
   });
 });
@@ -2299,3 +2440,153 @@ describe('Layout — A/B player routing (plan 286)', () => {
   });
 });
 
+
+describe('Layout — analysis gaps reach the chapters slice (#3435 decision F / O2)', () => {
+  it("the layout's book-state hydrate carries unattributedChapterIds and failedChapterErrors into analysisGapById", async () => {
+    getBookStateMock.mockResolvedValue({
+      state: {
+        bookId: 'b1',
+        manuscriptId: 'mns1',
+        title: 'Test Book',
+        author: 'Author',
+        series: null,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+        ],
+        coverGradient: ['#000', '#fff'],
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+      cast: { characters: [] },
+      manuscript: { wordCount: 0, format: 'plaintext' },
+      manuscriptEdits: null,
+      revisions: null,
+      completedSlugs: [],
+      chapterCharacters: {},
+      changeLog: null,
+      analysis: {
+        failedChapterIds: [1],
+        failedChapterErrors: {
+          '1': { code: 'analyzer-timeout', message: 'Attribution broke.', remediation: '', phase: 'attribution' },
+        },
+        stage1Ready: true,
+        resumeRequired: false,
+        unattributedChapterIds: [2],
+      },
+    });
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_confirmed' }));
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/listen']}>
+          <Routes>
+            <Route path="/books/:bookId/listen" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => {
+      expect(store.getState().chapters.analysisGapById).toEqual({
+        1: { message: 'Attribution broke.' },
+        2: { message: "Analysis didn't finish for this chapter." },
+      });
+    });
+  });
+});
+
+describe("Layout — Confirm's voice-match waits for its own book's cast (#3435, PR #3505 pass 5)", () => {
+  /* The voice-match effect fires on stage=confirm using whatever cast the
+     slice holds, and its result is a persisted action (applyVoiceMatches), so
+     while the slices still hold book B it would PUT B's cast to A's
+     cast.json. A's read is held open to pin that window; the persistence
+     middleware is real because an in-memory-only check cannot see the PUT. */
+  afterEach(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 600));
+  });
+
+  const bookOf = (bookId: string) => ({
+    state: { bookId, manuscriptId: 'm1', title: 'Book A', castConfirmed: false, chapters: [] },
+    cast: { characters: [{ id: 'a-villain', name: 'Villain', role: 'Antagonist', color: 'magenta' }] },
+    manuscript: null,
+    manuscriptEdits: null,
+    revisions: null,
+    completedSlugs: [],
+    chapterCharacters: {},
+    changeLog: null,
+  });
+
+  function seedBookBInSlices(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b2', manuscriptId: 'm2', title: 'Book B' } as never,
+        sentences: null,
+      }),
+    );
+    store.dispatch(
+      castSlice.actions.hydrateCharacters([{ id: 'b-hero', name: 'Hero', role: 'Protagonist', color: 'peach' }]),
+    );
+  }
+
+  async function assertMatchWaitsForBookA(store: ReturnType<typeof makeStoreWithScopeAndPersistence>) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    getBookStateMock.mockImplementation(async (bookId: string) => {
+      await gate;
+      return bookOf(bookId);
+    });
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/confirm']}>
+          <Routes>
+            <Route path="/books/:bookId/confirm" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalledWith('b1'));
+    expect(store.getState().ui.stage).toMatchObject({ kind: 'confirm', bookId: 'b1' });
+    // Past the 500 ms persistence debounce: a wrongly-fired match would have PUT by now.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+
+    expect(matchVoicesMock).not.toHaveBeenCalled();
+    expect(putBookStateMock.mock.calls.filter(([, req]) => (req as { slice: string }).slice === 'cast')).toEqual([]);
+
+    release();
+    await waitFor(() => expect(matchVoicesMock).toHaveBeenCalledTimes(1));
+    expect(matchVoicesMock).toHaveBeenCalledWith({
+      bookId: 'b1',
+      characters: [expect.objectContaining({ id: 'a-villain' })],
+    });
+    await waitFor(() => {
+      const castPuts = putBookStateMock.mock.calls.filter(([, req]) => (req as { slice: string }).slice === 'cast');
+      expect(castPuts).toHaveLength(1);
+      expect(castPuts[0][0]).toBe('b1');
+      const patch = (castPuts[0][1] as { patch: { characters: Array<{ id: string }> } }).patch;
+      expect(patch.characters.map((c) => c.id)).toEqual(['a-villain']);
+    });
+  }
+
+  it("P5a: a skipped analysis result for A (slices still hold B) does not voice-match B's cast into A", async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    seedBookBInSlices(store);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+    store.dispatch(uiActions.analysisComplete({ bookId: 'b1' }));
+    await assertMatchWaitsForBookA(store);
+  });
+
+  it("P5b: opening cast-pending A from the library after viewing B does not voice-match B's cast into A", async () => {
+    const store = makeStoreWithScopeAndPersistence();
+    seedBookBInSlices(store);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    await assertMatchWaitsForBookA(store);
+  });
+});
