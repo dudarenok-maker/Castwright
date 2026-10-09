@@ -16,7 +16,7 @@
  * imports so paths.ts picks up WORKSPACE_DIR, supertest against the real
  * router. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import {
   rmSync,
   mkdirSync,
@@ -47,6 +47,11 @@ let audioRoot: string;
 let app: Express;
 let bookId: string;
 let cachePath: string;
+
+vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+  return { ...real, dropPendingForChapters: vi.fn(real.dropPendingForChapters) };
+});
 
 /* Three short chapters; chapter 1 + 2 have rendered audio, chapter 3
  * doesn't (mirrors a real partially-generated book). */
@@ -129,11 +134,9 @@ beforeAll(async () => {
   workspaceRoot = await mkdtemp(join(tmpdir(), 'audiobook-restructure-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ chaptersRestructureRouter }, { bookStateRouter }, { makeBookId }] = await Promise.all([
-    import('./chapters-restructure.js'),
-    import('./book-state.js'),
-    import('../workspace/paths.js'),
-  ]);
+  const { chaptersRestructureRouter } = await import('./chapters-restructure.js');
+  const { bookStateRouter } = await import('./book-state.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   cachePath = join(CACHE_DIR, `${MANUSCRIPT_ID}.json`);
 
@@ -1507,5 +1510,36 @@ describe('merge/split propagate titleOverridden (plan 78)', () => {
     const sticky = after.chapters.find((c) => c.title === 'Sticky One');
     expect(sticky?.id).toBe(3);
     expect(sticky?.titleOverridden).toBe(true);
+  });
+});
+
+/* -- plan 286: restructure drops stale A/B entries ------------------ */
+
+describe('plan 286 — restructure drops stale A/B entries', () => {
+  const revPath = () => join(bookDir, '.audiobook', 'revisions.json');
+  const srv = (chapterId: number, id: string) => ({ id, chapterId, characterId: 'narr', playable: true, hasPreviousAudio: true, segments: [], origin: 'server' });
+  afterEach(() => rmSync(revPath(), { recursive: true, force: true }));
+
+  it('a merge of chapters 2+3 drops their entries and keeps chapter 1\'s', async () => {
+    writeFileSync(revPath(), JSON.stringify({ schema: 1, fileId: '000000000000001-a', rev: 1, pending: [srv(1, 'r1'), srv(2, 'r2')], dismissed: [], acceptedSelections: {}, timeline: {} }));
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+    const disk = JSON.parse(readFileSync(revPath(), 'utf8'));
+    expect(disk.pending.map((p: { id: string }) => p.id)).toEqual(['r1']);
+  });
+
+  it('a failing drop still answers 200 and leaks no path', async () => {
+    /* A rejection whose message embeds the path: an EISDIR fixture's message carries
+       none, so asserting its absence would prove nothing (Invariant 8). */
+    const store = await import('../workspace/revisions-store.js');
+    vi.mocked(store.dropPendingForChapters).mockRejectedValueOnce(Object.assign(
+      new Error(`EPERM: operation not permitted, rename '${revPath()}.tmp'`), { code: 'EPERM' }));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    const errorCalls = err.mock.calls.length; // before mockRestore, which clears mock.calls in vitest 5
+    err.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.text).not.toContain(workspaceRoot);
+    expect(errorCalls).toBeGreaterThan(0);
   });
 });

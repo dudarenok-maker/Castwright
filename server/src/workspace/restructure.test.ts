@@ -18,7 +18,9 @@ import {
   applyRename,
   applyExclude,
   computeBodySplitIndex,
+  touchedChapterIds,
   type RestructureSentence,
+  type AudioOp,
 } from './restructure.js';
 import type { BookStateJson } from './scan.js';
 import type { ChapterHint } from '../store/manuscripts.js';
@@ -584,5 +586,19 @@ describe('uuid preservation across restructure (srv-35)', () => {
     expect(result.state.chapters[0].uuid).toBe('u-a');
     expect(result.state.chapters[1].uuid).toBe('u-b');
     expect(result.state.chapters[1].excluded).toBe(true);
+  });
+});
+
+/* -- touchedChapterIds (plan 286) ------------------------------------ */
+
+describe('touchedChapterIds', () => {
+  const ch = (id: number, slug: string) => ({ id, title: slug, slug });
+
+  it('plan 286 — touchedChapterIds covers content change (same id), id change, and slug-only rename; leaves untouched chapters', () => {
+    const old = [ch(1, '01-a'), ch(2, '02-b'), ch(3, '03-c'), ch(4, '04-d'), ch(5, '05-e')];
+    const neu = [ch(1, '01-a'), ch(2, '02-b'), ch(3, '03-c-renamed'), ch(4, '04-merged')];
+    const ops: AudioOp[] = [{ kind: 'delete', from: '02-b' }, { kind: 'rename', from: '03-c', to: '03-c-renamed', newChapterId: 3, newChapterTitle: 'C' }];
+    // 2: content changed, same id+slug (delete op) · 3: slug-only rename · 4: same id, new slug · 5: gone · 1: untouched
+    expect(touchedChapterIds(old as never, neu as never, ops)).toEqual([2, 3, 4, 5]);
   });
 });

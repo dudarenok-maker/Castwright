@@ -322,6 +322,22 @@ export async function dropPendingForChapter(
   });
 }
 
+/** Plan 286 — drop pending entries for several chapters a restructure
+    touched, in one write under the revisions lock. No-op (no write) when
+    none of the ids match. */
+export async function dropPendingForChapters(
+  bookDir: string,
+  chapters: readonly ChapterRef[],
+  chapterIds: readonly number[],
+): Promise<RevisionsFile> {
+  return withKeyLock(revisionsLockKey(bookDir), async () => {
+    const file = await load(bookDir, chapters);
+    const ids = new Set(chapterIds);
+    if (!file.pending.some((p) => ids.has(p.chapterId))) return file;
+    return save(bookDir, { ...file, pending: file.pending.filter((p) => !ids.has(p.chapterId)) });
+  });
+}
+
 export async function dismissDriftId(
   bookDir: string,
   chapters: readonly ChapterRef[],

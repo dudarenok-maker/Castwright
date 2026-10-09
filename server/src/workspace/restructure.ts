@@ -95,6 +95,31 @@ function sortById<T extends { id: number }>(arr: readonly T[]): T[] {
   return [...arr].sort((a, b) => a.id - b.id);
 }
 
+/** Plan 286 — old chapter ids whose A/B review entries no longer pair with
+    the live take after a restructure: every old chapter whose slug is an
+    audio op's `from`, plus every old chapter whose id now maps to a
+    different slug or to no chapter at all. A rename's `newChapterId` is not
+    added separately — the old chapter with that id either has its own op or
+    changed slug, so it is already covered. Sorted, unique. */
+export function touchedChapterIds(
+  oldChapters: BookStateJson['chapters'],
+  newChapters: BookStateJson['chapters'],
+  audioOps: readonly AudioOp[],
+): number[] {
+  const touched = new Set<number>();
+  const oldBySlug = new Map(oldChapters.map((c) => [c.slug, c]));
+  for (const op of audioOps) {
+    const old = oldBySlug.get(op.from);
+    if (old) touched.add(old.id);
+  }
+  const newById = new Map(newChapters.map((c) => [c.id, c]));
+  for (const old of oldChapters) {
+    const neu = newById.get(old.id);
+    if (!neu || neu.slug !== old.slug) touched.add(old.id);
+  }
+  return [...touched].sort((a, b) => a - b);
+}
+
 /** Map each surviving old chapter id to its new id (one-to-one or
     many-to-one for merge). Chapters that vanished entirely (merged
     INTO another id) still appear in the map but pointed at the

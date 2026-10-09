@@ -33,6 +33,7 @@ import {
   applyExclude,
   applyRefreshTitles,
   applyRename,
+  touchedChapterIds,
   type MergeOp,
   type SplitOp,
   type ReorderOp,
@@ -41,6 +42,7 @@ import {
   type RestructureResult,
   type RestructureSentence,
 } from '../workspace/restructure.js';
+import { dropPendingForChapters } from '../workspace/revisions-store.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import {
   audioDir,
@@ -154,6 +156,10 @@ async function applyRestructure(
      is persisted below, so this also migrates the book. */
   ensureChapterUuids(state);
 
+  /* Plan 286 — captured before transform(...) in case the transform
+     mutates `state` in place. */
+  const oldChapters = state.chapters.map((c) => ({ ...c }));
+
   let result: RestructureResult;
   try {
     result = transform(state, alignedHints, sentences);
@@ -177,6 +183,17 @@ async function applyRestructure(
 
   // Apply audio ops (best-effort — errors are surfaced in the response).
   const audioSummary = await rewriteChapterSlugs(audioDir(bookDir), result.audioOps);
+
+  /* Plan 286 — entries for chapters this op touched no longer pair with the
+     live take. Best-effort: logged, never in a response (the six handlers
+     return raw messages, so a lock-key path must not reach them). A deliberate
+     swallow of LockAcquisitionTimeoutError (CLAUDE.md swallow list). */
+  try {
+    const touched = touchedChapterIds(oldChapters, result.state.chapters, result.audioOps);
+    if (touched.length > 0) await dropPendingForChapters(bookDir, oldChapters, touched);
+  } catch (e) {
+    console.error('[chapters-restructure] could not drop stale A/B review entries', e);
+  }
 
   // Plan 70c — re-derive the analysis cache from the freshly-written
   // manuscript-edits.json so subsequent generation runs still find

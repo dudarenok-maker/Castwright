@@ -609,17 +609,20 @@ Design rationale:
   journals, which are lineage and must stay best-effort. Swallowing at an
   identity site would report success with `cast.json` written and the
   retirement lost; swallowing at an authoritative write reported success with
-  `cast.json` and `state.json` never written at all. FIVE handlers swallow it
+  `cast.json` and `state.json` never written at all. SIX handlers swallow it
   deliberately: `reconcileRejectEdgesOnDisk`
   (`server/src/routes/analysis.ts`), which runs after every retirement has
   landed and writes only cosmetic `notLinkedTo` edges the next persist
   re-heals; the three interim cast.json snapshots (per-chapter, stage-1,
   subset), which a final write in the same run clobbers, so a timeout there
-  diverges nothing (#2292); and `applyReview`
+  diverges nothing (#2292); `applyReview`
   (`server/src/audio/finalize-chapter-write.ts`, plan 285), whose A/B
   review record on the per-book revisions lock is best-effort with respect
   to a render that has already landed — it logs in full and surfaces only
-  `reviewOutcome: 'failed'`, never the lock key. A NINTH site fails loud in a
+  `reviewOutcome: 'failed'`, never the lock key; and the restructure pending
+  drop (`server/src/routes/chapters-restructure.ts`, plan 286) — a stale
+  entry it fails to drop answers `revision_not_found` on the next
+  accept/reject. A NINTH site fails loud in a
   different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,

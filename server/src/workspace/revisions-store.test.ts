@@ -11,6 +11,7 @@ import {
   resetRevisions,
   recordPending,
   dropPendingForChapter,
+  dropPendingForChapters,
   dismissDriftId,
   beginRevisionOp,
   commitRevisionOp,
@@ -282,6 +283,15 @@ describe('recordPending / dropPendingForChapter', () => {
     expect((await readRevisions(bookDir, CHAPTERS)).pending.map((p) => p.id).sort()).toEqual(['r2', 'r3']);
     await dropPendingForChapter(bookDir, CHAPTERS, 1);
     expect((await readRevisions(bookDir, CHAPTERS)).pending.map((p) => p.id)).toEqual(['r2']);
+  });
+
+  it('plan 286 — dropPendingForChapters drops several chapters in one write; no-op when none match', async () => {
+    seedRaw({ schema: 1, fileId: '000000000000001-a', rev: 4, pending: [serverEntry(1, 'r1'), serverEntry(2, 'r2')], dismissed: [], acceptedSelections: {}, timeline: {} });
+    const out = await dropPendingForChapters(bookDir, CHAPTERS, [1, 2]);
+    expect(out.pending).toEqual([]);
+    expect(onDisk().rev).toBe(5);
+    await dropPendingForChapters(bookDir, CHAPTERS, [7]);
+    expect(onDisk().rev).toBe(5);
   });
 });
 
