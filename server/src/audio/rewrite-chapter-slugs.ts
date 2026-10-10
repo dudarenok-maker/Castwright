@@ -3,7 +3,7 @@
    content changed.
 
    Files involved per chapter (any subset may exist):
-     <slug>.mp3         the audio itself
+     <slug>.mp3 / .m4a / .ogg  the audio itself (the book's output format)
      <slug>.segments.json  per-segment timing + chapter metadata
      <slug>.peaks.json     waveform peaks summary (plan 35-related)
      <slug>.previous.mp3 / <slug>.previous.segments.json
@@ -30,17 +30,18 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
+import { CHAPTER_AUDIO_EXTS, type ChapterAudioExt } from '../workspace/chapter-audio-file.js';
 
 /** Suffixes of the companion files per chapter audio. Kept in one
     array so add-a-new-companion changes touch one site. */
 const COMPANION_SUFFIXES = [
-  'mp3',
+  ...CHAPTER_AUDIO_EXTS,
   'segments.json',
   'peaks.json',
   'previous.mp3',
   'previous.segments.json',
 ] as const;
-type CompanionSuffix = (typeof COMPANION_SUFFIXES)[number];
+type CompanionSuffix = ChapterAudioExt | 'segments.json' | 'peaks.json' | 'previous.mp3' | 'previous.segments.json';
 
 export type ChapterAudioOp =
   | { kind: 'delete'; from: string }

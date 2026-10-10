@@ -142,6 +142,35 @@ describe('rewriteChapterSlugs', () => {
     expect(result.renamed.map((r) => r.suffix)).toEqual(['mp3']);
   });
 
+  // #3400 — finalize writes <slug>.m4a / <slug>.ogg for non-mp3 books; the live
+  // audio must follow the same rename/delete rules as .mp3.
+  for (const ext of ['m4a', 'ogg'] as const) {
+    it(`swaps two chapters' live .${ext} audio together with their segments`, async () => {
+      for (const slug of ['01-a', '02-b']) {
+        writeFileSync(join(audioRoot, `${slug}.${ext}`), `audio-bytes:${slug}`);
+        writeFileSync(join(audioRoot, `${slug}.segments.json`), JSON.stringify({ segments: [] }));
+      }
+      const result = await rewriteChapterSlugs(audioRoot, [
+        { kind: 'rename', from: '01-a', to: '02-a', newChapterId: 2, newChapterTitle: 'A' },
+        { kind: 'rename', from: '02-b', to: '01-b', newChapterId: 1, newChapterTitle: 'B' },
+      ]);
+      expect(result.errors).toEqual([]);
+      expect(readFileSync(join(audioRoot, `02-a.${ext}`), 'utf8')).toBe('audio-bytes:01-a');
+      expect(readFileSync(join(audioRoot, `01-b.${ext}`), 'utf8')).toBe('audio-bytes:02-b');
+      expect(existsSync(join(audioRoot, `01-a.${ext}`))).toBe(false);
+      expect(existsSync(join(audioRoot, `02-b.${ext}`))).toBe(false);
+    });
+
+    it(`deletes the live .${ext} audio for a delete op`, async () => {
+      writeFileSync(join(audioRoot, `05-doomed.${ext}`), 'x');
+      writeFileSync(join(audioRoot, '05-doomed.segments.json'), '{}');
+      const result = await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '05-doomed' }]);
+      expect(result.errors).toEqual([]);
+      expect(existsSync(join(audioRoot, `05-doomed.${ext}`))).toBe(false);
+      expect(result.deleted.map((d) => d.suffix)).toContain(ext);
+    });
+  }
+
   it('tolerates a delete on a slug that has no files (silent no-op)', async () => {
     const result = await rewriteChapterSlugs(audioRoot, [
       { kind: 'delete', from: '99-never-existed' },
