@@ -7,6 +7,11 @@ import {
   syncAnalyzerConcurrency,
   getAnalyzerConcurrencyStats,
   resetAnalyzerConcurrencyPeak,
+  _resetEndpointBusyForTest,
+  endpointIdsForModelIds,
+  isEndpointBusy,
+  markEndpointRunActive,
+  registerEndpointCallInFlight,
 } from './analyzer-concurrency.js';
 
 afterEach(() => {
@@ -125,5 +130,59 @@ describe('VRAM co-residence gate removal', () => {
   it('analyzer-concurrency.ts no longer imports gpuSemaphore/GpuSemaphore (deleted VRAM budget)', () => {
     const src = readFileSync(new URL('./analyzer-concurrency.ts', import.meta.url), 'utf8');
     expect(src).not.toMatch(/gpuSemaphore|GpuSemaphore/);
+  });
+});
+
+describe('endpoint busy accounting (#3084 P1)', () => {
+  afterEach(() => _resetEndpointBusyForTest());
+
+  it('a registered call makes only its own endpoint busy until released; release is idempotent', () => {
+    expect(isEndpointBusy('lab')).toBe(false);
+    const release = registerEndpointCallInFlight('lab');
+    expect(isEndpointBusy('lab')).toBe(true);
+    expect(isEndpointBusy('other')).toBe(false);
+    release();
+    release();
+    expect(isEndpointBusy('lab')).toBe(false);
+  });
+
+  it('a run marks each endpoint it uses busy for its whole life, with no call in flight (the gap between chunk calls)', () => {
+    const release = markEndpointRunActive(['lab', 'swap']);
+    expect(isEndpointBusy('lab')).toBe(true);
+    expect(isEndpointBusy('swap')).toBe(true);
+    release();
+    expect(isEndpointBusy('lab')).toBe(false);
+    expect(isEndpointBusy('swap')).toBe(false);
+  });
+
+  it("a run's double release cannot clear another run's mark on the same endpoint", () => {
+    const first = markEndpointRunActive(['lab']);
+    const second = markEndpointRunActive(['lab']);
+    first();
+    first();
+    expect(isEndpointBusy('lab')).toBe(true);
+    second();
+    expect(isEndpointBusy('lab')).toBe(false);
+  });
+
+  it('endpoint calls and runs never touch the Ollama slot figures (Ollama eviction gate unchanged)', () => {
+    const before = getAnalyzerConcurrencyStats().inFlight;
+    const releaseCall = registerEndpointCallInFlight('lab');
+    const releaseRun = markEndpointRunActive(['lab']);
+    expect(getAnalyzerConcurrencyStats().inFlight).toBe(before);
+    releaseCall();
+    releaseRun();
+  });
+
+  it('endpointIdsForModelIds keeps endpoint ids only, once each', () => {
+    expect(endpointIdsForModelIds(['openai:lab::a', 'qwen3.5:4b', 'openai:lab::b', 'gemini-3.6-flash', 'openai:swap::c'])).toEqual(['lab', 'swap']);
+  });
+
+  it('_resetEndpointBusyForTest clears calls and runs', () => {
+    registerEndpointCallInFlight('lab');
+    markEndpointRunActive(['swap']);
+    _resetEndpointBusyForTest();
+    expect(isEndpointBusy('lab')).toBe(false);
+    expect(isEndpointBusy('swap')).toBe(false);
   });
 });

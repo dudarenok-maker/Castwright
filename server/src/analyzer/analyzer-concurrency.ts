@@ -7,6 +7,7 @@
    acquireAnalyzerSlot(model, onCpu). */
 import { CountSemaphore } from '../gpu/count-semaphore.js';
 import { configValue } from '../config/resolver.js';
+import { parseEndpointModelId } from './model-id.js';
 
 function resolveK(): number {
   const k = configValue<number>('analyzer.ollama.concurrency');
@@ -69,6 +70,62 @@ export async function acquireAnalyzerSlot(_model: string, _onCpu: boolean): Prom
     inFlightCount--;
     releaseLimiter();
   };
+}
+
+/* #3084 P1 — busy accounting for OpenAI-compatible endpoints, keyed by endpoint id. An
+   endpoint is busy while a call to it is in flight OR a run that uses it is active: the
+   run mark covers the gap between two chunk calls, which a per-call count reads as idle.
+   TTS eviction (gpu/endpoint-eviction.ts) re-checks it before every unload POST. Kept apart
+   from the Ollama K limiter, so Ollama's own eviction gate and peak stay Ollama-only. */
+const endpointCalls = new Map<string, number>();
+const endpointRuns = new Map<string, number>();
+
+function adjust(counts: Map<string, number>, id: string, delta: number): void {
+  const next = (counts.get(id) ?? 0) + delta;
+  if (next <= 0) counts.delete(id);
+  else counts.set(id, next);
+}
+
+function onceOnly(fn: () => void): () => void {
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    fn();
+  };
+}
+
+/** One call to an endpoint on a GPU. Returns an idempotent release. */
+export function registerEndpointCallInFlight(endpointId: string): () => void {
+  adjust(endpointCalls, endpointId, 1);
+  return onceOnly(() => adjust(endpointCalls, endpointId, -1));
+}
+
+/** A run (analysis job or script review) that will use these endpoints, for its whole life.
+    Returns an idempotent release, so a second call cannot clear another run's mark. */
+export function markEndpointRunActive(endpointIds: readonly string[]): () => void {
+  const ids = [...new Set(endpointIds)];
+  for (const id of ids) adjust(endpointRuns, id, 1);
+  return onceOnly(() => {
+    for (const id of ids) adjust(endpointRuns, id, -1);
+  });
+}
+
+export function isEndpointBusy(endpointId: string): boolean {
+  return endpointCalls.has(endpointId) || endpointRuns.has(endpointId);
+}
+
+/** Test-only. A mark leaked by one case (a route that threw before its release) would make
+    every later case's endpoint read busy; each 3d test file resets in beforeEach/afterEach. */
+export function _resetEndpointBusyForTest(): void {
+  endpointCalls.clear();
+  endpointRuns.clear();
+}
+
+/** The endpoint ids named by a run's model ids (non-endpoint ids are ignored), once each. */
+export function endpointIdsForModelIds(modelIds: readonly string[]): string[] {
+  const ids = modelIds.map((id) => parseEndpointModelId(id)?.endpointId).filter((id): id is string => id !== undefined);
+  return [...new Set(ids)];
 }
 
 /** Startup log for analyzer concurrency (M4, K-only since the GPU VRAM budget
