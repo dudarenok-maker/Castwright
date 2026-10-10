@@ -6,6 +6,11 @@
      <slug>.mp3         the audio itself
      <slug>.segments.json  per-segment timing + chapter metadata
      <slug>.peaks.json     waveform peaks summary (plan 35-related)
+     <slug>.previous.mp3 / <slug>.previous.segments.json
+                           the A/B take's preserved prior render
+                           (audio/previous-audio.ts) — follows the live
+                           audio, else a chapter that inherits the slug
+                           inherits another chapter's previous take (#3400)
 
    Rename strategy is two-pass via a temp slug to avoid collisions on
    permutations (chapter 3 → 1, chapter 1 → 3 would otherwise clobber
@@ -26,9 +31,15 @@ import { randomUUID } from 'node:crypto';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 
-/** Suffixes of the three companion files per chapter audio. Kept in one
+/** Suffixes of the companion files per chapter audio. Kept in one
     array so add-a-new-companion changes touch one site. */
-const COMPANION_SUFFIXES = ['mp3', 'segments.json', 'peaks.json'] as const;
+const COMPANION_SUFFIXES = [
+  'mp3',
+  'segments.json',
+  'peaks.json',
+  'previous.mp3',
+  'previous.segments.json',
+] as const;
 type CompanionSuffix = (typeof COMPANION_SUFFIXES)[number];
 
 export type ChapterAudioOp =
@@ -123,30 +134,32 @@ export async function rewriteChapterSlugs(
     }
   }
 
-  // Phase 3: rewrite each finalised segments.json's embedded chapter
+  // Phase 3: rewrite each finalised segments.json's (live and previous) embedded chapter
   // metadata. (Peaks.json carries no chapter id / title per plan 35;
   // skip.) Best-effort — a corrupt file leaves stale metadata behind
   // but doesn't fail the op, since the audio still plays and the
   // frontend reads chapter metadata from state.json, not the segments
   // file.
   for (const { op } of staged) {
-    const segPath = suffixPath(audioRoot, op.to, 'segments.json');
-    if (!existsSync(segPath)) continue;
-    try {
-      const seg = await readJson<{ chapterId?: number; chapterTitle?: string }>(segPath);
-      if (!seg) continue;
-      const next = {
-        ...seg,
-        chapterId: op.newChapterId,
-        chapterTitle: op.newChapterTitle,
-      };
-      await writeJsonAtomic(segPath, next);
-    } catch (e) {
-      summary.errors.push({
-        op,
-        message: `segments.json metadata rewrite failed: ${(e as Error).message}`,
-        suffix: 'segments.json',
-      });
+    for (const suffix of ['segments.json', 'previous.segments.json'] as const) {
+      const segPath = suffixPath(audioRoot, op.to, suffix);
+      if (!existsSync(segPath)) continue;
+      try {
+        const seg = await readJson<{ chapterId?: number; chapterTitle?: string }>(segPath);
+        if (!seg) continue;
+        const next = {
+          ...seg,
+          chapterId: op.newChapterId,
+          chapterTitle: op.newChapterTitle,
+        };
+        await writeJsonAtomic(segPath, next);
+      } catch (e) {
+        summary.errors.push({
+          op,
+          message: `${suffix} metadata rewrite failed: ${(e as Error).message}`,
+          suffix,
+        });
+      }
     }
   }
 

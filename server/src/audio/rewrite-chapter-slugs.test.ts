@@ -181,3 +181,62 @@ import { readdirSync } from 'node:fs';
 function readDirNames(dir: string): string[] {
   return readdirSync(dir);
 }
+
+/* #3400 — the A/B take's `.previous.*` artifacts follow the live audio. */
+function seedPrevious(slug: string): void {
+  writeFileSync(join(audioRoot, `${slug}.previous.mp3`), `previous-bytes:${slug}`);
+  writeFileSync(
+    join(audioRoot, `${slug}.previous.segments.json`),
+    JSON.stringify({ bookId: 'b', chapterId: 99, chapterTitle: 'OLD', segments: [] }),
+  );
+}
+
+describe('rewriteChapterSlugs — .previous.* artifacts', () => {
+  it('moves a chapter\'s previous take with it on a swap, never leaving it under a slug another chapter now owns', async () => {
+    seed('01-a');
+    seed('02-b');
+    seedPrevious('01-a'); // only chapter A has a previous take
+
+    await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-b', newChapterId: 2, newChapterTitle: 'a' },
+      { kind: 'rename', from: '02-b', to: '01-a', newChapterId: 1, newChapterTitle: 'b' },
+    ]);
+
+    // A's previous take travelled to A's new slug.
+    expect(readFileSync(join(audioRoot, '02-b.previous.mp3'), 'utf8')).toBe('previous-bytes:01-a');
+    expect(existsSync(join(audioRoot, '02-b.previous.segments.json'))).toBe(true);
+    // B (now 01-a) had no previous take and must not inherit A's.
+    expect(existsSync(join(audioRoot, '01-a.previous.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.segments.json'))).toBe(false);
+    // Embedded chapter metadata follows the live segments rewrite.
+    const seg = JSON.parse(readFileSync(join(audioRoot, '02-b.previous.segments.json'), 'utf8'));
+    expect(seg).toMatchObject({ chapterId: 2, chapterTitle: 'a' });
+  });
+
+  it('chain A→B while B→C does not clobber either chapter\'s previous take', async () => {
+    seed('01-a');
+    seed('02-b');
+    seedPrevious('01-a');
+    seedPrevious('02-b');
+
+    await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-b', newChapterId: 2, newChapterTitle: 'a' },
+      { kind: 'rename', from: '02-b', to: '03-c', newChapterId: 3, newChapterTitle: 'b' },
+    ]);
+
+    expect(readFileSync(join(audioRoot, '02-b.previous.mp3'), 'utf8')).toBe('previous-bytes:01-a');
+    expect(readFileSync(join(audioRoot, '03-c.previous.mp3'), 'utf8')).toBe('previous-bytes:02-b');
+    expect(existsSync(join(audioRoot, '01-a.previous.mp3'))).toBe(false);
+  });
+
+  it('deletes the previous take when the chapter\'s audio is deleted (content changed)', async () => {
+    seed('01-a');
+    seedPrevious('01-a');
+
+    await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '01-a' }]);
+
+    expect(existsSync(join(audioRoot, '01-a.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.segments.json'))).toBe(false);
+  });
+});
