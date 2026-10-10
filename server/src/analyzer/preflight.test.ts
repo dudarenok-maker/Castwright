@@ -114,6 +114,18 @@ describe('runAnalyzerPreflight (#3084)', () => {
   });
 });
 
+describe('P14 — the engine default is checked as selection builds it (#3084 PR 3d)', () => {
+  it('the engine default is checked as the saved engine builds it: a saved openai engine with a non-endpoint default fails as endpoint-missing', () => {
+    _setUserSettingsCacheForTest({ analysisEngine: 'openai', defaultAnalysisModel: 'qwen3.5:4b' });
+    const s = settings({ analysisEngine: 'openai', defaultAnalysisModel: 'qwen3.5:4b' });
+    const targets = preflightTargets(['phase1'], undefined, s);
+    expect(targets).toEqual([{ modelId: 'qwen3.5:4b', source: 'settings', engine: 'openai' }]);
+    const err = thrown(() => runAnalyzerPreflight(targets, s));
+    expect(err).toBeInstanceOf(AnalyzerEndpointMissingError);
+    expect(err).toMatchObject({ endpointId: 'qwen3.5:4b', source: 'settings' });
+  });
+});
+
 describe('resolvePreflightDigests (#3084 A3)', () => {
   it('asks once per distinct Ollama model, never for Gemini or endpoint targets, and maps a failure to undefined', async () => {
     const s = settings();

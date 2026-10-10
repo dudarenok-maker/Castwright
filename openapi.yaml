@@ -5161,7 +5161,7 @@ components:
             health probe.
         analysisEngine:
           type: string
-          enum: [local, gemini]
+          enum: [local, gemini, openai]
           description: |
             Analyzer dispatch. `local` routes through OllamaAnalyzer (with
             Gemini as an opt-out fallback iff GEMINI_API_KEY is set,
@@ -5553,7 +5553,7 @@ components:
             The server also auto-latches this on any genuine change to
             defaultTtsModelKey.
         sidecarUrl: { type: string }
-        analysisEngine: { type: string, enum: [local, gemini] }
+        analysisEngine: { type: string, enum: [local, gemini, openai] }
         allowCloudFallback: { type: boolean }
         workspaceDirOverride:
           type: string

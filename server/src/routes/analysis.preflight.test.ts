@@ -152,6 +152,14 @@ describe('POST /api/manuscripts/:id/analysis — pre-run checks (#3084)', () => 
       expect.objectContaining({ kind: 'error', code: 'unknown', message: expect.stringContaining('misconfigured engine') }),
     );
   });
+
+  it('a saved openai engine whose default model is not an endpoint id fails with a code before selection (P14)', async () => {
+    seedManuscript();
+    _setUserSettingsCacheForTest({ analysisEngine: 'openai', defaultAnalysisModel: 'qwen3.5:4b', analyzerEndpoints: [] });
+    const res = await request(makeApp()).post('/api/manuscripts/m_preflight/analysis').send({});
+    expect(parseSse(res.text)).toContainEqual(expect.objectContaining({ kind: 'error', code: 'analyzer-endpoint-missing' }));
+    expect(selectSpy).not.toHaveBeenCalled();
+  });
 });
 
 /* #3084 P14 + A3 + #3004 — the double-checked dispatch. A reload joins a live job before any

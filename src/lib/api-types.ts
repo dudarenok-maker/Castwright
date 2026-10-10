@@ -3586,7 +3586,7 @@ export interface components {
              *     the engine. See server/src/analyzer/index.ts selectAnalyzer.
              * @enum {string}
              */
-            analysisEngine: "local" | "gemini";
+            analysisEngine: "local" | "gemini" | "openai";
             /**
              * @description Opt-out cloud-fallback gate. When engine=local and a Gemini key is
              *     set, the analyzer falls back to Gemini iff the local daemon is
@@ -3918,7 +3918,7 @@ export interface components {
             defaultTtsModelKeyExplicit?: boolean;
             sidecarUrl?: string;
             /** @enum {string} */
-            analysisEngine?: "local" | "gemini";
+            analysisEngine?: "local" | "gemini" | "openai";
             allowCloudFallback?: boolean;
             workspaceDirOverride?: string | null;
             exportSyncFolder?: string | null;

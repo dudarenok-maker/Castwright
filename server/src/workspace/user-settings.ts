@@ -229,7 +229,7 @@ function migrateLegacyAnalyzerModelFields(raw: unknown): unknown {
 }
 
 export const TTS_ENGINE_VALUES = ['local', 'gemini'] as const;
-export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini'] as const;
+export const ANALYSIS_ENGINE_VALUES = ['local', 'gemini', 'openai'] as const;
 export const TTS_MODEL_KEY_VALUES = [
   'kokoro-v1',
   'qwen3-tts-0.6b',
@@ -1638,12 +1638,9 @@ export function getResolvedTtsModelKey(): UserSettings['defaultTtsModelKey'] {
     leaking to the `ANALYZER` env var. This deliberately RETIRES `ANALYZER` as
     an engine selector (a stray `ANALYZER=gemini` in an old `.env` is now inert
     for engine choice — the engine is UI/user-settings-driven). `GEMINI_API_KEY`
-    is unaffected (still used for TTS + opt-out cloud fallback).
-    #3084 PR 3a: the return type is the full AnalysisEngine, but the stored
-    enum (ANALYSIS_ENGINE_VALUES) still holds only local|gemini, so the body
-    cannot yield 'openai' until PR 3d widens that enum. */
+    is unaffected (still used for TTS + opt-out cloud fallback). */
 export function getResolvedAnalysisEngine(): AnalysisEngine {
-  return getCachedUserSettings().analysisEngine === 'gemini' ? 'gemini' : 'local';
+  return getCachedUserSettings().analysisEngine;
 }
 
 /** Cloud-fallback gate (Part 1). Reads the saved user setting, defaulting

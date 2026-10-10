@@ -421,7 +421,7 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     expect(typeof phases[1].estRemainingMs).toBe('number');
   });
 
-  it('an endpoint id this build cannot run ends the stream with analyzer-endpoint-missing, before any analyzer call (#3084 P23)', async () => {
+  it('an endpoint that is not configured ends the stream with analyzer-endpoint-missing, before any analyzer call (#3084 P23)', async () => {
     writeBook(SENTENCES);
     const { AnalyzerEndpointMissingError } = await import('../analyzer/errors.js');
     emotionEngineState.selectError = new AnalyzerEndpointMissingError('gone', 'run-pick');

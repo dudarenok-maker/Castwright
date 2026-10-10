@@ -202,9 +202,9 @@ const ENDPOINT_SOURCE_LABEL: Record<'settings' | 'env' | 'run-pick' | 'persona',
   persona: 'the persona generation engine',
 };
 
-/** A model id names an OpenAI-compatible endpoint this build cannot run: until
-    PR 3d every endpoint id (P23), from PR 3d an id whose endpoint is not in
-    saved settings. Thrown by selection (PR 3a) and PR 3c's pre-run checks,
+/** A model id names an OpenAI-compatible endpoint that is not configured: from
+    PR 3d, an id whose endpoint is not in saved settings (P23; before 3d, every
+    endpoint id). Thrown by selection (PR 3a) and PR 3c's pre-run checks,
     before the first call. FailureCode `analyzer-endpoint-missing` (PR 3b). */
 export class AnalyzerEndpointMissingError extends Error {
   readonly code = 'ANALYZER_ENDPOINT_MISSING';

@@ -2301,7 +2301,7 @@ describe('POST /api/books/:bookId/script-review — unset book language (Task 6 
     expect(runReview).not.toHaveBeenCalled();
   });
 
-  it('an endpoint id this build cannot run reports analyzer-endpoint-missing, not internal_error (#3084 P23)', async () => {
+  it('an endpoint that is not configured reports analyzer-endpoint-missing, not internal_error (#3084 P23)', async () => {
     writeBook(SENTENCES);
     const { AnalyzerEndpointMissingError } = await import('../analyzer/errors.js');
     selectAnalyzerForPhaseMock.mockImplementationOnce(() => {

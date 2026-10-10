@@ -1,7 +1,7 @@
 /* #3084 P23 — every analysis selection call site reports AnalyzerEndpointMissingError
    as analyzer-endpoint-missing. Phase 0 and the subset retry run the REAL selection
-   through the REAL routes: a request model `openai:gone::m` makes PR 3a's selection
-   throw. Phase 1 runs runMainAnalyzerJob with the phase-1 selection throwing, the
+   through the REAL routes: a request model `openai:gone::m` makes selection
+   throw, because no endpoint `gone` is saved. Phase 1 runs runMainAnalyzerJob with the phase-1 selection throwing, the
    way analysis.phase-model.test.ts injects a phase-1 selection. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';

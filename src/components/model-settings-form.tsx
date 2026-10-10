@@ -28,6 +28,7 @@ import { api, type BlockerDiagnosis } from '../lib/api';
 import { useSetupDiagnosis } from '../lib/use-setup-diagnosis';
 import { isPrivateHostUrl } from '../lib/sidecar-url';
 import { OllamaInstall } from './ollama-install';
+import type { AnalysisEngine } from '../lib/model-id';
 import { ModelPullStatus } from './model-pull-status';
 
 /* #3141 step 3 — read-only display for a field whose editing moved to
@@ -135,7 +136,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
   const [sidecarUrl, setSidecarUrl] = useState(account.sidecarUrl);
   /* #3084 PR 3a — bound to the narrow persisted enum (plan row 49, unchanged
      in 3a): this form's picker only ever offers 'local'/'gemini'. */
-  const [analysisEngine, setAnalysisEngine] = useState<'local' | 'gemini'>(account.analysisEngine);
+  const [analysisEngine, setAnalysisEngine] = useState<AnalysisEngine>(account.analysisEngine);
   const [allowCloudFallback, setAllowCloudFallback] = useState<boolean>(
     account.allowCloudFallback ?? true,
   );
@@ -460,11 +461,12 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
         >
           <select
             value={analysisEngine}
-            onChange={(e) => setAnalysisEngine(e.target.value as 'local' | 'gemini')}
+            onChange={(e) => setAnalysisEngine(e.target.value as AnalysisEngine)}
             className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           >
             <option value="local">Local Ollama (default — on-device, with Gemini fallback)</option>
             <option value="gemini">Gemini API (direct)</option>
+            <option value="openai">OpenAI-compatible endpoint (uses the default analysis model's endpoint)</option>
           </select>
         </FieldRow>
         <FieldRow

@@ -21,6 +21,7 @@ import type {
 } from '../handoff/schemas.js';
 import { GeminiAnalyzer } from './gemini.js';
 import { OllamaAnalyzer } from './ollama.js';
+import { OpenAIAnalyzer } from './openai.js';
 import { AnalysisAbortedError, AnalyzerUnreachableError, AnalyzerEndpointMissingError, type TransportKind } from './errors.js';
 import {
   getResolvedAnalysisEngine,
@@ -31,6 +32,7 @@ import {
 import { getResolvedOllamaUrl, getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { configValue } from '../config/resolver.js';
 import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
+import { resolveEndpointApiKey } from '../workspace/analyzer-endpoints.js';
 
 export type { StageChunkInfo, StageCall, Analyzer } from './types.js';
 import type { Analyzer, StageCall } from './types.js';
@@ -73,13 +75,18 @@ export function selectAnalyzer(opts: SelectAnalyzerOptions = {}): AnalyzerSelect
   const apiKey = getResolvedGeminiApiKey() ?? '';
 
   if (engine === 'openai') {
-    /* #3084 P23 — endpoint ids have a grammar but no analyzer until PR 3d,
-       which builds OpenAIAnalyzer here. Refusing is what keeps an `openai:`
-       id out of the Ollama branch below (it contains ':'). `engine` is
-       'openai' only for an explicit `opts.model`: the saved engine enum
-       cannot hold it before PR 3d. */
-    const parsed = parseEndpointModelId(opts.model ?? '');
-    throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? String(opts.model), opts.modelSource ?? 'run-pick');
+    const settings = getCachedUserSettings();
+    const modelId = opts.model ?? settings.defaultAnalysisModel;
+    const parsed = parseEndpointModelId(modelId);
+    const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
+    /* Refused only when the endpoint is not saved. `modelSource` (3a) keeps an env-named id saying env.
+       Without it, an explicit model is a run pick (3a's contract); only the saved default is settings (P23). */
+    if (!parsed || !endpoint) {
+      throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? modelId, opts.modelSource ?? (opts.model ? 'run-pick' : 'settings'));
+    }
+    const primary = new OpenAIAnalyzer({ endpoint, apiKey: resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl), model: parsed.model });
+    /* No wrap yet: Task 3d.4b adds `fallbackSelectionFor` here and in the local branch (P30). */
+    return { analyzer: primary, engine: 'openai', model: modelId, fallbackModel: null };
   }
 
   if (engine === 'local') {
