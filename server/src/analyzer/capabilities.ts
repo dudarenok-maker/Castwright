@@ -6,8 +6,19 @@ import { randomBytes } from 'node:crypto';
 import type { UserSettings } from '../workspace/user-settings.js';
 import type { AdaptedSchema, ChatTransport, StructuredOutputMode, TransportRequest, TransportResult } from './runner/transport.js';
 import { jsonParseCandidates, stripThink } from './runner/parse.js';
-import { AnalysisAbortedError, AnalyzerCapabilityRejectedError, AnalyzerHttpError, type TransportKind } from './errors.js';
+import {
+  AnalysisAbortedError,
+  AnalyzerCapabilityRejectedError,
+  AnalyzerEndpointMissingError,
+  AnalyzerHttpError,
+  type TransportKind,
+} from './errors.js';
 import { estimateInputTokens } from './runner/prompt.js';
+import { configValue } from '../config/resolver.js';
+/* #3192 moved the Ollama URL resolver into this leaf (not user-settings.ts). */
+import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
+import { resolveEndpointApiKey } from '../workspace/analyzer-endpoints.js';
+import { parseEndpointModelId, type AnalysisEngine } from './model-id.js';
 import { namesContextOrTokenLimit } from './limit-400-patterns.js';
 import {
   emotionAnnotationSchema,
@@ -183,6 +194,39 @@ export function assertConfiguredCapabilitiesAllowed(
   /* P7: only a rejection recorded at the level this run sends refuses it. */
   if (record.structuredOutput[configured.structuredOutput]?.[configured.reasoning] === 'rejected') {
     throw new AnalyzerCapabilityRejectedError(modelId, 'structuredOutput', configured.structuredOutput, record.testedAt);
+  }
+}
+
+/** #3084 — one target's pre-run checks (3c.10), shared by runAnalyzerPreflight and a fallback
+    target's first call (P30). Here rather than in preflight.ts because index.ts must not import
+    preflight.ts (preflight → select-analyzer → index is a cycle). */
+export function assertAnalyzerTargetUsable(
+  target: { modelId: string; source: 'env' | 'run-pick' | 'settings'; engine: AnalysisEngine },
+  settings: UserSettings,
+  digest?: string,
+): void {
+  if (target.engine === 'openai') {
+    const parsed = parseEndpointModelId(target.modelId);
+    const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
+    if (!parsed || !endpoint) throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? target.modelId, target.source);
+    resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl); // throws AnalyzerKeyOriginError for a key bound to another host
+    assertConfiguredCapabilitiesAllowed(
+      capabilityRecordFor(settings, target.modelId, endpoint.baseUrl),
+      { structuredOutput: endpoint.structuredOutput, reasoning: defaultReasoningKey('openai') },
+      target.modelId,
+    );
+  } else if (target.engine === 'gemini') {
+    assertConfiguredCapabilitiesAllowed(
+      capabilityRecordFor(settings, target.modelId, 'gemini'),
+      { structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'), reasoning: defaultReasoningKey('gemini') },
+      target.modelId,
+    );
+  } else {
+    assertConfiguredCapabilitiesAllowed(
+      capabilityRecordFor(settings, target.modelId, getResolvedOllamaUrl(), digest),
+      { structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'), reasoning: defaultReasoningKey('ollama') },
+      target.modelId,
+    );
   }
 }
 

@@ -3579,22 +3579,16 @@ export interface components {
              */
             sidecarUrl: string;
             /**
-             * @description Analyzer dispatch. `local` routes through OllamaAnalyzer (with
-             *     Gemini as an opt-out fallback iff GEMINI_API_KEY is set,
-             *     allowCloudFallback is on, AND the local daemon is unreachable).
-             *     `gemini` always goes direct. The ANALYZER env no longer selects
+             * @description Analyzer dispatch. `local` routes through OllamaAnalyzer (falling
+             *     back, one hop, to the analyzer.fallback.target config knob when the
+             *     daemon is unreachable). `gemini` always goes direct. The ANALYZER env no longer selects
              *     the engine. See server/src/analyzer/index.ts selectAnalyzer.
              * @enum {string}
              */
             analysisEngine: "local" | "gemini" | "openai";
             /**
-             * @description Opt-out cloud-fallback gate. When engine=local and a Gemini key is
-             *     set, the analyzer falls back to Gemini iff the local daemon is
-             *     unreachable — but only when this is true. Default true (non-
-             *     breaking: existing installs keep today's behaviour). Turn OFF to
-             *     keep analysis strictly local: no cloud fall-through even on a local
-             *     outage. Resolved as the saved value (default true), with
-             *     ANALYZER_ALLOW_CLOUD_FALLBACK=0 as a pre-cache under-ride only.
+             * @description Legacy (#3084). No UI writes it. While the analyzer.fallback.target
+             *     config knob is unset, false reads as "off"; otherwise it is ignored.
              */
             allowCloudFallback: boolean;
             /**

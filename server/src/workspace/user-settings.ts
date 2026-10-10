@@ -291,20 +291,16 @@ export const userSettingsSchema = z.object({
      explicitly picked an engine. Optional so legacy files load unchanged. */
   defaultTtsModelKeyExplicit: z.boolean().optional(),
   sidecarUrl: z.string().min(1).max(2000),
-  /* Analyzer dispatch. `local` routes through OllamaAnalyzer (with Gemini
-     as an opt-out fallback iff GEMINI_API_KEY is set, allowCloudFallback is
-     on, and the local daemon is unreachable — see selectAnalyzer). `gemini`
-     always goes direct. Defaults local (defence-in-depth atop the always-
+  /* Analyzer dispatch. `local` routes through OllamaAnalyzer (falling back,
+     one hop, to analyzer.fallback.target when the daemon is unreachable —
+     see selectAnalyzer). `gemini` always goes direct. Defaults local (defence-in-depth atop the always-
      present DEFAULT); a corrupt value fails the parse and the read path
      falls back to all-DEFAULT (also local) — see getResolvedAnalysisEngine.
      The ANALYZER env var no longer selects the engine. */
   analysisEngine: z.enum(ANALYSIS_ENGINE_VALUES).default('local'),
-  /* Part 1 — opt-out cloud fallback gate. When engine=local and a Gemini key
-     is present, the analyzer wraps Ollama in a FallbackAnalyzer that fails over
-     to Gemini iff the local daemon is unreachable. Default true (non-breaking:
-     existing installs keep today's behaviour). Turn OFF to keep analysis
-     strictly local — no silent (or announced) cloud fall-through. See
-     selectAnalyzer + getResolvedAllowCloudFallback. */
+  /* Legacy (#3084 P30). No UI writes this any more; resolveAnalyzerFallbackTarget
+     reads false as "off" while analyzer.fallback.target is unset. Kept so existing
+     files still parse and a strict-local install stays strict-local. */
   allowCloudFallback: z.boolean().default(true),
   workspaceDirOverride: z.string().max(2000).nullable(),
   /* Optional folder the export pipeline copies finished audiobooks into,
@@ -1620,12 +1616,13 @@ export function getResolvedTtsModelKey(): UserSettings['defaultTtsModelKey'] {
     leaking to the `ANALYZER` env var. This deliberately RETIRES `ANALYZER` as
     an engine selector (a stray `ANALYZER=gemini` in an old `.env` is now inert
     for engine choice — the engine is UI/user-settings-driven). `GEMINI_API_KEY`
-    is unaffected (still used for TTS + opt-out cloud fallback). */
+    is unaffected (still used for TTS and a gemini fallback target). */
 export function getResolvedAnalysisEngine(): AnalysisEngine {
   return getCachedUserSettings().analysisEngine;
 }
 
-/** Cloud-fallback gate (Part 1). Reads the saved user setting, defaulting
+/** Legacy (#3084 P30): read only by resolveAnalyzerFallbackTarget.
+    Cloud-fallback gate (Part 1). Reads the saved user setting, defaulting
     TRUE (opt-out: existing installs keep today's Ollama→Gemini fallback).
     `ANALYZER_ALLOW_CLOUD_FALLBACK=0` is a legacy PRE-CACHE under-ride only —
     it can force the gate OFF when no user setting is cached yet (e.g. a strict-

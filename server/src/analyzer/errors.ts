@@ -94,6 +94,37 @@ export class AnalyzerTruncatedError extends Error {
   }
 }
 
+/* #3084 P30 — a prompt too large for the fallback target, refused before it was sent, so it is never
+   truncated on input. Thrown only for passes whose caller does not split; those that split get an
+   AnalyzerTruncatedError instead. Not a subclass of either, and never retried: nothing was sent. */
+export class AnalyzerTargetInputTooLargeError extends Error {
+  constructor(
+    readonly transport: TransportKind,
+    readonly model: string,
+    readonly targetLabel: string,
+    readonly limitTokens: number,
+    readonly family: 'context' | 'requestCap',
+  ) {
+    super(`prompt is larger than the fallback target ${targetLabel} can take (${family === 'context' ? 'context' : 'per-request cap'} ${limitTokens} tokens)`);
+    this.name = 'AnalyzerTargetInputTooLargeError';
+  }
+}
+
+/* #3084 P30 — what the fallback guard throws for a pass whose caller splits: a truncation, so the caller
+   splits and retries each half, carrying the refusal it stands for. */
+export class TargetInputOverBudgetError extends AnalyzerTruncatedError {
+  constructor(readonly refusal: AnalyzerTargetInputTooLargeError) {
+    super(refusal.transport, 'input-over-target-budget', 0);
+    this.name = 'TargetInputOverBudgetError';
+  }
+}
+
+/** A splitting caller's give-up rethrow: a target-budget truncation that cannot split further escapes as
+    the refusal it stands for, so it classifies with that copy and never reads as "response truncated". */
+export function targetInputTooLargeOr(err: unknown): unknown {
+  return err instanceof TargetInputOverBudgetError ? err.refusal : err;
+}
+
 /* Raised by runner/finish.ts when the Gemini transport reports a stream that finished with ZERO text — the
    signature of a content-filter block. On a `gemini-*` model the usual cause is
    RECITATION (Google refuses memorised/copyrighted source) or SAFETY; the model

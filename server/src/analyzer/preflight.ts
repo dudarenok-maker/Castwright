@@ -9,12 +9,10 @@ import { configValue } from '../config/resolver.js';
 import { getResolvedAnalysisEngine, type UserSettings } from '../workspace/user-settings.js';
 /* #3192 moved both resolvers into this leaf: env → Advanced Settings override → default. */
 import { getResolvedOllamaModel, getResolvedOllamaUrl } from '../config/ollama-resolved.js';
-import { resolveEndpointApiKey } from '../workspace/analyzer-endpoints.js';
-import { inferEngineFromModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
-import { AnalyzerEndpointMissingError } from './errors.js';
-import { assertConfiguredCapabilitiesAllowed, capabilityRecordFor, defaultReasoningKey } from './capabilities.js';
+import { inferEngineFromModelId, type AnalysisEngine } from './model-id.js';
+/* #3084 P30 — the per-target checks live in capabilities.ts, shared with a fallback target's first call. */
+import { assertAnalyzerTargetUsable } from './capabilities.js';
 import { resolvePhaseModelSelection, type AnalysisPhase } from './select-analyzer.js';
-import type { StructuredOutputMode } from './runner/transport.js';
 import { ollamaModelDigest } from './ollama-digest.js';
 
 export interface PreflightTarget {
@@ -86,28 +84,6 @@ export function runAnalyzerPreflight(
     const key = `${target.engine}|${target.modelId}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    if (target.engine === 'openai') {
-      const parsed = parseEndpointModelId(target.modelId);
-      const endpoint = parsed ? settings.analyzerEndpoints.find((e) => e.id === parsed.endpointId) : undefined;
-      if (!parsed || !endpoint) throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? target.modelId, target.source);
-      resolveEndpointApiKey(settings, endpoint, endpoint.baseUrl); // throws AnalyzerKeyOriginError for a key bound to another host
-      assertConfiguredCapabilitiesAllowed(
-        capabilityRecordFor(settings, target.modelId, endpoint.baseUrl),
-        { structuredOutput: endpoint.structuredOutput, reasoning: defaultReasoningKey('openai') },
-        target.modelId,
-      );
-    } else if (target.engine === 'gemini') {
-      assertConfiguredCapabilitiesAllowed(
-        capabilityRecordFor(settings, target.modelId, 'gemini'),
-        { structuredOutput: configValue<StructuredOutputMode>('analyzer.gemini.structuredOutput'), reasoning: defaultReasoningKey('gemini') },
-        target.modelId,
-      );
-    } else {
-      assertConfiguredCapabilitiesAllowed(
-        capabilityRecordFor(settings, target.modelId, getResolvedOllamaUrl(), digests?.get(target.modelId)),
-        { structuredOutput: configValue<StructuredOutputMode>('analyzer.ollama.structuredOutput'), reasoning: defaultReasoningKey('ollama') },
-        target.modelId,
-      );
-    }
+    assertAnalyzerTargetUsable(target, settings, digests?.get(target.modelId));
   }
 }
