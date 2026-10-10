@@ -7,7 +7,7 @@
    middleware, which is keyed by bookId — account state is user-wide). */
 
 import { createSlice, createAsyncThunk, isAnyOf, type PayloadAction } from '@reduxjs/toolkit';
-import type { AnalyzerEndpointInput, UserSettings, UserSettingsPatch } from '../lib/types';
+import type { AnalyzerCatalog, AnalyzerEndpointInput, UserSettings, UserSettingsPatch } from '../lib/types';
 import { FRONTEND_ACCOUNT_DEFAULTS } from '../lib/account-defaults';
 import { api, AnalyzerEndpointError } from '../lib/api';
 
@@ -32,6 +32,9 @@ export interface AccountState extends UserSettings {
   /** Curated install list (server's single source). Populated by
       `fetchAnalyzerModels`; the pickers + Model Manager read this. */
   pullableModels: string[];
+  /** #3084 — last GET /api/analyzer/models response. Fetched at the same moments as
+      fetchAnalyzerModels (never on a healthy cloud run's analysing view). */
+  analyzerCatalog: AnalyzerCatalog | null;
 }
 
 const initialState: AccountState = {
@@ -45,6 +48,7 @@ const initialState: AccountState = {
   hydrated: false,
   localAnalyzerModels: [],
   pullableModels: [],
+  analyzerCatalog: null,
 };
 
 export const fetchAccountSettings = createAsyncThunk<UserSettings>('account/fetch', async () => {
@@ -155,6 +159,11 @@ export const fetchAnalyzerModels = createAsyncThunk('account/fetchAnalyzerModels
   return { localTags, pullable: Array.isArray(health.pullable) ? health.pullable : [] };
 });
 
+export const fetchAnalyzerCatalog = createAsyncThunk(
+  'account/fetchAnalyzerCatalog',
+  async (opts: { refresh?: boolean } | undefined) => api.getAnalyzerModels(opts?.refresh ?? false),
+);
+
 export const accountSlice = createSlice({
   name: 'account',
   initialState,
@@ -262,6 +271,9 @@ export const accountSlice = createSlice({
       .addCase(fetchAnalyzerModels.fulfilled, (state, action) => {
         state.localAnalyzerModels = action.payload.localTags;
         state.pullableModels = action.payload.pullable;
+      })
+      .addCase(fetchAnalyzerCatalog.fulfilled, (state, action) => {
+        state.analyzerCatalog = action.payload;
       })
       .addMatcher(isAnyOf(...endpointWrites.map((t) => t.pending)), (s) => {
         s.status = 'saving';

@@ -24,18 +24,18 @@
    excluding `server/src/config/registry.ts` itself (the knob table — it
    defines keys, it doesn't read them).
 
-   DYNAMIC READERS. Two knob families are read through a COMPUTED key, not a
-   string literal, so the occurrence scan below is structurally blind to
-   them:
+   DYNAMIC READERS. One knob family is read through a COMPUTED key, not a
+   string literal, so the occurrence scan below is structurally blind to it:
      - `qa.asr.maxWer.<lang>` — `tts/segment-asr-qa.ts` builds
        `` `qa.asr.maxWer.${lang}` `` and looks it up via
        `allKnobs().find(...)` + `resolveKnob(...)`.
-     - `rate.{rpm,tpm,rpd}.<slug>` — `analyzer/rate-limit.ts`'s
-       `overrideValue` looks up the knob by matching `k.env` against a
-       computed env-var name, then resolves it — the fix this guard exists
-       to protect. Each `DECLARED_DYNAMIC_READERS` entry is verified against
-       the ACTUAL file content below (not just trusted), so a declaration
-       that stops matching reality fails the same as a missing read.
+   The `DECLARED_DYNAMIC_READERS` entry is verified against the ACTUAL file
+   content below (not just trusted), so a declaration that stops matching
+   reality fails the same as a missing read. (`rate.{rpm,tpm,rpd}.<slug>` was a
+   second family until #3084 retired those knobs into the
+   `analyzerRateLimitsByModel` user-settings map, which is not a registry knob;
+   `analyzer/rate-limit.test.ts` "resolveLimits reads a saved Gemini rpm from the
+   user-settings map" pins that read instead.)
 
    A THIRD RECOGNISED SHAPE: `readConfigOverrides()['<key>']` (bracket-
    literal), used by `workspace/user-settings.ts`'s `getResolvedGenerationWorkers`
@@ -204,11 +204,6 @@ const DECLARED_DYNAMIC_READERS: Array<{ pattern: RegExp; file: string; contains:
     pattern: /^qa\.asr\.maxWer\.[a-z]+$/,
     file: 'server/src/tts/segment-asr-qa.ts',
     contains: 'allKnobs().find((k) => k.key === `qa.asr.maxWer.${lang}`)',
-  },
-  {
-    pattern: /^rate\.(rpm|tpm|rpd)\.[a-zA-Z0-9]+$/,
-    file: 'server/src/analyzer/rate-limit.ts',
-    contains: 'allKnobs().find((k) => k.env === envName)',
   },
 ];
 

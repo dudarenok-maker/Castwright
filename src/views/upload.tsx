@@ -37,6 +37,7 @@ export function UploadView() {
      pulled-but-uncurated tag is selectable. Populated by fetchAnalyzerModels on
      mount; empty (offline) falls back to the curated catalog. */
   const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog ?? null);
   const analysisModelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
   useEffect(() => {
     void dispatch(fetchAnalyzerModels());
@@ -300,6 +301,7 @@ export function UploadView() {
             onChange={(id) => dispatch(uiActions.setSelectedModel(id))}
             disabled={busy}
             groups={analysisModelGroups}
+            catalog={analyzerCatalog}
           />
         </div>
 

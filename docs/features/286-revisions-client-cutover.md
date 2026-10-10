@@ -106,7 +106,7 @@ Real backend: owed as on-box acceptance — a **new** register row (Task 31) plu
 PR 2 (client cutover) is pending — opens in Task 32 as `fix(frontend,server):
 revisions.json client cutover to server ownership (#3400)`, `Closes #3400`,
 `Closes #3397`. Status stays `active` (not `stable`) until the on-box
-acceptance register row (A113, added in Task 31) is run and accepted (OD18).
+acceptance register row (A114, added in Task 31) is run and accepted (OD18).
 
 ---
 

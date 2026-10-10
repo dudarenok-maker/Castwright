@@ -12,6 +12,7 @@ import { MixedHeading } from '../components/primitives';
 import { SettingsAccordion, SettingsSection } from '../components/settings/settings-accordion';
 import { OverrideRow, beginConfigAction, describeConfigSaveError } from '../components/settings/override-row';
 import { RestartSidecarBanner } from '../components/settings/restart-sidecar-banner';
+import { AnalyzerModelLimits } from '../components/settings/analyzer-model-limits';
 import { EnvCleanupNotice } from '../components/env-cleanup-notice';
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
@@ -597,6 +598,7 @@ export function AdvancedView() {
                       />
                     );
                   })}
+                  {group.id === 'rate-limits' && <AnalyzerModelLimits />}
                   {group.id === 'analyzer-models' && account.hydrated && analyzerEngine === 'local' && (
                     <div className="py-3 border-b border-ink/8">
                       <div className="flex items-center gap-2 mb-1">

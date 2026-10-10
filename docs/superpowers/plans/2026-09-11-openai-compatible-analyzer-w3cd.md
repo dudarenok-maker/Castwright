@@ -14860,7 +14860,7 @@ The page is published after merge by `npm run wiki:sync` (Task 3d.11, Step 5).
 
 **Files:**
 - Modify: `docs/testing/onbox-acceptance-register.md` (the 3c row, three new Group A rows, the glance count, the owed line, a Last-change note, the Group A `next-id` marker)
-- Modify: `docs/testing/openai-analyzer-onbox-acceptance.md` (created in 3c)
+- Modify: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` (3c wrote its §6 "Live structured output" here; append 3d's sections after it)
 - Modify: `docs/testing/onbox-acceptance-register-live-view.html`
 
 Row ids are minted at ship time from Group A's `<!-- next-id: A… -->` marker; bump it once per row in the same commit. Below, `‹row-3c›` is the id PR 3c minted, and `‹A-new-1›`/`‹A-new-2›`/`‹A-new-3›` are the three ids minted here.
@@ -14895,7 +14895,7 @@ fallback fires before the first token.
   chapter whose stage-1 prompt exceeds 64k tokens.
 - Observe the server log: no `analyzer-timeout`, no idle retry, no fallback announcement;
   the chapter completes. Record time to first token and total time.
-- Criteria: `docs/testing/openai-analyzer-onbox-acceptance.md` § "Long silent prefill".
+- Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Long silent prefill".
 
 ### ‹A-new-2› · Same-card eviction of an endpoint for a Qwen load ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #NNNN) · **2-card boot (8 GB + 16 GB), llama-swap with a per-model unload URL, Qwen TTS**
 
@@ -14953,7 +14953,7 @@ is never unloaded under a live run.
   render against the same card: each denied synthesize call repeats that cost (the models stay
   in the served set while the server is down) — record how many synth ops were denied and
   the total time lost, because this is the per-synth-op multiplication the unit bound hides.
-- Criteria: `docs/testing/openai-analyzer-onbox-acceptance.md` § "Same-card eviction".
+- Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Same-card eviction".
 
 ### ‹A-new-3› · Fallback to a smaller context leaves room to answer ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #NNNN) · **one GPU box: a llama.cpp `llama-server` endpoint with a ≥64k context, and Ollama with `analyzer.ollama.numCtx` ≤ 16k**
 
@@ -14978,12 +14978,12 @@ the context: a context shift, an early stop, or an error.
   annotate-emotion over a chapter sized for the primary: the chapter fails with the input-too-large
   copy (or, for an escalation window, the skip warning is logged), and the target's own log shows
   no request for it.
-- Criteria: `docs/testing/openai-analyzer-onbox-acceptance.md` § "Fallback to a smaller context".
+- Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Fallback to a smaller context".
 ```
 
 Update the glance table's Group A count (+3). Prepend a `> **Last change: <date> (#3084 W3d), <owed> → <owed + 3>.**` note naming the three rows and the extension. Bump the marker three times. Run `npm run register:build`, and copy its owed total into the `**NN owed.**` line if it differs.
 
-- [ ] **Step 3: Run sheet** — append to `docs/testing/openai-analyzer-onbox-acceptance.md`:
+- [ ] **Step 3: Run sheet** — append to `docs/testing/3084-openai-analyzer-onbox-acceptance.md`:
 
 ```markdown
 ## Live structured output — real chapters (added in W3d)
@@ -15047,21 +15047,21 @@ Update the glance table's Group A count (+3). Prepend a `> **Last change: <date>
       <summary><span class="num">‹A-new-1›</span><span class="iname">Long silent prefill completes on an endpoint</span><span class="risk">slower card of a 2-card box, llama-swap with a ≥64k-context model</span><span class="chev">›</span></summary>
       <div class="body">
         <p>A chapter whose prompt exceeds 64k tokens on a llama-swap endpoint on the slower card completes within the request ceiling: no timeout, idle retry or fallback. Record time to first token and total time.</p>
-        <p>Criteria: <code>docs/testing/openai-analyzer-onbox-acceptance.md</code> § Long silent prefill. #3084.</p>
+        <p>Criteria: <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> § Long silent prefill. #3084.</p>
       </div>
     </details>
     <details class="item">
       <summary><span class="num">‹A-new-2›</span><span class="iname">Same-card eviction of an endpoint for a Qwen load</span><span class="risk">2-card boot, llama-swap per-model unload URL, Qwen TTS</span><span class="chev">›</span></summary>
       <div class="body">
         <p>With the endpoint idle, a Qwen load on its card POSTs its unload URL once per model that has been sent to it and succeeds; a load on the other card does not. Mid-run, with the Qwen load timed between two chunk calls, nothing is unloaded and the next chunk needs no reload. Two models get two POSTs. An unload URL without <code>{model}</code> saves with a warning. Without an unload URL the failure names the setting. A run that starts while an unload POST is still out behaves as an Ollama eviction does today: one model reload, admission retries. Right after a restart, with no model run on the endpoint yet, nothing is POSTed and the failure says so. The endpoint lever has no latch — Ollama keeps its own — so of two endpoints on one card, one busy, the idle one unloads at once and the busy one is still unloaded later in the same admission once its run ends. Each (endpoint, model) gets at most one POST per admission, 10&nbsp;s each: a worst case of Σ served models × 10&nbsp;s, repaid per denied synthesize call, not per chapter. A 2xx or 404 removes the model from the served set. A slow or unresponsive unload endpoint is POSTed once per model, not on every poll, and the failure says every request failed.</p>
-        <p>Criteria: <code>docs/testing/openai-analyzer-onbox-acceptance.md</code> § Same-card eviction. #3084.</p>
+        <p>Criteria: <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> § Same-card eviction. #3084.</p>
       </div>
     </details>
     <details class="item">
       <summary><span class="num">‹A-new-3›</span><span class="iname">Fallback to a smaller context leaves room to answer</span><span class="risk">llama.cpp endpoint ≥64k + Ollama num_ctx ≤16k, one GPU</span><span class="chev">›</span></summary>
       <div class="body">
         <p>After a fallback switch from a large-context primary to a smaller-context target (endpoint → Ollama, then Ollama → llama.cpp), every chunk the target receives finishes with prompt plus output under its context: no context shift, no early stop, no context-size error, no truncated JSON. A chunk the target cannot take is refused before it is sent. Record the prompt and output token counts each server reports per chunk.</p>
-        <p>Criteria: <code>docs/testing/openai-analyzer-onbox-acceptance.md</code> § Fallback to a smaller context. #3084.</p>
+        <p>Criteria: <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> § Fallback to a smaller context. #3084.</p>
       </div>
     </details>
 ```
@@ -15070,7 +15070,7 @@ Also append the W3d paragraph to the 3c row's `<div class="body">`. Run `npm run
 
 - [ ] **Step 5: Commit**
 ```bash
-git add docs/testing/onbox-acceptance-register.md docs/testing/openai-analyzer-onbox-acceptance.md docs/testing/onbox-acceptance-register-live-view.html
+git add docs/testing/onbox-acceptance-register.md docs/testing/3084-openai-analyzer-onbox-acceptance.md docs/testing/onbox-acceptance-register-live-view.html
 git commit -m "docs(docs): on-box rows for endpoint prefill, same-card eviction, smaller-context fallback and live structured output"
 ```
 

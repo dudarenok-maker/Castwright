@@ -135,7 +135,7 @@ PR 1 (server, dark) merged `ce142a3c`. PR 2 (client cutover, plan 286) is
 pending — opens in plan 286 Task 32 as `fix(frontend,server): revisions.json
 client cutover to server ownership (#3400)`, `Closes #3400`, `Closes #3397`.
 Status stays `active` (not `stable`) until the on-box acceptance register row
-(A113, plan 286) is run and accepted (OD18).
+(A114, plan 286) is run and accepted (OD18).
 
 ---
 

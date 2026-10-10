@@ -38,6 +38,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   for (const spy of spies) spy.mockRestore();
+  vi.unstubAllEnvs();
   _resetUserSettingsCache();
   if (savedEnvKey === undefined) delete process.env.GEMINI_API_KEY;
   else process.env.GEMINI_API_KEY = savedEnvKey;
@@ -130,6 +131,9 @@ describe('Ollama persona call redaction (#3084 P22, A8)', () => {
        resolver; `ollamaUrl` is not a settings field any more, so seed the
        saved Advanced Settings override instead (#3084 A3 re-pin). */
     _setUserSettingsCacheForTest({ geminiApiKey: SECRET, configOverrides: { 'analyzer.ollama.url': url } });
+    /* The OLLAMA_URL env outranks the saved override; unset it so the override under test wins
+       even when the suite runs with the live-Ollama guard (OLLAMA_URL=http://127.0.0.1:1). */
+    vi.stubEnv('OLLAMA_URL', undefined);
     const err = await generatePersonaViaOllama('Describe the voice.', 'qwen3.5:4b').then(() => null, (e: unknown) => e);
     expect((err as Error).message).toBe(
       `Ollama ${url} returned 500 Internal Server Error: {"error":"persona runner failed for key [redacted]"}`,

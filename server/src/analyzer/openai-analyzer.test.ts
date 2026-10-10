@@ -34,6 +34,12 @@ async function start(reply: (n: number, res: ServerResponse, req: IncomingMessag
     let raw = '';
     req.on('data', (d) => (raw += d));
     req.on('end', () => {
+      /* #3084 P15: prepare() lists /v1/models before the first chat request. */
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ object: 'list', data: [] }));
+        return;
+      }
       bodies.push(JSON.parse(raw));
       reply(bodies.length, res, req);
     });

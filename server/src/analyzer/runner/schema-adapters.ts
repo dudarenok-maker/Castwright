@@ -11,13 +11,8 @@
    dialect marker, not a constraint, and recording it would label every
    endpoint "partial". */
 
-import type { StructuredOutputMode, StructuredOutputRequest } from './transport.js';
+import type { AdaptedSchema, StructuredOutputMode, StructuredOutputRequest } from './transport.js';
 import type { ModelCapabilityRecord } from '../capabilities.js';
-
-export interface AdaptedSchema {
-  schema: Record<string, unknown>;
-  dropped: string[];
-}
 
 type Node = Record<string, unknown>;
 

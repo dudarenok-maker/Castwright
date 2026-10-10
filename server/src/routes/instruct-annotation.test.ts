@@ -16,6 +16,7 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
 import type { Stage3ChapterOutput } from '../handoff/schemas.js';
+import { _resetUserSettingsCache, _setUserSettingsCacheForTest, USER_SETTINGS_PATH } from '../workspace/user-settings.js';
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Test Series';
@@ -439,5 +440,36 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
     expect(res.status).toBe(200);
     expect(parseSse(res.text).find((e) => e.kind === 'error')).toMatchObject({ kind: 'error', code: 'auth' });
     expect(runStage3).not.toHaveBeenCalled();
+  });
+
+  it('#3084 — refuses a model on a deleted endpoint before the instruct analyzer is called', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({ model: 'openai:gone::m' });
+      expect(parseSse(res.text)).toContainEqual(expect.objectContaining({ kind: 'error', code: 'analyzer-endpoint-missing' }));
+      expect(runStage3).not.toHaveBeenCalled();
+    } finally {
+      _resetUserSettingsCache();
+    }
+  });
+
+  it('#3084 N7 — reads saved settings before the checks, so a saved endpoint passes them on a cold cache (after a restart)', async () => {
+    writeBook(SENTENCES);
+    writeFileSync(
+      USER_SETTINGS_PATH,
+      JSON.stringify({
+        analyzerEndpoints: [{ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 }],
+      }),
+    );
+    _resetUserSettingsCache(); // nothing cached, exactly as after a server restart
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({ model: 'openai:lab::m' });
+      expect(parseSse(res.text)).not.toContainEqual(expect.objectContaining({ code: 'analyzer-endpoint-missing' }));
+      expect(runStage3).toHaveBeenCalled();
+    } finally {
+      rmSync(USER_SETTINGS_PATH, { force: true });
+      _resetUserSettingsCache();
+    }
   });
 });

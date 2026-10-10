@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
-import { _setUserSettingsCacheForTest, _resetUserSettingsCache } from '../workspace/user-settings.js';
+import { _setUserSettingsCacheForTest, _resetUserSettingsCache, USER_SETTINGS_PATH } from '../workspace/user-settings.js';
 import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 import type { ScriptReviewOutput } from '../handoff/schemas.js';
 import type {
@@ -1095,6 +1095,39 @@ describe('POST /api/books/:bookId/script-review', () => {
 
     expect(prompts[2] ?? '').toContain('Prior chapter');       // ch1 ended A/B → ch2 gets it
     expect(prompts[3] ?? '').not.toContain('Prior chapter');   // ch2 ended narration → no cascade to ch1
+  });
+
+  it('#3084 — refuses a model on a deleted endpoint before selecting an analyzer', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [] });
+    selectAnalyzerForPhaseMock.mockClear();
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:gone::m' });
+      expect(parseSse(res.text)).toContainEqual(expect.objectContaining({ kind: 'error', code: 'analyzer-endpoint-missing' }));
+      expect(selectAnalyzerForPhaseMock).not.toHaveBeenCalled();
+    } finally {
+      _resetUserSettingsCache();
+    }
+  });
+
+  it('#3084 N7 — reads saved settings before the checks, so a saved endpoint passes them on a cold cache (after a restart)', async () => {
+    writeBook(SENTENCES);
+    writeFileSync(
+      USER_SETTINGS_PATH,
+      JSON.stringify({
+        analyzerEndpoints: [{ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 32768 }],
+      }),
+    );
+    _resetUserSettingsCache();
+    selectAnalyzerForPhaseMock.mockClear();
+    try {
+      const res = await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(parseSse(res.text)).not.toContainEqual(expect.objectContaining({ code: 'analyzer-endpoint-missing' }));
+      expect(selectAnalyzerForPhaseMock).toHaveBeenCalled();
+    } finally {
+      rmSync(USER_SETTINGS_PATH, { force: true });
+      _resetUserSettingsCache();
+    }
   });
 });
 

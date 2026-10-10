@@ -66,6 +66,7 @@ function makeStore({
     hydrated: true,
     localAnalyzerModels: [],
     pullableModels: [],
+    analyzerCatalog: null,
     defaultThemePreference: accountDefault,
   };
   return configureStore({

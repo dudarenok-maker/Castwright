@@ -55,8 +55,8 @@ const liveSnapshot: ActiveStreamSnapshot = {
   halted: false,
 };
 
-function Harness({ onProceed }: { onProceed: () => void }) {
-  const { guard, modal } = useLocalAnalyzerGuard();
+function Harness({ onProceed, modelId }: { onProceed: () => void; modelId?: string }) {
+  const { guard, modal } = useLocalAnalyzerGuard({ modelId });
   return (
     <>
       <button onClick={() => guard(onProceed)}>Trigger</button>
@@ -177,5 +177,42 @@ describe('useLocalAnalyzerGuard', () => {
     /* The bookId 'marlow_book' is rendered as the fallback identifier
        inside the dialog body. */
     expect(screen.getByText(/marlow_book/)).toBeInTheDocument();
+  });
+
+  it('modelId overrides ui.selectedModel: a local model under test prompts even when a Gemini model is selected', () => {
+    const store = makeStore({ selectedModel: 'gemini-2.5-flash', activeStream: liveSnapshot });
+    const proceed = vi.fn();
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} modelId="qwen3.5:4b" />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
+    expect(proceed).not.toHaveBeenCalled();
+  });
+
+  it('modelId overrides ui.selectedModel: a Gemini model under test passes through with a local model selected', () => {
+    const store = makeStore({ selectedModel: 'qwen3.5:4b', activeStream: liveSnapshot });
+    const proceed = vi.fn();
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} modelId="gemini-3.6-flash" />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it('an OpenAI-compatible endpoint model fails closed (prompts) while a stream is active', () => {
+    const store = makeStore({ selectedModel: 'gemini-2.5-flash', activeStream: liveSnapshot });
+    const proceed = vi.fn();
+    render(
+      <Provider store={store}>
+        <Harness onProceed={proceed} modelId="openai:lab::qwen3-30b" />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
   });
 });

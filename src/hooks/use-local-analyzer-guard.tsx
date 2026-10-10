@@ -46,6 +46,9 @@ interface GuardOptions {
       back to the activeStream's bookId so the user can identify which run
       is about to pause even if the title lookup misses. */
   generatingBookTitle?: string | null;
+  /** #3084 — the model about to be called, when it is not the run's selected model
+      (e.g. Settings → Test on one model). Defaults to `ui.selectedModel`. */
+  modelId?: string;
 }
 
 interface GuardResult {
@@ -59,7 +62,7 @@ interface GuardResult {
   modal: ReactNode;
 }
 
-export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}): GuardResult {
+export function useLocalAnalyzerGuard({ generatingBookTitle, modelId }: GuardOptions = {}): GuardResult {
   const dispatch = useAppDispatch();
   const selectedModel = useAppSelector((s) => s.ui.selectedModel);
   const anyActiveStream = useAppSelector(selectAnyActiveStream);
@@ -72,13 +75,13 @@ export function useLocalAnalyzerGuard({ generatingBookTitle }: GuardOptions = {}
      confirm, after dispatching the halt. Null while closed. */
   const [pending, setPending] = useState<(() => void) | null>(null);
 
-  /* Engine lookup — `local` engines are the only ones that compete for
-     GPU. Anything else (gemini, gemma-via-Gemini) is a remote API and
-     safe to fire alongside an in-flight TTS run. */
-  const engine = engineForModelId(selectedModel);
+  /* Engine lookup — Ollama shares the card with the Voice engine. Gemini is a remote
+     API and safe alongside TTS. An OpenAI-compatible endpoint fails closed here until
+     the card comparison lands (#3084 W3d). */
+  const engine = engineForModelId(modelId ?? selectedModel);
 
   const guard: GuardResult['guard'] = (proceed) => {
-    if (engine !== 'local' || !anyActiveStream) {
+    if (engine === 'gemini' || !anyActiveStream) {
       proceed();
       return;
     }

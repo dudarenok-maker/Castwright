@@ -160,6 +160,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/analyzer/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List analyzer models for Ollama, Gemini and every saved endpoint
+         * @description #3084 — grouped live catalogs with a 30 s server cache. A failed Ollama or endpoint
+         *     listing keeps its group with `status: error` and no models; Gemini without a key, or
+         *     with a failed listing, is `status: fallback` with no models (the client overlays its
+         *     curated list). Entries carry a label, served context/output limits when known, the
+         *     structured-output label, and the Test record whose `serverUrl` still matches.
+         */
+        get: operations["getAnalyzerModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analyzer/models/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test what a model accepts and enforces (structured output) */
+        post: operations["testAnalyzerModel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/analyzer/models/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** List an endpoint's models before it is saved (context prefill) */
+        post: operations["previewAnalyzerEndpointModels"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/analyzer/endpoints/{endpointId}": {
         parameters: {
             query?: never;
@@ -3684,6 +3742,17 @@ export interface components {
                 [key: string]: number;
             };
             /**
+             * @description #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
+             *     `openai:<endpointId>::<model>`). PUT replaces the whole map.
+             */
+            analyzerRateLimitsByModel?: {
+                [key: string]: components["schemas"]["AnalyzerModelRateLimits"];
+            };
+            /** @description #3084 — Test-action records keyed by model id; server-written only. */
+            readonly analyzerCapabilitiesByModel?: {
+                [key: string]: components["schemas"]["ModelCapabilityRecord"];
+            };
+            /**
              * @description #3084 — named OpenAI-compatible analyzer endpoints. Written only by
              *     the /api/analyzer/endpoints routes, never by PUT /api/user/settings.
              */
@@ -3747,6 +3816,109 @@ export interface components {
             readonly corruptSettingsFile: boolean;
         };
         /**
+         * @description #3084 — one model's saved analyzer rate limits. Absent fields fall through:
+         *     Gemini ids env GEMINI_{RPM,TPM,RPD}_<slug> → this entry → built-in table;
+         *     endpoint ids this entry → unlimited. `tpm: 0` means unlimited.
+         */
+        AnalyzerModelRateLimits: {
+            rpm?: number;
+            tpm?: number;
+            rpd?: number;
+        };
+        ProbeOutcomeByLevel: {
+            [key: string]: "enforced" | "ignored" | "rejected" | "accepted";
+        };
+        ModelCapabilityRecord: {
+            serverUrl: string;
+            /** Format: date-time */
+            testedAt: string;
+            /** @description #3084 (3c) — Ollama only: the model digest when the Test ran; a record for another digest is discarded. */
+            digest?: string;
+            control: {
+                ok: boolean;
+                error?: string;
+            };
+            structuredOutput: {
+                schema?: components["schemas"]["ProbeOutcomeByLevel"];
+                json?: components["schemas"]["ProbeOutcomeByLevel"];
+                off?: components["schemas"]["ProbeOutcomeByLevel"];
+            };
+            reasoning: {
+                [key: string]: "accepted" | "rejected";
+            };
+        };
+        /**
+         * @description Master-contract fields id, label, contextTokens, outputTokens, capability
+         *     (offeredReasoningLevels arrives in wave 5); W3c adds engine, model,
+         *     structuredOutput and testPlan.
+         */
+        AnalyzerCatalogEntry: {
+            id: string;
+            /** @description Gemini displayName or id; the Ollama tag; an endpoint's bare model name */
+            label: string;
+            contextTokens?: number;
+            outputTokens?: number;
+            capability?: components["schemas"]["ModelCapabilityRecord"];
+            /** @enum {string} */
+            engine: "local" | "gemini" | "openai";
+            model: string;
+            structuredOutput: {
+                /** @enum {string} */
+                mode: "schema" | "json" | "off";
+                dropped: string[];
+                label: string;
+                /**
+                 * @description The Test action's recorded outcome for `mode` at the reasoning level actually sent (undefined when no record exists for it). `label` never says "rejected" by design (P7) — a refused mode still shows its plain structured-output label there — so a surface that must tell a rejection apart from a pass (the Settings Test result line) reads this instead.
+                 * @enum {string}
+                 */
+                outcome?: "enforced" | "ignored" | "rejected" | "accepted";
+            };
+            testPlan: {
+                configured: number;
+                all: number;
+                /** @description The most attempts one Test request can take on this model's transport, retries included (Ollama 1, Gemini and endpoints 3). The confirm dialog states requests x attempts as the maximum. */
+                attempts: number;
+            };
+        };
+        AnalyzerCatalogGroup: {
+            /** @enum {string} */
+            kind: "ollama" | "gemini" | "endpoint";
+            id: string;
+            label: string;
+            /**
+             * @description fallback = Gemini without a key or with a failed listing (no models; the client overlays its curated list); error = an Ollama or endpoint listing failed (no models)
+             * @enum {string}
+             */
+            status: "ok" | "fallback" | "error";
+            error?: string;
+            models: components["schemas"]["AnalyzerCatalogEntry"][];
+        };
+        AnalyzerCatalog: {
+            groups: components["schemas"]["AnalyzerCatalogGroup"][];
+        };
+        AnalyzerModelTestRequest: {
+            modelId: string;
+            /** @enum {string} */
+            scope: "configured" | "all";
+        };
+        AnalyzerEndpointModelsPreviewRequest: {
+            /** Format: uri */
+            baseUrl: string;
+            endpointId?: string;
+            apiKey?: string;
+        };
+        AnalyzerEndpointModelsPreview: {
+            /** @enum {string} */
+            status: "ok" | "failed";
+            error?: string;
+            models: {
+                model: string;
+                contextTokens?: number;
+                maxOutputTokens?: number;
+            }[];
+            suggestedContextTokens?: number;
+        };
+        /**
          * @description Partial update payload. Read-only fields (apiKeyStatus,
          *     workspaceRoot, workspaceSource, corruptSettingsFile) are ignored.
          *     Any `geminiApiKey`-shaped field is dropped — the API key only lives
@@ -3790,6 +3962,13 @@ export interface components {
             /** @description Per-model Ollama analyzer keep-alive in seconds (0 unload, -1 pin). */
             analyzerKeepAliveByModel?: {
                 [key: string]: number;
+            };
+            /**
+             * @description #3084 — per-model analyzer rate limits keyed by model id (a Gemini id or
+             *     `openai:<endpointId>::<model>`). PUT replaces the whole map.
+             */
+            analyzerRateLimitsByModel?: {
+                [key: string]: components["schemas"]["AnalyzerModelRateLimits"];
             };
             /**
              * @description #3084 — named OpenAI-compatible analyzer endpoints. Written only by
@@ -7123,6 +7302,124 @@ export interface operations {
                         upstreamStatus?: number;
                     };
                 };
+            };
+        };
+    };
+    getAnalyzerModels: {
+        parameters: {
+            query?: {
+                refresh?: "1";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Catalog */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerCatalog"];
+                };
+            };
+            /** @description Listing failed unexpectedly */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    testAnalyzerModel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyzerModelTestRequest"];
+            };
+        };
+        responses: {
+            /** @description The saved capability record, keyed by the reasoning level the requests sent */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCapabilityRecord"];
+                };
+            };
+            /** @description Invalid body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Key bound to another host, or Gemini key missing (code: auth) */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Endpoint no longer configured (code: analyzer-endpoint-missing) */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description The control request failed (outcome: failed) or a step was inconclusive (outcome: inconclusive). Nothing is saved; an earlier record stays. */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: string;
+                        /** @enum {string} */
+                        outcome: "failed" | "inconclusive";
+                    };
+                };
+            };
+        };
+    };
+    previewAnalyzerEndpointModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnalyzerEndpointModelsPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Listing outcome */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnalyzerEndpointModelsPreview"];
+                };
+            };
+            /** @description Invalid body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

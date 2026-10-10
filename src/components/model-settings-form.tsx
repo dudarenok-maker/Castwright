@@ -322,11 +322,11 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             <>
               <span className="font-semibold text-emerald-700">Currently ON</span> — Phase 0:{' '}
               <span className="font-medium text-ink">
-                {analyzerModelLabel(account.analyzerPhase0Model)}
+                {analyzerModelLabel(account.analyzerPhase0Model, account.analyzerCatalog)}
               </span>{' '}
               · Phase 1:{' '}
               <span className="font-medium text-ink">
-                {analyzerModelLabel(account.analyzerPhase1Model)}
+                {analyzerModelLabel(account.analyzerPhase1Model, account.analyzerCatalog)}
               </span>{' '}
               · lag {account.analyzerPhase1MinLagChapters} chapter
               {account.analyzerPhase1MinLagChapters === 1 ? '' : 's'}.
@@ -336,7 +336,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
               <span className="font-semibold">Currently OFF</span> — both phases run on the default
               analysis model (
               <span className="font-medium text-ink">
-                {analyzerModelLabel(defaultAnalysisModel)}
+                {analyzerModelLabel(defaultAnalysisModel, account.analyzerCatalog)}
               </span>
               ).
             </>
@@ -348,7 +348,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
         >
           <AdvancedSettingsValue
             testId="account-analyzer-phase0-model"
-            value={analyzerModelLabel(account.analyzerPhase0Model, 'Not set')}
+            value={analyzerModelLabel(account.analyzerPhase0Model, account.analyzerCatalog, 'Not set')}
           />
         </ReadOnlyRow>
         <ReadOnlyRow
@@ -357,7 +357,7 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
         >
           <AdvancedSettingsValue
             testId="account-analyzer-phase1-model"
-            value={analyzerModelLabel(account.analyzerPhase1Model, 'Not set')}
+            value={analyzerModelLabel(account.analyzerPhase1Model, account.analyzerCatalog, 'Not set')}
           />
         </ReadOnlyRow>
         <ReadOnlyRow

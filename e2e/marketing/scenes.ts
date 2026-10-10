@@ -612,13 +612,54 @@ export const SCENES: Scene[] = [
     hash: '#/advanced',
     viewports: ['desktop'],
     action: async (page) => {
+      // The default mock catalog has no Gemini key, so only a Local Ollama model shows
+      // and the table has no RPM/TPM/RPD inputs. Seed a representative catalog (mock
+      // hook: api.ts __SEED_ANALYZER_CATALOG__) and reload so the editor fetches it.
+      await page.addInitScript(() => {
+        const entry = (id: string, label: string, engine: string, mode: string) => ({
+          id,
+          label,
+          engine,
+          model: label,
+          structuredOutput: { mode, dropped: [], label: mode === 'json' ? 'JSON mode' : 'Schema' },
+          testPlan: { configured: 2, all: 3, attempts: engine === 'local' ? 1 : 3 },
+        });
+        (globalThis as unknown as Record<string, unknown>).__SEED_ANALYZER_CATALOG__ = {
+          groups: [
+            { kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [entry('qwen3.5:4b', 'Qwen3.5 4B (local)', 'local', 'schema')] },
+            {
+              kind: 'gemini',
+              id: 'gemini',
+              label: 'Gemini API',
+              status: 'ok',
+              models: [
+                entry('gemini-3.5-flash-lite', 'Gemini 3.5 Flash Lite', 'gemini', 'json'),
+                entry('gemini-3.5-flash', 'Gemini 3.5 Flash', 'gemini', 'json'),
+              ],
+            },
+            { kind: 'endpoint', id: 'lan-llama', label: 'LAN llama.cpp', status: 'ok', models: [entry('openai:lan-llama::qwen3-32b', 'qwen3-32b', 'openai', 'schema')] },
+          ],
+        };
+      });
+      await page.reload();
       await page
         .getByRole('navigation', { name: 'Settings sections' })
-        .getByText('Gemini rate limits', { exact: true })
+        .getByText('Analyzer rate limits', { exact: true })
         .click({ timeout: 5000 });
+      // The editor fetches the analyzer catalog on mount; wait for its per-model
+      // rows so the scroll below frames the settled layout, not the empty shell.
+      await page.waitForSelector('[data-testid^="model-limits-row-"]', { timeout: 10_000 });
+      // This group sits above two more sections that together are shorter than half a
+      // viewport, so the page bottoms out before the editor can be centred; pad the
+      // end of the page so scrollTo can frame it.
+      await page.addStyleTag({ content: 'body { padding-bottom: 100vh; }' });
+      await page.waitForTimeout(1000);
     },
-    waitForAfterAction: 'text=Gemma 4 31B RPM',
-    scrollTo: 'text=Gemma 4 31B RPM',
+    // #3084 W3c retired the six rate.*.gemma* knobs (and "Gemini rate limits") into
+    // the per-model AnalyzerModelLimits editor — "Save rate limits" is its one
+    // stable, unique anchor regardless of which models happen to be in the catalog.
+    waitForAfterAction: 'text=Save rate limits',
+    scrollTo: '[data-testid="analyzer-model-limits"]',
     strict: true,
   },
   {

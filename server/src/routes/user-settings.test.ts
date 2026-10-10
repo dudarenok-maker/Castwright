@@ -9,7 +9,7 @@
      5. Read-only fields (apiKeyStatus, workspaceRoot, workspaceSource)
         submitted in PUT are ignored, not stored, not echoed verbatim. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import {
   mkdtempSync,
   rmSync,
@@ -54,6 +54,10 @@ afterAll(() => {
   if (workspaceRoot) rmSync(workspaceRoot, { recursive: true, force: true });
   delete process.env.WORKSPACE_DIR;
   delete process.env.GEMINI_API_KEY;
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 beforeEach(() => {
@@ -245,6 +249,9 @@ describe('user-settings router', () => {
      read-only. */
   describe('GET surfaces the four retired fields from the config resolver (#3141 step 2)', () => {
     it('reflects a configOverrides entry for analyzer.ollama.url as ollamaUrl', async () => {
+      /* The OLLAMA_URL env outranks the saved override; unset it so the override wins even when
+         the suite runs with the live-Ollama guard (OLLAMA_URL=http://127.0.0.1:1). */
+      vi.stubEnv('OLLAMA_URL', undefined);
       await request(app)
         .put('/api/user/settings')
         .send({ configOverrides: { 'analyzer.ollama.url': 'http://192.168.1.20:11434' } });
@@ -377,6 +384,10 @@ describe('user-settings router', () => {
       /* Sparse per-model keep-alive override map (seconds). A non-empty map
          proves the field round-trips; the value is a plain integer-second. */
       analyzerKeepAliveByModel: { 'qwen3.5:4b': 300 },
+      /* #3084 PR 3c.1 — the whole per-model rate-limit map is written by the
+         general PUT (it is NOT in FORBIDDEN_KEYS), so it round-trips like any
+         other writable field. */
+      analyzerRateLimitsByModel: { 'gemma-4-31b-it': { rpm: 12 } },
     };
 
     /* Guard: every writable schema field has a sample value here. A field
@@ -393,6 +404,10 @@ describe('user-settings router', () => {
          server's FORBIDDEN_KEYS), never by the general PUT this guard probes. */
       'analyzerEndpoints',
       'analyzerEndpointKeys',
+      /* #3084 PR 3c.3 — Test-action capability records are written only by
+         writeAnalyzerCapabilityRecord (they sit in the server's FORBIDDEN_KEYS),
+         never by the general PUT this guard probes. */
+      'analyzerCapabilitiesByModel',
     ]);
     const writableKeys = Object.keys(userSettingsSchema.shape).filter((k) => !NON_WRITABLE.has(k));
     for (const key of writableKeys) {

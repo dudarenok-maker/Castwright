@@ -223,6 +223,26 @@ describe('StatusPopover', () => {
     expect(screen.getByTestId('substage-engine-model').textContent).toBe('Gemini · Gemma 4 31B');
   });
 
+  it('labels an endpoint model id as "<endpoint name> · <model>" when the catalog is passed', () => {
+    render(
+      <StatusPopover
+        {...makeProps({
+          analysis: null,
+          analysisSubstage: {
+            label: 'Reviewing script',
+            percent: 10,
+            engine: 'local',
+            model: 'openai:lab::qwen3-30b',
+          },
+          analyzerCatalog: {
+            groups: [{ kind: 'endpoint', id: 'lab', label: 'Lab server', status: 'ok', models: [] }],
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId('substage-engine-model').textContent).toBe('Ollama · Lab server · qwen3-30b');
+  });
+
   it('omits the engine·model line when the substage has no model', () => {
     render(
       <StatusPopover

@@ -17,10 +17,13 @@
    import this module in a later wave. */
 import { configValue } from '../config/resolver.js';
 import { getCachedGeminiModelInfo } from './catalog/gemini-catalog.js';
+import { getCachedUserSettings } from '../workspace/user-settings.js';
+import type { AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { resolveLimits } from './rate-limit.js';
 import { resolveMaxInputTokensPerRequest } from './token-budget.js';
-import { parseEndpointModelId, type AnalysisEngine } from './model-id.js';
+import { endpointModelId, parseEndpointModelId, type AnalysisEngine } from './model-id.js';
 import { AnalyzerEndpointMissingError } from './errors.js';
+import { getEndpointServedLimits } from './catalog/endpoint-served-limits.js';
 
 export interface EngineCapacity {
   family: 'context' | 'requestCap';
@@ -39,18 +42,31 @@ export const TODAY_LOCAL_CAPACITY = (
   numCtx: number = configValue<number>('analyzer.ollama.numCtx'),
 ): EngineCapacity => ({ family: 'context', contextTokens: numCtx, maxOutputTokens: null });
 
-export function resolveCapacity(sel: { engine: AnalysisEngine; model: string }): EngineCapacity {
-  if (sel.engine === 'openai') {
-    /* #3084 P23 (rework #3464) — endpoint ids have a grammar but no analyzer
-       until PR 3d, so they have no EngineCapacity either. The selection layer
-       (selectAnalyzer in index.ts) throws AnalyzerEndpointMissingError first,
-       so this branch is unreachable at runtime — but the type was widened to
-       AnalysisEngine in 3bfebeba without the matching runtime guard, so an
-       'openai' selection silently fell into the Gemini branch. This guard
-       matches the refusal pattern established in index.ts (PR 3a). */
-    const parsed = parseEndpointModelId(sel.model);
-    throw new AnalyzerEndpointMissingError(parsed?.endpointId ?? sel.model, 'run-pick');
-  }
+function resolveEndpointCapacity(sel: { model: string; endpoint?: AnalyzerEndpoint }): EngineCapacity {
+  const parsed = parseEndpointModelId(sel.model);
+  const endpointId = parsed?.endpointId ?? sel.endpoint?.id ?? sel.model;
+  const endpoint = sel.endpoint ?? getCachedUserSettings().analyzerEndpoints.find((e) => e.id === endpointId);
+  if (!endpoint) throw new AnalyzerEndpointMissingError(endpointId, 'settings');
+  const model = parsed?.model ?? sel.model;
+  const tpm = resolveLimits(endpointModelId(endpoint.id, model)).tpm;
+  const caps = [endpoint.maxInputTokensPerRequest, Number.isFinite(tpm) ? tpm : undefined].filter(
+    (n): n is number => typeof n === 'number',
+  );
+  /* P15: served limits warmed by this endpoint's transport, keyed by its current base URL. */
+  const served = getEndpointServedLimits(endpoint.baseUrl, model)?.maxOutputTokens;
+  const manual = endpoint.maxOutputTokens > 0 ? endpoint.maxOutputTokens : undefined;
+  const maxOutputTokens =
+    manual !== undefined ? (served !== undefined ? Math.min(manual, served) : manual) : (served ?? null);
+  return {
+    family: 'context',
+    contextTokens: endpoint.contextTokens,
+    maxOutputTokens,
+    ...(caps.length > 0 ? { perRequestInputCap: Math.min(...caps) } : {}),
+  };
+}
+
+export function resolveCapacity(sel: { engine: AnalysisEngine; model: string; endpoint?: AnalyzerEndpoint }): EngineCapacity {
+  if (sel.engine === 'openai') return resolveEndpointCapacity(sel);
   if (sel.engine === 'local') return TODAY_LOCAL_CAPACITY();
   const cap = resolveMaxInputTokensPerRequest();
   const listed = getCachedGeminiModelInfo(sel.model);
@@ -60,8 +76,8 @@ export function resolveCapacity(sel: { engine: AnalysisEngine; model: string }):
     maxOutputTokens: listed?.outputTokenLimit ?? GEMINI_FALLBACK_MAX_OUTPUT_TOKENS,
     /* #3084 wave 2b (spec §6) — size the request to the smaller of the registry
        cap and the model's per-minute token limit, so one request never exceeds
-       a TPM an operator lowered (env GEMINI_TPM_<SLUG> or a saved rate.tpm.*
-       override). tpm is Infinity for "unlimited", which leaves the cap. */
+       a TPM an operator lowered (env GEMINI_TPM_<SLUG> or a saved analyzerRateLimitsByModel
+       tpm). tpm is Infinity for "unlimited", which leaves the cap. */
     perRequestInputCap: Math.min(cap, resolveLimits(sel.model).tpm),
   };
 }

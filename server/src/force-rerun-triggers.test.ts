@@ -208,10 +208,9 @@ const MAIN_COVERED = [
     file: 'a file under the cast-lock guard scan scope (CAST_LOCK_GUARD_SCAN_GLOB)',
     base: REPO_ROOT,
   },
-  /* #3139/#3146: registry-knob-read.guard.test.ts reads these two files' source
-     text at RUNTIME to verify its DECLARED_DYNAMIC_READERS claims — the same
+  /* #3139/#3146: registry-knob-read.guard.test.ts reads this file's source
+     text at RUNTIME to verify its DECLARED_DYNAMIC_READERS claim — the same
      #1847 runtime-read trap as the entries above. */
-  { rel: 'src/analyzer/rate-limit.ts', file: 'the rate-limit dynamic-reader lookup', base: SERVER_ROOT },
   { rel: 'src/tts/segment-asr-qa.ts', file: 'the per-language maxWer dynamic-reader lookup', base: SERVER_ROOT },
   /* state-language.guard.test.ts (#3085): a tree-wide scanner —
      collectSourceFiles(SRC_ROOT) reads every non-test .ts file under

@@ -10,8 +10,8 @@ The knobs are grouped into a collapsible, side-nav-indexed accordion:
 LLM sampling parameters, analyzer chunking & truncation, analyzer prompts &
 skills, analyzer models & endpoints, voice engine & device, voice batching &
 throughput, per-sentence QA gates, audio loudness targets, GPU arbitration &
-memory, Gemini rate limits, LAN access & device tokens, and dialogue-structure
-attribution — 120 knobs across 12 groups in total. High-risk groups (marked
+memory, analyzer rate limits, LAN access & device tokens, and dialogue-structure
+attribution — 114 knobs across 12 groups in total. High-risk groups (marked
 with a small warning glyph) start collapsed; the rest start open.
 
 - **Reset all** (top-right) and a per-section **Reset section** button
@@ -87,9 +87,9 @@ is disabled.
 | Knob | What it does | Default | Range | Apply | Risk |
 |---|---|---|---|---|---|
 | Stage-2 chunk char budget | Max chars per stage-2 attribution chunk before pre-emptive split; ceiling for both families — local derives max(1000, min(fraction × num_ctx × ~2 chars/token, this)), Gemini derives min(this, token-cap-derived body) | 9000 | integer | live | medium |
-| Stage-2 local input fraction | Fraction of local num_ctx reserved for stage-2 INPUT; lower for a verbose local model whose output overflows the window; local (context-family) engines only, Gemini ignores it | 0.3 | 0.1–0.9, step 0.05 | live | medium |
+| Stage-2 local input fraction | Fraction of local num_ctx reserved for stage-2 INPUT; lower for a verbose local model whose output overflows the window; local (context-family) engines only, Gemini ignores it. OpenAI-compatible endpoints use it too: Stage 2 chunks are at most this fraction × the endpoint's Context size × 2 chars/token, capped by the pass ceiling, and an endpoint's Max input tokens per request (or its TPM limit, whichever is smaller) lowers that further. Both endpoint fields are edited in Model Manager → Analyzer endpoints. | 0.3 | 0.1–0.9, step 0.05 | live | medium |
 | Stage-1 chunk char budget | Max chars per stage-1 cast-detection chunk before split; local derives the effective budget from num_ctx, Gemini ignores it and sizes instead from the max-input-tokens-per-request knob | 24000 | integer | live | medium |
-| Stage-1 local input fraction | Fraction of local num_ctx reserved for stage-1 INPUT; lower for a verbose local model that overflows the window; local (context-family) engines only, Gemini ignores it | 0.7 | 0.1–0.9, step 0.05 | live | medium |
+| Stage-1 local input fraction | Fraction of local num_ctx reserved for stage-1 INPUT; lower for a verbose local model that overflows the window; local (context-family) engines only, Gemini ignores it. OpenAI-compatible endpoints use it too: Stage 1 chunks are at most this fraction × the endpoint's Context size × 2 chars/token, capped by the pass ceiling, and an endpoint's Max input tokens per request (or its TPM limit, whichever is smaller) lowers that further. Both endpoint fields are edited in Model Manager → Analyzer endpoints. | 0.7 | 0.1–0.9, step 0.05 | live | medium |
 | Gemini output-heavy chunk chars | Per-chunk INPUT char budget for the output-heavy Gemini passes (script review, emotion, instruct annotation); local (context-family) engines ignore it and use the stage-1 cast-detection budget instead | 32000 | integer, min 2000 | live | medium |
 | Coverage min ratio | Attributed/source word-ratio floor → treated as truncated | 0.6 | 0–1, step 0.05 | live | medium |
 | Coverage max ratio | Ratio ceiling → treated as a repeat-loop | 1.6 | 1–5, step 0.1 | live | medium |
@@ -334,22 +334,15 @@ RAM/VRAM recycle-and-restart thresholds. See
 [Troubleshooting](Troubleshooting#gpu-capacity--vram-placement) if an op
 won't place on a card it should fit, or the eGPU drops off the bus.
 
-## 10. Gemini rate limits
+## 10. Analyzer rate limits
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/advanced-settings/10-gemini-rate-limits-dark.png">
   <source media="(prefers-color-scheme: light)" srcset="images/advanced-settings/10-gemini-rate-limits.png">
-  <img alt="Gemini rate limits" src="images/advanced-settings/10-gemini-rate-limits.png">
+  <img alt="Analyzer rate limits" src="images/advanced-settings/10-gemini-rate-limits.png">
 </picture>
 
-| Knob | What it does | Default | Range | Apply | Risk |
-|---|---|---|---|---|---|
-| Gemma 4 31B RPM | Requests-per-minute cap | 30 | integer, min 1 | restart · app | low |
-| Gemma 4 31B TPM | Input-tokens-per-minute cap; 0 = unlimited sentinel | 16000 | integer, min 0 | restart · app | low |
-| Gemma 4 31B RPD | Requests-per-day cap | 14400 | integer, min 1 | restart · app | low |
-| Gemma 4 26B A4B RPM | Requests-per-minute cap | 30 | integer, min 1 | restart · app | low |
-| Gemma 4 26B A4B TPM | Input-tokens-per-minute cap; 0 = unlimited sentinel | 16000 | integer, min 0 | restart · app | low |
-| Gemma 4 26B A4B RPD | Requests-per-day cap | 14400 | integer, min 1 | restart · app | low |
+Per-model request, token and daily caps for Gemini models and OpenAI-compatible endpoint models, edited in the per-model table in this section. GEMINI_{RPM,TPM,RPD}_<slug> environment variables still win for Gemini models. Saved gemma overrides from earlier versions are migrated into the table.
 
 ## 11. LAN access & device tokens
 

@@ -715,7 +715,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 35 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 36 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 7 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -725,18 +725,24 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**64 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**65 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-09 (plan 286, #3400/#3397), 63 → 64.** Added **A113** —
+> **Last change: 2026-10-10 (plan 286, #3400/#3397), 64 → 65.** Added **A114** —
 > the revisions server-ownership cutover: accept/reject/dismiss move to
 > per-op server routes, pending comes only from the server, and every render
 > records or drops a chapter's A/B state itself, closing the #3397 gap A9's
 > body documented (a take finishing while you were away from its book coming
 > back stuck or without an A/B prompt). A9's own "known gap (#3397)" sentences
-> now point here instead of restating the gap as open. Group A 34 → 35.
-> `next-id` bumped A113 → A114 in the same change.
+> now point here instead of restating the gap as open. Group A 35 → 36.
+> `next-id` bumped A114 → A115 in the same change.
+>
+> **Prior change: 2026-10-10 (#3084 W3c, PR 3c), 63 → 64.** Row **A113** (live
+> structured output — Test action records match real model behaviour) added
+> from #3084 PR 3c's run sheet (`3084-openai-analyzer-onbox-acceptance.md`
+> § "Live structured output"). Group A 34 → 35. `next-id` bumped A113 → A114
+> in the same change. Row is owed; not run here.
 >
 > **Prior change: 2026-10-09 (#3440), 62 → 63.** Row **E113** added — the real-book
 > line-count and Fix-audio check for the drifted-attribution-id fix, owed because
@@ -1798,7 +1804,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A114 -->
+<!-- next-id: A115 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -2658,14 +2664,14 @@ Leaving the book mid-batch — for a different book or for any non-book view
 the batch's enqueue and playable-flip were skipped while no book, or a
 different book, was active, so a take that finished while you were away came
 back stuck "rendering" or without an A/B prompt. Closed server-side by plan
-286 (revisions server ownership) — see register row A113. One more step, added
+286 (revisions server ownership) — see register row A114. One more step, added
 2026-09-24 (PR #3395 review pass 3, widened in pass 4) to pin the revisions
 slice's hydrate gating: with a take pending and at least one Revision History
 entry on a book, start a multi-chapter Fix-audio batch, then go to Library and
 back to the book while it is still running — the earlier pending take and
 Revision History are still there, and after the next chapter completes they're
 still on disk (reload); the #3397 gap above (batch takes finishing while you
-were on the Library) is now closed — see register row A113. *Merged*
+were on the Library) is now closed — see register row A114. *Merged*
 2026-06-03, PR #500.
 
 > **2026-09-06 — on-box run, PARTIAL.** Loudness (+3 dB, Master Oduvan, CH 3):
@@ -2716,7 +2722,7 @@ were on the Library) is now closed — see register row A113. *Merged*
 > the Library — left that take stuck "rendering," or without an A/B
 > prompt, when you returned; it no longer landed in another book at all
 > (#3397). **Closed by plan 286** (revisions server ownership — the server now
-> records or drops A/B state on every render) — see register row A113. The
+> records or drops A/B state on every render) — see register row A114. The
 > on-box re-run above is **still owed** — the row stays open.
 
 > **2026-09-24 — two more ways a pending take could go missing, fixed
@@ -2751,7 +2757,7 @@ were on the Library) is now closed — see register row A113. *Merged*
 > a book sends its queued writes at once, and the re-read on return waits
 > for any still in flight, so an accept made just before a Library round trip
 > is not read back stale and erased. Not covered: the #3397 gap above —
-> closed by plan 286, see register row A113. The
+> closed by plan 286, see register row A114. The
 > on-box re-run above is **still owed** — the row stays open.
 
 > **2026-10-01 — review pass 5 (PR #3395).** A write recorded for a book
@@ -6069,7 +6075,40 @@ but never the real embedding path). *Criteria:* the observations above; issue
 #3414 and the mutation-tested regression split (#3449 stale-drop, #3460
 kept-and-gates) for the exact defect this closes.
 
-### A113 · Revisions server ownership (plan [286](../features/286-revisions-client-cutover.md), [Castwright#3400](https://github.com/dudarenok-maker/Castwright/issues/3400)/[#3397](https://github.com/dudarenok-maker/Castwright/issues/3397)) · **GPU box, real sidecar, a real rendered book**
+### A113 · Live structured output — Test action ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3595) · **GPU box with Ollama + a llama-swap endpoint on one card; a Gemini key; a small-context vLLM or an OpenRouter endpoint**
+
+The Test action (Advanced Settings → Analyzer rate limits → **Test**) runs a ladder: a
+control request with no structured output, then one request per mode (`schema` with a
+marker key the prompt never mentions, `json`). Every request carries the same prompt and
+the same output cap: the model's resolved Auto cap clamped to context minus input. A 400
+that names a context, token or length limit is inconclusive rather than `rejected`, and
+records are keyed by the reasoning level actually sent. Unit tests use fake transports;
+only real servers show whether real models finish the probes and whether the recorded
+outcome matches what the model does.
+
+- Run **Test** (configured) and **Test every mode** on `qwen3.5:4b` (Ollama), a `gemma-*`
+  and a `gemini-*` model, and a llama-swap endpoint model with thinking on and off.
+- Record each outcome and compare it with a hand request in the same mode: an `ignored`
+  record must correspond to output without the marker; `enforced` to output with it.
+- **Thinking models produce a record:** `gemini-3.6-flash` in its default `json` mode, and
+  the llama-swap Qwen3 model with thinking on, each end with a saved record (not a 502 that
+  says `finish=length`). Note the cap the requests carried (server log / request dump).
+- **Small context never records `rejected` by size:** on a vLLM endpoint whose served
+  context is small (e.g. `--max-model-len 8192`) or an OpenRouter model whose
+  `max_completion_tokens` exceeds what is left of its context, run **Test every mode**. The
+  record must not show `rejected` for a mode the model accepts; a size-limit 400, if one
+  still happens, answers 502 "inconclusive" and saves nothing.
+- A failed test keeps the earlier record: stop the llama-swap server, run **Test**, and
+  confirm the Settings row still shows the previous outcome and date.
+- Record what the Gemini adapter drops (the entry's `structuredOutput.dropped` in
+  `GET /api/analyzer/models`).
+- Change the endpoint's base URL: the record disappears from the catalog entry.
+- **Re-pulled Ollama model:** with a saved record for `qwen3.5:4b` (note its `digest`), pull a
+  different build of that tag so `ollama list` shows a new digest: the catalog entry loses the
+  record, and an analysis on that model starts instead of refusing on the old verdict.
+- Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` §6 "Live structured output".
+
+### A114 · Revisions server ownership (plan [286](../features/286-revisions-client-cutover.md), [Castwright#3400](https://github.com/dudarenok-maker/Castwright/issues/3400)/[#3397](https://github.com/dudarenok-maker/Castwright/issues/3397)) · **GPU box, real sidecar, a real rendered book**
 
 `revisions.json` moves from a client-written cache to a server-owned one:
 accept/reject/dismiss go through per-op routes instead of a raw `PUT /state`,

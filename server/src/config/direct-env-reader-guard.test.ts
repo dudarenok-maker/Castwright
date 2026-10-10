@@ -59,10 +59,10 @@
        `` process.env[`GEMINI_RPM_${slug}`] ``) are still invisible by
        construction — there's no static literal name to match. Real site
        of this shape: `rate-limit.ts`'s `` process.env[`GEMINI_RPM_${slug}`] ``
-       (audited by hand: for the two registered slugs, `gemma-4-31b-it` and
-       `gemma-4-26b-a4b-it`, the `BUILTIN_LIMITS` fallback table's
-       rpm/tpm/rpd values are identical to the matching
-       `GEMINI_{RPM,TPM,RPD}_GEMMA_*` registry defaults). `select-analyzer.ts`
+       (audited by
+       hand: it substitutes nothing a registry knob declares — since #3084 the
+       fall-through is the `analyzerRateLimitsByModel` settings map, then the
+       `BUILTIN_LIMITS` table, neither of which is a registry default). `select-analyzer.ts`
        no longer reads `process.env` directly at all (#3141 step 1 — its
        phase-model and min-lag knobs resolve through `configValue()`/
        `resolveKnob()` like everything else).

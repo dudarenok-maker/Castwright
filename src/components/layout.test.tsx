@@ -52,6 +52,7 @@ const rejectRevisionMock = vi.fn();
 const restorePreviousUnrecordedMock = vi.fn();
 const getChapterAudioPreviousMock = vi.fn();
 const matchVoicesMock = vi.fn();
+const getAnalyzerModelsMock = vi.fn();
 
 vi.mock('../lib/api', async (importOriginal) => {
   const mod = await importOriginal<typeof import('../lib/api')>();
@@ -166,6 +167,8 @@ vi.mock('../lib/api', async (importOriginal) => {
       })),
       /* fe-47 tier-modal test — the "apply tier to cast" sink. */
       setCastTier: vi.fn(async () => ({ updated: 0 })),
+      /* #3570 — Layout loads the analyzer catalog at boot so endpoint labels resolve. */
+      getAnalyzerModels: (...args: unknown[]) => getAnalyzerModelsMock(...args),
     },
     AnalysisError: class extends Error {},
     ExportIncompleteError: class extends Error {
@@ -206,6 +209,8 @@ import {
   selectVoiceReadinessGateShouldFire,
 } from '../store/voice-readiness-selectors';
 import type { RootState } from '../store';
+import { modelLabel } from '../lib/model-label';
+import type { AnalyzerCatalog } from '../lib/types';
 
 function makeStore(extraMiddleware: Middleware[] = []) {
   return configureStore({
@@ -1993,6 +1998,30 @@ describe('Layout — resident-model Stop control in the global TTS notice banner
        pill nor the new banner control, which only renders a Stop affordance
        when a resident engine's state is 'ready'. */
     expect(screen.queryByRole('button', { name: /^stop/i })).toBeNull();
+  });
+});
+
+describe('Layout — analyzer catalog loads at boot so endpoint labels resolve (#3570)', () => {
+  it('fills account.analyzerCatalog without Settings being opened, so modelLabel shows the endpoint name', async () => {
+    const catalog = {
+      groups: [{ kind: 'endpoint', id: 'lab', label: 'Lab server', status: 'ok', models: [] }],
+    } as unknown as AnalyzerCatalog;
+    getAnalyzerModelsMock.mockResolvedValue(catalog);
+    const store = makeStore();
+    expect(store.getState().account.analyzerCatalog).toBeNull();
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/']}>
+          <Routes>
+            <Route path="/" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+    await waitFor(() => expect(store.getState().account.analyzerCatalog).not.toBeNull());
+    expect(modelLabel('openai:lab::qwen3-30b', store.getState().account.analyzerCatalog)).toBe('Lab server · qwen3-30b');
   });
 });
 

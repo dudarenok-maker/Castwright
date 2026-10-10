@@ -1,4 +1,5 @@
-import { MODEL_OPTIONS, buildLocalModelOptions, buildModelOptionGroups } from '../../lib/models';
+import { buildLocalModelOptions, buildModelOptionGroups } from '../../lib/models';
+import { modelLabel } from '../../lib/model-label';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
   fetchAnalyzerModels,
@@ -57,6 +58,7 @@ export function PhaseModelSwap({ manuscriptId, phaseId, isRunLive }: PhaseModelS
      Empty (not yet fetched / offline) falls back to the curated catalog. */
   const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
   const modelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog);
 
   const disabled = isRunLive || !manuscriptId;
 
@@ -70,8 +72,7 @@ export function PhaseModelSwap({ manuscriptId, phaseId, isRunLive }: PhaseModelS
   };
 
   if (overrideActive) {
-    const overrideLabel =
-      MODEL_OPTIONS.find((m) => m.id === overrideModelId)?.label ?? overrideModelId ?? 'override';
+    const overrideLabel = modelLabel(overrideModelId, analyzerCatalog);
     return (
       <span className="inline-flex items-center gap-2">
         <select

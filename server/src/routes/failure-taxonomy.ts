@@ -27,6 +27,7 @@ import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import {
   AnalyzerTruncatedError,
   AnalyzerHttpError,
+  AnalyzerCapabilityRejectedError,
   AnalyzerKeyOriginError,
   AnalyzerReasoningOverflowError,
   AnalyzerTimeoutError,
@@ -39,6 +40,9 @@ import {
   type TransportKind,
 } from '../analyzer/errors.js';
 import { redactKnownSecrets } from '../analyzer/redact.js';
+/* #3084 PR 3c — the id grammar's own leaf module, the same parser that names an
+   endpoint model id, reads the transport a Test record was refused for. */
+import { inferEngineFromModelId, type AnalysisEngine } from '../analyzer/model-id.js';
 import { namesContextOrTokenLimit } from '../analyzer/limit-400-patterns.js';
 /* #3084 A9 — through the leaf gate, never an import of workspace/user-settings.ts. */
 import { knownAnalyzerSecrets } from '../analyzer/known-secrets-gate.js';
@@ -711,6 +715,21 @@ const KEY_SETTING: Record<TransportKind, string> = {
   openai: "the endpoint's API key",
 };
 
+/* #3084 PR 3c — the id grammar's engine names a test record's transport. */
+const ENGINE_TO_TRANSPORT: Record<AnalysisEngine, TransportKind> = {
+  local: 'ollama',
+  gemini: 'gemini',
+  openai: 'openai',
+};
+
+/** #3084 PR 3c — the request-shaping settings to name for a refusal recorded against a
+    model id: the same per-transport list `requestRejected` uses, chosen by the id's own
+    grammar (`qwen3.5:4b` → Ollama, `openai:<id>::<model>` → that endpoint, anything else
+    → Gemini). */
+function requestShapingSettings(modelId: string): string[] {
+  return REQUEST_SHAPING_SETTINGS[ENGINE_TO_TRANSPORT[inferEngineFromModelId(modelId)]];
+}
+
 /* #3084 P24 — an endpoint 400 whose message names a context, token or length
    limit is about the request's size. Auto output leaves a margin, but the
    input size is an estimate. */
@@ -973,6 +992,25 @@ export function classifyAnalysisFailure(
       code: 'unknown',
       userMessage: `${modelLabel} request failed${causeCodeSuffix(err.causeCode)}.`,
       remediation: ENDPOINT_FAILURE_REMEDIATION,
+      detail: redactKnownSecrets(err.message, knownAnalyzerSecrets()),
+    };
+  }
+  /* #3084 PR 3c — the Test action recorded that this model refuses the configured
+     structured-output mode (or, from wave 5, the reasoning level), so the run stops
+     before its first request. Nothing was sent, so there is no HTTP status anywhere in
+     this copy, and the branch must sit above the ApiError / bare-status checks: without
+     it a status-less error falls through to `unknown`. The shape follows the 400 branch
+     (requestRejected) — same code, same remediation lead-in, same per-transport settings
+     list, keyed here by the model id's grammar — and adds what a refusal needs: the
+     setting that was refused and that a new Test re-records the answer. */
+  if (err instanceof AnalyzerCapabilityRejectedError) {
+    return {
+      code: 'analyzer-request-rejected',
+      userMessage: err.message,
+      remediation:
+        `${FAILURE_REMEDIATIONS['analyzer-request-rejected'].remediation} ` +
+        `Settings that shape this request: ${requestShapingSettings(err.modelId).join('; ')}. ` +
+        `Change the setting, then run Test again — a new test re-records what ${err.modelId} accepts.`,
       detail: redactKnownSecrets(err.message, knownAnalyzerSecrets()),
     };
   }

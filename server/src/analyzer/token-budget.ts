@@ -57,3 +57,9 @@ export function cloudBodyCharBudget(
   const perRequestChars = Math.floor(availableTokens * charsPerTokenForText(body));
   return Math.max(2000, perRequestChars - reservedChars);
 }
+
+/** cloudBodyCharBudget at an explicit per-request token cap (#3084: an endpoint's
+    perRequestInputCap). Same formula, same 2000-char floor. */
+export function cloudBodyCharBudgetForCap(capTokens: number, body: string, reservedChars = 0, reservedTokens = 0): number {
+  return cloudBodyCharBudget(body, reservedChars, reservedTokens, capTokens);
+}

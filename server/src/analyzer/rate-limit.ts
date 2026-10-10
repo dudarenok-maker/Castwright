@@ -15,27 +15,26 @@
    2026-05-16). RPM is the typical binding constraint for the Gemini
    models; RPD is the binding constraint for Gemini 2.5 Flash and 3
    Flash preview (20/day). Gemma defaults to a finite 16000 TPM (only
-   Infinity when explicitly overridden via env with `0`/"unlimited").
+   Infinity when explicitly overridden to `0`/"unlimited" via env or the
+   saved analyzerRateLimitsByModel map).
    TPM rarely bites on Flash Lite under normal use but is the safety net
    against outlier long chapters and burst-retry pathology. */
 
 import { AnalysisAbortedError } from './errors.js';
 import { inferEngineFromModelId } from './model-id.js';
-import { allKnobs } from '../config/registry.js';
-import { resolveKnob } from '../config/resolver.js';
+import { getCachedUserSettings } from '../workspace/user-settings.js';
 
 interface ModelLimits {
   rpm: number;
   /** Total input tokens per minute. `Infinity` only when a model's TPM is
-      explicitly overridden to "unlimited" (e.g. Gemma via env `0`/"unlimited");
+      explicitly overridden to "unlimited" (e.g. Gemma via env `0`/"unlimited", or a saved
+      analyzerRateLimitsByModel tpm of 0);
       otherwise always a finite cap. */
   tpm: number;
   rpd: number;
 }
 
 const FALLBACK_LIMITS: ModelLimits = { rpm: 5, tpm: 100_000, rpd: 50 };
-
-const UNLIMITED: ModelLimits = { rpm: Infinity, tpm: Infinity, rpd: Infinity };
 
 /* Built-in limits per model id. Values pulled live from AI Studio on
    2026-05-16 — keep in lockstep with the table in
@@ -78,45 +77,59 @@ function readTpmEnv(name: string): number | undefined {
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
-/* Saved-override lookup for a rate field. Finds the registry knob whose env
-   var matches the computed name (`GEMINI_<RPM|TPM|RPD>_<slug>`) and returns
-   its effective value only when the resolver reports `source: 'override'` —
-   i.e. a value stored in user-settings configOverrides, not an env var and not
-   the registry default. Resolving through the resolver is what makes a future
-   registered model knob work here with zero changes to this file. Only ever
-   reached after the env path returns undefined, so `resolveKnob`'s env
-   coercion/warning (e.g. on "unlimited") is never triggered for a value the
-   actual env read already accepted. */
-function overrideValue(envName: string): number | undefined {
-  const knob = allKnobs().find((k) => k.env === envName);
-  if (!knob) return undefined;
-  const state = resolveKnob(knob);
-  if (state.source !== 'override') return undefined;
-  return typeof state.effective === 'number' ? state.effective : undefined;
+function savedPositive(n: number | undefined): number | undefined {
+  return typeof n === 'number' && Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
+/* A saved tpm of 0 means "no per-minute gate", matching the retired rate.tpm.* knobs'
+   help text and the env sentinel in readTpmEnv. */
+function savedTpm(n: number | undefined): number | undefined {
+  return n === 0 ? Infinity : savedPositive(n);
+}
+
+/** Limits for one analyzer model id. Gemini ids: env GEMINI_{RPM,TPM,RPD}_<slug> →
+    Settings map → BUILTIN_LIMITS → FALLBACK_LIMITS. OpenAI-compatible endpoint ids
+    (`openai:<endpointId>::<model>`): Settings map → unlimited; endpoints deliberately
+    have no env override (spec non-goal). Read on every acquire, so a saved change is live. */
 export function resolveLimits(model: string): ModelLimits {
-  /* #3084 PR 3b — an OpenAI-compatible endpoint id is unlimited by default
-     (decision 5). PR 3c puts the per-model settings map in front of this. The
-     Gemini env / builtin chain below never sees an endpoint id, so a
-     GEMINI_{RPM,TPM,RPD}_<slug> env var cannot throttle an endpoint. */
-  if (inferEngineFromModelId(model) === 'openai') return UNLIMITED;
+  const entry = getCachedUserSettings().analyzerRateLimitsByModel[model];
+  if (inferEngineFromModelId(model) === 'openai') {
+    return {
+      rpm: savedPositive(entry?.rpm) ?? Infinity,
+      tpm: savedTpm(entry?.tpm) ?? Infinity,
+      rpd: savedPositive(entry?.rpd) ?? Infinity,
+    };
+  }
   const base = BUILTIN_LIMITS[model] ?? FALLBACK_LIMITS;
   const slug = envSlug(model);
   return {
-    rpm: readEnvNumber(`GEMINI_RPM_${slug}`) ?? overrideValue(`GEMINI_RPM_${slug}`) ?? base.rpm,
-    rpd: readEnvNumber(`GEMINI_RPD_${slug}`) ?? overrideValue(`GEMINI_RPD_${slug}`) ?? base.rpd,
-    tpm: tpmLimit(`GEMINI_TPM_${slug}`, base.tpm),
+    rpm: readEnvNumber(`GEMINI_RPM_${slug}`) ?? savedPositive(entry?.rpm) ?? base.rpm,
+    tpm: readTpmEnv(`GEMINI_TPM_${slug}`) ?? savedTpm(entry?.tpm) ?? base.tpm,
+    rpd: readEnvNumber(`GEMINI_RPD_${slug}`) ?? savedPositive(entry?.rpd) ?? base.rpd,
   };
 }
 
-/* TPM alone has a 0/"unlimited" sentinel (see readTpmEnv). A saved override of
-   0 likewise means "no per-minute gate" (Infinity), matching the TPM knob's
-   help text. The RPM/RPD knobs are min:1 in the registry, so a 0 override is
-   impossible there and needs no sentinel. */
-function tpmLimit(envName: string, fallback: number): number {
-  const t = readTpmEnv(envName) ?? overrideValue(envName);
-  return t === undefined ? fallback : t === 0 ? Infinity : t;
+/** `acquire()` (below) now gates both Gemini AND OpenAI-compatible endpoint
+    models through the same limiter (`analyzerRateLimiter` in
+    `transports/openai-transport.ts`), so these two error messages can no
+    longer hardcode "Gemini" — an endpoint model hits them too, and a
+    message naming the wrong provider or a Gemini-only knob sends the user
+    to a setting that doesn't exist for their model. */
+function engineLabel(model: string): string {
+  switch (inferEngineFromModelId(model)) {
+    case 'gemini':
+      return 'Gemini';
+    case 'openai':
+      return 'Endpoint model';
+    default:
+      return 'Model';
+  }
+}
+
+function tpmCapHint(model: string): string {
+  return inferEngineFromModelId(model) === 'gemini'
+    ? 'Lower analyzer.gemini.maxInputTokensPerRequest or raise TPM.'
+    : "Lower the endpoint's saved max input tokens per request, or raise its saved TPM limit.";
 }
 
 /** Daily-quota exhausted for the given model. The route layer catches
@@ -129,7 +142,7 @@ export class DailyQuotaExhaustedError extends Error {
     public readonly model: string,
     public readonly resetAt: Date,
   ) {
-    super(`Gemini ${model} daily quota exhausted — resets at ${resetAt.toISOString()}.`);
+    super(`${engineLabel(model)} ${model} daily quota exhausted — resets at ${resetAt.toISOString()}.`);
     this.name = 'DailyQuotaExhaustedError';
   }
 }
@@ -146,8 +159,8 @@ export class RequestExceedsTpmError extends Error {
     public readonly cap: number,
   ) {
     super(
-      `Gemini ${model}: request estimate ${estimated} tokens exceeds the ${cap} tokens/min cap — ` +
-        `no single request can fit. Lower analyzer.gemini.maxInputTokensPerRequest or raise TPM.`,
+      `${engineLabel(model)} ${model}: request estimate ${estimated} tokens exceeds the ${cap} tokens/min cap — ` +
+        `no single request can fit. ${tpmCapHint(model)}`,
     );
     this.name = 'RequestExceedsTpmError';
   }

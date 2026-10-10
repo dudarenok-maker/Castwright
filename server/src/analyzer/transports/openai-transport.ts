@@ -49,6 +49,7 @@ import type { AnalyzerEndpoint } from '../../workspace/analyzer-endpoints.js';
 import { loadKnownAnalyzerSecrets } from '../known-secrets-gate.js';
 import { allowlistedFetch } from './allowlisted-fetch.js';
 import { redactKnownSecrets } from '../redact.js';
+import { warmEndpointServedLimits } from '../catalog/endpoint-served-limits.js';
 
 type OpenAIClientOptions = NonNullable<ConstructorParameters<typeof OpenAI>[0]>;
 
@@ -263,11 +264,13 @@ export function endpointAutoOutputMargin(contextTokens: number): number {
 
 /** #3084 P24 — the engine-level output cap OpenAIAnalyzer resolves into
     EngineRequestSettings.maxOutputTokens, a number (wave 2b resolves every engine's
-    cap). A manual value is returned as saved; PR 3c clamps it to the served limit.
+    cap). A manual value is clamped to the served output limit when one is known (PR 3c, P15).
     Auto returns min(served output limit if known, contextTokens − margin). The
     request builder then takes each request's estimated input off Auto. */
 export function resolveEndpointMaxOutputTokens(endpoint: AnalyzerEndpoint, servedOutputLimit?: number): number {
-  if (endpoint.maxOutputTokens > 0) return endpoint.maxOutputTokens;
+  if (endpoint.maxOutputTokens > 0) {
+    return servedOutputLimit !== undefined ? Math.min(endpoint.maxOutputTokens, servedOutputLimit) : endpoint.maxOutputTokens;
+  }
   const contextBound = Math.max(1, endpoint.contextTokens - endpointAutoOutputMargin(endpoint.contextTokens));
   return servedOutputLimit !== undefined ? Math.min(servedOutputLimit, contextBound) : contextBound;
 }
@@ -323,12 +326,22 @@ export class OpenAITransport implements ChatTransport {
   /** P22: this endpoint's key, redacted from every error the transport builds. PR 3c's
       prepare() also reads it (w3cd Task 3c.9 must not add the field a second time). */
   private readonly apiKey: string | null;
+  /** Test-only: the served-limits warm-up bound (P26). Production uses SERVED_LIMITS_WARMUP_TIMEOUT_MS. */
+  private readonly servedLimitsTimeoutMs: number | undefined;
 
-  constructor(opts: { endpoint: AnalyzerEndpoint; apiKey: string | null; model: string; dispatcher?: Agent; now?: () => number }) {
+  constructor(opts: {
+    endpoint: AnalyzerEndpoint;
+    apiKey: string | null;
+    model: string;
+    dispatcher?: Agent;
+    now?: () => number;
+    servedLimitsTimeoutMs?: number;
+  }) {
     this.endpoint = opts.endpoint;
     this.model = opts.model;
     this.now = opts.now ?? Date.now;
     this.apiKey = opts.apiKey;
+    this.servedLimitsTimeoutMs = opts.servedLimitsTimeoutMs;
     this.client = new OpenAI({
       baseURL: opts.endpoint.baseUrl,
       /* A placeholder only: the SDK requires a string and would otherwise read
@@ -362,6 +375,13 @@ export class OpenAITransport implements ChatTransport {
       displayName: `Endpoint ${this.endpoint.name}`,
       recordActualTokens: (r) => r.usage?.inputTokens,
     });
+  }
+
+  /** P15 / P26: warm this endpoint's served limits before the runner reads settings (W2 Task 2.6
+      passes call.signal). Bounded at SERVED_LIMITS_WARMUP_TIMEOUT_MS, one listing per base URL
+      shared by concurrent requests, released at once when `signal` aborts. Never rejects. */
+  prepare(signal?: AbortSignal): Promise<void> {
+    return warmEndpointServedLimits(this.endpoint, this.apiKey, { signal, timeoutMs: this.servedLimitsTimeoutMs });
   }
 
   private async attempt(req: TransportRequest): Promise<TransportResult> {

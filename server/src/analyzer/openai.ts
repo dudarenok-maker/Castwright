@@ -12,6 +12,7 @@ import { OPENAI_RETRY_POLICY } from './runner/retry-policy.js';
 import { adaptSchemaForOpenAI } from './runner/schema-adapters.js';
 import type { EngineRequestSettings } from './runner/stage-runner.js';
 import { OpenAITransport, resolveEndpointMaxOutputTokens } from './transports/openai-transport.js';
+import { getEndpointServedLimits } from './catalog/endpoint-served-limits.js';
 import type { AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { AnalyzerReasoningOverflowError } from './errors.js';
 import type { StageCall } from './types.js';
@@ -42,7 +43,9 @@ export class OpenAIAnalyzer extends TransportAnalyzer {
           dispatcher: opts.dispatcher,
         }),
         policy: OPENAI_RETRY_POLICY,
-        settings: () => openAIRequestSettings(opts.endpoint),
+        /* P15 / P24: the served output limit prepare() warmed for this base URL (undefined when
+           unknown); openAIRequestSettings keeps maxOutputTokens a number either way. */
+        settings: () => openAIRequestSettings(opts.endpoint, getEndpointServedLimits(opts.endpoint.baseUrl, opts.model)?.maxOutputTokens),
         adaptSchema: adaptSchemaForOpenAI,
       }),
     );

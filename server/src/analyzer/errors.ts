@@ -302,6 +302,32 @@ export class AnalyzerKeyOriginError extends Error {
   }
 }
 
+/** The Test action recorded that this model refuses a setting the run is configured
+    to send (its structured-output mode, or — from wave 5 — its reasoning level), so
+    the run stops before its first request. Nothing was sent, so it deliberately has
+    NO `status` property: the taxonomy's bare-status branch reads `.status`, and this
+    refusal must never be taken for an HTTP answer. `classifyAnalysisFailure` gives it
+    its own branch, above the ApiError / bare-status checks, mapping it to
+    `analyzer-request-rejected` (#3084 PR 3c). */
+export class AnalyzerCapabilityRejectedError extends Error {
+  readonly code = 'ANALYZER_CAPABILITY_REJECTED';
+  constructor(
+    readonly modelId: string,
+    /** Which setting the record refused. W3 records only `structuredOutput`. */
+    readonly setting: 'structuredOutput' | 'reasoning',
+    /** The value the run would have sent (`schema` / `json` / `off`, or a level key). */
+    readonly value: string,
+    /** ISO timestamp of the Test that recorded the refusal. */
+    readonly testedAt: string,
+  ) {
+    super(
+      `Model ${modelId} rejected ${setting}=${value} when it was last tested (${testedAt}). Change that setting, or run Test again.`,
+    );
+    this.name = 'AnalyzerCapabilityRejectedError';
+  }
+}
+
+
 /** Validation failed after the retry. The message is exactly today's text
     (ollama.ts:609-611, gemini.ts:515-517); `detail` is the
     "<kind> — <summarised detail>" string the runner builds. */

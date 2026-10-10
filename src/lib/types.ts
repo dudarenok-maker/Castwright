@@ -155,6 +155,14 @@ export type UserSettingsPatch = components['schemas']['UserSettingsPatch'] & {
   backupCadence?: BackupCadence;
   backupRetention?: number;
 };
+export type AnalyzerCatalog = components['schemas']['AnalyzerCatalog'];
+export type AnalyzerCatalogGroup = components['schemas']['AnalyzerCatalogGroup'];
+export type AnalyzerCatalogEntry = components['schemas']['AnalyzerCatalogEntry'];
+export type ModelCapabilityRecord = components['schemas']['ModelCapabilityRecord'];
+export type AnalyzerModelTestRequest = components['schemas']['AnalyzerModelTestRequest'];
+export type AnalyzerEndpointModelsPreviewRequest = components['schemas']['AnalyzerEndpointModelsPreviewRequest'];
+export type AnalyzerEndpointModelsPreview = components['schemas']['AnalyzerEndpointModelsPreview'];
+export type StructuredOutputMode = AnalyzerCatalogEntry['structuredOutput']['mode'];
 
 /* #3084 — analyzer endpoints (generated shapes). */
 export type AnalyzerEndpoint = components['schemas']['AnalyzerEndpoint'];

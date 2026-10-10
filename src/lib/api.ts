@@ -66,6 +66,13 @@ import type {
   BookQaReport,
   ReviewRequest,
   RevisionsState,
+  AnalyzerCatalog,
+  AnalyzerCatalogEntry,
+  ModelCapabilityRecord,
+  AnalyzerModelTestRequest,
+  AnalyzerEndpointModelsPreviewRequest,
+  AnalyzerEndpointModelsPreview,
+  StructuredOutputMode,
 } from './types';
 import type { components as ApiComponents, paths as ApiPaths } from './api-types';
 import { revisionOpFailureFrom } from './revision-op-failure';
@@ -74,7 +81,8 @@ import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
 import { MAX_CLONE_TRANSCRIPT_CHARS } from './clone-transcript-limit';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from './analysis-stream-codes';
-import { engineForModelId, parseEndpointModelId, type AnalysisEngine } from './model-id';
+import { endpointModelId, engineForModelId, parseEndpointModelId, type AnalysisEngine } from './model-id';
+import { structuredOutputLabel } from './structured-output-label';
 import { manifestSlotFor } from '../../server/src/tts/clone-engines';
 import { allKnobDescriptors } from '../../server/src/config/descriptors';
 import { GROUPS as REGISTRY_GROUPS } from '../../server/src/config/registry';
@@ -7131,6 +7139,8 @@ const MOCK_USER_SETTINGS: UserSettings = {
   workspaceSource: 'default',
   corruptSettingsFile: false,
   analyzerKeepAliveByModel: {},
+  analyzerRateLimitsByModel: {},
+  analyzerCapabilitiesByModel: {},
   analyzerEndpoints: [],
   analyzerEndpointKeyStatus: {},
   droppedEndpointEntries: [],
@@ -7172,6 +7182,35 @@ async function realPutGeminiKey(key: string | null): Promise<UserSettings> {
     throw new Error(
       `Gemini key save failed (${res.status}): ${(await res.text()) || res.statusText}`,
     );
+  return res.json();
+}
+
+async function realGetAnalyzerModels(refresh = false): Promise<AnalyzerCatalog> {
+  const res = await fetch(`/api/analyzer/models${refresh ? '?refresh=1' : ''}`);
+  if (!res.ok) throw new Error(`Analyzer model list failed (${res.status}): ${(await res.text()) || res.statusText}`);
+  return res.json();
+}
+
+async function realTestAnalyzerModel(body: AnalyzerModelTestRequest): Promise<ModelCapabilityRecord> {
+  const res = await fetch('/api/analyzer/models/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const payload = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(payload.error ?? `Model test failed (${res.status})`);
+  }
+  return res.json();
+}
+
+async function realPreviewAnalyzerEndpointModels(body: AnalyzerEndpointModelsPreviewRequest): Promise<AnalyzerEndpointModelsPreview> {
+  const res = await fetch('/api/analyzer/models/preview', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`Model preview failed (${res.status}): ${(await res.text()) || res.statusText}`);
   return res.json();
 }
 
@@ -7634,6 +7673,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
     exportSyncFolder,
     dualModelEnabled,
     analyzerKeepAliveByModel,
+    analyzerRateLimitsByModel,
   } = patch;
   Object.assign(
     MOCK_USER_SETTINGS,
@@ -7648,6 +7688,7 @@ async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettin
         exportSyncFolder,
         dualModelEnabled,
         analyzerKeepAliveByModel,
+        analyzerRateLimitsByModel,
       }).filter(([, v]) => v !== undefined),
     ),
   );
@@ -8075,13 +8116,14 @@ async function realRedeemBrowserPair(body: { code: string }) {
   return res.json() as Promise<{ label: string; expiresAt: string }>;
 }
 
-const mockCreateDevicePairSession = async (_b: { label: string; selfBind?: boolean }) =>
-  ({
-    url: `https://mock.local:8443/#/pair?c=MOCKCODEMOCKCODE`,
-    code: 'MOCKCODEMOCKCODE',
-    expiresAt: Date.now() + 300_000,
-    friendlyUrl: 'https://castwright.local/#/pair?c=MOCKCODEMOCKCODE',
-  });
+const mockCreateDevicePairSession = async (
+  _b: { label: string; selfBind?: boolean },
+): Promise<{ url: string; code: string; expiresAt: number; friendlyUrl?: string }> => ({
+  url: `https://mock.local:8443/#/pair?c=MOCKCODEMOCKCODE`,
+  code: 'MOCKCODEMOCKCODE',
+  expiresAt: Date.now() + 300_000,
+  friendlyUrl: 'https://castwright.local/#/pair?c=MOCKCODEMOCKCODE',
+});
 const mockListDevices = async () => ({ devices: [] as PublicDevice[] });
 const mockRevokeDevice = async (_id: string) => ({ ok: true as const });
 const mockRegenerateLanCert = async () => ({
@@ -9121,6 +9163,100 @@ export async function mockGetGpuDevices(): Promise<GpuDevicesResponse> {
     ],
     cpu: true,
   };
+}
+
+/* #3084 — mock catalog derived from the mock settings' endpoints. Seeds (e2e):
+   __SEED_ANALYZER_CATALOG__ (whole response), __SEED_ENDPOINT_MODELS__ (endpointId →
+   model names), __SEED_ANALYZER_CAPABILITIES__ (modelId → Test record),
+   __SEED_TEST_OUTCOME__ (schema outcome mockTestAnalyzerModel records). testPlan mirrors
+   the server's plannedTestRequestCount for W3: configured = the off-mode control + 1 (just the
+   control for an `off` model), all = control + the schema and json checks. Group statuses
+   follow the contract: Gemini without a key is `fallback`. */
+type MockCatalogSource = Pick<UserSettings, 'analyzerEndpoints' | 'analyzerCapabilitiesByModel' | 'apiKeyStatus'>;
+
+/* The level a W3 request is sent at, and so the record key (server capabilities.ts
+   defaultReasoningKey, P7): Ollama sends think:false, Gemini and endpoints send nothing. */
+function mockLevelKey(modelId: string): string {
+  return engineForModelId(modelId) === 'local' ? 'off' : 'model-default';
+}
+
+function mockServerUrlFor(modelId: string, source: MockCatalogSource): string {
+  const parsed = parseEndpointModelId(modelId);
+  if (parsed) return source.analyzerEndpoints?.find((e) => e.id === parsed.endpointId)?.baseUrl ?? '';
+  return modelId.includes(':') ? 'http://localhost:11434' : 'gemini';
+}
+
+export async function mockGetAnalyzerModels(_refresh = false, source: MockCatalogSource = MOCK_USER_SETTINGS): Promise<AnalyzerCatalog> {
+  await wait(30);
+  const g = globalThis as unknown as {
+    __SEED_ANALYZER_CATALOG__?: AnalyzerCatalog;
+    __SEED_ENDPOINT_MODELS__?: Record<string, string[]>;
+    __SEED_ANALYZER_CAPABILITIES__?: Record<string, ModelCapabilityRecord>;
+  };
+  if (g.__SEED_ANALYZER_CATALOG__) return g.__SEED_ANALYZER_CATALOG__;
+  const capabilities = { ...(source.analyzerCapabilitiesByModel ?? {}), ...(g.__SEED_ANALYZER_CAPABILITIES__ ?? {}) };
+  const entry = (id: string, engine: AnalyzerCatalogEntry['engine'], model: string, mode: StructuredOutputMode, droppedIfSchema: string[]): AnalyzerCatalogEntry => {
+    const serverUrl = mockServerUrlFor(id, source).replace(/\/+$/, '');
+    const stored = capabilities[id];
+    const record = stored && stored.serverUrl.replace(/\/+$/, '') === serverUrl ? stored : undefined;
+    const dropped = mode === 'schema' ? droppedIfSchema : [];
+    const level = mockLevelKey(id);
+    const outcome = record?.structuredOutput[mode]?.[level] ?? (mode === 'off' && record?.control.ok ? 'accepted' : undefined);
+    return {
+      id,
+      label: model,
+      ...(record ? { capability: record } : {}),
+      engine,
+      model,
+      structuredOutput: { mode, dropped, label: structuredOutputLabel(mode, dropped, record, level), ...(outcome ? { outcome } : {}) },
+      testPlan: { configured: mode === 'off' ? 1 : 2, all: 3, attempts: engine === 'local' ? 1 : 3 },
+    };
+  };
+  return {
+    groups: [
+      { kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [entry('qwen3.5:4b', 'local', 'qwen3.5:4b', 'schema', [])] },
+      source.apiKeyStatus === 'set'
+        ? { kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'ok', models: [entry('gemini-3.5-flash-lite', 'gemini', 'gemini-3.5-flash-lite', 'json', [])] }
+        : { kind: 'gemini', id: 'gemini', label: 'Gemini API', status: 'fallback', models: [] },
+      ...(source.analyzerEndpoints ?? []).map((e) => ({
+        kind: 'endpoint' as const,
+        id: e.id,
+        label: e.name,
+        status: 'ok' as const,
+        models: (g.__SEED_ENDPOINT_MODELS__?.[e.id] ?? ['mock-model']).map((m) =>
+          entry(endpointModelId(e.id, m), 'openai', m, e.structuredOutput ?? 'schema', []),
+        ),
+      })),
+    ],
+  };
+}
+
+export async function mockTestAnalyzerModel(body: AnalyzerModelTestRequest): Promise<ModelCapabilityRecord> {
+  await wait(60);
+  const seeded = (globalThis as unknown as { __SEED_TEST_OUTCOME__?: 'enforced' | 'ignored' | 'rejected' }).__SEED_TEST_OUTCOME__ ?? 'enforced';
+  const catalog = await mockGetAnalyzerModels(false);
+  const mode = catalog.groups.flatMap((x) => x.models).find((m) => m.id === body.modelId)?.structuredOutput.mode ?? 'schema';
+  const level = mockLevelKey(body.modelId);
+  const record: ModelCapabilityRecord = {
+    serverUrl: mockServerUrlFor(body.modelId, MOCK_USER_SETTINGS),
+    testedAt: new Date().toISOString(),
+    control: { ok: true },
+    structuredOutput:
+      body.scope === 'all'
+        ? { schema: { [level]: seeded }, json: { [level]: 'accepted' }, off: { [level]: 'accepted' } }
+        : { [mode]: { [level]: mode === 'schema' ? seeded : 'accepted' } },
+    reasoning: {},
+  };
+  Object.assign(MOCK_USER_SETTINGS, {
+    analyzerCapabilitiesByModel: { ...(MOCK_USER_SETTINGS.analyzerCapabilitiesByModel ?? {}), [body.modelId]: record },
+  });
+  return record;
+}
+
+export async function mockPreviewAnalyzerEndpointModels(_body: AnalyzerEndpointModelsPreviewRequest): Promise<AnalyzerEndpointModelsPreview> {
+  await wait(40);
+  const seeded = (globalThis as unknown as { __SEED_ENDPOINT_PREVIEW__?: AnalyzerEndpointModelsPreview }).__SEED_ENDPOINT_PREVIEW__;
+  return seeded ?? { status: 'ok', models: [{ model: 'mock-model', contextTokens: 32768 }], suggestedContextTokens: 32768 };
 }
 
 /* Plan 2 §2.4 — mocked analyzer device placement for the Advanced
@@ -10452,6 +10588,9 @@ const real = {
   getUserSettings: realGetUserSettings,
   putUserSettings: realPutUserSettings,
   putGeminiKey: realPutGeminiKey,
+  getAnalyzerModels: realGetAnalyzerModels,
+  testAnalyzerModel: realTestAnalyzerModel,
+  previewAnalyzerEndpointModels: realPreviewAnalyzerEndpointModels,
   createAnalyzerEndpoint: realCreateAnalyzerEndpoint,
   updateAnalyzerEndpoint: realUpdateAnalyzerEndpoint,
   deleteAnalyzerEndpoint: realDeleteAnalyzerEndpoint,
@@ -11116,6 +11255,9 @@ const mock = {
   resetPrompt: mockResetPrompt,
   restartSidecar: mockRestartSidecar,
   getGpuDevices: mockGetGpuDevices,
+  getAnalyzerModels: mockGetAnalyzerModels,
+  testAnalyzerModel: mockTestAnalyzerModel,
+  previewAnalyzerEndpointModels: mockPreviewAnalyzerEndpointModels,
   getAnalyzerDevice: mockGetAnalyzerDevice,
   getAnalyzerGpuSplit: mockGetAnalyzerGpuSplit,
   getQaReport: mockGetQaReport,
