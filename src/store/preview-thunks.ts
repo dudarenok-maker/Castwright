@@ -59,8 +59,17 @@ export function approvePreviewSideEffects(preview: PreviewRegenCtx) {
 }
 
 export function restoreUnrecordedPreview(preview: PreviewRegenCtx) {
-  return async (dispatch: AppDispatch): Promise<void> => {
-    const close = () => { dispatch(uiActions.setPreviewRegen(null)); dispatch(uiActions.setOpenRevision(null)); };
+  return async (dispatch: AppDispatch, getState: () => RootState): Promise<void> => {
+    /* Settle only what THIS restore acted on: the user may have switched books
+       or opened another entry while the request ran. The preview slot is a
+       single global, so "still this preview" (book + chapter + character) is
+       the identity of the stub player it owns (the stub carries no id). */
+    const close = () => {
+      const { previewRegen: cur, openRevision: open } = getState().ui;
+      if (!cur || cur.bookId !== preview.bookId || cur.previewChapterId !== preview.previewChapterId || cur.characterId !== preview.characterId) return;
+      dispatch(uiActions.setPreviewRegen(null));
+      if (activeBookId(getState()) === preview.bookId && open?.kind === 'preview-stub') dispatch(uiActions.setOpenRevision(null));
+    };
     if (!preview.stub?.hasPreviousAudio) return close();
     dispatch(uiActions.beginRevisionOp());
     try {

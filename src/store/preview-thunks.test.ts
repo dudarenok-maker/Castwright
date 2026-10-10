@@ -112,6 +112,35 @@ describe('restoreUnrecordedPreview (plan 286, spec §4 stub table)', () => {
     expect(store.getState().ui.previewRegen).toBeNull();
     expect(store.getState().ui.openRevision).toBeNull();
   });
+  it('#3400: A\'s restore settling after the user opened an entry on book B leaves B\'s player open', async () => {
+    let release!: (v: unknown) => void;
+    apiMock.restorePreviousUnrecorded.mockReturnValueOnce(new Promise((r) => (release = r)));
+    const store = makeStore('A');
+    const p = store.dispatch(restoreUnrecordedPreview(open(store, true)));
+    store.dispatch(uiActions.openBook({ id: 'B', status: 'complete' } as never));
+    store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'b1', chapterId: 3 }));
+    release('restored'); await p;
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'b1', chapterId: 3 });
+  });
+  it('#3400: A\'s restore settling after the user opened another entry on the same book leaves it open', async () => {
+    let release!: (v: unknown) => void;
+    apiMock.restorePreviousUnrecorded.mockReturnValueOnce(new Promise((r) => (release = r)));
+    const store = makeStore('A');
+    const p = store.dispatch(restoreUnrecordedPreview(open(store, true)));
+    store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'r2', chapterId: 3 }));
+    release('restored'); await p;
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'r2', chapterId: 3 });
+  });
+  it('#3400: a restore settling for a preview that was since replaced leaves the newer preview alone', async () => {
+    let release!: (v: unknown) => void;
+    apiMock.restorePreviousUnrecorded.mockReturnValueOnce(new Promise((r) => (release = r)));
+    const store = makeStore('A');
+    const p = store.dispatch(restoreUnrecordedPreview(open(store, true)));
+    store.dispatch(uiActions.setPreviewRegen(PREVIEW({ previewChapterId: 9, stub: stub(true) })));
+    release('restored'); await p;
+    expect(store.getState().ui.previewRegen?.previewChapterId).toBe(9);
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' });
+  });
   it.each([
     ['has_revision', 409, "This chapter has an older pending review — resolve it from the chapter's review first"],
     ['chapter_busy', 409, 'This chapter is busy — try again when it finishes'],
