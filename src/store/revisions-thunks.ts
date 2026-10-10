@@ -39,11 +39,6 @@ export function refetchActiveRevisions(bookId: string) {
   };
 }
 
-/* Ops in flight across ALL books (#3400 review pass 1): the ui flag is one
-   boolean, so an op settling must not clear it while another op is still
-   running — a settle for book A would otherwise unlock book B's controls. */
-let opsInFlight = 0;
-
 function runOp(bookId: string, revisionId: string, chapterId: number, call: () => Promise<RevisionsState>) {
   return async (dispatch: AppDispatch, getState: () => RootState): Promise<RevisionOpOutcome> => {
     const applyIfActive = (state: RevisionsState | undefined): boolean => {
@@ -61,8 +56,10 @@ function runOp(bookId: string, revisionId: string, chapterId: number, call: () =
         dispatch(uiActions.setOpenRevision(null));
       }
     };
-    opsInFlight++;
-    dispatch(uiActions.setRevisionOpInFlight(true));
+    /* The ui flag is one boolean across ALL books (#3400 review pass 1): the
+       in-store count keeps an op settling from clearing it while another op
+       (or an unrecorded restore) is still running. */
+    dispatch(uiActions.beginRevisionOp());
     try {
       applyIfActive(await call());
       closeIfOpen();
@@ -104,7 +101,7 @@ function runOp(bookId: string, revisionId: string, chapterId: number, call: () =
       }
       return { ok: false, code };
     } finally {
-      if (--opsInFlight === 0) dispatch(uiActions.setRevisionOpInFlight(false));
+      dispatch(uiActions.endRevisionOp());
     }
   };
 }

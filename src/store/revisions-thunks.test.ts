@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 
 const { apiMock } = vi.hoisted(() => ({
-  apiMock: { acceptRevision: vi.fn(), rejectRevision: vi.fn(), dismissDrift: vi.fn(), pollRevisions: vi.fn() },
+  apiMock: { acceptRevision: vi.fn(), rejectRevision: vi.fn(), dismissDrift: vi.fn(), pollRevisions: vi.fn(), restorePreviousUnrecorded: vi.fn() },
 }));
 vi.mock('../lib/api', () => ({ api: apiMock }));
 
@@ -11,6 +11,7 @@ import { revisionsSlice, revisionsActions } from './revisions-slice';
 import { notificationsSlice } from './notifications-slice';
 import { RevisionOpFailure } from '../lib/revision-op-failure';
 import { acceptRevisionOp, rejectRevisionOp, dismissDriftOp, refetchActiveRevisions } from './revisions-thunks';
+import { restoreUnrecordedPreview } from './preview-thunks';
 
 const F = '000000000000001-a';
 const S = (bookId: string, rev: number, ids: string[] = [], fileId = F) => ({ bookId, fileId, rev, pending: ids.map((id) => ({ id, chapterId: 3, characterId: 'c', segments: [] })), dismissed: [], acceptedSelections: {}, timeline: {} });
@@ -181,5 +182,29 @@ describe('revisions thunks (plan 286)', () => {
     expect(apiMock.pollRevisions).not.toHaveBeenCalled();
     apiMock.pollRevisions.mockRejectedValueOnce(new Error('x'));
     expect(await store.dispatch(refetchActiveRevisions('A'))).toBe('failed');
+  });
+});
+
+describe('in-flight count lives in the store (#3400)', () => {
+  it('a restore-unrecorded settling mid-op leaves the flag true until the op settles', async () => {
+    let release!: (v: unknown) => void;
+    apiMock.acceptRevision.mockReturnValueOnce(new Promise((r) => (release = r)));
+    apiMock.restorePreviousUnrecorded.mockResolvedValueOnce('restored');
+    const store = makeStore('A');
+    const p = store.dispatch(acceptRevisionOp({ bookId: 'A', revisionId: 'r1', chapterId: 3 }));
+    await store.dispatch(restoreUnrecordedPreview({ ...PREVIEW(3), stub: { hasPreviousAudio: true } } as never));
+    expect(store.getState().ui.revisionOpInFlight).toBe(true);
+    release(S('A', 2)); await p;
+    expect(store.getState().ui.revisionOpInFlight).toBe(false);
+  });
+  it('two stores do not share the count', async () => {
+    apiMock.acceptRevision.mockReturnValueOnce(new Promise(() => {}));
+    apiMock.rejectRevision.mockResolvedValueOnce(S('A', 2));
+    const one = makeStore('A');
+    void one.dispatch(acceptRevisionOp({ bookId: 'A', revisionId: 'r1', chapterId: 3 }));
+    const two = makeStore('A');
+    await two.dispatch(rejectRevisionOp({ bookId: 'A', revisionId: 'r1', chapterId: 3 }));
+    expect(two.getState().ui.revisionOpInFlight).toBe(false);
+    expect(one.getState().ui.revisionOpInFlight).toBe(true);
   });
 });

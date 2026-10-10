@@ -80,6 +80,10 @@ export interface UiState {
   /** Plan 286 — true while an accept/reject/dismiss op is in flight, so
       the player can disable its actions for the round trip. Transient. */
   revisionOpInFlight: boolean;
+  /** #3400 — revision ops + unrecorded restores currently in flight;
+      revisionOpInFlight is derived from it (> 0). Lives in the store, not a
+      module counter, so it is per-store and cannot leak across stores/HMR. */
+  revisionOpsInFlight: number;
   /** Session-only banner shown on the Cast view after a voice-edit Save
       reveals that one or more done chapters now hold audio that no longer
       matches the character's current voice/identity. Click "Regenerate
@@ -187,6 +191,7 @@ const initialState: UiState = {
   previewRegen: null,
   openRevision: null,
   revisionOpInFlight: false,
+  revisionOpsInFlight: 0,
   staleAudio: null,
   revisionHistoryFor: null,
   showDriftReport: false,
@@ -402,8 +407,13 @@ export const uiSlice = createSlice({
     setOpenRevision: (s, a: PayloadAction<OpenRevision | null>) => {
       s.openRevision = a.payload;
     },
-    setRevisionOpInFlight: (s, a: PayloadAction<boolean>) => {
-      s.revisionOpInFlight = a.payload;
+    beginRevisionOp: (s) => {
+      s.revisionOpsInFlight += 1;
+      s.revisionOpInFlight = true;
+    },
+    endRevisionOp: (s) => {
+      s.revisionOpsInFlight = Math.max(0, s.revisionOpsInFlight - 1);
+      s.revisionOpInFlight = s.revisionOpsInFlight > 0;
     },
     /* Plan 286 (OD30) — set the preview's stub AND open it, in ONE action.
        Two separate dispatches (setPreviewRegen with the stub, then

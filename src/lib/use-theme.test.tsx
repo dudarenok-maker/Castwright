@@ -34,6 +34,7 @@ function makeStore({
     previewRegen: null,
     openRevision: null,
     revisionOpInFlight: false,
+    revisionOpsInFlight: 0,
     staleAudio: null,
     revisionHistoryFor: null,
     showDriftReport: false,

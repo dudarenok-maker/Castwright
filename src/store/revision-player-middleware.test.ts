@@ -34,7 +34,7 @@ describe('revisionPlayerMiddleware (plan 286)', () => {
     const store = makeStore();
     store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'r1', chapterId: 3 }));
     store.dispatch(uiActions.setPreviewRegen(preview(3)));
-    store.dispatch(uiActions.setRevisionOpInFlight(true));
+    store.dispatch(uiActions.beginRevisionOp());
     store.dispatch(revisionsActions.applyServerState(state(2, [['r2', 5]])));
     expect(store.getState().ui.openRevision).not.toBeNull();
     expect(store.getState().ui.previewRegen).not.toBeNull();

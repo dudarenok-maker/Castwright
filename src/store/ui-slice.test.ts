@@ -24,6 +24,7 @@ const baseState = (stage: Stage): UiState => ({
   previewRegen: null,
   openRevision: null,
   revisionOpInFlight: false,
+  revisionOpsInFlight: 0,
   staleAudio: null,
   revisionHistoryFor: null,
   showDriftReport: false,
@@ -445,9 +446,20 @@ describe('uiSlice — plan 286: openRevision, revisionOpInFlight, preview stub',
     expect(s.openRevision).toBeNull();
     expect(s.revisionOpInFlight).toBe(false);
     s = uiSlice.reducer(s, uiActions.setOpenRevision({ kind: 'server', revisionId: 'r', chapterId: 3 }));
-    s = uiSlice.reducer(s, uiActions.setRevisionOpInFlight(true));
+    s = uiSlice.reducer(s, uiActions.beginRevisionOp());
     expect(s.openRevision).toEqual({ kind: 'server', revisionId: 'r', chapterId: 3 });
     expect(s.revisionOpInFlight).toBe(true);
+  });
+
+  it('beginRevisionOp/endRevisionOp count nested ops and clamp at 0 (#3400)', () => {
+    let s = uiSlice.reducer(undefined, uiActions.beginRevisionOp());
+    s = uiSlice.reducer(s, uiActions.beginRevisionOp());
+    s = uiSlice.reducer(s, uiActions.endRevisionOp());
+    expect(s.revisionOpInFlight).toBe(true);
+    s = uiSlice.reducer(s, uiActions.endRevisionOp());
+    s = uiSlice.reducer(s, uiActions.endRevisionOp());
+    expect(s.revisionOpsInFlight).toBe(0);
+    expect(s.revisionOpInFlight).toBe(false);
   });
 
   it('previewRegen carries its bookId and an optional stub', () => {

@@ -56,7 +56,7 @@ export function restoreUnrecordedPreview(preview: PreviewRegenCtx) {
   return async (dispatch: AppDispatch): Promise<void> => {
     const close = () => { dispatch(uiActions.setPreviewRegen(null)); dispatch(uiActions.setOpenRevision(null)); };
     if (!preview.stub?.hasPreviousAudio) return close();
-    dispatch(uiActions.setRevisionOpInFlight(true));
+    dispatch(uiActions.beginRevisionOp());
     try {
       await api.restorePreviousUnrecorded({ bookId: preview.bookId, chapterId: preview.previewChapterId });
       close();
@@ -68,7 +68,7 @@ export function restoreUnrecordedPreview(preview: PreviewRegenCtx) {
         : (['error', REVISION_COPY.restoreFailed] as const);
       dispatch(notificationsActions.pushToast({ kind, message, dedupeKey: `preview-restore-${code}` }));
     } finally {
-      dispatch(uiActions.setRevisionOpInFlight(false));
+      dispatch(uiActions.endRevisionOp());
     }
   };
 }
