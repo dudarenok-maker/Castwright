@@ -1328,28 +1328,13 @@ function stripForbiddenKeys(value: unknown): Record<string, unknown> {
   }
   return out;
 }
-/* #3084 P23 — until PR 3d, no saved selection may name an OpenAI-compatible
-   endpoint. `defaultAnalysisModel` is the only settings field left to check
-   here — `analyzerPhase0Model`/`analyzerPhase1Model` no longer exist on the
-   schema at all (A5) and are unconditionally refused for an unrelated
-   reason by this file's own RETIRED_ANALYZER_FIELDS (routes/user-settings.ts)
-   before this check would ever run. `analyzer.ollama.model` joins the two
-   phase knobs (A3 — it is Advanced-editable and read at runtime now, so a
-   saved endpoint id there would reach an Ollama probe exactly like a phase
-   knob would). Checked on CLIENT input only (the general PUT and
-   PUT /api/config): the schema also parses the file on read, and the
-   override upsert below rewrites the whole overrides map. PR 3d deletes
-   ENDPOINT_ID_REFUSED_FIELDS and narrows ENDPOINT_ID_REFUSED_KNOBS to
-   ['analyzer.ollama.model'] rather than deleting it — that knob keeps its
-   save refusal permanently (coordinator ruling): it is the Ollama tag, so
-   an endpoint id there can never be what the user meant, and this is the
-   only guard that stops one being WRITTEN in the first place (3a.4's
-   getResolvedOllamaModel merely keeps a written one off the wire). The
-   general PUT, PUT /api/config, and this helper therefore all survive PR
-   3d, narrowed to that one knob; only the mock PUT's defaultAnalysisModel
-   block is fully deleted there. */
-export const ENDPOINT_ID_REFUSED_FIELDS = ['defaultAnalysisModel'] as const;
-export const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model'] as const;
+/* #3084 P23 — a saved selection may now name an OpenAI-compatible endpoint (PR 3d): the
+   `defaultAnalysisModel` field and the two phase-model knobs. `analyzer.ollama.model` is the one
+   exception, permanently: it is the Ollama tag the local engine sends, so an endpoint id there is
+   refused at save rather than accepted and silently ignored at run time.
+   `config/ollama-resolved.ts`'s `getResolvedOllamaModel` also returns the knob default for such a
+   value — defence in depth, not the only guard. */
+export const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.ollama.model'] as const;
 const ENDPOINT_ID_REFUSAL = 'OpenAI-compatible endpoint models cannot be selected in this build.';
 
 export function endpointModelIdRefusals(patch: unknown): Array<{ path: string[]; message: string }> {
@@ -1357,9 +1342,6 @@ export function endpointModelIdRefusals(patch: unknown): Array<{ path: string[];
   const p = patch as Record<string, unknown>;
   const isEndpointId = (v: unknown): boolean => typeof v === 'string' && inferEngineFromModelId(v.trim()) === 'openai';
   const out: Array<{ path: string[]; message: string }> = [];
-  for (const field of ENDPOINT_ID_REFUSED_FIELDS) {
-    if (isEndpointId(p[field])) out.push({ path: [field], message: ENDPOINT_ID_REFUSAL });
-  }
   const overrides = p.configOverrides;
   if (overrides && typeof overrides === 'object') {
     for (const knob of ENDPOINT_ID_REFUSED_KNOBS) {

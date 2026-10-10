@@ -7588,23 +7588,11 @@ const RETIRED_ANALYZER_FIELDS = [
 
 async function mockPutUserSettings(patch: UserSettingsPatch): Promise<UserSettings> {
   await wait(50);
-  /* #3084 P23 — mirrors the server's refusal of an endpoint model id in a saved
-     selection (server/src/workspace/user-settings.ts endpointModelIdRefusals),
-     with realPutUserSettings' error text. PR 3d deletes this block. Only
-     defaultAnalysisModel — A5 removed the two phase fields from the schema
-     entirely, so the mock (like the server) never sees them here at all. */
-  if (typeof patch.defaultAnalysisModel === 'string' && engineForModelId(patch.defaultAnalysisModel.trim()) === 'openai') {
-    throw new Error(
-      `User settings save failed (400): ${JSON.stringify({
-        error: 'Invalid user settings.',
-        issues: [{ path: ['defaultAnalysisModel'], message: 'OpenAI-compatible endpoint models cannot be selected in this build.' }],
-      })}`,
-    );
-  }
-  /* #3084 P23 — mirrors the server's refusal of an endpoint id in the three
-     ENDPOINT_ID_REFUSED_KNOBS (server/src/workspace/user-settings.ts
-     endpointModelIdRefusals), which runs BEFORE writeUserSettings. */
-  const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.phase0.model', 'analyzer.phase1.model', 'analyzer.ollama.model'] as const;
+  /* #3084 P23 — mirrors the server's refusal of an endpoint id in the one
+     surviving ENDPOINT_ID_REFUSED_KNOBS entry (server/src/workspace/user-settings.ts
+     endpointModelIdRefusals), which runs BEFORE writeUserSettings. PR 3d lifted the
+     refusal of defaultAnalysisModel and the two phase-model knobs. */
+  const ENDPOINT_ID_REFUSED_KNOBS = ['analyzer.ollama.model'] as const;
   const incomingOverrides = (patch as Record<string, unknown>).configOverrides as Record<string, unknown> | undefined;
   if (incomingOverrides && typeof incomingOverrides === 'object') {
     for (const knob of ENDPOINT_ID_REFUSED_KNOBS) {
