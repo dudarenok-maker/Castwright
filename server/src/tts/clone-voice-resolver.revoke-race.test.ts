@@ -5,8 +5,8 @@
    Wave-3c write-serialization fix. These two tests are written ON TOP of the
    production fix (which already shipped: `server/src/workspace/voice-library.ts`
    holds `withEntryLock` + `updateEntry`). A test that cannot be reddened by any
-   mutation proves nothing, so these are judged by the mutation table at the
-   bottom of this file, NOT by "goes green".
+   mutation proves nothing, so these are judged by whether a mutation of the
+   production fix reddens them, NOT by "goes green".
 
    Why we talk to the REAL lock and not a double: this repo's own
    `clone-voice-resolver.test.ts:434-456` defines a LOCKLESS `updateEntry`
@@ -176,8 +176,10 @@ describe('#1826 Step 1 — cloned-voice repair races against the real per-uuid l
 
     await deriveReachedP; // the repair holds a stale snapshot, mid-derive
     deriveGates[0](); // release the derive -> resolver proceeds to updateEntry
-    // The resolver either queued behind the revoke (real/M3) or finished
-    // without ever calling updateEntry (M1). Whichever structural event comes
+    // The resolver either queued behind the revoke (the real lock; with the
+    // lock bypassed — the "M3" mutation named in commit 3a0f55d9's message —
+    // it never queues) or finished without ever calling updateEntry (the
+    // "M1" mutation of that same message). Whichever structural event comes
     // first releases the revoke; racing two events, not timing.
     await Promise.race([repairQueuedP, settledP]);
     releaseRevoke(); // the revoke's mutate returns: revokedAt is written
@@ -208,17 +210,21 @@ describe('#1826 Step 1 — cloned-voice repair races against the real per-uuid l
 
   it('Test 2 — corner (b): two repairs and a revoke leave no `.pt`', async () => {
     /* Honest about what this pins: the RE-PURGE, not the lock. Test 1 is what
-       pins the lock (M3 is its instrument mutation). A reader who confuses the
-       two will trust this test past its reach. */
+       pins the lock (bypassing the lock — "M3" in commit 3a0f55d9's message —
+       is what reddens it). A reader who confuses the two will trust this test
+       past its reach. */
     const UUID = 'race-test-2';
     await vl.writeEntry(seedEntry(UUID));
 
     let reached = 0;
+    let firstResolve!: () => void;
     let bothResolve!: () => void;
+    const firstReachedP = new Promise<void>((r) => (firstResolve = r));
     const bothReachedP = new Promise<void>((r) => (bothResolve = r));
     const { deps, pts, purgeMock, deriveGates } = makeRaceDeps({
       onDeriveReached: () => {
         reached += 1;
+        if (reached === 1) firstResolve();
         if (reached === 2) bothResolve();
       },
     });
@@ -229,8 +235,14 @@ describe('#1826 Step 1 — cloned-voice repair races against the real per-uuid l
 
     // Worker A and Worker B are both in-flight repairs of the SAME voice; both
     // classify from the still-stale entry (their classify reads happen before
-    // either writes), then both park mid-derive.
+    // either writes), then both park mid-derive. B starts only once A is parked
+    // in derive so `deriveGates[0]` is A's and `[1]` is B's: which of two real
+    // `readEntry` fs reads finishes first is not deterministic, and with both
+    // started together the gate order could flip and hang `await pA`. A is
+    // parked BEFORE it writes, so B still classifies from the same stale entry
+    // and both still contend for the real lock afterwards.
     const pA = resolveClonedVoicesForChapter([req('Marlow', 'marlow', UUID)], deps);
+    await firstReachedP;
     const pB = resolveClonedVoicesForChapter([req('Reeve', 'reeve', UUID)], deps);
     await bothReachedP; // both are mid-derive, holding a stale snapshot
 
