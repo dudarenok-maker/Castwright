@@ -19,10 +19,10 @@ non-fork subagent, or the routing instruction is silently void.
 
 | Tier | Model | Selected for |
 |---|---|---|
-| Cheap | Haiku 4.5 | Mechanical search-and-report subagents, boilerplate/scaffolding, running commands and summarizing output, single well-specified bug fixes with a clear repro and no design decisions, high-volume parallel fan-out **via non-fork subagents** |
-| Default | Sonnet 5 | Everything else — standard feature work, most debugging, most non-fork subagent dispatch, code review, the main session itself |
-| Premium | Opus 4.8 | Ambiguous specs needing judgment, architecture/design tradeoffs with multiple viable options, adversarial review passes (below), cases where Sonnet visibly got stuck (2 failed attempts), irreversible/high-blast-radius decisions |
-| Reserved | Fable 5 | Never auto-selected. Explicit user approval only, per task |
+| Cheap | Haiku 5.5 | Mechanical search-and-report subagents, boilerplate/scaffolding, running commands and summarizing output, single well-specified bug fixes with a clear repro and no design decisions, high-volume parallel fan-out **via non-fork subagents** |
+| Default | Sonnet 5.5 | Everything else — standard feature work, most debugging, most non-fork subagent dispatch, code review, the main session itself |
+| Premium | Opus 5.5 | Ambiguous specs needing judgment, architecture/design tradeoffs with multiple viable options, adversarial review passes (below), cases where Sonnet visibly got stuck (2 failed attempts), irreversible/high-blast-radius decisions |
+| Reserved | Fable 5.1 | Never auto-selected. Explicit user approval only, per task |
 
 ## Named dispatch roles
 
