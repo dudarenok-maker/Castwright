@@ -29,12 +29,14 @@ import { castJsonPath } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
-import { selectAnalyzer, type StageCall, type AnalyzerSelection } from '../analyzer/index.js';
+import { selectAnalyzer, fallbackNames, type StageCall, type AnalyzerSelection } from '../analyzer/index.js';
+import { resolveAnalyzerFallbackTarget } from '../analyzer/fallback-target.js';
+import { inferEngineFromModelId } from '../analyzer/model-id.js';
 import { markReviewBusy, clearReviewBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';
 import { unloadResidentOllama } from './ollama-health.js';
 import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
-import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback, readUserSettings } from '../workspace/user-settings.js';
+import { readUserSettings } from '../workspace/user-settings.js';
 import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight } from '../analyzer/preflight.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { warmOllamaModel } from './ollama-health.js';
@@ -739,7 +741,7 @@ async function runScriptReviewJob(
     for (const sub of job.subscribers) sub.res.end();
     return;
   }
-  let activeSelection = selection; // Task 6 may reassign this to a Gemini-only selection
+  let activeSelection = selection; // Task 6 may reassign this to the fallback-target selection
 
   let fellBack = false;
   // Tracks the progress fraction of the last emitted phase event, so a
@@ -747,12 +749,21 @@ async function runScriptReviewJob(
   // announces itself at the CURRENT progress instead of snapping the bar
   // back to 0% — the "frozen at 0%" symptom this feature exists to kill.
   let lastEmittedProgress = 0;
+  /* #3084 P30 — the fallback target is marked busy only once the review switches to it, and stays
+     marked until the review ends (the finally below). A local target behind a non-local primary
+     takes the Ollama review pin; no unload at the end, since the primary never loaded Ollama. */
+  let releaseFallbackRun: () => void = () => {};
+  let pinnedLocalFallback = false;
   const switchToFallback = (reason: string): void => {
     if (fellBack) return;
     fellBack = true;
-    // Re-select a Gemini-only analyzer (fallbackModel has no ':' → gemini),
-    // so subsequent chapters skip the dead Ollama primary entirely.
+    // Re-select the configured fallback target, so subsequent chapters skip the dead primary entirely.
     if (selection.fallbackModel) activeSelection = selectAnalyzer({ model: selection.fallbackModel });
+    releaseFallbackRun = markEndpointRunActive(endpointIdsForModelIds(selection.fallbackModel ? [selection.fallbackModel] : []));
+    if (selection.engine !== 'local' && selection.fallbackModel !== null && inferEngineFromModelId(selection.fallbackModel) === 'local') {
+      markReviewBusy(located.bookDir);
+      pinnedLocalFallback = true;
+    }
     send({
       kind: 'phase',
       phaseId: 0,
@@ -760,7 +771,7 @@ async function runScriptReviewJob(
       label: 'Reviewing script',
       activityState: 'waiting',
       model: activeSelection.model,
-      engine: activeSelection.engine, // 'gemini'
+      engine: activeSelection.engine,
       fallbackReason: reason,
     });
   };
@@ -787,19 +798,18 @@ async function runScriptReviewJob(
           warm.kind === 'load_timeout'
             ? `The analyzer model (${activeSelection.model}) didn't finish loading in time. It may be large or on a slow disk — try again, or pick a smaller model.`
             : `Couldn't reach the analyzer model (${activeSelection.model}). Is Ollama running and the model pulled?`;
-        // Part 1.4 — an opt-out user who has a Gemini key but turned Cloud
-        // fallback OFF has a one-click path back: nudge them to it.
-        const canReenableCloud = getResolvedGeminiApiKey() != null && !getResolvedAllowCloudFallback();
-        const message = canReenableCloud
-          ? `${base} Or turn on Cloud fallback in Settings → analyzer to use Gemini when the local analyzer is unavailable.`
-          : base;
+        // #3084 P30 — no analyzer fallback is configured: point at where one is chosen.
+        const message =
+          resolveAnalyzerFallbackTarget() === 'off' ? `${base} Or choose an analyzer fallback in Advanced Settings → Analyzer fallback.` : base;
         send({ kind: 'error', code: 'model_load_failed', message, model: activeSelection.model, warmKind: warm.kind });
         for (const sub of job.subscribers) sub.res.end();
         return;
       }
-      // A Gemini fallback exists (key present + cloud fallback on) — don't abort
+      // A fallback target exists (resolved, with a usable key/endpoint) — don't abort
       // a setup that works today.
-      switchToFallback(warm.kind === 'load_timeout' ? 'Ollama model load timed out' : 'Ollama unreachable');
+      /* #3084 P30 — name the model that failed and the target the review moves to. */
+      const names = fallbackNames(activeSelection, { engine: inferEngineFromModelId(selection.fallbackModel), model: selection.fallbackModel });
+      switchToFallback(`${warm.kind === 'load_timeout' ? 'Ollama model load timed out' : 'Ollama unreachable'} (${names.primary}) — switched to ${names.target}`);
     }
   }
 
@@ -1092,6 +1102,8 @@ async function runScriptReviewJob(
     }
   } finally {
     releaseEndpointRun();
+    releaseFallbackRun(); // #3084 P30 — release the fallback target's run mark, if it ever activated
+    if (pinnedLocalFallback) clearReviewBusy(located.bookDir);
     for (const sub of job.subscribers) clearInterval(sub.keepAlive);
     /* Release the run-scoped analyzer pin: clear this run's busy ref and, once
        no analysis/other review still needs the model (ref-counted), evict it

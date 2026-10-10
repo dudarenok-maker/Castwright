@@ -17,10 +17,14 @@ import type { Analyzer, AnalyzerSelection, StageCall } from '../analyzer/index.j
 import type { Stage1ChapterOutput, Stage1Output, Stage2ChapterOutput } from '../handoff/schemas.js';
 import type { ChapterHint } from '../store/manuscripts.js';
 import { putManuscript, removeManuscript } from '../store/manuscripts.js';
-import { AnalysisAbortedError, AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../analyzer/errors.js';
+import { AnalysisAbortedError, AnalyzerReasoningOverflowError, GeminiContentBlockedError, AnalyzerUnreachableError } from '../analyzer/errors.js';
 import { LocalUnreachableError } from '../analyzer/ollama.js';
-import { FallbackAnalyzer } from '../analyzer/index.js';
-import { USER_SETTINGS_PATH } from '../workspace/user-settings.js';
+import { FallbackAnalyzer, targetInputGuard } from '../analyzer/index.js';
+import { USER_SETTINGS_PATH, _setUserSettingsCacheForTest, _resetUserSettingsCache } from '../workspace/user-settings.js';
+import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+import { estimateInputTokens } from '../analyzer/runner/prompt.js';
+import { resolveCapacity } from '../analyzer/capacity.js';
+import { resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
 
 /* ── spy analyzer / selection helpers (mirrors analysis-pipelining.test.ts) */
 
@@ -429,6 +433,216 @@ describe('phase events name the effective model after a silent local→gemini fa
       removeManuscript(manuscriptId);
       await clearAnalysisCache(manuscriptId);
       process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+    }
+  }, 60_000);
+
+  async function getManuscriptForTest(id: string) {
+    return (await import('../store/manuscripts.js')).getManuscript(id) as never;
+  }
+
+  it('#3084 P30 — after a switch to a local target, phase-0 events name the Ollama model with engine local, not gemini', async () => {
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] }); // resolveCapacity({engine:'openai',...}) needs the endpoint saved
+    const manuscriptId = `test-fallback-local-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const primary: Analyzer = {
+      ...buildSpyPhase0Analyzer(),
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      },
+    };
+    const selection: AnalyzerSelection = {
+      analyzer: new FallbackAnalyzer(primary, buildSpyPhase0Analyzer()),
+      engine: 'openai',
+      model: 'openai:lab::qwen3-30b',
+      fallbackModel: 'qwen3.5:4b',
+    };
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
+    const job = buildStubJob(manuscriptId);
+    const events = attachEventCapture(job);
+    try {
+      const { getManuscript } = await import('../store/manuscripts.js');
+      await runMainAnalyzerJob(job, getManuscript(manuscriptId) as never, selection, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      const switched = (events as Array<CapturedEvent & { model?: string; engine?: string }>).filter((e) => e.kind === 'phase' && e.phaseId === 0 && e.model === 'qwen3.5:4b');
+      expect(switched.length).toBeGreaterThan(0);
+      expect(switched.every((e) => e.engine === undefined || e.engine === 'local')).toBe(true);
+      expect(switched.some((e) => e.engine === 'local')).toBe(true);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
+
+  it('#3084 P30 — two chapters sized for a large-context endpoint, dispatched together (analyzer.ollama.concurrency 2), reach the Ollama target split to its stage-1 budget, and none above it', async () => {
+    const big = analyzerEndpointSchema.parse({ id: 'big', name: 'Big', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 262144 });
+    /* Explicit values, so the preconditions hold on any box: `analyzer.stage1.chunkCharBudget` has no registry `max`. */
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [big],
+      configOverrides: { 'analyzer.stage1.chunkCharBudget': 200_000, 'analyzer.ollama.numCtx': 32_768, 'analyzer.ollama.concurrency': 2 },
+    });
+    const tokens = (text: string) => estimateInputTokens('', [{ role: 'user', parts: [{ text }] }]);
+    const localCapacity = resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' });
+    const localContext = localCapacity.contextTokens;
+    const targetBudget = resolveStage1ChunkCharBudget(localCapacity, 'x', []); // 45,875 chars: 32,768 × 0.7 × 2, under the 200,000 ceiling
+    const sentence = 'The lamp guttered and the room went quiet. ';
+    /* About 1.6× the target's stage-1 budget: over that budget, under Ollama's raw context. */
+    const body = sentence.repeat(2 * Math.floor((0.8 * targetBudget) / sentence.length));
+    const endpointBudget = resolveStage1ChunkCharBudget(resolveCapacity({ engine: 'openai', model: 'openai:big::qwen3-30b' }), body, []);
+    /* Preconditions: the endpoint sizes each chapter as one chunk; that chunk is over the target's stage-1
+       budget, but a raw-context check (estimateInputTokens ≤ contextTokens) would let it through unsplit. */
+    expect(endpointBudget).toBeGreaterThanOrEqual(body.length);
+    expect(body.length).toBeGreaterThan(targetBudget);
+    expect(tokens(body)).toBeLessThan(localContext);
+
+    const manuscriptId = `test-fallback-capacity-${Date.now()}`;
+    putManuscript({
+      manuscriptId, format: 'plaintext', title: 'Capacity', wordCount: 1, byteSize: body.length * 2, uploadedAt: new Date().toISOString(),
+      sourceText: body + body,
+      chapterHints: [{ id: 1, title: 'One', body }, { id: 2, title: 'Two', body }] as unknown as ChapterHint[],
+    });
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const primaryCalls: number[] = [];
+    const targetCalls: Array<{ chapterId: number; bodyChars: number | undefined }> = [];
+    /* Hold every primary call until both chapters have reached the primary, so both were sized for
+       the endpoint before any switch lands (what two workers do in production). */
+    let openGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      openGate = resolve;
+    });
+    const spy = buildSpyPhase0Analyzer();
+    const primary: Analyzer = {
+      ...spy,
+      async runStage1Chapter(_m: string, chapterId: number): Promise<Stage1ChapterOutput> {
+        primaryCalls.push(chapterId);
+        if (new Set(primaryCalls).size === 2) openGate();
+        await gate;
+        throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      },
+    };
+    const target: Analyzer = {
+      ...spy,
+      async runStage1Chapter(m: string, chapterId: number, p: string, call: StageCall): Promise<Stage1ChapterOutput> {
+        targetCalls.push({ chapterId, bodyChars: call.inputBody?.length });
+        return spy.runStage1Chapter(m, chapterId, p, call);
+      },
+    };
+    const selection: AnalyzerSelection = {
+      analyzer: new FallbackAnalyzer(primary, target, undefined, targetInputGuard({ engine: 'local', model: 'qwen3.5:4b' })),
+      engine: 'openai',
+      model: 'openai:big::qwen3-30b',
+      fallbackModel: 'qwen3.5:4b',
+    };
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
+    const job = buildStubJob(manuscriptId);
+    try {
+      await runMainAnalyzerJob(job, await getManuscriptForTest(manuscriptId), selection, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      /* Both chapters reached the primary, sized for the endpoint, before the switch. */
+      expect(new Set(primaryCalls.slice(0, 2))).toEqual(new Set([1, 2]));
+      /* Every chunk that reached the target carried its body (the main job's stage-1 call site sets
+         StageCall.inputBody), and none was above the target's stage-1 budget. */
+      expect(targetCalls.length).toBeGreaterThan(0);
+      expect(targetCalls.every((c) => c.bodyChars !== undefined && c.bodyChars <= targetBudget)).toBe(true);
+      /* Both in-flight chapters were split for the target. */
+      expect(targetCalls.filter((c) => c.chapterId === 1).length).toBeGreaterThanOrEqual(2);
+      expect(targetCalls.filter((c) => c.chapterId === 2).length).toBeGreaterThanOrEqual(2);
+      expect(job.engine).toBe('local');
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
+
+  it('#3084 P30 — a chapter started after the switch is sized for the target by its chunk budget, with no pre-send check (concurrency 1)', async () => {
+    const big = analyzerEndpointSchema.parse({ id: 'big', name: 'Big', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'any', contextTokens: 262144 });
+    /* Explicit values, so the preconditions hold on any box: `analyzer.stage1.chunkCharBudget` has no registry `max`. */
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [big],
+      configOverrides: { 'analyzer.stage1.chunkCharBudget': 200_000, 'analyzer.ollama.numCtx': 32_768, 'analyzer.ollama.concurrency': 1 },
+    });
+    const tokens = (text: string) => estimateInputTokens('', [{ role: 'user', parts: [{ text }] }]);
+    const localContext = resolveCapacity({ engine: 'local', model: 'qwen3.5:4b' }).contextTokens;
+    const sentence = 'The lamp guttered and the room went quiet. ';
+    const paragraph = sentence.repeat(20);
+    /* Paragraph-separated (unlike a single run-on string) so splitBodyIntoChunks — which only
+       cuts on blank-line boundaries — can actually divide this body once it is over budget. */
+    const body = Array.from({ length: Math.ceil(((localContext - 1_000) * 1.2 * 4) / paragraph.length) }, () => paragraph).join('\n\n');
+    expect(resolveStage1ChunkCharBudget(resolveCapacity({ engine: 'openai', model: 'openai:big::qwen3-30b' }), body, [])).toBeGreaterThanOrEqual(body.length);
+    expect(tokens(body)).toBeGreaterThan(localContext);
+
+    const manuscriptId = `test-fallback-capacity-later-${Date.now()}`;
+    putManuscript({
+      manuscriptId, format: 'plaintext', title: 'Capacity later', wordCount: 1, byteSize: body.length * 2, uploadedAt: new Date().toISOString(),
+      sourceText: body + body,
+      chapterHints: [{ id: 1, title: 'One', body }, { id: 2, title: 'Two', body }] as unknown as ChapterHint[],
+    });
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const targetCalls: Array<{ chapterId: number; tokens: number }> = [];
+    const spy = buildSpyPhase0Analyzer();
+    const primary: Analyzer = {
+      ...spy,
+      async runStage1Chapter(): Promise<Stage1ChapterOutput> {
+        throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      },
+    };
+    const target: Analyzer = {
+      ...spy,
+      async runStage1Chapter(m: string, chapterId: number, p: string, call: StageCall): Promise<Stage1ChapterOutput> {
+        targetCalls.push({ chapterId, tokens: tokens(p) });
+        return spy.runStage1Chapter(m, chapterId, p, call);
+      },
+    };
+    /* No guard: chapter 1 reaches the target oversized (it was sized before the switch); chapter 2,
+       started after it, must be sized for Ollama by the chunk budget alone. */
+    const selection: AnalyzerSelection = { analyzer: new FallbackAnalyzer(primary, target), engine: 'openai', model: 'openai:big::qwen3-30b', fallbackModel: 'qwen3.5:4b' };
+    setPhase1Selection(buildSelection(buildSpyPhase1Analyzer(), 'phase1-test-model'));
+    const job = buildStubJob(manuscriptId);
+    try {
+      await runMainAnalyzerJob(job, await getManuscriptForTest(manuscriptId), selection, { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      const chapter2 = targetCalls.filter((c) => c.chapterId === 2);
+      expect(chapter2.length).toBeGreaterThanOrEqual(2);
+      expect(chapter2.every((c) => c.tokens <= localContext)).toBe(true);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
+    }
+  }, 60_000);
+
+  it('#3084 P30 — after a phase-1 switch, phase-1 events carry the target engine', async () => {
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] }); // resolveCapacity({engine:'openai',...}) needs the endpoint saved
+    const manuscriptId = `test-fallback-phase1-${Date.now()}`;
+    registerStubManuscript(manuscriptId, 2);
+    const origCovRetries = process.env.STAGE2_COVERAGE_RETRIES;
+    process.env.STAGE2_COVERAGE_RETRIES = '0';
+    const phase1Primary: Analyzer = {
+      ...buildSpyPhase1Analyzer(),
+      async runStage2Chapter(): Promise<Stage2ChapterOutput> {
+        throw new AnalyzerUnreachableError('connect ECONNREFUSED', 'openai');
+      },
+    };
+    setPhase1Selection({ analyzer: new FallbackAnalyzer(phase1Primary, buildSpyPhase1Analyzer()), engine: 'openai', model: 'openai:lab::qwen3-30b', fallbackModel: 'qwen3.5:4b' });
+    const job = buildStubJob(manuscriptId);
+    const events = attachEventCapture(job);
+    try {
+      await runMainAnalyzerJob(job, await getManuscriptForTest(manuscriptId), buildSelection(buildSpyPhase0Analyzer(), 'phase0-test-model'), { requestedFresh: true, allowStage1Shrink: true, requestedModel: undefined });
+      const switched = (events as Array<CapturedEvent & { model?: string; engine?: string }>).filter((e) => e.kind === 'phase' && e.phaseId === 1 && e.model === 'qwen3.5:4b');
+      expect(switched.length).toBeGreaterThan(0);
+      expect(switched.every((e) => e.engine === 'local')).toBe(true);
+    } finally {
+      removeManuscript(manuscriptId);
+      await clearAnalysisCache(manuscriptId);
+      process.env.STAGE2_COVERAGE_RETRIES = origCovRetries;
+      _resetUserSettingsCache();
     }
   }, 60_000);
 });

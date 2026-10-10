@@ -35,7 +35,13 @@ let manuscriptId: string;
    derives a finite, num_ctx-bound budget and a large chapter splits. */
 const { runStage3, engineState: instructEngineState } = vi.hoisted(() => ({
   runStage3: vi.fn(),
-  engineState: { engine: 'gemini' as 'gemini' | 'local', selectError: null as Error | null, model: 'test-model' as string },
+  engineState: {
+    engine: 'gemini' as 'gemini' | 'local',
+    selectError: null as Error | null,
+    model: 'test-model' as string,
+    fallbackModel: null as string | null,
+    activate: false,
+  },
 }));
 
 const { instructMarks, instructReleases } = vi.hoisted(() => ({ instructMarks: [] as string[][], instructReleases: { count: 0 } }));
@@ -74,7 +80,7 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
         analyzer: fakeAnalyzer,
         engine: instructEngineState.engine,
         model: instructEngineState.model,
-        fallbackModel: null,
+        fallbackModel: instructEngineState.fallbackModel,
       };
     },
   };
@@ -532,6 +538,37 @@ describe('POST /api/books/:bookId/instruct-annotation', () => {
     } finally {
       spy.mockRestore();
       instructEngineState.model = 'test-model';
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 P30 — an instruct pass marks its fallback endpoint only once the fallback activates', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    instructEngineState.model = 'openai:lab::m';
+    instructEngineState.fallbackModel = 'openai:spare::m';
+    runStage3.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      if (instructEngineState.activate) call.onFallback?.({ reason: 'switched' });
+      return { annotations: [] };
+    });
+    try {
+      instructMarks.length = 0;
+      await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({ model: 'openai:lab::m' });
+      expect(instructMarks).toEqual([['lab']]);
+
+      instructEngineState.activate = true;
+      instructMarks.length = 0;
+      instructReleases.count = 0;
+      await request(app).post(`/api/books/${bookId}/instruct-annotation`).send({ model: 'openai:lab::m' });
+      expect(instructMarks).toEqual([['lab'], ['spare']]);
+      expect(instructReleases.count).toBe(2);
+      expect(isEndpointBusy('spare')).toBe(false);
+    } finally {
+      instructEngineState.model = 'test-model';
+      instructEngineState.fallbackModel = null;
+      instructEngineState.activate = false;
       _resetUserSettingsCache();
       _resetEndpointBusyForTest();
     }

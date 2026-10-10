@@ -18,7 +18,8 @@ import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
 import { _setUserSettingsCacheForTest, _resetUserSettingsCache, USER_SETTINGS_PATH } from '../workspace/user-settings.js';
 import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
-import { _resetEndpointBusyForTest } from '../analyzer/analyzer-concurrency.js';
+import { _resetEndpointBusyForTest, isEndpointBusy } from '../analyzer/analyzer-concurrency.js';
+import { isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
 import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 import type { ScriptReviewOutput } from '../handoff/schemas.js';
 import type {
@@ -858,7 +859,7 @@ describe('POST /api/books/:bookId/script-review', () => {
       expect(runReview).not.toHaveBeenCalled();
     });
 
-    it('Part 1.4 — warm fail with a Gemini key present but Cloud fallback OFF nudges the user to re-enable it', async () => {
+    it('Part 1.4 — warm fail with no analyzer fallback (target off) points the user to Advanced Settings → Analyzer fallback (#3084 P30)', async () => {
       writeBook(SENTENCES);
       selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({
         analyzer: {
@@ -875,7 +876,7 @@ describe('POST /api/books/:bookId/script-review', () => {
         fallbackModel: null, // gate off ⇒ selectAnalyzer wired no fallback
       }));
       warmOllamaModelMock.mockResolvedValue({ ok: false, kind: 'unreachable', status: 503, error: 'down' });
-      // Key present (env) + cloud fallback opted OUT.
+      // Key present (env) + cloud fallback opted OUT — the legacy step reads 'off'.
       const priorKey = process.env.GEMINI_API_KEY;
       process.env.GEMINI_API_KEY = 'k-present';
       _setUserSettingsCacheForTest({ allowCloudFallback: false });
@@ -885,7 +886,7 @@ describe('POST /api/books/:bookId/script-review', () => {
         const err = events.find((e) => e.kind === 'error' && e.code === 'model_load_failed') as
           | { message?: string }
           | undefined;
-        expect(err?.message).toMatch(/turn on Cloud fallback/i);
+        expect(err?.message).toMatch(/choose an analyzer fallback in Advanced Settings → Analyzer fallback/i);
       } finally {
         if (priorKey === undefined) delete process.env.GEMINI_API_KEY;
         else process.env.GEMINI_API_KEY = priorKey;
@@ -1162,6 +1163,97 @@ describe('POST /api/books/:bookId/script-review', () => {
       await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
       expect(reviewMarks).toEqual([['lab']]);
       expect(reviewReleases.count).toBe(1);
+    } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  const lab = () => analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+  const spare = () => analyzerEndpointSchema.parse({ id: 'spare', name: 'Spare', baseUrl: 'http://127.0.0.1:8081/v1', gpu: 'cuda:0', contextTokens: 32768 });
+  const reviewOn = (fallbackModel: string) => {
+    const base = (selectAnalyzerForPhaseMock.getMockImplementation() as (o: unknown) => Record<string, unknown>)({ phase: 'phase1' });
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'openai', model: 'openai:lab::m', fallbackModel }));
+  };
+
+  it('#3084 P30 — a healthy review holds no mark for its fallback endpoint on the same card', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab(), spare()] });
+    reviewOn('openai:spare::m');
+    let spareBusy: boolean | undefined;
+    runReview.mockImplementation(async () => {
+      spareBusy = isEndpointBusy('spare');
+      return { ops: [] };
+    });
+    reviewMarks.length = 0;
+    try {
+      await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(reviewMarks).toEqual([['lab']]);
+      expect(spareBusy).toBe(false);
+    } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 P30 — once the review falls back, its endpoint target is marked until the review ends', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab(), spare()] });
+    reviewOn('openai:spare::m');
+    let spareBusy: boolean | undefined;
+    runReview.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      call.onFallback?.({ reason: 'Analyzer endpoint unreachable (Lab · m) — switched to endpoint Spare (m)' });
+      spareBusy = isEndpointBusy('spare');
+      return { ops: [] };
+    });
+    reviewMarks.length = 0;
+    reviewReleases.count = 0;
+    try {
+      await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(reviewMarks).toEqual([['lab'], ['spare']]);
+      expect(spareBusy).toBe(true);
+      expect(reviewReleases.count).toBe(2);
+      expect(isEndpointBusy('spare')).toBe(false);
+    } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 P30 — a healthy endpoint review whose fallback target is local does not pin Ollama', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab()] });
+    reviewOn('qwen3.5:4b');
+    let busyDuringCall: boolean | undefined;
+    runReview.mockImplementation(async () => {
+      busyDuringCall = isAnyAnalyzerRunBusy();
+      return { ops: [] };
+    });
+    try {
+      await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(busyDuringCall).toBe(false);
+    } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 P30 — once an endpoint review falls back to local, the Ollama review pin holds until the end, then releases without an unload', async () => {
+    writeBook(SENTENCES);
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab()] });
+    reviewOn('qwen3.5:4b');
+    let busyAfterSwitch: boolean | undefined;
+    runReview.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      call.onFallback?.({ reason: 'Analyzer endpoint unreachable (Lab · m) — switched to Ollama (qwen3.5:4b)' });
+      busyAfterSwitch = isAnyAnalyzerRunBusy();
+      return { ops: [] };
+    });
+    unloadResidentOllamaMock.mockClear();
+    try {
+      await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(busyAfterSwitch).toBe(true);
+      expect(isAnyAnalyzerRunBusy()).toBe(false);
+      expect(unloadResidentOllamaMock).not.toHaveBeenCalled();
     } finally {
       _resetUserSettingsCache();
       _resetEndpointBusyForTest();

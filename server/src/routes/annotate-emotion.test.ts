@@ -35,7 +35,13 @@ let manuscriptId: string;
    derives a finite, num_ctx-bound budget and a large chapter splits. */
 const { runEmotion, engineState: emotionEngineState } = vi.hoisted(() => ({
   runEmotion: vi.fn(),
-  engineState: { engine: 'gemini' as 'gemini' | 'local', selectError: null as Error | null, model: 'test-model' as string },
+  engineState: {
+    engine: 'gemini' as 'gemini' | 'local',
+    selectError: null as Error | null,
+    model: 'test-model' as string,
+    fallbackModel: null as string | null,
+    activate: false,
+  },
 }));
 
 const { emotionMarks, emotionReleases } = vi.hoisted(() => ({ emotionMarks: [] as string[][], emotionReleases: { count: 0 } }));
@@ -74,7 +80,7 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
         analyzer: fakeAnalyzer,
         engine: emotionEngineState.engine,
         model: emotionEngineState.model,
-        fallbackModel: null,
+        fallbackModel: emotionEngineState.fallbackModel,
       };
     },
   };
@@ -524,6 +530,37 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     } finally {
       spy.mockRestore();
       emotionEngineState.model = 'test-model';
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 P30 — an emotion pass marks its fallback endpoint only once the fallback activates', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    emotionEngineState.model = 'openai:lab::m';
+    emotionEngineState.fallbackModel = 'openai:spare::m';
+    runEmotion.mockImplementation(async (_m: string, _c: number, _p: string, call: { onFallback?: (i: { reason: string }) => void }) => {
+      if (emotionEngineState.activate) call.onFallback?.({ reason: 'switched' });
+      return { annotations: [] };
+    });
+    try {
+      emotionMarks.length = 0;
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(emotionMarks).toEqual([['lab']]);
+
+      emotionEngineState.activate = true;
+      emotionMarks.length = 0;
+      emotionReleases.count = 0;
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(emotionMarks).toEqual([['lab'], ['spare']]);
+      expect(emotionReleases.count).toBe(2);
+      expect(isEndpointBusy('spare')).toBe(false);
+    } finally {
+      emotionEngineState.model = 'test-model';
+      emotionEngineState.fallbackModel = null;
+      emotionEngineState.activate = false;
       _resetUserSettingsCache();
       _resetEndpointBusyForTest();
     }

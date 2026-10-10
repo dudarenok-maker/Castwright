@@ -187,6 +187,8 @@ annotateEmotionRouter.post(
        between those calls must not read as idle to TTS eviction. Assigned as the first
        statement INSIDE the try below, whose finally every path reaches (A4). */
     let releaseEndpointRun: () => void = () => {};
+    /* #3084 P30 — the fallback target is marked busy only once the pass switches to it. */
+    let releaseFallbackRun: (() => void) | undefined;
     try {
       releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([selection.model]));
       for (let i = 0; i < chapterIds.length; i += 1) {
@@ -244,6 +246,13 @@ annotateEmotionRouter.post(
                 waitMs,
                 reason,
               }),
+            /* #3084 P30 — the fallback target is marked busy only once the pass switches to it. */
+            onFallback: ({ reason }) => {
+              console.log(`[annotate-emotion] ${reason}`);
+              if (selection.fallbackModel && !releaseFallbackRun) {
+                releaseFallbackRun = markEndpointRunActive(endpointIdsForModelIds([selection.fallbackModel]));
+              }
+            },
           };
           await withPassEval(
             emotionCall,
@@ -326,6 +335,7 @@ annotateEmotionRouter.post(
       }
     } finally {
       releaseEndpointRun();
+      releaseFallbackRun?.();
       clearInterval(keepAlive);
     }
 
