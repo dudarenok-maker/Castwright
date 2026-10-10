@@ -77,8 +77,9 @@ export interface UiState {
   /** Plan 286 — which A/B player entry is open, if any. Transient; never
       persisted (see UI_PERSIST_WHITELIST). */
   openRevision: OpenRevision | null;
-  /** Plan 286 — true while an accept/reject/dismiss op is in flight, so
-      the player can disable its actions for the round trip. Transient. */
+  /** Plan 286 — true while an accept/reject op or an unrecorded-preview
+      restore is in flight, so the player can disable its actions for the
+      round trip. Dismiss does not set it. Transient. */
   revisionOpInFlight: boolean;
   /** #3400 — revision ops + unrecorded restores currently in flight;
       revisionOpInFlight is derived from it (> 0). Lives in the store, not a
