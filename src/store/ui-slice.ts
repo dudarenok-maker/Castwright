@@ -4,13 +4,24 @@
    at the slice top — they cut across stages and have their own lifecycles. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
-import type { Stage, View, TtsModelKey } from '../lib/types';
+import type { Stage, View, TtsModelKey, Revision } from '../lib/types';
 import type { Chapter } from '../lib/types';
 import type { RegenScope } from '../modals/regenerate';
 import { DEFAULT_MODEL } from '../lib/models';
 import { DEFAULT_TTS_MODEL, TTS_MODEL_OPTIONS } from '../lib/tts-models';
 import { fetchAccountSettings, saveAccountSettings } from './account-slice';
 import type { RootState } from './index';
+import type { components as ApiComponents } from '../lib/api-types';
+
+/* Plan 286 (OD29) — what finalize did with A/B review state (Task 7). */
+type ReviewOutcome = ApiComponents['schemas']['ReviewOutcome'];
+
+/** Plan 286 — which A/B player entry (if any) is open: a server-owned
+    revision, or the client-only preview stub. Never routed by id or by a
+    missing `origin` — only by `kind`. */
+export type OpenRevision =
+  | { kind: 'server'; revisionId: string; chapterId: number }
+  | { kind: 'preview-stub' };
 
 const READY_DEFAULTS = { currentChapterId: 3, openProfileId: null as string | null };
 
@@ -30,6 +41,25 @@ export interface PreviewRegenCtx {
   remainingChapterIds: number[];
   reason: string;
   note: string;
+  /** Plan 286 — the book the preview belongs to, so a completion seen
+      elsewhere can be told apart from one on the active book (OD28). */
+  bookId: string;
+  /** Plan 286 (OD30) — the client-only stub shown when the preview's
+      render recorded no server entry. Lives only here, never in the
+      revisions cache; routed by `ui.openRevision.kind === 'preview-stub'`. */
+  stub?: Revision;
+  /** Plan 286 (OD27/OD28) — set on EVERY completion of this preview's
+      chapter (on its book or elsewhere), so a finished preview whose
+      player was closed, never opened, or failed to build stays
+      re-openable: arriving at `bookId` re-runs the open path (Task 24).
+      `reviewOutcome` is finalize's answer (Task 7): 'none' and 'failed'
+      open a stub, and 'recorded' opens the server entry or is dropped as
+      resolved elsewhere when it is gone (OD29). `stubFallback` (OD23)
+      says whether a 'recorded' completion whose refetch failed twice may
+      still open a stub: true only when the completion was seen on its
+      own book; false when it finished elsewhere, or once a server entry
+      for the chapter has been seen (Task 21). */
+  completed?: { reviewOutcome?: ReviewOutcome; stubFallback: boolean };
 }
 
 export interface UiState {
@@ -44,6 +74,17 @@ export interface UiState {
   regenInitialScope: RegenScope | null;
   regenCharacterCtx: RegenCharacterCtx | null;
   previewRegen: PreviewRegenCtx | null;
+  /** Plan 286 — which A/B player entry is open, if any. Transient; never
+      persisted (see UI_PERSIST_WHITELIST). */
+  openRevision: OpenRevision | null;
+  /** Plan 286 — true while an accept/reject op or an unrecorded-preview
+      restore is in flight, so the player can disable its actions for the
+      round trip. Dismiss does not set it. Transient. */
+  revisionOpInFlight: boolean;
+  /** #3400 — revision ops + unrecorded restores currently in flight;
+      revisionOpInFlight is derived from it (> 0). Lives in the store, not a
+      module counter, so it is per-store and cannot leak across stores/HMR. */
+  revisionOpsInFlight: number;
   /** Session-only banner shown on the Cast view after a voice-edit Save
       reveals that one or more done chapters now hold audio that no longer
       matches the character's current voice/identity. Click "Regenerate
@@ -55,7 +96,6 @@ export interface UiState {
     characterName: string;
     chapterIds: number[];
   } | null;
-  showRevisionPlayer: boolean;
   /** Plan 55 — when truthy, the revision-history modal is mounted. The
       value carries `chapterId` (null = cross-chapter view) so the modal
       can scope its list. */
@@ -150,8 +190,10 @@ const initialState: UiState = {
   regenInitialScope: null,
   regenCharacterCtx: null,
   previewRegen: null,
+  openRevision: null,
+  revisionOpInFlight: false,
+  revisionOpsInFlight: 0,
   staleAudio: null,
-  showRevisionPlayer: false,
   revisionHistoryFor: null,
   showDriftReport: false,
   driftReportCharacterFilter: null,
@@ -353,6 +395,40 @@ export const uiSlice = createSlice({
     setPreviewRegen: (s, a: PayloadAction<PreviewRegenCtx | null>) => {
       s.previewRegen = a.payload;
     },
+    /** Plan 286 (OD31) — the preview's book was re-parsed, its manuscript
+        replaced, its chapters restructured, or the book deleted. Chapter ids
+        may now mean different chapters, and the server dropped any pending
+        entry for the touched chapters, so the preview cannot be resumed: drop it.
+        The new take stays as the chapter's audio (nothing is restored). Only a
+        preview of THAT book; a no-op otherwise. An open stub player is closed by
+        the watcher's rule 2 (Task 21), since its stub is gone. */
+    clearPreviewForBook: (s, a: PayloadAction<string>) => {
+      if (s.previewRegen?.bookId === a.payload) s.previewRegen = null;
+    },
+    setOpenRevision: (s, a: PayloadAction<OpenRevision | null>) => {
+      s.openRevision = a.payload;
+    },
+    beginRevisionOp: (s) => {
+      s.revisionOpsInFlight += 1;
+      s.revisionOpInFlight = true;
+    },
+    endRevisionOp: (s) => {
+      s.revisionOpsInFlight = Math.max(0, s.revisionOpsInFlight - 1);
+      s.revisionOpInFlight = s.revisionOpsInFlight > 0;
+    },
+    /* Plan 286 (OD30) — set the preview's stub AND open it, in ONE action.
+       Two separate dispatches (setPreviewRegen with the stub, then
+       setOpenRevision) let the player watcher run between them: with a
+       cached entry for the chapter, the watcher's rule 1 would drop the
+       stub while no player is open, then rule 2 would hide the stub
+       player the second dispatch opens — nothing opens, no toast. In one
+       action the watcher sees the stub player already open, so rule 1
+       switches it to the cached entry instead. No-op without a preview. */
+    openPreviewStub: (s, a: PayloadAction<Revision>) => {
+      if (!s.previewRegen) return;
+      s.previewRegen.stub = a.payload;
+      s.openRevision = { kind: 'preview-stub' };
+    },
     setStaleAudio: (s, a: PayloadAction<UiState['staleAudio']>) => {
       s.staleAudio = a.payload;
     },
@@ -361,9 +437,6 @@ export const uiSlice = createSlice({
     },
     setRevisionHistoryFor: (s, a: PayloadAction<{ chapterId: number | null } | null>) => {
       s.revisionHistoryFor = a.payload;
-    },
-    setShowRevisionPlayer: (s, a: PayloadAction<boolean>) => {
-      s.showRevisionPlayer = a.payload;
     },
     setShowDriftReport: (s, a: PayloadAction<boolean>) => {
       s.showDriftReport = a.payload;
@@ -532,6 +605,15 @@ export function selectPhaseModelPick(
   const entry = ui.analyzerPhasePicks[manuscriptId];
   return phaseId === 0 ? entry?.phase0 : entry?.phase1;
 }
+
+/** Plan 286 (OD28) — the preview stub, shown (and counted in the Status
+    popover) only while its own book is the active one. Navigating away
+    hides it without clearing it. */
+export const selectActivePreviewStub = (s: { ui: UiState }): Revision | undefined => {
+  const pv = s.ui.previewRegen;
+  const active = (s.ui.stage as { bookId?: string } | undefined)?.bookId ?? null;
+  return pv?.stub && pv.bookId === active ? pv.stub : undefined;
+};
 
 export const uiSelectors = {
   stageKind: (s: RootState) => s.ui.stage.kind,

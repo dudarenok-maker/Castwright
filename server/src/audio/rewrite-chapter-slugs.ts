@@ -3,9 +3,18 @@
    content changed.
 
    Files involved per chapter (any subset may exist):
-     <slug>.mp3         the audio itself
+     <slug>.mp3 / .m4a / .ogg  the audio itself (the book's output format)
      <slug>.segments.json  per-segment timing + chapter metadata
      <slug>.peaks.json     waveform peaks summary (plan 35-related)
+     <slug>.previous.mp3 / <slug>.previous.segments.json
+                           the A/B take's preserved prior render
+                           (audio/previous-audio.ts) — follows the live
+                           audio, else a chapter that inherits the slug
+                           inherits another chapter's previous take (#3400)
+     <slug>.lufs.json / .embeddings.json / .render-integrity.json /
+     <slug>.render-integrity-attempted.json
+                           per-chapter loudness + QA sidecars; describe THIS
+                           chapter's audio, so they move/delete with it (#3400)
 
    Rename strategy is two-pass via a temp slug to avoid collisions on
    permutations (chapter 3 → 1, chapter 1 → 3 would otherwise clobber
@@ -25,11 +34,31 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
+import { CHAPTER_AUDIO_EXTS, type ChapterAudioExt } from '../workspace/chapter-audio-file.js';
 
-/** Suffixes of the three companion files per chapter audio. Kept in one
+/** Suffixes of the companion files per chapter audio. Kept in one
     array so add-a-new-companion changes touch one site. */
-const COMPANION_SUFFIXES = ['mp3', 'segments.json', 'peaks.json'] as const;
-type CompanionSuffix = (typeof COMPANION_SUFFIXES)[number];
+const COMPANION_SUFFIXES = [
+  ...CHAPTER_AUDIO_EXTS,
+  'segments.json',
+  'peaks.json',
+  'previous.mp3',
+  'previous.segments.json',
+  'lufs.json',
+  'embeddings.json',
+  'render-integrity.json',
+  'render-integrity-attempted.json',
+] as const;
+type CompanionSuffix =
+  | ChapterAudioExt
+  | 'segments.json'
+  | 'peaks.json'
+  | 'previous.mp3'
+  | 'previous.segments.json'
+  | 'lufs.json'
+  | 'embeddings.json'
+  | 'render-integrity.json'
+  | 'render-integrity-attempted.json';
 
 export type ChapterAudioOp =
   | { kind: 'delete'; from: string }
@@ -72,6 +101,32 @@ export async function rewriteChapterSlugs(
 
   const renames = ops.filter((op): op is Extract<ChapterAudioOp, { kind: 'rename' }> => op.kind === 'rename');
   const deletes = ops.filter((op): op is Extract<ChapterAudioOp, { kind: 'delete' }> => op.kind === 'delete');
+
+  // Phase 0: deletes. Run BEFORE any rename so they hit the OLD occupant of the
+  // slug: a delete queued for a slug that another chapter is renamed INTO
+  // (merging in a "Chapter N" book) would otherwise remove the renamed
+  // chapter's freshly-landed files (#3400). A delete on a slug that is itself
+  // a rename source is skipped — those files are about to move away intact.
+  const renameSources = new Set(renames.map((op) => op.from));
+  for (const op of deletes) {
+    if (renameSources.has(op.from)) continue;
+    for (const suffix of COMPANION_SUFFIXES) {
+      const path = suffixPath(audioRoot, op.from, suffix);
+      if (!existsSync(path)) continue;
+      try {
+        await rm(path, { force: true });
+        summary.deleted.push({ slug: op.from, suffix });
+      } catch (e) {
+        const code = (e as { code?: string }).code;
+        if (code === 'ENOENT') continue;
+        summary.errors.push({
+          op,
+          message: `delete failed: ${(e as Error).message}`,
+          suffix,
+        });
+      }
+    }
+  }
 
   // Phase 1: rename each source slug's companion files to a unique temp slug.
   // Tracking which (op, suffix, tempSlug) tuples succeeded lets phase 2 only
@@ -123,51 +178,54 @@ export async function rewriteChapterSlugs(
     }
   }
 
-  // Phase 3: rewrite each finalised segments.json's embedded chapter
-  // metadata. (Peaks.json carries no chapter id / title per plan 35;
+  // Phase 3: rewrite each finalised segments.json's (live and previous) embedded chapter
+  // metadata, and the chapterId on render-integrity.json's verdict rows. (Peaks.json carries no chapter id / title per plan 35;
   // skip.) Best-effort — a corrupt file leaves stale metadata behind
   // but doesn't fail the op, since the audio still plays and the
   // frontend reads chapter metadata from state.json, not the segments
   // file.
   for (const { op } of staged) {
-    const segPath = suffixPath(audioRoot, op.to, 'segments.json');
-    if (!existsSync(segPath)) continue;
-    try {
-      const seg = await readJson<{ chapterId?: number; chapterTitle?: string }>(segPath);
-      if (!seg) continue;
-      const next = {
-        ...seg,
-        chapterId: op.newChapterId,
-        chapterTitle: op.newChapterTitle,
-      };
-      await writeJsonAtomic(segPath, next);
-    } catch (e) {
-      summary.errors.push({
-        op,
-        message: `segments.json metadata rewrite failed: ${(e as Error).message}`,
-        suffix: 'segments.json',
-      });
-    }
-  }
-
-  // Phase 4: deletes. Run after renames so a delete op targeting a slug
-  // that was just renamed AWAY is a no-op (ENOENT tolerated).
-  for (const op of deletes) {
-    for (const suffix of COMPANION_SUFFIXES) {
-      const path = suffixPath(audioRoot, op.from, suffix);
-      if (!existsSync(path)) continue;
+    for (const suffix of ['segments.json', 'previous.segments.json'] as const) {
+      const segPath = suffixPath(audioRoot, op.to, suffix);
+      if (!existsSync(segPath)) continue;
       try {
-        await rm(path, { force: true });
-        summary.deleted.push({ slug: op.from, suffix });
+        const seg = await readJson<{ chapterId?: number; chapterTitle?: string }>(segPath);
+        if (!seg) continue;
+        const next = {
+          ...seg,
+          chapterId: op.newChapterId,
+          chapterTitle: op.newChapterTitle,
+        };
+        await writeJsonAtomic(segPath, next);
       } catch (e) {
-        const code = (e as { code?: string }).code;
-        if (code === 'ENOENT') continue;
         summary.errors.push({
           op,
-          message: `delete failed: ${(e as Error).message}`,
+          message: `${suffix} metadata rewrite failed: ${(e as Error).message}`,
           suffix,
         });
       }
+    }
+
+    /* `render-integrity.json` is an array of verdict rows, each carrying the
+       `chapterId` it was scored under (fs-51; qa-report attributes voice drift
+       by it). Re-stamp only rows that have one: a legacy row without it must
+       stay unattributed. lufs / embeddings / attempted embed no chapter
+       identity, so they move untouched. */
+    const verdictPath = suffixPath(audioRoot, op.to, 'render-integrity.json');
+    if (!existsSync(verdictPath)) continue;
+    try {
+      const rows = await readJson<Array<{ chapterId?: number }>>(verdictPath);
+      if (!Array.isArray(rows)) continue;
+      await writeJsonAtomic(
+        verdictPath,
+        rows.map((r) => (r && typeof r === 'object' && 'chapterId' in r ? { ...r, chapterId: op.newChapterId } : r)),
+      );
+    } catch (e) {
+      summary.errors.push({
+        op,
+        message: `render-integrity.json chapterId rewrite failed: ${(e as Error).message}`,
+        suffix: 'render-integrity.json',
+      });
     }
   }
 

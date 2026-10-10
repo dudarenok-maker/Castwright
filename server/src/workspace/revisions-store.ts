@@ -20,24 +20,28 @@
    (readJson's JSON.parse), so no store write ever overwrites it; only
    resetRevisions (reparse / replace) replaces a corrupt file, as the old `rm`
    did. assertRevisionsResettable is the preflight reparse/replace run BEFORE
-   deleting anything. (In PR 1 the client's raw PUT /state still writes the
-   file outside this module, by design.)
+   deleting anything. (Since plan 286 the client's PUT /state refuses a
+   `revisions` slice, so nothing writes the file outside this module.)
 
-   PR 1 IS DARK: no production code calls the write ops except resetRevisions.
-   The client remains the only writer of `pending`. */
+   WRITERS. The server records `pending` entries (finalize via recordPending /
+   dropPendingForChapter(s)) and the per-op routes (routes/revision-ops.ts)
+   write through beginRevisionOp / commitRevisionOp / dismissDriftId. The
+   client writes nothing. */
 
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readJson, writeJsonAtomic } from './state-io.js';
-import { audioDir, revisionsJsonPath } from './paths.js';
+import { audioDir, revisionsJsonPath, stateJsonPath } from './paths.js';
 import { withKeyLock } from './file-lock.js';
 import { hasPreviousAudio as previousAudioExists } from './preserve-previous-audio.js';
 import { SCHEMA_SEAMS, migrateSeamDoc, stampSeamSchema, UnsupportedSchemaError } from './schema-migrate.js';
 
 const REVISIONS_SEAM = SCHEMA_SEAMS.find((s) => s.label === 'revisions.json')!;
 
-export interface ChapterRef { id: number; slug: string }
+/** `uuid` / `audioRenderedAt` are the chapter's identity stamps (state.json); optional so a chapter
+    that has not been stamped yet still resolves. See entryMatchesChapter. */
+export interface ChapterRef { id: number; slug: string; uuid?: string; audioRenderedAt?: string }
 export interface StoredRevision {
   id: string; chapterId: number; characterId: string;
   triggeredBy?: string; triggeredAgo?: string; oldDuration?: string; newDuration?: string;
@@ -45,6 +49,11 @@ export interface StoredRevision {
   segments: unknown[];
   /** Present (`'server'`) on entries the server recorded; absent on legacy client-written ones. */
   origin?: 'server';
+  /** Identity of the chapter this entry was recorded for (chapter `uuid`, which survives renumbering) and of the render it pairs with (`audioRenderedAt`). Stamped by finalize; absent on legacy entries. Checked by entryMatchesChapter. */
+  chapterUuid?: string;
+  renderedAt?: string;
+  /** Plan 286 OD20 — a legacy entry the old client never flipped (stuck "Rendering…"), surfaced because .previous.mp3 exists. Its A side is the take kept before the chapter's last render, which may not be the take this entry was recorded against. */
+  recovered?: true;
 }
 export interface StoredTimelineEntry {
   id: string; chapterId: number; characterId?: string;
@@ -80,8 +89,8 @@ export function revisionsLockKey(bookDir: string): string {
   return `revisions:${resolve(bookDir)}`;
 }
 
-/** Per-chapter key serialising accept/reject (and the legacy previous-audio
-    routes) across their whole audio step. Distinct from the revisions lock:
+/** Per-chapter key serialising accept/reject (and restore-unrecorded)
+    across their whole audio step. Distinct from the revisions lock:
     lock order is `revision-op` -> `revisions`, never the reverse. */
 export function revisionOpLockKey(bookDir: string, chapterId: number): string {
   return `revision-op:${resolve(bookDir)}:${chapterId}`;
@@ -110,10 +119,12 @@ const EVENT_KINDS = new Set(['accepted', 'rejected', 'rolled-back']);
 
 /** Pure. Never writes. `previousExists(chapterId)` answers whether
     `audio/<slug>.previous.mp3` exists for that chapter. Rules (spec §1):
-    drop the legacy `drift` copy; default missing fields; drop legacy
-    (origin-less) entries with `playable:false`; keep a legacy entry whose
-    `playable` is true OR absent only if `.previous.mp3` exists; keep the LAST
-    entry when a chapter has several. */
+    drop the legacy `drift` copy; default missing fields; keep a legacy
+    (origin-less) entry — whatever its `playable` flag — only while
+    `.previous.mp3` exists, surfaced as playable, and stamped
+    `recovered: true` when it was stored `playable:false` (plan 286 OD20);
+    keep the LAST entry per chapter, except that a recovered entry never
+    replaces a non-recovered one (plan 286, pass 3 #5). */
 export function normaliseRevisions(
   raw: unknown,
   previousExists: (chapterId: number) => boolean,
@@ -128,15 +139,22 @@ export function normaliseRevisions(
     if (typeof e.id !== 'string' || typeof e.characterId !== 'string') continue;
     if (typeof e.chapterId !== 'number' || !Number.isInteger(e.chapterId)) continue;
     if (e.origin !== 'server') {
-      if (e.playable === false) continue;
       if (!previousExists(e.chapterId)) continue;
     }
+    const recovered = e.origin !== 'server' && (e.playable === false || e.recovered === true);
+    /* Plan 286 (OD20, pass 3 #5) — a recovered entry never replaces a non-recovered
+       one for its chapter, whatever their order: a failed splice appended
+       after a playable take must not shadow it (it would show as "Recovered"
+       with no segments, and the next store write would persist the loss). */
+    const held = byChapter.get(e.chapterId);
+    if (recovered && held && !held.recovered) continue;
     byChapter.delete(e.chapterId);
     byChapter.set(e.chapterId, {
       ...(e as unknown as StoredRevision),
       segments: Array.isArray(e.segments) ? e.segments : [],
       playable: true,
       hasPreviousAudio: typeof e.hasPreviousAudio === 'boolean' ? e.hasPreviousAudio : true,
+      ...(recovered ? { recovered: true as const } : {}),
     });
   }
 
@@ -169,6 +187,18 @@ export function normaliseRevisions(
   }
 
   return { schema: 1, fileId, rev, pending: [...byChapter.values()], dismissed, acceptedSelections, timeline };
+}
+
+/** An entry's `chapterId` is positional: a merge/split/reorder renumbers chapters, so after a restructure
+    whose drop failed (best-effort) the id can name a DIFFERENT chapter, or the same chapter re-rendered
+    (a merge survivor), whose `.previous.*` is not the A side this entry was recorded against. An entry
+    that carries identity stamps is therefore honoured only while the chapter at its id still has the
+    same uuid AND render stamp. A legacy / client-written entry carries neither stamp and is kept
+    (nothing to compare against; its behaviour is unchanged). */
+export function entryMatchesChapter(entry: StoredRevision, chapter: ChapterRef): boolean {
+  if (entry.chapterUuid !== undefined && chapter.uuid !== entry.chapterUuid) return false;
+  if (entry.renderedAt !== undefined && chapter.audioRenderedAt !== entry.renderedAt) return false;
+  return true;
 }
 
 export function toRevisionsState(bookId: string, file: RevisionsFile): RevisionsState {
@@ -216,6 +246,19 @@ async function loadRaw(bookDir: string): Promise<Record<string, unknown> | null>
   return migrateSeamDoc(REVISIONS_SEAM, raw).doc;
 }
 
+/** state.json's chapters as they are on disk now; [] when it is missing, unreadable or malformed
+    (the snapshot alone then decides, as before). */
+async function readLiveChapters(bookDir: string): Promise<ChapterRef[]> {
+  try {
+    const path = stateJsonPath(bookDir);
+    if (!existsSync(path)) return [];
+    const state = await readJson<{ chapters?: unknown }>(path);
+    return Array.isArray(state?.chapters) ? (state.chapters as ChapterRef[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 async function load(bookDir: string, chapters: readonly ChapterRef[]): Promise<RevisionsFile> {
   return (await loadWithStored(bookDir, chapters)).file;
 }
@@ -232,13 +275,30 @@ async function loadWithStored(
   const slugById = new Map(chapters.map((c) => [c.id, c.slug] as const));
   const root = audioDir(bookDir);
   const raw = await loadRaw(bookDir);
-  return {
-    file: normaliseRevisions(raw, (chapterId) => {
-      const slug = slugById.get(chapterId);
-      return slug !== undefined && previousAudioExists(root, slug);
+  const normalised = normaliseRevisions(raw, (chapterId) => {
+    const slug = slugById.get(chapterId);
+    return slug !== undefined && previousAudioExists(root, slug);
+  });
+  /* A stamped entry whose chapter no longer sits at its id is invisible to every read and op (begin
+     answers not-found) and falls off the file at the next write. A missing chapter is left to
+     beginRevisionOp's own branch. */
+  const chapterById = new Map(chapters.map((c) => [c.id, c] as const));
+  /* The caller's snapshot can be stale: finalize passes the state.json it read before its own
+     write, and a sibling chapter's finalize (it stamps state.json BEFORE recording its entry) may
+     have landed since. An entry the snapshot refuses is therefore also checked against state.json as
+     it is now (read here, under the revisions lock for every writer; no other lock is taken), and
+     only dropped when that refuses it too. */
+  const live = new Map((await readLiveChapters(bookDir)).map((c) => [c.id, c] as const));
+  const file: RevisionsFile = {
+    ...normalised,
+    pending: normalised.pending.filter((p) => {
+      const chapter = chapterById.get(p.chapterId);
+      if (chapter === undefined || entryMatchesChapter(p, chapter)) return true;
+      const current = live.get(p.chapterId);
+      return current !== undefined && entryMatchesChapter(p, current);
     }),
-    stored: normaliseRevisions(raw, () => true),
   };
+  return { file, stored: normaliseRevisions(raw, () => true) };
 }
 
 async function writeStamped(bookDir: string, file: RevisionsFile): Promise<void> {
@@ -253,6 +313,17 @@ async function save(bookDir: string, file: RevisionsFile): Promise<RevisionsFile
 
 export async function readRevisions(bookDir: string, chapters: readonly ChapterRef[]): Promise<RevisionsFile> {
   return load(bookDir, chapters);
+}
+
+/** Plan 286 — lock-free: does the normalised view hold a pending entry for
+    this chapter? restore-unrecorded's check-then-act guard (spec §4: a guard
+    against the common case, not a fence). */
+export async function hasPendingForChapter(
+  bookDir: string,
+  chapters: readonly ChapterRef[],
+  chapterId: number,
+): Promise<boolean> {
+  return (await load(bookDir, chapters)).pending.some((p) => p.chapterId === chapterId);
 }
 
 /** Preflight for reparse / replace, run BEFORE they delete anything (lock-free
@@ -300,6 +371,22 @@ export async function dropPendingForChapter(
   });
 }
 
+/** Plan 286 — drop pending entries for several chapters a restructure
+    touched, in one write under the revisions lock. No-op (no write) when
+    none of the ids match. */
+export async function dropPendingForChapters(
+  bookDir: string,
+  chapters: readonly ChapterRef[],
+  chapterIds: readonly number[],
+): Promise<RevisionsFile> {
+  return withKeyLock(revisionsLockKey(bookDir), async () => {
+    const file = await load(bookDir, chapters);
+    const ids = new Set(chapterIds);
+    if (!file.pending.some((p) => ids.has(p.chapterId))) return file;
+    return save(bookDir, { ...file, pending: file.pending.filter((p) => !ids.has(p.chapterId)) });
+  });
+}
+
 export async function dismissDriftId(
   bookDir: string,
   chapters: readonly ChapterRef[],
@@ -336,7 +423,7 @@ function hasOutcome(file: RevisionsFile, op: RevisionOpKind, revisionId: string)
   return Object.values(file.timeline).some((list) => list.some((t) => t.id === revisionId && t.eventKind === kind));
 }
 
-/** appendTimelineEntryHelper's reversible-chain rule (revisions-slice.ts): a
+/** The timeline's reversible-chain rule (mirrored by src/mocks/mock-revisions.ts): a
     new reversible entry flips every prior entry on the chapter to non-reversible. */
 function appendTimelineEntry(
   timeline: Record<string, StoredTimelineEntry[]>,
@@ -409,5 +496,13 @@ export async function commitRevisionOp(
     });
     return { kind: 'committed', file: next };
   });
+}
+
+/** Plan 286 (invariant 8) — the text a whole-request 500 may show for a
+    store failure: UnsupportedSchemaError's own fixed "upgrade" sentence, or
+    the caller's fixed fallback. Never an fs error's message (it embeds the
+    absolute workspace path). */
+export function revisionsFailureText(err: unknown, fallback: string): string {
+  return err instanceof UnsupportedSchemaError ? err.message : fallback;
 }
 

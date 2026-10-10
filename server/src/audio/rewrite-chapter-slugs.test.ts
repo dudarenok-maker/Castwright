@@ -142,6 +142,35 @@ describe('rewriteChapterSlugs', () => {
     expect(result.renamed.map((r) => r.suffix)).toEqual(['mp3']);
   });
 
+  // #3400 — finalize writes <slug>.m4a / <slug>.ogg for non-mp3 books; the live
+  // audio must follow the same rename/delete rules as .mp3.
+  for (const ext of ['m4a', 'ogg'] as const) {
+    it(`swaps two chapters' live .${ext} audio together with their segments`, async () => {
+      for (const slug of ['01-a', '02-b']) {
+        writeFileSync(join(audioRoot, `${slug}.${ext}`), `audio-bytes:${slug}`);
+        writeFileSync(join(audioRoot, `${slug}.segments.json`), JSON.stringify({ segments: [] }));
+      }
+      const result = await rewriteChapterSlugs(audioRoot, [
+        { kind: 'rename', from: '01-a', to: '02-a', newChapterId: 2, newChapterTitle: 'A' },
+        { kind: 'rename', from: '02-b', to: '01-b', newChapterId: 1, newChapterTitle: 'B' },
+      ]);
+      expect(result.errors).toEqual([]);
+      expect(readFileSync(join(audioRoot, `02-a.${ext}`), 'utf8')).toBe('audio-bytes:01-a');
+      expect(readFileSync(join(audioRoot, `01-b.${ext}`), 'utf8')).toBe('audio-bytes:02-b');
+      expect(existsSync(join(audioRoot, `01-a.${ext}`))).toBe(false);
+      expect(existsSync(join(audioRoot, `02-b.${ext}`))).toBe(false);
+    });
+
+    it(`deletes the live .${ext} audio for a delete op`, async () => {
+      writeFileSync(join(audioRoot, `05-doomed.${ext}`), 'x');
+      writeFileSync(join(audioRoot, '05-doomed.segments.json'), '{}');
+      const result = await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '05-doomed' }]);
+      expect(result.errors).toEqual([]);
+      expect(existsSync(join(audioRoot, `05-doomed.${ext}`))).toBe(false);
+      expect(result.deleted.map((d) => d.suffix)).toContain(ext);
+    });
+  }
+
   it('tolerates a delete on a slug that has no files (silent no-op)', async () => {
     const result = await rewriteChapterSlugs(audioRoot, [
       { kind: 'delete', from: '99-never-existed' },
@@ -181,3 +210,195 @@ import { readdirSync } from 'node:fs';
 function readDirNames(dir: string): string[] {
   return readdirSync(dir);
 }
+
+/* #3400 — the A/B take's `.previous.*` artifacts follow the live audio. */
+function seedPrevious(slug: string): void {
+  writeFileSync(join(audioRoot, `${slug}.previous.mp3`), `previous-bytes:${slug}`);
+  writeFileSync(
+    join(audioRoot, `${slug}.previous.segments.json`),
+    JSON.stringify({ bookId: 'b', chapterId: 99, chapterTitle: 'OLD', segments: [] }),
+  );
+}
+
+describe('rewriteChapterSlugs — .previous.* artifacts', () => {
+  it('moves a chapter\'s previous take with it on a swap, never leaving it under a slug another chapter now owns', async () => {
+    seed('01-a');
+    seed('02-b');
+    seedPrevious('01-a'); // only chapter A has a previous take
+
+    await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-b', newChapterId: 2, newChapterTitle: 'a' },
+      { kind: 'rename', from: '02-b', to: '01-a', newChapterId: 1, newChapterTitle: 'b' },
+    ]);
+
+    // A's previous take travelled to A's new slug.
+    expect(readFileSync(join(audioRoot, '02-b.previous.mp3'), 'utf8')).toBe('previous-bytes:01-a');
+    expect(existsSync(join(audioRoot, '02-b.previous.segments.json'))).toBe(true);
+    // B (now 01-a) had no previous take and must not inherit A's.
+    expect(existsSync(join(audioRoot, '01-a.previous.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.segments.json'))).toBe(false);
+    // Embedded chapter metadata follows the live segments rewrite.
+    const seg = JSON.parse(readFileSync(join(audioRoot, '02-b.previous.segments.json'), 'utf8'));
+    expect(seg).toMatchObject({ chapterId: 2, chapterTitle: 'a' });
+  });
+
+  it('chain A→B while B→C does not clobber either chapter\'s previous take', async () => {
+    seed('01-a');
+    seed('02-b');
+    seedPrevious('01-a');
+    seedPrevious('02-b');
+
+    await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-b', newChapterId: 2, newChapterTitle: 'a' },
+      { kind: 'rename', from: '02-b', to: '03-c', newChapterId: 3, newChapterTitle: 'b' },
+    ]);
+
+    expect(readFileSync(join(audioRoot, '02-b.previous.mp3'), 'utf8')).toBe('previous-bytes:01-a');
+    expect(readFileSync(join(audioRoot, '03-c.previous.mp3'), 'utf8')).toBe('previous-bytes:02-b');
+    expect(existsSync(join(audioRoot, '01-a.previous.mp3'))).toBe(false);
+  });
+
+  it('deletes the previous take when the chapter\'s audio is deleted (content changed)', async () => {
+    seed('01-a');
+    seedPrevious('01-a');
+
+    await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '01-a' }]);
+
+    expect(existsSync(join(audioRoot, '01-a.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '01-a.previous.segments.json'))).toBe(false);
+  });
+
+  it('a delete whose slug is also a rename target removes the OLD occupant, never the chapter renamed into it (#3400)', async () => {
+    seed('03-c');
+    seedPrevious('03-c');
+    seed('04-d');
+    seedPrevious('04-d');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'delete', from: '03-c' },
+      { kind: 'rename', from: '04-d', to: '03-c', newChapterId: 3, newChapterTitle: 'd' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    // Renamed chapter's live + previous + segments + peaks landed at the slug...
+    expect(readFileSync(join(audioRoot, '03-c.mp3'), 'utf8')).toBe('audio-bytes:04-d');
+    expect(readFileSync(join(audioRoot, '03-c.previous.mp3'), 'utf8')).toBe('previous-bytes:04-d');
+    expect(existsSync(join(audioRoot, '03-c.segments.json'))).toBe(true);
+    expect(existsSync(join(audioRoot, '03-c.peaks.json'))).toBe(true);
+    expect(existsSync(join(audioRoot, '03-c.previous.segments.json'))).toBe(true);
+    // ...and the deleted chapter's bytes are gone, the source slug vacated.
+    expect(existsSync(join(audioRoot, '04-d.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '04-d.previous.mp3'))).toBe(false);
+    expect(result.deleted.map((d) => d.slug)).toEqual(Array(5).fill('03-c'));
+  });
+});
+
+/* #3400 — per-chapter sidecars written next to the audio by finalize
+   (`.lufs.json`), the content-QA pass (`.embeddings.json`) and the
+   render-integrity scorer (`.render-integrity.json`,
+   `.render-integrity-attempted.json`) describe THIS chapter's audio, so they
+   must follow it on a slug swap and go with it on a delete. */
+const PER_CHAPTER_SIDECARS = [
+  'lufs.json',
+  'embeddings.json',
+  'render-integrity.json',
+  'render-integrity-attempted.json',
+] as const;
+
+function seedSidecars(slug: string): void {
+  for (const suffix of PER_CHAPTER_SIDECARS) {
+    writeFileSync(join(audioRoot, `${slug}.${suffix}`), JSON.stringify(`${suffix}:${slug}`));
+  }
+}
+
+describe('rewriteChapterSlugs — per-chapter sidecars (#3400)', () => {
+  it('swaps two chapters\' loudness/QA sidecars together with their audio', async () => {
+    seed('01-a');
+    seed('02-b');
+    seedSidecars('01-a');
+    seedSidecars('02-b');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-a', newChapterId: 2, newChapterTitle: 'A' },
+      { kind: 'rename', from: '02-b', to: '01-b', newChapterId: 1, newChapterTitle: 'B' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    for (const suffix of PER_CHAPTER_SIDECARS) {
+      expect(readFileSync(join(audioRoot, `02-a.${suffix}`), 'utf8')).toBe(JSON.stringify(`${suffix}:01-a`));
+      expect(readFileSync(join(audioRoot, `01-b.${suffix}`), 'utf8')).toBe(JSON.stringify(`${suffix}:02-b`));
+      expect(existsSync(join(audioRoot, `01-a.${suffix}`))).toBe(false);
+      expect(existsSync(join(audioRoot, `02-b.${suffix}`))).toBe(false);
+    }
+  });
+
+  it('rewrites the chapterId embedded in a moved render-integrity.json to the new id', async () => {
+    seed('02-old');
+    const row = (characterId: string, extra: object = {}) => ({
+      characterId,
+      sentenceIds: [1],
+      verdict: 'voice-mismatch',
+      ...extra,
+    });
+    writeFileSync(
+      join(audioRoot, '02-old.render-integrity.json'),
+      JSON.stringify([row('c1', { chapterId: 2 }), row('c2', { chapterId: 2 }), row('legacy')]),
+    );
+    // The other sidecars embed no chapter identity (lufs: measurements; embeddings:
+    // characterId/sentenceIds/vec; attempted: attemptedAt) and must move byte-for-byte.
+    const attempted = JSON.stringify({ attemptedAt: '2026-01-01T00:00:00.000Z' });
+    writeFileSync(join(audioRoot, '02-old.render-integrity-attempted.json'), attempted);
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '02-old', to: '03-new', newChapterId: 3, newChapterTitle: 'New' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    const rows = JSON.parse(readFileSync(join(audioRoot, '03-new.render-integrity.json'), 'utf8'));
+    expect(rows.map((r: { chapterId?: number }) => r.chapterId)).toEqual([3, 3, undefined]);
+    expect(readFileSync(join(audioRoot, '03-new.render-integrity-attempted.json'), 'utf8')).toBe(attempted);
+  });
+
+  it('a corrupt render-integrity.json is reported, not thrown, and the other files still move', async () => {
+    seed('02-old');
+    writeFileSync(join(audioRoot, '02-old.render-integrity.json'), '{not json');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '02-old', to: '03-new', newChapterId: 3, newChapterTitle: 'New' },
+    ]);
+
+    expect(existsSync(join(audioRoot, '03-new.mp3'))).toBe(true);
+    expect(result.errors.map((e) => e.suffix)).toEqual(['render-integrity.json']);
+  });
+
+  it('deletes the sidecars when the chapter\'s audio is deleted', async () => {
+    seed('05-doomed');
+    seedSidecars('05-doomed');
+
+    const result = await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '05-doomed' }]);
+
+    expect(result.errors).toEqual([]);
+    for (const suffix of PER_CHAPTER_SIDECARS) {
+      expect(existsSync(join(audioRoot, `05-doomed.${suffix}`))).toBe(false);
+    }
+  });
+
+  it('a delete on a slug that is also a rename source leaves the files to move away intact', async () => {
+    seed('01-x');
+    seedSidecars('01-x');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'delete', from: '01-x' },
+      { kind: 'rename', from: '01-x', to: '02-y', newChapterId: 2, newChapterTitle: 'Y' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.deleted).toEqual([]);
+    expect(readFileSync(join(audioRoot, '02-y.mp3'), 'utf8')).toBe('audio-bytes:01-x');
+    for (const suffix of PER_CHAPTER_SIDECARS) {
+      expect(existsSync(join(audioRoot, `02-y.${suffix}`))).toBe(true);
+      expect(existsSync(join(audioRoot, `01-x.${suffix}`))).toBe(false);
+    }
+  });
+});

@@ -586,8 +586,8 @@ Design rationale:
   class while holding a later one, or two requests deadlock. The per-book
   `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
   outside that order: nothing but revisions.json is written under it and no
-  other lock is taken while it is held. Accept/reject (and the legacy
-  `…/audio/previous` routes) additionally serialise per chapter on a
+  other lock is taken while it is held. Accept/reject and `restore-unrecorded`
+  additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
   while holding `revisions`. Since #2260 that
@@ -609,17 +609,24 @@ Design rationale:
   journals, which are lineage and must stay best-effort. Swallowing at an
   identity site would report success with `cast.json` written and the
   retirement lost; swallowing at an authoritative write reported success with
-  `cast.json` and `state.json` never written at all. FIVE handlers swallow it
+  `cast.json` and `state.json` never written at all. SIX handlers swallow it
   deliberately: `reconcileRejectEdgesOnDisk`
   (`server/src/routes/analysis.ts`), which runs after every retirement has
   landed and writes only cosmetic `notLinkedTo` edges the next persist
   re-heals; the three interim cast.json snapshots (per-chapter, stage-1,
   subset), which a final write in the same run clobbers, so a timeout there
-  diverges nothing (#2292); and `applyReview`
+  diverges nothing (#2292); `applyReview`
   (`server/src/audio/finalize-chapter-write.ts`, plan 285), whose A/B
   review record on the per-book revisions lock is best-effort with respect
   to a render that has already landed — it logs in full and surfaces only
-  `reviewRecorded: false`, never the lock key. A NINTH site fails loud in a
+  `reviewOutcome: 'failed'`, never the lock key; and the restructure pending
+  drop (`server/src/routes/chapters-restructure.ts`, plan 286) — an entry
+  it fails to drop answers `revision_not_found` on the next accept/reject
+  once its chapter has been renumbered or re-rendered, because a
+  server-recorded entry carries the chapter's `uuid` and `audioRenderedAt`
+  and `revisions-store.ts` refuses it when the chapter at its id no longer
+  matches (`entryMatchesChapter`, #3400). A legacy client-written entry
+  has no stamps and is not covered. A NINTH site fails loud in a
   different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
@@ -646,8 +653,9 @@ Design rationale:
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET and `resume-scoring`), `voices`,
   `qwen-voice`, `voice-style`, `single-design`, `script-review`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
-  merge routes and of the two legacy `…/audio/previous` routes in
-  `chapter-audio.ts` (`DELETE` and `…/restore`); and
+  merge routes and of `restore-unrecorded` in `chapter-audio.ts` (the two
+  legacy `…/audio/previous` routes there answer 410 unconditionally since
+  plan 286 and no longer acquire a lock); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
   `detail` blob (that blob renders in the UI's collapsible). The raw error goes

@@ -99,10 +99,13 @@ test.describe('Fix audio — full run', () => {
     await expect(page.getByTestId('fix-audio-summary')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByTestId('fix-audio-summary')).toContainText(/chapters? updated/i);
 
-    const pendingCount = await page.evaluate(
-      () => (window as unknown as StoreWin).__store__?.getState().revisions.pending.length ?? 0,
-    );
-    expect(pendingCount).toBeGreaterThan(0);
+    /* Plan 286 (#3400) — the runner no longer writes pending locally; it
+       refetches the active book's server-owned revisions after the splice
+       completes, so the pending count lands asynchronously rather than being
+       true the instant the summary appears. */
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as StoreWin).__store__?.getState().revisions.pending.length ?? 0), { timeout: 10_000 })
+      .toBeGreaterThan(0);
   });
 });
 

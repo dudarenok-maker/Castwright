@@ -18,7 +18,9 @@ import {
   applyRename,
   applyExclude,
   computeBodySplitIndex,
+  touchedChapterIds,
   type RestructureSentence,
+  type AudioOp,
 } from './restructure.js';
 import type { BookStateJson } from './scan.js';
 import type { ChapterHint } from '../store/manuscripts.js';
@@ -584,5 +586,87 @@ describe('uuid preservation across restructure (srv-35)', () => {
     expect(result.state.chapters[0].uuid).toBe('u-a');
     expect(result.state.chapters[1].uuid).toBe('u-b');
     expect(result.state.chapters[1].excluded).toBe(true);
+  });
+});
+
+/* -- touchedChapterIds (plan 286) ------------------------------------ */
+
+describe('touchedChapterIds', () => {
+  const ch = (id: number, slug: string) => ({ id, title: slug, slug });
+
+  it('plan 286 — touchedChapterIds covers content change (same id), id change, and slug-only rename; leaves untouched chapters', () => {
+    const old = [ch(1, '01-a'), ch(2, '02-b'), ch(3, '03-c'), ch(4, '04-d'), ch(5, '05-e')];
+    const neu = [ch(1, '01-a'), ch(2, '02-b'), ch(3, '03-c-renamed'), ch(4, '04-merged')];
+    const ops: AudioOp[] = [{ kind: 'delete', from: '02-b' }, { kind: 'rename', from: '03-c', to: '03-c-renamed', newChapterId: 3, newChapterTitle: 'C' }];
+    // 2: content changed, same id+slug (delete op) · 3: slug-only rename · 4: same id, new slug · 5: gone · 1: untouched
+    expect(touchedChapterIds(old as never, neu as never, ops)).toEqual([2, 3, 4, 5]);
+  });
+});
+
+describe('post-process passes move audio with the slug (#3400)', () => {
+  const T = '2026-01-01T00:00:00.000Z';
+  const rendered = (id: number, title: string) => ({
+    id,
+    title,
+    audioModelKey: 'kokoro-v1',
+    audioRenderedAt: T,
+  });
+  const slugs = (ops: AudioOp[], kind: AudioOp['kind']) =>
+    ops
+      .filter((o) => o.kind === kind)
+      .map((o) => (o.kind === 'rename' ? `${o.from}>${o.to}` : o.from))
+      .sort();
+
+  it('exclude: chapters retitled only by the generic-title pass get a rename from their original slug', () => {
+    const state = makeState([
+      rendered(1, 'Prologue'),
+      rendered(2, 'Chapter 1'),
+      rendered(3, 'Chapter 2'),
+      rendered(4, 'Chapter 3'),
+    ]);
+    const hints = makeHints(state.chapters.map((c) => ({ id: c.id, title: c.title, body: 'b' })));
+    const r = applyExclude(state, hints, [], { chapterIds: [4], excluded: true });
+    expect(r.state.chapters.map((c) => c.slug)).toEqual([
+      '01-prologue',
+      '02-chapter-2',
+      '03-chapter-3',
+      '04-chapter-4',
+    ]);
+    expect(slugs(r.audioOps, 'rename')).toEqual([
+      '02-chapter-1>02-chapter-2',
+      '03-chapter-2>03-chapter-3',
+      '04-chapter-3>04-chapter-4',
+    ]);
+    expect(slugs(r.audioOps, 'delete')).toEqual([]);
+  });
+
+  it('merge [3,4]: the chapter shifted only by a retitle keeps its audio', () => {
+    const state = makeState([
+      rendered(1, 'Prologue'),
+      rendered(2, 'Chapter 1'),
+      rendered(3, 'Chapter 2'),
+      rendered(4, 'Chapter 3'),
+    ]);
+    const hints = makeHints(state.chapters.map((c) => ({ id: c.id, title: c.title, body: 'b' })));
+    const r = applyMerge(state, hints, [], { chapterIds: [3, 4] });
+    expect(slugs(r.audioOps, 'rename')).toContain('02-chapter-1>02-chapter-2');
+    expect(slugs(r.audioOps, 'delete')).toEqual(['03-chapter-2', '04-chapter-3']);
+  });
+
+  it('prune: a survivor renumbered into a pruned chapter\'s slot is renamed, the pruned audio deleted from its own slug', () => {
+    const state = makeState([
+      rendered(1, 'Chapter 1'),
+      rendered(2, 'Chapter 2'),
+      rendered(3, 'Chapter 3'),
+    ]);
+    const hints = makeHints(state.chapters.map((c) => ({ id: c.id, title: c.title, body: 'b' })));
+    // chapter 2 has no sentences → pruned; chapter 3 becomes id 2
+    const sentences: RestructureSentence[] = [
+      { id: 1, chapterId: 1, characterId: 'n', text: 'a' },
+      { id: 1, chapterId: 3, characterId: 'n', text: 'c' },
+    ];
+    const r = applyExclude(state, hints, sentences, { chapterIds: [1], excluded: false });
+    expect(slugs(r.audioOps, 'delete')).toEqual(['02-chapter-2']);
+    expect(slugs(r.audioOps, 'rename')).toEqual(['03-chapter-3>02-chapter-2']);
   });
 });

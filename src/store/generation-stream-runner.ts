@@ -26,9 +26,8 @@ import {
   buildScoringStartedEvent,
   buildScoringCompleteEvent,
 } from '../lib/change-log';
-import { chaptersActions } from './chapters-slice';
+import { chaptersActions, previewChapterComplete } from './chapters-slice';
 import { changeLogActions } from './change-log-slice';
-import { revisionsActions } from './revisions-slice';
 import { notificationsActions } from './notifications-slice';
 import { retryQueueEntry } from './queue-thunks';
 import type { ActiveStreamSnapshot, ChaptersState } from './chapters-slice';
@@ -77,14 +76,11 @@ function streamKey(bookId: string, chapterId: number | undefined): string {
 const IMMEDIATE_TOAST_ERROR_CODES = new Set(['voice-not-designed', 'cloned-voice-broken']);
 
 /** Minimal store surface the runner needs. Satisfied by the configured RTK
-    store; kept narrow (`chapters` + `revisions.bookId`) so the runner
-    doesn't import the store's circular `RootState` and stays usable from
-    lean test stores. `revisions.bookId` is read by the `chapter_complete`
-    handler's `markRevisionPlayable` guard (#3395 pass 2, N2) — see
-    handleTickFor below for why that can't reuse `chapters.currentBookId`. */
+    store; kept narrow (`chapters`) so the runner doesn't import the store's
+    circular `RootState` and stays usable from lean test stores. */
 export interface StreamRunnerStore {
   dispatch: AppDispatch;
-  getState: () => { chapters: ChaptersState; revisions: { bookId: string | null } };
+  getState: () => { chapters: ChaptersState };
 }
 
 interface OpenHandle {
@@ -404,18 +400,14 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
           handle.completedChapterIds.push(ev.chapterId);
         }
       }
-      /* Flip any pending revisions for this chapter to playable — guarded on
-         `revisions.bookId` (kept in lockstep with the active book by
-         revisions-scope-middleware), NOT `sliceMatchesHandle` /
-         `chapters.currentBookId`: `pending` belongs to whichever book the
-         revisions slice currently tracks, which can diverge from chapters'
-         hydrate-gated `currentBookId` when a chapter completes mid-
-         navigation — a stale `sliceMatchesHandle` guard let a just-
-         navigated-away book's `markRevisionPlayable` land on the NEW book's
-         `pending` via a same-numbered chapterId collision across books
-         (#3395 pass 2, N2). */
-      if (after.revisions.bookId === bookId) {
-        dispatch(revisionsActions.markRevisionPlayable({ chapterId: ev.chapterId }));
+      /* Plan 286 (OD12) — a chapter actually rendered with review is
+         stamped `reviewChapter: true` on its own live chapter_complete
+         (never a replay). Dispatch for ANY book — the generation-stream
+         middleware's previewChapterComplete handling decides what to do
+         with it (open the entry, build a stub, or just toast); no refetch
+         fires here. */
+      if (ev.reviewChapter === true) {
+        dispatch(previewChapterComplete({ bookId, chapterId: ev.chapterId, reviewOutcome: ev.reviewOutcome }));
       }
     } else if (ev.type === 'chapter_failed' && ev.chapterId != null) {
       /* Record the failure UNCONDITIONALLY (not gated on sliceMatchesHandle) —

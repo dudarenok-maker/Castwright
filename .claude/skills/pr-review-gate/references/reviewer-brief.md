@@ -269,6 +269,17 @@ recite:
     detached job, name the condition it may run under; ask what stops it when
     that condition ends; and ask what a second concurrent instance does to the
     first's registration.
+27. **An op list computed before a later pass changes its keys, then patched
+    only for the entries it already has** — `server/src/workspace/restructure.ts` (`postProcessRestructure`),
+    PR #3594 gate pass 3: the audio rename ops were computed from the first
+    slug transform, then the prune renumber and the generic-title retitle
+    changed more slugs but only patched ops that already existed, so a chapter
+    renamed ONLY by a later pass kept its stale audio, `.previous` takes and
+    sidecars (a merged chapter could even play another chapter's audio); fixed
+    in 0c6d9a2b by moving files with the slugs the post-passes change.
+    Checkable: list every later pass that changes a key the op list is keyed
+    on, and for each ask whether an entry renamed ONLY by that pass gets an
+    op; test with a fixture where the later pass is the sole renamer.
 
 ### Keeping the catalogue current
 

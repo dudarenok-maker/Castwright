@@ -13,13 +13,21 @@
    is the regression baseline that nails it down and lets the doc be
    cleaned up. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* Plan 286 — the GET handler reads revisions through the store. Passthrough by
+   default; one test injects a path-bearing rejection so the fixed-sentence
+   contract can be pinned. */
+vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+  return { ...real, readRevisions: vi.fn(real.readRevisions) };
+});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -42,10 +50,11 @@ beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-hydrate-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
-  const [{ bookStateRouter }, { makeBookId }] = await Promise.all([
-    import('./book-state.js'),
-    import('../workspace/paths.js'),
-  ]);
+  /* Sequential, not `Promise.all` — this file carries a hoisted async-factory
+     `vi.mock` (revisions-store.js, plan 286), which a `Promise.all` of dynamic
+     imports races (#2083). */
+  const { bookStateRouter } = await import('./book-state.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
   cachePath = join(CACHE_DIR, `${MANUSCRIPT_ID}.json`);
 
@@ -196,3 +205,59 @@ describe('PUT /:bookId/state slice=manuscript → GET round-trip', () => {
     expect(byId.get(999)!.characterId).toBe('halloran');
   });
 });
+
+describe('PUT /:bookId/state slice=revisions is refused (plan 286)', () => {
+  it('plan 286 — PUT slice=revisions is refused with 400 and writes nothing', async () => {
+    const res = await request(app).put(`/api/books/${bookId}/state`).send({ slice: 'revisions', patch: { pending: [] } });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('revisions_server_owned');
+    expect(existsSync(join(bookDir, '.audiobook', 'revisions.json'))).toBe(false);
+  });
+});
+
+describe('GET /state — revisions read through the store (plan 286)', () => {
+  const revPath = () => join(bookDir, '.audiobook', 'revisions.json');
+  it('normalises: drops drift and a legacy entry with no .previous.mp3, adds fileId/rev/bookId', async () => {
+    writeFileSync(revPath(), JSON.stringify({
+      pending: [{ id: 'splice-x-1-eliza', chapterId: 1, characterId: 'eliza', playable: true, segments: [] }],
+      drift: [{ id: 'd1' }], dismissed: ['a'], timeline: {},
+    }));
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(res.body.revisions).toEqual({ bookId, fileId: null, rev: 0, pending: [], dismissed: ['a'], acceptedSelections: {}, timeline: {} });
+    expect(res.body).not.toHaveProperty('revisionsError');
+  });
+  it('a missing file reads as an empty state, not null and not an error', async () => {
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.body.revisions).toEqual({ bookId, fileId: null, rev: 0, pending: [], dismissed: [], acceptedSelections: {}, timeline: {} });
+    expect(res.body).not.toHaveProperty('revisionsError');
+  });
+  it('an unreadable file still opens the book: revisions null + a fixed revisionsError, raw error logged', async () => {
+    /* A rejection whose message embeds the path — an EISDIR fixture's message
+       carries none, so it could not prove the body is path-free. */
+    const store = await import('../workspace/revisions-store.js');
+    vi.mocked(store.readRevisions).mockRejectedValueOnce(Object.assign(
+      new Error(`EPERM: operation not permitted, open '${revPath()}'`), { code: 'EPERM' }));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    /* Read the calls BEFORE mockRestore: in vitest 5 mockRestore also clears
+       mock.calls, so asserting toHaveBeenCalled after it always fails. */
+    const errorCalls = err.mock.calls.length;
+    err.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body.revisions).toBeNull();
+    expect(res.body.revisionsError).toBe("This book's A/B review history couldn't be read, so its pending reviews aren't shown.");
+    expect(res.text).not.toContain(workspaceRoot);
+    expect(errorCalls).toBeGreaterThan(0);
+  });
+  it('a newer-schema file opens the book with its own upgrade sentence', async () => {
+    writeFileSync(revPath(), JSON.stringify({ schema: 99 }));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    err.mockRestore();
+    expect(res.status).toBe(200);
+    expect(res.body.revisions).toBeNull();
+    expect(res.body.revisionsError).toMatch(/upgrade the server/i);
+  });
+});
+

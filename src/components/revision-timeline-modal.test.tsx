@@ -5,29 +5,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
-import { revisionsSlice } from '../store/revisions-slice';
+import { revisionsSlice, revisionsActions } from '../store/revisions-slice';
+import { uiSlice, uiActions } from '../store/ui-slice';
 import { RevisionTimelineModal } from './revision-timeline-modal';
 import type { Character, TimelineEntry } from '../lib/types';
 
-function makeStore(timeline: Record<number, TimelineEntry[]>) {
-  return configureStore({
-    reducer: {
-      revisions: revisionsSlice.reducer,
-    },
-    preloadedState: {
-      revisions: {
-        pending: [],
-        drift: [],
-        dismissed: [],
-        acceptedSelections: {},
-        timeline,
-        loaded: true,
-        bookId: null,
-        hydratedFor: null,
-        windowActions: {},
-      },
-    },
-  });
+function makeStore(timeline: Record<number, TimelineEntry[]>, cacheBook = 'b1', activeBook = 'b1') {
+  const store = configureStore({ reducer: { revisions: revisionsSlice.reducer, ui: uiSlice.reducer } });
+  store.dispatch(uiActions.openBook({ id: activeBook, status: 'complete' } as never));
+  store.dispatch(revisionsActions.applyServerState({ bookId: cacheBook, fileId: '000000000000001-a', rev: 1, pending: [], dismissed: [], acceptedSelections: {}, timeline }));
+  return store;
 }
 
 const halloran: Character = {
@@ -201,5 +188,15 @@ describe('RevisionTimelineModal — plan 55', () => {
     );
     fireEvent.click(screen.getByTestId('revision-timeline-close'));
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('plan 286 — shows the empty state for a cached book that is not the active book', () => {
+    const store = makeStore({ 3: [{ id: 't', chapterId: 3, eventKind: 'accepted', timestamp: '2026-01-01T00:00:00Z', status: 'active' }] }, 'X', 'Y');
+    render(
+      <Provider store={store}>
+        <RevisionTimelineModal chapterId={null} chapterTitle={undefined} characters={[halloran]} onClose={() => undefined} />
+      </Provider>,
+    );
+    expect(screen.getByTestId('revision-timeline-empty')).toBeInTheDocument();
   });
 });

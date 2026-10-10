@@ -13,11 +13,14 @@
    GET /api/books/:bookId/chapters/:chapterId/audio/previous.mp3
      → binary preview of the preserved file with range-support.
    DELETE /api/books/:bookId/chapters/:chapterId/audio/previous
-     → ACCEPT — the new render wins. Removes the .previous.* pair.
+     → Plan 286 — moved to POST …/revisions/{id}/accept. Answers 410.
    POST   /api/books/:bookId/chapters/:chapterId/audio/previous/restore
-     → REJECT — the prior render wins. Renames .previous.* over the
-       live names, clobbering the just-rendered audio. 409 when a
-       generation is in flight for the book (would race the write).
+     → Plan 286 — moved to POST …/revisions/{id}/reject. Answers 410.
+   POST   /api/books/:bookId/chapters/:chapterId/audio/previous/restore-unrecorded
+     → Plan 286 — restore `.previous` for a preview whose A/B review was
+       never recorded (finalize answered reviewOutcome:'failed'). 409
+       has_revision when revisions.json holds a pending entry for the
+       chapter. Never writes revisions.json.
 
    Express's `sendFile` sets Accept-Ranges + handles 206 partials natively,
    which is what <audio> seeking relies on.
@@ -36,10 +39,10 @@ import { audioDir } from '../workspace/paths.js';
 import { readJson } from '../workspace/state-io.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { findChapterAudio, type ChapterAudioFile } from '../workspace/chapter-audio-file.js';
-import { acceptPreviousAudio, restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';
+import { restorePreviousAudio, findPreviousChapterAudio } from '../audio/previous-audio.js';
 import { isGenerationActive } from './generation.js';
 import { withKeyLock, isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
-import { revisionOpLockKey } from '../workspace/revisions-store.js';
+import { revisionOpLockKey, hasPendingForChapter } from '../workspace/revisions-store.js';
 import type { LoudnormSidecarJson } from '../tts/loudnorm.js';
 
 /** Disk shape mirror of `ChapterPeaksFile` in `server/src/tts/mp3.ts`.
@@ -365,60 +368,61 @@ chapterAudioRouter.get(
   makeFileHandler('previous'),
 );
 
-/* ACCEPT — the user has chosen the new render. Delete the .previous.* pair.
-   404 when nothing to delete (caller didn't audition first, or already
-   accepted/rejected). 204 on success. */
+/* Plan 286 Task 29 — these two routes moved to the server-owned revision
+   operations (POST …/revisions/{id}/accept|reject). Answer 410, never 404:
+   the old client's accept treats 404 as success, so a 404 here would read
+   as a silent accept of audio this route never touched. No file is read or
+   written. */
 chapterAudioRouter.delete(
   '/:bookId/chapters/:chapterId/audio/previous',
-  async (req: Request, res: Response) => {
-    const chapterId = Number.parseInt(req.params.chapterId, 10);
-    if (!Number.isInteger(chapterId))
-      return res.status(404).json({ message: 'Chapter audio not found.' });
-    const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ message: 'Chapter audio not found.' });
-    const chapter = located.state.chapters.find((c) => c.id === chapterId);
-    if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
-    const root = audioDir(located.bookDir);
-    /* #3400: serialised against revision accept/reject on the same chapter
-       (the same audio functions, the same race). */
-    let outcome: 'deleted' | 'none';
-    try {
-      outcome = await withKeyLock(revisionOpLockKey(located.bookDir, chapter.id), () =>
-        acceptPreviousAudio(root, chapter.slug),
-      );
-    } catch (e) {
-      /* The lock key embeds the absolute book path — never echo it. The raw
-         error goes to the log. */
-      if (isLockAcquisitionTimeout(e)) {
-        console.error('[chapter-audio] accept (DELETE previous): lock timeout', e);
-        return res.status(500).json({ message: LOCK_CONTENTION_REQUEST_ERROR });
-      }
-      throw e;
-    }
-    if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
-    res.status(204).end();
+  (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'moved',
+      message: 'This operation moved to POST /api/books/{bookId}/revisions/{revisionId}/accept or /reject.',
+    });
   },
 );
 
-/* REJECT — the user has chosen the prior render. Promote .previous.* over
-   the live names. 409 when a generation is in flight (the rename would
-   race the write path). 404 when no preserved pair. */
 chapterAudioRouter.post(
   '/:bookId/chapters/:chapterId/audio/previous/restore',
+  (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: 'moved',
+      message: 'This operation moved to POST /api/books/{bookId}/revisions/{revisionId}/accept or /reject.',
+    });
+  },
+);
+
+/* Plan 286 (#3400 PR 2) — restore `.previous` for a preview whose A/B review
+   was never recorded (finalize answered reviewOutcome:'failed'). Keeps the
+   restore route's order: busy 409 first, then the chapter parse and lookups.
+   Refuses with has_revision when a pending entry exists for the chapter (that
+   one must go through the recorded reject). Never writes revisions.json.
+   Takes the per-chapter revision-op key: it runs restorePreviousAudio, so it
+   shares accept/reject's race (PR #3504 review pass 1). */
+chapterAudioRouter.post(
+  '/:bookId/chapters/:chapterId/audio/previous/restore-unrecorded',
   async (req: Request, res: Response) => {
     if (isGenerationActive(req.params.bookId)) {
-      return res.status(409).json({
-        message:
-          'A generation is in flight for this book. Wait for the render to finish before rejecting.',
-      });
+      return res.status(409).json({ error: 'chapter_busy', message: 'This chapter is busy — try again when it finishes.' });
     }
     const chapterId = Number.parseInt(req.params.chapterId, 10);
-    if (!Number.isInteger(chapterId))
-      return res.status(404).json({ message: 'Chapter audio not found.' });
+    if (!Number.isInteger(chapterId)) return res.status(404).json({ error: 'not_found', message: 'Chapter audio not found.' });
     const located = await findBookByBookId(req.params.bookId);
-    if (!located) return res.status(404).json({ message: 'Chapter audio not found.' });
+    if (!located) return res.status(404).json({ error: 'not_found', message: 'Chapter audio not found.' });
     const chapter = located.state.chapters.find((c) => c.id === chapterId);
-    if (!chapter) return res.status(404).json({ message: 'Chapter audio not found.' });
+    if (!chapter) return res.status(404).json({ error: 'not_found', message: 'Chapter audio not found.' });
+    try {
+      if (await hasPendingForChapter(located.bookDir, located.state.chapters, chapter.id)) {
+        return res.status(409).json({
+          error: 'has_revision',
+          message: "This chapter has an older pending review — resolve it from the chapter's review first.",
+        });
+      }
+    } catch (e) {
+      console.error('[chapter-audio] restore-unrecorded: revisions.json unreadable', e);
+      return res.status(500).json({ error: "Couldn't read this chapter's review state." });
+    }
     const root = audioDir(located.bookDir);
     let outcome: 'restored' | 'none';
     try {
@@ -426,13 +430,13 @@ chapterAudioRouter.post(
         restorePreviousAudio(root, chapter.slug),
       );
     } catch (e) {
-      console.error('[chapter-audio] reject (restore previous) failed', e);
-      /* A lock timeout's message embeds the book path; the fixed body below
-         reveals none, but a timeout is named as contention like every site. */
-      if (isLockAcquisitionTimeout(e)) return res.status(500).json({ message: LOCK_CONTENTION_REQUEST_ERROR });
-      return res.status(500).json({ message: 'Failed to restore previous audio.' });
+      console.error('[chapter-audio] restore-unrecorded failed', e);
+      if (isLockAcquisitionTimeout(e)) {
+        return res.status(500).json({ error: 'lock_contention', message: LOCK_CONTENTION_REQUEST_ERROR });
+      }
+      return res.status(500).json({ error: 'restore_failed', message: "Couldn't restore the earlier take — try Reject again." });
     }
-    if (outcome === 'none') return res.status(404).json({ message: 'No preserved previous audio.' });
-    res.status(204).end();
+    if (outcome === 'none') return res.status(404).json({ error: 'no_previous_audio', message: 'No preserved previous audio.' });
+    return res.status(204).end();
   },
 );

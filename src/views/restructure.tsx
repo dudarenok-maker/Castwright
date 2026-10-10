@@ -17,11 +17,13 @@ import { uiActions } from '../store/ui-slice';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
+import { revisionsActions } from '../store/revisions-slice';
+import { activeBookId } from '../store/revisions-thunks';
 import { notificationsActions } from '../store/notifications-slice';
 import { api, type ChapterRestructureResponse } from '../lib/api';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
 import { EditChapterTitleModal } from '../modals/edit-chapter-title';
-import type { Chapter } from '../lib/types';
+import type { Chapter, Sentence } from '../lib/types';
 
 interface Props {
   bookId: string;
@@ -38,14 +40,25 @@ export function RestructureView({ bookId }: Props) {
   const [renamingChapter, setRenamingChapter] = useState<Chapter | null>(null);
 
   const applyResponse = useCallback(
-    async (res: ChapterRestructureResponse) => {
+    async (res: ChapterRestructureResponse, sentencesAtStart: Sentence[]) => {
+      // OD31 — the restructure dropped any pending entry for the touched
+      // chapters, so the preview's book can't resume it: clear it here.
+      dispatch(uiActions.clearPreviewForBook(bookId));
       // Re-fetch book-state so chaptersActions.hydrateFromBookState gets
       // a coherent payload: completedSlugs derived from the post-rewrite
       // audio dir, chapterCharacters re-derived from the remapped
       // manuscript-edits.json. The book-state GET handler runs the same
       // reconciliation that surface code expects on a normal page open.
+      const requestSeq = store.getState().revisions.adoptSeq;
       const fresh = await api.getBookState(bookId).catch(() => null);
-      if (fresh) {
+      /* The user may have opened another book while the re-read was in flight;
+         the hydrate's sequence guard only orders same-book reads, so adopt only
+         while this book is still the open one (same guard as refetchActiveRevisions). */
+      if (fresh && activeBookId(store.getState()) === bookId) {
+        /* #3400 — the server drops A/B entries for the touched chapters, so
+           adopt its revisions through the same sequence-guarded hydrate book
+           open uses; otherwise the dropped entries linger until the next poll. */
+        dispatch(revisionsActions.hydrate({ bookId, state: fresh.revisions ?? null, requestSeq }));
         dispatch(
           chaptersActions.hydrateFromBookState({
             bookId,
@@ -59,11 +72,26 @@ export function RestructureView({ bookId }: Props) {
           }),
         );
       }
-      dispatch(
-        manuscriptActions.applyChapterRestructure({
-          sentenceRemap: res.sentenceRemap ?? [],
-        }),
-      );
+      /* Same cross-book rule for the remap: it rewrites (and drops unmapped)
+         whatever sentences the slice holds, so apply it only while the slice
+         itself holds this book — the stage can move before the slices do.
+         The remap is also only valid for the sentences captured when the
+         restructure started: if the slice now holds a different set (book A's
+         own layout read re-hydrated the server's post-restructure sentences
+         first), the server state is authoritative and re-mapping would drop
+         or move sentences. */
+      const after = store.getState();
+      if (
+        activeBookId(after) === bookId &&
+        after.manuscript.bookId === bookId &&
+        after.manuscript.sentences === sentencesAtStart
+      ) {
+        dispatch(
+          manuscriptActions.applyChapterRestructure({
+            sentenceRemap: res.sentenceRemap ?? [],
+          }),
+        );
+      }
       // Refresh library so the Listen view's chapter card and the
       // generation queue pick up the new structure on next render.
       const lib = await api.getLibrary().catch(() => null);
@@ -88,8 +116,9 @@ export function RestructureView({ bookId }: Props) {
       setBusy(true);
       setErrorBanner(null);
       try {
+        const sentencesAtStart = store.getState().manuscript.sentences;
         const res = await api.mergeChapters(bookId, chapterIds);
-        await applyResponse(res);
+        await applyResponse(res, sentencesAtStart);
       } catch (e) {
         setErrorBanner((e as Error).message || 'Merge failed.');
         throw e;
@@ -105,8 +134,9 @@ export function RestructureView({ bookId }: Props) {
       setBusy(true);
       setErrorBanner(null);
       try {
+        const sentencesAtStart = store.getState().manuscript.sentences;
         const res = await api.splitChapter(bookId, chapterId, afterSentenceId);
-        await applyResponse(res);
+        await applyResponse(res, sentencesAtStart);
       } catch (e) {
         setErrorBanner((e as Error).message || 'Split failed.');
         throw e;
@@ -122,8 +152,9 @@ export function RestructureView({ bookId }: Props) {
       setBusy(true);
       setErrorBanner(null);
       try {
+        const sentencesAtStart = store.getState().manuscript.sentences;
         const res = await api.reorderChapters(bookId, order);
-        await applyResponse(res);
+        await applyResponse(res, sentencesAtStart);
       } catch (e) {
         setErrorBanner((e as Error).message || 'Reorder failed.');
         throw e;
@@ -139,8 +170,9 @@ export function RestructureView({ bookId }: Props) {
       setBusy(true);
       setErrorBanner(null);
       try {
+        const sentencesAtStart = store.getState().manuscript.sentences;
         const res = await api.excludeChapters(bookId, [chapterId], excluded);
-        await applyResponse(res);
+        await applyResponse(res, sentencesAtStart);
       } catch (e) {
         setErrorBanner((e as Error).message || 'Exclude failed.');
         throw e;
@@ -155,8 +187,9 @@ export function RestructureView({ bookId }: Props) {
     setBusy(true);
     setErrorBanner(null);
     try {
+      const sentencesAtStart = store.getState().manuscript.sentences;
       const res = await api.refreshChapterTitles(bookId);
-      await applyResponse(res);
+      await applyResponse(res, sentencesAtStart);
     } catch (e) {
       setErrorBanner((e as Error).message || 'Refresh chapter names failed.');
       throw e;

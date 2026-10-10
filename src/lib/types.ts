@@ -78,6 +78,7 @@ export type UploadResponse = components['schemas']['UploadResponse'];
 export type AnalyseResponse = components['schemas']['AnalyseResponse'];
 export type VoiceMatchResponse = components['schemas']['VoiceMatchResponse'];
 export type RevisionsResponse = components['schemas']['RevisionsResponse'];
+export type RevisionsState = components['schemas']['RevisionsState'];
 export type BulkRevisionsResponse = components['schemas']['BulkRevisionsResponse'];
 /** Plan 285 — the A/B review intent a queue entry / generation request carries. */
 export type ReviewRequest = components['schemas']['ReviewRequest'];
@@ -450,15 +451,12 @@ export interface BookStateResponse {
       ETA without loading the full sourceText. */
   manuscript: { wordCount: number; format: UploadResponse['format'] } | null;
   manuscriptEdits: { sentences?: Sentence[]; /** fs-58 — merge tombstone keys. */ mergedAwayKeys?: string[] } | null;
-  revisions: {
-    pending?: Revision[];
-    drift?: DriftEvent[];
-    dismissed?: string[];
-    /** Per-revision A/B segment selections captured at accept time. Written
-        by `revisionsActions.acceptRevision`; not yet consumed in-app
-        (future per-segment TTS regen). */
-    acceptedSelections?: Record<string, Record<number, 'A' | 'B'>>;
-  } | null;
+  /** Server-owned revisions cache state for this book (plan 286), or `null`
+      when the book has never had revisions tracked. */
+  revisions: RevisionsState | null;
+  /** Set when revisions.json exists but could not be read; `revisions` is
+      `null` in that case. The server's fixed, path-free sentence (OD2). */
+  revisionsError?: string;
   /** Slugs of chapters that already have an audio file on disk. */
   completedSlugs: string[];
   /** Plan 77 — per-chapter EBU R128 loudness sidecar payloads keyed
@@ -662,7 +660,7 @@ export interface AnalysisStateResponse {
   writtenAt?: number;
 }
 
-export type StateSlice = 'cast' | 'manuscript' | 'revisions' | 'state' | 'changeLog';
+export type StateSlice = 'cast' | 'manuscript' | 'state' | 'changeLog';
 
 export interface PutStateRequest {
   slice: StateSlice;

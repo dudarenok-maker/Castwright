@@ -33,6 +33,7 @@ import {
   applyExclude,
   applyRefreshTitles,
   applyRename,
+  touchedChapterIds,
   type MergeOp,
   type SplitOp,
   type ReorderOp,
@@ -41,6 +42,7 @@ import {
   type RestructureResult,
   type RestructureSentence,
 } from '../workspace/restructure.js';
+import { dropPendingForChapters } from '../workspace/revisions-store.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import {
   audioDir,
@@ -154,6 +156,10 @@ async function applyRestructure(
      is persisted below, so this also migrates the book. */
   ensureChapterUuids(state);
 
+  /* Plan 286 — captured before transform(...) in case the transform
+     mutates `state` in place. */
+  const oldChapters = state.chapters.map((c) => ({ ...c }));
+
   let result: RestructureResult;
   try {
     result = transform(state, alignedHints, sentences);
@@ -178,12 +184,28 @@ async function applyRestructure(
   // Apply audio ops (best-effort — errors are surfaced in the response).
   const audioSummary = await rewriteChapterSlugs(audioDir(bookDir), result.audioOps);
 
+  /* Plan 286 — entries for chapters this op touched no longer pair with the
+     live take. Best-effort: logged, never in a response (the six handlers
+     return raw messages, so a lock-key path must not reach them). A deliberate
+     swallow of LockAcquisitionTimeoutError (CLAUDE.md swallow list). An entry
+     that survives a failed drop is NOT left to act on whichever chapter now
+     holds its id: a server-recorded entry carries the chapter's uuid +
+     audioRenderedAt and revisions-store's entryMatchesChapter refuses it
+     (revision_not_found) once the chapter at that id differs (#3400). A legacy
+     client-written entry has no stamps and is not covered. */
+  try {
+    const touched = touchedChapterIds(oldChapters, result.state.chapters, result.audioOps);
+    if (touched.length > 0) await dropPendingForChapters(bookDir, oldChapters, touched);
+  } catch (e) {
+    console.error('[chapters-restructure] could not drop stale A/B review entries', e);
+  }
+
   // Plan 70c — re-derive the analysis cache from the freshly-written
   // manuscript-edits.json so subsequent generation runs still find
   // sentences keyed by the new chapter ids. Earlier code wiped the
   // cache outright, which made every post-restructure Generate halt
   // with "No analysed sentences cached for this book."
-  // Plan 286 — 'replace': ids are renumbered, so prior keys cannot be kept.
+  // Plan 287 — 'replace': ids are renumbered, so prior keys cannot be kept.
   await rebuildCacheFromEdits(state.manuscriptId, editsPath, { mode: 'replace' }).catch((e) => {
     console.error('[chapters-restructure] cache rebuild failed', e);
   });

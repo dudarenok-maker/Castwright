@@ -6,8 +6,8 @@
    fallback narrative has been retired; the `audio.wav` route is no longer
    registered and a legacy `.wav` on disk is invisible to the locator. */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -41,6 +41,10 @@ vi.mock('../workspace/file-lock.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/file-lock.js')>();
   return { ...real, withKeyLock: vi.fn(real.withKeyLock) };
 });
+vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
+  return { ...real, hasPendingForChapter: vi.fn(real.hasPendingForChapter) };
+});
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
@@ -60,10 +64,10 @@ beforeAll(async () => {
   // Defer module load so paths.ts picks up WORKSPACE_DIR. Importing the
   // router after env is set guarantees the workspace root resolves into
   // our tempdir rather than the repo's default.
-  const [{ chapterAudioRouter }, { makeBookId }] = await Promise.all([
-    import('./chapter-audio.js'),
-    import('../workspace/paths.js'),
-  ]);
+  /* Sequential, not `Promise.all` — this file carries hoisted async-factory
+     `vi.mock`s, which a `Promise.all` of dynamic imports races (#2083). */
+  const { chapterAudioRouter } = await import('./chapter-audio.js');
+  const { makeBookId } = await import('../workspace/paths.js');
   bookId = makeBookId(AUTHOR, SERIES, TITLE);
 
   bookDir = join(workspaceRoot, 'books', AUTHOR, SERIES, TITLE);
@@ -523,184 +527,109 @@ describe('chapter-audio router', () => {
       });
     });
 
-    describe('DELETE /audio/previous (accept)', () => {
-      beforeAll(() => {
+    describe('DELETE /audio/previous and POST /audio/previous/restore — retired (plan 286, #3400 Task 29)', () => {
+      /* These two routes moved to the server-owned revision operations.
+         Removed here (previously under 'DELETE /audio/previous (accept)' and
+         'POST /audio/previous/restore (reject)'): "removes both .previous.*
+         files and 204s", "404s when nothing to delete", "renames .previous.*
+         over live names and 204s", "404s when nothing preserved", "restore
+         mid-unlink, then DELETE previous (accept): the DELETE waits and 404s;
+         the restored take survives (#3400)" (PR 1's legacy race test), the
+         "a lock timeout answers the curated 500 (no key or path) and is
+         logged" it.each, "409s when a generation is in flight for the book",
+         and "409s (not 404) for an INVALID chapter id while a generation is
+         in flight — the busy check runs first". The shared audio functions
+         (acceptPreviousAudio / restorePreviousAudio) keep equivalent coverage
+         through restore-unrecorded, below. */
+      it.each([
+        ['delete', '/audio/previous'],
+        ['post', '/audio/previous/restore'],
+      ] as const)('plan 286 — %s %s answers 410 moved and touches no audio', async (verb, suffix) => {
         resetAudio();
         writeMp3();
         writePreviousMp3();
-        writePreviousSegments();
-      });
-
-      it('removes both .previous.* files and 204s', async () => {
-        const fs = await import('node:fs');
-        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(true);
-
-        const res = await request(app).delete(`/api/books/${bookId}/chapters/1/audio/previous`);
-        expect(res.status).toBe(204);
-        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(false);
-        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.segments.json`))).toBe(false);
-        /* Live file untouched. */
-        expect(fs.existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
-      });
-
-      it('404s when nothing to delete', async () => {
-        const res = await request(app).delete(`/api/books/${bookId}/chapters/1/audio/previous`);
-        expect(res.status).toBe(404);
+        const res = await request(app)[verb](`/api/books/${bookId}/chapters/1${suffix}`);
+        expect(res.status).toBe(410);
+        expect(res.body.error).toBe('moved');
+        expect(existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(true);
+        expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
       });
     });
+    describe('POST /audio/previous/restore-unrecorded (plan 286)', () => {
+      const RU = () => `/api/books/${bookId}/chapters/1/audio/previous/restore-unrecorded`;
+      const revisionsFile = () => join(bookDir, '.audiobook', 'revisions.json');
+      const seedPendingForCh1 = () =>
+        writeFileSync(revisionsFile(), JSON.stringify({ schema: 1, fileId: '000000000000001-a', rev: 1,
+          pending: [{ id: 'revision:1:1', chapterId: 1, characterId: 'narrator', playable: true, hasPreviousAudio: true, segments: [], origin: 'server' }],
+          dismissed: [], acceptedSelections: {}, timeline: {} }));
+      beforeEach(() => { if (existsSync(revisionsFile())) rmSync(revisionsFile()); });
 
-    describe('POST /audio/previous/restore (reject)', () => {
-      it('renames .previous.* over live names and 204s', async () => {
-        resetAudio();
-        writeMp3();
-        writePreviousMp3();
-        writePreviousSegments();
-        const fs = await import('node:fs');
-        const liveMp3 = join(audioRoot, `${SLUG}.mp3`);
-        const liveSegments = join(audioRoot, `${SLUG}.segments.json`);
-        /* Mark the live mp3 with a sentinel byte so we can verify the
-           previous content replaced it (not just sat next to it). */
-        const liveBytes = fs.readFileSync(liveMp3);
-        const prevBytes = fs.readFileSync(join(audioRoot, `${SLUG}.previous.mp3`));
-        expect(liveBytes.equals(prevBytes)).toBe(false);
-
-        const res = await request(app).post(
-          `/api/books/${bookId}/chapters/1/audio/previous/restore`,
-        );
+      it('204: restores .previous over live and never writes revisions.json', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3();
+        const res = await request(app).post(RU());
         expect(res.status).toBe(204);
-
-        /* Previous pair is gone; live now holds what was previous. */
-        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(false);
-        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.segments.json`))).toBe(false);
-        expect(fs.existsSync(liveMp3)).toBe(true);
-        expect(fs.readFileSync(liveMp3).equals(prevBytes)).toBe(true);
-        expect(fs.existsSync(liveSegments)).toBe(true);
+        expect(existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(false);
+        expect(existsSync(join(audioRoot, `${SLUG}.mp3`))).toBe(true);
+        expect(existsSync(revisionsFile())).toBe(false);
       });
-
-      it('404s when nothing preserved', async () => {
-        resetAudio();
-        writeMp3();
-        const res = await request(app).post(
-          `/api/books/${bookId}/chapters/1/audio/previous/restore`,
-        );
+      it('404 no_previous_audio when nothing was preserved', async () => {
+        resetAudio(); writeMp3();
+        const res = await request(app).post(RU());
         expect(res.status).toBe(404);
+        expect(res.body.error).toBe('no_previous_audio');
       });
-
-      it('restore mid-unlink, then DELETE previous (accept): the DELETE waits and 404s; the restored take survives (#3400)', async () => {
-        resetAudio();
-        writeMp3();
-        writePreviousMp3();
-        const fs = await import('node:fs');
-        const prevBytes = fs.readFileSync(join(audioRoot, `${SLUG}.previous.mp3`));
-        vi.mocked((await import('../workspace/file-lock.js')).withKeyLock).mockClear();
-        let entered!: () => void;
-        let release!: () => void;
-        const hit = new Promise<void>((r) => (entered = r));
-        unlinkGate.release = new Promise<void>((r) => (release = r));
-        unlinkGate.entered = entered;
-        unlinkGate.match = (p) => p.endsWith(`${SLUG}.mp3`);
-        const restoring = request(app)
-          .post(`/api/books/${bookId}/chapters/1/audio/previous/restore`)
-          .then((r) => r);
-        await hit;
-        const accepting = request(app)
-          .delete(`/api/books/${bookId}/chapters/1/audio/previous`)
-          .then((r) => r);
-        /* Wait until the DELETE has queued behind the parked restore (withKeyLock
-           registers its place synchronously on call) — no sleep. */
-        const { withKeyLock } = await import('../workspace/file-lock.js');
+      it('409 has_revision when revisions.json has a pending entry for the chapter; audio and file untouched', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3(); seedPendingForCh1();
+        const before = readFileSync(revisionsFile(), 'utf8');
+        const res = await request(app).post(RU());
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe('has_revision');
+        expect(existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(true);
+        expect(readFileSync(revisionsFile(), 'utf8')).toBe(before);
+      });
+      it('409 chapter_busy during generation, checked before the chapter-id parse', async () => {
+        vi.resetModules();
+        vi.doMock('./generation.js', () => ({ generationRouter: undefined, isGenerationActive: () => true }));
+        const { chapterAudioRouter: mocked } = await import('./chapter-audio.js');
+        const mApp = express(); mApp.use('/api/books', mocked);
+        const res = await request(mApp).post(`/api/books/${bookId}/chapters/not-a-number/audio/previous/restore-unrecorded`);
+        expect(res.status).toBe(409);
+        expect(res.body.error).toBe('chapter_busy');
+        vi.doUnmock('./generation.js'); vi.resetModules();
+      });
+      it('a lock timeout answers the curated contention body (no key or path) and is logged', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3();
+        const { withKeyLock, LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+        vi.mocked(withKeyLock).mockRejectedValueOnce(new LockAcquisitionTimeoutError('revision-op:C:/SECRET-WORKSPACE/book:1', 10_000));
+        const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
         try {
-          await vi.waitFor(() => {
-            const opCalls = vi.mocked(withKeyLock).mock.calls.filter(([k]) => String(k).startsWith('revision-op:'));
-            expect(opCalls.length).toBeGreaterThanOrEqual(2);
-          });
-        } finally {
-          release();
-        }
-        const [rest, acc] = await Promise.all([restoring, accepting]);
-        expect(rest.status).toBe(204);
-        expect(acc.status).toBe(404);
-        expect(fs.readFileSync(join(audioRoot, `${SLUG}.mp3`)).equals(prevBytes)).toBe(true);
+          const res = await request(app).post(RU());
+          expect(res.status).toBe(500);
+          expect(res.body).toEqual({ error: 'lock_contention', message: LOCK_CONTENTION_REQUEST_ERROR });
+          expect(res.text).not.toContain('SECRET-WORKSPACE');
+          expect(errSpy).toHaveBeenCalled();
+        } finally { errSpy.mockRestore(); }
       });
-
-      it.each([
-        ['DELETE previous (accept)', 'delete', `/audio/previous`],
-        ['POST previous/restore (reject)', 'post', `/audio/previous/restore`],
-      ] as const)('%s: a lock timeout answers the curated 500 (no key or path) and is logged', async (_n, verb, suffix) => {
-        resetAudio();
-        writeMp3();
-        writePreviousMp3();
-        const { withKeyLock, LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import(
-          '../workspace/file-lock.js'
-        );
-        vi.mocked(withKeyLock).mockRejectedValueOnce(
-          new LockAcquisitionTimeoutError('revision-op:C:/SECRET-WORKSPACE/book:1', 10_000),
+      it('an unreadable revisions.json answers a fixed 500 without the path, and the raw error is logged', async () => {
+        resetAudio(); writeMp3(); writePreviousMp3();
+        const { hasPendingForChapter } = await import('../workspace/revisions-store.js');
+        /* EISDIR's own message carries no path, so it could not prove path-freedom;
+           a mocked EPERM-style rejection whose message embeds the path can. */
+        vi.mocked(hasPendingForChapter).mockRejectedValueOnce(
+          Object.assign(new Error("EPERM: operation not permitted, open 'C:\\SECRET-WORKSPACE\\book\\.audiobook\\revisions.json'"), { code: 'EPERM' }),
         );
         const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
         try {
-          const res = await request(app)[verb](`/api/books/${bookId}/chapters/1${suffix}`);
+          const res = await request(app).post(RU());
           expect(res.status).toBe(500);
-          expect(res.body).toEqual({ message: LOCK_CONTENTION_REQUEST_ERROR });
+          expect(res.body).toEqual({ error: "Couldn't read this chapter's review state." });
           expect(res.text).not.toContain('SECRET-WORKSPACE');
           expect(errSpy).toHaveBeenCalled();
-        } finally {
-          errSpy.mockRestore();
-        }
-      });
-
-      it('409s when a generation is in flight for the book', async () => {
-        /* Re-mock generation.js so isGenerationActive returns true for any
-           bookId — we don't want to spin up a real generation here, just
-           verify the route refuses the restore under that condition.
-
-           vi.doMock affects only the FOLLOWING fresh import. We re-import
-           the router into a separate express app so the mock takes effect
-           without contaminating the rest of the suite. */
-        vi.resetModules();
-        vi.doMock('./generation.js', () => ({
-          generationRouter: undefined,
-          isGenerationActive: () => true,
-        }));
-        const { chapterAudioRouter: mockedRouter } = await import('./chapter-audio.js');
-        const mockedApp = express();
-        mockedApp.use('/api/books', mockedRouter);
-
-        resetAudio();
-        writePreviousMp3();
-        const res = await request(mockedApp).post(
-          `/api/books/${bookId}/chapters/1/audio/previous/restore`,
-        );
-        expect(res.status).toBe(409);
-        /* .previous.mp3 must still be on disk — refused, not partially executed. */
-        const fs = await import('node:fs');
-        expect(fs.existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(true);
-
-        vi.doUnmock('./generation.js');
-        vi.resetModules();
-      });
-
-      it('409s (not 404) for an INVALID chapter id while a generation is in flight — the busy check runs first', async () => {
-        /* Plan 285 — pins today's ORDER: isGenerationActive is checked before
-           the chapter-id parse, so the extraction into audio/previous-audio.ts
-           must not move it. */
-        vi.resetModules();
-        vi.doMock('./generation.js', () => ({
-          generationRouter: undefined,
-          isGenerationActive: () => true,
-        }));
-        const { chapterAudioRouter: mockedRouter } = await import('./chapter-audio.js');
-        const mockedApp = express();
-        mockedApp.use('/api/books', mockedRouter);
-
-        const res = await request(mockedApp).post(
-          `/api/books/${bookId}/chapters/not-a-number/audio/previous/restore`,
-        );
-        expect(res.status).toBe(409);
-
-        vi.doUnmock('./generation.js');
-        vi.resetModules();
+          expect(existsSync(join(audioRoot, `${SLUG}.previous.mp3`))).toBe(true);
+        } finally { errSpy.mockRestore(); }
       });
     });
+
   });
 });
 

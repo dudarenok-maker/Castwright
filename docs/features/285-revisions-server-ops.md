@@ -60,7 +60,7 @@ owner: null
      - **Newer-schema file, cast or not:** new. Main parsed it like any JSON and answered 200. PR 1 refuses it through `migrateSeamDoc`.
      - **Valid JSON whose top level is not a plain object** (`null`, `[]`, a string or a number), **cast or not:** new, and accepted. Main parsed it and answered 200, because its `Array.isArray` guards read every field as empty. PR 1 treats it as corrupt and answers 500, so a later store write can never overwrite it as if it were missing.
      - **Numeric `schema` below 1** (e.g. `0`), **cast or not:** new. Main answered 200. `migrateSeamDoc` has no migration registered for it and throws a plain `Error` ("No migration registered for revisions.json schema=0 → 1"), so the polls and qa-report answer 500.
-     - **Error text:** a parse failure or a non-object top level surfaces the raw `SyntaxError` message. That is `requestFailureMessage`'s verbatim fallback, which curates only a lock-acquisition timeout. A newer schema surfaces `UnsupportedSchemaError`'s own message. Neither contains a path.
+     - **Error text:** a parse failure or a non-object top level surfaces the raw `SyntaxError` message. That is `requestFailureMessage`'s verbatim fallback, which curates only a lock-acquisition timeout. A newer schema surfaces `UnsupportedSchemaError`'s own message. Neither contains a path. (PR 2 / plan 286 Task 3: every such 500 now answers a fixed sentence; a newer schema keeps its upgrade sentence.)
      - **Blast radius:** the bulk `GET /api/revisions` maps every requested book through one `Promise.all`. A single such book therefore fails the **whole** bulk response with a 500, and every other book's drift goes with it. Main already has that blast radius for an unparseable file in a cast book. PR 1 extends it to the new cases above. **Visible effect:** The bulk poll only ever asks for non-active books that are past analysis (`layout.tsx:1137-1146` filters out `not_analysed`, `analysing`, `cast_pending`, `voices_pending`, `unreadable` and `orphaned`), so a book with no confirmed cast never enters it. Its `.then` has no `catch` (`layout.tsx` ~1153-1158), so one failing book is a silent unhandled rejection that stalls every *other* book's background drift badges. Main already does this for an unparseable file in a cast book, and the newer-schema case cannot be reached until a later version writes `schema: 2`. That leaves one newly reachable trigger in PR 1: a cast book whose revisions.json is valid JSON with a non-object top level (`null`, `[]`, a string or a number).
   4. **The poll carries extra fields, and `pending` now arrives with an empty cast (D8).** The old client's `applyPoll` and `applyBackgroundPoll` read only `drift`, so it never sees these.
   5. **Three new routes are mounted and reachable:** accept, reject and dismiss. No client calls them.
@@ -131,7 +131,11 @@ Also out of scope: the chapter-take lifecycle (#3456) and the fsck m4a/ogg fix (
 
 ## Ship notes
 
-(Filled in when PR 2 ships.)
+PR 1 (server, dark) merged `ce142a3c`. PR 2 (client cutover, plan 286) is
+pending — opens in plan 286 Task 32 as `fix(frontend,server): revisions.json
+client cutover to server ownership (#3400)`, `Closes #3400`, `Closes #3397`.
+Status stays `active` (not `stable`) until the on-box acceptance register row
+(A114, plan 286) is run and accepted (OD18).
 
 ---
 
@@ -171,7 +175,7 @@ Finalize gets a tri-state `review`, which every caller leaves undefined in PR 1.
 ### Paths and how to run tests
 
 - **`<wt>` means `C:/Claude/Projects/wt-3400-revisions-server-ops` throughout.** Work only there. Never touch `C:/Claude/Projects/Audiobook-Generator`.
-- **Superseded by later commits — the shipped code wins over the quoted code in these sections.** Task 3 Step 6 (legacy `DELETE`/`restore` handlers) and Task 4 Step 3 (`revision-ops.ts`) quote the pre-serialisation routes: `c2d4bbb7` added the per-chapter `revision-op:<bookDir>:<chapterId>` key (`serialisedPerChapter` in `revision-ops.ts`, and the same key around the legacy audio steps), `7d39752e` made `commitRevisionOp` look its entry up in `stored` so a legacy entry commits, and `744d7bf6` added the legacy timeout branches (`LOCK_CONTENTION_REQUEST_ERROR` on both legacy routes). The quoted `load`/`commitRevisionOp` in Task 2 are current as of the pass-3 cleanup. Read the shipped route files for the rest.
+- **Superseded by later commits — the shipped code wins over the quoted code in these sections.** Task 3 Step 6 (legacy `DELETE`/`restore` handlers) and Task 4 Step 3 (`revision-ops.ts`) quote the pre-serialisation routes: `c2d4bbb7` added the per-chapter `revision-op:<bookDir>:<chapterId>` key (`serialisedPerChapter` in `revision-ops.ts`, and the same key around the legacy audio steps), `7d39752e` made `commitRevisionOp` look its entry up in `stored` so a legacy entry commits, and `744d7bf6` added the legacy timeout branches (`LOCK_CONTENTION_REQUEST_ERROR` on both legacy routes). The quoted `load`/`commitRevisionOp` in Task 2 are current as of the pass-3 cleanup. Read the shipped route files for the rest. Plan 286 Task 7 replaced `reviewRecorded` (boolean) with `reviewOutcome: 'recorded' | 'none' | 'failed'` on finalize's result and the three completion ticks.
 - **The quoted code is authoritative; line numbers are advisory.** Every `file:line` here was measured on the base before any task ran, and an earlier task's edit shifts later lines in the same file. Where a later task's line moved, it says so ("after Task N's edit, near `<quoted text>`"). If a number and the quoted text ever disagree, find the quoted text.
 - The command forms below are the `$Cmd` you hand to the detach recipe (see "Lanes and long commands"). In Tasks 1–12, never run them in the foreground. **Every line of a "Run:" block is its own recipe launch, with one `$Cmd` each.** Never chain commands off `cd`: Task 13's Bash permission hook blocks `cd X &&`, and the recipe does not need it.
   - Server, fast pool: `npm --prefix C:/Claude/Projects/wt-3400-revisions-server-ops/server run test -- <path under server/>`

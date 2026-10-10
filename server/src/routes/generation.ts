@@ -384,9 +384,11 @@ interface RunningJob {
       gate (renders straight through) for a confirmed entry, so a confirm →
       re-claim → re-enter cycle doesn't re-prompt. Default false. */
   fallbackConfirmed: boolean;
-  /** Plan 285 — the request's A/B review intent (null when absent). Stamps
-      `reviewChapter: true` on THIS job's live chapter_complete. Not yet passed
-      to finalize (PR 2). */
+  /** Plan 285/286 — the request's A/B review intent (null when absent). Stamps
+      `reviewChapter: true` on THIS job's live chapter_complete, and is passed
+      to finalize for the chapter actually rendered with review (a job with
+      `review` renders exactly one chapter; replayed chapters never finalize,
+      so no per-chapter guard is needed). */
   review: ReviewRequest | null;
   /** The chapter the loop is currently synthesising. Set at the top of
       each loop iteration and cleared on chapter_complete / break. Used
@@ -1045,7 +1047,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
   const hasEdits = Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0;
   if (hasEdits) {
-    /* Plan 286 — overlay: keeps a `[]` take and an excluded chapter's take. */
+    /* Plan 287 — overlay: keeps a `[]` take and an excluded chapter's take. */
     await rebuildCacheFromEdits(state.manuscriptId, editsPath, {
       excludedChapterIds: state.chapters.filter((c) => c.excluded).map((c) => c.id),
     }).catch((e) => {
@@ -1427,7 +1429,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       /* Bug E: drop from in-flight before continuing so the aggregate
          stays accurate when the next chapter is added. */
       job.runInProgress.delete(chapter.id);
-      /* Plan 286 decision C — a `[]` take is a finished analysis (decision B),
+      /* Plan 287 decision C — a `[]` take is a finished analysis (decision B),
          so say why it produced no audio. With no failure record the chapter
          had no words to attribute; with one, attribution ran and found no
          lines. No own key at all is the incomplete-cache case. */
@@ -1900,7 +1902,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         audioQa,
         audioModelKey: renderedModelKey,
         audioEngines,
-        reviewRecorded,
+        reviewOutcome,
       } = await finalizeChapterAudioWrite({
         bookId,
         bookDir,
@@ -1944,6 +1946,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            fail-closed, the same direction `isAudioCurrent` takes everywhere
            else. */
         castHistorySeq: castIdHistory.seq ?? 0,
+        // Plan 286 — null when absent; a reviewed job renders exactly one chapter.
+        review: job.review,
       });
       if (audioQa.status === 'suspect') {
         console.warn(
@@ -2105,8 +2109,8 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         /* srv-27 — advisory QA verdict so the frontend can stamp a "Suspect"
            badge the moment the Done pill flips, without a state.json reload. */
         audioQa,
-        /* Plan 285 — present only when finalize was asked to record review state. */
-        ...(reviewRecorded === undefined ? {} : { reviewRecorded }),
+        /* Plan 285/286 — present only when finalize was asked to record review state. */
+        ...(reviewOutcome === undefined ? {} : { reviewOutcome }),
         /* Plan 285 — only the chapter actually rendered with `review`; the
            replay loop above never carries it. */
         ...(job.review !== null && job.chapterId === chapter.id ? { reviewChapter: true } : {}),

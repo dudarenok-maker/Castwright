@@ -5,9 +5,10 @@
    re-opens a book whose in-memory ManuscriptRecord has been lost (server
    restart).
 
-   PUT accepts `{ slice: 'cast'|'manuscript'|'revisions'|'state', patch }` and
+   PUT accepts `{ slice: 'cast'|'manuscript'|'state'|'changeLog', patch }` and
    atomically writes the matching JSON file. Used by the persistence
-   middleware in Phase 5. */
+   middleware in Phase 5. A `'revisions'` slice is refused (400
+   `revisions_server_owned`) — the server owns revisions.json (plan 286). */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
@@ -27,14 +28,21 @@ import {
   listenStatsJsonPath,
   manuscriptEditsJsonPath,
   queueJsonPath,
-  revisionsJsonPath,
   slug,
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { withKeyLock, requestFailureMessage } from '../workspace/file-lock.js';
+import { withKeyLock, requestFailureMessage, isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import { withCastLock } from '../workspace/cast-lock.js';
-import { assertRevisionsResettable, resetRevisions } from '../workspace/revisions-store.js';
+import {
+  assertRevisionsResettable,
+  readRevisions,
+  resetRevisions,
+  revisionsFailureText,
+  toRevisionsState,
+  type RevisionsState,
+} from '../workspace/revisions-store.js';
+import { UnsupportedSchemaError } from '../workspace/schema-migrate.js';
 import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
 import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile, type StatsPutBody } from '../workspace/listen-stats.js';
@@ -44,6 +52,7 @@ import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { ensureChapterUuids, reconcileChapterUuids } from '../workspace/chapter-uuid.js';
+import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
 import {
   putManuscript,
   getManuscript,
@@ -286,16 +295,22 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     }
     const cast = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
     let edits = await readJson<{ sentences?: unknown[]; mergedAwayKeys?: string[] }>(manuscriptEditsJsonPath(bookDir));
-    const revs = await readJson<{
-      pending?: unknown[];
-      drift?: unknown[];
-      dismissed?: string[];
-      acceptedSelections?: Record<string, Record<number, 'A' | 'B'>>;
-      /* Plan 55 — per-chapter timeline. Persisted by the frontend; surfaced
-         on getBookState so the Revision History view can hydrate without an
-         extra round-trip. */
-      timeline?: Record<string, unknown[]>;
-    }>(revisionsJsonPath(bookDir));
+    /* Plan 286 — read through the store: normalised (legacy drift dropped,
+       stale legacy pending dropped), with fileId/rev for the client cache. An
+       unreadable file must not lock the user out of the book: serve null plus a
+       fixed, path-free revisionsError the client toasts once (OD2). */
+    let revs: RevisionsState | null;
+    let revisionsError: string | undefined;
+    try {
+      revs = toRevisionsState(req.params.bookId, await readRevisions(bookDir, state.chapters));
+    } catch (e) {
+      console.error('[book-state] revisions.json unreadable; serving the book without it', e);
+      revs = null;
+      revisionsError = revisionsFailureText(
+        e,
+        "This book's A/B review history couldn't be read, so its pending reviews aren't shown.",
+      );
+    }
     const changeLog = await readJson<{ events?: unknown[] }>(changeLogJsonPath(bookDir));
 
     /* #2040 Wave 3 review round 1 IMPORTANT — loaded as its OWN statement
@@ -395,7 +410,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        populated in analysis.ts:913 (full route) and the subset route. */
     let failedChapterIds: number[] = [];
     let failedChapterErrors: Record<string, ChapterErrorRecord> = {};
-    /* Plan 286 §3.4 (C18, C20, F) — server facts the analysing view reads
+    /* Plan 287 §3.4 (C18, C20, F) — server facts the analysing view reads
        after a reload or a dropped snapshot: the roster is final
        (`stage1Ready`); the book has not reached Confirm and still needs a main
        resume (`resumeRequired` — never true past Confirm, so no Resume is
@@ -713,6 +728,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       manuscript,
       manuscriptEdits: edits,
       revisions: revs,
+      ...(revisionsError ? { revisionsError } : {}),
       completedSlugs,
       chapterCharacters,
       characterIdAliases,
@@ -882,8 +898,10 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
         break;
       }
       case 'revisions':
-        await writeJsonAtomic(revisionsJsonPath(bookDir), body.patch);
-        break;
+        return res.status(400).json({
+          error: 'revisions_server_owned',
+          message: 'revisions.json is written by the server; use the revision operations.',
+        });
       case 'changeLog':
         await writeJsonAtomic(changeLogJsonPath(bookDir), body.patch);
         break;
@@ -1301,7 +1319,16 @@ async function applyReparse(
        file is replaced (as the rm did); a newer-schema one was already
        refused by the route's preflight. This arm sits BESIDE the
        withCastLock arm, never inside it. */
-    resetRevisions(bookDir),
+    /* Plan 286 (invariant 8) — this arm's fs error embeds the absolute
+       workspace path, and both handlers answer (e as Error).message. Log it raw;
+       surface a fixed sentence. A lock timeout and a newer-schema refusal pass
+       through unchanged: the handlers' requestFailureMessage curates the first,
+       and the second's text is fixed and path-free. */
+    resetRevisions(bookDir).catch((e: unknown) => {
+      console.error('[book-state] revisions reset failed', e);
+      if (isLockAcquisitionTimeout(e) || e instanceof UnsupportedSchemaError) throw e;
+      throw new Error("Couldn't reset this book's A/B review history.");
+    }),
     existsSync(ad) ? rm(ad, { recursive: true, force: true }) : Promise.resolve(),
   ]);
 
@@ -1584,7 +1611,7 @@ bookStateRouter.post(
       if (excluded) {
         const audioRoot = audioDir(bookDir);
         const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
-        const audioCandidates = ['mp3', 'm4a', 'opus'].map((ext) =>
+        const audioCandidates = CHAPTER_AUDIO_EXTS.map((ext) =>
           join(audioRoot, `${current.slug}.${ext}`),
         );
         for (const p of [segmentsPath, ...audioCandidates]) {

@@ -73,6 +73,14 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'e2e') {
       overrideEntry: _overrideMockVoiceLibraryEntry,
     };
   });
+  /* Plan 286 — let e2e specs seed/read the mock server-owned revisions.json. */
+  void import('./mocks/mock-revisions').then(({ seedMockRevisions, getMockRevisions, resetMockRevisions }) => {
+    (window as unknown as { __mockRevisions: unknown }).__mockRevisions = {
+      seed: seedMockRevisions,
+      get: getMockRevisions,
+      reset: resetMockRevisions,
+    };
+  });
 }
 
 createRoot(document.getElementById('root')!).render(

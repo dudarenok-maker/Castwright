@@ -55,7 +55,7 @@ export interface EnqueueInput {
       per-chapter `awaiting_fallback_confirm` gate doesn't re-prompt for it. */
   fallbackConfirmed?: boolean;
   /** Plan 285 — the A/B review intent; rides the persisted entry into the
-      generation request. Nothing sets it until PR 2. */
+      generation request. Set by the profile-regen preview enqueue (plan 286). */
   review?: ReviewRequest;
 }
 

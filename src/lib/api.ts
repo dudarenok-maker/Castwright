@@ -65,6 +65,7 @@ import type {
   AnalyzerGpuSplitResponse,
   BookQaReport,
   ReviewRequest,
+  RevisionsState,
   AnalyzerCatalog,
   AnalyzerCatalogEntry,
   ModelCapabilityRecord,
@@ -74,6 +75,7 @@ import type {
   StructuredOutputMode,
 } from './types';
 import type { components as ApiComponents, paths as ApiPaths } from './api-types';
+import { revisionOpFailureFrom } from './revision-op-failure';
 import { type DesignPhase, DESIGN_PHASE_ORDER } from './design-phase';
 import { engineForModelKey } from './tts-models';
 import { FRONTEND_ACCOUNT_DEFAULTS } from './account-defaults';
@@ -103,6 +105,18 @@ import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
 import { MOCK_VOICE_LIBRARY_ENTRIES, MOCK_VOICE_LIBRARY_USAGE } from '../mocks/voice-library';
 import { MATCH_FACTORS } from '../data/match-factors';
 import { PENDING_REVISIONS } from '../data/revisions';
+import {
+  mockAcceptRevision,
+  mockRejectRevision,
+  mockDismissDrift,
+  mockRestoreUnrecorded,
+  mockRecordRender,
+  getMockRevisions,
+  hasMockRevisions,
+  mockHasPrevious,
+  resetMockRevisions,
+  seedMockRevisions,
+} from '../mocks/mock-revisions';
 import { VOICE_DRIFT_EVENTS } from '../data/drift';
 import { CHANGE_LOG_EVENTS } from '../data/change-log';
 import { MOCK_QA_REPORT } from '../data/qa-report';
@@ -317,6 +331,8 @@ export interface MergeCharactersResponse {
 }
 /* Tier-2b diminutive merge-suggestions (Task 12). Sourced from api-types.ts. */
 export type MergeSuggestion = ApiComponents['schemas']['MergeSuggestion'];
+/* Plan 286 (OD29) — what finalize did with A/B review state (Task 7). */
+type ReviewOutcome = ApiComponents['schemas']['ReviewOutcome'];
 /* POST /api/books/:bookId/cast/:characterId/series-patch — cross-book
    Compare save propagation. Applies the patch to the source character
    AND every series-sibling cast.json row that the plan-94 dedup rule
@@ -679,8 +695,8 @@ export type SpliceTick =
       durationSec: number;
       segmentCount: number;
       hasPreviousAudio: boolean;
-      /** Plan 285 — present only when finalize recorded (or failed to record) A/B review state. */
-      reviewRecorded?: boolean;
+      /** Plan 285/286 — present only when finalize was asked to record A/B review state. */
+      reviewOutcome?: ReviewOutcome;
     }
   | { type: 'chapter_failed'; chapterId?: number; errorReason: string };
 
@@ -724,8 +740,8 @@ export type QaRepairTick =
       repaired?: number[];
       stillSuspect?: number[];
       durationSec?: number;
-      /** Plan 285 — present only when finalize recorded (or failed to record) A/B review state. */
-      reviewRecorded?: boolean;
+      /** Plan 285/286 — present only when finalize was asked to record A/B review state. */
+      reviewOutcome?: ReviewOutcome;
     }
   | { type: 'chapter_failed'; chapterId?: number; errorReason: string };
 
@@ -1054,15 +1070,7 @@ function buildSolwayBayMockState(): BookStateResponse {
        ANALYSIS_NORTHERN_STAR, so it goes through the normal
        hydrateFromBookState path rather than an empty manuscript. */
     manuscriptEdits: { sentences: initialSentences, mergedAwayKeys: [] },
-    /* #3376 — `pending` is client-owned, seeded only by this disk hydrate
-       (hydrateFromBookState), never by a poll. The e2e a/b-audition spec
-       (revision-diff.spec.ts) needs a pending revision on book-open to
-       reach the Status popover's "N revisions" button, so it has to live
-       here now rather than in mockPollRevisions' PENDING_REVISIONS, which
-       the poll paths no longer write into the slice. Mirrors the real
-       server's getBookState, which reads revisions.json's `pending`
-       straight off disk. */
-    revisions: { pending: PENDING_REVISIONS },
+    revisions: null,
     /* Every chapter is rendered (matches the library card's
        completedChapters: 18). hydrateFromBookState then flips each
        chapter row to state: 'done', which makes them appear as
@@ -1203,6 +1211,12 @@ function seedDefaultMockBookStates(): void {
   MOCK_BOOK_STATES.set('sb', buildSolwayBayMockState());
   MOCK_BOOK_STATES.set('ns', buildNorthernStarMockState());
   MOCK_BOOK_STATES.set('cc', buildCarricksCompassMockState());
+  resetMockRevisions();
+  seedMockRevisions('sb', {
+    state: { pending: [PENDING_REVISIONS[0]] },
+    previousChapterIds: [3],
+    liveChapterIds: SB_CHAPTERS.map((c) => c.id),
+  });
 }
 seedDefaultMockBookStates();
 
@@ -1262,8 +1276,6 @@ function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): Boo
       return { ...prev, cast: req.patch as BookStateResponse['cast'] };
     case 'manuscript':
       return { ...prev, manuscriptEdits: req.patch as BookStateResponse['manuscriptEdits'] };
-    case 'revisions':
-      return { ...prev, revisions: req.patch as BookStateResponse['revisions'] };
     case 'changeLog': {
       const events =
         (req.patch as { events?: ChangeLogEvent[] } | null | undefined)?.events ?? null;
@@ -1302,10 +1314,12 @@ function applyMockSliceWrite(prev: BookStateResponse, req: PutStateRequest): Boo
    time — flipping the env in a test file is too late). */
 export async function mockGetBookState(bookId: string): Promise<BookStateResponse | null> {
   await wait(60);
-  if (DEMO_CAPTURE && HOLLOW_TIDE_BOOK_STATES.has(bookId)) {
-    return HOLLOW_TIDE_BOOK_STATES.get(bookId) ?? null;
-  }
-  const stored = MOCK_BOOK_STATES.get(bookId) ?? null;
+  const stored =
+    DEMO_CAPTURE && HOLLOW_TIDE_BOOK_STATES.has(bookId)
+      ? HOLLOW_TIDE_BOOK_STATES.get(bookId) ?? null
+      : MOCK_BOOK_STATES.get(bookId) ?? null;
+  const withRevisions =
+    stored && hasMockRevisions(bookId) ? { ...stored, revisions: getMockRevisions(bookId) } : stored;
   /* e2e seam: a spec can prime a book's prosodyAnnotated watermark via
      `page.addInitScript` BEFORE the app boots (mock PUTs never write it), so
      the open-time emotion re-run sees an explicit `false`. Undefined in
@@ -1313,9 +1327,9 @@ export async function mockGetBookState(bookId: string): Promise<BookStateRespons
   const seeded = (
     globalThis as unknown as { __SEED_PROSODY_ANNOTATED__?: Record<string, boolean> }
   ).__SEED_PROSODY_ANNOTATED__?.[bookId];
-  return stored && seeded !== undefined
-    ? { ...stored, state: { ...stored.state, prosodyAnnotated: seeded } }
-    : stored;
+  return withRevisions && seeded !== undefined
+    ? { ...withRevisions, state: { ...withRevisions.state, prosodyAnnotated: seeded } }
+    : withRevisions;
 }
 
 export async function mockPutBookState(bookId: string, req: PutStateRequest): Promise<void> {
@@ -1663,6 +1677,9 @@ function safeOnTick(onTick: StreamArgs['onTick']): StreamArgs['onTick'] {
 }
 
 function mockStreamGeneration({
+  bookId,
+  chapterIds,
+  review,
   getChapters,
   onTick: rawOnTick,
   mockGenConcurrency,
@@ -1716,6 +1733,9 @@ function mockStreamGeneration({
       : undefined) ??
     1;
   const targetK = Math.max(1, Math.floor(requestedK));
+  /* Plan 286 (Task 11) — a single-chapter A/B review intent names its one
+     chapter; only that chapter's completion is asked about review. */
+  const reviewChapterId = review && chapterIds?.length === 1 ? chapterIds[0] : null;
 
   const tick = () => {
     const chapters = getChapters?.() ?? [];
@@ -1751,6 +1771,25 @@ function mockStreamGeneration({
         active.duration && active.duration !== '00:00'
           ? parseDuration(active.duration)
           : totalLines * 5;
+      /* Plan 286 (Task 11) — mirror the server's parity contract (Task 27):
+         the reviewed chapter's completion is asked about review and stamped
+         `reviewChapter`; every other completion reports `reviewOutcome: 'none'`
+         with no `reviewChapter` key, the same as a real finalize with
+         `review: null`. */
+      let reviewFields: { reviewChapter?: true; reviewOutcome?: ReviewOutcome } = {};
+      if (isComplete) {
+        if (active.id === reviewChapterId) {
+          const recorded = mockRecordRender(bookId, active.id, {
+            ...review!,
+            oldDuration: active.duration,
+            newDuration: active.duration,
+          });
+          reviewFields = { reviewChapter: true, reviewOutcome: recorded ? 'recorded' : 'none' };
+        } else {
+          mockRecordRender(bookId, active.id, null);
+          reviewFields = { reviewOutcome: 'none' };
+        }
+      }
       onTick({
         type: isComplete ? 'chapter_complete' : 'progress',
         chapterId: active.id,
@@ -1759,6 +1798,7 @@ function mockStreamGeneration({
         currentLine,
         totalLines,
         ...(isComplete ? { durationSec: mockDurationSec } : {}),
+        ...reviewFields,
       });
     }
 
@@ -1790,15 +1830,29 @@ function mockStreamGeneration({
 /* fs-26 mock — emits the start → assembling → complete arc synchronously so
    mock-mode (e2e / unit) drives the splice flow without a backend. */
 async function mockStreamSplice({
+  bookId,
   chapterId,
   mode,
   characterId,
   onTick,
 }: SpliceArgs): Promise<void> {
+  /* Plan 286 (Task 11) — e2e specs tune the delay via
+     `window.__mockSpliceDelayMs` (character-splice.spec.ts leaves a book
+     mid-splice to exercise the cross-book "Fix audio" race). */
+  const delayMs =
+    (typeof window !== 'undefined'
+      ? (window as unknown as { __mockSpliceDelayMs?: number }).__mockSpliceDelayMs
+      : undefined) ?? 80;
   onTick({ type: 'splice_start', chapterId, mode, characterId });
-  await wait(80);
+  await wait(delayMs);
   onTick({ type: 'chapter_assembling', chapterId, progress: 0.99 });
-  await wait(80);
+  await wait(delayMs);
+  /* A splice always has audio (it operates on an existing take), so the
+     chapter is treated as live regardless of the mock store's own record. */
+  const cast = MOCK_BOOK_STATES.get(bookId)?.cast?.characters;
+  const firstName = (cast?.find((c) => c.id === characterId)?.name ?? characterId).split(' ')[0];
+  const triggeredBy = `${mode === 'remix' ? 'Loudness fix' : 'Re-record'} (${firstName})`;
+  mockRecordRender(bookId, chapterId, { characterId, triggeredBy }, { assumeLive: true });
   onTick({
     type: 'splice_complete',
     chapterId,
@@ -1807,6 +1861,7 @@ async function mockStreamSplice({
     durationSec: 120,
     segmentCount: 1,
     hasPreviousAudio: true,
+    reviewOutcome: 'recorded',
   });
 }
 
@@ -1818,7 +1873,7 @@ async function mockStreamSplice({
    cleared, which mock mode has no way to reach, and this is the only frame
    whose whole point is that it must reach the user. Emitting it here keeps the
    frontend advisory path exercised in mock mode and in the e2e spec. */
-async function mockStreamQaRepair({ chapterId, onTick }: QaRepairArgs): Promise<void> {
+async function mockStreamQaRepair({ bookId, chapterId, onTick }: QaRepairArgs): Promise<void> {
   onTick({ type: 'qa_scan', chapterId, flaggedCount: 2 });
   await wait(60);
   onTick({ type: 'splice_start', chapterId });
@@ -1832,6 +1887,10 @@ async function mockStreamQaRepair({ chapterId, onTick }: QaRepairArgs): Promise<
   await wait(60);
   onTick({ type: 'chapter_assembling', chapterId, progress: 0.99 });
   await wait(60);
+  /* Plan 286 (Task 11, parity with Task 27) — a QA repair's finalize always
+     passes review: null, so the chapter's entry is dropped and the frame
+     reports reviewOutcome: 'none', the same as the server. */
+  mockRecordRender(bookId, chapterId, null);
   onTick({
     type: 'qa_repair_complete',
     chapterId,
@@ -1839,6 +1898,7 @@ async function mockStreamQaRepair({ chapterId, onTick }: QaRepairArgs): Promise<
     repaired: [3, 7],
     stillSuspect: [],
     durationSec: 222,
+    reviewOutcome: 'none',
   });
 }
 
@@ -1927,10 +1987,16 @@ async function mockGetChapterAudio({ bookId, chapterId, duration }: AudioArgs): 
   };
 }
 
-/* Previous (A) audio for the revision-diff a/b player. Mock mode always
-   resolves — the real backend 404s when no preserved pair exists. */
-async function mockGetChapterAudioPrevious({ duration }: AudioArgs): Promise<ChapterAudio> {
+/* Previous (A) audio for the revision-diff a/b player. Resolves only when
+   the mock store mirrors a `.previous` for this chapter (plan 286, D7) —
+   the real backend 404s (→ null) under the same condition. */
+async function mockGetChapterAudioPrevious({
+  bookId,
+  chapterId,
+  duration,
+}: AudioArgs): Promise<ChapterAudio | null> {
   await wait(120);
+  if (!mockHasPrevious(bookId, chapterId)) return null;
   const totalSec = parseDuration(duration || '10:00');
   return {
     url: stubAudioA,
@@ -1951,67 +2017,33 @@ async function mockGetBaseVoiceSample({ modelKey }: BaseVoiceSampleArgs): Promis
   return { url: stubAudioA, durationSec: 12, cached: false, modelKey };
 }
 
-/* Mock accept (DELETE /audio/previous) and reject (POST /audio/previous/restore)
-   for the revision-diff a/b player. Both no-op in mock mode — the slice is
-   the source of truth, the disk state is fictional. */
-async function mockAcceptChapterRevision(_args: {
-  bookId: string;
-  chapterId: number;
-}): Promise<void> {
-  await wait(100);
-}
-
-async function mockRejectChapterRevision(_args: {
-  bookId: string;
-  chapterId: number;
-}): Promise<void> {
-  await wait(100);
-}
-
 async function mockPollRevisions(args: PollArgs): Promise<RevisionsResponse> {
   await wait(200);
   /* Filter drift to the requested book so the mock mirrors the server's
      per-book endpoint shape. The dev fixture seeds events for two
      books — the modal's multi-book grouping only renders if the slice
      accumulates entries from each book separately, which is what
-     happens when `applyPoll` is called once per book.
-
-     NOTE: `pending` is returned for every book, but as of #3376 round 2
-     neither poll path writes it — `pending` is client-owned once a book is
-     open (seeded only by the one-shot disk hydrate on book-open), and both
-     the active book's 30 s `applyPoll` and the 120 s background fan-out's
-     `applyBackgroundPoll` merge drift only. `pending` here is inert for
-     both; the every-book shape is kept so the mock mirrors the server's
-     per-book endpoint. The fe-15 profile-regen-preview spec clears
-     `pending` itself before opening its preview stub to avoid the
-     phantom-revision collision. */
-  /* Quality Gate marketing/wiki screenshots (#1286) — under DEMO_CAPTURE,
-     stop the dev-only PENDING_REVISIONS fixture (an Eliza/book-`sb` revision
-     with no bookId field, so it always matched every book before) from
-     bleeding into the marketing books' poll response. Scoped to the
-     DEMO_CAPTURE flag for EVERY book, not specific book ids — the background
-     bulk poll (layout.tsx) reaches every non-active marketing book, and
-     `applyPoll` (which the bulk fan-out used before #3376 moved it to
-     `applyBackgroundPoll`) replaced `pending` wholesale regardless of
-     bookId at the time, so a partial scope wouldn't have fully closed the
-     bleed (adversarial review round 2 caught this when an earlier fix
-     scoped it to hollow-tide-* only). Since #3376 round 2 neither poll path
-     writes `pending` at all, but the every-book filter is kept so both poll
-     paths see the same scoped mock shape regardless. */
-  if (DEMO_CAPTURE) {
-    return {
-      pending: [],
-      drift: [
+     happens when `applyPoll` is called once per book. */
+  const drift = DEMO_CAPTURE
+    ? [
         ...VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
         ...HOLLOW_TIDE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
-      ],
-    };
-  }
-  return {
-    pending: PENDING_REVISIONS,
-    drift: VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId),
-  };
+      ]
+    : VOICE_DRIFT_EVENTS.filter((d) => !args.bookId || d.bookId === args.bookId);
+  /* Plan 286 — pending, dismissed etc. come from the per-book mock store (D7);
+     drift the store has dismissed is filtered, as the server does. */
+  const state = getMockRevisions(args.bookId);
+  const dismissed = new Set(state.dismissed);
+  return { ...state, drift: drift.filter((d) => !dismissed.has(d.id)) };
 }
+
+export {
+  mockPollRevisions as _mockPollRevisions,
+  mockGetChapterAudioPrevious as _mockGetChapterAudioPrevious,
+  mockStreamSplice as _mockStreamSplice,
+  mockStreamGeneration as _mockStreamGeneration,
+  mockStreamQaRepair as _mockStreamQaRepair,
+};
 
 /* ── real fetch-based implementations ────────────────────────────────── */
 
@@ -10723,40 +10755,69 @@ const real = {
     }
     return res.json();
   },
-  acceptChapterRevision: async ({
+  /* Plan 286 — server-owned revisions operations (plan 285 routes). */
+  acceptRevision: async ({
     bookId,
-    chapterId,
+    revisionId,
+    selection,
   }: {
     bookId: string;
-    chapterId: number;
-  }): Promise<void> => {
+    revisionId: string;
+    selection?: Record<number, 'A' | 'B'>;
+  }): Promise<RevisionsState> => {
     const res = await fetch(
-      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous`,
-      { method: 'DELETE' },
+      `/api/books/${encodeURIComponent(bookId)}/revisions/${encodeURIComponent(revisionId)}/accept`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(selection ? { selection } : {}),
+      },
     );
-    if (!res.ok && res.status !== 404) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`Accept revision failed (${res.status}): ${detail || res.statusText}`);
-    }
+    if (!res.ok) throw await revisionOpFailureFrom(res, `Accept failed (${res.status}).`);
+    return res.json();
   },
-  rejectChapterRevision: async ({
+  rejectRevision: async ({
     bookId,
-    chapterId,
+    revisionId,
   }: {
     bookId: string;
-    chapterId: number;
-  }): Promise<void> => {
+    revisionId: string;
+  }): Promise<RevisionsState> => {
     const res = await fetch(
-      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous/restore`,
+      `/api/books/${encodeURIComponent(bookId)}/revisions/${encodeURIComponent(revisionId)}/reject`,
       { method: 'POST' },
     );
-    if (res.status === 409) {
-      throw new Error('Generation is in flight. Wait for the render to finish before rejecting.');
-    }
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`Reject revision failed (${res.status}): ${detail || res.statusText}`);
-    }
+    if (!res.ok) throw await revisionOpFailureFrom(res, `Reject failed (${res.status}).`);
+    return res.json();
+  },
+  dismissDrift: async ({
+    bookId,
+    driftId,
+  }: {
+    bookId: string;
+    driftId: string;
+  }): Promise<RevisionsState> => {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/drift/${encodeURIComponent(driftId)}/dismiss`,
+      { method: 'POST' },
+    );
+    if (!res.ok) throw await revisionOpFailureFrom(res, `Dismiss failed (${res.status}).`);
+    return res.json();
+  },
+  restorePreviousUnrecorded: async ({
+    bookId,
+    chapterId,
+  }: {
+    bookId: string;
+    chapterId: number;
+  }): Promise<'restored' | 'none'> => {
+    const res = await fetch(
+      `/api/books/${encodeURIComponent(bookId)}/chapters/${chapterId}/audio/previous/restore-unrecorded`,
+      { method: 'POST' },
+    );
+    if (res.status === 204) return 'restored';
+    if (res.status === 404) return 'none';
+    throw await revisionOpFailureFrom(res, `Restore failed (${res.status}).`);
   },
   pollRevisions: async ({ bookId }: PollArgs): Promise<RevisionsResponse> => {
     const res = await fetch(`/api/books/${encodeURIComponent(bookId)}/revisions`);
@@ -11017,8 +11078,48 @@ const mock = {
   redeemBrowserPair: mockRedeemBrowserPair,
   getChapterAudio: mockGetChapterAudio,
   getChapterAudioPrevious: mockGetChapterAudioPrevious,
-  acceptChapterRevision: mockAcceptChapterRevision,
-  rejectChapterRevision: mockRejectChapterRevision,
+  acceptRevision: async ({
+    bookId,
+    revisionId,
+    selection,
+  }: {
+    bookId: string;
+    revisionId: string;
+    selection?: Record<number, 'A' | 'B'>;
+  }): Promise<RevisionsState> => {
+    await wait(100);
+    return mockAcceptRevision(bookId, revisionId, selection);
+  },
+  rejectRevision: async ({
+    bookId,
+    revisionId,
+  }: {
+    bookId: string;
+    revisionId: string;
+  }): Promise<RevisionsState> => {
+    await wait(100);
+    return mockRejectRevision(bookId, revisionId);
+  },
+  dismissDrift: async ({
+    bookId,
+    driftId,
+  }: {
+    bookId: string;
+    driftId: string;
+  }): Promise<RevisionsState> => {
+    await wait(60);
+    return mockDismissDrift(bookId, driftId);
+  },
+  restorePreviousUnrecorded: async ({
+    bookId,
+    chapterId,
+  }: {
+    bookId: string;
+    chapterId: number;
+  }): Promise<'restored' | 'none'> => {
+    await wait(60);
+    return mockRestoreUnrecorded(bookId, chapterId);
+  },
   pollRevisions: mockPollRevisions,
   /* Plan 83 — mock fans out via the existing single-book mock for each id.
      Real server runs the per-book helper in parallel; the mock can do the
@@ -11177,6 +11278,9 @@ const mock = {
   cloneVoice: mockCloneVoice,
   revokeVoiceLibraryEntry: mockRevokeVoiceLibraryEntry,
 };
+
+export type __MockApi = typeof mock;
+export type __RealApi = typeof real;
 
 /* fs-20 — re-export so the Admin trend panel + its tests import the telemetry
    record type from the same `../lib/api` surface as the other admin types. */
