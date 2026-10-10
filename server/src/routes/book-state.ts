@@ -409,7 +409,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        populated in analysis.ts:913 (full route) and the subset route. */
     let failedChapterIds: number[] = [];
     let failedChapterErrors: Record<string, ChapterErrorRecord> = {};
-    /* Plan 286 §3.4 (C18, C20, F) — server facts the analysing view reads
+    /* Plan 287 §3.4 (C18, C20, F) — server facts the analysing view reads
        after a reload or a dropped snapshot: the roster is final
        (`stage1Ready`); the book has not reached Confirm and still needs a main
        resume (`resumeRequired` — never true past Confirm, so no Resume is

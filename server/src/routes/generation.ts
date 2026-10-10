@@ -1047,7 +1047,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const editsSnapshot = await readJson<{ sentences?: unknown[] }>(editsPath);
   const hasEdits = Array.isArray(editsSnapshot?.sentences) && editsSnapshot.sentences.length > 0;
   if (hasEdits) {
-    /* Plan 286 — overlay: keeps a `[]` take and an excluded chapter's take. */
+    /* Plan 287 — overlay: keeps a `[]` take and an excluded chapter's take. */
     await rebuildCacheFromEdits(state.manuscriptId, editsPath, {
       excludedChapterIds: state.chapters.filter((c) => c.excluded).map((c) => c.id),
     }).catch((e) => {
@@ -1429,7 +1429,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       /* Bug E: drop from in-flight before continuing so the aggregate
          stays accurate when the next chapter is added. */
       job.runInProgress.delete(chapter.id);
-      /* Plan 286 decision C — a `[]` take is a finished analysis (decision B),
+      /* Plan 287 decision C — a `[]` take is a finished analysis (decision B),
          so say why it produced no audio. With no failure record the chapter
          had no words to attribute; with one, attribution ran and found no
          lines. No own key at all is the incomplete-cache case. */
