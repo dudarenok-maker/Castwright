@@ -30,6 +30,7 @@ let app: Express;
 let userSettingsPath: string;
 let resetCache: () => void;
 let userSettingsSchema: SettingsModule['userSettingsSchema'];
+let writeUserSettings: SettingsModule['writeUserSettings'];
 
 beforeAll(async () => {
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-user-settings-test-'));
@@ -44,6 +45,7 @@ beforeAll(async () => {
   userSettingsPath = settings.USER_SETTINGS_PATH;
   resetCache = settings._resetUserSettingsCache;
   userSettingsSchema = settings.userSettingsSchema;
+  writeUserSettings = settings.writeUserSettings;
 
   app = express();
   app.use(express.json());
@@ -587,6 +589,24 @@ describe('user-settings router', () => {
       .send({ configOverrides: { 'analyzer.ollama.model': 'openai:latest' } });
     expect(ok.status).toBe(200);
     expect(ok.body.configOverrides['analyzer.ollama.model']).toBe('openai:latest');
+  });
+
+  it('refuses a fallback target naming an endpoint that is not saved, with the issue on its path (#3084 P30)', async () => {
+    const res = await request(app).put('/api/user/settings').send({ configOverrides: { 'analyzer.fallback.target': 'openai:gone::m' } });
+    expect(res.status).toBe(400);
+    expect(res.body.issues).toEqual([{ path: ['configOverrides', 'analyzer.fallback.target'], message: expect.stringMatching(/no analyzer endpoint "gone" is saved/) }]);
+    expect((await request(app).get('/api/user/settings')).body.configOverrides['analyzer.fallback.target']).toBeUndefined();
+  });
+
+  it('an unrelated save that resends an older, now-unusable target still saves (#3084 P30)', async () => {
+    /* Saved before its endpoint went away (seeded below the route, as a hand edit or an older build would). */
+    await writeUserSettings({ configOverrides: { 'analyzer.fallback.target': 'openai:gone::m' } });
+    /* `displayName`, not `ollamaUrl`: #3141 retired `ollamaUrl`, and the PUT refuses it with 400. */
+    const res = await request(app)
+      .put('/api/user/settings')
+      .send({ displayName: 'Unrelated save', configOverrides: { 'analyzer.fallback.target': 'openai:gone::m' } });
+    expect(res.status).toBe(200);
+    expect(res.body.displayName).toBe('Unrelated save');
   });
 
   it('GET exposes analyzer endpoints and key status, never the keys (#3084 PR 3b)', async () => {

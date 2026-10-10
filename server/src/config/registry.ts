@@ -1120,7 +1120,7 @@ export const KNOBS: ConfigKnob[] = [
     env: 'GEMINI_MODEL',
     group: 'analyzer-models',
     label: 'Gemini analyzer model',
-    help: 'Gemini model used directly (engine=gemini) or as the Ollama-unreachable fallback (engine=local). Ships defaulting to gemini-3.5-flash-lite (500 RPD, comfortably parses a novel). Switch to a gemma-* model (30 RPM / 14,400 RPD, its own free-tier bucket) to avoid the RECITATION content filter that can block copyrighted-book chapters on gemini-* models.',
+    help: 'Gemini model used directly (engine=gemini) or as the fallback when Analyzer fallback is gemini. Ships defaulting to gemini-3.5-flash-lite (500 RPD, comfortably parses a novel). Switch to a gemma-* model (30 RPM / 14,400 RPD, its own free-tier bucket) to avoid the RECITATION content filter that can block copyrighted-book chapters on gemini-* models.',
     type: 'string',
     // #2179 — analyzer/index.ts, routes/analysis.ts, and run-eval-cli.ts used
     // to read process.env.GEMINI_MODEL directly with a hardcoded
@@ -1134,6 +1134,22 @@ export const KNOBS: ConfigKnob[] = [
     // the only fallback — the gemma-4-31b-it literal is retired.
     default: 'gemini-3.5-flash-lite', // ← GEMINI_MODEL default mirrored in server/.env.example
     apply: 'live', risk: 'medium',
+  },
+  {
+    key: 'analyzer.fallback.target',
+    env: 'ANALYZER_FALLBACK_TARGET',
+    group: 'analyzer-models',
+    label: 'Analyzer fallback',
+    help: 'Where analysis goes, one hop, when the local Ollama daemon or an OpenAI-compatible endpoint is unreachable (connection refused or timed out before a reply). "off": no fallback, the run fails naming the server. "local": the Ollama model a local run uses (the saved Ollama model; when the saved default is an endpoint, OLLAMA_MODEL, else the Advanced Settings analyzer.ollama.model override, else the shipped default). "gemini" (default): the Gemini analyzer model, only when a Gemini API key is set. Or pick an endpoint model. A reply that breaks off mid-stream or a proxy 502 is retried, never a fallback. The fallback is never itself wrapped, a Gemini run never falls back, and persona generation never falls back. Saving a target whose endpoint is missing, or "gemini" with no key, is refused. An install that switched the old Model Manager "Cloud fallback" off reads as "off" until this is set.',
+    type: 'analyzer-engine',
+    options: ['off', 'local', 'gemini'],
+    /* off | local | gemini | an endpoint model id — the grammar of analyzer/model-id.ts, repeated as a
+       literal because registry.ts must stay pure data (registry-imports.guard.test.ts); registry.test.ts
+       pins it against parseEndpointModelId. The only 'analyzer-engine' pattern that admits `off`. */
+    pattern: /^(off|local|gemini|openai:[a-z0-9-]{1,40}::.+)$/,
+    default: 'gemini',
+    apply: 'live',
+    risk: 'medium',
   },
   {
     key: 'analyzer.gemini.voiceStyleModel',

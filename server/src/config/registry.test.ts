@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { GROUPS, KNOBS, allKnobs, getKnob, knobByEnv, knobsInGroup } from './registry.js';
 import { coerceAndValidate } from './resolver.js';
+import { parseEndpointModelId } from '../analyzer/model-id.js';
 
 describe('config registry', () => {
   it('declares the twelve groups', () => {
@@ -210,11 +211,11 @@ describe('config registry', () => {
      ignored (never reached, never enforced) rather than rejected as a
      registry-authoring mistake. `pattern` is only ever consulted in the
      'string'/'device' default case. */
-  it('pattern is only declared on string/device knobs — coerceAndValidate never checks it for any other type', () => {
+  it('pattern is only declared on string/device/analyzer-engine knobs — coerceAndValidate never checks it for any other type', () => {
     for (const k of allKnobs()) {
       if (!k.pattern) continue;
       expect(
-        ['string', 'device'],
+        ['string', 'device', 'analyzer-engine'],
         `knob ${k.key} declares a pattern but has type "${k.type}" — coerceAndValidate's ` +
           `${k.type} case returns before ever consulting knob.pattern, so it silently does nothing`,
       ).toContain(k.type);
@@ -243,5 +244,40 @@ describe('config registry', () => {
     // restart-sidecar, not live: the sidecar (its primary consumer) reads
     // GPU_RESERVE_MB from the environment at process start.
     expect(k?.apply).toBe('restart-sidecar');
+  });
+});
+
+/* #3084 P30 — the analyzer fallback target, the first 'analyzer-engine' knob (P10). */
+describe('analyzer.fallback.target', () => {
+  const knob = () => getKnob('analyzer.fallback.target')!;
+
+  it('is an analyzer-engine knob in analyzer-models offering off, local and gemini, default gemini, env ANALYZER_FALLBACK_TARGET', () => {
+    expect(knob()).toMatchObject({
+      type: 'analyzer-engine',
+      group: 'analyzer-models',
+      label: 'Analyzer fallback',
+      options: ['off', 'local', 'gemini'],
+      default: 'gemini',
+      env: 'ANALYZER_FALLBACK_TARGET',
+      apply: 'live',
+    });
+  });
+
+  it.each(['off', 'local', 'gemini', ' gemini ', 'openai:lab::qwen3-30b', 'openai:my-box-2::meta-llama/llama-3.1-8b:free'])('accepts %j', (v) => {
+    expect(coerceAndValidate(knob(), v)).toEqual({ ok: true, value: v.trim() });
+  });
+
+  it.each(['', 'Off', 'none', 'cloud', 'openai', 'openai:lab:qwen3', 'openai:lab::', 'openai:Lab::qwen3', 'openai:latest', 'qwen3.5:9b', 'gemini-3.5-flash-lite', `openai:${'a'.repeat(41)}::m`])(
+    'rejects %j',
+    (v) => {
+      expect(coerceAndValidate(knob(), v).ok).toBe(false);
+    },
+  );
+
+  it('accepts no endpoint-shaped id that parseEndpointModelId rejects', () => {
+    for (const id of ['openai:latest', 'openai:Lab::qwen3', 'openai:lab_1::qwen3', 'openai:::qwen3', 'openai:lab:qwen3', 'openai']) {
+      expect(parseEndpointModelId(id), id).toBeNull();
+      expect(coerceAndValidate(knob(), id).ok, id).toBe(false);
+    }
   });
 });

@@ -34,6 +34,7 @@ import { configValue } from '../config/resolver.js';
 import { getResolvedOllamaUrl } from '../config/ollama-resolved.js';
 import { WORKSPACE_ROOT, WORKSPACE_SOURCE } from '../workspace/paths.js';
 import { endpointKeyStatus, type EndpointKeyStatus } from '../workspace/analyzer-endpoints.js';
+import { fallbackTargetSaveError } from '../analyzer/fallback-target.js';
 
 export const userSettingsRouter = Router();
 
@@ -168,6 +169,18 @@ userSettingsRouter.put('/', async (req: Request, res: Response) => {
     const refusals = endpointModelIdRefusals(req.body);
     if (refusals.length > 0) {
       return res.status(400).json({ error: 'Invalid user settings.', issues: refusals });
+    }
+    /* #3084 P30 — the same save-time check PUT /api/config runs, for a changed fallback target. */
+    const target = (req.body as { configOverrides?: Record<string, unknown> } | undefined)?.configOverrides?.['analyzer.fallback.target'];
+    if (typeof target === 'string') {
+      const saved = await readUserSettings();
+      const message =
+        target.trim() === saved.configOverrides['analyzer.fallback.target']
+          ? null
+          : fallbackTargetSaveError(target.trim(), { endpointIds: saved.analyzerEndpoints.map((e) => e.id), geminiKey: Boolean(getResolvedGeminiApiKey()) });
+      if (message) {
+        return res.status(400).json({ error: 'Invalid user settings.', issues: [{ path: ['configOverrides', 'analyzer.fallback.target'], message }] });
+      }
     }
     const updated = await writeUserSettings(req.body);
     res.json(envDerived(updated));

@@ -75,11 +75,13 @@ export interface EndpointReferenceSource {
 export const MODEL_ID_SETTING_FIELDS = ['defaultAnalysisModel'] as const;
 
 /** Registry knobs (config overrides) that hold a selectable model id. The persona
-    engine is listed now: wave 4 makes it a model-id-style selection. */
+    engine is listed now: wave 4 makes it a model-id-style selection. The fallback
+    target is listed from PR 3d (P30). */
 export const MODEL_ID_CONFIG_KNOBS = [
   'analyzer.phase0.model',
   'analyzer.phase1.model',
   'analyzer.personaGeneration.engine',
+  'analyzer.fallback.target',
 ] as const;
 
 export class AnalyzerEndpointRefusal extends Error {
@@ -129,12 +131,10 @@ export function resolveUnloadUrl(endpoint: AnalyzerEndpoint, model: string | und
   return endpoint.unloadUrl.split('{model}').join(encodeURIComponent(model));
 }
 
-/* #3084 F4 (not this PR) — PR 3d extends this to also count the
-   `analyzer.fallback.target` knob (`resolveAnalyzerFallbackTarget`'s saved
-   override, a bare `openai:<endpointId>::<model>` string) as a reference, so
-   deleting an endpoint the fallback names is refused like any other
-   reference. The fallback knob itself is not introduced in 3b (F4: it lands
-   in PR 3d alongside the `'analyzer-engine'` knob type). */
+/* #3084 F4 — the `analyzer.fallback.target` knob (`resolveAnalyzerFallbackTarget`'s
+   saved override, a bare `openai:<endpointId>::<model>` string) is counted as a
+   reference through MODEL_ID_CONFIG_KNOBS above, so deleting an endpoint the
+   fallback names is refused like any other reference (PR 3d, P30). */
 export function findEndpointReferences(settings: EndpointReferenceSource, endpointId: string): string[] {
   const names = (value: unknown): boolean =>
     typeof value === 'string' && parseEndpointModelId(value.trim())?.endpointId === endpointId;

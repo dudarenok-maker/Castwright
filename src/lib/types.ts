@@ -933,8 +933,10 @@ export interface KnobDescriptor {
   label: string;
   help: string;
   /** 'device' is a string knob whose UI is a dropdown built from GET /api/gpu/devices
-      (plus 'auto'/'cpu') instead of a free-text box. */
-  type: 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'device';
+      (plus 'auto'/'cpu') instead of a free-text box. 'analyzer-engine' (#3084 P10) is a string
+      knob whose UI is a dropdown of its static `options` plus the OpenAI-compatible endpoint
+      models from GET /api/analyzer/models. */
+  type: 'number' | 'integer' | 'boolean' | 'string' | 'enum' | 'device' | 'analyzer-engine';
   min?: number;
   max?: number;
   step?: number;
@@ -977,6 +979,10 @@ export interface KnobValue {
   overridden: boolean;
   /** Set when `effective` is degraded/unresolved — see StaleReason. */
   staleReason?: StaleReason;
+  /** #3084 P30 — only on analyzer.fallback.target: display labels for the static options, the
+      Ollama model `local` resolves to, and a note when the value comes from the legacy
+      allowCloudFallback step. */
+  analyzerEngine?: { localModel: string; optionLabels: Record<string, string>; sourceNote?: string };
 }
 
 /** Map of key → KnobValue returned by the config endpoints. */

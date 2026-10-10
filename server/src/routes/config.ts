@@ -24,11 +24,15 @@ import {
   clearConfigOverride,
   clearAllConfigOverrides,
   endpointModelIdRefusals,
+  readUserSettings,
+  getResolvedGeminiApiKey,
 } from '../workspace/user-settings.js';
 import { PROMPT_IDS, readPrompt, writeForkedPrompt, resetPrompt } from '../config/prompts.js';
 import { toUuidForm, needsUuidTranslation } from './gpu-uuid.js';
 import { fetchSidecarDevices, type SidecarDevicesResponse } from '../gpu/fetch-sidecar-devices.js';
 import { ensureGpuDeviceListWarm } from '../gpu/ensure-gpu-device-list-warm.js';
+import { fallbackTargetSaveError, fallbackTargetValueState } from '../analyzer/fallback-target.js';
+import type { KnobValueState } from '../config/types.js';
 
 export const configRouter = Router();
 
@@ -39,6 +43,15 @@ let tmpSeq = 0;
 /* Test-only: override the server .env path without exposing it over HTTP.
    Production code never sets this; only test code calls _setServerEnvPathForTest. */
 let serverEnvPathOverride: string | null = null;
+
+/* #3084 P30 — resolveAll() reads resolveKnob, which knows nothing of the fallback target's legacy
+   step; Advanced Settings must show the target that actually applies. */
+function clientValues(): Record<string, KnobValueState> {
+  const values = resolveAll();
+  const key = 'analyzer.fallback.target';
+  if (values[key]) values[key] = fallbackTargetValueState(values[key]);
+  return values;
+}
 
 /* resolveAll() -> resolveKnob() reconciles a stored 'cuda-uuid:<uuid>'
    override against getLastKnownGpuDevices()'s cache SYNCHRONOUSLY — it's
@@ -80,7 +93,7 @@ configRouter.get('/', async (_req, res) => {
   res.json({
     groups: GROUPS,
     descriptors,
-    values: resolveAll(),
+    values: clientValues(),
     restartPending: false,
     cudaEnvShadow: Boolean(process.env.CUDA_VISIBLE_DEVICES || process.env.CUDA_DEVICE_ORDER),
     envCleanupCandidates,
@@ -134,6 +147,21 @@ configRouter.put('/', async (req, res) => {
     coerced[key] = r.value!;
   }
 
+  /* #3084 P30 — a fallback target must be usable when saved. Read from disk first: a cold cache
+     after a restart would report a saved endpoint or key as missing. Nothing has been written. */
+  const fallbackTarget = coerced['analyzer.fallback.target'];
+  if (typeof fallbackTarget === 'string') {
+    const saved = await readUserSettings();
+    const error = fallbackTargetSaveError(fallbackTarget, {
+      endpointIds: saved.analyzerEndpoints.map((e) => e.id),
+      geminiKey: Boolean(getResolvedGeminiApiKey()),
+    });
+    if (error) {
+      res.status(400).json({ error });
+      return;
+    }
+  }
+
   /* Pass 2: cross-field validation against the RESULTING EFFECTIVE config —
      the patch's own coerced value for a key it touches, otherwise whatever
      is already in effect for that key (env/override/default) — not just the
@@ -163,7 +191,7 @@ configRouter.put('/', async (req, res) => {
     await writeConfigOverride(key, value);
     applied.push(key);
   }
-  res.json({ ok: true, applied, values: resolveAll() });
+  res.json({ ok: true, applied, values: clientValues() });
 });
 
 configRouter.post('/reset', async (req, res) => {
@@ -222,7 +250,7 @@ configRouter.post('/reset', async (req, res) => {
   } else {
     for (const k of toClear) await clearConfigOverride(k);
   }
-  res.json({ ok: true, values: resolveAll() });
+  res.json({ ok: true, values: clientValues() });
 });
 
 // ── POST /env-cleanup ────────────────────────────────────────────────────────
