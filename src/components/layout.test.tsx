@@ -2325,6 +2325,9 @@ describe('Layout — A/B player routing (plan 286)', () => {
     renderLayoutAt(store, 'b1');
     await waitFor(() => expect(getBookStateMock).toHaveBeenCalled());
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); // let the null hydrate land first
+    /* The null hydrate leaves manuscript.bookId unset; a loaded book has it, and
+       the preview Approve's change-log append is gated on it (#3400 review 2). */
+    act(() => { store.dispatch(manuscriptSlice.actions.hydrateFromBookState({ state: { bookId: 'b1', manuscriptId: 'mns_b1', title: 'Book b1' } as never, sentences: null })); });
     act(() => { store.dispatch(revisionsActions.applyServerState(S(pending))); });
     return store;
   }

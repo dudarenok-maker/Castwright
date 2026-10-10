@@ -32,11 +32,17 @@ export function approvePreviewSideEffects(preview: PreviewRegenCtx) {
   return async (dispatch: AppDispatch, getState: () => RootState): Promise<void> => {
     dispatch(uiActions.setPreviewRegen(null));
     /* The change log and the cast are the OPEN book's — persistence saves the
-       log to whichever book is open — so a preview approved after switching
-       books must not log into the wrong one. The fan-out below is keyed on
-       preview.bookId and is still correct cross-book. */
-    const character = activeBookId(getState()) === preview.bookId
-      ? getState().cast.characters.find((c) => c.id === preview.characterId)
+       log to whichever book the stage has open — so a preview approved after
+       switching books must not log into the wrong one. The stage alone is not
+       enough: between a switch and the new book's state read landing, the
+       slices still hold the PREVIOUS book while the stage already names the
+       new one, and appending then would overwrite its change-log.json with the
+       old book's history. manuscript.bookId is stamped by the same hydrate as
+       the change log, so both must name preview.bookId. The fan-out below is
+       keyed on preview.bookId and is still correct cross-book. */
+    const state = getState();
+    const character = activeBookId(state) === preview.bookId && state.manuscript.bookId === preview.bookId
+      ? state.cast.characters.find((c) => c.id === preview.characterId)
       : undefined;
     if (character) {
       dispatch(changeLogActions.appendLogEvent(buildCharacterRegenEvent({

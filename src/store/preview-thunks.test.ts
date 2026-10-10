@@ -7,6 +7,7 @@ vi.mock('../lib/api', () => ({ api: apiMock }));
 import { uiSlice, uiActions, type PreviewRegenCtx } from './ui-slice';
 import { castSlice } from './cast-slice';
 import { changeLogSlice } from './change-log-slice';
+import { manuscriptSlice } from './manuscript-slice';
 import { queueSlice } from './queue-slice';
 import { analysisSlice } from './analysis-slice';
 import { chaptersSlice } from './chapters-slice';
@@ -34,17 +35,19 @@ function makeStore(active = 'A'): {
     changeLog: ReturnType<typeof changeLogSlice.reducer>;
     queue: ReturnType<typeof queueSlice.reducer>;
     analysis: ReturnType<typeof analysisSlice.reducer>;
+    manuscript: ReturnType<typeof manuscriptSlice.reducer>;
     chapters: ReturnType<typeof chaptersSlice.reducer>;
     notifications: ReturnType<typeof notificationsSlice.reducer>;
   };
   dispatch: TestDispatch;
 } {
-  const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, changeLog: changeLogSlice.reducer, queue: queueSlice.reducer, analysis: analysisSlice.reducer, chapters: chaptersSlice.reducer, notifications: notificationsSlice.reducer } });
+  const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, changeLog: changeLogSlice.reducer, queue: queueSlice.reducer, analysis: analysisSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, notifications: notificationsSlice.reducer } });
   const typed = store as unknown as {
     getState: typeof store.getState;
     dispatch: TestDispatch;
   };
   typed.dispatch(uiActions.openBook({ id: active, status: 'complete' } as never));
+  typed.dispatch(manuscriptSlice.actions.hydrateFromBookState({ state: { bookId: active, manuscriptId: `m-${active}`, title: active } as never, sentences: null }));
   typed.dispatch(castSlice.actions.hydrateCharacters([{ id: 'eliza', name: 'Eliza Carrick', role: '', color: 'narrator' } as never]));
   return typed;
 }
