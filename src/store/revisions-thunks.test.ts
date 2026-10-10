@@ -183,6 +183,18 @@ describe('revisions thunks (plan 286)', () => {
     apiMock.pollRevisions.mockRejectedValueOnce(new Error('x'));
     expect(await store.dispatch(refetchActiveRevisions('A'))).toBe('failed');
   });
+  it('#3400: a refetch for book A that resolves after the user switched to B does not touch B\'s cache', async () => {
+    let release!: (v: unknown) => void;
+    apiMock.pollRevisions.mockReturnValueOnce(new Promise((r) => (release = r)));
+    const store = makeStore('A');
+    const p = store.dispatch(refetchActiveRevisions('A'));
+    store.dispatch(uiActions.openBook({ id: 'B', status: 'complete' } as never));
+    store.dispatch(revisionsActions.applyServerState(S('B', 1, ['b1'])));
+    release(S('A', 5, ['a1']));
+    expect(await p).toBe('ok');
+    expect(store.getState().revisions.rev).toBe(1);
+    expect(store.getState().revisions.pending.map((r) => r.id)).toEqual(['b1']);
+  });
 });
 
 describe('in-flight count lives in the store (#3400)', () => {
