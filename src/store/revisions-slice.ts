@@ -170,12 +170,14 @@ export const revisionsSlice = createSlice({
       s.timeline = {};
     },
     /* Plan 286 — the server owns pending. The poll carries the whole
-       RevisionsState plus live drift: drift always merges (per book); the rest
-       is adopted by the ordered rule, so a slow poll cannot revert a newer op
-       response. Callers dispatch only for the active book. */
+       RevisionsState plus live drift: drift (per book) and the rest are adopted
+       by the same ordered rule, so a slow poll cannot revert a newer op
+       response or resurrect a dismissed drift event. Callers dispatch only for the active book. */
     applyPoll: (s, a: PayloadAction<RevisionsResponse & { bookId: string }>) => {
-      mergeDriftForBook(s, a.payload.bookId, a.payload.drift);
-      if (shouldAdoptOrdered(s, a.payload)) adopt(s, a.payload);
+      if (shouldAdoptOrdered(s, a.payload)) {
+        mergeDriftForBook(s, a.payload.bookId, a.payload.drift);
+        adopt(s, a.payload);
+      }
       s.loaded = true;
     },
     /* Background fan-out (Plan 83's 120 s bulk poll over NON-active books):

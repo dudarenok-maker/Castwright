@@ -112,7 +112,7 @@ describe('applyPoll adopts server state (plan 286)', () => {
     expect(s.drift.map((d) => d.id)).toEqual(['x']);
     expect(s.loaded).toBe(true);
   });
-  it('a stale poll (lower rev) updates drift but not pending', () => {
+  it('a stale poll (lower rev) updates neither drift nor pending (#3400)', () => {
     let s = revisionsSlice.reducer(
       base(),
       revisionsActions.applyServerState({
@@ -136,7 +136,7 @@ describe('applyPoll adopts server state (plan 286)', () => {
       }),
     );
     expect(s.pending.map((p) => p.id)).toEqual(['keep']);
-    expect(s.drift.map((d) => d.id)).toEqual(['new']);
+    expect(s.drift).toEqual([]);
   });
 });
 

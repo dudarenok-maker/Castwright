@@ -128,6 +128,21 @@ describe('applyDismiss', () => {
   });
 });
 
+describe('applyPoll — drift follows the ordered rule (#3400)', () => {
+  const ev = { id: 'd1', bookId: 'A' } as never;
+  const poll = (rev: number, drift: unknown[]) => a.applyPoll({ ...st({ fileId: F1, rev }), drift } as never);
+  it('a stale poll does not resurrect a dismissed drift event; a newer poll adopts drift', () => {
+    let s = reduce(init(), poll(5, [ev]));
+    expect(s.drift.map((d) => d.id)).toEqual(['d1']);
+    s = reduce(s, a.applyDismiss({ driftId: 'd1', state: { ...st({ fileId: F1, rev: 6 }), dismissed: ['d1'] } }));
+    expect(s.drift).toEqual([]);
+    s = reduce(s, poll(5, [ev]));
+    expect(s.drift).toEqual([]);
+    s = reduce(s, poll(7, [ev]));
+    expect(s.drift.map((d) => d.id)).toEqual(['d1']);
+  });
+});
+
 describe('forgetBook', () => {
   it('resets only when it holds that book', () => {
     let s = reduce(init(), a.applyServerState(st({ bookId: 'A', fileId: F1, rev: 2, ids: ['x'] })));
