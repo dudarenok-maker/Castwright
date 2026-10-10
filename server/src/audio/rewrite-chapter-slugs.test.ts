@@ -293,3 +293,55 @@ describe('rewriteChapterSlugs — .previous.* artifacts', () => {
     expect(result.deleted.map((d) => d.slug)).toEqual(Array(5).fill('03-c'));
   });
 });
+
+/* #3400 — per-chapter sidecars written next to the audio by finalize
+   (`.lufs.json`), the content-QA pass (`.embeddings.json`) and the
+   render-integrity scorer (`.render-integrity.json`,
+   `.render-integrity-attempted.json`) describe THIS chapter's audio, so they
+   must follow it on a slug swap and go with it on a delete. */
+const PER_CHAPTER_SIDECARS = [
+  'lufs.json',
+  'embeddings.json',
+  'render-integrity.json',
+  'render-integrity-attempted.json',
+] as const;
+
+function seedSidecars(slug: string): void {
+  for (const suffix of PER_CHAPTER_SIDECARS) {
+    writeFileSync(join(audioRoot, `${slug}.${suffix}`), `${suffix}:${slug}`);
+  }
+}
+
+describe('rewriteChapterSlugs — per-chapter sidecars (#3400)', () => {
+  it('swaps two chapters\' loudness/QA sidecars together with their audio', async () => {
+    seed('01-a');
+    seed('02-b');
+    seedSidecars('01-a');
+    seedSidecars('02-b');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '01-a', to: '02-a', newChapterId: 2, newChapterTitle: 'A' },
+      { kind: 'rename', from: '02-b', to: '01-b', newChapterId: 1, newChapterTitle: 'B' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    for (const suffix of PER_CHAPTER_SIDECARS) {
+      expect(readFileSync(join(audioRoot, `02-a.${suffix}`), 'utf8')).toBe(`${suffix}:01-a`);
+      expect(readFileSync(join(audioRoot, `01-b.${suffix}`), 'utf8')).toBe(`${suffix}:02-b`);
+      expect(existsSync(join(audioRoot, `01-a.${suffix}`))).toBe(false);
+      expect(existsSync(join(audioRoot, `02-b.${suffix}`))).toBe(false);
+    }
+  });
+
+  it('deletes the sidecars when the chapter\'s audio is deleted', async () => {
+    seed('05-doomed');
+    seedSidecars('05-doomed');
+
+    const result = await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '05-doomed' }]);
+
+    expect(result.errors).toEqual([]);
+    for (const suffix of PER_CHAPTER_SIDECARS) {
+      expect(existsSync(join(audioRoot, `05-doomed.${suffix}`))).toBe(false);
+    }
+  });
+});

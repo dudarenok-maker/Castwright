@@ -11,6 +11,10 @@
                            (audio/previous-audio.ts) — follows the live
                            audio, else a chapter that inherits the slug
                            inherits another chapter's previous take (#3400)
+     <slug>.lufs.json / .embeddings.json / .render-integrity.json /
+     <slug>.render-integrity-attempted.json
+                           per-chapter loudness + QA sidecars; describe THIS
+                           chapter's audio, so they move/delete with it (#3400)
 
    Rename strategy is two-pass via a temp slug to avoid collisions on
    permutations (chapter 3 → 1, chapter 1 → 3 would otherwise clobber
@@ -40,8 +44,21 @@ const COMPANION_SUFFIXES = [
   'peaks.json',
   'previous.mp3',
   'previous.segments.json',
+  'lufs.json',
+  'embeddings.json',
+  'render-integrity.json',
+  'render-integrity-attempted.json',
 ] as const;
-type CompanionSuffix = ChapterAudioExt | 'segments.json' | 'peaks.json' | 'previous.mp3' | 'previous.segments.json';
+type CompanionSuffix =
+  | ChapterAudioExt
+  | 'segments.json'
+  | 'peaks.json'
+  | 'previous.mp3'
+  | 'previous.segments.json'
+  | 'lufs.json'
+  | 'embeddings.json'
+  | 'render-integrity.json'
+  | 'render-integrity-attempted.json';
 
 export type ChapterAudioOp =
   | { kind: 'delete'; from: string }
