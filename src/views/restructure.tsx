@@ -18,6 +18,7 @@ import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
 import { revisionsActions } from '../store/revisions-slice';
+import { activeBookId } from '../store/revisions-thunks';
 import { notificationsActions } from '../store/notifications-slice';
 import { api, type ChapterRestructureResponse } from '../lib/api';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
@@ -50,7 +51,10 @@ export function RestructureView({ bookId }: Props) {
       // reconciliation that surface code expects on a normal page open.
       const requestSeq = store.getState().revisions.adoptSeq;
       const fresh = await api.getBookState(bookId).catch(() => null);
-      if (fresh) {
+      /* The user may have opened another book while the re-read was in flight;
+         the hydrate's sequence guard only orders same-book reads, so adopt only
+         while this book is still the open one (same guard as refetchActiveRevisions). */
+      if (fresh && activeBookId(store.getState()) === bookId) {
         /* #3400 — the server drops A/B entries for the touched chapters, so
            adopt its revisions through the same sequence-guarded hydrate book
            open uses; otherwise the dropped entries linger until the next poll. */

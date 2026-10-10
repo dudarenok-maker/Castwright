@@ -74,3 +74,27 @@ describe('RestructureView — #3400 revisions adoption', () => {
     expect(store.getState().revisions.rev).toBe(2);
   });
 });
+
+describe('RestructureView — #3400 cross-book guard', () => {
+  it("does not adopt book A's re-read into the revisions cache once book B is open", async () => {
+    const store = makeStore();
+    let resolveA!: (v: unknown) => void;
+    apiMock.getBookState.mockReturnValue(new Promise((r) => (resolveA = r)));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1'));
+    // The user switches to book B (cache seeded) while A's re-read is in flight.
+    store.dispatch(uiActions.openBook({ id: 'b2', status: 'complete' } as never));
+    store.dispatch(
+      revisionsActions.hydrate({
+        bookId: 'b2',
+        state: { fileId: '000000000000002-bbbb', rev: 5, pending: [{ id: 'rev-b2', chapterId: 1 }] } as never,
+      }),
+    );
+    resolveA({ state: { chapters: [] }, completedSlugs: [], revisions: { fileId: '000000000000001-aaaa', rev: 9, pending: [] } });
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled()); // applyResponse ran to its end
+    expect(store.getState().revisions.pending).toEqual([{ id: 'rev-b2', chapterId: 1 }]);
+    expect(store.getState().revisions.rev).toBe(5);
+  });
+});
