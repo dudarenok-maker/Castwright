@@ -308,7 +308,7 @@ const PER_CHAPTER_SIDECARS = [
 
 function seedSidecars(slug: string): void {
   for (const suffix of PER_CHAPTER_SIDECARS) {
-    writeFileSync(join(audioRoot, `${slug}.${suffix}`), `${suffix}:${slug}`);
+    writeFileSync(join(audioRoot, `${slug}.${suffix}`), JSON.stringify(`${suffix}:${slug}`));
   }
 }
 
@@ -326,11 +326,50 @@ describe('rewriteChapterSlugs — per-chapter sidecars (#3400)', () => {
 
     expect(result.errors).toEqual([]);
     for (const suffix of PER_CHAPTER_SIDECARS) {
-      expect(readFileSync(join(audioRoot, `02-a.${suffix}`), 'utf8')).toBe(`${suffix}:01-a`);
-      expect(readFileSync(join(audioRoot, `01-b.${suffix}`), 'utf8')).toBe(`${suffix}:02-b`);
+      expect(readFileSync(join(audioRoot, `02-a.${suffix}`), 'utf8')).toBe(JSON.stringify(`${suffix}:01-a`));
+      expect(readFileSync(join(audioRoot, `01-b.${suffix}`), 'utf8')).toBe(JSON.stringify(`${suffix}:02-b`));
       expect(existsSync(join(audioRoot, `01-a.${suffix}`))).toBe(false);
       expect(existsSync(join(audioRoot, `02-b.${suffix}`))).toBe(false);
     }
+  });
+
+  it('rewrites the chapterId embedded in a moved render-integrity.json to the new id', async () => {
+    seed('02-old');
+    const row = (characterId: string, extra: object = {}) => ({
+      characterId,
+      sentenceIds: [1],
+      verdict: 'voice-mismatch',
+      ...extra,
+    });
+    writeFileSync(
+      join(audioRoot, '02-old.render-integrity.json'),
+      JSON.stringify([row('c1', { chapterId: 2 }), row('c2', { chapterId: 2 }), row('legacy')]),
+    );
+    // The other sidecars embed no chapter identity (lufs: measurements; embeddings:
+    // characterId/sentenceIds/vec; attempted: attemptedAt) and must move byte-for-byte.
+    const attempted = JSON.stringify({ attemptedAt: '2026-01-01T00:00:00.000Z' });
+    writeFileSync(join(audioRoot, '02-old.render-integrity-attempted.json'), attempted);
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '02-old', to: '03-new', newChapterId: 3, newChapterTitle: 'New' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    const rows = JSON.parse(readFileSync(join(audioRoot, '03-new.render-integrity.json'), 'utf8'));
+    expect(rows.map((r: { chapterId?: number }) => r.chapterId)).toEqual([3, 3, undefined]);
+    expect(readFileSync(join(audioRoot, '03-new.render-integrity-attempted.json'), 'utf8')).toBe(attempted);
+  });
+
+  it('a corrupt render-integrity.json is reported, not thrown, and the other files still move', async () => {
+    seed('02-old');
+    writeFileSync(join(audioRoot, '02-old.render-integrity.json'), '{not json');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '02-old', to: '03-new', newChapterId: 3, newChapterTitle: 'New' },
+    ]);
+
+    expect(existsSync(join(audioRoot, '03-new.mp3'))).toBe(true);
+    expect(result.errors.map((e) => e.suffix)).toEqual(['render-integrity.json']);
   });
 
   it('deletes the sidecars when the chapter\'s audio is deleted', async () => {

@@ -179,7 +179,7 @@ export async function rewriteChapterSlugs(
   }
 
   // Phase 3: rewrite each finalised segments.json's (live and previous) embedded chapter
-  // metadata. (Peaks.json carries no chapter id / title per plan 35;
+  // metadata, and the chapterId on render-integrity.json's verdict rows. (Peaks.json carries no chapter id / title per plan 35;
   // skip.) Best-effort — a corrupt file leaves stale metadata behind
   // but doesn't fail the op, since the audio still plays and the
   // frontend reads chapter metadata from state.json, not the segments
@@ -204,6 +204,28 @@ export async function rewriteChapterSlugs(
           suffix,
         });
       }
+    }
+
+    /* `render-integrity.json` is an array of verdict rows, each carrying the
+       `chapterId` it was scored under (fs-51; qa-report attributes voice drift
+       by it). Re-stamp only rows that have one: a legacy row without it must
+       stay unattributed. lufs / embeddings / attempted embed no chapter
+       identity, so they move untouched. */
+    const verdictPath = suffixPath(audioRoot, op.to, 'render-integrity.json');
+    if (!existsSync(verdictPath)) continue;
+    try {
+      const rows = await readJson<Array<{ chapterId?: number }>>(verdictPath);
+      if (!Array.isArray(rows)) continue;
+      await writeJsonAtomic(
+        verdictPath,
+        rows.map((r) => (r && typeof r === 'object' && 'chapterId' in r ? { ...r, chapterId: op.newChapterId } : r)),
+      );
+    } catch (e) {
+      summary.errors.push({
+        op,
+        message: `render-integrity.json chapterId rewrite failed: ${(e as Error).message}`,
+        suffix: 'render-integrity.json',
+      });
     }
   }
 
