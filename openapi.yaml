@@ -2039,8 +2039,8 @@ paths:
                     A request carrying `review` that does not name exactly one
                     chapter gets a 400 before any SSE header is sent. The chapter
                     actually rendered with it gets `reviewChapter: true` on its
-                    `chapter_complete` (never a replayed done chapter). Not sent
-                    by the client until PR 2.
+                    `chapter_complete` (never a replayed done chapter).
+                    Sent by the client for a profile-regen preview (plan 286).
       responses:
         '200':
           description: Tick stream
@@ -3128,7 +3128,7 @@ paths:
         audio step. Idempotent on the revision id. Refuses with 409
         `live_audio_missing` when the chapter has no live audio but still has a
         `.previous` take (accepting would delete the only copy — retry Reject).
-        No client caller until PR 2.
+        Called by the client (plan 286).
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: revisionId, required: true, schema: { type: string } }
@@ -3178,7 +3178,7 @@ paths:
         One request runs the audio step (promote `.previous.*` over the live
         names — today's code) and then records the outcome. The JSON is
         untouched when the request is refused as busy, finds no `.previous`, or
-        the audio step throws. No client caller until PR 2.
+        the audio step throws. Called by the client (plan 286).
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: revisionId, required: true, schema: { type: string } }
@@ -3208,7 +3208,7 @@ paths:
     post:
       summary: Dismiss a drift event (plan 285)
       operationId: dismissDrift
-      description: Adds the id to revisions.json's `dismissed`. Idempotent; touches no audio. No client caller until PR 2.
+      description: Adds the id to revisions.json's `dismissed`. Idempotent; touches no audio. Called by the client (plan 286).
       parameters:
         - { in: path, name: bookId, required: true, schema: { type: string } }
         - { in: path, name: driftId, required: true, schema: { type: string } }
@@ -6595,7 +6595,7 @@ components:
         review:
           allOf:
             - $ref: '#/components/schemas/ReviewRequest'
-          description: Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2.
+          description: Plan 285 — the A/B review intent carried from enqueue to the generation request. Set by the client for a profile-regen preview (plan 286).
         parkedAt:
           type: string
           format: date-time
@@ -6687,7 +6687,7 @@ components:
         review:
           allOf:
             - $ref: '#/components/schemas/ReviewRequest'
-          description: Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2.
+          description: Plan 285 — the A/B review intent carried from enqueue to the generation request. Set by the client for a profile-regen preview (plan 286).
 
     QueueReorderRequest:
       type: object
@@ -7409,8 +7409,8 @@ components:
         timeline:
           description: >-
             Per-chapter chronological log of accept / reject / rollback events
-            written by the frontend at user-action time. Read-back by the
-            Revision History view (plan 55). Keyed by chapterId; each chapter's
+            recorded by the server when it resolves a revision (plan 286).
+            Read-back by the Revision History view (plan 55). Keyed by chapterId; each chapter's
             value is an append-only list in insertion order (oldest first).
             Optional — older books without timeline entries omit it.
           type: object
@@ -7491,8 +7491,8 @@ components:
           description: >-
             True when this entry's prior audio is still on disk (i.e. plan
             20's `.previous.<slug>.mp3` exists for the chapter and this is
-            the most recent reversible accept/reject). The frontend only
-            enables the Rollback button when this is true. Multi-step rollback
+            the most recent reversible accept/reject). The client has no
+            Rollback action since plan 286. Multi-step rollback
             (snapshot-per-entry) is parked for v1.4.0.
 
     Revision:

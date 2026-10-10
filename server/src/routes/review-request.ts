@@ -2,7 +2,7 @@
    may carry: { characterId, triggeredBy }. Shared by routes/queue.ts (the
    enqueue whitelist) and routes/generation.ts (the request body) so both
    reject the same malformed shapes. Lives under routes/ so generation.ts
-   gains no new import from audio/ or workspace/. Not set by any client in PR 1. */
+   gains no new import from audio/ or workspace/. The client sets it on an A/B re-record enqueue (plan 286). */
 
 export interface ReviewRequest {
   characterId: string;

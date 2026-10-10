@@ -83,7 +83,8 @@ export interface QueueEntry {
      fallbackCharacters comment above). */
   parkedAt?: string;
   /* Plan 285 — the A/B review intent, carried from enqueue to the generation
-     request. Mirrored in openapi.yaml's QueueEntry. Not set by the client until PR 2. */
+     request. Mirrored in openapi.yaml's QueueEntry.
+     The client sets it on a profile-regen preview enqueue (plan 286). */
   review?: { characterId: string; triggeredBy: string };
 }
 
@@ -112,7 +113,8 @@ export interface EnqueueInput {
      fresh entries. */
   fallbackConfirmed?: boolean;
   /* Plan 285 — the A/B review intent, carried from enqueue to the generation
-     request. Mirrored in openapi.yaml's QueueEntry. Not set by the client until PR 2. */
+     request. Mirrored in openapi.yaml's QueueEntry.
+     The client sets it on a profile-regen preview enqueue (plan 286). */
   review?: { characterId: string; triggeredBy: string };
 }
 

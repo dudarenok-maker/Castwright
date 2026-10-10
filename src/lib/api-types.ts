@@ -1959,7 +1959,7 @@ export interface paths {
          *     audio step. Idempotent on the revision id. Refuses with 409
          *     `live_audio_missing` when the chapter has no live audio but still has a
          *     `.previous` take (accepting would delete the only copy — retry Reject).
-         *     No client caller until PR 2.
+         *     Called by the client (plan 286).
          */
         post: operations["acceptRevision"];
         delete?: never;
@@ -1982,7 +1982,7 @@ export interface paths {
          * @description One request runs the audio step (promote `.previous.*` over the live
          *     names — today's code) and then records the outcome. The JSON is
          *     untouched when the request is refused as busy, finds no `.previous`, or
-         *     the audio step throws. No client caller until PR 2.
+         *     the audio step throws. Called by the client (plan 286).
          */
         post: operations["rejectRevision"];
         delete?: never;
@@ -2002,7 +2002,7 @@ export interface paths {
         put?: never;
         /**
          * Dismiss a drift event (plan 285)
-         * @description Adds the id to revisions.json's `dismissed`. Idempotent; touches no audio. No client caller until PR 2.
+         * @description Adds the id to revisions.json's `dismissed`. Idempotent; touches no audio. Called by the client (plan 286).
          */
         post: operations["dismissDrift"];
         delete?: never;
@@ -4764,7 +4764,7 @@ export interface components {
              *     re-dispatch instead of re-parking it.
              */
             fallbackConfirmed?: boolean;
-            /** @description Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2. */
+            /** @description Plan 285 — the A/B review intent carried from enqueue to the generation request. Set by the client for a profile-regen preview (plan 286). */
             review?: components["schemas"]["ReviewRequest"];
             /**
              * Format: date-time
@@ -4827,7 +4827,7 @@ export interface components {
              *     re-prompt for it.
              */
             fallbackConfirmed?: boolean;
-            /** @description Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2. */
+            /** @description Plan 285 — the A/B review intent carried from enqueue to the generation request. Set by the client for a profile-regen preview (plan 286). */
             review?: components["schemas"]["ReviewRequest"];
         };
         QueueReorderRequest: {
@@ -5368,7 +5368,7 @@ export interface components {
         RevisionsResponse: {
             pending?: components["schemas"]["Revision"][];
             drift?: components["schemas"]["DriftEvent"][];
-            /** @description Per-chapter chronological log of accept / reject / rollback events written by the frontend at user-action time. Read-back by the Revision History view (plan 55). Keyed by chapterId; each chapter's value is an append-only list in insertion order (oldest first). Optional — older books without timeline entries omit it. */
+            /** @description Per-chapter chronological log of accept / reject / rollback events recorded by the server when it resolves a revision (plan 286). Read-back by the Revision History view (plan 55). Keyed by chapterId; each chapter's value is an append-only list in insertion order (oldest first). Optional — older books without timeline entries omit it. */
             timeline?: {
                 [key: string]: components["schemas"]["TimelineEntry"][];
             };
@@ -5422,7 +5422,7 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "rolled-back-from";
-            /** @description True when this entry's prior audio is still on disk (i.e. plan 20's `.previous.<slug>.mp3` exists for the chapter and this is the most recent reversible accept/reject). The frontend only enables the Rollback button when this is true. Multi-step rollback (snapshot-per-entry) is parked for v1.4.0. */
+            /** @description True when this entry's prior audio is still on disk (i.e. plan 20's `.previous.<slug>.mp3` exists for the chapter and this is the most recent reversible accept/reject). The client has no Rollback action since plan 286. Multi-step rollback (snapshot-per-entry) is parked for v1.4.0. */
             reversible?: boolean;
         };
         Revision: {
@@ -9207,8 +9207,8 @@ export interface operations {
                      *     A request carrying `review` that does not name exactly one
                      *     chapter gets a 400 before any SSE header is sent. The chapter
                      *     actually rendered with it gets `reviewChapter: true` on its
-                     *     `chapter_complete` (never a replayed done chapter). Not sent
-                     *     by the client until PR 2.
+                     *     `chapter_complete` (never a replayed done chapter).
+                     *     Sent by the client for a profile-regen preview (plan 286).
                      */
                     review?: components["schemas"]["ReviewRequest"];
                 };

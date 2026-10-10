@@ -70,9 +70,10 @@ vi.mock('../lib/api', async (importOriginal) => {
          getBookStateMock.mockResolvedValue. */
       getBookState: (...args: unknown[]) => getBookStateMock(...args),
       /* Persistence-middleware's PUT sink — only wired into the store by the
-         tests below that use `makeStoreWithScopeAndPersistence()` (#3395
-         pass 3, R1/R2); a stub here so it's never `undefined` if the
-         middleware is ever wired into a test that doesn't configure it. */
+         tests below that use `makeStoreWithScopeAndPersistence()` (the #3435
+         cast-persist-vs-book-switch tests); a stub here so it's never
+         `undefined` if the middleware is ever wired into a test that doesn't
+         configure it. */
       putBookState: (...args: unknown[]) => putBookStateMock(...args),
       /* Cold-boot analysis state probe — return null so the analysing-pill
          rehydration short-circuits. */
@@ -270,9 +271,8 @@ const openAt = (store: ReturnType<typeof makeStore>, id: string) =>
 
 /** Same shape as `makeStore()`, plus `persistenceMiddleware` — the
     production store's real debounced PUT-on-mutation behaviour. Needed by
-    the #3395 pass 3 R1/R2 tests below, which assert on the actual patch
-    `api.putBookState` receives after a book reopens or a write races a
-    hydrate. Kept separate from the plain `makeStore()` so the many tests that
+    the #3435 tests below, which assert on the `cast` patches
+    `api.putBookState` receives while a book switch is in flight. Kept separate from the plain `makeStore()` so the many tests that
     don't care about persistence aren't dragged through the debounce timers. */
 function makeStoreWithScopeAndPersistence() {
   return configureStore({

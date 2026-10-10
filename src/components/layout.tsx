@@ -503,7 +503,7 @@ export function Layout() {
      null. */
   const [reassignSource, setReassignSource] = useState<ReassignSource | null>(null);
   /* Plan 286, Task 22 — A's audio is known to be gone for the SHOWN
-     revision (a live-audio-missing op response), keyed by revision id so a
+     revision (a Reject that answered `no_previous_audio`), keyed by revision id so a
      stale flag never follows the player onto a different revision. */
   const [previousMissingFor, setPreviousMissingFor] = useState<string | null>(null);
   /* fs-26 — per-character "Fix audio" (loudness/re-record splice) modal.
@@ -1199,9 +1199,9 @@ export function Layout() {
      (i.e. books that have actual chapter audio to drift). Excludes the
      active book (covered by the 30 s ticker above). Cadence is 120 s to
      conserve free-tier server quotas; the slice's applyBackgroundPoll
-     action merges drift per bookId and never writes pending — like the
-     active-book applyPoll above, neither poll path touches `pending`
-     (client-owned, #3376). */
+     action merges drift per bookId and never writes pending — unlike the
+     active-book applyPoll above, which adopts the server's `pending` for the
+     active book (#3376). */
   const bgBookIds = useMemo(() => {
     return library.books
       .filter(

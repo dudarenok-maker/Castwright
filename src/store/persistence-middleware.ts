@@ -3,7 +3,7 @@
    Watches a curated set of action types that represent user edits and
    debounces a PUT /api/books/:bookId/state for the touched slice. Each
    (book, slice) pair has its own debounce window so an edit to cast doesn't
-   delay a write to revisions, and one book's write never cancels another's.
+   delay a write to the manuscript, and one book's write never cancels another's.
    Leaving a book sends its queued writes at once (#3395 pass 4, S3).
 
    Skipped when no bookId is in scope (library browsing, fresh upload
@@ -100,17 +100,9 @@ function debounceMs(s: PersistableRootState): number {
 /* Action types that should trigger a persist. Hydration actions
    (hydrateFromAnalysis, hydrateFromBookState, applyPoll for initial load,
    setImportCandidate) are intentionally absent — those are server-driven
-   and would create a write-loop if echoed back.
-
-   `revisions/persistPendingAfterHydrateMerge` is the one deliberate
-   exception, and it's a distinct action type from `hydrateFromBookState`
-   itself — not that action re-added. It's a no-op reducer (see
-   revisions-slice.ts) that `layout.tsx` dispatches immediately AFTER a
-   hydrate that replayed recorded pre-hydrate-window writes on top of the
-   disk snapshot; without it that result would live only in memory until the
-   next ordinary mutation (#3395 pass 3 R2, pass 4 S1). It doesn't create a
-   write-loop the way echoing the hydrate itself would: it only fires when
-   there was something local to replay, not on every hydrate. */
+   and would create a write-loop if echoed back. Revisions never persist from
+   the client at all (plan 286): the server owns revisions.json and refuses a
+   revisions PUT. */
 const PERSIST_RULES: Record<
   string,
   { slice: StateSlice; build: (s: PersistableRootState, bookId: string) => unknown }

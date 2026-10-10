@@ -32,22 +32,22 @@ export interface RevisionsState {
   adoptSeq: number;
   pending: Revision[];
   drift: DriftEvent[];
-  /** Ids of drift events the user has dismissed. The backend revisions
-      detector reads this from disk and filters its output, so a dismissed
-      event won't reappear on the next poll. Slice carries it so subsequent
-      dismissals in the same session don't overwrite the persisted list. */
+  /** Ids of drift events the user has dismissed, as the server last reported
+      them. The server persists the list (POST …/drift/{id}/dismiss) and its
+      revisions detector filters its output by it, so a dismissed event won't
+      reappear on the next poll. The slice only caches it — it also filters
+      late polls against it (`withoutDismissed`) — and never writes it. */
   dismissed: string[];
-  /** Write-only audit log of per-segment selections at accept time. Keyed by
-      revision id. The future TTS regen flow will consume this to re-render
-      only the rejected segments; today nothing reads it back. Persisted
-      because losing it would force the user to redo the diff if regen ever
-      needs to know which take they kept. */
+  /** Audit log of per-segment selections at accept time, as the server
+      recorded them. Keyed by revision id. The future TTS regen flow will
+      consume this to re-render only the rejected segments; today nothing
+      reads it back. */
   acceptedSelections: Record<string, Record<number, 'A' | 'B'>>;
   /** Plan 55 — per-chapter append-only event log of accept / reject /
       rollback actions. Keyed by chapterId (as string in serialised form;
-      numeric on the slice). The Revision History view reads this back to
-      surface a chronological timeline; the rollback button on the most
-      recent reversible entry calls plan 20's existing restore endpoint. */
+      numeric on the slice). The server records it; the Revision History view
+      reads it back to surface a chronological timeline. The client has no
+      rollback action (plan 20's restore endpoint now answers 410). */
   timeline: Record<number, TimelineEntry[]>;
   loaded: boolean;
   /** The book `pending`/`dismissed`/`acceptedSelections`/`timeline` belong
@@ -194,10 +194,10 @@ export const revisionsSlice = createSlice({
     },
     /* Background fan-out (Plan 83's 120 s bulk poll over NON-active books):
        merge drift scoped to the polled bookId, and never touch `pending` or
-       `loaded`. `pending` is client-owned (see applyPoll above) and never
-       written by any poll, active or background — this action additionally
-       has no business writing a foreign book's data into the active book's
-       state regardless (#3376). */
+       `loaded`. A background poll covers other books, so it never adopts
+       `pending` (the server-owned state, adopted only by the active-book
+       `applyPoll` above) — it has no business writing a foreign book's data
+       into the active book's state (#3376). */
     applyBackgroundPoll: (s, a: PayloadAction<{ bookId: string; drift?: DriftEvent[] }>) => {
       mergeDriftForBook(s, a.payload.bookId, withoutDismissed(s, a.payload.bookId, a.payload.drift));
     },

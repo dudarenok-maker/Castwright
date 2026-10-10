@@ -5,9 +5,10 @@
    re-opens a book whose in-memory ManuscriptRecord has been lost (server
    restart).
 
-   PUT accepts `{ slice: 'cast'|'manuscript'|'revisions'|'state', patch }` and
+   PUT accepts `{ slice: 'cast'|'manuscript'|'state'|'changeLog', patch }` and
    atomically writes the matching JSON file. Used by the persistence
-   middleware in Phase 5. */
+   middleware in Phase 5. A `'revisions'` slice is refused (400
+   `revisions_server_owned`) — the server owns revisions.json (plan 286). */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';

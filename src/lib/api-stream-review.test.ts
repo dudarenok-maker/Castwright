@@ -1,5 +1,5 @@
 /* Plan 285 — realStreamGeneration threads `review` into the generation POST
-   body (nothing sets it in PR 1). Mirrors api-stream-fallback-confirmed.test.ts. */
+   body (set by the profile-regen preview enqueue since plan 286). Mirrors api-stream-fallback-confirmed.test.ts. */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 let fetchMock: ReturnType<typeof vi.fn>;

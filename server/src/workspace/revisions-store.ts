@@ -20,11 +20,13 @@
    (readJson's JSON.parse), so no store write ever overwrites it; only
    resetRevisions (reparse / replace) replaces a corrupt file, as the old `rm`
    did. assertRevisionsResettable is the preflight reparse/replace run BEFORE
-   deleting anything. (In PR 1 the client's raw PUT /state still writes the
-   file outside this module, by design.)
+   deleting anything. (Since plan 286 the client's PUT /state refuses a
+   `revisions` slice, so nothing writes the file outside this module.)
 
-   PR 1 IS DARK: no production code calls the write ops except resetRevisions.
-   The client remains the only writer of `pending`. */
+   WRITERS. The server records `pending` entries (finalize via recordPending /
+   dropPendingForChapter(s)) and the per-op routes (routes/revision-ops.ts)
+   write through beginRevisionOp / commitRevisionOp / dismissDriftId. The
+   client writes nothing. */
 
 import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
@@ -400,7 +402,7 @@ function hasOutcome(file: RevisionsFile, op: RevisionOpKind, revisionId: string)
   return Object.values(file.timeline).some((list) => list.some((t) => t.id === revisionId && t.eventKind === kind));
 }
 
-/** appendTimelineEntryHelper's reversible-chain rule (revisions-slice.ts): a
+/** The timeline's reversible-chain rule (mirrored by src/mocks/mock-revisions.ts): a
     new reversible entry flips every prior entry on the chapter to non-reversible. */
 function appendTimelineEntry(
   timeline: Record<string, StoredTimelineEntry[]>,

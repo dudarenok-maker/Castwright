@@ -158,7 +158,7 @@ export interface FinalizeChapterAudioInput {
       when `embeddings` (a full render) is passed. */
   reembeddedRows?: EmbeddingRow[];
   /** Plan 285 (#3400) — the A/B review intent for this render.
-      `undefined` (PR 1: every caller) — leave revisions.json alone.
+      `undefined` — leave revisions.json alone (a caller that passes no review).
       `null` — a plain render: drop the chapter's pending entry (its A side was just overwritten).
       object — a review render: upsert the chapter's single entry iff
       preserveExistingAsPrevious actually preserved; otherwise (a first

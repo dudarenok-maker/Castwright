@@ -43,8 +43,8 @@ interface Props {
       purposes even if the revision itself says otherwise. */
   rendering?: boolean;
   /** Plan 286 — A's audio is known to be gone even though
-      `hasPreviousAudio` may say otherwise (e.g. a live-audio-missing op
-      response). */
+      `hasPreviousAudio` may say otherwise (e.g. a Reject answered
+      `no_previous_audio`). */
   previousMissing?: boolean;
   /** Plan 286 (OD11) — review mode only: when A is unavailable, the
       footer's primary button becomes "Keep new take" and calls this

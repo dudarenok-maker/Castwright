@@ -313,7 +313,7 @@ app.use('/api/books', shareRouter); // mounts /:bookId/share (POST — mint a sl
 app.use('/', sharePublicRouter); // mounts /share/:slug (public-facing M4B proxy — plan 67)
 app.use('/api/books', revisionsRouter); // mounts /:bookId/revisions (drift diff over segments snapshots)
 app.use('/api', revisionsBulkRouter); // plan 83 — bulk /revisions?bookIds=... for cross-book fan-out
-app.use('/api/books', revisionOpsRouter); // plan 285 — server-owned accept / reject / dismiss (no client caller until PR 2)
+app.use('/api/books', revisionOpsRouter); // plan 285 — server-owned accept / reject / dismiss (called by the client since plan 286)
 app.use('/api/books', qaReportRouter); // fs-51 — mounts /:bookId/qa-report
 app.use('/api', worktreesRouter); // plan 86 — dev-only GET /worktrees (404s in production)
 app.use('/api/voices', voicesRouter); // mounts GET / + PUT /:voiceId/pin

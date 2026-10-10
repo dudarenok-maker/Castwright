@@ -3,8 +3,9 @@
    audio/previous-audio.ts) and then the JSON write, in that order; the JSON is
    written only if the audio step succeeded.
 
-   PR 1: no client calls these yet (the client cuts over in PR 2), so the
-   client remains the only writer of `pending` on main. */
+   Since plan 286 (PR 2) the client calls these and writes no revisions of its
+   own: the server records pending entries itself (finalize) and refuses client
+   revisions PUTs (book-state.ts). */
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';

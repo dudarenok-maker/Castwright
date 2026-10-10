@@ -118,7 +118,7 @@ vi.mock('../tts/language.js', async (importOriginal) => {
 });
 
 /* Plan 285 — passthrough spy so a test can (1) assert generation passes NO
-   `review` to finalize in PR 1 and (2) force `reviewOutcome:'failed'` to prove
+   review request (`review: null`) to finalize and (2) force `reviewOutcome:'failed'` to prove
    it reaches chapter_complete. Every other test still runs the real write. */
 vi.mock('../audio/finalize-chapter-write.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../audio/finalize-chapter-write.js')>();
@@ -2452,7 +2452,7 @@ describe('POST /api/books/:bookId/generation — language-unset guard (#2515)', 
   });
 });
 
-describe('plan 285 — finalize review plumbing (PR 1 dark)', () => {
+describe('plan 285/286 — finalize review plumbing', () => {
   afterEach(async () => {
     const fs = await import('node:fs');
     const audioRoot = join(bookDir, 'audio');
