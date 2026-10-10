@@ -7,6 +7,7 @@ import {
 } from './capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { setProbeSidecarHealthProvider } from './sidecar-health-gate.js';
+import { registerEndpointCallInFlight } from '../analyzer/analyzer-concurrency.js';
 
 /* Free-function contract for the reusable no-capacity retry helper (Task 5,
    #1720). Unlike the old SidecarTtsProvider.postWithCapacityRetry, this
@@ -660,6 +661,338 @@ describe('withCapacityRetry — design-resident extended wait (#2678 Task 3)', (
 
     // No extension: gives up at the ORIGINAL maxAttempts bound, not 3 + 5.
     expect(doPost).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('withCapacityRetry — analyzer endpoint eviction (#3084)', () => {
+  it('an endpoint call on cuda:1 does not block Ollama eviction for a cuda:0 denial (Ollama gate unchanged)', async () => {
+    const release = registerEndpointCallInFlight('other-card');
+    try {
+      let calls = 0;
+      const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
+      const evictOllama = vi.fn(async () => {});
+      await withCapacityRetry(doPost, {
+        engine: 'qwen',
+        capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+        evictOllama,
+        analyzerEvictWouldHelp: vi.fn(async () => true),
+        // isAnalysisInFlight deliberately omitted: the default Ollama slot gate is under test
+        evictEndpoints: vi.fn(async () => ({ attempted: 0, unloaded: 0 })),
+        pollMs: 1,
+        maxAttempts: 5,
+      });
+      expect(evictOllama).toHaveBeenCalledTimes(1);
+    } finally {
+      release();
+    }
+  });
+
+  it('an Ollama call in flight blocks only Ollama eviction: endpoint unloads are still attempted', async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
+    const evictOllama = vi.fn(async () => {});
+    const evictEndpoints = vi.fn(async () => ({ attempted: 1, unloaded: 1 }));
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 3_000) },
+      evictOllama,
+      analyzerEvictWouldHelp: vi.fn(async () => true),
+      isAnalysisInFlight: () => true,
+      evictEndpoints,
+      pollMs: 1,
+      maxAttempts: 5,
+    });
+    expect(evictEndpoints).toHaveBeenCalledWith('cuda:0');
+    expect(evictOllama).not.toHaveBeenCalled();
+  });
+
+  it('unloads endpoints for the denied card even when evicting Ollama would not help', async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:1') : okResponse()));
+    const evictEndpoints = vi.fn(async () => ({ attempted: 1, unloaded: 1 }));
+    const evictOllama = vi.fn(async () => {});
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:1', 500) },
+      evictOllama,
+      analyzerEvictWouldHelp: vi.fn(async () => false),
+      isAnalysisInFlight: () => false,
+      evictEndpoints,
+      pollMs: 1,
+      maxAttempts: 5,
+    });
+    expect(evictEndpoints).toHaveBeenCalledWith('cuda:1');
+    expect(evictOllama).not.toHaveBeenCalled();
+  });
+
+  /* N1 — the two levers must never act on one measurement, and neither latch may spend the
+     other's chance. The three cases below use a realistic isAnalysisInFlight: the analyzer is
+     mid-call when the denial arrives and its call ends WHILE the unload POST is out (llama-swap
+     blocks until the model is gone), which is the sequence a shared latch got wrong. */
+  it("Ollama busy at the denial and idle at the next one is still evicted: the endpoint lever never spends Ollama's chance", async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => (++calls <= 2 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
+    let ollamaBusy = true;
+    const isAnalysisInFlight = vi.fn(() => ollamaBusy);
+    const evictOllama = vi.fn(async () => {});
+    /* The analyzer's chunk call finishes while this POST is out. */
+    const evictEndpoints = vi.fn(async () => {
+      ollamaBusy = false;
+      return { attempted: 1, unloaded: 1 };
+    });
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+      evictOllama,
+      analyzerEvictWouldHelp: vi.fn(async () => true),
+      isAnalysisInFlight,
+      evictEndpoints,
+      pollMs: 1,
+      maxAttempts: 5,
+    });
+    expect(evictEndpoints).toHaveBeenCalledTimes(1);
+    expect(evictOllama).toHaveBeenCalledTimes(1);
+    /* Read once per iteration, immediately before evictOllama() — never once for two levers. */
+    expect(isAnalysisInFlight).toHaveBeenCalledTimes(2);
+  });
+
+  it('an endpoint unload alone frees the card: Ollama, busy when the denial arrived, is never evicted', async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
+    let ollamaBusy = true;
+    const evictOllama = vi.fn(async () => {});
+    const evictEndpoints = vi.fn(async () => {
+      ollamaBusy = false; // the analyzer goes idle during the unload
+      return { attempted: 1, unloaded: 1 };
+    });
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+      evictOllama,
+      analyzerEvictWouldHelp: vi.fn(async () => true),
+      isAnalysisInFlight: () => ollamaBusy,
+      evictEndpoints,
+      pollMs: 1,
+      maxAttempts: 5,
+    });
+    expect(evictOllama).not.toHaveBeenCalled();
+    expect(doPost).toHaveBeenCalledTimes(2);
+  });
+
+  it("a failed unload POST spends no Ollama chance: Ollama, idle at the second denial, is still evicted", async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => (++calls <= 3 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
+    let ollamaBusy = true;
+    const evictOllama = vi.fn(async () => {});
+    let unloadAttempts = 0;
+    const evictEndpoints = vi.fn(async () => {
+      unloadAttempts += 1;
+      ollamaBusy = false; // the analyzer's call ends while the refused POST is out
+      return { attempted: 1, unloaded: 0 }; // the server refused
+    });
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+      evictOllama,
+      analyzerEvictWouldHelp: vi.fn(async () => true),
+      isAnalysisInFlight: () => ollamaBusy,
+      evictEndpoints,
+      evictIdleTts: vi.fn(async () => false),
+      pollMs: 1,
+      maxAttempts: 6,
+    });
+    /* Denial 1: Ollama busy → endpoints asked, refused. Denial 2: Ollama idle → evicted.
+       Denial 3: Ollama's latch is spent → endpoints asked again (no endpoint latch). */
+    expect(unloadAttempts).toBe(2);
+    expect(evictOllama).toHaveBeenCalledTimes(1);
+  });
+
+  /* A1 — no latch: with the REAL evictEndpointsOnDevice behind the default closure, a realistic
+     two-endpoint, multi-model, multi-poll admission. This is the sequence the deleted
+     `endpointsUnloaded` latch got wrong, and no injected single-stub case can see it. */
+  it('the default lever asks an endpoint that goes idle only at a later poll, after another endpoint already unloaded', async () => {
+    const { _setUserSettingsCacheForTest, _resetUserSettingsCache } = await import('../workspace/user-settings.js');
+    const { analyzerEndpointSchema } = await import('../workspace/analyzer-endpoints.js');
+    const { noteEndpointModelUsed, _resetEndpointRuntimeForTest } = await import('../analyzer/transports/endpoint-runtime.js');
+    const { markEndpointRunActive, _resetEndpointBusyForTest } = await import('../analyzer/analyzer-concurrency.js');
+    _resetEndpointBusyForTest();
+    _resetEndpointRuntimeForTest();
+    /* A real unload server (Global Constraints: real sockets, not a stubbed fetch). */
+    const { createServer } = await import('node:http');
+    const sent: string[] = [];
+    const server = createServer((req, res) => {
+      sent.push(req.url ?? '');
+      res.writeHead(200);
+      res.end('OK');
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const origin = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+    const mk = (id: string, path: string) =>
+      analyzerEndpointSchema.parse({ id, name: id.toUpperCase(), baseUrl: `${origin}/v1`, gpu: 'cuda:0', contextTokens: 8192, unloadUrl: `${origin}/${path}/{model}` });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [mk('a', 'ua'), mk('b', 'ub')], analyzerEndpointKeys: {} });
+    noteEndpointModelUsed('a', 'm1');
+    noteEndpointModelUsed('b', 'm2');
+    noteEndpointModelUsed('b', 'm3');
+    let releaseB = markEndpointRunActive(['b']); // B is mid-run when the first denial arrives
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    let calls = 0;
+    const doPost = vi.fn(async () => {
+      calls += 1;
+      if (calls === 4) releaseB(); // B's run ends between polls 4 and 5
+      return calls <= 5 ? noCapacityResponse(2_000, 'cuda:0') : okResponse();
+    });
+    try {
+      await withCapacityRetry(doPost, {
+        engine: 'qwen',
+        capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+        evictOllama: vi.fn(async () => {}),
+        analyzerEvictWouldHelp: vi.fn(async () => false),
+        isAnalysisInFlight: () => false,
+        evictIdleTts: vi.fn(async () => false),
+        describeBlockers: async () => [],
+        isDesignResident: async () => false,
+        pollMs: 1,
+        maxAttempts: 10,
+      });
+      /* A once at poll 1; B's two models once each after its run ended — nothing latched B out,
+         and m3 was not abandoned behind m2. Never a second POST for any (endpoint, model). */
+      expect(sent).toEqual(['/ua/m1', '/ub/m2', '/ub/m3']);
+    } finally {
+      releaseB();
+      releaseB = () => {};
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+      info.mockRestore();
+      _resetUserSettingsCache();
+      _resetEndpointRuntimeForTest();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('the default give-up message names each sharing endpoint and its cause (A6)', async () => {
+    const { _setUserSettingsCacheForTest, _resetUserSettingsCache } = await import('../workspace/user-settings.js');
+    const { analyzerEndpointSchema } = await import('../workspace/analyzer-endpoints.js');
+    const { noteEndpointModelUsed, _resetEndpointRuntimeForTest } = await import('../analyzer/transports/endpoint-runtime.js');
+    const { markEndpointRunActive, _resetEndpointBusyForTest } = await import('../analyzer/analyzer-concurrency.js');
+    _resetEndpointBusyForTest();
+    _resetEndpointRuntimeForTest();
+    /* A real server that drops every unload connection, so each POST throws. */
+    const { createServer } = await import('node:http');
+    let downHits = 0;
+    const server = createServer((req) => {
+      if (req.url?.startsWith('/ud/')) downHits += 1;
+      req.socket.destroy();
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const origin = `http://127.0.0.1:${(server.address() as import('node:net').AddressInfo).port}`;
+    const mk = (id: string, name: string, unloadUrl?: string) =>
+      analyzerEndpointSchema.parse({ id, name, baseUrl: `${origin}/v1`, gpu: 'cuda:0', contextTokens: 8192, ...(unloadUrl ? { unloadUrl } : {}) });
+    _setUserSettingsCacheForTest({
+      analyzerEndpoints: [mk('busy', 'Busy lab', `${origin}/ub/{model}`), mk('down', 'Down lab', `${origin}/ud/{model}`), mk('nourl', 'No-URL lab')],
+      analyzerEndpointKeys: {},
+    });
+    noteEndpointModelUsed('busy', 'm');
+    noteEndpointModelUsed('down', 'm');
+    const release = markEndpointRunActive(['busy']);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    try {
+      const err = await withCapacityRetry(vi.fn(async () => noCapacityResponse(2_000, 'cuda:0')), {
+        engine: 'qwen',
+        capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+        evictOllama: vi.fn(async () => {}),
+        analyzerEvictWouldHelp: vi.fn(async () => false),
+        isAnalysisInFlight: () => false,
+        evictIdleTts: vi.fn(async () => false),
+        describeBlockers: async () => [],
+        isDesignResident: async () => false,
+        pollMs: 1,
+        maxAttempts: 3,
+      }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(NoCapacityError);
+      const message = (err as Error).message;
+      expect(message).toMatch(/"Busy lab".*busy for the whole wait/);
+      expect(message).toMatch(/"Down lab".*every unload request/);
+      expect(message).toMatch(/"No-URL lab".*Unload URL/);
+      expect(downHits).toBe(1); // "Down lab"'s one model, once, over three polls
+    } finally {
+      release();
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+      warn.mockRestore();
+      info.mockRestore();
+      _resetUserSettingsCache();
+      _resetEndpointRuntimeForTest();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it("a 2xx unload retries admission at once, and the next denial re-measures free memory before Ollama's lever", async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => (++calls <= 2 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
+    let probes = 0;
+    const read = vi.fn(async () => fakeDevices('cuda:0', ++probes === 1 ? 500 : 3_000));
+    const analyzerEvictWouldHelp = vi.fn(async () => false);
+    const started = Date.now();
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read },
+      evictOllama: vi.fn(async () => {}),
+      analyzerEvictWouldHelp,
+      isAnalysisInFlight: () => false,
+      evictEndpoints: vi.fn(async () => ({ attempted: 1, unloaded: 1 })),
+      evictIdleTts: vi.fn(async () => false),
+      pollMs: 5_000,
+      maxAttempts: 5,
+    });
+    /* Immediate retry (no 5 s poll wait), and Ollama's VRAM check saw the post-unload figure. */
+    expect(Date.now() - started).toBeLessThan(4_000);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(analyzerEvictWouldHelp.mock.calls).toEqual([
+      [2_000, 500],
+      [2_000, 3_000],
+    ]);
+  });
+
+  it('Ollama idle and helpful → evicted first, exactly as before, and the endpoints are never asked', async () => {
+    let calls = 0;
+    const doPost = vi.fn(async () => (++calls === 1 ? noCapacityResponse(2_000, 'cuda:0') : okResponse()));
+    const read = vi.fn(async () => fakeDevices('cuda:0', 500));
+    const evictIdleTts = vi.fn(async () => false);
+    const evictEndpoints = vi.fn(async () => ({ attempted: 0, unloaded: 0 }));
+    await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read },
+      evictOllama: vi.fn(async () => {}),
+      analyzerEvictWouldHelp: vi.fn(async () => true),
+      isAnalysisInFlight: () => false,
+      evictEndpoints,
+      evictIdleTts,
+      pollMs: 1,
+      maxAttempts: 5,
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(evictEndpoints).not.toHaveBeenCalled();
+    expect(evictIdleTts).not.toHaveBeenCalled();
+  });
+
+  it('the give-up message names the Unload URL setting for a sharing endpoint without one', async () => {
+    const doPost = vi.fn(async () => noCapacityResponse(2_000, 'cuda:0'));
+    const err = await withCapacityRetry(doPost, {
+      engine: 'qwen',
+      capacityProbe: { read: async () => fakeDevices('cuda:0', 500) },
+      evictOllama: vi.fn(async () => {}),
+      analyzerEvictWouldHelp: vi.fn(async () => false),
+      isAnalysisInFlight: () => false,
+      evictEndpoints: vi.fn(async () => ({ attempted: 0, unloaded: 0 })),
+      endpointUnloadNotes: () => ['Analyzer endpoint "Lab" shares this card but has no Unload URL — set "Unload URL".'],
+      describeBlockers: async () => [],
+      isDesignResident: async () => false,
+      pollMs: 1,
+      maxAttempts: 2,
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(NoCapacityError);
+    expect((err as Error).message).toContain('Unload URL');
   });
 });
 

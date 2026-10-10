@@ -18,6 +18,11 @@ import {
   analyzerEvictWouldHelp as defaultAnalyzerEvictWouldHelp,
 } from '../analyzer/ollama-residency.js';
 import { getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
+import {
+  evictEndpointsOnDevice,
+  endpointUnloadNotes as defaultEndpointUnloadNotes,
+  type EndpointUnloadOutcome,
+} from './endpoint-eviction.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import type { TtsEngine } from '../tts/model-keys.js';
 import { describeVramBlockers, type VramBlocker } from './describe-vram-blockers.js';
@@ -121,6 +126,16 @@ export interface CapacityRetryOpts {
   /** Injected "is the analyzer mid-run" check — defaults to reading
       `getAnalyzerConcurrencyStats().inFlight > 0`. */
   isAnalysisInFlight?: () => boolean;
+  /** #3084 — injected "unload analyzer endpoints on this card" action — defaults to
+      evictEndpointsOnDevice, bound to this call's own per-admission state. It has NO latch
+      (A1): it is asked on every iteration Ollama did not win, and Task 3d.2's per-(endpoint,
+      model) attempt set is what bounds it. It never reads Ollama's gate:
+      evictEndpointsOnDevice re-checks each endpoint's own run/call busy state immediately
+      before every POST (P1). Not gated on analyzerEvictWouldHelp either, because an endpoint
+      reports no VRAM figure. */
+  evictEndpoints?: (deviceKey: string) => Promise<{ attempted: number; unloaded: number }>;
+  /** #3084 — injected give-up notes naming sharing endpoints still holding the card, with the cause. */
+  endpointUnloadNotes?: (deviceKey: string) => string[];
   /** Injected poll interval (ms) between no-capacity admission retries. */
   pollMs?: number;
   /** Injected cap on no-capacity retry attempts before giving up with
@@ -235,6 +250,22 @@ export async function withCapacityRetry(
   const analyzerEvictWouldHelp = opts.analyzerEvictWouldHelp ?? defaultAnalyzerEvictWouldHelp;
   const isAnalysisInFlight =
     opts.isAnalysisInFlight ?? (() => getAnalyzerConcurrencyStats().inFlight > 0);
+  /* #3084 — per-admission state for the endpoint lever, one of each per withCapacityRetry call
+     (never per poll; every synthesize call is its own admission, sidecar.ts:422-441):
+     - loggedBusy: an endpoint busy at every poll is logged once (Task 3d.2);
+     - attemptedEndpoints: keyed by (endpoint, model) — the lever's SOLE bound (A1): each unload
+       POST is sent at most once per admission, so a hanging endpoint costs one 10 s timeout per
+       model, not one per poll;
+     - endpointOutcomes: what each endpoint did, so the give-up message can say why (A6). */
+  const loggedBusy = new Set<string>();
+  const attemptedEndpoints = new Set<string>();
+  const endpointOutcomes = new Map<string, EndpointUnloadOutcome>();
+  const evictEndpoints =
+    opts.evictEndpoints ??
+    ((deviceKey: string) => evictEndpointsOnDevice(deviceKey, { loggedBusy, attemptedEndpoints, endpointOutcomes }));
+  const unloadNotes =
+    opts.endpointUnloadNotes ??
+    ((deviceKey: string) => defaultEndpointUnloadNotes(deviceKey, undefined, undefined, endpointOutcomes));
   const pollMs = opts.pollMs ?? GPU_CAPACITY_POLL_MS;
   const maxAttempts = opts.maxAttempts ?? GPU_CAPACITY_MAX_ATTEMPTS;
   const evictIdleTts = opts.evictIdleTts ?? (async () => false);
@@ -281,6 +312,21 @@ export async function withCapacityRetry(
         continue; // immediate retry after freeing the analyzer
       }
 
+      /* #3084 P1/N1/A1 — the endpoint lever. Reached only on an iteration where Ollama was NOT
+         evicted, because Ollama's block above `continue`s when it fires: so Ollama's gate is
+         always read fresh, immediately before evictOllama(), against the freeMb of that same
+         iteration. evictEndpointsOnDevice re-checks each endpoint's own run/call busy state
+         before every POST, so an Ollama call in flight blocks only Ollama, and an endpoint's
+         own run or call blocks only its own unload. No latch: on a later poll it sends only the
+         (endpoint, model) POSTs this admission has not tried, e.g. an endpoint that just went idle. */
+      const { unloaded } = await evictEndpoints(noCap.deviceKey);
+      if (unloaded > 0) {
+        /* Retry admission at once: the unload blocked until the model was gone, and the next
+           iteration re-probes the card, so Ollama's gate, analyzerEvictWouldHelp and the
+           idle-TTS lever all read post-unload free memory rather than the stale figure. */
+        continue;
+      }
+
       /* Second lever: free a resident Qwen base this op doesn't need. Guarded to
          "no render in flight" inside evictIdleQwenBase, so it is inert during
          generation by construction. At most once per call, like the analyzer. */
@@ -297,6 +343,7 @@ export async function withCapacityRetry(
             noCap.neededMb,
             noCap.deviceKey,
             await describeBlockers(noCap.deviceKey),
+            unloadNotes(noCap.deviceKey),
           );
         }
       } else if (attempt + 1 >= maxAttempts) {
@@ -327,6 +374,7 @@ export async function withCapacityRetry(
             opts.describeBlockers
               ? await opts.describeBlockers(noCap.deviceKey)
               : await defaultDescribeBlockers(noCap.deviceKey, fetchHealthOnce),
+            unloadNotes(noCap.deviceKey),
           );
         }
       }
@@ -365,6 +413,7 @@ export async function withCapacityRetry(
         lastNoCap.neededMb,
         lastNoCap.deviceKey,
         await describeBlockers(lastNoCap.deviceKey),
+        unloadNotes(lastNoCap.deviceKey),
       );
     }
     throw err;

@@ -162,6 +162,9 @@ interface SidecarOptions {
   /** Injected "is the analyzer mid-run" check — for testing only. Defaults
       to reading `getAnalyzerConcurrencyStats().inFlight > 0`. */
   isAnalysisInFlight?: () => boolean;
+  /** #3084 — injected endpoint-unload action — for testing only. Defaults to
+      evictEndpointsOnDevice (via withCapacityRetry). */
+  evictEndpoints?: (deviceKey: string) => Promise<{ attempted: number; unloaded: number }>;
   /** Injected poll interval (ms) between no-capacity admission retries —
       for testing only, so a test doesn't have to sleep the real default. */
   capacityPollMs?: number;
@@ -178,6 +181,7 @@ export class SidecarTtsProvider implements TtsProvider {
   private readonly evictOllama: () => Promise<void>;
   private readonly analyzerEvictWouldHelp: (neededMb: number, freeOnDeviceMb: number) => Promise<boolean>;
   private readonly isAnalysisInFlight: () => boolean;
+  private readonly evictEndpoints: ((deviceKey: string) => Promise<{ attempted: number; unloaded: number }>) | undefined;
   /* Left undefined unless injected — withCapacityRetry applies the
      GPU_CAPACITY_POLL_MS / GPU_CAPACITY_MAX_ATTEMPTS defaults. */
   private readonly capacityPollMs: number | undefined;
@@ -192,6 +196,7 @@ export class SidecarTtsProvider implements TtsProvider {
     this.analyzerEvictWouldHelp = opts.analyzerEvictWouldHelp ?? defaultAnalyzerEvictWouldHelp;
     this.isAnalysisInFlight =
       opts.isAnalysisInFlight ?? (() => getAnalyzerConcurrencyStats().inFlight > 0);
+    this.evictEndpoints = opts.evictEndpoints;
     this.capacityPollMs = opts.capacityPollMs;
     this.maxCapacityAttempts = opts.maxCapacityAttempts;
   }
@@ -432,6 +437,7 @@ export class SidecarTtsProvider implements TtsProvider {
       evictOllama: this.evictOllama,
       analyzerEvictWouldHelp: this.analyzerEvictWouldHelp,
       isAnalysisInFlight: this.isAnalysisInFlight,
+      evictEndpoints: this.evictEndpoints,
       pollMs: this.capacityPollMs,
       maxAttempts: this.maxCapacityAttempts,
       evictIdleTts: () => evictIdleQwenBase({ modelKey, signal }),

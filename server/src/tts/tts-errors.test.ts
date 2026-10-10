@@ -18,3 +18,13 @@ describe('NoCapacityError', () => {
     expect(err.blockers).toEqual([]);
   });
 });
+
+describe('NoCapacityError notes (#3084)', () => {
+  it('appends notes after the blocker text', () => {
+    const err = new NoCapacityError('qwen', 3000, 'cuda:0', [], ['Analyzer endpoint "Lab" has no Unload URL.']);
+    expect(err.message).toBe('Not enough GPU memory for qwen (3000MB) — free VRAM or attach a second GPU. Analyzer endpoint "Lab" has no Unload URL.');
+  });
+  it('without notes the message is unchanged', () => {
+    expect(new NoCapacityError('qwen', 3000, 'cuda:0').message).toBe('Not enough GPU memory for qwen (3000MB) — free VRAM or attach a second GPU.');
+  });
+});
