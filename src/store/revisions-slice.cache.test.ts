@@ -128,18 +128,28 @@ describe('applyDismiss', () => {
   });
 });
 
-describe('applyPoll — drift follows the ordered rule (#3400)', () => {
-  const ev = { id: 'd1', bookId: 'A' } as never;
+describe('drift polls never resurrect a dismissed id (#3400)', () => {
+  const ev = (id: string, bookId = 'A') => ({ id, bookId }) as never;
   const poll = (rev: number, drift: unknown[]) => a.applyPoll({ ...st({ fileId: F1, rev }), drift } as never);
-  it('a stale poll does not resurrect a dismissed drift event; a newer poll adopts drift', () => {
-    let s = reduce(init(), poll(5, [ev]));
-    expect(s.drift.map((d) => d.id)).toEqual(['d1']);
-    s = reduce(s, a.applyDismiss({ driftId: 'd1', state: { ...st({ fileId: F1, rev: 6 }), dismissed: ['d1'] } }));
+  const dismissed = () =>
+    reduce(
+      init(),
+      poll(5, [ev('d1')]),
+      a.applyDismiss({ driftId: 'd1', state: { ...st({ fileId: F1, rev: 6 }), dismissed: ['d1'] } }),
+    );
+  it('a stale poll carrying a dismissed id leaves it gone', () => {
+    const s = reduce(dismissed(), poll(5, [ev('d1')]));
     expect(s.drift).toEqual([]);
-    s = reduce(s, poll(5, [ev]));
-    expect(s.drift).toEqual([]);
-    s = reduce(s, poll(7, [ev]));
-    expect(s.drift.map((d) => d.id)).toEqual(['d1']);
+  });
+  it('a stale poll still merges a NEW (non-dismissed) drift event', () => {
+    const s = reduce(dismissed(), poll(5, [ev('d1'), ev('d2')]));
+    expect(s.drift.map((d) => d.id)).toEqual(['d2']);
+  });
+  it('a background poll for the active book filters dismissed ids; other books are untouched', () => {
+    let s = reduce(dismissed(), a.applyBackgroundPoll({ bookId: 'A', drift: [ev('d1'), ev('d3')] }));
+    expect(s.drift.map((d) => d.id)).toEqual(['d3']);
+    s = reduce(s, a.applyBackgroundPoll({ bookId: 'B', drift: [ev('d1', 'B')] }));
+    expect(s.drift.map((d) => d.id).sort()).toEqual(['d1', 'd3']);
   });
 });
 

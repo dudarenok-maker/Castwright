@@ -95,6 +95,18 @@ function mergeDriftForBook(
   }
 }
 
+/* #3400 — drop incoming drift ids the cache knows were dismissed, so a late
+   poll cannot bring one back. The cache holds the dismissed set of the ACTIVE
+   book only, so other books' drift passes through unfiltered. */
+function withoutDismissed(
+  s: RevisionsState,
+  bookId: string | undefined,
+  incoming: DriftEvent[] | undefined,
+): DriftEvent[] | undefined {
+  if (!incoming || !bookId || bookId !== s.bookId) return incoming;
+  return incoming.filter((d) => !s.dismissed.includes(d.id));
+}
+
 /** Plan 286 — null (a legacy file never written through the store) is
     older than any id; ids are `${epoch 15-padded}-${random}`, so string
     order is epoch order with the suffix breaking a same-ms tie. */
@@ -170,14 +182,14 @@ export const revisionsSlice = createSlice({
       s.timeline = {};
     },
     /* Plan 286 — the server owns pending. The poll carries the whole
-       RevisionsState plus live drift: drift (per book) and the rest are adopted
-       by the same ordered rule, so a slow poll cannot revert a newer op
-       response or resurrect a dismissed drift event. Callers dispatch only for the active book. */
+       RevisionsState plus live drift: drift always merges (per book), even from
+       a stale-rev poll (drift is not versioned by `rev`), EXCEPT ids in the
+       cache's dismissed set, so a slow poll cannot resurrect a dismissed event;
+       the rest is adopted by the ordered rule, so a slow poll cannot revert a
+       newer op response. Callers dispatch only for the active book. */
     applyPoll: (s, a: PayloadAction<RevisionsResponse & { bookId: string }>) => {
-      if (shouldAdoptOrdered(s, a.payload)) {
-        mergeDriftForBook(s, a.payload.bookId, a.payload.drift);
-        adopt(s, a.payload);
-      }
+      if (shouldAdoptOrdered(s, a.payload)) adopt(s, a.payload);
+      mergeDriftForBook(s, a.payload.bookId, withoutDismissed(s, a.payload.bookId, a.payload.drift));
       s.loaded = true;
     },
     /* Background fan-out (Plan 83's 120 s bulk poll over NON-active books):
@@ -187,7 +199,7 @@ export const revisionsSlice = createSlice({
        has no business writing a foreign book's data into the active book's
        state regardless (#3376). */
     applyBackgroundPoll: (s, a: PayloadAction<{ bookId: string; drift?: DriftEvent[] }>) => {
-      mergeDriftForBook(s, a.payload.bookId, a.payload.drift);
+      mergeDriftForBook(s, a.payload.bookId, withoutDismissed(s, a.payload.bookId, a.payload.drift));
     },
   },
 });

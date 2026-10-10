@@ -3122,7 +3122,7 @@ The field has no client consumer before PR 2: the first ones are Tasks 11, 20 an
 - Test: `src/store/revisions-slice.test.ts`, `src/components/layout.test.tsx` (the `(#3376 round 2)` describe `~:2658`), `src/store/revisions-thunks.test.ts`.
 
 **Interfaces:**
-- `applyPoll(payload: RevisionsResponse & { bookId: string })`: merges drift for `bookId`, then ordered adopt, then `loaded = true`. `bookId` becomes required.
+- `applyPoll(payload: RevisionsResponse & { bookId: string })`: ordered adopt, then merges drift for `bookId` regardless of ordering (drift is not versioned by `rev`, so a stale-rev poll may carry newer drift) EXCEPT ids in the cache's `dismissed` set for that book (#3400: a late poll must not resurrect a dismissed event), then `loaded = true`. `applyBackgroundPoll` applies the same dismissed filter when `bookId` is the cached (active) book; the cache holds no dismissed set for other books, so theirs pass through. `bookId` becomes required.
 - Active poll: `.then((res) => { if (!cancelled && (store.getState().ui.stage as { bookId?: string }).bookId === bookId) dispatch(revisionsActions.applyPoll({ ...res, bookId })); }).catch((err) => console.warn('[revisions] active poll failed:', (err as Error).message))`.
 - Bulk poll: chunks of ≤50 (`BULK_POLL_MAX = 50`, the server's cap); each chunk has its own `.catch`; `res.errors` entries and chunk failures go through `warnOnce` (module-level `Set`, with a test-only `export function _resetRevisionPollWarningsForTests(): void` that clears it — same reason as Task 18's OD2 set: a module-level set otherwise leaks across tests and across vitest's `retry: 1` re-run), console only (OD24).
 - `onDismiss={(eventId) => void dispatch(dismissDriftOp(eventId))}`.
@@ -3137,6 +3137,7 @@ The field has no client consumer before PR 2: the first ones are Tasks 11, 20 an
       const s = revisionsSlice.reducer(base(), revisionsActions.applyPoll({ bookId: 'A', fileId: F, rev: 3, pending: [{ id: 'p', chapterId: 1, characterId: 'c', segments: [] }], dismissed: ['d'], drift: [{ id: 'x', bookId: 'A' } as never] }));
       expect(s.pending.map((p) => p.id)).toEqual(['p']); expect(s.dismissed).toEqual(['d']); expect(s.drift.map((d) => d.id)).toEqual(['x']); expect(s.loaded).toBe(true);
     });
+    // #3400: a stale poll's drift still merges, but a dismissed id never returns (see revisions-slice.cache.test.ts)
     it('a stale poll (lower rev) updates drift but not pending', () => {
       let s = revisionsSlice.reducer(base(), revisionsActions.applyServerState({ bookId: 'A', fileId: F, rev: 5, pending: [{ id: 'keep', chapterId: 1, characterId: 'c', segments: [] }], dismissed: [], acceptedSelections: {}, timeline: {} }));
       s = revisionsSlice.reducer(s, revisionsActions.applyPoll({ bookId: 'A', fileId: F, rev: 4, pending: [], drift: [{ id: 'new', bookId: 'A' } as never] }));
