@@ -27,6 +27,7 @@ import {
   resolveClonedVoicesForChapter,
   type ResolveChapterDeps,
 } from './clone-voice-resolver.js';
+import { quarantinedIt } from '../test-utils/quarantine.js';
 import type { VoiceLibraryEntry } from '../workspace/voice-library.js';
 import { cloneStorageKey } from './clone-engines.js';
 
@@ -206,7 +207,9 @@ describe('#1826 Step 1 — cloned-voice repair races against the real per-uuid l
     expect(purgeMock).toHaveBeenCalledWith(UUID, {});
   });
 
-  it('Test 2 — corner (b): two repairs and a revoke leave no `.pt`', async () => {
+  // Quarantined (#3626): timed out at 15000 ms on two cloud verify.yml runs;
+  // passes in isolation, root cause not yet known. See docs/testing/flaky-register.md.
+  quarantinedIt('Test 2 — corner (b): two repairs and a revoke leave no `.pt`', async () => {
     /* Honest about what this pins: the RE-PURGE, not the lock. Test 1 is what
        pins the lock (M3 is its instrument mutation). A reader who confuses the
        two will trust this test past its reach. */
