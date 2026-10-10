@@ -344,4 +344,22 @@ describe('rewriteChapterSlugs — per-chapter sidecars (#3400)', () => {
       expect(existsSync(join(audioRoot, `05-doomed.${suffix}`))).toBe(false);
     }
   });
+
+  it('a delete on a slug that is also a rename source leaves the files to move away intact', async () => {
+    seed('01-x');
+    seedSidecars('01-x');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'delete', from: '01-x' },
+      { kind: 'rename', from: '01-x', to: '02-y', newChapterId: 2, newChapterTitle: 'Y' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    expect(result.deleted).toEqual([]);
+    expect(readFileSync(join(audioRoot, '02-y.mp3'), 'utf8')).toBe('audio-bytes:01-x');
+    for (const suffix of PER_CHAPTER_SIDECARS) {
+      expect(existsSync(join(audioRoot, `02-y.${suffix}`))).toBe(true);
+      expect(existsSync(join(audioRoot, `01-x.${suffix}`))).toBe(false);
+    }
+  });
 });
