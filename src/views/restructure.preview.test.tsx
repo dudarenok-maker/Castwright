@@ -139,6 +139,60 @@ describe('RestructureView — #3400 cross-book slices', () => {
     expect(store.getState().manuscript.sentences).toHaveLength(2);
   });
 
+  it("does not re-apply the remap over sentences A's own layout read already hydrated post-restructure", async () => {
+    const store = makeStore();
+    const sentence = (chapterId: number, id: number, text: string) => ({ id, chapterId, characterId: 'c', text });
+    const hydrateA = (sentences: unknown[]) =>
+      store.dispatch(
+        manuscriptSlice.actions.hydrateFromBookState({
+          state: { bookId: 'b1', manuscriptId: 'm1', title: 'A' } as never,
+          sentences: sentences as never,
+        }),
+      );
+    // Pre-restructure: ch1 = one, ch2 = two, ch3 = three, ch4 = four.
+    hydrateA([sentence(1, 1, 'one'), sentence(2, 1, 'two'), sentence(3, 1, 'three'), sentence(4, 1, 'four')]);
+    // Merge [2,3] -> ch2 holds two+three; four moves 3 -> 2's successor. The remap is
+    // delivered through the same applyResponse path every restructure route uses.
+    const remap = [
+      { oldChapterId: 1, oldSentenceId: 1, newChapterId: 1, newSentenceId: 1 },
+      { oldChapterId: 2, oldSentenceId: 1, newChapterId: 2, newSentenceId: 1 },
+      { oldChapterId: 3, oldSentenceId: 1, newChapterId: 2, newSentenceId: 2 },
+      { oldChapterId: 4, oldSentenceId: 1, newChapterId: 3, newSentenceId: 1 },
+    ];
+    const serverFresh = [sentence(1, 1, 'one'), sentence(2, 1, 'two'), sentence(2, 2, 'three'), sentence(3, 1, 'four')];
+    let resolveRestructure!: (v: unknown) => void;
+    apiMock.refreshChapterTitles.mockReturnValue(new Promise((r) => (resolveRestructure = r)));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalledWith('b1'));
+    // The user bounced A->B->A and A's own layout read landed first, already post-restructure.
+    hydrateA(serverFresh);
+    resolveRestructure({ sentenceRemap: remap, warnings: [] });
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    expect(store.getState().manuscript.sentences).toEqual(serverFresh);
+  });
+
+  it('applies the remap once when the slice still holds the sentences captured at click time', async () => {
+    const store = makeStore();
+    const sentence = (chapterId: number, id: number, text: string) => ({ id, chapterId, characterId: 'c', text });
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'A' } as never,
+        sentences: [sentence(2, 1, 'two'), sentence(3, 1, 'three')] as never,
+      }),
+    );
+    apiMock.refreshChapterTitles.mockResolvedValue({
+      sentenceRemap: [
+        { oldChapterId: 2, oldSentenceId: 1, newChapterId: 2, newSentenceId: 1 },
+        { oldChapterId: 3, oldSentenceId: 1, newChapterId: 2, newSentenceId: 2 },
+      ],
+      warnings: [],
+    });
+    await refreshTitles(store);
+    expect(store.getState().manuscript.sentences).toEqual([sentence(2, 1, 'two'), sentence(2, 2, 'three')]);
+  });
+
   it("does not hydrate book A's chapters over book B's chapters slice", async () => {
     const store = makeStore();
     const resolveA = await startAThenSwitchToB(store);
