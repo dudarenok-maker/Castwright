@@ -176,8 +176,10 @@ describe('#1826 Step 1 — cloned-voice repair races against the real per-uuid l
 
     await deriveReachedP; // the repair holds a stale snapshot, mid-derive
     deriveGates[0](); // release the derive -> resolver proceeds to updateEntry
-    // The resolver either queued behind the revoke (real/M3) or finished
-    // without ever calling updateEntry (M1). Whichever structural event comes
+    // The resolver either queued behind the revoke (the real lock; with the
+    // lock bypassed — the "M3" mutation named in commit 3a0f55d9's message —
+    // it never queues) or finished without ever calling updateEntry (the
+    // "M1" mutation of that same message). Whichever structural event comes
     // first releases the revoke; racing two events, not timing.
     await Promise.race([repairQueuedP, settledP]);
     releaseRevoke(); // the revoke's mutate returns: revokedAt is written
@@ -208,8 +210,9 @@ describe('#1826 Step 1 — cloned-voice repair races against the real per-uuid l
 
   it('Test 2 — corner (b): two repairs and a revoke leave no `.pt`', async () => {
     /* Honest about what this pins: the RE-PURGE, not the lock. Test 1 is what
-       pins the lock (M3 is its instrument mutation). A reader who confuses the
-       two will trust this test past its reach. */
+       pins the lock (bypassing the lock — "M3" in commit 3a0f55d9's message —
+       is what reddens it). A reader who confuses the two will trust this test
+       past its reach. */
     const UUID = 'race-test-2';
     await vl.writeEntry(seedEntry(UUID));
 
