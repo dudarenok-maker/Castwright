@@ -620,9 +620,13 @@ Design rationale:
   review record on the per-book revisions lock is best-effort with respect
   to a render that has already landed — it logs in full and surfaces only
   `reviewOutcome: 'failed'`, never the lock key; and the restructure pending
-  drop (`server/src/routes/chapters-restructure.ts`, plan 286) — a stale
-  entry it fails to drop answers `revision_not_found` on the next
-  accept/reject. A NINTH site fails loud in a
+  drop (`server/src/routes/chapters-restructure.ts`, plan 286) — an entry
+  it fails to drop answers `revision_not_found` on the next accept/reject
+  once its chapter has been renumbered or re-rendered, because a
+  server-recorded entry carries the chapter's `uuid` and `audioRenderedAt`
+  and `revisions-store.ts` refuses it when the chapter at its id no longer
+  matches (`entryMatchesChapter`, #3400). A legacy client-written entry
+  has no stamps and is not covered. A NINTH site fails loud in a
   different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,

@@ -37,7 +37,9 @@ import { SCHEMA_SEAMS, migrateSeamDoc, stampSeamSchema, UnsupportedSchemaError }
 
 const REVISIONS_SEAM = SCHEMA_SEAMS.find((s) => s.label === 'revisions.json')!;
 
-export interface ChapterRef { id: number; slug: string }
+/** `uuid` / `audioRenderedAt` are the chapter's identity stamps (state.json); optional so a chapter
+    that has not been stamped yet still resolves. See entryMatchesChapter. */
+export interface ChapterRef { id: number; slug: string; uuid?: string; audioRenderedAt?: string }
 export interface StoredRevision {
   id: string; chapterId: number; characterId: string;
   triggeredBy?: string; triggeredAgo?: string; oldDuration?: string; newDuration?: string;
@@ -45,6 +47,9 @@ export interface StoredRevision {
   segments: unknown[];
   /** Present (`'server'`) on entries the server recorded; absent on legacy client-written ones. */
   origin?: 'server';
+  /** Identity of the chapter this entry was recorded for (chapter `uuid`, which survives renumbering) and of the render it pairs with (`audioRenderedAt`). Stamped by finalize; absent on legacy entries. Checked by entryMatchesChapter. */
+  chapterUuid?: string;
+  renderedAt?: string;
   /** Plan 286 OD20 — a legacy entry the old client never flipped (stuck "Rendering…"), surfaced because .previous.mp3 exists. Its A side is the take kept before the chapter's last render, which may not be the take this entry was recorded against. */
   recovered?: true;
 }
@@ -182,6 +187,18 @@ export function normaliseRevisions(
   return { schema: 1, fileId, rev, pending: [...byChapter.values()], dismissed, acceptedSelections, timeline };
 }
 
+/** An entry's `chapterId` is positional: a merge/split/reorder renumbers chapters, so after a restructure
+    whose drop failed (best-effort) the id can name a DIFFERENT chapter, or the same chapter re-rendered
+    (a merge survivor), whose `.previous.*` is not the A side this entry was recorded against. An entry
+    that carries identity stamps is therefore honoured only while the chapter at its id still has the
+    same uuid AND render stamp. A legacy / client-written entry carries neither stamp and is kept
+    (nothing to compare against; its behaviour is unchanged). */
+export function entryMatchesChapter(entry: StoredRevision, chapter: ChapterRef): boolean {
+  if (entry.chapterUuid !== undefined && chapter.uuid !== entry.chapterUuid) return false;
+  if (entry.renderedAt !== undefined && chapter.audioRenderedAt !== entry.renderedAt) return false;
+  return true;
+}
+
 export function toRevisionsState(bookId: string, file: RevisionsFile): RevisionsState {
   return {
     bookId,
@@ -243,13 +260,22 @@ async function loadWithStored(
   const slugById = new Map(chapters.map((c) => [c.id, c.slug] as const));
   const root = audioDir(bookDir);
   const raw = await loadRaw(bookDir);
-  return {
-    file: normaliseRevisions(raw, (chapterId) => {
-      const slug = slugById.get(chapterId);
-      return slug !== undefined && previousAudioExists(root, slug);
+  const normalised = normaliseRevisions(raw, (chapterId) => {
+    const slug = slugById.get(chapterId);
+    return slug !== undefined && previousAudioExists(root, slug);
+  });
+  /* A stamped entry whose chapter no longer sits at its id is invisible to every read and op (begin
+     answers not-found) and falls off the file at the next write. A missing chapter is left to
+     beginRevisionOp's own branch. */
+  const chapterById = new Map(chapters.map((c) => [c.id, c] as const));
+  const file: RevisionsFile = {
+    ...normalised,
+    pending: normalised.pending.filter((p) => {
+      const chapter = chapterById.get(p.chapterId);
+      return chapter === undefined || entryMatchesChapter(p, chapter);
     }),
-    stored: normaliseRevisions(raw, () => true),
   };
+  return { file, stored: normaliseRevisions(raw, () => true) };
 }
 
 async function writeStamped(bookDir: string, file: RevisionsFile): Promise<void> {

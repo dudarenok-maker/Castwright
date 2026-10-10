@@ -815,6 +815,20 @@ describe('finalizeChapterAudioWrite review tri-state (plan 285)', () => {
     expect(pending[0].id).toMatch(/^revision:1:\d+$/);
   });
 
+  it('object + preserved: stamps the entry with the chapter uuid and the render stamp state.json carries (#3400)', async () => {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(statePath, 'utf8'));
+    st.chapters[0].uuid = 'uuid-ch-1';
+    writeFileSync(statePath, JSON.stringify(st));
+    writePriorTake();
+    await finalizeChapterAudioWrite({ ...baseInput(), review: REVIEW });
+    const after = JSON.parse(readFileSync(statePath, 'utf8'));
+    const [entry] = readPending();
+    expect(entry.chapterUuid).toBe('uuid-ch-1');
+    expect(entry.renderedAt).toBeTruthy();
+    expect(entry.renderedAt).toBe(after.chapters[0].audioRenderedAt);
+  });
+
   it('object + first render (nothing preserved): drops any stale entry, records nothing', async () => {
     seedEntry(1, 'revision:1:500');
     const result = await finalizeChapterAudioWrite({ ...baseInput(), review: REVIEW });

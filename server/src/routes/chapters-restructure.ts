@@ -187,7 +187,12 @@ async function applyRestructure(
   /* Plan 286 — entries for chapters this op touched no longer pair with the
      live take. Best-effort: logged, never in a response (the six handlers
      return raw messages, so a lock-key path must not reach them). A deliberate
-     swallow of LockAcquisitionTimeoutError (CLAUDE.md swallow list). */
+     swallow of LockAcquisitionTimeoutError (CLAUDE.md swallow list). An entry
+     that survives a failed drop is NOT left to act on whichever chapter now
+     holds its id: a server-recorded entry carries the chapter's uuid +
+     audioRenderedAt and revisions-store's entryMatchesChapter refuses it
+     (revision_not_found) once the chapter at that id differs (#3400). A legacy
+     client-written entry has no stamps and is not covered. */
   try {
     const touched = touchedChapterIds(oldChapters, result.state.chapters, result.audioOps);
     if (touched.length > 0) await dropPendingForChapters(bookDir, oldChapters, touched);

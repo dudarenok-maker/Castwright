@@ -7526,6 +7526,16 @@ components:
           type: string
           enum: [server]
           description: Plan 285 — present on entries the server recorded; absent on legacy client-written ones.
+        chapterUuid:
+          type: string
+          description: >-
+            #3400 — uuid of the chapter this entry was recorded for (survives
+            renumbering). With `renderedAt`, the server refuses (not-found) an
+            entry whose chapter no longer carries these stamps — e.g. after a
+            restructure whose best-effort drop failed. Absent on legacy entries.
+        renderedAt:
+          type: string
+          description: '#3400 — the chapter''s `audioRenderedAt` for the render this entry pairs with. See `chapterUuid`.'
         recovered:
           type: boolean
           description: >-

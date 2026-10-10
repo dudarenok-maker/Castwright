@@ -503,3 +503,40 @@ describe('lock serialisation — accept racing recordPending', () => {
     expect(file.rev).toBe(2);
   });
 });
+
+describe('identity stamps (#3400)', () => {
+  const stamped = (over: Partial<StoredRevision> = {}): StoredRevision => ({
+    ...serverEntry(1, 'r-s'),
+    chapterUuid: 'u1',
+    renderedAt: 't1',
+    ...over,
+  });
+  const ch = (over: Partial<ChapterRef> = {}): ChapterRef[] => [
+    { id: 1, slug: '01-one', uuid: 'u1', audioRenderedAt: 't1', ...over },
+    { id: 2, slug: '02-two', uuid: 'u2' },
+  ];
+
+  it('a stamped entry is visible and proceeds while its chapter matches', async () => {
+    seedRaw({ ...EMPTY, pending: [stamped()] });
+    expect((await readRevisions(bookDir, ch())).pending.map((p) => p.id)).toEqual(['r-s']);
+    expect((await beginRevisionOp(bookDir, ch(), 'accept', 'r-s')).kind).toBe('proceed');
+  });
+
+  it.each([
+    ['a different uuid at the id (renumbered)', { uuid: 'other' }],
+    ['a re-rendered chapter (render stamp moved)', { audioRenderedAt: 't2' }],
+    ['a chapter with no render stamp', { audioRenderedAt: undefined }],
+  ])('refuses and hides a stamped entry for %s, and the next write drops it', async (_n, over) => {
+    seedRaw({ ...EMPTY, pending: [stamped()] });
+    expect((await readRevisions(bookDir, ch(over))).pending).toEqual([]);
+    expect((await beginRevisionOp(bookDir, ch(over), 'accept', 'r-s')).kind).toBe('not-found');
+    await dismissDriftId(bookDir, ch(over), 'd1');
+    expect((onDisk().pending as unknown[]).length).toBe(0);
+  });
+
+  it('a legacy entry (no stamps) is kept whatever the chapter carries', async () => {
+    writeFileSync(join(audioDir(bookDir), '01-one.previous.mp3'), 'x');
+    seedRaw({ ...EMPTY, pending: [{ ...serverEntry(1, 'r-l'), origin: undefined }] });
+    expect((await readRevisions(bookDir, ch({ uuid: 'other', audioRenderedAt: 't9' }))).pending.map((p) => p.id)).toEqual(['r-l']);
+  });
+});

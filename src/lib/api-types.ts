@@ -5443,6 +5443,10 @@ export interface components {
              * @enum {string}
              */
             origin?: "server";
+            /** @description #3400 — uuid of the chapter this entry was recorded for (survives renumbering). With `renderedAt`, the server refuses (not-found) an entry whose chapter no longer carries these stamps — e.g. after a restructure whose best-effort drop failed. Absent on legacy entries. */
+            chapterUuid?: string;
+            /** @description #3400 — the chapter's `audioRenderedAt` for the render this entry pairs with. See `chapterUuid`. */
+            renderedAt?: string;
             /** @description Plan 286 (OD20) — a legacy entry left stuck "Rendering…" by the pre-server client, surfaced because a preserved take exists. The A side is the take kept before the chapter's last render, which may not be the take this entry was recorded against; the player labels it "Recovered from before the update". */
             recovered?: boolean;
             segments: {

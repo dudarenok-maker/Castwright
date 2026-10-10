@@ -755,7 +755,7 @@ export async function finalizeChapterAudioWrite(
   /* Plan 285 — AFTER the last disk write (audio rename, peaks, state.json):
      a throw earlier in finalize therefore never leaves an entry for a
      half-written take. */
-  const reviewOutcome = await applyReview(input, preserve.preserved, prev);
+  const reviewOutcome = await applyReview(input, preserve.preserved, prev, segmentsFile.synthesizedAt);
 
   return {
     durationSec,
@@ -777,10 +777,12 @@ async function applyReview(
   input: FinalizeChapterAudioInput,
   preserved: boolean,
   prev: BookStateJson | null,
+  renderedAt: string,
 ): Promise<ReviewOutcome | undefined> {
   if (input.review === undefined) return undefined;
   const { bookDir, chapter } = input;
   const chapters: ChapterRef[] = prev?.chapters ?? [{ id: chapter.id, slug: chapter.slug }];
+  const stamped = chapters.find((c) => c.id === chapter.id);
   try {
     if (input.review !== null && preserved) {
       await recordPending(bookDir, chapters, {
@@ -796,6 +798,11 @@ async function applyReview(
         hasPreviousAudio: true,
         segments: [],
         origin: 'server',
+        /* Identity stamps (#3400): a restructure whose best-effort drop failed must not let this
+           entry act on whichever chapter later inherits the id. renderedAt is what state.json's
+           audioRenderedAt carries for this render (stamped just above). */
+        ...(stamped?.uuid ? { chapterUuid: stamped.uuid } : {}),
+        renderedAt,
       });
       return 'recorded';
     }
