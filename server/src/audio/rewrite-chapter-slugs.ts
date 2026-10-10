@@ -84,6 +84,32 @@ export async function rewriteChapterSlugs(
   const renames = ops.filter((op): op is Extract<ChapterAudioOp, { kind: 'rename' }> => op.kind === 'rename');
   const deletes = ops.filter((op): op is Extract<ChapterAudioOp, { kind: 'delete' }> => op.kind === 'delete');
 
+  // Phase 0: deletes. Run BEFORE any rename so they hit the OLD occupant of the
+  // slug: a delete queued for a slug that another chapter is renamed INTO
+  // (merging in a "Chapter N" book) would otherwise remove the renamed
+  // chapter's freshly-landed files (#3400). A delete on a slug that is itself
+  // a rename source is skipped — those files are about to move away intact.
+  const renameSources = new Set(renames.map((op) => op.from));
+  for (const op of deletes) {
+    if (renameSources.has(op.from)) continue;
+    for (const suffix of COMPANION_SUFFIXES) {
+      const path = suffixPath(audioRoot, op.from, suffix);
+      if (!existsSync(path)) continue;
+      try {
+        await rm(path, { force: true });
+        summary.deleted.push({ slug: op.from, suffix });
+      } catch (e) {
+        const code = (e as { code?: string }).code;
+        if (code === 'ENOENT') continue;
+        summary.errors.push({
+          op,
+          message: `delete failed: ${(e as Error).message}`,
+          suffix,
+        });
+      }
+    }
+  }
+
   // Phase 1: rename each source slug's companion files to a unique temp slug.
   // Tracking which (op, suffix, tempSlug) tuples succeeded lets phase 2 only
   // try to finalise the ones it owns.
@@ -157,27 +183,6 @@ export async function rewriteChapterSlugs(
         summary.errors.push({
           op,
           message: `${suffix} metadata rewrite failed: ${(e as Error).message}`,
-          suffix,
-        });
-      }
-    }
-  }
-
-  // Phase 4: deletes. Run after renames so a delete op targeting a slug
-  // that was just renamed AWAY is a no-op (ENOENT tolerated).
-  for (const op of deletes) {
-    for (const suffix of COMPANION_SUFFIXES) {
-      const path = suffixPath(audioRoot, op.from, suffix);
-      if (!existsSync(path)) continue;
-      try {
-        await rm(path, { force: true });
-        summary.deleted.push({ slug: op.from, suffix });
-      } catch (e) {
-        const code = (e as { code?: string }).code;
-        if (code === 'ENOENT') continue;
-        summary.errors.push({
-          op,
-          message: `delete failed: ${(e as Error).message}`,
           suffix,
         });
       }

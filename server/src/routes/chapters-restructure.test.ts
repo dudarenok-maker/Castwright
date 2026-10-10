@@ -841,6 +841,39 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
     expect(renumberWarning).toBeDefined();
   });
 
+  it('merge [2,3] on rendered "Chapter N" titles keeps the shifted chapter\'s audio (#3400)', async () => {
+    seedDigitTitledBook();
+    for (const slug of [
+      '01-chapter-1',
+      '02-chapter-2',
+      '03-chapter-3',
+      '04-chapter-4',
+      '05-chapter-5',
+    ]) {
+      seedAudio(slug);
+      writeFileSync(join(audioRoot, `${slug}.previous.mp3`), `previous-${slug}`);
+    }
+    const stPath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf8'));
+    for (const c of st.chapters) {
+      c.audioModelKey = 'kokoro-v1';
+      c.audioRenderedAt = '2026-01-01T00:00:00.000Z';
+    }
+    writeFileSync(stPath, JSON.stringify(st));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+
+    // Old chapter 4 is now chapter 3 (slug 03-chapter-3): its audio must exist.
+    expect(readState().chapters[2].slug).toBe('03-chapter-3');
+    expect(readFileSync(join(audioRoot, '03-chapter-3.mp3'), 'utf8')).toBe('audio-04-chapter-4');
+    expect(readFileSync(join(audioRoot, '03-chapter-3.previous.mp3'), 'utf8')).toBe(
+      'previous-04-chapter-4',
+    );
+  });
+
   it('preserves user-customized chapter titles during the renumber pass', async () => {
     writeFileSync(
       join(bookDir, 'manuscript.md'),

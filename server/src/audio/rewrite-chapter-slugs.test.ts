@@ -239,4 +239,28 @@ describe('rewriteChapterSlugs — .previous.* artifacts', () => {
     expect(existsSync(join(audioRoot, '01-a.previous.mp3'))).toBe(false);
     expect(existsSync(join(audioRoot, '01-a.previous.segments.json'))).toBe(false);
   });
+
+  it('a delete whose slug is also a rename target removes the OLD occupant, never the chapter renamed into it (#3400)', async () => {
+    seed('03-c');
+    seedPrevious('03-c');
+    seed('04-d');
+    seedPrevious('04-d');
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'delete', from: '03-c' },
+      { kind: 'rename', from: '04-d', to: '03-c', newChapterId: 3, newChapterTitle: 'd' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    // Renamed chapter's live + previous + segments + peaks landed at the slug...
+    expect(readFileSync(join(audioRoot, '03-c.mp3'), 'utf8')).toBe('audio-bytes:04-d');
+    expect(readFileSync(join(audioRoot, '03-c.previous.mp3'), 'utf8')).toBe('previous-bytes:04-d');
+    expect(existsSync(join(audioRoot, '03-c.segments.json'))).toBe(true);
+    expect(existsSync(join(audioRoot, '03-c.peaks.json'))).toBe(true);
+    expect(existsSync(join(audioRoot, '03-c.previous.segments.json'))).toBe(true);
+    // ...and the deleted chapter's bytes are gone, the source slug vacated.
+    expect(existsSync(join(audioRoot, '04-d.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '04-d.previous.mp3'))).toBe(false);
+    expect(result.deleted.map((d) => d.slug)).toEqual(Array(5).fill('03-c'));
+  });
 });
