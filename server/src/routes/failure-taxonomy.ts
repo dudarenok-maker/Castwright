@@ -36,6 +36,7 @@ import {
   AnalyzerStreamIncompleteError,
   AnalyzerTransportError,
   AnalyzerUnreachableError,
+  AnalyzerTargetInputTooLargeError,
   causeCodeSuffix,
   type TransportKind,
 } from '../analyzer/errors.js';
@@ -676,6 +677,15 @@ export function reasoningOverflowFixes(ctx: {
   return [...fixes, ...reads];
 }
 
+/** #3084 P30 — the settings that let a fallback target take the request. */
+export function targetInputTooLargeFixes(): AnalysisFailureFix[] {
+  return [
+    { label: 'Choose a fallback target with a larger window', settingKey: 'analyzer.fallback.target' },
+    { label: 'Lower the stage-1 local input fraction', settingKey: 'analyzer.stage1.localInputFraction' },
+    { label: 'Lower the stage-2 local input fraction', settingKey: 'analyzer.stage2.localInputFraction' },
+  ];
+}
+
 /** #3084 pass-3 — the actionable half of `reasoningOverflowFixes` as one
     sentence of advice, for copy that cannot render structured fixes (the
     non-story warning is a plain string). Built FROM the fixes list — never a
@@ -867,6 +877,18 @@ export function classifyAnalysisFailure(
         err.outputTokens ? ` tokens=${err.outputTokens}` : ''
       }`,
     );
+  }
+  /* #3084 P30 — a request never sent because the fallback target could not take it. Its own copy,
+     under the existing request-rejected code, with no HTTP status: nothing reached a server. */
+  if (err instanceof AnalyzerTargetInputTooLargeError) {
+    return {
+      code: 'analyzer-request-rejected',
+      userMessage: err.message,
+      remediation:
+        'Lower the chunk size (Advanced Settings → Analyzer chunking: the stage input fractions) or choose a fallback target with a larger window (Advanced Settings → Analyzer fallback), then resume — finished chapters are kept.',
+      detail: `transport=${err.transport} model=${err.model} limit=${err.limitTokens} family=${err.family}`,
+      fixes: targetInputTooLargeFixes(),
+    };
   }
   if (err instanceof AnalyzerReasoningOverflowError) {
     const chapter = ctx?.chapter;

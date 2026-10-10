@@ -25,6 +25,7 @@ import {
   AnalyzerStreamIncompleteError,
   AnalyzerTransportError,
   AnalyzerUnreachableError,
+  AnalyzerTargetInputTooLargeError,
   causeCodeSuffix,
   sanitizeCauseCode,
 } from '../analyzer/errors.js';
@@ -1325,5 +1326,24 @@ describe('AnalyzerCapabilityRejectedError → analyzer-request-rejected (#3084 P
     expect(r.userMessage).toContain('high');
     expect(r.userMessage).toContain('2026-09-11T10:00:00.000Z');
     expect(r.remediation).toContain('Ollama structured output (analyzer.ollama.structuredOutput)');
+  });
+});
+
+describe('AnalyzerTargetInputTooLargeError (#3084 P30)', () => {
+  it('→ analyzer-request-rejected with its own copy: the message, no HTTP status, a chunk-size or larger-window remediation, and fixes', () => {
+    const r = classifyAnalysisFailure(new AnalyzerTargetInputTooLargeError('ollama', 'qwen3.5:4b', 'Ollama (qwen3.5:4b)', 8192, 'context'), 'Endpoint Lab (qwen3-30b)');
+    expect(r.code).toBe('analyzer-request-rejected');
+    expect(r.userMessage).toBe('prompt is larger than the fallback target Ollama (qwen3.5:4b) can take (context 8192 tokens)');
+    expect(r.userMessage).not.toMatch(/\(400\)|rejected the request/);
+    expect(r.remediation).toMatch(/Lower the chunk size/);
+    expect(r.remediation).toMatch(/fallback target with a larger window/);
+    expect(r.remediation).not.toMatch(/\(400\)/);
+    expect(r.fixes?.map((f) => f.settingKey)).toEqual(['analyzer.fallback.target', 'analyzer.stage1.localInputFraction', 'analyzer.stage2.localInputFraction']);
+  });
+
+  it('names a request-cap target by its per-request cap', () => {
+    expect(new AnalyzerTargetInputTooLargeError('gemini', 'gemini-3.5-flash-lite', 'Gemini (gemini-3.5-flash-lite)', 12000, 'requestCap').message).toBe(
+      'prompt is larger than the fallback target Gemini (gemini-3.5-flash-lite) can take (per-request cap 12000 tokens)',
+    );
   });
 });

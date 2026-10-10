@@ -15,8 +15,8 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect, afterEach } from 'vitest';
-import { reasoningOverflowFixes, classifyAnalysisFailure, type AnalysisFailureFix } from './failure-taxonomy.js';
-import { allKnobs } from '../config/registry.js';
+import { reasoningOverflowFixes, targetInputTooLargeFixes, classifyAnalysisFailure, type AnalysisFailureFix } from './failure-taxonomy.js';
+import { allKnobs, getKnob } from '../config/registry.js';
 import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
 import { analyzerEndpointSchema, type AnalyzerEndpoint } from '../workspace/analyzer-endpoints.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest } from '../workspace/user-settings.js';
@@ -214,6 +214,15 @@ describe('reasoningOverflowFixes — the RIGHT key, not just a valid one (#3084 
       // entry, never a field bolted onto a setting-changing fix.
       for (const f of fixes) if (isRead(f)) expect(f.settingKey, JSON.stringify(f)).toBeUndefined();
       expect(fixes.some((f) => f.label === 'Switch to a different analyzer model' && !f.settingKey && !isRead(f))).toBe(true);
+    }
+  });
+
+  it('targetInputTooLargeFixes names only registry keys (#3084 P30)', () => {
+    const fixes = targetInputTooLargeFixes();
+    expect(fixes.length).toBeGreaterThan(0);
+    for (const fix of fixes) {
+      expect(fix.settingKey, fix.label).toBeDefined();
+      expect(getKnob(fix.settingKey!), fix.settingKey).toBeDefined();
     }
   });
 });

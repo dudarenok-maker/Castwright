@@ -264,7 +264,10 @@ instructAnnotationRouter.post(
                   manuscriptId,
                   chapterId,
                   prompt,
-                  stage3Call,
+                  {
+                    ...stage3Call,
+                    inputBody: chunk.core.map((s) => JSON.stringify({ sentenceId: s.id, characterId: s.characterId, text: s.text })).join(''),
+                  },
                 );
                 const owned = result.annotations.filter((a) => chunk.coreIds.has(a.sentenceId));
                 if (owned.length) {

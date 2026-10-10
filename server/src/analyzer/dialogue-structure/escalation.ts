@@ -1,8 +1,9 @@
-import type { SentenceOutput } from '../../handoff/schemas.js';
+import type { SentenceOutput, EscalationOutput } from '../../handoff/schemas.js';
 import type { Analyzer, StageCall } from '../index.js';
 import type { ParagraphEvidence } from './types.js';
 import { alignSentences, type AlignedSentence } from './aligner.js';
 import { conventionsFor } from './lang/index.js';
+import { AnalyzerTargetInputTooLargeError } from '../errors.js';
 
 /* srv-59 Task 9b (spec §5.4). Second-pass re-query of the conversation
    windows crossExamine (Task 7) flagged as unresolved. Pure orchestration
@@ -249,13 +250,24 @@ export async function escalateFlaggedWindows(opts: EscalateFlaggedWindowsOpts): 
     perChapterRemaining -= 1;
     outcome.attempted += 1;
 
-    const response = await opts.analyzer.runAttributionEscalation(
-      opts.manuscriptId,
-      opts.chapterId,
-      group.windowId,
-      prompt,
-      opts.stageCall,
-    );
+    let response: EscalationOutput | null;
+    try {
+      response = await opts.analyzer.runAttributionEscalation(
+        opts.manuscriptId,
+        opts.chapterId,
+        group.windowId,
+        prompt,
+        opts.stageCall,
+      );
+    } catch (err) {
+      /* #3084 P30 — a window too large for the fallback target was refused before it was sent. Escalation
+         is best-effort (index.ts escalation contract): skip this window like an empty reply, and say so. */
+      if (err instanceof AnalyzerTargetInputTooLargeError) {
+        console.warn(`[analysis:structure] ch=${opts.chapterId} window=${group.windowId} escalation skipped: ${err.message}`);
+        continue;
+      }
+      throw err;
+    }
     if (!response) continue; // empty/blocked/unparseable — skip, flags stay intact
 
     // A model that returns the same `line` twice in one reply must only

@@ -27,7 +27,7 @@
    majority of chapters. */
 
 import type { CharacterOutput } from '../handoff/schemas.js';
-import { AnalyzerTruncatedError } from './errors.js';
+import { AnalyzerTruncatedError, targetInputTooLargeOr } from './errors.js';
 import { configValue } from '../config/resolver.js';
 import { splitBodyIntoChunks, splitParagraphIntoSentences } from './stage2-chunk.js';
 import { cloudBodyCharBudget, cloudBodyCharBudgetForCap } from './token-budget.js';
@@ -188,7 +188,7 @@ export async function runStage1ChapterChunked(
           return;
         }
       }
-      throw err;
+      throw targetInputTooLargeOr(err);
     }
   };
 
@@ -206,7 +206,7 @@ export async function runStage1ChapterChunked(
     } catch (err) {
       if (!(err instanceof AnalyzerTruncatedError)) throw err;
       const forced = splitSpanForRetry(opts.body);
-      if (forced.length <= 1) throw err;
+      if (forced.length <= 1) throw targetInputTooLargeOr(err);
       for (let i = 0; i < forced.length; i += 1) {
         opts.onChunk?.({ index: i, total: forced.length, chars: forced[i].length });
         await detectSpan(forced[i], 1);

@@ -17,7 +17,7 @@ import {
   STAGE1_CLOUD_RESERVED_TOKENS,
   type Stage1ChunkRunOptions,
 } from './stage1-chunk.js';
-import { AnalyzerTruncatedError, AnalyzerReasoningOverflowError } from './errors.js';
+import { AnalyzerTruncatedError, AnalyzerReasoningOverflowError, AnalyzerTargetInputTooLargeError, TargetInputOverBudgetError } from './errors.js';
 import { buildSystemInstruction, loadSkill, estimateInputTokens } from './gemini.js';
 import { cloudBodyCharBudget } from './token-budget.js';
 import { buildStage1ChapterInbox } from '../routes/analysis.js';
@@ -248,5 +248,52 @@ describe('#1682/#1691 — worst-case Cyrillic stage-1 request clears the Gemma T
     const budget60 = resolveStage1ChunkCharBudget(gemini(), cyr, worstCaseRoster(60));
     const budget150 = resolveStage1ChunkCharBudget(gemini(), cyr, worstCaseRoster(150));
     expect(budget150).toBeLessThan(budget60);
+  });
+});
+
+describe('a target-budget truncation that cannot split further escapes as the refusal (#3084 P30)', () => {
+  const refusal = () => new AnalyzerTargetInputTooLargeError('ollama', 'qwen3.5:4b', 'Ollama (qwen3.5:4b)', 32768, 'context');
+
+  it('an unsplittable span: the single-call path rethrows the refusal, not a truncation', async () => {
+    const r = refusal();
+    const err = await runStage1ChapterChunked({
+      body: 'x'.repeat(50), // one "sentence", no paragraph or sentence break
+      charBudget: 10_000,
+      callForBody: async () => {
+        throw new TargetInputOverBudgetError(r);
+      },
+      mergeRosters: () => {},
+    }).catch((e: unknown) => e);
+    expect(err).toBe(r);
+  });
+
+  it('at the max split depth: the leaf rethrows the refusal, not a truncation', async () => {
+    const r = refusal();
+    const calls: string[] = [];
+    const err = await runStage1ChapterChunked({
+      body: 'The lamp guttered. '.repeat(40),
+      charBudget: 10_000,
+      maxSplitDepth: 1,
+      callForBody: async (sub) => {
+        calls.push(sub);
+        throw new TargetInputOverBudgetError(r);
+      },
+      mergeRosters: () => {},
+    }).catch((e: unknown) => e);
+    expect(err).toBe(r);
+    expect(calls.length).toBeGreaterThan(1); // it did split once before giving up
+  });
+
+  it('a model truncation still escapes as a truncation', async () => {
+    const err = await runStage1ChapterChunked({
+      body: 'x'.repeat(50),
+      charBudget: 10_000,
+      callForBody: async () => {
+        throw new AnalyzerTruncatedError('ollama', 'length', 10);
+      },
+      mergeRosters: () => {},
+    }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AnalyzerTruncatedError);
+    expect(err).not.toBeInstanceOf(AnalyzerTargetInputTooLargeError);
   });
 });

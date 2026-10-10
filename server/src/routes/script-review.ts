@@ -39,7 +39,7 @@ import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight } from 
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { warmOllamaModel } from './ollama-health.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
-import { AnalyzerReasoningOverflowError, AnalyzerTruncatedError, GeminiContentBlockedError } from '../analyzer/errors.js';
+import { AnalyzerReasoningOverflowError, AnalyzerTruncatedError, GeminiContentBlockedError, targetInputTooLargeOr } from '../analyzer/errors.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { analyzerSelectionErrorEvent } from './failure-taxonomy.js';
@@ -920,7 +920,10 @@ async function runScriptReviewJob(
           manuscriptId, chapterId, [...contextBefore, ...core, ...contextAfter], roster, withPrior ? priorExchange : null, structureEvidence,
         );
         try {
-          const result = await activeSelection.analyzer.runScriptReviewChapter(manuscriptId, chapterId, prompt, reviewCall);
+          const result = await activeSelection.analyzer.runScriptReviewChapter(manuscriptId, chapterId, prompt, {
+            ...reviewCall,
+            inputBody: core.map((s) => JSON.stringify(buildReviewSentencesInput([s], structureEvidence)[0])).join(''),
+          });
           return result.ops.filter((op) => ownsOp(coreIds, primarySentenceId(op)));
         } catch (err) {
           if (err instanceof AnalyzerTruncatedError && depth < MAX_FORCE_SPLIT_DEPTH && core.length > 1) {
@@ -934,7 +937,7 @@ async function runScriptReviewJob(
             const rightOps = await reviewCore(right, [...contextBefore, ...left.slice(-OVERLAP)], contextAfter, false, depth + 1);
             return [...leftOps, ...rightOps];
           }
-          throw err;
+          throw targetInputTooLargeOr(err);
         }
       };
 

@@ -32,7 +32,7 @@ import {
   type PhaseWatermark,
 } from '../analyzer/phase-watermark.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
-import { AnalyzerReasoningOverflowError, GeminiContentBlockedError } from '../analyzer/errors.js';
+import { AnalyzerReasoningOverflowError, GeminiContentBlockedError, AnalyzerTargetInputTooLargeError } from '../analyzer/errors.js';
 import { detectOllamaDevice, unloadResidentOllama } from './ollama-health.js';
 import { setLastKnownAnalyzerDevice } from '../gpu/analyzer-device-state.js';
 import { foldMinorCast } from '../analyzer/fold-minor-cast.js';
@@ -2494,8 +2494,8 @@ export async function attributeChapterStage2(opts: {
          forensics per call. Spread rather than mutate: `stageCall` is created
          once per chapter and shared across every section, so assigning to it
          would race the concurrent chapter running in the other analyzer slot.
-         Undefined on the single-call path leaves the object shape unchanged. */
-      callSeq === undefined ? opts.stageCall : { ...opts.stageCall, stage2CallSeq: callSeq },
+         An undefined callSeq still adds no stage2CallSeq key. */
+      { ...opts.stageCall, inputBody: subBody, ...(callSeq === undefined ? {} : { stage2CallSeq: callSeq }) },
     );
   };
   const result = await runStage2ChapterChunked({
@@ -2669,11 +2669,21 @@ function throwIfReasoningOverflowed(job: AnalysisJob): void {
   if (job.reasoningOverflowed) throw job.reasoningOverflowError;
 }
 
+/** #3084 P30 — Signal-2 fails open: any error treats the chapter as a story. A prompt refused before
+    a fallback target could take it keeps that outcome but is logged, so the skip is never silent. */
+export function nonStoryClassificationFailed(err: unknown, manuscriptId: string, chapterId: number): false {
+  if (err instanceof AnalysisAbortedError) throw err;
+  if (err instanceof AnalyzerTargetInputTooLargeError) {
+    console.warn(`[analysis] ${manuscriptId}: chapter ${chapterId} non-story check skipped: ${err.message}`);
+  }
+  return false;
+}
+
 /** #3084 P20 — Signal-2 non-story classification for the third-party
     front-matter guard, shared by the main and subset jobs. It replaces their
     two inline copies (:5814-5836, :7540-7566) and keeps their behaviour. Once
     the job has seen a reasoning overflow it makes no further call. A call that
-    overflows marks the job and reads as story, like any other Signal-2 hiccup. */
+    overflows marks the job and reads as story, like any other Signal-2 stumble. */
 export function buildNonStoryClassifier(opts: {
   job: AnalysisJob;
   structureBudget: { remainingWindows: number };
@@ -2703,7 +2713,7 @@ export function buildNonStoryClassifier(opts: {
       if (err instanceof AnalysisAbortedError) throw err;
       /* #3084 F7 — this classifier already has the chapter (`ch`). */
       noteReasoningOverflow(job, structureBudget, err, { id: ch.id, title: ch.title }, 0);
-      return false; // Signal-2 hiccup → treat as story, degrade to Signal-1-only
+      return nonStoryClassificationFailed(err, manuscriptId, ch.id);
     }
   };
 }
@@ -5186,7 +5196,7 @@ export async function runMainAnalyzerJob(
                           seriesPrior,
                           bookAuthor,
                         ),
-                        castCall,
+                        { ...castCall, inputBody: subBody },
                       ),
                   }).then((r) => ({ characters: r.characters })),
               }),
@@ -8120,7 +8130,7 @@ export async function runSubsetAnalyzerJob(
                         subsetSeriesPrior,
                         bookAuthor,
                       ),
-                      stage1Call,
+                      { ...stage1Call, inputBody: subBody },
                     ),
                 }).then((r) => ({ characters: r.characters })),
             }),

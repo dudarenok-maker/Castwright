@@ -265,7 +265,10 @@ annotateEmotionRouter.post(
                   manuscriptId,
                   chapterId,
                   prompt,
-                  emotionCall,
+                  {
+                    ...emotionCall,
+                    inputBody: chunk.core.map((s) => JSON.stringify({ sentenceId: s.id, characterId: s.characterId, text: s.text })).join(''),
+                  },
                 );
                 const owned = result.annotations.filter((a) => chunk.coreIds.has(a.sentenceId));
                 if (owned.length) {
