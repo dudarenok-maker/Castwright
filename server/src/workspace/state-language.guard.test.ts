@@ -235,6 +235,13 @@ const G1_ALLOWED = new Map<string, { writes: number; why: string }>([
       why: 'writes the chapter segments file (segPath) — not state.json.',
     },
   ],
+  [
+    'workspace/revisions-store.ts',
+    {
+      writes: 1,
+      why: 'writeJsonAtomic targets revisions.json (revisionsJsonPath) — never state.json; its one stateJsonPath( use (readLiveChapters, #3400) is a read-only readJson, taking no lock and writing nothing.',
+    },
+  ],
 ]);
 
 // ---------------------------------------------------------------- G2
@@ -280,7 +287,8 @@ function countRawStateWrites(
    its `voice-not-designed` failure persist; analysis.ts went from 2 to 3
    when #3435's Start fresh began un-confirming the book, and to 4 when the
    subset route began reading castConfirmed at load for its result gate —
-   a read, not a write). Asserted BOTH
+   a read, not a write; revisions-store.ts joined with 1 read-only site when
+   #3400's readLiveChapters began re-checking an A/B entry against live state). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
@@ -301,6 +309,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'workspace/auto-backup.ts': 3,
   'workspace/book-dir-guard.ts': 1,
   'workspace/library-cast-scan.ts': 1,
+  'workspace/revisions-store.ts': 1,
   'workspace/scan.ts': 4,
   'workspace/series-cast-scan.ts': 2,
   'workspace/series-full-cast-scan.ts': 1,
