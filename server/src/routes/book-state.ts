@@ -52,6 +52,7 @@ import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { ensureChapterUuids, reconcileChapterUuids } from '../workspace/chapter-uuid.js';
+import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
 import {
   putManuscript,
   getManuscript,
@@ -1610,7 +1611,7 @@ bookStateRouter.post(
       if (excluded) {
         const audioRoot = audioDir(bookDir);
         const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
-        const audioCandidates = ['mp3', 'm4a', 'opus'].map((ext) =>
+        const audioCandidates = CHAPTER_AUDIO_EXTS.map((ext) =>
           join(audioRoot, `${current.slug}.${ext}`),
         );
         for (const p of [segmentsPath, ...audioCandidates]) {

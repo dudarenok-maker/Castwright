@@ -885,6 +885,19 @@ describe('book-state router — POST /chapters/:chapterId/exclude', () => {
     expect(existsSync(join(audioRoot, '01-dedication.segments.json'))).toBe(false);
   });
 
+  it.each(['mp3', 'm4a', 'ogg'])('deletes the live .%s audio when newly excluded (#3400)', async (ext) => {
+    seedTwoChapters();
+    const audioRoot = join(bookDir, 'audio');
+    mkdirSync(audioRoot, { recursive: true });
+    writeFileSync(join(audioRoot, `01-dedication.${ext}`), Buffer.from([0, 0]));
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/1/exclude`)
+      .send({ excluded: true });
+    expect(res.status).toBe(200);
+    expect(existsSync(join(audioRoot, `01-dedication.${ext}`))).toBe(false);
+  });
+
   it('400s on a non-boolean excluded payload', async () => {
     const res = await request(app)
       .post(`/api/books/${bookId}/chapters/1/exclude`)
