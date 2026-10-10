@@ -21,6 +21,8 @@ import {
   formatReport,
   buildVitestArgs,
   classifyRunResult,
+  runVitestJson,
+  unparseableRunNotice,
   buildParseFailureMessage,
   worstCaseRunMs,
   budgetExceeded,
@@ -28,7 +30,7 @@ import {
   RUN_LOOP_WALL_CLOCK_BUDGET_MS,
   JOB_CAP_MS,
 } from '../quarantine-health.mjs';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
@@ -1148,6 +1150,64 @@ test('classifyRunResult: unparsable stdout -> crashed, not a silent zero-result 
   const result = classifyRunResult(r);
   assert.equal(result.runOutcome, 'crashed');
   assert.deepEqual(result.testResults, []);
+});
+
+// --- vitest 5 writes the JSON report to a FILE, not stdout (#3626) ---------
+//
+// vitest 5's `--reporter=json` no longer prints the report to stdout; it
+// writes it to `server/.vitest/json/output.json` by default and prints only
+// `JSON report written to <path>`. The script must name its own output file
+// (outside the repo) and read that, or every row lands in `unknown`.
+
+test('buildVitestArgs names the JSON output file when given one', () => {
+  const args = buildVitestArgs(undefined, ['a.test.ts'], '/tmp/x/report.json');
+  assert.ok(args.includes('--outputFile.json=/tmp/x/report.json'), JSON.stringify(args));
+  assert.equal(args[args.length - 1], 'a.test.ts', 'file list stays last');
+});
+
+test('classifyRunResult reads the report text it is handed (the file) over a stdout that is only the vitest 5 "written to" line', () => {
+  const r = { error: undefined, signal: null, status: 0, stdout: 'JSON report written to /x/output.json', stderr: '' };
+  const report = JSON.stringify({ testResults: [{ name: 'f.ts', assertionResults: [] }] });
+  const result = classifyRunResult(r, report);
+  assert.equal(result.runOutcome, 'ok');
+  assert.equal(result.testResults.length, 1);
+});
+
+test('classifyRunResult: vitest 5 stdout alone (no report file) is unparseable and flagged as such, not ok', () => {
+  const r = { error: undefined, signal: null, status: 0, stdout: 'JSON report written to /x/output.json', stderr: '' };
+  const result = classifyRunResult(r);
+  assert.equal(result.runOutcome, 'crashed');
+  assert.equal(result.unparseable, true);
+});
+
+test('runVitestJson passes a temp --outputFile.json, reads the report vitest wrote there, and cleans the file up', () => {
+  let outPath;
+  const fakeSpawn = (command) => {
+    const m = /--outputFile\.json=([^"]+)"/.exec(command);
+    assert.ok(m, `no --outputFile.json in: ${command}`);
+    outPath = m[1];
+    writeFileSync(outPath, JSON.stringify({ testResults: [{ name: 'f.ts', assertionResults: [] }] }));
+    return { error: undefined, signal: null, status: 0, stdout: `JSON report written to ${outPath}`, stderr: '' };
+  };
+  const result = runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
+  assert.equal(result.runOutcome, 'ok');
+  assert.equal(result.testResults.length, 1);
+  assert.ok(!outPath.startsWith(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')), 'report must live outside the repo');
+  assert.ok(!existsSync(outPath), 'temp report must be removed afterwards');
+});
+
+test('runVitestJson: vitest exits without writing any report -> unparseable, surfaced (not an empty ok)', () => {
+  const fakeSpawn = () => ({ error: undefined, signal: null, status: 1, stdout: '', stderr: 'boom' });
+  const result = runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
+  assert.equal(result.runOutcome, 'crashed');
+  assert.equal(result.unparseable, true);
+});
+
+test('unparseableRunNotice is silent at zero and loud (names the count) otherwise', () => {
+  assert.equal(unparseableRunNotice(0), null);
+  const n = unparseableRunNotice(3);
+  assert.match(n, /3/);
+  assert.match(n, /could not be parsed/i);
 });
 
 // --- classifyRunResult: maxBuffer overflow / OOM misdiagnosis (finding 2) --
