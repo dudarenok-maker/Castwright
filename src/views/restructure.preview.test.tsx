@@ -98,3 +98,53 @@ describe('RestructureView — #3400 cross-book guard', () => {
     expect(store.getState().revisions.rev).toBe(5);
   });
 });
+
+describe('RestructureView — #3400 cross-book slices', () => {
+  const sent = (id: number) => ({ id, chapterId: 1, characterId: 'c', text: `b2 sentence ${id}` });
+  /* Start A's restructure, hold its book-state re-read open, then switch to B
+     with B's manuscript + chapters seeded; returns the resolver for A's read. */
+  async function startAThenSwitchToB(store: ReturnType<typeof makeStore>) {
+    let resolveA!: (v: unknown) => void;
+    apiMock.getBookState.mockReturnValue(new Promise((r) => (resolveA = r)));
+    // A's restructure maps nothing, so an unguarded remap would drop every sentence it touches.
+    apiMock.refreshChapterTitles.mockResolvedValue({ sentenceRemap: [], warnings: [] });
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+    await waitFor(() => expect(apiMock.getBookState).toHaveBeenCalledWith('b1'));
+    store.dispatch(uiActions.openBook({ id: 'b2', status: 'complete' } as never));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b2', manuscriptId: 'm2', title: 'B2' } as never,
+        sentences: [sent(1), sent(2)] as never,
+      }),
+    );
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b2',
+        chapters: [{ id: 7, title: 'B2 chapter' }] as never,
+        completedSlugs: [],
+        characters: [],
+      } as never),
+    );
+    return resolveA;
+  }
+
+  it("does not apply book A's sentence remap to book B's manuscript", async () => {
+    const store = makeStore();
+    const resolveA = await startAThenSwitchToB(store);
+    resolveA({ state: { chapters: [{ id: 1, title: 'A chapter' }] }, completedSlugs: [] });
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    expect(store.getState().manuscript.bookId).toBe('b2');
+    expect(store.getState().manuscript.sentences).toHaveLength(2);
+  });
+
+  it("does not hydrate book A's chapters over book B's chapters slice", async () => {
+    const store = makeStore();
+    const resolveA = await startAThenSwitchToB(store);
+    resolveA({ state: { chapters: [{ id: 1, title: 'A chapter' }] }, completedSlugs: [] });
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    expect(store.getState().chapters.currentBookId).toBe('b2');
+    expect(store.getState().chapters.chapters.map((c) => c.id)).toEqual([7]);
+  });
+});

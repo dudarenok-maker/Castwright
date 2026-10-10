@@ -72,11 +72,17 @@ export function RestructureView({ bookId }: Props) {
           }),
         );
       }
-      dispatch(
-        manuscriptActions.applyChapterRestructure({
-          sentenceRemap: res.sentenceRemap ?? [],
-        }),
-      );
+      /* Same cross-book rule for the remap: it rewrites (and drops unmapped)
+         whatever sentences the slice holds, so apply it only while the slice
+         itself holds this book — the stage can move before the slices do. */
+      const after = store.getState();
+      if (activeBookId(after) === bookId && after.manuscript.bookId === bookId) {
+        dispatch(
+          manuscriptActions.applyChapterRestructure({
+            sentenceRemap: res.sentenceRemap ?? [],
+          }),
+        );
+      }
       // Refresh library so the Listen view's chapter card and the
       // generation queue pick up the new structure on next render.
       const lib = await api.getLibrary().catch(() => null);
