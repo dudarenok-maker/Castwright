@@ -39,7 +39,12 @@ export function refetchActiveRevisions(bookId: string) {
   };
 }
 
-function runOp(bookId: string, chapterId: number, call: () => Promise<RevisionsState>) {
+/* Ops in flight across ALL books (#3400 review pass 1): the ui flag is one
+   boolean, so an op settling must not clear it while another op is still
+   running — a settle for book A would otherwise unlock book B's controls. */
+let opsInFlight = 0;
+
+function runOp(bookId: string, revisionId: string, chapterId: number, call: () => Promise<RevisionsState>) {
   return async (dispatch: AppDispatch, getState: () => RootState): Promise<RevisionOpOutcome> => {
     const applyIfActive = (state: RevisionsState | undefined): boolean => {
       if (!state || activeBookId(getState()) !== bookId) return false;
@@ -48,10 +53,19 @@ function runOp(bookId: string, chapterId: number, call: () => Promise<RevisionsS
     };
     const toast = (kind: 'warn' | 'error', message: string, key: string) =>
       dispatch(notificationsActions.pushToast({ kind, message, dedupeKey: `revision-op-${key}` }));
+    /* Close the player only if it still shows the entry THIS op acted on: the
+       user may have switched books and opened another entry meanwhile. */
+    const closeIfOpen = () => {
+      const open = getState().ui.openRevision;
+      if (activeBookId(getState()) === bookId && open?.kind === 'server' && open.revisionId === revisionId) {
+        dispatch(uiActions.setOpenRevision(null));
+      }
+    };
+    opsInFlight++;
     dispatch(uiActions.setRevisionOpInFlight(true));
     try {
       applyIfActive(await call());
-      dispatch(uiActions.setOpenRevision(null));
+      closeIfOpen();
       return { ok: true };
     } catch (err) {
       const f = err instanceof RevisionOpFailure ? err : null;
@@ -60,7 +74,7 @@ function runOp(bookId: string, chapterId: number, call: () => Promise<RevisionsS
         case 'revision_not_found':
         case 'revision_gone': {
           if (!applyIfActive(f?.state)) void dispatch(refetchActiveRevisions(bookId));
-          dispatch(uiActions.setOpenRevision(null));
+          closeIfOpen();
           const preview = getState().ui.previewRegen;
           if (preview && preview.bookId === bookId && preview.previewChapterId === chapterId) {
             dispatch(uiActions.setPreviewRegen(null));
@@ -90,17 +104,17 @@ function runOp(bookId: string, chapterId: number, call: () => Promise<RevisionsS
       }
       return { ok: false, code };
     } finally {
-      dispatch(uiActions.setRevisionOpInFlight(false));
+      if (--opsInFlight === 0) dispatch(uiActions.setRevisionOpInFlight(false));
     }
   };
 }
 
 export function acceptRevisionOp({ bookId, revisionId, chapterId, selection }: { bookId: string; revisionId: string; chapterId: number; selection?: Record<number, 'A' | 'B'> }) {
-  return runOp(bookId, chapterId, () => api.acceptRevision(selection ? { bookId, revisionId, selection } : { bookId, revisionId }));
+  return runOp(bookId, revisionId, chapterId, () => api.acceptRevision(selection ? { bookId, revisionId, selection } : { bookId, revisionId }));
 }
 
 export function rejectRevisionOp({ bookId, revisionId, chapterId }: { bookId: string; revisionId: string; chapterId: number }) {
-  return runOp(bookId, chapterId, () => api.rejectRevision({ bookId, revisionId }));
+  return runOp(bookId, revisionId, chapterId, () => api.rejectRevision({ bookId, revisionId }));
 }
 
 export function dismissDriftOp(driftId: string) {

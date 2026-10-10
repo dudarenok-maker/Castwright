@@ -70,6 +70,32 @@ describe('revisions thunks (plan 286)', () => {
     release(S('A', 2)); await p;
     expect(store.getState().revisions.rev).toBe(1);
   });
+  it('#3400: an op settling for book A leaves a player the user opened on book B open', async () => {
+    let release!: (v: unknown) => void;
+    apiMock.acceptRevision.mockReturnValueOnce(new Promise((r) => (release = r)));
+    const store = makeStore('A');
+    const p = store.dispatch(acceptRevisionOp({ bookId: 'A', revisionId: 'r1', chapterId: 3 }));
+    store.dispatch(uiActions.openBook({ id: 'B', status: 'complete' } as never));
+    store.dispatch(revisionsActions.applyServerState(S('B', 1, ['b1'])));
+    store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'b1', chapterId: 3 }));
+    release(S('A', 2)); await p;
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'b1', chapterId: 3 });
+  });
+  it('#3400: a settle for book A does not clear the in-flight flag while book B\'s op still runs', async () => {
+    let releaseA!: (v: unknown) => void;
+    let releaseB!: (v: unknown) => void;
+    apiMock.acceptRevision.mockReturnValueOnce(new Promise((r) => (releaseA = r)));
+    apiMock.rejectRevision.mockReturnValueOnce(new Promise((r) => (releaseB = r)));
+    const store = makeStore('A');
+    const pA = store.dispatch(acceptRevisionOp({ bookId: 'A', revisionId: 'r1', chapterId: 3 }));
+    store.dispatch(uiActions.openBook({ id: 'B', status: 'complete' } as never));
+    store.dispatch(revisionsActions.applyServerState(S('B', 1, ['b1'])));
+    const pB = store.dispatch(rejectRevisionOp({ bookId: 'B', revisionId: 'b1', chapterId: 3 }));
+    releaseA(S('A', 2)); await pA;
+    expect(store.getState().ui.revisionOpInFlight).toBe(true);
+    releaseB(S('B', 2)); await pB;
+    expect(store.getState().ui.revisionOpInFlight).toBe(false);
+  });
   it('revision_gone with a preview on THAT chapter: applies state, closes, clears the preview, one toast', async () => {
     apiMock.acceptRevision.mockRejectedValueOnce(new RevisionOpFailure('gone', 409, 'revision_gone', S('A', 3)));
     const store = makeStore();
