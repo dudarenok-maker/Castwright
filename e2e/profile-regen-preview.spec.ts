@@ -93,13 +93,18 @@ async function openPreviewPlayer(page: Page) {
   await page.evaluate(() => {
     const s = (window as unknown as StoreWin).__store__;
     /* Dismiss the (overlapping) profile drawer — the modal's own state is
-       independent and stays open. Also clear the phantom mock revision the
-       per-book poll seeds for every book (rev1), so the preview chapter's stub
-       lands at pending[0] instead of behind it. The next poll is 30s+ out, so
-       it can't re-seed within this test. */
+       independent and stays open. */
     s?.dispatch({ type: 'ui/setOpenProfileId', payload: null });
-    s?.dispatch({ type: 'revisions/rejectAllPending' });
   });
+  /* Plan 286 — the server owns pending and the mock 'cc' book starts with none
+     (only 'sb' is seeded), so the preview chapter's stub lands at pending[0]. */
+  expect(
+    await page.evaluate(
+      () =>
+        (window as unknown as { __store__: { getState: () => { revisions: { pending: unknown[] } } } })
+          .__store__.getState().revisions.pending.length,
+    ),
+  ).toBe(0);
   await page.getByTestId('regen-character-preview').click();
 
   /* The preview chapter (CH1) is enqueued + claimed → in_progress. Fast-forward

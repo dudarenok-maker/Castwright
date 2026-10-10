@@ -68,7 +68,6 @@ async function openPreviewPlayerRecorded(page: Page) {
   await page.evaluate(() => {
     const s = (window as unknown as StoreWin).__store__;
     s?.dispatch({ type: 'ui/setOpenProfileId', payload: null });
-    s?.dispatch({ type: 'revisions/rejectAllPending' });
   });
   await page.evaluate(() =>
     (window as unknown as { __mockRevisions: { seed: (b: string, s: unknown) => void } }).__mockRevisions.seed('cc', { liveChapterIds: [1, 2, 3] }));
