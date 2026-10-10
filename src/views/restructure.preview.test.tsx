@@ -9,6 +9,7 @@ import { manuscriptSlice } from '../store/manuscript-slice';
 import { librarySlice } from '../store/library-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { castSlice } from '../store/cast-slice';
+import { revisionsSlice, revisionsActions } from '../store/revisions-slice';
 
 const { holder, apiMock } = vi.hoisted(() => ({
   holder: { store: null as null | { getState: () => unknown } },
@@ -23,7 +24,7 @@ vi.mock('../store', async () => {
 import { RestructureView } from './restructure';
 
 function makeStore() {
-  const store = configureStore({ reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer } });
+  const store = configureStore({ reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer } });
   holder.store = store;
   store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' } as never));
   return store;
@@ -50,5 +51,26 @@ describe('RestructureView — OD31', () => {
     store.dispatch(uiActions.setPreviewRegen(preview('b1')));
     await refreshTitles(store);
     expect(store.getState().ui.previewRegen).toBeNull();
+  });
+});
+
+describe('RestructureView — #3400 revisions adoption', () => {
+  it('adopts the refetched book-state revisions, dropping entries the server removed, without waiting for a poll', async () => {
+    const store = makeStore();
+    store.dispatch(
+      revisionsActions.hydrate({
+        bookId: 'b1',
+        state: { fileId: '000000000000001-aaaa', rev: 1, pending: [{ id: 'rev-stale', chapterId: 1 }] } as never,
+      }),
+    );
+    expect(store.getState().revisions.pending).toHaveLength(1);
+    apiMock.getBookState.mockResolvedValue({
+      state: { chapters: [] },
+      completedSlugs: [],
+      revisions: { fileId: '000000000000001-aaaa', rev: 2, pending: [] },
+    });
+    await refreshTitles(store);
+    expect(store.getState().revisions.pending).toEqual([]);
+    expect(store.getState().revisions.rev).toBe(2);
   });
 });

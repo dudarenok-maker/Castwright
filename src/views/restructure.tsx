@@ -17,6 +17,7 @@ import { uiActions } from '../store/ui-slice';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { libraryActions } from '../store/library-slice';
+import { revisionsActions } from '../store/revisions-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { api, type ChapterRestructureResponse } from '../lib/api';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
@@ -47,8 +48,13 @@ export function RestructureView({ bookId }: Props) {
       // audio dir, chapterCharacters re-derived from the remapped
       // manuscript-edits.json. The book-state GET handler runs the same
       // reconciliation that surface code expects on a normal page open.
+      const requestSeq = store.getState().revisions.adoptSeq;
       const fresh = await api.getBookState(bookId).catch(() => null);
       if (fresh) {
+        /* #3400 — the server drops A/B entries for the touched chapters, so
+           adopt its revisions through the same sequence-guarded hydrate book
+           open uses; otherwise the dropped entries linger until the next poll. */
+        dispatch(revisionsActions.hydrate({ bookId, state: fresh.revisions ?? null, requestSeq }));
         dispatch(
           chaptersActions.hydrateFromBookState({
             bookId,
