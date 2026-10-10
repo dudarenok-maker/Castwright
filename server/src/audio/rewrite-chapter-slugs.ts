@@ -106,7 +106,7 @@ export async function rewriteChapterSlugs(
   // slug: a delete queued for a slug that another chapter is renamed INTO
   // (merging in a "Chapter N" book) would otherwise remove the renamed
   // chapter's freshly-landed files (#3400). A delete on a slug that is itself
-  // a rename source is skipped — those files are about to move away intact.
+  // a rename source is skipped â€” those files are about to move away intact.
   const renameSources = new Set(renames.map((op) => op.from));
   for (const op of deletes) {
     if (renameSources.has(op.from)) continue;
