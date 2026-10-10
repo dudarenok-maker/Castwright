@@ -270,7 +270,7 @@ recite:
     that condition ends; and ask what a second concurrent instance does to the
     first's registration.
 27. **An op list computed before a later pass changes its keys, then patched
-    only for the entries it already has** — `server/src/routes/chapters-restructure.ts`,
+    only for the entries it already has** — `server/src/workspace/restructure.ts` (`postProcessRestructure`),
     PR #3594 gate pass 3: the audio rename ops were computed from the first
     slug transform, then the prune renumber and the generic-title retitle
     changed more slugs but only patched ops that already existed, so a chapter
