@@ -2438,6 +2438,39 @@ describe('Layout — A/B player routing (plan 286)', () => {
     expect(await screen.findByTestId('revision-diff-player')).toBeInTheDocument();
     expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' });
   });
+
+  async function openFromStatus(store: Awaited<ReturnType<typeof mounted>>) {
+    fireEvent.click(await screen.findByTestId('status-pill'));
+    const section = await screen.findByTestId('status-popover-revisions');
+    fireEvent.click(within(section).getByRole('button', { name: /pending · Open/ }));
+    return store;
+  }
+  it('PR #3594 review — the Status popover reopens the preview\'s own recorded entry, not the older pending[0]', async () => {
+    const store = await mounted([entry('r-old', 2, 'Old fix-audio take'), entry('r-prev', 5, 'Preview take')]);
+    act(() => {
+      store.dispatch(castActions.hydrateCharacters([{ id: 'eliza', name: 'Eliza', role: '', color: 'narrator' } as never]));
+      store.dispatch(uiActions.setPreviewRegen({ bookId: 'b1', characterId: 'eliza', previewChapterId: 5, remainingChapterIds: [], reason: 'voice', note: '' }));
+    });
+    await openFromStatus(store);
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'r-prev', chapterId: 5 });
+    const player = await screen.findByTestId('revision-diff-player');
+    expect(within(player).getByText('Preview take')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Approve.*regenerate the rest/i })).toBeInTheDocument();
+  });
+  it('PR #3594 review — with a stub (no recorded entry) the popover still opens the stub ahead of an older pending take', async () => {
+    const store = await mounted([entry('r-old', 2, 'Old fix-audio take')]);
+    act(() => {
+      store.dispatch(uiActions.setPreviewRegen({ bookId: 'b1', characterId: 'eliza', previewChapterId: 5, remainingChapterIds: [], reason: 'voice', note: '',
+        stub: entry('revision:5:eliza', 5, 'Eliza voice change', { hasPreviousAudio: true }) }));
+    });
+    await openFromStatus(store);
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' });
+  });
+  it('PR #3594 review — with no preview the popover opens pending[0]', async () => {
+    const store = await mounted([entry('r-old', 2, 'Old fix-audio take'), entry('r-b', 5, 'Bee change')]);
+    await openFromStatus(store);
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'r-old', chapterId: 2 });
+  });
 });
 
 

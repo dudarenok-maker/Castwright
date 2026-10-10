@@ -271,6 +271,7 @@ export function Layout() {
   /* Status pill and popover (OD28; pass 4 #6) — the stub stays reachable
      from the popover without entering the revisions cache (Invariant 6). */
   const previewStub = useAppSelector(selectActivePreviewStub);
+  const previewRegen = useAppSelector((s) => s.ui.previewRegen);
   const revisionsCount = pending.length + (previewStub ? 1 : 0);
 
   /* Prefetch the lazy GenerationView chunk (routes/index.tsx loads it via
@@ -1984,10 +1985,20 @@ export function Layout() {
     design: designPill,
     exportPill,
     pendingRevisionsCount: revisionsCount,
-    /* OD15, amended by OD28 — the active book's preview comes first, because
-       it is the take the user was just reviewing and closing it must not
-       bury it behind older takes. Otherwise this is pending[0]. */
+    /* OD15, amended by OD28 and the PR #3594 review — the active book's
+       preview comes first, because it is the take the user was just reviewing
+       and closing it must not bury it behind older takes (the server appends,
+       so pending[0] is the OLDEST). That is the preview's own recorded entry
+       when it has one, else its stub; otherwise this is pending[0]. */
     onOpenRevisions: () => {
+      const recorded =
+        previewRegen && previewRegen.bookId === bookId
+          ? pending.find((p) => p.chapterId === previewRegen.previewChapterId)
+          : undefined;
+      if (recorded) {
+        dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: recorded.id, chapterId: recorded.chapterId }));
+        return;
+      }
       if (previewStub) {
         dispatch(uiActions.setOpenRevision({ kind: 'preview-stub' }));
         return;
