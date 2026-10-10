@@ -402,13 +402,17 @@ function renumberGenericTitlesInChapters(
    Excluded chapters are not pruned even when empty — preserving the
    soft-hide invariant. Excluded chapters with sentences attached are
    kept as well. */
-function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResult {
+function pruneEmptyChaptersInResult(result: RestructureResult): {
+  result: RestructureResult;
+  /** pre-prune chapter id → post-prune id; absent = pruned. Identity when nothing pruned. */
+  idRemap: Map<number, number> | null;
+} {
   // Pre-analysis books have NO sentences at all — every chapter would
   // look "empty" by our metric. Skip the pass entirely in that case so
   // we don't collapse a freshly imported book down to zero chapters.
   // The empty-chapter symptom only matters post-analysis when SOME
   // chapters have content and others don't.
-  if (result.sentences.length === 0) return result;
+  if (result.sentences.length === 0) return { result, idRemap: null };
 
   const sentenceCountByChapter = new Map<number, number>();
   for (const s of result.sentences) {
@@ -418,7 +422,7 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
   const pruned = result.state.chapters.filter(
     (c) => !c.excluded && (sentenceCountByChapter.get(c.id) ?? 0) === 0,
   );
-  if (pruned.length === 0) return result;
+  if (pruned.length === 0) return { result, idRemap: null };
 
   const survivors = result.state.chapters.filter((c) => !pruned.includes(c));
 
@@ -461,32 +465,6 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
     return { ...r, newChapterId };
   });
 
-  // Audio ops: keep deletes for pruned chapters that had audio (they'll
-  // be cleaned up); rewrite rename ops that target a renumbered survivor.
-  const additionalDeletes: AudioOp[] = pruned
-    .filter((c) => c.audioRenderedAt)
-    .map((c) => ({ kind: 'delete' as const, from: c.slug }));
-
-  const adjustedAudioOps: AudioOp[] = [
-    ...result.audioOps.map((op) => {
-      if (op.kind === 'rename') {
-        const newId = idRemap.get(op.newChapterId);
-        if (newId === undefined) {
-          // Rename target was pruned — degrade to delete
-          return { kind: 'delete' as const, from: op.from };
-        }
-        const newChapter = renumberedChapters.find((c) => c.id === newId);
-        return {
-          ...op,
-          newChapterId: newId,
-          to: newChapter?.slug ?? op.to,
-        };
-      }
-      return op;
-    }),
-    ...additionalDeletes,
-  ];
-
   const msg = `Removed ${pruned.length} empty chapter${pruned.length === 1 ? '' : 's'} (${pruned
     .map((c) => c.title)
     .slice(0, 3)
@@ -494,12 +472,17 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
   console.warn(`[restructure] ${msg}`);
 
   return {
-    state: { ...result.state, chapters: renumberedChapters },
-    hints: renumberedHints,
-    sentences: renumberedSentences,
-    remap: updatedRemap,
-    audioOps: adjustedAudioOps,
-    warnings: [...result.warnings, msg],
+    result: {
+      state: { ...result.state, chapters: renumberedChapters },
+      hints: renumberedHints,
+      sentences: renumberedSentences,
+      remap: updatedRemap,
+      // Stale after the renumber — postProcessRestructure re-derives the audio
+      // ops from the final slugs using `idRemap`.
+      audioOps: result.audioOps,
+      warnings: [...result.warnings, msg],
+    },
+    idRemap,
   };
 }
 
@@ -508,32 +491,63 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
    re-derive against the new ids. Renumbering also recomputes slugs for
    any title that changed.
 
-   Audio ops referencing a chapter whose generic title got rewritten
-   would technically need their `to` slug updated too — but in practice,
-   when a chapter is auto-titled "Chapter N", its audio file is keyed off
-   the same generic title, so the rename op's `to` already matches. The
-   one edge case is a chapter that was auto-titled at parse time, then
-   manually renamed by the user, then auto-titled-again here — but the
-   regex detector intentionally excludes manually-renamed titles, so this
-   case can't arise. */
+   The audio ops are re-derived from the FINAL slugs after both passes
+   (#3400): a chapter whose slug moved only in a pass has no op from the
+   caller, yet its files must follow it. */
 function postProcessRestructure(result: RestructureResult): RestructureResult {
-  const pruned = pruneEmptyChaptersInResult(result);
+  const { result: pruned, idRemap } = pruneEmptyChaptersInResult(result);
   const titled = renumberGenericTitlesInChapters(pruned.state.chapters);
-  if (titled.renumbered === 0) return pruned;
+  if (titled.renumbered === 0 && idRemap === null) return pruned;
 
-  // Re-key audio ops whose rename target slug shifted along with the
-  // title change. The chapter id is unchanged, but the slug now reflects
-  // the new title — update the `to` field.
-  const renumberedById = new Map(titled.chapters.map((c) => [c.id, c]));
-  const adjustedAudioOps: AudioOp[] = pruned.audioOps.map((op) => {
-    if (op.kind === 'rename') {
-      const ch = renumberedById.get(op.newChapterId);
-      if (ch && ch.slug !== op.to) {
-        return { ...op, to: ch.slug, newChapterTitle: ch.title };
-      }
+  // Re-derive the audio ops from the FINAL slugs (#3400). The ops the
+  // caller built only know the pre-pass slugs; the prune renumber and the
+  // generic-title retitle can move a chapter's slug further, and a chapter
+  // whose slug changed ONLY there had no rename op at all — its files were
+  // orphaned at the old slug. A chapter whose audio metadata survived
+  // (audioRenderedAt) keeps its files: rename them from where they live now
+  // (the caller's rename `from`, else the pre-pass slug — a chapter with no
+  // op has an unchanged slug) to the final slug. Deletes pass through; a
+  // pruned chapter's audio is deleted from where it lives, not from its
+  // renumbered slug.
+  const finalById = new Map(titled.chapters.map((c) => [c.id, c]));
+  const renameFromByPreId = new Map<number, string>();
+  for (const op of result.audioOps) {
+    if (op.kind === 'rename') renameFromByPreId.set(op.newChapterId, op.from);
+  }
+  const deletes = result.audioOps.filter((op) => op.kind === 'delete');
+  const renames: AudioOp[] = [];
+  for (const pre of result.state.chapters) {
+    if (!pre.audioRenderedAt) continue;
+    const origSlug = renameFromByPreId.get(pre.id) ?? pre.slug;
+    const finalId = idRemap ? idRemap.get(pre.id) : pre.id;
+    const fin = finalId === undefined ? undefined : finalById.get(finalId);
+    if (!fin) {
+      // Pruned. A pre-existing rename op for it already degraded to a delete
+      // of its `from`; a no-op chapter has none, so add it (deduped below).
+      deletes.push({ kind: 'delete', from: origSlug });
+      continue;
     }
-    return op;
-  });
+    if (fin.slug !== origSlug) {
+      renames.push({
+        kind: 'rename',
+        from: origSlug,
+        to: fin.slug,
+        newChapterId: fin.id,
+        newChapterTitle: fin.title,
+      });
+    }
+  }
+  const seenDeletes = new Set<string>();
+  const adjustedAudioOps: AudioOp[] = [
+    ...deletes.filter((op) => {
+      if (seenDeletes.has(op.from)) return false;
+      seenDeletes.add(op.from);
+      return true;
+    }),
+    ...renames,
+  ];
+
+  if (titled.renumbered === 0) return { ...pruned, audioOps: adjustedAudioOps };
 
   const msg = `Renumbered ${titled.renumbered} auto-generated chapter title${titled.renumbered === 1 ? '' : 's'} against new positions.`;
   console.warn(`[restructure] ${msg}`);

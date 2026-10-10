@@ -874,6 +874,88 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
     );
   });
 
+  function seedRenderedChapters(slugs: string[]): void {
+    for (const slug of slugs) {
+      seedAudio(slug);
+      writeFileSync(join(audioRoot, `${slug}.previous.mp3`), `previous-${slug}`);
+    }
+    const stPath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf8'));
+    for (const c of st.chapters) {
+      c.audioModelKey = 'kokoro-v1';
+      c.audioRenderedAt = '2026-01-01T00:00:00.000Z';
+    }
+    writeFileSync(stPath, JSON.stringify(st));
+  }
+
+  it('merge [4,5] with an empty chapter 2: survivors keep their OWN audio, merged chapter gets none (#3400)', async () => {
+    seedDigitTitledBook();
+    // plan 70a Part F's state: chapter 2 has no sentences, so the prune pass drops it.
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [1, 3, 4, 5].map((c) => ({ id: 1, chapterId: c, characterId: 'narr', text: `s${c}.` })),
+      }),
+    );
+    const olds = ['01-chapter-1', '02-chapter-2', '03-chapter-3', '04-chapter-4', '05-chapter-5'];
+    seedRenderedChapters(olds);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [4, 5] });
+    expect(res.status).toBe(200);
+
+    const st = readState();
+    expect(st.chapters.map((c) => c.slug)).toEqual(['01-chapter-1', '02-chapter-2', '03-chapter-3']);
+    // new chapter 2 is old chapter 3: its audio (and .previous take) moved with it
+    expect(readFileSync(join(audioRoot, '02-chapter-2.mp3'), 'utf8')).toBe('audio-03-chapter-3');
+    expect(readFileSync(join(audioRoot, '02-chapter-2.previous.mp3'), 'utf8')).toBe(
+      'previous-03-chapter-3',
+    );
+    // the merged chapter (new 3) is content-changed: no stale audio, no rendered stamp
+    expect(existsSync(join(audioRoot, '03-chapter-3.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '03-chapter-3.previous.mp3'))).toBe(false);
+    expect(st.chapters[2].audioRenderedAt).toBeUndefined();
+    expect(st.chapters[1].audioRenderedAt).toBeDefined();
+    expect(existsSync(join(audioRoot, '04-chapter-4.mp3'))).toBe(false);
+    expect(existsSync(join(audioRoot, '05-chapter-5.mp3'))).toBe(false);
+  });
+
+  it('exclude: chapters retitled only by the generic-title pass keep their audio at the new slug (#3400)', async () => {
+    seedDigitTitledBook();
+    const stPath = join(bookDir, '.audiobook', 'state.json');
+    const st = JSON.parse(readFileSync(stPath, 'utf8'));
+    ['Prologue', 'Chapter 1', 'Chapter 2', 'Chapter 3', 'Chapter 4'].forEach((t, i) => {
+      st.chapters[i].title = t;
+      st.chapters[i].slug = `${String(i + 1).padStart(2, '0')}-${t.toLowerCase().replace(/ /g, '-')}`;
+    });
+    writeFileSync(stPath, JSON.stringify(st));
+    const olds = st.chapters.map((c: { slug: string }) => c.slug) as string[];
+    seedRenderedChapters(olds);
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [5], excluded: true });
+    expect(res.status).toBe(200);
+
+    expect(readState().chapters.map((c) => c.slug)).toEqual([
+      '01-prologue',
+      '02-chapter-2',
+      '03-chapter-3',
+      '04-chapter-4',
+      '05-chapter-5',
+    ]);
+    expect(readFileSync(join(audioRoot, '01-prologue.mp3'), 'utf8')).toBe('audio-01-prologue');
+    expect(readFileSync(join(audioRoot, '02-chapter-2.mp3'), 'utf8')).toBe('audio-02-chapter-1');
+    expect(readFileSync(join(audioRoot, '03-chapter-3.mp3'), 'utf8')).toBe('audio-03-chapter-2');
+    expect(readFileSync(join(audioRoot, '04-chapter-4.mp3'), 'utf8')).toBe('audio-04-chapter-3');
+    expect(readFileSync(join(audioRoot, '05-chapter-5.mp3'), 'utf8')).toBe('audio-05-chapter-4');
+    expect(readFileSync(join(audioRoot, '05-chapter-5.previous.mp3'), 'utf8')).toBe(
+      'previous-05-chapter-4',
+    );
+    expect(existsSync(join(audioRoot, '02-chapter-1.mp3'))).toBe(false);
+  });
+
   it('preserves user-customized chapter titles during the renumber pass', async () => {
     writeFileSync(
       join(bookDir, 'manuscript.md'),
