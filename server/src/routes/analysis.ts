@@ -12,7 +12,12 @@ import { safeBookId } from '../util/safe-id.js';
 import { runStage1ChapterChunked, resolveStage1ChunkCharBudget } from '../analyzer/stage1-chunk.js';
 import { resolveCapacity, type EngineCapacity } from '../analyzer/capacity.js';
 import { applyNarratorDefault } from '../analyzer/narrator-default.js';
-import { resetAnalyzerConcurrencyPeak, getAnalyzerConcurrencyStats } from '../analyzer/analyzer-concurrency.js';
+import {
+  resetAnalyzerConcurrencyPeak,
+  getAnalyzerConcurrencyStats,
+  endpointIdsForModelIds,
+  markEndpointRunActive,
+} from '../analyzer/analyzer-concurrency.js';
 import { applyNarratorIdentity } from '../analyzer/narrator-identity.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { type AnalyzerSelection, type Analyzer, type StageCall } from '../analyzer/index.js';
@@ -2975,6 +2980,10 @@ export interface AnalysisJob {
       parked Phase-1 worker. Absent until the run creates it (endJob can run
       before that: the `language_unset` terminal). */
   watermark?: PhaseWatermark;
+  /** #3084 P1 — releases the run-level busy mark on the OpenAI-compatible endpoints this
+      job uses (analyzer-concurrency.ts markEndpointRunActive). Set at job creation, called by
+      releaseBusyAndPin beside clearAnalysisBusy. Idempotent. */
+  releaseEndpointRun?: () => void;
 }
 
 /* #3435 — which model the terminal failure names: the overflowing call's phase,
@@ -3718,6 +3727,7 @@ function releaseBusyAndPin(job: AnalysisJob): void {
      a per-book lock, or keying busy state on book id instead of path — which
      is out of scope for #2165. */
   if (job.bookDir) clearAnalysisBusy(job.bookDir);
+  job.releaseEndpointRun?.(); // #3084 P1 — this run no longer holds its endpoints
   /* Release the run-scoped analyzer PIN. keepAliveFor() returned -1 for every
      Ollama call while a run was in flight (see analyzer/ollama.ts) so the model
      couldn't idle out between the minutes-apart attribution calls. Now that this
@@ -4046,6 +4056,10 @@ analysisRouter.post('/:id/analysis', async (req: Request, res: Response) => {
   /* #3435 decision A — a writer from here until it leaves (endJob + drain). */
   joinWriters(job);
   if (job.bookDir) markAnalysisBusy(job.bookDir);
+  /* #3084 P1 — the endpoints both phases will use (Task 3c.10's `preflight` targets, resolved
+     exactly as selection resolves them, per-run phase picks included) stay busy for the whole
+     run, gaps between chunk calls included, so TTS eviction does not unload them mid-run. */
+  job.releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds(preflight.map((t) => t.modelId)));
   const subscriber: AnalysisSubscriber = { send, res, keepAlive };
   job.subscribers.add(subscriber);
   res.on('close', () => {
@@ -7697,6 +7711,10 @@ analysisRouter.post('/:id/analysis/chapters', async (req: Request, res: Response
   };
   inFlightSubsetByManuscript.set(manuscriptId, job);
   if (job.bookDir) markAnalysisBusy(job.bookDir);
+  /* #3084 P1 — the endpoints both phases will use (Task 3c.10's `preflight` targets, resolved
+     exactly as selection resolves them, per-run phase picks included) stay busy for the whole
+     run, gaps between chunk calls included, so TTS eviction does not unload them mid-run. */
+  job.releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds(preflight.map((t) => t.modelId)));
   const subscriber: AnalysisSubscriber = { send, res, keepAlive };
   job.subscribers.add(subscriber);
   res.on('close', () => {

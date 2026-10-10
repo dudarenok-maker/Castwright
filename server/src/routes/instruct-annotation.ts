@@ -14,6 +14,7 @@ import type { Request, Response } from '../http.js';
 import { findBookByBookId } from '../workspace/scan.js';
 import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js';
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
+import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';
 import { makeThrottledHeartbeat } from './analysis-heartbeat.js';
 import { AnalysisAbortedError } from '../analyzer/ollama.js';
 import { AnalyzerReasoningOverflowError } from '../analyzer/errors.js';
@@ -181,7 +182,12 @@ instructAnnotationRouter.post(
     let actualMsTotal = 0;
     let actualCharsTotal = 0;
     const charsByChapter = buildCharsByChapter(chapterIds, byChapter);
+    /* #3084 P1 — this pass calls the analyzer once per chapter, minutes apart, so the gaps
+       between those calls must not read as idle to TTS eviction. Assigned as the first
+       statement INSIDE the try below, whose finally every path reaches (A4). */
+    let releaseEndpointRun: () => void = () => {};
     try {
+      releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([selection.model]));
       for (let i = 0; i < chapterIds.length; i += 1) {
         if (closed) break;
         const chapterId = chapterIds[i];
@@ -313,6 +319,7 @@ instructAnnotationRouter.post(
         }
       }
     } finally {
+      releaseEndpointRun();
       clearInterval(keepAlive);
     }
 

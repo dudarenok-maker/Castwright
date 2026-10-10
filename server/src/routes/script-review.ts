@@ -31,6 +31,7 @@ import { loadPostFoldSentencesByChapter } from '../store/post-fold-sentences.js'
 import { selectAnalyzerForPhase } from '../analyzer/select-analyzer.js';
 import { selectAnalyzer, type StageCall, type AnalyzerSelection } from '../analyzer/index.js';
 import { markReviewBusy, clearReviewBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
+import { endpointIdsForModelIds, markEndpointRunActive } from '../analyzer/analyzer-concurrency.js';
 import { unloadResidentOllama } from './ollama-health.js';
 import { withPassEval } from '../analyzer/analyzer-eval-stats.js';
 import { getResolvedGeminiApiKey, getResolvedAllowCloudFallback, readUserSettings } from '../workspace/user-settings.js';
@@ -823,7 +824,12 @@ async function runScriptReviewJob(
      the finally below. Marked INSIDE the try so a warm-step early-return can't
      leak the ref. */
   const pinnedLocal = selection.engine === 'local';
+  /* #3084 P1 — a review on an endpoint keeps it busy for the whole review (reviews call the
+     analyzer minutes apart per chapter). Assigned as the first statement INSIDE the try below,
+     so nothing between the mark and the try can throw and leak it (A4). */
+  let releaseEndpointRun: () => void = () => {};
   try {
+    releaseEndpointRun = markEndpointRunActive(endpointIdsForModelIds([selection.model]));
     if (pinnedLocal) markReviewBusy(located.bookDir);
     for (let i = 0; i < chapterIds.length; i += 1) {
       if (job.controller.signal.aborted) break;
@@ -1082,6 +1088,7 @@ async function runScriptReviewJob(
       }
     }
   } finally {
+    releaseEndpointRun();
     for (const sub of job.subscribers) clearInterval(sub.keepAlive);
     /* Release the run-scoped analyzer pin: clear this run's busy ref and, once
        no analysis/other review still needs the model (ref-counted), evict it

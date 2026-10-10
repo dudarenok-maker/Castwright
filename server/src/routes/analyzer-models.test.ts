@@ -32,7 +32,25 @@ vi.mock('../workspace/user-settings.js', async (importOriginal) => ({
   writeAnalyzerCapabilityRecord: h.writeAnalyzerCapabilityRecord,
 }));
 
+const { testMarks, testReleases } = vi.hoisted(() => ({ testMarks: [] as string[][], testReleases: { count: 0 } }));
+
+vi.mock('../analyzer/analyzer-concurrency.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/analyzer-concurrency.js')>();
+  return {
+    ...actual,
+    markEndpointRunActive: (ids: readonly string[]) => {
+      testMarks.push([...ids]);
+      const release = actual.markEndpointRunActive(ids);
+      return () => {
+        testReleases.count += 1;
+        release();
+      };
+    },
+  };
+});
+
 const { analyzerModelsRouter } = await import('./analyzer-models.js');
+const { isEndpointBusy, _resetEndpointBusyForTest } = await import('../analyzer/analyzer-concurrency.js');
 const { DEFAULT_USER_SETTINGS } = await import('../workspace/user-settings.js');
 const { ModelTestControlFailedError, ModelTestInconclusiveError } = await import('../analyzer/capabilities.js');
 
@@ -119,6 +137,7 @@ describe('POST /api/analyzer/models/test', () => {
     const res = await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:gone::m', scope: 'configured' });
     expect(res.status).toBe(404);
     expect(res.body.code).toBe('analyzer-endpoint-missing');
+    expect(isEndpointBusy('gone')).toBe(false);
   });
 
   it('401 auth for a key bound to another host', async () => {
@@ -191,6 +210,39 @@ describe('POST /api/analyzer/models/test', () => {
       server.closeAllConnections();
       await new Promise<void>((r) => server.close(() => r()));
     }
+  });
+
+  it('#3084 P1 — a Test holds its endpoint busy for the whole ladder and releases it after', async () => {
+    const busyDuringRun: boolean[] = [];
+    h.modelTestDepsFor.mockReturnValue({ transport: {} });
+    h.runModelTest.mockImplementation(async () => {
+      busyDuringRun.push(isEndpointBusy('lab'));
+      return RECORD;
+    });
+    testMarks.length = 0;
+    testReleases.count = 0;
+    const res = await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:lab::m', scope: 'configured' });
+    expect(res.status).toBe(200);
+    expect(testMarks).toEqual([['lab']]);
+    expect(busyDuringRun).toEqual([true]);
+    expect(testReleases.count).toBe(1);
+    expect(isEndpointBusy('lab')).toBe(false);
+  });
+
+  it('#3084 P1 — a failed Test releases the mark, and a Gemini model marks nothing', async () => {
+    h.modelTestDepsFor.mockReturnValue({ transport: {} });
+    h.runModelTest.mockRejectedValue(new ModelTestControlFailedError('openai:lab::m', 'HTTP 503 loading model.'));
+    testMarks.length = 0;
+    testReleases.count = 0;
+    await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'openai:lab::m', scope: 'configured' });
+    expect(testMarks).toEqual([['lab']]);
+    expect(testReleases.count).toBe(1);
+    expect(isEndpointBusy('lab')).toBe(false);
+    h.runModelTest.mockResolvedValue(RECORD);
+    testMarks.length = 0;
+    await request(makeApp()).post('/api/analyzer/models/test').send({ modelId: 'gemini-3.6-flash', scope: 'configured' });
+    expect(testMarks).toEqual([[]]);
+    _resetEndpointBusyForTest(); // imported beside isEndpointBusy
   });
 });
 

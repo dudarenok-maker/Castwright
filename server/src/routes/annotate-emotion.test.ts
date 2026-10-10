@@ -17,6 +17,9 @@ import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
 import type { EmotionAnnotationOutput } from '../handoff/schemas.js';
 import { _resetUserSettingsCache, _setUserSettingsCacheForTest, USER_SETTINGS_PATH } from '../workspace/user-settings.js';
+import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+import { isEndpointBusy, _resetEndpointBusyForTest } from '../analyzer/analyzer-concurrency.js';
+import * as chapterPacing from '../analyzer/chapter-pacing.js';
 
 const AUTHOR = 'Test Author';
 const SERIES = 'Test Series';
@@ -32,8 +35,25 @@ let manuscriptId: string;
    derives a finite, num_ctx-bound budget and a large chapter splits. */
 const { runEmotion, engineState: emotionEngineState } = vi.hoisted(() => ({
   runEmotion: vi.fn(),
-  engineState: { engine: 'gemini' as 'gemini' | 'local', selectError: null as Error | null },
+  engineState: { engine: 'gemini' as 'gemini' | 'local', selectError: null as Error | null, model: 'test-model' as string },
 }));
+
+const { emotionMarks, emotionReleases } = vi.hoisted(() => ({ emotionMarks: [] as string[][], emotionReleases: { count: 0 } }));
+
+vi.mock('../analyzer/analyzer-concurrency.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/analyzer-concurrency.js')>();
+  return {
+    ...actual,
+    markEndpointRunActive: (ids: readonly string[]) => {
+      emotionMarks.push([...ids]);
+      const release = actual.markEndpointRunActive(ids);
+      return () => {
+        emotionReleases.count += 1;
+        release();
+      };
+    },
+  };
+});
 
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../analyzer/select-analyzer.js')>();
@@ -53,7 +73,7 @@ vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
       return {
         analyzer: fakeAnalyzer,
         engine: emotionEngineState.engine,
-        model: 'test-model',
+        model: emotionEngineState.model,
         fallbackModel: null,
       };
     },
@@ -462,6 +482,50 @@ describe('POST /api/books/:bookId/annotate-emotion', () => {
     } finally {
       rmSync(USER_SETTINGS_PATH, { force: true });
       _resetUserSettingsCache();
+    }
+  });
+
+  it('#3084 P1 — an emotion pass on an endpoint holds it busy for the whole pass, including the gaps between chapter calls, and releases it at the end', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] }); // Task 3c.10's checks must pass
+    emotionEngineState.model = 'openai:lab::m';
+    emotionMarks.length = 0;
+    emotionReleases.count = 0;
+    try {
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' });
+      expect(emotionMarks).toEqual([['lab']]);
+      expect(emotionReleases.count).toBe(1);
+      expect(isEndpointBusy('lab')).toBe(false);
+    } finally {
+      emotionEngineState.model = 'test-model';
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
+    }
+  });
+
+  it('#3084 A4 — a throw between selection and the chapter loop does not leak the endpoint mark', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    emotionEngineState.model = 'openai:lab::m';
+    /* The window A4 names: buildCharsByChapter runs after selection and before the try. */
+    const spy = vi.spyOn(chapterPacing, 'buildCharsByChapter').mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    try {
+      /* The synchronous throw happens after headers are flushed (SSE), so Express 5 forwards
+         it to the default error handler, which destroys the socket — supertest sees that as a
+         connection error, not a response. The server-side throw (and the mark leak it would
+         cause) has already happened by the time that rejection surfaces, so swallow it here;
+         the assertion below is what this case is actually proving. */
+      await request(app).post(`/api/books/${bookId}/annotate-emotion`).send({ model: 'openai:lab::m' }).catch(() => {});
+      expect(isEndpointBusy('lab')).toBe(false);
+    } finally {
+      spy.mockRestore();
+      emotionEngineState.model = 'test-model';
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
     }
   });
 });

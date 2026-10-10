@@ -17,6 +17,8 @@ import express, { type Express } from 'express';
 import request from 'supertest';
 import type { Analyzer } from '../analyzer/index.js';
 import { _setUserSettingsCacheForTest, _resetUserSettingsCache, USER_SETTINGS_PATH } from '../workspace/user-settings.js';
+import { analyzerEndpointSchema } from '../workspace/analyzer-endpoints.js';
+import { _resetEndpointBusyForTest } from '../analyzer/analyzer-concurrency.js';
 import { AnalyzerTruncatedError } from '../analyzer/errors.js';
 import type { ScriptReviewOutput } from '../handoff/schemas.js';
 import type {
@@ -52,6 +54,23 @@ const { runReview, engineState, selectAnalyzerForPhaseMock, warmOllamaModelMock,
   unloadResidentOllamaMock: vi.fn(async () => {}),
   selectAnalyzerMock: vi.fn(),
 }));
+
+const { reviewMarks, reviewReleases } = vi.hoisted(() => ({ reviewMarks: [] as string[][], reviewReleases: { count: 0 } }));
+
+vi.mock('../analyzer/analyzer-concurrency.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../analyzer/analyzer-concurrency.js')>();
+  return {
+    ...actual,
+    markEndpointRunActive: (ids: readonly string[]) => {
+      reviewMarks.push([...ids]);
+      const release = actual.markEndpointRunActive(ids);
+      return () => {
+        reviewReleases.count += 1;
+        release();
+      };
+    },
+  };
+});
 
 vi.mock('../analyzer/select-analyzer.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../analyzer/select-analyzer.js')>();
@@ -1127,6 +1146,25 @@ describe('POST /api/books/:bookId/script-review', () => {
     } finally {
       rmSync(USER_SETTINGS_PATH, { force: true });
       _resetUserSettingsCache();
+    }
+  });
+
+  it('#3084 P1 — a review on an endpoint marks it busy for the whole review and releases it at the end', async () => {
+    writeBook(SENTENCES);
+    const lab = analyzerEndpointSchema.parse({ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu: 'cuda:0', contextTokens: 32768 });
+    _setUserSettingsCacheForTest({ analyzerEndpoints: [lab] });
+    /* Reuse the file's default fake selection (:69) and only name an endpoint model on it. */
+    const base = (selectAnalyzerForPhaseMock.getMockImplementation() as (o: unknown) => Record<string, unknown>)({ phase: 'phase1' });
+    selectAnalyzerForPhaseMock.mockImplementationOnce(() => ({ ...base, engine: 'openai', model: 'openai:lab::m' }));
+    reviewMarks.length = 0;
+    reviewReleases.count = 0;
+    try {
+      await request(app).post(`/api/books/${bookId}/script-review`).send({ model: 'openai:lab::m' });
+      expect(reviewMarks).toEqual([['lab']]);
+      expect(reviewReleases.count).toBe(1);
+    } finally {
+      _resetUserSettingsCache();
+      _resetEndpointBusyForTest();
     }
   });
 });
