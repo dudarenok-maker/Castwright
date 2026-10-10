@@ -13,17 +13,14 @@
 
 import { useAppDispatch, useAppSelector } from '../store';
 import { uiActions } from '../store/ui-slice';
-import { MODEL_OPTIONS } from '../lib/models';
-
-function modelLabel(id: string): string {
-  return MODEL_OPTIONS.find((m) => m.id === id)?.label ?? id;
-}
+import { modelLabel } from '../lib/model-label';
 
 export function AnalyzerModelOverrideBadge() {
   const dispatch = useAppDispatch();
   const selectedModel = useAppSelector((s) => s.ui.selectedModel);
   const explicit = useAppSelector((s) => s.ui.selectedModelExplicit);
   const savedDefault = useAppSelector((s) => s.account?.defaultAnalysisModel ?? '');
+  const catalog = useAppSelector((s) => s.account?.analyzerCatalog ?? null);
 
   /* Only when a per-run pick is active AND actually differs from the saved
      default — an explicit pick that matches the default is not an override. */
@@ -35,8 +32,8 @@ export function AnalyzerModelOverrideBadge() {
       className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink/70"
     >
       <span>
-        This run uses <span className="font-semibold text-ink">{modelLabel(selectedModel)}</span> —
-        overrides your saved default ({modelLabel(savedDefault)}).
+        This run uses <span className="font-semibold text-ink">{modelLabel(selectedModel, catalog)}</span> —
+        overrides your saved default ({modelLabel(savedDefault, catalog)}).
       </span>
       <button
         type="button"

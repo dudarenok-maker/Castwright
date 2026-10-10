@@ -99,6 +99,59 @@ function migrateLegacyEagerLoadFields(raw: unknown): unknown {
   return next;
 }
 
+/* #3084 — the six rate.{rpm,tpm,rpd}.gemma[26] registry knobs (#3139) were retired
+   into analyzerRateLimitsByModel. Move any saved override into the map (a value the map
+   already holds wins) and drop the dead configOverrides keys. No-op once none remain. */
+const LEGACY_RATE_KNOBS: ReadonlyArray<{ key: string; model: string; field: 'rpm' | 'tpm' | 'rpd' }> = [
+  { key: 'rate.rpm.gemma', model: 'gemma-4-31b-it', field: 'rpm' },
+  { key: 'rate.tpm.gemma', model: 'gemma-4-31b-it', field: 'tpm' },
+  { key: 'rate.rpd.gemma', model: 'gemma-4-31b-it', field: 'rpd' },
+  { key: 'rate.rpm.gemma26', model: 'gemma-4-26b-a4b-it', field: 'rpm' },
+  { key: 'rate.tpm.gemma26', model: 'gemma-4-26b-a4b-it', field: 'tpm' },
+  { key: 'rate.rpd.gemma26', model: 'gemma-4-26b-a4b-it', field: 'rpd' },
+];
+
+/* The smallest value analyzerRateLimitsByModel's schema accepts per field. A saved
+   override below it is dropped, never copied: copying it would make
+   userSettingsSchema.safeParse fail, and readUserSettings's whole-object safeParse would then
+   reset EVERY saved setting to defaults (P8) — that's the schema-validation-failure
+   path; an unparseable file is recovered from its .bak.N backups, else it falls back
+   with a corruption flag, so it never reaches this code. The
+   same holds for an integer past 2^53: zod 4's `.int()` accepts safe integers only,
+   so the copy test is Number.isSafeInteger, not Number.isInteger. */
+const LEGACY_RATE_MIN: Readonly<Record<'rpm' | 'tpm' | 'rpd', number>> = { rpm: 1, tpm: 0, rpd: 1 };
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Runs on every settings READ, before schema validation. It never throws. It copies a
+    legacy value only when the map's own schema accepts it. It leaves any shape it does
+    not recognise to the schema. */
+export function migrateLegacyRateLimitOverrides(raw: unknown): unknown {
+  if (!isPlainObject(raw) || !isPlainObject(raw.configOverrides)) return raw;
+  const overrides = raw.configOverrides;
+  if (!LEGACY_RATE_KNOBS.some((k) => Object.hasOwn(overrides, k.key))) return raw;
+  const nextOverrides: Record<string, unknown> = { ...overrides };
+  for (const { key } of LEGACY_RATE_KNOBS) delete nextOverrides[key];
+  const existing = raw.analyzerRateLimitsByModel;
+  if (existing !== undefined && !isPlainObject(existing)) {
+    /* A malformed saved map is the schema's to judge: drop only the dead knob keys. */
+    return { ...raw, configOverrides: nextOverrides };
+  }
+  const map: Record<string, unknown> = { ...(existing ?? {}) };
+  for (const { key, model, field } of LEGACY_RATE_KNOBS) {
+    const value = overrides[key];
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < LEGACY_RATE_MIN[field]) continue;
+    const current = map[model];
+    if (current !== undefined && !isPlainObject(current)) continue;
+    const entry: Record<string, unknown> = { ...(current ?? {}) };
+    if (entry[field] === undefined) entry[field] = value;
+    map[model] = entry;
+  }
+  return { ...raw, configOverrides: nextOverrides, analyzerRateLimitsByModel: map };
+}
+
 /* #3141 step 2 — the four legacy Account-settings analyzer knobs
    (ollamaUrl, analyzerPhase0Model, analyzerPhase1Model,
    analyzerPhase1MinLagChapters) are no longer read at runtime — step 1
@@ -191,6 +244,29 @@ export const BACKUP_CADENCE_VALUES = ['daily', 'weekly'] as const;
 
 /* #3084 — one saved endpoint key, bound at save time to the base URL's origin. */
 const endpointKeyEntrySchema = z.object({ origin: z.string(), key: z.string() });
+
+const probeOutcomeSchema = z.enum(['enforced', 'ignored', 'rejected', 'accepted']);
+const probeByLevelSchema = z.record(z.string(), probeOutcomeSchema);
+/* #3084 — persisted shape of analyzer/capabilities.ts ModelCapabilityRecord (declared
+   here, not imported, so user-settings stays a leaf of the analyzer import graph). The
+   inner record keys are the reasoning level the Test requests actually sent (P7). */
+export const modelCapabilityRecordSchema = z.object({
+  serverUrl: z.string(),
+  testedAt: z.string(),
+  control: z.union([z.object({ ok: z.literal(true) }), z.object({ ok: z.literal(false), error: z.string() })]),
+  structuredOutput: z.object({
+    schema: probeByLevelSchema.optional(),
+    json: probeByLevelSchema.optional(),
+    off: probeByLevelSchema.optional(),
+  }),
+  /* Declared to match analyzer/capabilities.ts ModelCapabilityRecord EXACTLY: those two shapes
+     must be assignable in both directions under `strict`. The plan pairs a `Partial<Record<...>>`
+     in that interface with this non-optional `z.record`, which is not mutually assignable, so
+     capabilities.ts drops the `Partial` and both sides are the plain record. */
+  reasoning: z.record(z.string(), z.enum(['accepted', 'rejected'])),
+  /* 3c (A3): Ollama digest at Test time; 5a adds verdictTestedAt beside it. */
+  digest: z.string().optional(),
+});
 
 export const userSettingsSchema = z.object({
   /* config-override store — sparse key→value map for the advanced-settings
@@ -323,6 +399,27 @@ export const userSettingsSchema = z.object({
      synchronously by resolveKeepAliveSeconds. Optional-with-default so legacy
      files load unchanged. */
   analyzerKeepAliveByModel: z.record(z.string(), z.number().int()).default({}),
+  /* #3084 — per-model analyzer rate limits (Advanced → Analyzer rate limits). Sparse:
+     model id (Gemini id or `openai:<endpointId>::<model>`) → any of rpm/tpm/rpd.
+     Gemini ids: env → this map → built-in table; endpoint ids: this map → unlimited.
+     `tpm: 0` = unlimited. The general PUT writes the whole map (NOT in FORBIDDEN_KEYS);
+     resolveLimits reads it synchronously on every acquire. */
+  analyzerRateLimitsByModel: z
+    .record(
+      z.string(),
+      z
+        .object({
+          rpm: z.number().int().min(1).optional(),
+          tpm: z.number().int().min(0).optional(),
+          rpd: z.number().int().min(1).optional(),
+        })
+        .strict(),
+    )
+    .default({}),
+  /* #3084 — Test-action records keyed by model id. Server-written only
+     (writeAnalyzerCapabilityRecord); stripped from the general PUT via FORBIDDEN_KEYS;
+     returned by GET so Settings can show the outcome. */
+  analyzerCapabilitiesByModel: z.record(z.string(), modelCapabilityRecordSchema).default({}),
   /* #3084 PR 3b — named OpenAI-compatible analyzer endpoints. Returned by GET.
      NOT writable through the general PUT (FORBIDDEN_KEYS): the dedicated
      /api/analyzer/endpoints routes are the only writers, via mutateUserSettings. */
@@ -405,6 +502,8 @@ export const DEFAULT_USER_SETTINGS: UserSettings = {
   /* Per-model analyzer keep-alive — empty by default; every model falls
      through to the flat DEFAULT_ANALYZER_KEEP_ALIVE_SECONDS (30s). */
   analyzerKeepAliveByModel: {},
+  analyzerRateLimitsByModel: {},
+  analyzerCapabilitiesByModel: {},
   /* #3084 — no endpoints and no keys on a fresh install. */
   analyzerEndpoints: [],
   analyzerEndpointKeys: {},
@@ -1035,7 +1134,7 @@ async function performUserSettingsRead(): Promise<UserSettings> {
   const explicitKeys = new Set(Object.keys(raw as Record<string, unknown>));
 
   const eagerLoadMigrated = migrateLegacyEagerLoadFields(raw);
-  const migrated = migrateLegacyAnalyzerModelFields(eagerLoadMigrated);
+  const migrated = migrateLegacyRateLimitOverrides(migrateLegacyAnalyzerModelFields(eagerLoadMigrated));
   if (migrated !== raw) {
     await writeJsonAtomic(USER_SETTINGS_PATH, migrated, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } }).catch(
       (err) => {
@@ -1216,6 +1315,8 @@ const FORBIDDEN_KEYS = new Set([
      writer. Defensive-only, exactly like corruptSettingsFile above: it is never
      added to userSettingsSchema's shape, so the general PUT already strips it. */
   'droppedEndpointEntries',
+  /* #3084 Test-action records — written only by writeAnalyzerCapabilityRecord. */
+  'analyzerCapabilitiesByModel',
 ]);
 
 function stripForbiddenKeys(value: unknown): Record<string, unknown> {
@@ -1617,6 +1718,20 @@ export async function mutateUserSettings(
   });
   writeChain = next.catch(() => undefined);
   return next;
+}
+
+/** #3084 — persist one Test-action record, replacing any earlier record for the id.
+    Goes through mutateUserSettings so it serialises with endpoint and key writes. Only a
+    completed test calls it: a failed control or an inconclusive step writes nothing, so the
+    previous record stays (P7). */
+export async function writeAnalyzerCapabilityRecord(
+  modelId: string,
+  record: z.infer<typeof modelCapabilityRecordSchema>,
+): Promise<UserSettings> {
+  const validated = modelCapabilityRecordSchema.parse(record);
+  return mutateUserSettings((current) => ({
+    analyzerCapabilitiesByModel: { ...current.analyzerCapabilitiesByModel, [modelId]: validated },
+  }));
 }
 
 /** Plan 49 — resolve the Gemini API key from the canonical fallback chain:

@@ -216,3 +216,39 @@ Book: as §4. Prerequisites: a Gemini API key; no local analyzer needed.
 3. Restore `json`.
 
 Run by / date / SHA:
+
+## 6. Live structured output — register row A113
+
+Register rows: A113 (this PR; id minted from Group A's next-id marker); wave 3's last
+PR extends it and adds the eviction and long-prefill rows. Prerequisites: the GPU box,
+Ollama with `qwen3.5:4b`, a Gemini API key, llama-swap serving a Qwen3 model (thinking
+switchable) with a per-model unload endpoint, and either a vLLM endpoint started with a
+small `--max-model-len` or an OpenRouter key.
+
+1. Advanced Settings → Analyzer rate limits. For each of `qwen3.5:4b`, one `gemma-*`,
+   one `gemini-*`, and the llama-swap model (thinking on, then off): click **Test**, confirm
+   the request count (2; 1 for a model whose configured mode is `off`), run. Then **Test**
+   with "Test every structured-output mode" (3: the off-mode control, `schema`, `json`).
+   Result:
+2. For each `schema` outcome, send one request by hand in `schema` mode and note whether the
+   reply contains `cw_probe_marker`. `enforced` ⇔ present, `ignored` ⇔ absent.
+   Result:
+3. Thinking models: `gemini-3.6-flash` (default `json`) and the llama-swap Qwen3 model with
+   thinking on each end with a saved record, not 502 `finish=length`. Note the
+   `max_tokens` / `maxOutputTokens` every request carried; all requests of one test carry
+   the same value. Result:
+4. Small context: on the small-context vLLM endpoint (or an OpenRouter model whose output
+   cap exceeds its remaining context), **Test every mode**. No mode is recorded `rejected`
+   because of size; note any 502 "inconclusive" message verbatim. Result:
+5. Failed test keeps the record: stop llama-swap, **Test** its model → the 502 says the
+   control request failed; the Settings row still shows the earlier outcome. Result:
+6. `GET /api/analyzer/models` → note each Gemini entry's `structuredOutput.dropped`.
+   Result:
+7. Change the llama-swap endpoint's base URL (e.g. `localhost` → `127.0.0.1`): the entry's
+   `capability` is gone and the label no longer says "not enforced".
+   Result:
+7a. Re-pulled Ollama model: note the saved record's `digest` for `qwen3.5:4b`; pull a different
+   build of the tag (new digest in `ollama list`); the catalog entry has no `capability`, and an
+   analysis on it starts rather than refusing. Old digest ___ new digest ___ Result:
+
+Run by / date / SHA:

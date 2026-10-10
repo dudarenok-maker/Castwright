@@ -6,7 +6,7 @@ import { BuildStamp } from './build-stamp';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, type RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
-import { fetchAccountSettings } from '../store/account-slice';
+import { fetchAccountSettings, fetchAnalyzerCatalog } from '../store/account-slice';
 import { fetchTourStatus } from '../store/tour-slice';
 import {
   aggregateStreamsByBook,
@@ -203,6 +203,7 @@ export function Layout() {
   const activeStreams = useAppSelectorShallow(selectActiveStreams);
   const analysisStream = useAppSelector((s) => s.analysis.activeStream);
   const analysisSubstage = useAppSelector(selectAnalysisSubstage);
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog ?? null);
   const designSnapshot = useAppSelector((s) => s.castDesign.active);
   const exportsByBookId = useAppSelector((s) => s.exports.byBookId);
   const exportsLinger = useAppSelector((s) => s.exports.linger);
@@ -534,6 +535,10 @@ export function Layout() {
   useEffect(() => {
     void dispatch(fetchAccountSettings());
     void dispatch(fetchTourStatus());
+    /* #3570 — endpoint names for every modelLabel() site (status popover, upload picker,
+       phase chips) come from the catalog, which is otherwise only loaded by Settings.
+       The server caches listings (30 s TTL) and bounds each source with a timeout. */
+    void dispatch(fetchAnalyzerCatalog(undefined));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1952,6 +1957,7 @@ export function Layout() {
       : null,
     readiness: setupReadiness,
     onDiagnosisRefetch: refetchSetupDiagnosis,
+    analyzerCatalog,
   };
 
   /* fs-21 — boot-splash. Gates the first paint until the readiness probe

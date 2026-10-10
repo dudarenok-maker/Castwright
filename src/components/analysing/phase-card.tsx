@@ -6,7 +6,7 @@ import {
   type AnalysisLiveChapter,
   type AnalysisLiveInfo,
 } from '../../lib/api';
-import { MODEL_OPTIONS } from '../../lib/models';
+import { modelLabel } from '../../lib/model-label';
 import type { AnalysisPhase, DroppedQuotesResponse } from '../../lib/types';
 import { useAppSelector } from '../../store';
 import { selectAnalyzerSplitIsActive } from '../../store/account-slice';
@@ -351,7 +351,8 @@ function ThrottleRow({
     return () => clearInterval(id);
   }, []);
   const remainingSec = Math.max(0, Math.ceil((until - now) / 1000));
-  const modelLabel = MODEL_OPTIONS.find((m) => m.id === model)?.label ?? model;
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog ?? null);
+  const modelLabelText = modelLabel(model, analyzerCatalog);
   const reasonText = (() => {
     switch (reason) {
       case 'rpm':
@@ -369,7 +370,7 @@ function ThrottleRow({
   return (
     <div className="mt-2 inline-flex items-center gap-2 text-[11px] font-mono tabular-nums text-amber-700">
       <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
-      <span className="font-semibold">Throttling {modelLabel}</span>
+      <span className="font-semibold">Throttling {modelLabelText}</span>
       <span className="text-ink/30">·</span>
       <span>resuming in {remainingSec}s</span>
       <span className="text-ink/30">·</span>

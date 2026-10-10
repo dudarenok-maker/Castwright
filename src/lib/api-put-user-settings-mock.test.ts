@@ -25,3 +25,12 @@ describe('mockPutUserSettings — analyzerKeepAliveByModel', () => {
     expect(out.analyzerKeepAliveByModel!['qwen36-castwright:latest']).toBe(300);
   });
 });
+
+describe('mockPutUserSettings — analyzerRateLimitsByModel (#3084)', () => {
+  it('persists the whole map', async () => {
+    const out = await api.putUserSettings({
+      analyzerRateLimitsByModel: { 'gemini-3.6-flash': { rpm: 2, rpd: 10 } },
+    });
+    expect(out.analyzerRateLimitsByModel).toEqual({ 'gemini-3.6-flash': { rpm: 2, rpd: 10 } });
+  });
+});

@@ -30,7 +30,7 @@ import type { CharacterOutput } from '../handoff/schemas.js';
 import { AnalyzerTruncatedError } from './errors.js';
 import { configValue } from '../config/resolver.js';
 import { splitBodyIntoChunks, splitParagraphIntoSentences } from './stage2-chunk.js';
-import { cloudBodyCharBudget } from './token-budget.js';
+import { cloudBodyCharBudget, cloudBodyCharBudgetForCap } from './token-budget.js';
 import type { EngineCapacity } from './capacity.js';
 
 /* Per-chunk INPUT char budget. Stage-1 output is small (a roster, not a
@@ -120,11 +120,16 @@ export function resolveStage1ChunkCharBudget(
       capacity?.perRequestInputCap,
     );
   }
-  return stage1ChunkBudgetForEngine(
+  const contextBudget = stage1ChunkBudgetForEngine(
     configValue<number>('analyzer.stage1.chunkCharBudget'),
     capacity.contextTokens,
     'local',
     configValue<number>('analyzer.stage1.localInputFraction'),
+  );
+  if (capacity.perRequestInputCap === undefined) return contextBudget;
+  return Math.min(
+    contextBudget,
+    cloudBodyCharBudgetForCap(capacity.perRequestInputCap, body ?? '', stage1RosterReservedChars(runningRoster), STAGE1_CLOUD_RESERVED_TOKENS),
   );
 }
 

@@ -13,6 +13,7 @@ import { classifyFailure, classifyAnalysisError, classifyAnalysisFailure, analyz
 import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
 import {
+  AnalyzerCapabilityRejectedError,
   AnalyzerReasoningOverflowError,
   AnalyzerTimeoutError,
   AnalyzerTruncatedError,
@@ -1274,5 +1275,55 @@ describe('auth copy is true for TTS (#3084 PR 3b review pass 3 🟡1)', () => {
       expect(text).not.toMatch(/refused/i);
       expect(text).not.toMatch(/named in the message/i);
     }
+  });
+});
+
+/* #3084 PR 3c — a Test record says the model refused the configured mode or level
+   BEFORE any request was sent, so nothing here may read an HTTP status: the branch is
+   keyed off the error type and sits above the ApiError / bare-status checks. */
+describe('AnalyzerCapabilityRejectedError → analyzer-request-rejected (#3084 PR 3c)', () => {
+  it.each([
+    ['qwen3.5:4b', 'Ollama structured output (analyzer.ollama.structuredOutput)'],
+    ['gemini-3.6-flash', 'Gemini structured output (analyzer.gemini.structuredOutput)'],
+    ['openai:lab::m', "the endpoint's Structured output field"],
+  ])('%s names the model and the setting that shapes the request', (modelId, setting) => {
+    const err = new AnalyzerCapabilityRejectedError(modelId, 'structuredOutput', 'schema', '2026-09-11T10:00:00.000Z');
+    const r = classifyAnalysisFailure(err, 'Analyzer');
+    expect(r.code).toBe('analyzer-request-rejected');
+    expect(r.userMessage).toBe(err.message);
+    expect(r.userMessage).toContain(modelId);
+    expect(r.userMessage).toContain('schema');
+    expect(r.userMessage).toContain('2026-09-11T10:00:00.000Z');
+    expect(r.remediation).toContain(FAILURE_REMEDIATIONS['analyzer-request-rejected'].remediation);
+    expect(r.remediation).toContain(setting);
+  });
+
+  it('says running Test again re-records the result', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerCapabilityRejectedError('openai:lab::m', 'structuredOutput', 'schema', '2026-09-11T10:00:00.000Z'),
+      'lab (m)',
+    );
+    expect(r.remediation).toMatch(/run Test again/i);
+  });
+
+  it('carries no HTTP status — no request was sent, so none of the copy is about one', () => {
+    const r = classifyAnalysisFailure(
+      new AnalyzerCapabilityRejectedError('openai:lab::m', 'structuredOutput', 'schema', '2026-09-11T10:00:00.000Z'),
+      'lab (m)',
+    );
+    expect(r.userMessage).not.toMatch(/\b400\b/);
+    expect(r.userMessage).not.toMatch(/\bstatus\b/i);
+    expect(r.remediation).not.toMatch(/\b400\b/);
+    expect(r.detail ?? '').not.toMatch(/status/i);
+  });
+
+  it('names a rejected reasoning level and the date the test ran', () => {
+    const err = new AnalyzerCapabilityRejectedError('qwen3.5:4b', 'reasoning', 'high', '2026-09-11T10:00:00.000Z');
+    const r = classifyAnalysisFailure(err, 'Ollama (qwen3.5:4b)');
+    expect(r.code).toBe('analyzer-request-rejected');
+    expect(r.userMessage).toBe(err.message);
+    expect(r.userMessage).toContain('high');
+    expect(r.userMessage).toContain('2026-09-11T10:00:00.000Z');
+    expect(r.remediation).toContain('Ollama structured output (analyzer.ollama.structuredOutput)');
   });
 });
