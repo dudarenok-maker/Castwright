@@ -82,6 +82,16 @@ describe('revisions thunks (plan 286)', () => {
     release(S('A', 2)); await p;
     expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'b1', chapterId: 3 });
   });
+  it('#3400: an op settling for entry r1 leaves a player the user opened on another entry of the SAME book open', async () => {
+    let release!: (v: unknown) => void;
+    apiMock.acceptRevision.mockReturnValueOnce(new Promise((r) => (release = r)));
+    const store = makeStore('A');
+    store.dispatch(revisionsActions.applyServerState(S('A', 1, ['r1', 'r2'])));
+    const p = store.dispatch(acceptRevisionOp({ bookId: 'A', revisionId: 'r1', chapterId: 3 }));
+    store.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'r2', chapterId: 3 }));
+    release(S('A', 2, ['r2'])); await p;
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'r2', chapterId: 3 });
+  });
   it('#3400: a settle for book A does not clear the in-flight flag while book B\'s op still runs', async () => {
     let releaseA!: (v: unknown) => void;
     let releaseB!: (v: unknown) => void;
