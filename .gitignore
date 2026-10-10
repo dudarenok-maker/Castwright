@@ -192,6 +192,12 @@ server/roster.json
 # suite regardless; this is defense in depth against an accidental commit.
 server/src/__wire-fixtures__/
 
+# vitest 5's `--reporter=json` default output (.vitest/json/output.json under
+# the vitest root); a plain `vitest run --reporter=json` leaves it untracked.
+# scripts/quarantine-health.mjs writes to a temp file instead.
+/.vitest/
+/server/.vitest/
+
 # Self-contained HTML artifacts rendered by the html-artifacts skill (plans,
 # reports, mockups). Local scratch output, never committed.
 artifacts/
