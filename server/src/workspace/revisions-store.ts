@@ -32,7 +32,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { readJson, writeJsonAtomic } from './state-io.js';
-import { audioDir, revisionsJsonPath } from './paths.js';
+import { audioDir, revisionsJsonPath, stateJsonPath } from './paths.js';
 import { withKeyLock } from './file-lock.js';
 import { hasPreviousAudio as previousAudioExists } from './preserve-previous-audio.js';
 import { SCHEMA_SEAMS, migrateSeamDoc, stampSeamSchema, UnsupportedSchemaError } from './schema-migrate.js';
@@ -246,6 +246,19 @@ async function loadRaw(bookDir: string): Promise<Record<string, unknown> | null>
   return migrateSeamDoc(REVISIONS_SEAM, raw).doc;
 }
 
+/** state.json's chapters as they are on disk now; [] when it is missing, unreadable or malformed
+    (the snapshot alone then decides, as before). */
+async function readLiveChapters(bookDir: string): Promise<ChapterRef[]> {
+  try {
+    const path = stateJsonPath(bookDir);
+    if (!existsSync(path)) return [];
+    const state = await readJson<{ chapters?: unknown }>(path);
+    return Array.isArray(state?.chapters) ? (state.chapters as ChapterRef[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 async function load(bookDir: string, chapters: readonly ChapterRef[]): Promise<RevisionsFile> {
   return (await loadWithStored(bookDir, chapters)).file;
 }
@@ -270,11 +283,19 @@ async function loadWithStored(
      answers not-found) and falls off the file at the next write. A missing chapter is left to
      beginRevisionOp's own branch. */
   const chapterById = new Map(chapters.map((c) => [c.id, c] as const));
+  /* The caller's snapshot can be stale: finalize passes the state.json it read before its own
+     write, and a sibling chapter's finalize (it stamps state.json BEFORE recording its entry) may
+     have landed since. An entry the snapshot refuses is therefore also checked against state.json as
+     it is now (read here, under the revisions lock for every writer; no other lock is taken), and
+     only dropped when that refuses it too. */
+  const live = new Map((await readLiveChapters(bookDir)).map((c) => [c.id, c] as const));
   const file: RevisionsFile = {
     ...normalised,
     pending: normalised.pending.filter((p) => {
       const chapter = chapterById.get(p.chapterId);
-      return chapter === undefined || entryMatchesChapter(p, chapter);
+      if (chapter === undefined || entryMatchesChapter(p, chapter)) return true;
+      const current = live.get(p.chapterId);
+      return current !== undefined && entryMatchesChapter(p, current);
     }),
   };
   return { file, stored: normaliseRevisions(raw, () => true) };

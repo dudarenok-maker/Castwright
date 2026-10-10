@@ -22,7 +22,7 @@ import {
   type ChapterRef,
   type StoredRevision,
 } from './revisions-store.js';
-import { revisionsJsonPath, audioDir } from './paths.js';
+import { revisionsJsonPath, audioDir, stateJsonPath } from './paths.js';
 
 let bookDir: string;
 const CHAPTERS: ChapterRef[] = [
@@ -532,6 +532,39 @@ describe('identity stamps (#3400)', () => {
     expect((await beginRevisionOp(bookDir, ch(over), 'accept', 'r-s')).kind).toBe('not-found');
     await dismissDriftId(bookDir, ch(over), 'd1');
     expect((onDisk().pending as unknown[]).length).toBe(0);
+  });
+
+  describe('a stale caller snapshot never costs a sibling chapter its entry', () => {
+    const sibling = (): StoredRevision => ({ ...serverEntry(2, 'r-sib'), chapterUuid: 'u2', renderedAt: 't2-new' });
+    /* The caller's snapshot predates the sibling's render; state.json (the truth) already carries it. */
+    const staleSnapshot = (): ChapterRef[] => [
+      { id: 1, slug: '01-one', uuid: 'u1', audioRenderedAt: 't1' },
+      { id: 2, slug: '02-two', uuid: 'u2', audioRenderedAt: 't2-old' },
+    ];
+    const seedState = (chapter2RenderedAt: string) =>
+      writeFileSync(
+        stateJsonPath(bookDir),
+        JSON.stringify({
+          chapters: [
+            { id: 1, slug: '01-one', uuid: 'u1', audioRenderedAt: 't1' },
+            { id: 2, slug: '02-two', uuid: 'u2', audioRenderedAt: chapter2RenderedAt },
+          ],
+        }),
+      );
+
+    it("recordPending for chapter 1 keeps chapter 2's fresh entry on disk", async () => {
+      seedState('t2-new');
+      seedRaw({ ...EMPTY, pending: [sibling()] });
+      await recordPending(bookDir, staleSnapshot(), { ...serverEntry(1, 'r-one'), chapterUuid: 'u1', renderedAt: 't1' });
+      expect((onDisk().pending as { id: string }[]).map((p) => p.id).sort()).toEqual(['r-one', 'r-sib']);
+    });
+
+    it('a genuinely mismatched entry is still dropped when state.json agrees with the snapshot', async () => {
+      seedState('t2-old');
+      seedRaw({ ...EMPTY, pending: [sibling()] });
+      await recordPending(bookDir, staleSnapshot(), { ...serverEntry(1, 'r-one'), chapterUuid: 'u1', renderedAt: 't1' });
+      expect((onDisk().pending as { id: string }[]).map((p) => p.id)).toEqual(['r-one']);
+    });
   });
 
   it('a legacy entry (no stamps) is kept whatever the chapter carries', async () => {
