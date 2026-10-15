@@ -160,3 +160,102 @@ describe('scoreBook — the audition reference follows the current cast voice (#
     expect((await readCentroids(dir))!['thurid'].auditionVoice?.voiceName).toBe('qwen-old');
   });
 });
+
+/* #3524 child 2 — the IN-BOOK anchor pool follows the current cast voice.
+   12 lines per chapter (≥ CENTROID_MIN_N = 10) so each chapter alone is enough
+   for the in-book path; `stamp` is the per-segment voice stamp (`voiceName`),
+   or null for a legacy unstamped segment that falls back to the chapter's
+   snapshot `resolvedVoiceName`. */
+async function writeBulkChapter(
+  dir: string,
+  slug: string,
+  chapterId: number,
+  axis: number | Float32Array,
+  snapshotVoice: string,
+  stamp: string | null,
+) {
+  mkdirSync(join(dir, 'audio'), { recursive: true });
+  const rows = Array.from({ length: 12 }, (_, i) => ({
+    characterId: 'thurid',
+    sentenceIds: [i],
+    // Identical vectors per chapter ("one angle"): any jitter would put the
+    // lowest-cosine NEW line under the in-book severe-edge percentile by design.
+    vec: typeof axis === 'number' ? vec(axis, 0) : axis,
+  }));
+  await writeEmbeddings(join(dir, 'audio', `${slug}.embeddings.json`), rows, EMBEDDINGS_VERSION);
+  writeFileSync(
+    join(dir, 'audio', `${slug}.segments.json`),
+    JSON.stringify({
+      chapterId,
+      modelKey: 'qwen3-tts-1.7b',
+      segments: rows.map((r) => ({
+        characterId: 'thurid',
+        sentenceIds: r.sentenceIds,
+        renderedFallbackEngine: null,
+        ...(stamp != null ? { voiceName: stamp } : {}),
+      })),
+      characterSnapshots: {
+        thurid: { voiceEngine: 'qwen', modelKey: 'qwen3-tts-1.7b', resolvedVoiceName: snapshotVoice },
+      },
+    }),
+  );
+}
+
+const cos = (a: number[], b: Float32Array) => a.reduce((s, x, i) => s + x * b[i], 0);
+
+describe('scoreBook — in-book anchors pool only from the current cast voice (#3524)', () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 0;
+  });
+
+  it('builds the in-book centroid from the NEW-voice lines only and records inBookVoiceName', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-inbook-cur-'));
+    writeCast(dir, 'new');
+    await writeBulkChapter(dir, 'ch1', 1, 0, 'qwen-old', 'qwen-old');
+    await writeBulkChapter(dir, 'ch2', 2, 1, 'qwen-new', 'qwen-new');
+
+    await scoreBook(dir, CHAPTERS);
+
+    const row = (await readCentroids(dir))!['thurid'];
+    expect(row.referenceKind).toBe('in-book');
+    expect(row.inBookVoiceName).toBe('qwen-new');
+    expect(cos(row.centroid, vec(1, 3))).toBeGreaterThan(0.99);
+    const ch2 = await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'));
+    expect(ch2!.length).toBeGreaterThan(0);
+    expect(ch2!.filter((r) => r.verdict === 'voice-mismatch')).toEqual([]);
+  });
+
+  it('resolves an unstamped legacy line through its chapter snapshot voice', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-inbook-legacy-'));
+    writeCast(dir, 'new');
+    await writeBulkChapter(dir, 'ch1', 1, 0, 'qwen-old', null); // legacy, snapshot OLD → not an anchor
+    await writeBulkChapter(dir, 'ch2', 2, 1, 'qwen-new', null); // legacy, snapshot NEW → anchor
+
+    await scoreBook(dir, CHAPTERS);
+
+    const row = (await readCentroids(dir))!['thurid'];
+    expect(row.referenceKind).toBe('in-book');
+    expect(row.inBookVoiceName).toBe('qwen-new');
+    expect(cos(row.centroid, vec(1, 3))).toBeGreaterThan(0.99);
+  });
+
+  it('pools every line and records no inBookVoiceName for a character with no cast.json row', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-inbook-nocast-'));
+    // OLD at 0°, NEW at 20° in the axis-0/1 plane: close enough to stay one
+    // unimodal pool, far enough that pooling both (centroid at 10°) is
+    // distinguishable from NEW alone (cosine 1).
+    const rad = (20 * Math.PI) / 180;
+    const newVec = Float32Array.from([Math.cos(rad), Math.sin(rad), 0, 0, 0, 0, 0, 0]);
+    await writeBulkChapter(dir, 'ch1', 1, 0, 'qwen-old', 'qwen-old');
+    await writeBulkChapter(dir, 'ch2', 2, newVec, 'qwen-new', 'qwen-new');
+
+    await scoreBook(dir, CHAPTERS);
+
+    const row = (await readCentroids(dir))!['thurid'];
+    expect(row.referenceKind).toBe('in-book');
+    expect(row.inBookVoiceName).toBeUndefined();
+    expect(cos(row.centroid, newVec)).toBeGreaterThan(0.97);
+    expect(cos(row.centroid, newVec)).toBeLessThan(0.995);
+  });
+});

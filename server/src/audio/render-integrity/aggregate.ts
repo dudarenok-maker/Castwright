@@ -6,7 +6,8 @@
  *   1. For each chapter: read its embeddings sibling (skip if null) + segments file.
  *   2. Across all chapters, gather per-character anchor-eligible vectors
  *      (gate-passing AND per-segment renderedFallbackEngine unset AND
- *       stochastic-configured — qwen or coqui).
+ *       stochastic-configured — qwen or coqui AND, for a character with a
+ *       current cast.json voice, the line was rendered in that voice — #3524).
  *   3. buildCentroid per character; compute clean cosine spread; persist via writeCentroids.
  *   4. Score every embedding row for every chapter; write one
  *      `<slug>.render-integrity.json` per chapter.
@@ -66,6 +67,12 @@ interface SegmentsEntry {
   /** Per-SEGMENT fallback engine — the field we extend in segments-io.ts.
    *  Null / absent = rendered in the configured engine (anchor-eligible). */
   renderedFallbackEngine?: string | null;
+  /** #3524 — the voice this line was rendered in: `baseVoiceName` is the
+   *  pre-emotion-variant stamp and wins over `voiceName` (precedent:
+   *  `renderedSegmentVoices` in segments-io.ts). Both absent on a legacy
+   *  segment, which falls back to its chapter snapshot's `resolvedVoiceName`. */
+  voiceName?: string;
+  baseVoiceName?: string;
   /** #3362 pass-4 fix (🟠D) — the canonical id THIS render resolved
    *  `characterId` to, stamped by finalize-chapter-write.ts. See
    *  `resolveRowCharId`'s own doc comment just below for how this is used
@@ -242,6 +249,9 @@ interface CharacterReference {
    *  current chapter audio). Carried on the persisted row so a match-checked
    *  reuse rewrites the same identity back instead of silently dropping it. */
   auditionVoice?: AuditionVoiceRef;
+  /** #3524 — the cast.json voice an 'in-book' reference's anchors were filtered
+   *  to. Set only when the character had a current voice; see CharacterCentroid. */
+  inBookVoiceName?: string;
   /** A36 fix — band-computation method used ('synthetic-sigma' = post-fix,
    *  or 'percentile' = original/pre-fix). Carried on persisted 'audition' rows
    *  so pre-fix rows can be detected and rebuilt with the new logic. */
@@ -267,7 +277,7 @@ type ReferenceOutcome =
 const TOO_SHORT_REF: CharacterReference = { centroid: [], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' };
 
 function persistedAsRef(row: CharacterCentroid): CharacterReference {
-  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice, bandMethod: row.bandMethod };
+  return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice, inBookVoiceName: row.inBookVoiceName, bandMethod: row.bandMethod };
 }
 
 /** #1969 / A36 — whether a persisted audition centroid's recorded voice identity still matches the
@@ -315,6 +325,8 @@ function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacte
  * function's three outcomes 1:1 (see `ReferenceOutcome`'s doc comment).
  *
  * @param anchorVecs  Anchor-eligible embedding vectors collected from the book.
+ * @param inBookVoiceName  #3524 — the current cast voice `anchorVecs` were filtered to
+ *                    (undefined = no current voice, unfiltered); recorded on an in-book ref.
  * @param voiceInfo   Optional voice info for Option-B (absent when no snapshot).
  * @param persisted   This character's prior-run row from centroids.json, if any.
  * @param auditionOpts  Test-only synth/embed fn overrides, forwarded to auditionCentroid.
@@ -323,6 +335,7 @@ async function resolveCharacterReference(
   anchorVecs: Float32Array[],
   voiceInfo: AuditionCharacter | undefined,
   persisted: CharacterCentroid | undefined,
+  inBookVoiceName: string | undefined,
   auditionOpts?: Pick<AuditionCentroidOpts, 'synthFn' | 'embedFn'>,
 ): Promise<ReferenceOutcome> {
   const result = buildCentroid(anchorVecs);
@@ -335,7 +348,7 @@ async function resolveCharacterReference(
     const cleanMean = cosines.reduce((s, c) => s + c, 0) / cosines.length;
     const pSevere = percentile(cosines, CUTOFFS.severeEdgePctl);
     const pBand = percentile(cosines, CUTOFFS.bandUpperPctl);
-    return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'in-book' } };
+    return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'in-book', ...(inBookVoiceName !== undefined ? { inBookVoiceName } : {}) } };
   }
 
   if (persisted?.referenceKind === 'too-short') {
@@ -684,6 +697,10 @@ export async function scoreBook(
     return name || undefined;
   };
   const currentVoiceByChar = new Map<string, string | undefined>();
+  const currentVoiceFor = (charId: string): string | undefined => {
+    if (!currentVoiceByChar.has(charId)) currentVoiceByChar.set(charId, currentVoiceNameFor(charId));
+    return currentVoiceByChar.get(charId);
+  };
   const matchedCurrentVoice = new Set<string>();
   for (const cd of chapterData) {
     for (const [charId, snap] of Object.entries(cd.snapshots)) {
@@ -693,8 +710,7 @@ export async function scoreBook(
          after a voice change builds/keeps the audition from the new voice, not
          ch1's stale one. With no such chapter (or no current voice known) it is
          still the first chapter's snapshot that wins (#3650 changes the former). */
-      if (!currentVoiceByChar.has(charId)) currentVoiceByChar.set(charId, currentVoiceNameFor(charId));
-      const currentVoice = currentVoiceByChar.get(charId);
+      const currentVoice = currentVoiceFor(charId);
       const isCurrentVoiceMatch =
         currentVoice !== undefined && !matchedCurrentVoice.has(charId) && snap.resolvedVoiceName === currentVoice;
       if (
@@ -755,6 +771,10 @@ export async function scoreBook(
 
   // Gather anchor-eligible vectors per character:
   // eligible iff: stochastic-configured AND per-segment renderedFallbackEngine unset/null
+  // AND (#3524) for a character with a current cast.json voice, the line was
+  // rendered in that voice — `baseVoiceName ?? voiceName ?? the chapter
+  // snapshot's resolvedVoiceName`; a line whose voice is unknown is not an
+  // anchor. A character with no current voice keeps today's unfiltered pool.
   const anchorVecsByChar = new Map<string, Float32Array[]>();
   for (const charId of stochasticChars) anchorVecsByChar.set(charId, []);
 
@@ -773,6 +793,11 @@ export async function scoreBook(
       // NOT characterSnapshots.renderedFallbackEngine which over-excludes)
       const hasFallback = seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '';
       if (!hasFallback) {
+        const currentVoice = currentVoiceFor(rowCharId);
+        if (currentVoice !== undefined) {
+          const lineVoice = seg?.baseVoiceName ?? seg?.voiceName ?? cd.snapshots[rowCharId]?.resolvedVoiceName;
+          if (lineVoice !== currentVoice) continue;
+        }
         anchorVecsByChar.get(rowCharId)!.push(row.vec);
       }
     }
@@ -859,6 +884,7 @@ export async function scoreBook(
       anchorVecs,
       voiceInfoByChar.get(charId),
       persisted,
+      currentVoiceFor(charId),
       { synthFn: opts?.__testSynthFn, embedFn: opts?.__testEmbedFn },
     );
 

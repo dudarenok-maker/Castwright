@@ -65,6 +65,11 @@ export interface CharacterCentroid {
    *  non-audition row) — an 'audition' row with no recorded voice is treated as unknown and
    *  rebuilt rather than trusted. */
   auditionVoice?: AuditionVoiceRef;
+  /** #3524 — the cast.json voice an 'in-book' row's anchors were pooled from (only lines
+   *  rendered in the character's then-current voice count). Recorded only when the character
+   *  had a current voice; absent on 'audition'/'too-short' rows and on legacy rows. Lets the
+   *  qa-repair route tell when the in-book reference has gone stale after a voice change. */
+  inBookVoiceName?: string;
   /** A36 fix — detection of pre-fix persisted audition rows. Records which band-computation
    *  method was used on post-fix audition centroid rows:
    *  - 'percentile': percentile-of-pool method (used on real-anchor paths, or on synthetic-only
