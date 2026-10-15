@@ -17,7 +17,9 @@ import {
   applyReorder,
   applyRename,
   applyExclude,
+  applyRefreshTitles,
   computeBodySplitIndex,
+  type RefreshTitlesOptions,
   type RestructureSentence,
 } from './restructure.js';
 import type { BookStateJson } from './scan.js';
@@ -688,5 +690,69 @@ describe('renumbering honours titleSynthesized (#3628)', () => {
       });
       expect(later.state.chapters.find((c) => c.id === id)!.title, label).toBe('Chapter 9');
     }
+  });
+});
+
+/* -- title source (#3628): the title-refresh passes honour the flag -- */
+
+describe('applyRefreshTitles honours titleSynthesized (#3628)', () => {
+  const opts = (over: Partial<RefreshTitlesOptions> = {}): RefreshTitlesOptions => ({
+    parsedTitles: [],
+    useFirstLine: false,
+    looksLikeTitle: () => true,
+    maxLen: 80,
+    ...over,
+  });
+  const oneChapter = (synth: boolean) => ({
+    state: makeState([{ id: 1, title: 'Chapter 1', ...(synth ? { titleSynthesized: true } : {}) }]),
+    hints: makeHints([{ id: 1, title: 'Chapter 1', body: 'The Long Road Home' }]),
+    sentences: [s(1, 1, 'narr', 'The Long Road Home')],
+  });
+
+  it('first-line promotion leaves an unflagged "Chapter 1" heading alone', () => {
+    const { state, hints, sentences } = oneChapter(false);
+    const result = applyRefreshTitles(state, hints, sentences, opts({ useFirstLine: true }));
+    expect(result.state.chapters[0].title).toBe('Chapter 1');
+  });
+
+  it('first-line promotion replaces a flagged title and drops the flag', () => {
+    const { state, hints, sentences } = oneChapter(true);
+    const result = applyRefreshTitles(state, hints, sentences, opts({ useFirstLine: true }));
+    const ch = result.state.chapters[0];
+    expect(ch.title).toBe('The Long Road Home');
+    expect('titleSynthesized' in ch).toBe(false);
+  });
+
+  it('parser-aligned pass does not replace an unflagged generic title', () => {
+    const { state, hints, sentences } = oneChapter(false);
+    const result = applyRefreshTitles(
+      state,
+      hints,
+      sentences,
+      opts({ parsedTitles: ['Opening'], parsedTitleSynthesized: [false] }),
+    );
+    expect(result.state.chapters[0].title).toBe('Chapter 1');
+  });
+
+  it('parser-aligned pass replaces a flagged title; the flag follows the parsed title', () => {
+    const synthesizedParse = oneChapter(true);
+    const kept = applyRefreshTitles(
+      synthesizedParse.state,
+      synthesizedParse.hints,
+      synthesizedParse.sentences,
+      opts({ parsedTitles: ['Chapter 7'], parsedTitleSynthesized: [true] }),
+    );
+    expect(kept.state.chapters[0].title).toBe('Chapter 7');
+    expect(kept.state.chapters[0].titleSynthesized).toBe(true);
+
+    const headingParse = oneChapter(true);
+    const cleared = applyRefreshTitles(
+      headingParse.state,
+      headingParse.hints,
+      headingParse.sentences,
+      opts({ parsedTitles: ['Opening'], parsedTitleSynthesized: [false] }),
+    );
+    expect(cleared.state.chapters[0].title).toBe('Opening');
+    expect('titleSynthesized' in cleared.state.chapters[0]).toBe(false);
   });
 });

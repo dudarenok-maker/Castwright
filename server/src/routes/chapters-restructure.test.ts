@@ -1140,9 +1140,9 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
         manuscriptFile: 'manuscript.md',
         castConfirmed: true,
         chapters: [
-          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1208,8 +1208,8 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
         castConfirmed: true,
         chapters: [
           { id: 1, title: 'The Verdict', slug: '01-the-verdict' },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1316,9 +1316,9 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
         castConfirmed: true,
         chapters: [
           // titleOverridden looks generic but is sticky.
-          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleOverridden: true },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleOverridden: true, titleSynthesized: true },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),

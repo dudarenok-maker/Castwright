@@ -269,6 +269,7 @@ chaptersRestructureRouter.post(
       // error) downgrade gracefully — we still run the first-line
       // promotion pass on the in-memory state.
       let parsedTitles: string[] = [];
+      let parsedTitleSynthesized: boolean[] = [];
       const manuscriptPath = join(bookDir, state.manuscriptFile);
       if (existsSync(manuscriptPath)) {
         try {
@@ -279,6 +280,7 @@ chaptersRestructureRouter.post(
             sourcePath: manuscriptPath,
           });
           parsedTitles = parsed.chapters.map((c) => c.title);
+          parsedTitleSynthesized = parsed.chapters.map((c) => c.titleSynthesized === true);
         } catch (parseErr) {
           console.warn(
             `[chapters-restructure] refresh-titles: manuscript parse failed for ${state.bookId}:`,
@@ -291,6 +293,7 @@ chaptersRestructureRouter.post(
         applyRestructure(req.params.bookId, (s, hints, sentences) =>
           applyRefreshTitles(s, hints, sentences, {
             parsedTitles,
+            parsedTitleSynthesized,
             useFirstLine,
             looksLikeTitle,
             maxLen: MAX_SUBTITLE_LEN,

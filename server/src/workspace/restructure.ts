@@ -853,6 +853,10 @@ export interface RefreshTitlesOptions {
       length) → skip the parser-aligned rewrite and only run the
       first-line promotion pass below. */
   parsedTitles: readonly string[];
+  /** Parallel to `parsedTitles`: true where the parser made that title up
+      (no heading in the manuscript). A replaced chapter carries
+      `titleSynthesized: true` only when its parsed title is flagged. */
+  parsedTitleSynthesized?: readonly boolean[];
   /** When true, opportunistically promote a chapter's first non-dialogue
       sentence to its title if the chapter's current title still matches
       the generic auto-generated pattern. Skipped per-chapter when the
@@ -884,9 +888,9 @@ export function applyRefreshTitles(
   }
 
   // First pass: parser-aligned rewrite (when chapter counts match).
-  // Only fires for chapters whose current title still matches the
-  // generic auto-generated pattern OR equals the parsed title for the
-  // same parser order — user-customised titles ("The Verdict") are
+  // Only fires for chapters the app itself titled (titleSynthesized) whose
+  // current title still matches the generic auto-generated pattern —
+  // manuscript headings and user-customised titles ("The Verdict") are
   // never clobbered by re-parsing.
   let parserAligned = 0;
   let stagedChapters = state.chapters.map((c, i) => {
@@ -897,11 +901,20 @@ export function applyRefreshTitles(
     // below is the legacy backup gate (catches chapters that pre-date
     // the override flag).
     if (c.titleOverridden) return c;
+    // Only an app-made title may be replaced; an unflagged chapter holds a
+    // manuscript heading (or a legacy title) and is left alone.
+    if (c.titleSynthesized !== true) return c;
     const candidate = opts.parsedTitles[i];
     if (!candidate || candidate === c.title) return c;
     if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
     parserAligned++;
-    return { ...c, title: candidate, slug: chapterSlug(c.id, candidate) };
+    const { titleSynthesized: _drop, ...rest } = c;
+    return {
+      ...rest,
+      title: candidate,
+      slug: chapterSlug(c.id, candidate),
+      ...(opts.parsedTitleSynthesized?.[i] === true ? { titleSynthesized: true } : {}),
+    };
   });
   if (parserAligned > 0) {
     warnings.push(
@@ -909,10 +922,9 @@ export function applyRefreshTitles(
     );
   }
 
-  // Second pass: first-line promotion for any chapter whose title still
-  // matches the generic pattern. Uses the GENERIC_TITLE_RE detector to
-  // gate "is this title auto-generated and therefore eligible for
-  // replacement?" — user-customised titles are skipped.
+  // Second pass: first-line promotion for any app-made chapter title
+  // (titleSynthesized) that still matches the generic pattern.
+  // Manuscript headings and user-customised titles are skipped.
   let firstLinePromoted = 0;
   if (opts.useFirstLine) {
     // Build per-chapter sentence map once.
@@ -930,6 +942,7 @@ export function applyRefreshTitles(
     stagedChapters = stagedChapters.map((c) => {
       // Same hard override gate as the parser-aligned pass above.
       if (c.titleOverridden) return c;
+      if (c.titleSynthesized !== true) return c;
       if (!GENERIC_TITLE_RE.test(c.title.trim())) return c;
       const chapterSentences = sentencesByChapter.get(c.id);
       const firstSentence = chapterSentences?.[0]?.text?.trim();
@@ -939,8 +952,10 @@ export function applyRefreshTitles(
       if (/[.!]$/.test(firstSentence)) return c;
       if (!opts.looksLikeTitle(firstSentence)) return c;
       firstLinePromoted++;
+      // The first line comes from the manuscript, so the title is no longer app-made.
+      const { titleSynthesized: _drop, ...rest } = c;
       return {
-        ...c,
+        ...rest,
         title: firstSentence,
         slug: chapterSlug(c.id, firstSentence),
       };
