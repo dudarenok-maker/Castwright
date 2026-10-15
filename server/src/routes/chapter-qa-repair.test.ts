@@ -1546,6 +1546,152 @@ describe('POST /:bookId/chapters/:chapterId/audio-qa-repair (acoustic-only rejec
     expect((done!.stillSuspect as number[]).includes(1)).toBe(false);
   });
 
+  /* #3524 — the in-book reference is only kept when it was built from the
+     character's CURRENT cast voice. The cast resolves castor to 'castor-alden-B'
+     (current); the row's `inBookVoiceName` is what the in-book anchors were
+     filtered to at scoring time. The centroid is aligned with the mocked
+     embedSegment (axis 1, cosine ~1.0 ≥ cleanMean), so a KEPT row accepts the
+     take (repaired) while a DROPPED row means "no centroid" → the acoustic-only
+     candidate is skipped before synth → stillSuspect. */
+  async function scaffoldInBookCentroidBook(
+    bookTitle: string,
+    inBookVoiceName: string | undefined,
+  ): Promise<{ bookId: string; chapterSlug: string }> {
+    const id = makeBookId(AUTHOR2, SERIES2, bookTitle);
+    const bookDir = join(workspaceRoot, 'books', AUTHOR2, SERIES2, bookTitle);
+    const thisAudioRoot = audioDirFn(bookDir);
+    mkdirSync(thisAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: id,
+        manuscriptId: VERDICT_MANUSCRIPT_ID,
+        title: bookTitle,
+        author: AUTHOR2,
+        series: SERIES2,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'en',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:02' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    // The cast was reassigned to 'castor-alden-B'; the snapshot is stale (still A).
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'amy', name: 'Amy', gender: 'female', attributes: [] },
+          {
+            id: 'castor',
+            name: 'Castor',
+            gender: 'female',
+            attributes: [],
+            overrideTtsVoices: { kokoro: { name: 'castor-alden-B' } },
+          },
+        ],
+      }),
+    );
+    const chapterPcm = Buffer.concat([tone(1.0, 12000), tone(1.0, 12000)]);
+    const mp3Bytes = await encodePcmToAudio(chapterPcm, SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(thisAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.segments.json`),
+      JSON.stringify({
+        bookId: id,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 2.0,
+        sampleRate: SR,
+        modelKey: 'kokoro-v1',
+        synthesizedAt: new Date().toISOString(),
+        segments: [
+          { groupIndex: 0, characterId: 'amy', sentenceIds: [1], startSec: 0, endSec: 1.0 },
+          { groupIndex: 1, characterId: 'castor', sentenceIds: [2], startSec: 1.0, endSec: 2.0 },
+        ],
+        characterSnapshots: {
+          castor: { voiceEngine: 'kokoro', resolvedVoiceName: 'castor-alden-A', modelKey: 'kokoro-v1' },
+        },
+      }),
+    );
+    writeFileSync(
+      join(thisAudioRoot, `${SLUG}.render-integrity.json`),
+      JSON.stringify([
+        {
+          characterId: 'castor',
+          sentenceIds: [2],
+          verdict: 'voice-mismatch',
+          cosine: 0.3,
+          severity: 'severe',
+          fixable: true,
+          expectedEngine: 'kokoro',
+          renderedEngine: 'kokoro',
+          referenceKind: 'in-book',
+          windowed: false,
+          segmentIndex: 1,
+        },
+      ]),
+    );
+    writeFileSync(
+      join(thisAudioRoot, 'render-integrity.centroids.json'),
+      JSON.stringify({
+        castor: {
+          characterId: 'castor',
+          centroid: unitVec(1),
+          cleanMean: 0.9,
+          pSevere: 0.45,
+          pBand: 0.6,
+          referenceKind: 'in-book',
+          ...(inBookVoiceName === undefined ? {} : { inBookVoiceName }),
+        },
+      }),
+    );
+    return { bookId: id, chapterSlug: SLUG };
+  }
+
+  async function runInBookRepair(title: string, inBookVoiceName: string | undefined) {
+    synthesiseChapterMock.mockReset();
+    synthesiseChapterMock.mockImplementation(async () => ({
+      pcm: tone(0.5, 12000), // loud, healthy re-record — signal-QA clean
+      sampleRate: SR,
+    }));
+    const { bookId: id } = await scaffoldInBookCentroidBook(title, inBookVoiceName);
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(id)}/chapters/1/audio-qa-repair`)
+      .send({ dryRun: false, modelKey: 'kokoro-v1' });
+    const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
+    expect(done, `expected qa_repair_complete, got:\n${res.text}`).toBeTruthy();
+    return done!;
+  }
+
+  it('#3524 — drops a stale in-book centroid built from the OLD voice after a cast reassignment (no re-render)', async () => {
+    const done = await runInBookRepair('Stale InBook Story', 'castor-alden-A');
+    // Row built from OLD voice A, cast now B → dropped → "no centroid" → skipped before synth.
+    expect((done.stillSuspect as number[]).includes(1)).toBe(true);
+    expect((done.repaired as number[]).includes(1)).toBe(false);
+    expect(synthesiseChapterMock).not.toHaveBeenCalled();
+  });
+
+  it('#3524 — keeps an in-book centroid whose inBookVoiceName matches the current cast voice', async () => {
+    const done = await runInBookRepair('Matching InBook Story', 'castor-alden-B');
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    expect((done.repaired as number[]).includes(1)).toBe(true);
+    expect((done.stillSuspect as number[]).includes(1)).toBe(false);
+  });
+
+  it('#3524 — keeps a legacy in-book centroid with no inBookVoiceName (pre-#3524 row)', async () => {
+    const done = await runInBookRepair('Legacy InBook Story', undefined);
+    expect(synthesiseChapterMock).toHaveBeenCalled();
+    expect((done.repaired as number[]).includes(1)).toBe(true);
+    expect((done.stillSuspect as number[]).includes(1)).toBe(false);
+  });
+
 });
 
 /* fs-38 Wave 3c (fix wave, Task 6) — mirrors generation.ts/chapter-splice.ts's

@@ -120,8 +120,12 @@ export async function readCentroids(
  *  (chapter-qa-repair.ts) derives the voice name from the CURRENT cast via
  *  pickVoiceForEngine, but the model key from the snapshot/segFile (NOT the current
  *  cast). Voice name staleness after a reassignment with no re-render is caught here
- *  (#3449); in-book rows are kept and rebuilt only when rescored, so after a voice
- *  change with no re-render they reflect the old voice (#3517). An 'audition' row is
+ *  (#3449). An in-book row is usable when it recorded NO `inBookVoiceName` (a legacy
+ *  row, or one built when no current voice was known — kept as before, rebuilt with
+ *  the field on the next `scoreBook` pass) or when that name equals the character's
+ *  current voice; a recorded name that differs (or a missing current voice) means the
+ *  anchors came from a voice the character no longer has and the row is dropped
+ *  (#3524, settles #3517's in-book half). An 'audition' row is
  *  usable ONLY when it recorded a voice identity AND that identity matches the
  *  character's current resolved voice/model — otherwise it is a stale reference
  *  (possibly for a voice the character no longer is) and must not be scored against.
@@ -138,7 +142,9 @@ export function auditionCentroidUsableForCurrent(
   currentVoiceName: string | undefined,
   currentModelKey: string,
 ): boolean {
-  if (row.referenceKind === 'in-book') return true;
+  if (row.referenceKind === 'in-book') {
+    return row.inBookVoiceName == null || row.inBookVoiceName === currentVoiceName;
+  }
   if (row.referenceKind !== 'audition') return false; // incl. 'too-short'
   if (row.auditionVoice == null || currentVoiceName == null) return false;
   return row.auditionVoice.voiceName === currentVoiceName && row.auditionVoice.modelKey === currentModelKey;

@@ -447,9 +447,10 @@ chapterQaRepairRouter.post(
          valid and an engine change is caught by the voice-name mismatch above —
          except a Qwen tier change (per-character elevation or a repair at a different
          tier), which keeps the old tier's centroid; known gap, #3518. After this filter a filtered-out character behaves exactly like "no
-         centroid" at every downstream `centroids?.[charId]` site. in-book rows are
-         kept; they are rebuilt only when the book is rescored, so after a voice
-         change with no re-render they still reflect the old voice (#3517). */
+         centroid" at every downstream `centroids?.[charId]` site. An in-book row is
+         kept only when it recorded no `inBookVoiceName` (legacy) or that name
+         equals the current cast voice; one built from an older voice is dropped
+         (#3524, settles #3517's in-book half). */
       const centroids: Record<string, CharacterCentroid> | null =
         readCentroidsMap &&
         Object.fromEntries(
