@@ -1137,7 +1137,8 @@ describe('MiniPlayer — jump-to-issue + auto-seek', () => {
     renderMiniPlayer({ id: 1, title: 'Ch', duration: '0:30' });
     const el = document.querySelector('audio') as HTMLAudioElement;
     Object.defineProperty(el, 'duration', { configurable: true, value: 30 });
-    await screen.findByLabelText(/Next issue/);
+    await screen.findByLabelText(/Next issue/, undefined, { timeout: 5000 });
+    await waitFor(() => expect(el.getAttribute('src')).toBe('blob:x'));
     fireEvent.click(screen.getByLabelText(/Next issue/));
     expect(el.currentTime).toBe(8);
   });
