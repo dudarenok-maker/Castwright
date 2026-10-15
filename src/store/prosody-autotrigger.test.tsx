@@ -1345,6 +1345,51 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     expect(unfinishedPuts()).toEqual(['b1']);
   });
 
+  it('restructure: a library-triggered run refused during one never started, so the next library change retries it (watermark unset)', async () => {
+    const store = makeStore(true);
+    renderAnyPath(store);
+    await settle(30);
+    store.dispatch(uiActions.setRestructuringBook('b1'));
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+    });
+    await settle(100);
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+    expect(marks.has('b1')).toBe(false); // refused, so nothing was marked
+
+    await act(async () => {
+      store.dispatch(uiActions.setRestructuringBook(null));
+    });
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b2', 'cast_pending')));
+    });
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledWith('b1', expect.anything()));
+    await settle(300);
+  });
+
+  it('restructure: an aborted library-triggered run loses its pill at once, not when its passes return', async () => {
+    let release!: () => void;
+    detectEmotionsMock.mockImplementation(async (_id: string, opts: Opts) => {
+      await new Promise<void>((r) => (release = r));
+      emit(opts, [ch1]);
+      return { totalAnnotations: 1, annotatedChapters: 1 };
+    });
+    const store = makeStore(true);
+    renderAnyPath(store);
+    await settle(30);
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+    });
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
+    expect(store.getState().prosody.activeStreams.b1).toBeDefined();
+    await act(async () => {
+      store.dispatch(uiActions.setRestructuringBook('b1'));
+    });
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined(); // before release
+    await act(async () => release());
+    await settle(300);
+  });
+
   it('yields: a run that yielded is marked unfinished, never done, even when nothing arrived after it yielded', async () => {
     let release!: () => void;
     detectEmotionsMock.mockImplementation(async () => {

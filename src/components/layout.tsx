@@ -1324,7 +1324,13 @@ export function Layout() {
     () =>
       store.subscribe(() => {
         const restructuring = store.getState().ui.restructuringBookId;
-        if (restructuring) prosodyLibraryRuns.current.get(restructuring)?.abort();
+        const libraryRun = restructuring ? prosodyLibraryRuns.current.get(restructuring) : undefined;
+        if (restructuring && libraryRun && !libraryRun.signal.aborted) {
+          libraryRun.abort();
+          // Its pill blocks the book; drop it now, not when the passes return.
+          if (store.getState().prosody.activeStreams[restructuring])
+            dispatch(prosodyActions.clear({ bookId: restructuring }));
+        }
         const bg = prosodyBackground.current;
         if (!bg || bg.ctrl.signal.aborted) return;
         const s = store.getState();
@@ -1369,8 +1375,12 @@ export function Layout() {
           prosodyBackground.current = { id, ctrl };
         } else {
           /* A restructure in flight re-keys the sentences this run would apply
-             by; it is picked up by the open trigger once the book is open. */
-          if (store.getState().ui.restructuringBookId === id) return;
+             by. Never started, so it is not kept in `considered` (the next
+             library change retries it), like a run whose read threw. */
+          if (store.getState().ui.restructuringBookId === id) {
+            prosodyConsidered.current.delete(id);
+            return;
+          }
           ctrl = new AbortController();
           prosodyLibraryRuns.current.set(id, ctrl);
         }
