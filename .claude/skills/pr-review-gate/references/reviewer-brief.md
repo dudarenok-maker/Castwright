@@ -280,6 +280,17 @@ recite:
     Checkable: list every later pass that changes a key the op list is keyed
     on, and for each ask whether an entry renamed ONLY by that pass gets an
     op; test with a fixture where the later pass is the sole renamer.
+28. **A reference-identity check used to mean "unchanged since X" in a store
+    where every write replaces the reference** — `src/views/restructure.tsx`
+    (`applyResponse`), PR #3594 gate pass 4: the sentence remap skipped when
+    the book's sentences were no longer the same array as at click time, but
+    under Immer any same-book write replaces the array, so the skip fired on
+    unrelated writes (a background emotion-detection run) and the work it
+    dropped was never retried, saving sentences with stale chapter ids; fixed
+    in 3723e4f6 with a `hydrateSeq` counter that moves only on a re-hydrate. Checkable: for every `===` /
+    `Object.is` guard on store state, ask what ELSE replaces that reference;
+    then ask whether the work the guard drops is retried. Test by making an
+    unrelated write between capture and use.
 
 ### Keeping the catalogue current
 
