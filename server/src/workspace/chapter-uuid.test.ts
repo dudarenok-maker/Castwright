@@ -2,7 +2,7 @@
  * immutable per-chapter `uuid`. Pure functions, no I/O. */
 
 import { describe, it, expect } from 'vitest';
-import { ensureChapterUuids, reconcileChapterUuids } from './chapter-uuid.js';
+import { ensureChapterUuids, reconcileChapterUuids, carryTitleSynthesized } from './chapter-uuid.js';
 import type { BookStateJson } from './scan.js';
 
 type Chapter = BookStateJson['chapters'][number];
@@ -115,5 +115,45 @@ describe('reconcileChapterUuids', () => {
     reconcileChapterUuids(incoming, existing);
 
     expect(incoming[0].uuid).toBeUndefined();
+  });
+});
+
+describe('carryTitleSynthesized', () => {
+  it('carries a true flag from the existing chapter by id', () => {
+    const existing = [ch({ id: 1, titleSynthesized: true }), ch({ id: 2 })];
+    const incoming = [ch({ id: 1 }), ch({ id: 2 })];
+
+    const out = carryTitleSynthesized(incoming, existing);
+
+    expect(out[0].titleSynthesized).toBe(true);
+    expect('titleSynthesized' in out[1]).toBe(false);
+  });
+
+  it('drops a client-sent true when the existing chapter has no flag', () => {
+    const existing = [ch({ id: 1 })];
+    const incoming = [ch({ id: 1, titleSynthesized: true })];
+
+    const out = carryTitleSynthesized(incoming, existing);
+
+    expect('titleSynthesized' in out[0]).toBe(false);
+  });
+
+  it('leaves the flag absent for an incoming id with no existing chapter', () => {
+    const existing = [ch({ id: 1, titleSynthesized: true })];
+    const incoming = [ch({ id: 1 }), ch({ id: 2, titleSynthesized: true })];
+
+    const out = carryTitleSynthesized(incoming, existing);
+
+    expect(out[0].titleSynthesized).toBe(true);
+    expect('titleSynthesized' in out[1]).toBe(false);
+  });
+
+  it('does not mutate the incoming array', () => {
+    const existing = [ch({ id: 1, titleSynthesized: true })];
+    const incoming = [ch({ id: 1 })];
+
+    carryTitleSynthesized(incoming, existing);
+
+    expect('titleSynthesized' in incoming[0]).toBe(false);
   });
 });

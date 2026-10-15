@@ -56,3 +56,22 @@ export function reconcileChapterUuids(
     return { ...c, uuid: uuidById.get(c.id) ?? randomUUID() };
   });
 }
+
+/** Carry the server-owned `titleSynthesized` flag across a wholesale chapter
+ *  replace. The frontend never tracks the flag, and a client value is
+ *  ignored: for each incoming chapter the flag is taken from the existing
+ *  chapter with the same `id` (kept only when `true`, otherwise the key is
+ *  removed). Returns a new array; the incoming array is not mutated. */
+export function carryTitleSynthesized(
+  incoming: readonly Chapter[],
+  existing: readonly Chapter[],
+): Chapter[] {
+  const synthesizedIds = new Set<number>();
+  for (const c of existing) {
+    if (c.titleSynthesized === true) synthesizedIds.add(c.id);
+  }
+  return incoming.map((c) => {
+    const { titleSynthesized: _clientValue, ...rest } = c;
+    return synthesizedIds.has(c.id) ? { ...rest, titleSynthesized: true } : rest;
+  });
+}
