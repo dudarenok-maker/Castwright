@@ -459,7 +459,7 @@ test('an id-less Blocked heading throws the BLK-ID error, even when a shell with
   const html = blockedSection([blkUncShell('—', 'Legacy thing', 'legacy body')]);
   assert.throws(
     () => reconcileRowShells(md, html),
-    /Blocked row "Legacy thing" has no BLK ID: allocate one from the section's next-id marker \(e\.g\. BLK107\) and bump the marker/,
+    /Blocked row \u0022Legacy thing\u0022 has no BLK ID: allocate one from the section\u0027s next-id marker \(e\.g\. BLK107\) and bump the marker/,
   );
 });
 
@@ -472,7 +472,7 @@ test('an id-less Unconfirmed bullet throws the UNC-ID error', () => {
   const html = unconfirmedSection([blkUncShell('—', 'Legacy bullet', 'legacy body')]);
   assert.throws(
     () => reconcileRowShells(md, html),
-    /Unconfirmed row "Legacy bullet" has no UNC ID: allocate one from the section's next-id marker \(e\.g\. UNC107\) and bump the marker/,
+    /Unconfirmed row \u0022Legacy bullet\u0022 has no UNC ID: allocate one from the section\u0027s next-id marker \(e\.g\. UNC107\) and bump the marker/,
   );
 });
 
