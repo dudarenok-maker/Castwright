@@ -1456,7 +1456,20 @@ export function checkLiveView(
     return ['No "## At a glance" section in the markdown — cannot check the live view against it.'];
   }
   const { groups: mdGroups } = parseGlanceTable(glanceSection.body);
-  const { groups: mdBodyGroups } = parseBodyGroups(sections);
+  const { groups: lettersBodyGroups } = parseBodyGroups(sections);
+  // #3587: the Blocked/Unconfirmed sections' BLK/UNC rows are classified by ID
+  // exactly like a lettered group's. They join the id-to-section map used by the
+  // verdict loops below, but never `mdGroups` (no glance row). Accept, never
+  // require: a section with no ID row and no marker (today's `main`) adds no key.
+  const mdBodyGroups = new Map(lettersBodyGroups);
+  const { groups: titledGroups } = parseTitledSections(sections);
+  for (const { prefix, titleRegex } of TITLED_SECTIONS) {
+    const rows = titledGroups.get(prefix);
+    if (rows === undefined) continue;
+    const section = sections.find((s) => titleRegex.test(s.title));
+    if (rows.length === 0 && parseNextIdMarker(section.body, prefix) === null) continue;
+    mdBodyGroups.set(prefix, rows);
+  }
 
   // 'extraOnly' needs a baseline to tell a discharge apart from a genuine
   // competing-lane row (#2199) — resolve it once, up front, and fail closed
@@ -1631,11 +1644,13 @@ export function checkLiveView(
   // register's next-id, the live page's highest ID, and origin/main's next-id
   // (an ID main minted and since dropped is still spent — allocate-once).
   const renumberAdvice = (letter) => {
+    const titled = TITLED_SECTIONS.find((t) => t.prefix === letter);
     const mineNext = parseNextIdMarker(
-      sections.find((s) => s.title.startsWith(`Group ${letter}`))?.body ?? '',
+      sections.find((s) => (titled ? titled.titleRegex.test(s.title) : s.title.startsWith(`Group ${letter}`)))
+        ?.body ?? '',
       letter,
     );
-    const liveNumbers = (lvSections.get(letter)?.rowIds ?? []).map((r) => Number(r.slice(1)));
+    const liveNumbers = (lvSections.get(letter)?.rowIds ?? []).map((r) => splitRowId(r).number);
     const liveNext = liveNumbers.length > 0 ? Math.max(...liveNumbers) + 1 : 0;
     const target = Math.max(mineNext ?? 0, liveNext, baselineNextIds?.get(letter) ?? 0);
     return `Renumber your row to ${letter}${target} (the highest of your next-id, the live page's highest ID + 1 and origin/main's next-id), then re-run.`;
@@ -1650,8 +1665,12 @@ export function checkLiveView(
     }
     return `No branch this checkout has fetched committed it, so its owner cannot be named here — fetch every branch (git fetch origin '+refs/heads/*:refs/remotes/origin/*') and re-run to name it. The page's publish id "${provenance.nonce}" names whoever PUBLISHED the page, which for a union publish is not the row's owner.`;
   };
+  // "Group A" for a lettered group; the Blocked/Unconfirmed sections are named
+  // for what they are, not for their BLK/UNC prefix (#3587).
+  const sectionLabel = (letter) =>
+    TITLED_SECTIONS.find((t) => t.prefix === letter)?.name.replace(/^the | section$/g, '') ?? `Group ${letter}`;
   const unmergedLaneError = (id, letter) =>
-    `${UNMERGED_LANE_ROW_ERROR_PREFIX}${id}: the live page's Group ${letter} section has row ${id}, which origin/main lacks; it belongs to a lane that has not merged. ${ownerText(id)} Publishing a file without it drops it: carry its live block verbatim in the file you publish (--build-union <out> builds it) and name that file with --publishing <file>; if that lane's PR was closed without merging, retire the row in the register's "Retired carried rows" table instead.`;
+    `${UNMERGED_LANE_ROW_ERROR_PREFIX}${id}: the live page's ${sectionLabel(letter)} section has row ${id}, which origin/main lacks; it belongs to a lane that has not merged. ${ownerText(id)} Publishing a file without it drops it: carry its live block verbatim in the file you publish (--build-union <out> builds it) and name that file with --publishing <file>; if that lane's PR was closed without merging, retire the row in the register's "Retired carried rows" table instead.`;
   // A live-only row origin/main lacks: 'yours' (silent: your own or a
   // merged publish's row, a row main's register has ever carried, or a
   // retired one), 'foreign' (another unmerged lane's) or 'unknown'.
@@ -1675,8 +1694,8 @@ export function checkLiveView(
     return 'foreign';
   };
   const baselineHasRow = (id) => {
-    const [, idLetter, idNumber] = id.match(/^([A-Z])(\d+)$/);
-    return (baselineBodyGroups.get(idLetter) ?? []).includes(Number(idNumber));
+    const { prefix, number } = splitRowId(id);
+    return (baselineBodyGroups.get(prefix) ?? []).includes(number);
   };
 
   // The owed total, as the summary strip states it.
@@ -1795,7 +1814,7 @@ export function checkLiveView(
   // earlier, alongside the glance table — see the comment there for why.
   for (const { letter, id } of invalidRowIds) {
     errors.push(
-      `Live view: Group ${letter} has a row numbered "${id}", which is not a valid row ID. Rows are ${letter}1, ${letter}2, … — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
+      `Live view: ${sectionLabel(letter)} has a row numbered "${id}", which is not a valid row ID. Rows are ${letter}1, ${letter}2, … — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
     );
   }
   if (![...lvSections.keys()].some((key) => /^[A-Z]$/.test(key))) {
@@ -1814,14 +1833,14 @@ export function checkLiveView(
     if (!section) {
       // Normal pre-publish state in 'extraOnly' mode — see the function
       // header comment.
-      if (direction === 'both') errors.push(`Live view: no group section for Group ${letter}.`);
+      if (direction === 'both') errors.push(`Live view: no group section for ${sectionLabel(letter)}.`);
       continue;
     }
     if (section.headerCount === null) {
       // An extraction failure, not a directional comparison — the header IS
       // there, its `gcount` span just couldn't be read. Fires in both modes.
       errors.push(
-        `Live view: Group ${letter}'s header has no \`<span class="gcount">N rows</span>\`.`,
+        `Live view: ${sectionLabel(letter)}'s header has no \`<span class="gcount">N rows</span>\`.`,
       );
     }
     const expected = new Set(mdNumbers.map((n) => `${letter}${n}`));
@@ -1868,11 +1887,8 @@ export function checkLiveView(
     const staleExtra =
       direction === 'extraOnly'
         ? extra.filter((id) => {
-            const idMatch = id.match(/^([A-Z])(\d+)$/);
-            if (!idMatch) return true; // shouldn't happen — rowIds is pre-filtered to this shape
-            const [, idLetter, idNumber] = idMatch;
-            const baselineNumbers = baselineBodyGroups.get(idLetter) ?? [];
-            if (!baselineNumbers.includes(Number(idNumber))) {
+            if (!splitRowId(id)) return true; // shouldn't happen — rowIds is pre-filtered to this shape
+            if (!baselineHasRow(id)) {
               if (liveOnlyVerdict(id) === 'foreign') unmergedExtra.push(id);
               return false;
             }
@@ -1886,21 +1902,31 @@ export function checkLiveView(
     if (staleExtra.length > 0) {
       errors.push(
         direction === 'extraOnly'
-          ? `The live page's Group ${letter} section has ${staleExtra.length === 1 ? 'row' : 'rows'} ${staleExtra.join(', ')} that this register does not yet have — the register is BEHIND what is already published. Merge ${staleExtra.length === 1 ? 'it' : 'them'} in before publishing.`
-          : `Live view's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's Group ${letter} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
+          ? `The live page's ${sectionLabel(letter)} section has ${staleExtra.length === 1 ? 'row' : 'rows'} ${staleExtra.join(', ')} that this register does not yet have — the register is BEHIND what is already published. Merge ${staleExtra.length === 1 ? 'it' : 'them'} in before publishing.`
+          : `Live view's ${sectionLabel(letter)} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's ${sectionLabel(letter)} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
       );
     }
     for (const id of unmergedExtra) errors.push(unmergedLaneError(id, letter));
     if (section.rowIds.length !== found.size) {
       const seen = new Set();
       const dupes = [...new Set(section.rowIds.filter((id) => seen.has(id) || !seen.add(id)))];
-      errors.push(`Live view: Group ${letter} lists ${dupes.join(', ')} more than once.`);
+      errors.push(`Live view: ${sectionLabel(letter)} lists ${dupes.join(', ')} more than once.`);
     }
   }
   for (const letter of lvSections.keys()) {
-    // #3587: `BLK`/`UNC` sections are parsed but get no verdict here yet —
-    // their register-vs-page comparison is a later change in the chain.
-    if (letter === 'BLK' || letter === 'UNC') continue;
+    // #3587: a `BLK`/`UNC` section the register has no ID row or marker for is
+    // today's legacy unnumbered form (`—` rows): nothing to compare, so it must
+    // not read as a section the register lacks (accept, never require). In
+    // 'extraOnly' mode a page ID row for it is still classified below like a
+    // lettered group's; the tracked-pair 'both' comparison only starts once the
+    // register itself carries BLK/UNC IDs.
+    if (
+      TITLED_SECTIONS.some((t) => t.prefix === letter) &&
+      !mdBodyGroups.has(letter) &&
+      (direction === 'both' || lvSections.get(letter).rowIds.length === 0)
+    ) {
+      continue;
+    }
     if (!mdBodyGroups.has(letter)) {
       if (direction === 'extraOnly') {
         // #2199: whole-group discharge — same baseline check as the
@@ -1936,11 +1962,11 @@ export function checkLiveView(
             // group actually matched, so a plain, flag-less run keeps its
             // original wording verbatim.
             errors.push(
-              `The live page has a Group ${letter} section that this register's body does not — the register is BEHIND what is already published. ${unnamedIds.length === 1 ? 'Row' : 'Rows'} ${unnamedIds.join(', ')} ${unnamedIds.length === 1 ? 'is' : 'are'} not named via --discharging; add ${unnamedIds.length === 1 ? 'it' : 'them'} to the register before publishing.`,
+              `The live page has a ${sectionLabel(letter)} section that this register's body does not — the register is BEHIND what is already published. ${unnamedIds.length === 1 ? 'Row' : 'Rows'} ${unnamedIds.join(', ')} ${unnamedIds.length === 1 ? 'is' : 'are'} not named via --discharging; add ${unnamedIds.length === 1 ? 'it' : 'them'} to the register before publishing.`,
             );
           } else {
             errors.push(
-              `The live page has a Group ${letter} section that this register's body does not — the register is BEHIND what is already published. Add the section before publishing.`,
+              `The live page has a ${sectionLabel(letter)} section that this register's body does not — the register is BEHIND what is already published. Add the section before publishing.`,
             );
           }
         } else {
@@ -1955,7 +1981,7 @@ export function checkLiveView(
         continue;
       }
       errors.push(
-        `Live view has a Group ${letter} section that the register's body does not. Remove it or add the section to the register.`,
+        `Live view has a ${sectionLabel(letter)} section that the register's body does not. Remove it or add the section to the register.`,
       );
     }
   }
@@ -2056,15 +2082,14 @@ export function checkLiveView(
     for (const [id, trackedTitle] of trackedTitles) {
       const publishedTitle = publishedTitles.get(id);
       if (publishedTitle === undefined || publishedTitle === trackedTitle) continue;
-      const [, idLetter, idNumber] = id.match(/^([A-Z])(\d+)$/);
-      if ((baselineBodyGroups.get(idLetter) ?? []).includes(Number(idNumber))) continue;
+      if (baselineHasRow(id)) continue;
       if (provenance.kind === 'own' && stampedRowIds.has(id)) continue;
       if (provenance.kind === 'unknown') {
         unknownProvenanceIds.push(id);
         continue;
       }
       errors.push(
-        `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${trackedTitle}" but the live page's ${id} is "${publishedTitle}" — two lanes allocated the same ID. ${renumberAdvice(idLetter)}`,
+        `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${trackedTitle}" but the live page's ${id} is "${publishedTitle}" — two lanes allocated the same ID. ${renumberAdvice(splitRowId(id).prefix)}`,
       );
     }
     for (const [id, trackedBody] of trackedRowBodies) {
@@ -2192,7 +2217,7 @@ export function checkLiveView(
         }
         if (mergeBaseIds.has(id)) continue;
         errors.push(
-          `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${mineTitle}" but origin/main's ${id} is "${mainTitle}", and the merge-base your branch forked from has no ${id} — two lanes allocated the same ID and the other merged first. ${renumberAdvice(id[0])}`,
+          `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${mineTitle}" but origin/main's ${id} is "${mainTitle}", and the merge-base your branch forked from has no ${id} — two lanes allocated the same ID and the other merged first. ${renumberAdvice(splitRowId(id)?.prefix ?? id[0])}`,
         );
       }
       if (undecidable.length > 0) {

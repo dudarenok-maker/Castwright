@@ -6069,3 +6069,207 @@ test('#3529 pass 5: an incomplete commit list fails closed and says so, not "nam
     assert.match(retired[0], /must still be carried/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #3587: --against-published classifies Blocked/Unconfirmed rows by ID, with
+// the same verdicts a lettered row gets. Fixtures reuse the #3529 harness
+// (`merged`/`own`/`UNMERGED`, `withRetired`) with a Blocked or Unconfirmed
+// section appended to the Group B register and live view.
+// ---------------------------------------------------------------------------
+const TITLED_CASES = [
+  {
+    prefix: 'BLK',
+    heading: '## Blocked — hardware not available',
+    row: (n, title) => `### BLK${n} · ${title}\n\nText.\n`,
+    sectionAttrs: 'class="group is-blocked" id="blocked"',
+    label: 'Blocked',
+  },
+  {
+    prefix: 'UNC',
+    heading: '## Unconfirmed — not debts until substantiated',
+    row: (n, title) => `- **UNC${n} · ${title}** (z)\n`,
+    sectionAttrs: 'class="group is-soft" id="unconfirmed"',
+    label: 'Unconfirmed',
+  },
+];
+
+function titledRegister(tc, rows, nextId) {
+  const body = rows.map(([n, title]) => tc.row(n, title)).join('\n');
+  return `${MAIN_B()}\n${tc.heading}\n\n<!-- next-id: ${tc.prefix}${nextId} -->\n\n${body}`;
+}
+
+function titledLiveView(tc, rows) {
+  const details = rows
+    .map(
+      ({ id, body, title }) => `    <details class="item">
+      <summary><span class="num">${id}</span><span class="iname">${title ?? 't'}</span><span class="risk">default</span></summary>
+      <div class="body">
+        <p>${body}</p>
+      </div>
+    </details>`,
+    )
+    .join('\n');
+  return `${buildRowContentLiveView(baseRows, 'B')}
+  <section ${tc.sectionAttrs}>
+    <h3 class="gtitle"><span class="gtag">${tc.prefix}</span> ${tc.label} <span class="gcount">${rows.length} rows</span></h3>
+${details}
+  </section>
+`;
+}
+
+for (const tc of TITLED_CASES) {
+  const P = tc.prefix;
+  const id1 = `${P}101`;
+  const id2 = `${P}102`;
+  const reg = (rows = [[101, 'mine one']], next = 102) => titledRegister(tc, rows, next);
+  const own1 = { id: id1, body: 'x', title: 'mine one' };
+  const theirs2 = { id: id2, body: 'theirs', title: THEIRS_TITLE };
+  const ownerOfId2 = (id) => (id === id2 ? OWNER_X : null);
+  const run = ({ working, baseline, tracked, published, extra = {} }) =>
+    checkLiveView(working ?? reg(), titledLiveView(tc, published ?? [own1, theirs2]), {
+      direction: 'extraOnly',
+      baselineText: baseline ?? reg(),
+      trackedLiveViewHtml: titledLiveView(tc, tracked ?? [own1]),
+      publishedProvenance: UNMERGED,
+      ...extra,
+    });
+
+  test(`#3587 ${P} (a): a live-only ${id2} from an unmerged lane fails as unmerged-lane-row, in the ${tc.label} section's words`, () => {
+    const errors = run({ extra: { rowOwnerLookup: ownerOfId2 } });
+    const unmerged = ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX);
+    assert.equal(unmerged.length, 1, JSON.stringify(errors));
+    assert.match(unmerged[0], new RegExp(`^unmerged-lane-row: ${id2}:`));
+    assert.ok(unmerged[0].includes(`${tc.label} section`), unmerged[0]);
+    assert.ok(!/Group (BLK|UNC)/.test(unmerged[0]), unmerged[0]);
+    assert.ok(unmerged[0].includes(OWNER_X.commit.slice(0, 12)), 'names the owner commit');
+    assert.match(unmerged[0], /--publishing/);
+  });
+
+  test(`#3587 ${P} (b): the same row is silent on a merged or own publish, and unknown-provenance when the publish is untraceable`, () => {
+    for (const provenance of [merged(['B101', 'B102', id1, id2]), own(['B101', 'B102', id1, id2])]) {
+      assert.deepEqual(run({ extra: { publishedProvenance: provenance } }), [], provenance.kind);
+    }
+    const errors = run({
+      extra: { publishedProvenance: { kind: 'unknown', nonce: 'ghost0x1', reason: 'not found in any git history' } },
+    });
+    const unknown = ofPrefix(errors, UNKNOWN_PROVENANCE_ERROR_PREFIX);
+    assert.equal(unknown.length, 1, JSON.stringify(errors));
+    assert.match(unknown[0], new RegExp(id2));
+    assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 0);
+  });
+
+  test(`#3587 ${P} (b): a live-only row origin/main has ever carried is a discharge, whatever the provenance`, () => {
+    assert.deepEqual(run({ extra: { mainEverCarried: (id) => id === id2 } }), []);
+  });
+
+  test(`#3587 ${P} (b): a row the --publishing file carries verbatim is not dropped`, () => {
+    const errors = run({ extra: { publishingHtml: titledLiveView(tc, [own1, theirs2]) } });
+    assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 0, JSON.stringify(errors));
+  });
+
+  test(`#3587 ${P} (c): the same ${id2} under a different title on the live page is a row-id-collision naming both titles`, () => {
+    const errors = run({
+      working: reg([[101, 'mine one'], [102, MINE_TITLE]], 103),
+      tracked: [own1, { id: id2, body: 'mine', title: MINE_TITLE }],
+      published: [own1, theirs2],
+    });
+    const collision = ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX);
+    assert.equal(collision.length, 1, JSON.stringify(errors));
+    assert.match(collision[0], new RegExp(`^row-id-collision: ${id2}:`));
+    assert.ok(collision[0].includes(MINE_TITLE) && collision[0].includes(THEIRS_TITLE), collision[0]);
+    // the register's next-id (103) and the live page's highest + 1 (103)
+    assert.match(collision[0], new RegExp(`Renumber your row to ${P}103\\b`));
+  });
+
+  test(`#3587 ${P} (c): ${id2} on origin/main under a different title, with a merge-base lacking it, is the merged-lane collision`, () => {
+    const mineRegister = reg([[101, 'mine one'], [102, 'Mine']], 103);
+    const mainRegister = reg([[101, 'mine one'], [102, 'Theirs']], 104);
+    const mainPage = titledLiveView(tc, [own1, { id: id2, body: 'theirs', title: 'Theirs' }]);
+    const options = (mergeBaseText) => ({
+      direction: 'extraOnly',
+      baselineText: mainRegister,
+      trackedLiveViewHtml: titledLiveView(tc, [own1, { id: id2, body: 'mine', title: 'Mine' }]),
+      baselineLiveViewText: mainPage,
+      publishedProvenance: merged(['B101', 'B102', id1, id2]),
+      mergeBaseText,
+    });
+    const errors = checkLiveView(mineRegister, mainPage, options(reg()));
+    const collision = ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX);
+    assert.equal(collision.length, 1, JSON.stringify(errors));
+    assert.match(collision[0], new RegExp(`^row-id-collision: ${id2}:`));
+    // origin/main's next-id (104) clears the register's (103)
+    assert.match(collision[0], new RegExp(`Renumber your row to ${P}104\\b`));
+    // rebased onto main (the merge-base has it): main's own row, no collision
+    const rebased = checkLiveView(mineRegister, mainPage, options(mainRegister));
+    assert.equal(ofPrefix(rebased, ROW_ID_COLLISION_ERROR_PREFIX).length, 0, JSON.stringify(rebased));
+  });
+
+  test(`#3587 ${P} (d): --discharging ${id1} for a row the register dropped is consumed and silent; a name that is not live-only is refused`, () => {
+    const dropped = reg([[102, 'later row']], 103);
+    assert.deepEqual(
+      run({ working: dropped, tracked: [], published: [own1], extra: { dischargingIds: [id1] } }),
+      [],
+    );
+    // Without the name the register is BEHIND what is published.
+    const unnamed = run({ working: dropped, tracked: [], published: [own1] });
+    assert.equal(unnamed.length, 1, JSON.stringify(unnamed));
+    assert.match(unnamed[0], new RegExp(`${tc.label} section has row ${id1}`));
+    // Naming an ID the live page does not carry is the existing #2272 refusal.
+    const notLive = run({ published: [own1], extra: { dischargingIds: [id2] } });
+    assert.equal(ofPrefix(notLive, DISCHARGE_NAME_ERROR_PREFIX).length, 1, JSON.stringify(notLive));
+  });
+
+  test(`#3587 ${P} (e): a row in "Retired carried rows" (PR closed unmerged, owner confirmed) is not required to be carried`, () => {
+    const retired = `| ${id2} | #3505 | 2026-10-07 | closed in favour of #3525 |\n`;
+    const extra = { retiredPrStates: closedStates('CLOSED'), rowOwnerLookup: ownerOfId2 };
+    assert.deepEqual(run({ working: withRetired(reg(), retired), extra }), []);
+    const stillOwed = run({ extra });
+    assert.equal(ofPrefix(stillOwed, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, JSON.stringify(stillOwed));
+  });
+
+  test(`#3587 ${P}: a register with no ${P} row or marker still classifies the page's ${id2}`, () => {
+    const errors = run({
+      working: MAIN_B(),
+      baseline: MAIN_B(),
+      tracked: [],
+      published: [theirs2],
+      extra: { rowOwnerLookup: ownerOfId2 },
+    });
+    const unmerged = ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX);
+    assert.equal(unmerged.length, 1, JSON.stringify(errors));
+    assert.ok(unmerged[0].includes(`${tc.label} section`), unmerged[0]);
+  });
+}
+
+test("#3587 (f): a live page with — rows and a ? Unconfirmed section against today's register shape has no new error", () => {
+  const legacyRegister = `${MAIN_B()}
+## Blocked — hardware not available
+
+### Not numbered yet
+
+Text.
+
+## Unconfirmed — not debts until substantiated
+
+- **fs-38** x
+`;
+  assert.deepEqual(checkRegister(legacyRegister), []);
+  const live = `${buildRowContentLiveView(baseRows, 'B')}
+  <section class="group is-blocked" id="blocked">
+    <h3 class="gtitle"><span class="gtag">BLK</span> Blocked <span class="gcount">1 rows</span></h3>
+    <details class="item"><summary><span class="num">—</span><span class="iname">t</span></summary></details>
+  </section>
+  <section class="group is-soft" id="unconfirmed">
+    <h3 class="gtitle"><span class="gtag">?</span> Unconfirmed <span class="gcount">1 rows</span></h3>
+    <details class="item"><summary><span class="num">—</span><span class="iname">t</span></summary></details>
+  </section>
+`;
+  for (const direction of ['extraOnly', 'both']) {
+    const errors = checkLiveView(legacyRegister, live, {
+      direction,
+      baselineText: legacyRegister,
+      publishedProvenance: UNMERGED,
+    });
+    assert.deepEqual(errors, [], `${direction}: ${JSON.stringify(errors)}`);
+  }
+});
