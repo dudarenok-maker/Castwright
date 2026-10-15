@@ -107,6 +107,9 @@ function makeRaceDeps(
       voiceUuid: string,
       _opts: { deleteEntryDir?: boolean; deleteMasterClip?: boolean } = {},
     ): Promise<{ failed: string[] }> => {
+      // A real async boundary before the delete, like the real purge's fs
+      // unlinks: an UNAWAITED re-purge then leaves the `.pt` present.
+      await new Promise<void>((r) => setTimeout(r, 0));
       pts.delete(cloneStorageKey('qwen', voiceUuid));
       return { failed: [] };
     },
