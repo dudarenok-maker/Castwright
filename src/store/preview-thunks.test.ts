@@ -141,6 +141,16 @@ describe('restoreUnrecordedPreview (plan 286, spec §4 stub table)', () => {
     expect(store.getState().ui.previewRegen?.previewChapterId).toBe(9);
     expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' });
   });
+  it('#3400: a restore settling for a preview that was since replaced by another character\'s (same book and chapter) leaves it alone', async () => {
+    let release!: (v: unknown) => void;
+    apiMock.restorePreviousUnrecorded.mockReturnValueOnce(new Promise((r) => (release = r)));
+    const store = makeStore('A');
+    const p = store.dispatch(restoreUnrecordedPreview(open(store, true)));
+    store.dispatch(uiActions.setPreviewRegen(PREVIEW({ characterId: 'other', stub: stub(true) })));
+    release('restored'); await p;
+    expect(store.getState().ui.previewRegen?.characterId).toBe('other');
+    expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' });
+  });
   it.each([
     ['has_revision', 409, "This chapter has an older pending review — resolve it from the chapter's review first"],
     ['chapter_busy', 409, 'This chapter is busy — try again when it finishes'],
