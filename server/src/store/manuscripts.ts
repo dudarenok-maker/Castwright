@@ -23,6 +23,12 @@ export interface ChapterHint {
       same field on BookStateJson.chapters[] and is rehydrated from there
       after a server restart. */
   excluded?: boolean;
+  /** `true` only when the app itself made the title up (the fallback
+      `Chapter N` for a chapter with no heading). Absent means the title came
+      from the manuscript (heading, EPUB NCX / MOBI TOC label, PDF outline) or
+      from the user. Never persisted as `false`: write `true` or omit the key.
+      Server-only; not in openapi.yaml or the frontend types. */
+  titleSynthesized?: boolean;
 }
 
 export interface ManuscriptRecord {
