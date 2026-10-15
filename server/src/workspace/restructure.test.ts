@@ -32,6 +32,7 @@ function makeState(
     audioModelKey?: string;
     audioRenderedAt?: string;
     uuid?: string;
+    titleSynthesized?: boolean;
   }>,
 ): BookStateJson {
   return {
@@ -53,6 +54,7 @@ function makeState(
       ...(c.audioModelKey ? { audioModelKey: c.audioModelKey } : {}),
       ...(c.audioRenderedAt ? { audioRenderedAt: c.audioRenderedAt } : {}),
       ...(c.uuid ? { uuid: c.uuid } : {}),
+      ...(c.titleSynthesized ? { titleSynthesized: true } : {}),
     })),
     coverGradient: ['#000', '#fff'],
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -584,5 +586,107 @@ describe('uuid preservation across restructure (srv-35)', () => {
     expect(result.state.chapters[0].uuid).toBe('u-a');
     expect(result.state.chapters[1].uuid).toBe('u-b');
     expect(result.state.chapters[1].excluded).toBe(true);
+  });
+});
+
+/* -- title source (#3628): only app-made titles are renumbered ------ */
+
+describe('renumbering honours titleSynthesized (#3628)', () => {
+  const titles = ['Prologue', 'Chapter 1', 'Chapter 2', 'Chapter 3'];
+  const book = (synth: boolean) =>
+    makeState(
+      titles.map((title, i) => ({
+        id: i + 1,
+        title,
+        ...(synth && i > 0 ? { titleSynthesized: true } : {}),
+      })),
+    );
+  const bookHints = () =>
+    makeHints(titles.map((title, i) => ({ id: i + 1, title, body: `b${i + 1}` })));
+  const bookSentences = () => titles.map((_, i) => s(1, i + 1, 'narr', `One ${i + 1}.`));
+
+  it('(A) leaves manuscript headings without the flag untouched', () => {
+    const result = applyExclude(book(false), bookHints(), bookSentences(), {
+      chapterIds: [4],
+      excluded: true,
+    });
+    expect(result.state.chapters.map((c) => c.title)).toEqual(titles);
+  });
+
+  it('(B) renumbers chapters flagged titleSynthesized', () => {
+    const result = applyExclude(book(true), bookHints(), bookSentences(), {
+      chapterIds: [4],
+      excluded: true,
+    });
+    expect(result.state.chapters.map((c) => c.title)).toEqual([
+      'Prologue',
+      'Chapter 2',
+      'Chapter 3',
+      'Chapter 4',
+    ]);
+  });
+
+  it('(C) reorder and title-less merge carry the flag to the new chapter', () => {
+    const reordered = applyReorder(book(true), bookHints(), bookSentences(), {
+      order: [1, 3, 2, 4],
+    });
+    expect(reordered.state.chapters.map((c) => c.titleSynthesized)).toEqual([
+      undefined,
+      true,
+      true,
+      true,
+    ]);
+
+    // Merge 2+3: no explicit title → first member's title and flag.
+    const merged = applyMerge(book(true), bookHints(), bookSentences(), {
+      chapterIds: [2, 3],
+    });
+    expect(merged.state.chapters[1].titleSynthesized).toBe(true);
+    // A merge led by an unflagged member stays unflagged.
+    const mergedHeading = applyMerge(book(true), bookHints(), bookSentences(), {
+      chapterIds: [1, 2],
+    });
+    expect(mergedHeading.state.chapters[0].titleSynthesized).toBeUndefined();
+  });
+
+  it('(D) rename, merge mergedTitle and split newTitle drop the flag for good', () => {
+    const renamed = applyRename(book(true), bookHints(), bookSentences(), {
+      chapterId: 3,
+      title: 'Chapter 9',
+    });
+    const mergedExplicit = applyMerge(book(true), bookHints(), bookSentences(), {
+      chapterIds: [2, 3],
+      mergedTitle: 'Chapter 9',
+    });
+    const longHints = makeHints([
+      { id: 1, title: 'Prologue', body: 'p' },
+      { id: 2, title: 'Chapter 1', body: 'Alpha one. Beta two.' },
+    ]);
+    const splitExplicit = applySplit(
+      makeState([
+        { id: 1, title: 'Prologue' },
+        { id: 2, title: 'Chapter 1', titleSynthesized: true },
+      ]),
+      longHints,
+      [s(1, 1, 'narr', 'P.'), s(1, 2, 'narr', 'Alpha one.'), s(2, 2, 'narr', 'Beta two.')],
+      { chapterId: 2, afterSentenceId: 1, newTitle: 'Chapter 9' },
+    );
+
+    const cases: Array<[string, ReturnType<typeof applyRename>, number]> = [
+      ['rename', renamed, 3],
+      ['merge', mergedExplicit, 2],
+      ['split', splitExplicit, 3],
+    ];
+    for (const [label, result, id] of cases) {
+      const ch = result.state.chapters.find((c) => c.id === id)!;
+      expect(ch.title, label).toBe('Chapter 9');
+      expect('titleSynthesized' in ch, label).toBe(false);
+      // A later restructure must not renumber the explicit title.
+      const later = applyExclude(result.state, result.hints, result.sentences, {
+        chapterIds: [1],
+        excluded: true,
+      });
+      expect(later.state.chapters.find((c) => c.id === id)!.title, label).toBe('Chapter 9');
+    }
   });
 });
