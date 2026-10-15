@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { parseEpub, UnusableEpubError, decodeEntities } from './epub.js';
+import { parseEpub, UnusableEpubError, decodeEntities, mergeChapterTitle } from './epub.js';
 
 const { mkdtempSpy } = vi.hoisted(() => ({ mkdtempSpy: vi.fn() }));
 
@@ -313,5 +313,32 @@ describe('parseEpub — unusable-EPUB diagnostics', () => {
     await expect(parseEpub(buf, { fileName: 'sample-epub-image-only.epub' })).rejects.toThrow(
       /image-only/i,
     );
+  });
+});
+
+describe('mergeChapterTitle — titleSynthesized (#3628)', () => {
+  it('flags the made-up "Chapter N" when there is no NCX label and no body heading', () => {
+    expect(mergeChapterTitle('', null, 3)).toEqual({ title: 'Chapter 3', synthesized: true });
+  });
+
+  it('does not flag a generic NCX label such as "Chapter 1"', () => {
+    expect(mergeChapterTitle('Chapter 1', null, 1)).toEqual({
+      title: 'Chapter 1',
+      synthesized: false,
+    });
+  });
+
+  it('does not flag an empty NCX label that falls back to a body heading', () => {
+    expect(mergeChapterTitle('', 'The Berth', 2)).toEqual({
+      title: 'The Berth',
+      synthesized: false,
+    });
+  });
+
+  it('does not flag a generic NCX label merged with a descriptive body heading', () => {
+    expect(mergeChapterTitle('Chapter 1', 'The Berth', 1)).toEqual({
+      title: 'Chapter 1 — The Berth',
+      synthesized: false,
+    });
   });
 });

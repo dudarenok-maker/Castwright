@@ -55,7 +55,7 @@ vi.mock('@lingo-reader/mobi-parser', () => ({
   },
 }));
 
-import { parseMobi, DrmProtectedError } from './mobi.js';
+import { parseMobi, DrmProtectedError, resolveMobiChapterTitle } from './mobi.js';
 
 /* Build a minimal MOBI-shaped Buffer with a controllable encryption byte
    at the PalmDOC header position. PDB header is 78 bytes; record 0
@@ -271,5 +271,32 @@ describe('parseMobi — chapters', () => {
     await expect(parseMobi(buf, { fileName: 'x.mobi' })).rejects.toThrow(
       /no extractable text/i,
     );
+  });
+});
+
+describe('resolveMobiChapterTitle — titleSynthesized (#3628)', () => {
+  it('flags the made-up "Chapter N" when there is no TOC label and no body heading', () => {
+    expect(resolveMobiChapterTitle('', null, 4)).toEqual({ title: 'Chapter 4', synthesized: true });
+  });
+
+  it('does not flag a generic TOC label such as "Chapter 1"', () => {
+    expect(resolveMobiChapterTitle('Chapter 1', null, 1)).toEqual({
+      title: 'Chapter 1',
+      synthesized: false,
+    });
+  });
+
+  it('does not flag an empty TOC label that falls back to a body heading', () => {
+    expect(resolveMobiChapterTitle('', 'The Berth', 2)).toEqual({
+      title: 'The Berth',
+      synthesized: false,
+    });
+  });
+
+  it('does not flag a generic TOC label merged with a descriptive body heading', () => {
+    expect(resolveMobiChapterTitle('Chapter 1', 'The Berth', 1)).toEqual({
+      title: 'Chapter 1 — The Berth',
+      synthesized: false,
+    });
   });
 });
