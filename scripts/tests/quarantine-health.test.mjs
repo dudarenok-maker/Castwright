@@ -1479,6 +1479,80 @@ test('main() end-to-end: parse-failure dispatch reaches $GITHUB_STEP_SUMMARY (Fi
   }
 });
 
+// Drives main() with a fake spawn whose vitest output cannot be read (#3626):
+// every run must be flagged, the summary and ::error line must say so, and the
+// step must exit non-zero rather than concluding green with all rows `unknown`.
+for (const [label, stdout] of [
+  ['unparseable stdout', 'not json at all'],
+  ['payload with no testResults array', '{}'],
+]) {
+  test(`main() end-to-end: ${label} from vitest fails loud (#3626)`, async () => {
+    const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { main } = await import('../quarantine-health.mjs');
+
+    const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-main-test-'));
+    const registerPath = join(tempDir, 'test-register.md');
+    const summaryPath = join(tempDir, 'summary.md');
+    // One frontend and one server row, no tracking issue (so no `gh` call).
+    writeFileSync(
+      registerPath,
+      `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| \`fe case\` | \`src/lib/foo.test.ts\` | timing | flaky | — | Quarantined |
+| \`srv case\` | \`server/src/routes/foo.test.ts\` | timing | flaky | — | Quarantined |
+`,
+      'utf8',
+    );
+
+    // No report file is ever written, so classifyRunResult falls back to stdout.
+    let calls = 0;
+    const fakeSpawn = () => {
+      calls++;
+      return { status: 0, stdout, stderr: '' };
+    };
+
+    const originalSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+    const originalActions = process.env.GITHUB_ACTIONS;
+    const originalExitCode = process.exitCode;
+    const originalLog = console.log;
+    const originalError = console.error;
+    const logged = [];
+    try {
+      process.env.GITHUB_STEP_SUMMARY = summaryPath;
+      process.env.GITHUB_ACTIONS = 'true';
+      process.exitCode = 0;
+      console.log = (...a) => logged.push(a.join(' '));
+      console.error = () => {};
+
+      main(registerPath, fakeSpawn);
+
+      assert.equal(process.exitCode, 1, 'unparseable vitest output must exit non-zero');
+      const written = readFileSync(summaryPath, 'utf8');
+      // Frontend run + both server configs, every planned run: all counted.
+      assert.ok(calls >= 3, 'frontend and both server configs should have run');
+      assert.ok(
+        written.includes(`**Runner problem: vitest output for ${calls} run(s) could not be parsed**`),
+        `summary should count all ${calls} unparseable runs`,
+      );
+      assert.ok(
+        logged.some((l) => l.startsWith('::error title=quarantine-health::')),
+        'a GitHub Actions ::error annotation should be printed',
+      );
+    } finally {
+      console.log = originalLog;
+      console.error = originalError;
+      if (originalSummaryPath === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+      else process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+      if (originalActions === undefined) delete process.env.GITHUB_ACTIONS;
+      else process.env.GITHUB_ACTIONS = originalActions;
+      process.exitCode = originalExitCode;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+}
+
 test('the run-loop wall-clock budget fits inside the workflow job cap with margin (finding 3 arithmetic)', () => {
   // The budget check (`budgetExceeded`, called BEFORE starting each run)
   // guarantees the run loop's own total worst-case elapsed time never

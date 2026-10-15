@@ -1055,7 +1055,7 @@ export function emit(report) {
   if (summaryPath) appendFileSync(summaryPath, report + '\n');
 }
 
-export function main(registerPath = REGISTER_PATH) {
+export function main(registerPath = REGISTER_PATH, spawn = spawnSync) {
   let markdown;
   try {
     markdown = readFileSync(registerPath, 'utf8');
@@ -1116,14 +1116,14 @@ export function main(registerPath = REGISTER_PATH) {
       const outcomes = [];
       const failedDomains = new Set();
       if (frontendFiles.length) {
-        const fe = runVitestJson(ROOT, undefined, frontendFiles);
+        const fe = runVitestJson(ROOT, undefined, frontendFiles, spawn);
         if (fe.runOutcome !== 'ok') failedDomains.add('frontend');
         if (fe.unparseable) unparseableRuns++;
         outcomes.push(...flattenVitestJson(fe));
       }
       if (serverFiles.length) {
-        const serverMain = runVitestJson(serverRoot, 'vitest.config.ts', serverFiles);
-        const serverSlow = runVitestJson(serverRoot, 'vitest.config.slow.ts', serverFiles);
+        const serverMain = runVitestJson(serverRoot, 'vitest.config.ts', serverFiles, spawn);
+        const serverSlow = runVitestJson(serverRoot, 'vitest.config.slow.ts', serverFiles, spawn);
         // Two distinct flags, not one 'server' flag — see aggregate()'s
         // comment (re-review finding 5): a config crashing must not discard
         // the OTHER config's good results for the files it owns.
