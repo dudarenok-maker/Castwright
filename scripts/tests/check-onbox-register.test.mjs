@@ -426,6 +426,90 @@ test('BLK/UNC (g): parseTitledSections keys a section iff it exists, even with n
   assert.deepEqual([...one.groups], [['BLK', [101, 103]]]);
 });
 
+// #3587 child 3: the live-view parse layer and baseline helpers read BLK/UNC IDs.
+const item = (id, title) =>
+  `<details class="item"><summary><span class="num">${id}</span><span class="iname">${title}</span></summary><div class="body"><p>b ${id}</p></div></details>`;
+const blkUncLiveView = ({ blkTag = 'BLK', uncTag = 'UNC', extraBlk = '' } = {}) => `
+<section class="group is-blocked" id="blocked"><h3><span class="gtag">${blkTag}</span> Blocked <span class="gcount">2 rows</span></h3>
+${item('BLK101', 'no gpu')}${item('—', 'legacy blocked')}${extraBlk}</section>
+<section class="group is-soft" id="unconfirmed"><h3><span class="gtag">${uncTag}</span> Unconfirmed <span class="gcount">1 row</span></h3>
+${item('UNC101', 'maybe')}${item('—', 'legacy unconfirmed')}</section>
+`;
+
+test('BLK/UNC child3 (a): row bodies, titles and blocks read BLK/UNC rows and ignore a — row', () => {
+  const html = blkUncLiveView();
+  const { bodies, errors } = onbox.parseLiveViewRowBodies(html);
+  assert.deepEqual(errors, []);
+  assert.deepEqual([...bodies.keys()], ['BLK101', 'UNC101']);
+  assert.deepEqual([...onbox.parseLiveViewRowTitles(html)], [['BLK101', 'no gpu'], ['UNC101', 'maybe']]);
+  assert.deepEqual([...onbox.parseLiveViewRowBlocks(html).keys()], ['BLK101', 'UNC101']);
+});
+
+test('BLK/UNC child3 (b): parseLiveViewSections yields BLK/UNC keys; the old ? page yields no UNC key', () => {
+  const { sections, duplicateLetters, invalidRowIds } = onbox.parseLiveViewSections(blkUncLiveView());
+  assert.deepEqual(sections.get('BLK'), { headerCount: 2, rowIds: ['BLK101'] });
+  assert.deepEqual(sections.get('UNC'), { headerCount: 1, rowIds: ['UNC101'] });
+  assert.equal(duplicateLetters.size, 0);
+  assert.deepEqual(invalidRowIds, []);
+  const old = onbox.parseLiveViewSections(blkUncLiveView({ uncTag: '?' }));
+  assert.equal(old.sections.has('UNC'), false);
+  assert.deepEqual(old.invalidRowIds, []);
+  const dup = onbox.parseLiveViewSections(blkUncLiveView() + blkUncLiveView().split('\n').slice(0, 3).join('\n') + '</section>');
+  assert.ok(dup.duplicateLetters.has('BLK'));
+});
+
+test('BLK/UNC child3 (b): an old-format page and a BLK/UNC page add no checkLiveView error', () => {
+  const reg = buildRegister();
+  assert.deepEqual(checkLiveView(reg, buildLiveView()), []);
+  const numbered = buildLiveView().replace(
+    '<span class="num">—</span><span class="iname">something</span>',
+    '<span class="num">BLK101</span><span class="iname">something</span>',
+  );
+  assert.deepEqual(checkLiveView(reg, numbered), []);
+});
+
+test('BLK/UNC child3 (c): resolveBaselineGroups carries BLK/UNC into bodyGroups/nextIds/rowTitles, not tableLetters', () => {
+  const withIds = onbox.resolveBaselineGroups(
+    titledFixture({
+      blocked: '\n<!-- next-id: BLK103 -->\n\n### BLK101 · x\n\n### BLK102 · y\n',
+      unconfirmed: '\n<!-- next-id: UNC102 -->\n\n- **UNC101 · u** (z)\n',
+    }),
+  );
+  assert.deepEqual(withIds.bodyGroups.get('BLK'), [101, 102]);
+  assert.deepEqual(withIds.bodyGroups.get('UNC'), [101]);
+  assert.equal(withIds.nextIds.get('BLK'), 103);
+  assert.equal(withIds.nextIds.get('UNC'), 102);
+  assert.equal(withIds.rowTitles.get('UNC101'), 'u');
+  assert.deepEqual([...withIds.tableLetters], ['A']);
+  const legacy = onbox.resolveBaselineGroups(
+    titledFixture({ blocked: '\n### Not numbered\n', unconfirmed: '\n- **fs-38** x\n' }),
+  );
+  assert.notEqual(legacy, null);
+  assert.equal(legacy.bodyGroups.has('BLK'), false);
+  assert.equal(legacy.bodyGroups.has('UNC'), false);
+  assert.equal(legacy.nextIds.has('BLK'), false);
+  assert.equal(legacy.nextIds.has('UNC'), false);
+});
+
+test('BLK/UNC child3 (d): resolveMainEverCarried and resolveRowOwner accept BLK/UNC IDs', () => {
+  const calls = [];
+  const runner = (args) => {
+    calls.push(args);
+    return { status: 0, stdout: 'abc123\n' };
+  };
+  assert.equal(onbox.resolveMainEverCarried('/r', 'reg.md', 'main', 'BLK101', runner), true);
+  assert.equal(onbox.resolveMainEverCarried('/r', 'reg.md', 'main', 'UNC101', runner), true);
+  assert.equal(onbox.resolveMainEverCarried('/r', 'reg.md', 'main', 'nope', runner), false);
+  assert.ok(calls[0].includes('^### BLK101[^0-9]'));
+  assert.ok(calls[1].includes('^- \\*\\*UNC101[^0-9]'));
+  assert.equal(calls.length, 2, 'a non-ID makes no git call');
+  const owner = (id) => onbox.resolveRowOwner('/r', 'live.html', id, { title: 't', mainRef: 'main' }, () => ({ status: 0, stdout: '' }));
+  for (const id of ['BLK101', 'UNC101']) assert.notEqual(owner(id), undefined, id);
+  const seen = [];
+  onbox.resolveRowOwner('/r', 'live.html', 'UNC101', { title: 't', mainRef: 'main' }, (args) => (seen.push(args), { status: 0, stdout: '' }));
+  assert.ok(seen.length > 0, 'UNC101 reaches git');
+});
+
 test('4b: a row ID at or above its group next-id is reported', () => {
   const text = registerFixture({
     glance: [['A', 1]],

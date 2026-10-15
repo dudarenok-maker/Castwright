@@ -368,7 +368,7 @@ export function parseLiveViewRowBodies(liveViewHtml) {
       continue;
     }
     const id = idMatch[1].trim();
-    if (!/^[A-Z]\d+$/.test(id)) continue;
+    if (!ROW_ID_REGEX.test(id)) continue;
     const summaryMatch = block.match(/<summary>([\s\S]*?)<\/summary>/);
     if (!summaryMatch) {
       errors.push(
@@ -399,7 +399,8 @@ function hashRowContent(plainText) {
 // `parseLiveViewRowBodies` reads rows. Normalised with `htmlCellText` (tags
 // and whitespace) plus the handful of entities a hand-authored page uses, so
 // only a genuinely different title compares unequal. Rows whose ID is not a
-// plain `<Letter><N>` (Blocked/Unconfirmed use `—`) are skipped, as there.
+// row ID (`<Letter><N>`, `BLK<N>`, `UNC<N>`; a legacy `—` Blocked/Unconfirmed
+// row has none) are skipped, as there.
 const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 function rowTitleKey(html) {
   return htmlCellText(html)
@@ -418,7 +419,7 @@ export function parseLiveViewRowTitles(liveViewHtml) {
     const nameMatch = block.match(/<span class="iname">([\s\S]*?)<\/span>/);
     if (!idMatch || !nameMatch) continue;
     const id = idMatch[1].trim();
-    if (/^[A-Z]\d+$/.test(id)) titles.set(id, rowTitleKey(nameMatch[1]));
+    if (ROW_ID_REGEX.test(id)) titles.set(id, rowTitleKey(nameMatch[1]));
   }
   return titles;
 }
@@ -433,7 +434,7 @@ export function parseLiveViewRowBlocks(liveViewHtml) {
     const idMatch = m[0].match(/<span class="num">([^<]*)<\/span>/);
     if (!idMatch) continue;
     const id = idMatch[1].trim();
-    if (/^[A-Z]\d+$/.test(id)) blocks.set(id, m[0].replace(/\r\n/g, '\n'));
+    if (ROW_ID_REGEX.test(id)) blocks.set(id, m[0].replace(/\r\n/g, '\n'));
   }
   return blocks;
 }
@@ -545,7 +546,7 @@ function liveViewRowIdSet(liveViewHtml) {
   const ids = new Set();
   for (const m of stripHtmlComments(liveViewHtml).matchAll(/<span class="num">([^<]*)<\/span>/g)) {
     const id = m[1].trim();
-    if (/^[A-Z]\d+$/.test(id)) ids.add(id);
+    if (ROW_ID_REGEX.test(id)) ids.add(id);
   }
   return ids;
 }
@@ -1038,12 +1039,14 @@ function parseLiveViewGlance(html) {
   return { groups, malformedLetters, duplicateLetters };
 }
 
-// Parses the live view's group sections into letter → { headerCount, rowIds }.
+// Parses the live view's group sections into tag → { headerCount, rowIds }.
 // Rows are collected per SECTION rather than by their own ID letter, so a row
 // filed under the wrong group is caught rather than silently landing in the
-// right bucket. Sections whose `gtag` is not a single uppercase letter (the
-// `BLK` and `?` sections) are skipped — the markdown's own glance table marks
-// their rows with `—` and excludes them from the owed total too.
+// right bucket. A section whose `gtag` is a single uppercase letter, `BLK` or
+// `UNC` (#3587) is parsed; any other tag (the legacy `?` Unconfirmed section)
+// is skipped. A legacy Blocked/Unconfirmed row's `—` is tolerated and carries
+// no ID, as the markdown's glance table marks those rows; none of these rows
+// count toward the owed total.
 //
 // The split marker matches a whole `<section>` tag whose class list CONTAINS
 // `group`, wherever the class attribute sits among the others. Two rounds of
@@ -1061,29 +1064,31 @@ function parseLiveViewGlance(html) {
 //     quietly rather than failing loudly (#4, #5).
 // `(?:\s[^"]*)?` requires whitespace after `group`, so `grouping` no longer
 // matches; the leading `[^>]*` makes attribute order irrelevant.
-function parseLiveViewSections(html) {
+export function parseLiveViewSections(html) {
   const sections = new Map();
   const duplicateLetters = new Set();
   const invalidRowIds = [];
   const blocks = html.split(/<section\b[^>]*\bclass=\u0022group(?:\s[^\u0022]*)?\u0022[^>]*>/).slice(1);
   for (const block of blocks) {
     const tagMatch = block.match(/<span class="gtag">([^<]*)<\/span>/);
-    if (!tagMatch || !/^[A-Z]$/.test(tagMatch[1].trim())) continue;
+    // A lettered group, or a `BLK`/`UNC` section (#3587); the legacy `?`
+    // Unconfirmed tag (and any other non-letter tag) stays skipped.
+    if (!tagMatch || !/^(?:[A-Z]|BLK|UNC)$/.test(tagMatch[1].trim())) continue;
     const letter = tagMatch[1].trim();
     const countMatch = block.match(/<span class="gcount">(\d+) rows?<\/span>/);
     const allIds = [...block.matchAll(/<span class="num">([^<]*)<\/span>/g)].map((m) =>
       m[1].trim(),
     );
-    const rowIds = allIds.filter((id) => /^[A-Z]\d+$/.test(id));
-    // A `num` that is neither a row ID nor the `—` used by the Blocked and
-    // Unconfirmed sections is REPORTED, not dropped. Silently filtering it was
+    const rowIds = allIds.filter((id) => ROW_ID_REGEX.test(id));
+    // A `num` that is neither a row ID nor the legacy `—` of an unnumbered
+    // Blocked/Unconfirmed row is REPORTED, not dropped. Silently filtering it was
     // the inverse of the markdown side, which rejects the same convention
     // violation loudly (`### A19b` → invalidRowHeadings): a live-view row
     // numbered `A31b`, `a32` or `A&nbsp;32` used to vanish from the comparison
     // entirely, so the page carried a row the register did not and the check
     // stayed green (round 2, #1).
     for (const id of allIds) {
-      if (!/^[A-Z]\d+$/.test(id) && id !== '—') invalidRowIds.push({ letter, id });
+      if (!ROW_ID_REGEX.test(id) && id !== '—') invalidRowIds.push({ letter, id });
     }
     // Same last-writer-wins hazard as the glance table above: two sections
     // carrying the same `gtag` would leave only one visible, and the page
@@ -1130,7 +1135,7 @@ function parseLiveViewSections(html) {
 // extraction — no second parser — once `checkRegister` has already vouched
 // for the text; the fence-stripping/glance-section lookups below are just
 // pulling out what `checkRegister` already confirmed is there.
-function resolveBaselineGroups(baselineText) {
+export function resolveBaselineGroups(baselineText) {
   if (typeof baselineText !== 'string') return null;
   if (checkRegister(baselineText).length > 0) return null;
   const { text: strippedBaseline } = stripFences(baselineText);
@@ -1155,6 +1160,20 @@ function resolveBaselineGroups(baselineText) {
     const titleMatch = section.title.match(/^Group ([A-Z])\b/);
     if (!titleMatch) continue;
     nextIds.set(titleMatch[1], parseNextIdMarker(section.body, titleMatch[1]));
+  }
+  // #3587: the Blocked/Unconfirmed sections' BLK/UNC rows and markers join
+  // `bodyGroups` and `nextIds` (but NOT `tableLetters`, which mirrors the glance
+  // table). Accept, never require: a section with no ID row and no marker (the
+  // legacy unnumbered form, today's `main`) adds no key.
+  const { groups: baselineTitledGroups } = parseTitledSections(baselineSections);
+  for (const { prefix, titleRegex } of TITLED_SECTIONS) {
+    const rows = baselineTitledGroups.get(prefix);
+    if (rows === undefined) continue;
+    const section = baselineSections.find((s) => titleRegex.test(s.title));
+    const marker = parseNextIdMarker(section.body, prefix);
+    if (rows.length === 0 && marker === null) continue;
+    baselineBodyGroups.set(prefix, rows);
+    nextIds.set(prefix, marker);
   }
   return {
     tableLetters: new Set(baselineTableGroups.keys()),
@@ -1779,7 +1798,7 @@ export function checkLiveView(
       `Live view: Group ${letter} has a row numbered "${id}", which is not a valid row ID. Rows are ${letter}1, ${letter}2, … — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
     );
   }
-  if (lvSections.size === 0) {
+  if (![...lvSections.keys()].some((key) => /^[A-Z]$/.test(key))) {
     errors.push(
       'Live view: no `<section class="group…">` blocks with a single-letter `gtag` found — no rows could be read. If the markup changed, update scripts/check-onbox-register.mjs.',
     );
@@ -1879,6 +1898,9 @@ export function checkLiveView(
     }
   }
   for (const letter of lvSections.keys()) {
+    // #3587: `BLK`/`UNC` sections are parsed but get no verdict here yet —
+    // their register-vs-page comparison is a later change in the chain.
+    if (letter === 'BLK' || letter === 'UNC') continue;
     if (!mdBodyGroups.has(letter)) {
       if (direction === 'extraOnly') {
         // #2199: whole-group discharge — same baseline check as the
@@ -2451,9 +2473,12 @@ export function resolveMergeBaseRegister(repoRoot, registerPath, mainRef, gitRun
 // common run makes no call. `true`/`false`, or `null` when git failed,
 // which grants no exemption.
 export function resolveMainEverCarried(repoRoot, registerPath, mainRef, id, gitRunner = runGitCommand) {
-  if (!/^[A-Z]\d+$/.test(id)) return false;
+  const parts = splitRowId(id);
+  if (!parts) return false;
+  // An Unconfirmed row is a `- **UNC<N> · …**` bullet (#3587), not a heading.
+  const anchor = parts.prefix === 'UNC' ? `^- \\*\\*${id}[^0-9]` : `^### ${id}[^0-9]`;
   const log = gitRunner(
-    ['log', '--format=%H', '-s', '-n', '1', '--first-parent', '--diff-merges=first-parent', '-G', `^### ${id}[^0-9]`, mainRef, '--', registerPath],
+    ['log', '--format=%H', '-s', '-n', '1', '--first-parent', '--diff-merges=first-parent', '-G', anchor, mainRef, '--', registerPath],
     repoRoot,
   );
   if (log.error || log.status !== 0 || typeof log.stdout !== 'string') return null;
@@ -2484,7 +2509,7 @@ export function resolveMainEverCarried(repoRoot, registerPath, mainRef, id, gitR
 // `missingCommits`. `null` when no commit introduced the row and none was
 // missing, when the title or `mainRef` is unknown, or when git failed.
 export function resolveRowOwner(repoRoot, liveViewPath, id, { title, mainRef, extraCommits } = {}, gitRunner = runGitCommand) {
-  if (typeof title !== 'string' || typeof mainRef !== 'string' || !mainRef || !/^[A-Z]\d+$/.test(id)) return null;
+  if (typeof title !== 'string' || typeof mainRef !== 'string' || !mainRef || !ROW_ID_REGEX.test(id)) return null;
   const roots = [];
   const missingCommits = [];
   for (const oid of Array.isArray(extraCommits) ? extraCommits : []) {
