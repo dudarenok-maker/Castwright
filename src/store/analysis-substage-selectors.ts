@@ -18,9 +18,12 @@ export const selectAnalysisBusyForBook = (state: RootState, bookId: string): boo
 
 /** #3435 — anything the user has started on this book: a manual analysis
     pass, an analysis run (main or subset), generation queued or rendering,
-    or a cast-design run. The layout's background re-run of emotion detection
+    or a cast-design run — and (#3400) a chapter restructure, which re-keys
+    the book's sentences under a detection run that snapshotted the old
+    structure. The layout's background re-run of emotion detection
     does not start while this holds and ends at once when it starts to. */
 export const selectBookHasForegroundWork = (state: RootState, bookId: string): boolean =>
+  state.ui?.restructuringBookId === bookId ||
   selectAnalysisBusyForBook(state, bookId) ||
   (state.analysis?.activeStream?.bookId === bookId && state.analysis.activeStream.state === 'running') ||
   (state.queue?.entries ?? []).some(

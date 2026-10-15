@@ -74,6 +74,10 @@ describe('analysis-substage selectors', () => {
     expect(selectBookHasForegroundWork(st(run('b1', 'running', 'subset')), 'b1')).toBe(true);
     expect(selectBookHasForegroundWork(st(run('b1', 'halted')), 'b1')).toBe(false);
     expect(selectBookHasForegroundWork(st(run('b2', 'running')), 'b1')).toBe(false);
+    // #3400 — a chapter restructure in flight for the book re-keys its sentences
+    expect(selectBookHasForegroundWork(st({ ui: { restructuringBookId: 'b1' } }), 'b1')).toBe(true);
+    expect(selectBookHasForegroundWork(st({ ui: { restructuringBookId: 'b2' } }), 'b1')).toBe(false);
+    expect(selectBookHasForegroundWork(st({ ui: { restructuringBookId: null } }), 'b1')).toBe(false);
   });
 
   it('selectAnalysisSubstage prefers prosody, then lowest bookId', () => {

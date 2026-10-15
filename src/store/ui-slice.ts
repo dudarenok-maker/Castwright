@@ -180,6 +180,12 @@ export interface UiState {
       analysis run started from that view; never written to UserSettings.
       Cleared for a manuscript once its pick has been sent on a start request. */
   analyzerPhasePicks: Record<string, { phase0?: string; phase1?: string }>;
+  /** #3400 — the book whose chapter restructure (merge / split / reorder /
+      exclude / refresh titles) is in flight, else null. A restructure re-keys
+      the book's sentences, so it counts as foreground work for the book
+      (selectBookHasForegroundWork): an emotion-detection run snapshotted the
+      old structure and ends, and none starts, until it is over. Transient. */
+  restructuringBookId: string | null;
 }
 
 const initialState: UiState = {
@@ -213,6 +219,7 @@ const initialState: UiState = {
   cloneReadinessGate: null,
   startGenerationPending: false,
   analyzerPhasePicks: {},
+  restructuringBookId: null,
 };
 
 export const uiSlice = createSlice({
@@ -404,6 +411,9 @@ export const uiSlice = createSlice({
         the watcher's rule 2 (Task 21), since its stub is gone. */
     clearPreviewForBook: (s, a: PayloadAction<string>) => {
       if (s.previewRegen?.bookId === a.payload) s.previewRegen = null;
+    },
+    setRestructuringBook: (s, a: PayloadAction<string | null>) => {
+      s.restructuringBookId = a.payload;
     },
     setOpenRevision: (s, a: PayloadAction<OpenRevision | null>) => {
       s.openRevision = a.payload;

@@ -1314,9 +1314,17 @@ export function Layout() {
      one background run at a time: the open book's. The run in flight, if
      any. */
   const prosodyBackground = useRef<{ id: string; ctrl: AbortController } | null>(null);
+  /* #3400 — a library-triggered run is not background work (its pill blocks the
+     book like a manual run's), so the foreground-work yield above does not
+     apply to it; a chapter restructure still ends it, because the restructure
+     re-keys the sentences it snapshotted. It stays marked unfinished, and the
+     open trigger runs it again. */
+  const prosodyLibraryRuns = useRef<Map<string, AbortController>>(new Map());
   useEffect(
     () =>
       store.subscribe(() => {
+        const restructuring = store.getState().ui.restructuringBookId;
+        if (restructuring) prosodyLibraryRuns.current.get(restructuring)?.abort();
         const bg = prosodyBackground.current;
         if (!bg || bg.ctrl.signal.aborted) return;
         const s = store.getState();
@@ -1359,6 +1367,12 @@ export function Layout() {
           }
           ctrl = new AbortController();
           prosodyBackground.current = { id, ctrl };
+        } else {
+          /* A restructure in flight re-keys the sentences this run would apply
+             by; it is picked up by the open trigger once the book is open. */
+          if (store.getState().ui.restructuringBookId === id) return;
+          ctrl = new AbortController();
+          prosodyLibraryRuns.current.set(id, ctrl);
         }
         dispatch(
           prosodyActions.setActive({
@@ -1420,7 +1434,10 @@ export function Layout() {
            transition; one that started keeps its mark for the open trigger. */
         if (!pillActive) prosodyConsidered.current.delete(id);
       } finally {
-        if (ctrl) {
+        if (ctrl && !background) {
+          if (prosodyLibraryRuns.current.get(id) === ctrl) prosodyLibraryRuns.current.delete(id);
+          if (pillActive) dispatch(prosodyActions.clear({ bookId: id }));
+        } else if (ctrl) {
           // Only its own pill: a manual run may have taken the book's entry.
           if (prosodyBackground.current?.ctrl === ctrl) prosodyBackground.current = null;
           if (pillActive && store.getState().prosody.activeStreams[id]?.background)

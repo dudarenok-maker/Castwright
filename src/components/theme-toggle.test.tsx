@@ -54,6 +54,7 @@ function makeStore({
     cloneReadinessGate: null,
     startGenerationPending: false,
     analyzerPhasePicks: {},
+    restructuringBookId: null,
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,

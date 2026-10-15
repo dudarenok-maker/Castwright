@@ -45,6 +45,7 @@ const baseState = (stage: Stage): UiState => ({
   cloneReadinessGate: null,
   startGenerationPending: false,
   analyzerPhasePicks: {},
+  restructuringBookId: null,
 });
 
 describe('uiSlice — openBook status→stage routing', () => {
