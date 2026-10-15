@@ -1327,3 +1327,24 @@ describe('AnalyzerCapabilityRejectedError → analyzer-request-rejected (#3084 P
     expect(r.remediation).toContain('Ollama structured output (analyzer.ollama.structuredOutput)');
   });
 });
+
+
+describe('classifyFailure — state-lock timeout from finalize (#3625)', () => {
+  it('curates a LockAcquisitionTimeoutError so the workspace path never reaches userMessage', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const r = classifyFailure(new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000));
+    expect(r.code).toBe('lock-contention');
+    expect(r.userMessage).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(r.userMessage).not.toContain('/abs/secret/path');
+    expect(r.remediation).toBe(FAILURE_REMEDIATIONS['lock-contention'].remediation);
+    expect(r.fatal).toBe(false);
+  });
+
+  it('describeSynthesisError of the same error broadcasts only the curated reason', async () => {
+    const { LockAcquisitionTimeoutError, LOCK_CONTENTION_REQUEST_ERROR } = await import('../workspace/file-lock.js');
+    const { describeSynthesisError } = await import('./generation-error.js');
+    const out = describeSynthesisError(new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000));
+    expect(out.errorReason).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+    expect(out.errorReason).not.toContain('/abs/secret/path');
+  });
+});
