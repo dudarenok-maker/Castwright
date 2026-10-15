@@ -819,3 +819,137 @@ Needs a real GPU.
   assert.equal(buildLiveView(md, built), built);
 });
 
+
+// --- BLK/UNC allocate-once IDs (#3587): Blocked/Unconfirmed shells keyed by ID ---
+
+function blkUncShell(num, iname, body) {
+  return `      <details class="item">
+        <summary><span class="num">${num}</span><span class="iname">${iname}</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">${body}</div>
+      </details>`;
+}
+
+function blockedSection(shells) {
+  return `<section class="group is-blocked" id="blocked">
+      <header><h3 class="gtitle">…<span class="gcount">${shells.length} rows</span></h3></header>
+${shells.join('\n')}
+  </section>`;
+}
+
+function unconfirmedSection(shells) {
+  return `<section class="group is-soft" id="unconfirmed">
+      <header><h3 class="gtitle">…<span class="gcount">${shells.length} rows</span></h3></header>
+${shells.join('\n')}
+  </section>`;
+}
+
+test('ID-bearing Blocked rows are keyed by ID, not position: swapping them in the markdown moves each body with its ID', () => {
+  const md = `## Blocked — hardware not available
+<!-- next-id: BLK103 -->
+
+### BLK102 · Second blocked thing
+### BLK101 · First blocked thing
+`;
+  const html = blockedSection([
+    blkUncShell('BLK101', 'First blocked thing', 'first body'),
+    blkUncShell('BLK102', 'Second blocked thing', 'second body'),
+  ]);
+  const next = reconcileRowShells(md, html);
+  assert.ok(next.indexOf('BLK102') < next.indexOf('BLK101'), 'md order must win');
+  assert.match(next, /BLK102<\/span>[\s\S]*?second body/);
+  assert.match(next, /BLK101<\/span>[\s\S]*?first body/);
+  assert.ok(next.indexOf('second body') < next.indexOf('BLK101'), 'second body stays with BLK102');
+});
+
+test('a new BLK102 row with no shell gets a placeholder shell numbered BLK102, which --check then reports as body-placeholder', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'register-build-'));
+  try {
+    const md = buildRegisterFixture() + `
+## Blocked — hardware not available
+<!-- next-id: BLK103 -->
+
+### BLK101 · fixture blocked item
+### BLK102 · A brand new blocked row
+`;
+    const html = buildLiveViewFixture().replace(
+      '<span class="num">—</span><span class="iname">fixture blocked item',
+      '<span class="num">BLK101</span><span class="iname">fixture blocked item',
+    );
+    const built = buildLiveView(md, html);
+    assert.match(built, /<span class="num">BLK102<\/span><span class="iname">A brand new blocked row<\/span>/);
+    assert.match(built, /class="body-placeholder"/);
+    writeFileSync(join(dir, 'register.md'), md);
+    writeFileSync(join(dir, 'live-view.html'), built);
+    const errors = [];
+    const original = console.error;
+    console.error = (...args) => errors.push(args.join(' '));
+    let exit;
+    try {
+      exit = main('register.md', 'live-view.html', { repoRoot: dir, check: true });
+    } finally {
+      console.error = original;
+    }
+    assert.equal(exit, 1);
+    assert.match(errors.join('\n'), /body-placeholder/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a legacy "—" Blocked shell is adopted by title: only its num becomes BLK101, body bytes unchanged', () => {
+  const md = `## Blocked — hardware not available
+<!-- next-id: BLK102 -->
+
+### BLK101 · Legacy blocked thing (#111)
+`;
+  const legacy = blkUncShell('—', 'Legacy blocked thing', 'legacy body <b>kept</b> $& verbatim');
+  const next = reconcileRowShells(md, blockedSection([legacy]));
+  assert.ok(next.includes(legacy.replace('<span class="num">—</span>', '<span class="num">BLK101</span>')));
+  assert.ok(!next.includes('<span class="num">—</span>'));
+});
+
+test('a legacy "—" Unconfirmed shell is adopted by iname prefix: only its num becomes UNC101', () => {
+  const md = `## Unconfirmed — not debts until substantiated
+<!-- next-id: UNC102 -->
+
+- **UNC101 · fs-38 Wave 1** (designed-voice authoring, PR #1800) — no explicit owed callout
+`;
+  const legacy = blkUncShell('—', 'fs-38 Wave 1 — designed-voice authoring', 'legacy body');
+  const next = reconcileRowShells(md, unconfirmedSection([legacy]));
+  assert.ok(next.includes(legacy.replace('<span class="num">—</span>', '<span class="num">UNC101</span>')));
+  assert.ok(!next.includes('<span class="num">—</span>'));
+});
+
+test('building twice is idempotent for ID-bearing Blocked and Unconfirmed sections', () => {
+  const md = buildRegisterFixture() + `
+## Blocked — hardware not available
+<!-- next-id: BLK102 -->
+
+### BLK101 · fixture blocked item
+
+## Unconfirmed — not debts until substantiated
+<!-- next-id: UNC102 -->
+
+- **UNC101 · fixture unconfirmed item** (note)
+`;
+  const first = buildLiveView(md, buildLiveViewFixture());
+  assert.match(first, /<span class="num">BLK101<\/span>/);
+  assert.match(first, /<span class="num">UNC101<\/span>/);
+  assert.equal(buildLiveView(md, first), first);
+});
+
+test('a mixed section (one ID-bearing row, one legacy id-less row) builds and keeps both bodies', () => {
+  const md = `## Blocked — hardware not available
+
+### BLK101 · Numbered thing
+### Legacy thing
+`;
+  const html = blockedSection([
+    blkUncShell('—', 'Legacy thing', 'legacy body'),
+    blkUncShell('—', 'Numbered thing', 'numbered body'),
+  ]);
+  const next = reconcileRowShells(md, html);
+  assert.match(next, /BLK101<\/span>[\s\S]*?numbered body/);
+  assert.match(next, /<span class="num">—<\/span><span class="iname">Legacy thing[\s\S]*?legacy body/);
+  assert.equal(reconcileRowShells(md, next), next);
+});

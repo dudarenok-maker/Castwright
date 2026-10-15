@@ -26,6 +26,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readNormalized } from './lib/read-normalized.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
+import { splitRowId } from './check-onbox-register.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_REGISTER_PATH = 'docs/testing/onbox-acceptance-register.md';
@@ -316,26 +317,56 @@ export function parseTitledSectionBodyCounts(mdText) {
   return { blockedCount, unconfirmedCount };
 }
 
-function reconcileTitledSection(html, sectionId, titles, { prefixMatch }) {
+// A Blocked heading / Unconfirmed bullet's captured text is either
+// "BLK101 · <title>" / "UNC101 · <title>" (ID-bearing) or the bare title
+// (legacy, id-less). The ID is split with check-onbox-register's pinned
+// splitRowId, not a second regex; only the section's own prefix counts.
+function parseTitledRow(rawText, idPrefix) {
+  const sep = rawText.indexOf(' · ');
+  if (sep > 0) {
+    const parts = splitRowId(rawText.slice(0, sep));
+    if (parts && parts.prefix === idPrefix) {
+      return { id: rawText.slice(0, sep), title: rawText.slice(sep + 3) };
+    }
+  }
+  return { id: null, title: rawText };
+}
+
+function reconcileTitledSection(html, sectionId, rows, { prefixMatch }) {
   const sectionRegex = new RegExp(
     `(<section[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?<\\/header>\\s*\\n)([\\s\\S]*?)(\\s*<\\/section>)`,
   );
   const match = html.match(sectionRegex);
   if (!match) throw new Error(`reconcileRowShells: no section#${sectionId} (with a <header>) found`);
   const [, headerAndOpen, body, closeTag] = match;
+  const shellsById = splitShellsById(body);
   const shellsByIname = new Map();
   for (const m of body.matchAll(SHELL_BY_TITLE_REGEX)) {
     shellsByIname.set(decodeHtmlEntities(m[1]), m[0]);
   }
-  const newBody = titles
-    .map((rawTitle) => {
-      const wanted = prefixMatch ? rawTitle : normaliseTitle(rawTitle);
-      const matches = [...shellsByIname.entries()].filter(([iname]) =>
-        prefixMatch ? iname.startsWith(wanted) : normaliseTitle(iname) === wanted,
-      );
-      if (matches.length === 0) throw new Error(`reconcileRowShells: no shell title matches "${wanted}" in #${sectionId}`);
-      if (matches.length > 1) throw new Error(`reconcileRowShells: "${wanted}" matches ${matches.length} shells in #${sectionId}`);
-      return matches[0][1];
+  const findLegacy = (rawTitle) => {
+    const wanted = prefixMatch ? rawTitle : normaliseTitle(rawTitle);
+    const matches = [...shellsByIname.entries()].filter(([iname]) =>
+      prefixMatch ? iname.startsWith(wanted) : normaliseTitle(iname) === wanted,
+    );
+    if (matches.length > 1) throw new Error(`reconcileRowShells: "${wanted}" matches ${matches.length} shells in #${sectionId}`);
+    return { wanted, shell: matches.length === 1 ? matches[0][1] : null };
+  };
+  const newBody = rows
+    .map(({ id, title }) => {
+      if (id === null) {
+        const { wanted, shell } = findLegacy(title);
+        if (shell === null) throw new Error(`reconcileRowShells: no shell title matches "${wanted}" in #${sectionId}`);
+        return shell;
+      }
+      // Keyed by ID: a shell already numbered with this ID is kept as-is.
+      if (shellsById.has(id)) return shellsById.get(id);
+      // First appearance of the ID: adopt the legacy "—" shell for this title,
+      // changing only its num; with no such shell, a placeholder that
+      // register:build --check flags until its content is filled in.
+      const { shell } = findLegacy(title);
+      if (shell === null) return buildPlaceholderShell(id, title);
+      return shell.replace('<span class="num">—</span>', () => `<span class="num">${id}</span>`);
     })
     .join('\n');
   // No extra '\n' inserted here: closeTag's own `\s*` capture already carries
@@ -364,11 +395,11 @@ export function reconcileRowShells(mdText, html) {
     // until substantiated" — both start with the bare word, so the prefix
     // test below covers the real titles without assuming the whole line.
     if (/^Blocked\b/.test(section.title)) {
-      const blockedTitles = [...section.body.matchAll(BLOCKED_HEADING_REGEX)].map((m) => m[1]);
-      result = reconcileTitledSection(result, 'blocked', blockedTitles, { prefixMatch: false });
+      const blockedRows = [...section.body.matchAll(BLOCKED_HEADING_REGEX)].map((m) => parseTitledRow(m[1], 'BLK'));
+      result = reconcileTitledSection(result, 'blocked', blockedRows, { prefixMatch: false });
     } else if (/^Unconfirmed\b/.test(section.title)) {
-      const unconfirmedTitles = [...section.body.matchAll(UNCONFIRMED_BULLET_REGEX)].map((m) => m[1]);
-      result = reconcileTitledSection(result, 'unconfirmed', unconfirmedTitles, { prefixMatch: true });
+      const unconfirmedRows = [...section.body.matchAll(UNCONFIRMED_BULLET_REGEX)].map((m) => parseTitledRow(m[1], 'UNC'));
+      result = reconcileTitledSection(result, 'unconfirmed', unconfirmedRows, { prefixMatch: true });
     }
   }
   return result;
