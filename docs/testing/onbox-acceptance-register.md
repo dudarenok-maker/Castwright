@@ -729,7 +729,13 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-10 (#3084 W3c, PR 3c), 63 → 64.** Row **A113** (live
+> **Last change: 2026-10-16 (#3587), 64 → 64.** Allocate-once IDs assigned to the
+> Blocked rows (**BLK101**–**BLK106**) and the Unconfirmed bullets (**UNC101**–**UNC102**),
+> with a `next-id` marker under each section heading (BLK107, UNC103). IDs allocated
+> once (#3587); no row added or removed. Owed count unchanged at 64; Blocked stays 6,
+> Unconfirmed stays 2.
+>
+> **Prior change: 2026-10-10 (#3084 W3c, PR 3c), 63 → 64.** Row **A113** (live
 > structured output — Test action records match real model behaviour) added
 > from #3084 PR 3c's run sheet (`3084-openai-analyzer-onbox-acceptance.md`
 > § "Live structured output"). Group A 34 → 35. `next-id` bumped A113 → A114
@@ -7680,13 +7686,15 @@ that is NOT a chapter-order-dependent prefix.
 
 ## Blocked — hardware not available
 
-### AMD GPU support Phase 2 ([#1335](https://github.com/dudarenok-maker/Castwright/issues/1335))
+<!-- next-id: BLK107 -->
+
+### BLK101 · AMD GPU support Phase 2 ([#1335](https://github.com/dudarenok-maker/Castwright/issues/1335))
 
 Waves A–G were built and merged **dormant** — the code path exists but has never run
 against real ROCm hardware. A dormant capability, not an active bug. This box is
 dual-NVIDIA; this will not move until AMD/ROCm hardware exists.
 
-### ORT pip-consistency marker — AMD box ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md))
+### BLK102 · ORT pip-consistency marker — AMD box ([#2192](https://github.com/dudarenok-maker/Castwright/issues/2192), plan [282](../features/282-ort-pip-consistency-marker.md))
 
 Design doc §On-box acceptance, criterion 5: "no marker is written" on AMD.
 `planOrtSwap('amd', …)` resolves to plain `onnxruntime` (`accelerator-profile.mjs`),
@@ -7703,7 +7711,7 @@ injected `runPip`/marker seam, just never against a real ROCm→CPU fallback. Th
 is dual-NVIDIA; this will not move until AMD/ROCm hardware exists. Run sheet §7 in
 `docs/testing/ort-marker-onbox-acceptance.md` has the recipe ready for when it does.
 
-### CPU-only `RAM_HEAVY_MODELS` clamp (plan 263, B2 step 7)
+### BLK103 · CPU-only `RAM_HEAVY_MODELS` clamp (plan 263, B2 step 7)
 
 Formerly step 7 of B2 (per-model analyzer keep-alive). A `RAM_HEAVY_MODELS`
 clamp is meant to override a configured positive keep-alive back to `0` when
@@ -7714,7 +7722,7 @@ risking other lanes' concurrent work — not attempted. This box is
 dual-NVIDIA; this will not move until a CPU-only box exists, or one where
 GPU visibility can safely be disabled.
 
-### ops-36 golden-assembly on a second ffmpeg build ([#1880](https://github.com/dudarenok-maker/Castwright/issues/1880), plan [272](../features/272-golden-assembly-comparison.md))
+### BLK104 · ops-36 golden-assembly on a second ffmpeg build ([#1880](https://github.com/dudarenok-maker/Castwright/issues/1880), plan [272](../features/272-golden-assembly-comparison.md))
 
 **1. What is dormant.** The cross-build half of the ops-36 design — whether
 L1/L2/L3's hard assertions survive a genuinely different ffmpeg build, and
@@ -7748,7 +7756,7 @@ not satisfy the row's intent** — the row means a different environment, not
 a different binary on the same one. Recorded here as a neutral decision so a
 future reader can reverse it deliberately rather than stumble into it.
 
-### ops-35 ffmpeg floor — below-floor + Re-check walkthrough ([#1877](https://github.com/dudarenok-maker/Castwright/issues/1877), plan [269](../features/269-ffmpeg-version-floor.md))
+### BLK105 · ops-35 ffmpeg floor — below-floor + Re-check walkthrough ([#1877](https://github.com/dudarenok-maker/Castwright/issues/1877), plan [269](../features/269-ffmpeg-version-floor.md))
 
 **1. What is dormant.** The below-floor preflight exit (`npm run test:server`
 must exit 1 against ffmpeg 4.4, printing the host OS's upgrade command); the
@@ -7772,7 +7780,7 @@ so there is no way to put a genuinely-below-floor ffmpeg on `PATH` here.
 downgraded to a real pre-floor build — the row itself names a 22.04
 container with archive ffmpeg 4.4 as the cheapest route.
 
-### ROCm/AMD admitted device-key normalisation — real GPU engine load, pinned/resident, and idle-eviction ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), branch `fix/sidecar-rocm-device-normalisation`, PR review passes 1–2)
+### BLK106 · ROCm/AMD admitted device-key normalisation — real GPU engine load, pinned/resident, and idle-eviction ([#2813](https://github.com/dudarenok-maker/Castwright/issues/2813), branch `fix/sidecar-rocm-device-normalisation`, PR review passes 1–2)
 
 **1. What is dormant.** The VRAM-ledger admission layer (`PlacementController.admit()`)
 hands engines a device key like `"rocm:N"` on a ROCm/AMD box (`probe()`'s own honest
@@ -7829,15 +7837,17 @@ model sitting unused on the same card. Criteria live in issue #2813 and this row
 
 ## Unconfirmed — not debts until substantiated
 
+<!-- next-id: UNC103 -->
+
 Kept separate on purpose. Listing a suspicion as debt is how a register stops being
 trusted.
 
-- **fs-38 Wave 1** (designed-voice authoring, PR #1800) — no explicit owed callout
+- **UNC101 · fs-38 Wave 1** (designed-voice authoring, PR #1800) — no explicit owed callout
   beyond a generic "Live-GPU acceptance" line in plan 194 that is about cloning
   generally (Wave 3's concern), not marked outstanding the way 267/268/264/216/263
   are. Closed bugs #1802/#1833/#1836 show live "My voices" use, consistent with it
   being exercised informally. Not confirmed either way.
-- **Ollama concurrency (K>1) real-VRAM validation** — PR #1707 fixed a case where K
+- **UNC102 · Ollama concurrency (K>1) real-VRAM validation** — PR #1707 fixed a case where K
   never took effect and ships `peak==K` telemetry so a future run self-verifies. The
   UI half is B1's K=4 step. If a separate `n_slots=1` physics check is owed, its
   written criteria were not found in this repo — do not double-count it.
