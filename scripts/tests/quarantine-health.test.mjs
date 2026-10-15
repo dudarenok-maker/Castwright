@@ -1370,7 +1370,7 @@ test('buildParseFailureMessage and reportParseFailure reach $GITHUB_STEP_SUMMARY
     try {
       const { rmSync } = await import('node:fs');
       rmSync(summaryPath, { force: true });
-      rmSync(tempDir, { force: true });
+      rmSync(tempDir, { recursive: true, force: true });
     } catch {}
   }
 });
@@ -1485,7 +1485,7 @@ test('main() end-to-end: parse-failure dispatch reaches $GITHUB_STEP_SUMMARY (Fi
     try {
       rmSync(summaryPath, { force: true });
       rmSync(registerPath, { force: true });
-      rmSync(tempDir, { force: true });
+      rmSync(tempDir, { recursive: true, force: true });
     } catch {}
   }
 });
