@@ -6273,3 +6273,176 @@ Text.
     assert.deepEqual(errors, [], `${direction}: ${JSON.stringify(errors)}`);
   }
 });
+
+// ---------------------------------------------------------------------------
+// #3587 child 5 (#3643): --build-union / --publishing carry BLK/UNC row blocks
+// and raise their strip tiles and section gcounts — never the owed count.
+// ---------------------------------------------------------------------------
+function unionDetails(rows) {
+  return rows
+    .map(
+      ({ id, body, title }) => `    <details class="item">
+      <summary><span class="num">${id}</span><span class="iname">${title ?? 't'}</span><span class="risk">default</span></summary>
+      <div class="body">
+        <p>${body}</p>
+      </div>
+    </details>`,
+    )
+    .join('\n');
+}
+const plural = (n) => `${n} ${n === 1 ? 'row' : 'rows'}`;
+// A page with a lettered group (E), a Blocked section and an Unconfirmed
+// section, and a strip carrying the owed, Blocked and Unconfirmed tiles.
+function blkUncUnionView({ eRows = [], blkRows = [], uncRows = [] }) {
+  return `<title>On-box acceptance register — Castwright</title>
+
+  <div class="strip">
+    <div class="stat"><div class="n owed">${10 + eRows.length}</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n blk">${blkRows.length}</div><div class="l">Blocked</div></div>
+    <div class="stat"><div class="n">${uncRows.length}</div><div class="l">Unconfirmed</div></div>
+  </div>
+
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ge">E</a></td><td>Setup E</td><td>${eRows.length}</td></tr>
+    </tbody>
+  </table>
+
+  <section class="group" id="ge">
+    <h3 class="gtitle"><span class="gtag">E</span> Setup E <span class="gcount">${plural(eRows.length)}</span></h3>
+${unionDetails(eRows)}
+  </section>
+
+  <section class="group is-blocked" id="blocked">
+    <h3 class="gtitle"><span class="gtag">BLK</span> Blocked <span class="gcount">${plural(blkRows.length)}</span></h3>
+${unionDetails(blkRows)}
+  </section>
+
+  <section class="group is-soft" id="unconfirmed">
+    <h3 class="gtitle"><span class="gtag">UNC</span> Unconfirmed <span class="gcount">${plural(uncRows.length)}</span></h3>
+${unionDetails(uncRows)}
+  </section>
+`;
+}
+const uRow = (id) => ({ id, body: `body ${id}`, title: `title ${id}` });
+
+for (const tc of TITLED_CASES) {
+  const P = tc.prefix;
+  const key = P === 'BLK' ? 'blkRows' : 'uncRows';
+  const id1 = `${P}101`;
+  const id2 = `${P}102`;
+  const view = (ids, eRows = []) => blkUncUnionView({ eRows, [key]: ids.map(uRow) });
+  const reg = (rows = [[101, 'mine one']], next = 102) => titledRegister(tc, rows, next);
+  const mineRow = { id: id1, body: 'x', title: 'mine one' };
+  const theirsRow = { id: id2, body: 'theirs', title: THEIRS_TITLE };
+  const tiled = (rows) =>
+    titledLiveView(tc, rows).replace(
+      '<div class="l">Owed</div>',
+      `<div class="l">Owed</div><div class="n${P === 'BLK' ? ' blk' : ''}">${rows.length}</div><div class="l">${tc.label}</div>`,
+    );
+  const checkPublishing = (publishingHtml) =>
+    checkLiveView(reg(), tiled([mineRow, theirsRow]), {
+      direction: 'extraOnly',
+      baselineText: reg(),
+      trackedLiveViewHtml: tiled([mineRow]),
+      publishedProvenance: UNMERGED,
+      rowOwnerLookup: (id) => (id === id2 ? OWNER_X : null),
+      ...(publishingHtml === undefined ? {} : { publishingHtml }),
+    });
+  const stripTile = (html, label) => html.match(new RegExp(`<div class="n[^"]*">(\\d+)</div><div class="l">${label}</div>`))[1];
+
+  test(`#3587 ${P} (a): a carried ${id2} lands after ${id1}, raises the ${tc.label} tile and gcount, and leaves owed alone`, () => {
+    const union = onbox.buildUnionLiveView(view([id1]), view([id1, id2]), [id2]);
+    assert.equal(union, view([id1, id2]));
+    assert.ok(union.indexOf(`>${id1}<`) < union.indexOf(`>${id2}<`), 'block order');
+    assert.equal(stripTile(union, tc.label), '2');
+    assert.ok(union.includes('<span class="gcount">2 rows</span>'));
+    assert.ok(union.includes('<div class="n owed">10</div>'), 'owed untouched');
+    assert.ok(union.includes('<td>0</td>'), 'glance cell untouched');
+  });
+
+  test(`#3587 ${P} (a): the carried-row union passes --publishing, where the same run without it fails unmerged-lane-row`, () => {
+    const unmerged = ofPrefix(checkPublishing(), UNMERGED_LANE_ROW_ERROR_PREFIX);
+    assert.equal(unmerged.length, 1, JSON.stringify(unmerged));
+    const union = onbox.buildUnionLiveView(tiled([mineRow]), tiled([mineRow, theirsRow]), [id2]);
+    assert.deepEqual(checkPublishing(union), []);
+  });
+
+  test(`#3587 ${P} (d): a hand-built union with owed raised, or the ${tc.label} tile not raised, fails --publishing naming --build-union`, () => {
+    const good = onbox.buildUnionLiveView(tiled([mineRow]), tiled([mineRow, theirsRow]), [id2]);
+    assert.equal(stripTile(good, tc.label), '2');
+    const owedRaised = good.replace('<div class="n owed">2</div>', '<div class="n owed">3</div>');
+    const tileStale = good.replace(new RegExp(`(<div class="n[^"]*">)2(</div><div class="l">${tc.label}</div>)`), '$11$2');
+    for (const bad of [owedRaised, tileStale]) {
+      assert.notEqual(bad, good);
+      const pub = ofPrefix(checkPublishing(bad), PUBLISHING_FILE_ERROR_PREFIX);
+      assert.equal(pub.length, 1, JSON.stringify(pub));
+      assert.match(pub[0], /--build-union/);
+    }
+  });
+
+  test(`#3587 ${P} (f): a ${id2} absent from the live page, or already in the tracked view, is refused in the existing words`, () => {
+    const tracked = view([id1]);
+    assert.throws(() => onbox.buildUnionLiveView(tracked, view([id1]), [id2]), /not on the live page/);
+    assert.throws(() => onbox.buildUnionLiveView(tracked, view([id1, id2]), [id1]), /already in your live view/);
+    const noSection = tracked.replace(`<span class="gtag">${P}</span>`, '<span class="gtag">?</span>');
+    assert.throws(() => onbox.buildUnionLiveView(noSection, view([id1, id2]), [id2]), new RegExp(`${tc.label} section`));
+  });
+}
+
+test('#3587 (b): a UNC row carries into an empty Unconfirmed section and raises only its tile and gcount', () => {
+  const live = blkUncUnionView({ uncRows: [uRow('UNC102')] });
+  const tracked = blkUncUnionView({}).replace(/<\/h3>\n\n( {2}<\/section>\n)$/, '</h3>\n$1');
+  assert.equal(onbox.buildUnionLiveView(tracked, live, ['UNC102']), live);
+});
+
+test('#3587 (c): a mixed E + BLK carry raises owed by one, the E glance cell by one, and the Blocked tile by one', () => {
+  const tracked = blkUncUnionView({ eRows: [uRow('E101')], blkRows: [uRow('BLK101')] });
+  const live = blkUncUnionView({ eRows: [uRow('E101'), uRow('E115')], blkRows: [uRow('BLK101'), uRow('BLK102')] });
+  const union = onbox.buildUnionLiveView(tracked, live, ['BLK102', 'E115']);
+  assert.equal(union, live);
+  assert.ok(union.includes('<div class="n owed">12</div>'), 'owed 11 -> 12');
+  assert.ok(union.includes('<td>2</td>'), 'E glance cell 1 -> 2');
+});
+
+test('#3587 (c): a BLK-only carry does not need an owed tile to exist; a lettered one still does', () => {
+  const owedTile = /<div class="stat"><div class="n owed">\d+<\/div><div class="l">Owed<\/div><\/div>\n/;
+  const tracked = blkUncUnionView({ blkRows: [uRow('BLK101')] }).replace(owedTile, '');
+  assert.ok(!tracked.includes('n owed'));
+  const union = onbox.buildUnionLiveView(tracked, blkUncUnionView({ blkRows: [uRow('BLK101'), uRow('BLK102')] }), ['BLK102']);
+  assert.ok(union.includes('<span class="num">BLK102</span>'));
+  const lettered = blkUncUnionView({ eRows: [uRow('E101')] }).replace(owedTile, '');
+  assert.throws(() => onbox.buildUnionLiveView(lettered, blkUncUnionView({ eRows: [uRow('E101'), uRow('E102')] }), ['E102']), /n owed/);
+});
+
+test('#3587 (c): a BLK row is placed among BLK rows by number', () => {
+  const tracked = blkUncUnionView({ blkRows: [uRow('BLK101'), uRow('BLK105')] });
+  const live = blkUncUnionView({ blkRows: [uRow('BLK101'), uRow('BLK103'), uRow('BLK104'), uRow('BLK105')] });
+  assert.equal(onbox.buildUnionLiveView(tracked, live, ['BLK104', 'BLK103']), live);
+});
+
+test('#3587 (e) CLI: --build-union writes a union carrying a BLK row, and --publishing of it exits 0', () => {
+  const block = `    <details class="item">
+      <summary><span class="num">BLK102</span><span class="iname">other lane blocked row</span><span class="risk">default</span></summary>
+      <div class="body">
+        <p>body BLK102</p>
+      </div>
+    </details>`;
+  const section = REAL_LIVE_VIEW_HTML.match(/<section\b[^>]*id="blocked"[\s\S]*?<\/section>/);
+  assert.ok(section, 'the tracked live view has a Blocked section');
+  const mutated = REAL_LIVE_VIEW_HTML.replace(section[0], (s) => s.replace(/(\s*)<\/section>$/, `\n${block}$1</section>`));
+  assert.notEqual(mutated, REAL_LIVE_VIEW_HTML);
+  withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const env = { ONBOX_TEST_BASELINE_FILE: baselinePath, ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged' };
+    const unionPath = join(dirname(publishedPath), 'union.html');
+    const without = runCli(['--against-published', publishedPath], env);
+    assert.equal(without.status, 1, without.stderr);
+    assert.match(without.stderr, /unmerged-lane-row: BLK102/);
+    const built = runCli(['--against-published', publishedPath, '--build-union', unionPath], env);
+    assert.equal(built.status, 0, `stdout: ${built.stdout}\nstderr: ${built.stderr}`);
+    assert.ok(readFileSync(unionPath, 'utf8').includes('<span class="num">BLK102</span>'));
+    const checked = runCli(['--against-published', publishedPath, '--publishing', unionPath], env);
+    assert.equal(checked.status, 0, `stdout: ${checked.stdout}\nstderr: ${checked.stderr}`);
+  });
+});

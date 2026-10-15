@@ -454,10 +454,16 @@ export function parseLiveViewRowBlocks(liveViewHtml) {
 // - The derived figures are what `register:build` writes for a register
 //   holding your rows plus the carried ones: the owed count, the group's
 //   glance-table count and its section's `gcount`, each raised by the number
-//   of rows carried. The strip's other tiles — groups, Blocked, Unconfirmed,
-//   A1, oldest debt — are your register's: a carried row is another lane's
-//   numbered row in a group your page already has, and the oldest debt stays
-//   yours (a carried row's own date is not on this branch to compare).
+//   of lettered rows carried. The strip's other tiles — groups, A1, oldest
+//   debt — are your register's: a carried row is another lane's numbered row
+//   in a group your page already has, and the oldest debt stays yours (a
+//   carried row's own date is not on this branch to compare).
+// - A carried `BLK` / `UNC` row (#3587) goes into the Blocked / Unconfirmed
+//   section (matched by its `gtag`, `BLK` / `UNC`), ordered among that
+//   section's own rows by number. It is not owed: it raises the strip's
+//   Blocked / Unconfirmed tile and that section's `gcount` by one, and
+//   neither the owed count nor any glance-table cell (there is no row for
+//   either section).
 // - A carried row whose group has no section in your live view is refused
 //   (that lane added a new group: let it merge first), as is a row already
 //   in your view or absent from the live page.
@@ -481,18 +487,27 @@ function indentBefore(html, index) {
 export function buildUnionLiveView(trackedHtml, liveHtml, carriedIds) {
   const liveBlocks = parseLiveViewRowBlocks(stripHtmlComments(liveHtml.replace(/\r\n/g, '\n')));
   let html = trackedHtml.replace(/\r\n/g, '\n');
-  const ids = [...new Set(carriedIds)].sort((a, b) =>
-    a[0] === b[0] ? Number(a.slice(1)) - Number(b.slice(1)) : a < b ? -1 : 1,
-  );
+  const ids = [...new Set(carriedIds)].sort((a, b) => {
+    const x = splitRowId(a);
+    const y = splitRowId(b);
+    if (!x || !y) return a < b ? -1 : a > b ? 1 : 0;
+    return x.prefix === y.prefix ? x.number - y.number : x.prefix < y.prefix ? -1 : 1;
+  });
   const added = new Map();
   for (const id of ids) {
     const block = liveBlocks.get(id);
     if (block === undefined) throw new Error(`row ${id} is not on the live page, so there is no live block to carry.`);
-    const letter = id[0];
+    const parts = splitRowId(id);
+    if (!parts) throw new Error(`row ${id} is not a row ID, so there is no live block to carry.`);
+    const letter = parts.prefix;
+    const titled = letter === 'BLK' || letter === 'UNC';
+    const sectionName = letter === 'BLK' ? 'the Blocked section' : letter === 'UNC' ? 'the Unconfirmed section' : `Group ${letter}`;
     const section = findGroupSection(html, letter);
     if (!section) {
       throw new Error(
-        `row ${id} belongs to Group ${letter}, which has no section in your live view — the lane that owns it added a new group. Let that lane merge first rather than carrying a whole group.`,
+        titled
+          ? `row ${id} belongs to ${sectionName}, which has no section in your live view (no \`${letter}\` group tag) — the lane that owns it added it. Let that lane merge first rather than carrying a whole section.`
+          : `row ${id} belongs to Group ${letter}, which has no section in your live view — the lane that owns it added a new group. Let that lane merge first rather than carrying a whole group.`,
       );
     }
     const rows = [...html.slice(section.start, section.end).matchAll(ROW_BLOCK_REGEX)].map((m) => ({
@@ -501,7 +516,10 @@ export function buildUnionLiveView(trackedHtml, liveHtml, carriedIds) {
       id: (m[0].match(/<span class="num">([^<]*)<\/span>/)?.[1] ?? '').trim(),
     }));
     if (rows.some((r) => r.id === id)) throw new Error(`row ${id} is already in your live view; only carry rows it lacks.`);
-    const next = rows.find((r) => /^[A-Z]\d+$/.test(r.id) && r.id[0] === letter && Number(r.id.slice(1)) > Number(id.slice(1)));
+    const next = rows.find((r) => {
+      const rp = splitRowId(r.id);
+      return rp !== null && rp.prefix === letter && rp.number > parts.number;
+    });
     if (next) {
       html = `${html.slice(0, next.index)}${block}\n${indentBefore(html, next.index)}${html.slice(next.index)}`;
     } else if (rows.length > 0) {
@@ -509,16 +527,32 @@ export function buildUnionLiveView(trackedHtml, liveHtml, carriedIds) {
       html = `${html.slice(0, last.end)}\n${indentBefore(html, last.index)}${block}${html.slice(last.end)}`;
     } else {
       const headerEnd = html.indexOf('\n', html.indexOf('</h3>', section.start));
-      if (headerEnd === -1 || headerEnd > section.end) throw new Error(`Group ${letter}'s section in your live view has no header to place row ${id} after.`);
+      if (headerEnd === -1 || headerEnd > section.end) throw new Error(`${sectionName[0].toUpperCase()}${sectionName.slice(1)}'s section in your live view has no header to place row ${id} after.`);
       html = `${html.slice(0, headerEnd)}\n    ${block}${html.slice(headerEnd)}`;
     }
     added.set(letter, (added.get(letter) ?? 0) + 1);
   }
   if (ids.length === 0) return html;
-  const owed = html.match(/<div class="n owed">(\d+)<\/div>/);
-  if (!owed) throw new Error('your live view has no `<div class="n owed">N</div>` to raise.');
-  html = html.replace(owed[0], () => `<div class="n owed">${Number(owed[1]) + ids.length}</div>`);
+  const lettered = ids.filter((id) => !/^(BLK|UNC)/.test(id)).length;
+  if (lettered > 0) {
+    const owed = html.match(/<div class="n owed">(\d+)<\/div>/);
+    if (!owed) throw new Error('your live view has no `<div class="n owed">N</div>` to raise.');
+    html = html.replace(owed[0], () => `<div class="n owed">${Number(owed[1]) + lettered}</div>`);
+  }
   for (const [letter, count] of added) {
+    if (letter === 'BLK' || letter === 'UNC') {
+      const label = letter === 'BLK' ? 'Blocked' : 'Unconfirmed';
+      const tile = html.match(new RegExp(`<div class="n( blk)?">(\\d+)</div><div class="l">${label}</div>`));
+      if (!tile) throw new Error(`your live view has no ${label} tile to raise.`);
+      html = html.replace(tile[0], () => tile[0].replace(`>${tile[2]}<`, `>${Number(tile[2]) + count}<`));
+      const named = findGroupSection(html, letter);
+      const namedHtml = html.slice(named.start, named.end);
+      const namedCount = namedHtml.match(/<span class="gcount">(\d+) rows?<\/span>/);
+      if (!namedCount) throw new Error(`${label === 'Blocked' ? 'the Blocked' : 'the Unconfirmed'} section in your live view has no gcount to raise.`);
+      const total = Number(namedCount[1]) + count;
+      html = `${html.slice(0, named.start)}${namedHtml.replace(namedCount[0], () => `<span class="gcount">${total} ${total === 1 ? 'row' : 'rows'}</span>`)}${html.slice(named.end)}`;
+      continue;
+    }
     const table = html.match(/<table class="glance">[\s\S]*?<\/table>/);
     const row = table && [...table[0].matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/g)].find((tr) => {
       const first = tr[0].match(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/);
