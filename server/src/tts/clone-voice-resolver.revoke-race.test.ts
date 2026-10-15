@@ -178,9 +178,9 @@ describe('#1826 Step 1 — cloned-voice repair races against the real per-uuid l
     deriveGates[0](); // release the derive -> resolver proceeds to updateEntry
     // The resolver either queued behind the revoke (the real lock; with the
     // lock bypassed — the "M3" mutation named in commit 3a0f55d9's message —
-    // it never queues) or finished without ever calling updateEntry (the
-    // "M1" mutation of that same message). Whichever structural event comes
-    // first releases the revoke; racing two events, not timing.
+    // it never queues) or settled without ever calling updateEntry (a
+    // resolver mutated to skip its post-derive write). Whichever structural
+    // event comes first releases the revoke; racing two events, not timing.
     await Promise.race([repairQueuedP, settledP]);
     releaseRevoke(); // the revoke's mutate returns: revokedAt is written
     await revokeP;
@@ -239,8 +239,9 @@ describe('#1826 Step 1 — cloned-voice repair races against the real per-uuid l
     // in derive so `deriveGates[0]` is A's and `[1]` is B's: which of two real
     // `readEntry` fs reads finishes first is not deterministic, and with both
     // started together the gate order could flip and hang `await pA`. A is
-    // parked BEFORE it writes, so B still classifies from the same stale entry
-    // and both still contend for the real lock afterwards.
+    // parked BEFORE it writes, so B still classifies from the same stale entry.
+    // The steps below run strictly in sequence (A's write, then the revoke,
+    // then B's write), so nothing here waits on the lock: it is Test 1's job.
     const pA = resolveClonedVoicesForChapter([req('Marlow', 'marlow', UUID)], deps);
     await firstReachedP;
     const pB = resolveClonedVoicesForChapter([req('Reeve', 'reeve', UUID)], deps);
