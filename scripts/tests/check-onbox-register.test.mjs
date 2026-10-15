@@ -27,6 +27,10 @@ import {
   htmlCellText,
   ALLOCATION_FLOOR,
   parseNextIdMarker,
+  ROW_ID_REGEX,
+  splitRowId,
+  parseTitledSections,
+  parseRegisterRowTitles,
 } from '../check-onbox-register.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
@@ -279,6 +283,147 @@ test('4a: the same row ID twice in the SAME section is reported', () => {
     ],
     '4a must fire alone, with check 1 satisfied by the matching glance count',
   );
+});
+
+// ---------------------------------------------------------------------------
+// #3587: allocate-once BLK/UNC IDs in the Blocked and Unconfirmed sections.
+// ---------------------------------------------------------------------------
+const BLOCKED_TITLE = '## Blocked — hardware not available';
+const UNCONFIRMED_TITLE = '## Unconfirmed — not debts until substantiated';
+function titledFixture({ blocked, unconfirmed }) {
+  const extraSections = [];
+  if (blocked !== undefined) extraSections.push(`${BLOCKED_TITLE}\n${blocked}\n`);
+  if (unconfirmed !== undefined) extraSections.push(`${UNCONFIRMED_TITLE}\n${unconfirmed}\n`);
+  return registerFixture({
+    glance: [['A', 1]],
+    groups: [{ letter: 'A', nextId: 101, rows: [1] }],
+    extraSections,
+  });
+}
+
+test('BLK/UNC (a): numbered rows with markers above them produce zero errors', () => {
+  const text = titledFixture({
+    blocked: '\n<!-- next-id: BLK102 -->\n\n### BLK101 · x\n\nText.\n',
+    unconfirmed: '\n<!-- next-id: UNC102 -->\n\n- **UNC101 · y** (z)\n',
+  });
+  assert.deepEqual(checkRegister(text), []);
+});
+
+test('BLK/UNC (b): a duplicated BLK heading or UNC bullet is a duplicate-ID error', () => {
+  const blk = titledFixture({
+    blocked: '\n<!-- next-id: BLK102 -->\n\n### BLK101 · x\n\n### BLK101 · again\n',
+  });
+  assert.ok(checkRegister(blk).some((e) => e.includes('Row ID BLK101 appears more than once')));
+  const unc = titledFixture({
+    unconfirmed: '\n<!-- next-id: UNC102 -->\n\n- **UNC101 · y** (z)\n- **UNC101 · again**\n',
+  });
+  assert.ok(checkRegister(unc).some((e) => e.includes('Row ID UNC101 appears more than once')));
+});
+
+for (const [prefix, section, rowLine, name] of [
+  ['BLK', 'blocked', (n) => `### BLK${n} · x\n`, 'Blocked'],
+  ['UNC', 'unconfirmed', (n) => `- **UNC${n} · x** (z)\n`, 'Unconfirmed'],
+]) {
+  const build = (body) => titledFixture({ [section]: body });
+
+  test(`${prefix} (c): a numbered row with no next-id marker is reported`, () => {
+    const errors = checkRegister(build(`\n${rowLine(101)}`));
+    assert.ok(
+      errors.some((e) => e.includes(`The ${name} section has ${prefix} rows but no "<!-- next-id: ${prefix}N -->"`)),
+      `got: ${JSON.stringify(errors)}`,
+    );
+  });
+
+  test(`${prefix} (c): a marker below the floor is reported`, () => {
+    const errors = checkRegister(build(`\n<!-- next-id: ${prefix}100 -->\n\n`));
+    assert.ok(
+      errors.some((e) => e.includes(`next-id (${prefix}100) is below the allocation floor ${prefix}101`)),
+      `got: ${JSON.stringify(errors)}`,
+    );
+  });
+
+  test(`${prefix} (c): a row at or above the marker is reported`, () => {
+    const errors = checkRegister(build(`\n<!-- next-id: ${prefix}101 -->\n\n${rowLine(101)}`));
+    assert.ok(
+      errors.some((e) => e.includes(`${prefix}101 is at or above the ${name} section's next-id (${prefix}101)`)),
+      `got: ${JSON.stringify(errors)}`,
+    );
+  });
+
+  test(`${prefix} (c): a look-alike row number is reported as invalid`, () => {
+    const bad = prefix === 'BLK' ? '### BLK19b · x\n' : '- **UNC5a · x**\n';
+    const errors = checkRegister(build(`\n<!-- next-id: ${prefix}102 -->\n\n${bad}`));
+    assert.ok(
+      errors.some((e) => e.includes(`is not a valid row number`) && e.includes(`${prefix}${prefix === 'BLK' ? '19b' : '5a'}`)),
+      `got: ${JSON.stringify(errors)}`,
+    );
+  });
+}
+
+test('BLK (c): a dotted look-alike heading is reported as invalid', () => {
+  const errors = checkRegister(
+    titledFixture({ blocked: '\n<!-- next-id: BLK102 -->\n\n### BLK2.1 · x\n' }),
+  );
+  assert.ok(errors.some((e) => e.includes('BLK2.1') && e.includes('is not a valid row number')));
+});
+
+test('BLK/UNC (d): unnumbered legacy rows and no markers still produce zero errors', () => {
+  const text = titledFixture({
+    blocked: '\n### AMD GPU support Phase 2\n\nText.\n',
+    unconfirmed: '\n- **fs-38 Wave 1** (not a debt yet)\n',
+  });
+  assert.deepEqual(checkRegister(text), []);
+});
+
+test('BLK/UNC (e): the retired table accepts a BLK row id and still rejects malformed ones', () => {
+  const retired = (id) =>
+    `${registerFixture({ glance: [['A', 1]], groups: [{ letter: 'A', nextId: 101, rows: [1] }] })}
+## Retired carried rows
+
+| Row | Owning PR | Closed unmerged | Reason |
+|---|---|---|---|
+| ${id} | #3505 | 2026-10-01 | lane closed |
+`;
+  assert.deepEqual(checkRegister(retired('BLK101')), []);
+  assert.deepEqual(checkRegister(retired('UNC101')), []);
+  assert.ok(checkRegister(retired('BLK')).some((e) => e.includes('is not a row ID')));
+  assert.ok(checkRegister(retired('AB101')).some((e) => e.includes('is not a row ID')));
+});
+
+test('BLK/UNC (f): parseRegisterRowTitles returns BLK and UNC titles', () => {
+  const titles = parseRegisterRowTitles(
+    titledFixture({
+      blocked: '\n<!-- next-id: BLK102 -->\n\n### BLK101 · no   GPU here\n',
+      unconfirmed: '\n<!-- next-id: UNC102 -->\n\n- **UNC101 · maybe  a thing** (z)\n',
+    }),
+  );
+  assert.equal(titles.get('BLK101'), '· no GPU here');
+  assert.equal(titles.get('UNC101'), 'maybe a thing');
+  assert.equal(titles.get('A1'), '· thing 1');
+});
+
+test('BLK/UNC (f): splitRowId and ROW_ID_REGEX', () => {
+  assert.deepEqual(splitRowId('BLK101'), { prefix: 'BLK', number: 101 });
+  assert.deepEqual(splitRowId('UNC7'), { prefix: 'UNC', number: 7 });
+  assert.deepEqual(splitRowId('A1'), { prefix: 'A', number: 1 });
+  for (const bad of ['BLK', 'X', 'BL101', 'A1b']) {
+    assert.equal(splitRowId(bad), null, bad);
+    assert.equal(ROW_ID_REGEX.test(bad), false, bad);
+  }
+});
+
+test('BLK/UNC (g): parseTitledSections keys a section iff it exists, even with no ID rows', () => {
+  const sec = (title, body) => ({ title, body });
+  const both = parseTitledSections([
+    sec('Blocked — hardware not available', '\n### Not numbered\n'),
+    sec('Unconfirmed — not debts', '\n- **fs-38** x\n'),
+  ]);
+  assert.deepEqual([...both.groups], [['BLK', []], ['UNC', []]]);
+  assert.deepEqual(both.invalid, []);
+  const none = parseTitledSections([sec('Group A — x', '\n### A1 · x\n')]);
+  assert.equal(none.groups.size, 0);
+  const one = parseTitledSections([sec('Blocked — x', '\n### BLK101 · x\n\n### BLK103 · y\n')]);
+  assert.deepEqual([...one.groups], [['BLK', [101, 103]]]);
 });
 
 test('4b: a row ID at or above its group next-id is reported', () => {

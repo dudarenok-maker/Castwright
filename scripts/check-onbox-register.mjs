@@ -35,12 +35,16 @@ import { ghSpawn } from './gh.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { parsePublishToken, publishTokenRegex } from './publish-token.mjs';
 
-// Deliberately out of scope: the "Blocked" and "Unconfirmed" sections. They
-// use a different structure (one uses `###` headings, the other a bullet
-// list) and their rows are not part of the owed total — the glance table
-// itself marks them with `—` instead of a letter, which this parser treats
-// as "not a group" rather than special-casing two sections whose rows would
-// buy little coverage for a lot of parser fragility.
+// The "Blocked" and "Unconfirmed" sections are not groups: their rows are not
+// part of the owed total, and the glance table marks them with `—` instead of
+// a letter, which the glance parser treats as "not a group". They do carry
+// allocate-once IDs (#3587): `### BLK101 · …` headings under Blocked and
+// `- **UNC101 · …**` bullets under Unconfirmed, each section with its own
+// `<!-- next-id: BLK107 -->` marker. `parseTitledSections` and check 4c cover
+// them. The checker ACCEPTS those IDs and never REQUIRES them: unnumbered
+// legacy rows and a section with no marker are still legal here, because the
+// checker is retro-applied to `origin/main`'s copy (see above). Requiring an
+// ID on every row is `register:build`'s job (#3646), not this file's.
 
 // ops-44 (issue #1913) added two edge-case behaviours on top of the above: a
 // row heading that looks row-shaped but isn't a strict `<Letter><N>` (e.g. a
@@ -193,6 +197,64 @@ function parseBodyGroups(sections) {
   return { groups, duplicateLetters, invalidRowHeadings };
 }
 
+// One pinned row-ID vocabulary (#3587): a lettered group's `A101`, or a
+// `BLK`/`UNC` prefix for the Blocked/Unconfirmed sections. Reused by every
+// later consumer in the chain; do not write a second ID regex.
+export const ROW_ID_REGEX = /^(BLK|UNC|[A-Z])(\d+)$/;
+
+// Splits a row ID into `{ prefix, number }` (number a Number), or null.
+export function splitRowId(id) {
+  const match = ROW_ID_REGEX.exec(id);
+  return match ? { prefix: match[1], number: Number(match[2]) } : null;
+}
+
+// The titled (non-group) sections that carry allocate-once IDs: the register
+// section-title test, the ID prefix, how a row is written, and the name error
+// messages use. Blocked rows are `### BLK<N>` headings; Unconfirmed rows are
+// `- **UNC<N> · …**` bullets.
+const TITLED_SECTIONS = [
+  {
+    prefix: 'BLK',
+    titleRegex: /^Blocked\b/,
+    name: 'the Blocked section',
+    candidateRegex: /^### (BLK\d[^\r\n]*?)\r?$/gm,
+  },
+  {
+    prefix: 'UNC',
+    titleRegex: /^Unconfirmed\b/,
+    name: 'the Unconfirmed section',
+    candidateRegex: /^- \*\*(UNC\d[^\r\n]*?)(?:\*\*|\r?$)/gm,
+  },
+];
+
+// Collects the `BLK`/`UNC` row numbers of the Blocked and Unconfirmed sections,
+// mirroring `parseBodyGroups`: a candidate regex per section, a strict row
+// test, and an `invalid` list for look-alikes (`### BLK19b`, `### BLK2.1`,
+// `- **UNC5a · x**`). `groups` has a key iff that section exists, even with
+// zero ID rows. Rows with no ID prefix are not candidates and stay legal.
+export function parseTitledSections(sections) {
+  const groups = new Map();
+  const invalid = [];
+  for (const { prefix, titleRegex, candidateRegex } of TITLED_SECTIONS) {
+    const rowRegex = new RegExp(`^${prefix}(\\d+)(?=\\s|$)`);
+    for (const section of sections) {
+      if (!titleRegex.test(section.title)) continue;
+      const numbers = groups.get(prefix) ?? [];
+      for (const match of section.body.matchAll(candidateRegex)) {
+        const headingText = match[1].trim();
+        const rowMatch = headingText.match(rowRegex);
+        if (rowMatch) {
+          numbers.push(Number(rowMatch[1]));
+        } else {
+          invalid.push({ prefix, headingText });
+        }
+      }
+      groups.set(prefix, numbers);
+    }
+  }
+  return { groups, invalid };
+}
+
 // Formats a group's found row numbers for an error message: a single row is
 // just "E1"; a contiguous run collapses to "E1–E7" — under stable IDs that
 // run no longer has to start at 1, so "E3–E5" collapses too; otherwise a
@@ -239,6 +301,14 @@ export function parseNextIdMarker(sectionBody, letter) {
 export function parseAllRowHeadings(strippedText) {
   const found = [];
   for (const match of strippedText.matchAll(/^### ([A-Z])(\d+)(?=\s|\r?$)/gm)) {
+    found.push({ id: `${match[1]}${match[2]}` });
+  }
+  // #3587: Blocked rows (`### BLK101`) and Unconfirmed bullets
+  // (`- **UNC101 · …**`) share the one document-wide ID space.
+  for (const match of strippedText.matchAll(/^### (BLK)(\d+)(?=\s|\r?$)/gm)) {
+    found.push({ id: `${match[1]}${match[2]}` });
+  }
+  for (const match of strippedText.matchAll(/^- \*\*(UNC)(\d+)(?=\s|\*)/gm)) {
     found.push({ id: `${match[1]}${match[2]}` });
   }
   return found;
@@ -486,8 +556,12 @@ function liveViewRowIdSet(liveViewHtml) {
 export function parseRegisterRowTitles(registerText) {
   const titles = new Map();
   const { text } = stripFences(registerText);
-  for (const m of text.matchAll(/^### ([A-Z]\d+)(?=\s|\r?$)([^\r\n]*)\r?$/gm)) {
+  for (const m of text.matchAll(/^### ((?:BLK|[A-Z])\d+)(?=\s|\r?$)([^\r\n]*)\r?$/gm)) {
     titles.set(m[1], m[2].replace(/\s+/g, ' ').trim());
+  }
+  // #3587: an Unconfirmed bullet's title is the bold text after `UNC101 · `.
+  for (const m of text.matchAll(/^- \*\*(UNC\d+)(?=\s|\*)([^\r\n]*?)(?:\*\*|\r?$)/gm)) {
+    titles.set(m[1], m[2].replace(/^\s*·/, '').replace(/\s+/g, ' ').trim());
   }
   return titles;
 }
@@ -552,7 +626,7 @@ export function parseRetiredCarriedRows(registerText) {
     }
     const [id, pr, date, reason] = cells;
     const problems = [];
-    if (!/^[A-Z]\d+$/.test(id)) problems.push(`"${id}" is not a row ID (a letter and a number, e.g. B103)`);
+    if (!ROW_ID_REGEX.test(id)) problems.push(`"${id}" is not a row ID (a letter or BLK/UNC prefix and a number, e.g. B103 or BLK101)`);
     if (!/^#\d+$/.test(pr)) problems.push(`the owning PR "${pr}" must be a PR reference such as #3505`);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) problems.push(`the closed-unmerged date "${date}" must be YYYY-MM-DD`);
     if (!reason) problems.push('the reason is empty');
@@ -762,6 +836,42 @@ export function checkRegister(text) {
       if (n >= nextId) {
         errors.push(
           `Group ${letter}: ${letter}${n} is at or above the group's next-id (${letter}${nextId}). Bump next-id past every allocated ID.`,
+        );
+      }
+    }
+  }
+
+  // Check 4c (#3587): the Blocked/Unconfirmed sections' `BLK`/`UNC` IDs follow
+  // the same allocate-once rules as a group's. Accept, never require: a section
+  // with no ID row and no marker (today's `main`) adds no error here.
+  const titled = parseTitledSections(sections);
+  for (const { prefix, headingText } of titled.invalid) {
+    const { name } = TITLED_SECTIONS.find((s) => s.prefix === prefix);
+    errors.push(
+      `Row "${headingText}" in ${name} is not a valid row number. Row numbers are plain integers (${prefix}101, ${prefix}102, …), allocated once from the section's next-id — for a row covering more than one debt, annotate its title instead of sub-numbering.`,
+    );
+  }
+  for (const { prefix, titleRegex, name } of TITLED_SECTIONS) {
+    const rows = titled.groups.get(prefix);
+    if (rows === undefined) continue;
+    const section = sections.find((s) => titleRegex.test(s.title));
+    const marker = parseNextIdMarker(section.body, prefix);
+    if (rows.length === 0 && marker === null) continue;
+    if (marker === null) {
+      errors.push(
+        `${name[0].toUpperCase()}${name.slice(1)} has ${prefix} rows but no "<!-- next-id: ${prefix}N -->" allocation marker. Add one directly under the section heading — without it there is nothing to allocate new row IDs from.`,
+      );
+      continue;
+    }
+    if (marker < ALLOCATION_FLOOR) {
+      errors.push(
+        `${name[0].toUpperCase()}${name.slice(1)}'s next-id (${prefix}${marker}) is below the allocation floor ${prefix}${ALLOCATION_FLOOR}. IDs below the floor have been used before; reusing one silently re-points every existing citation.`,
+      );
+    }
+    for (const n of rows) {
+      if (n >= marker) {
+        errors.push(
+          `${prefix}${n} is at or above ${name}'s next-id (${prefix}${marker}). Bump next-id past every allocated ID.`,
         );
       }
     }
