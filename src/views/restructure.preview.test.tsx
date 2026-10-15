@@ -173,6 +173,54 @@ describe('RestructureView — #3400 cross-book slices', () => {
     expect(store.getState().manuscript.sentences).toEqual(serverFresh);
   });
 
+  /* Merge [2,3] over ch1..4 (one sentence each); held open so a test can write
+     to the slice while the request is pending. */
+  async function startMerge23(store: ReturnType<typeof makeStore>) {
+    const sentence = (chapterId: number, id: number, text: string) => ({ id, chapterId, characterId: 'c', text });
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'A' } as never,
+        sentences: [sentence(1, 1, 'one'), sentence(2, 1, 'two'), sentence(3, 1, 'three'), sentence(4, 1, 'four')] as never,
+      }),
+    );
+    let resolveRestructure!: (v: unknown) => void;
+    apiMock.refreshChapterTitles.mockReturnValue(new Promise((r) => (resolveRestructure = r)));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalledWith('b1'));
+    const remap = [
+      { oldChapterId: 1, oldSentenceId: 1, newChapterId: 1, newSentenceId: 1 },
+      { oldChapterId: 2, oldSentenceId: 1, newChapterId: 2, newSentenceId: 1 },
+      { oldChapterId: 3, oldSentenceId: 1, newChapterId: 2, newSentenceId: 2 },
+      { oldChapterId: 4, oldSentenceId: 1, newChapterId: 3, newSentenceId: 1 },
+    ];
+    return () => resolveRestructure({ sentenceRemap: remap, warnings: [] });
+  }
+  const keys = (store: ReturnType<typeof makeStore>) =>
+    store.getState().manuscript.sentences.map((x) => `${x.chapterId}:${x.id}:${x.text}:${x.emotion ?? ''}`);
+
+  it('still applies the remap when a same-book write (emotion detection) replaced the sentences array mid-request', async () => {
+    const store = makeStore();
+    const resolve = await startMerge23(store);
+    store.dispatch(
+      manuscriptSlice.actions.applyDetectedEmotions({ chapterId: 4, annotations: [{ sentenceId: 1, emotion: 'sad' }] }),
+    );
+    resolve();
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    expect(keys(store)).toEqual(['1:1:one:', '2:1:two:', '2:2:three:', '3:1:four:sad']);
+  });
+
+  it("skips the remap when the slice was re-pointed at another book without a sentence hydrate", async () => {
+    const store = makeStore();
+    const resolve = await startMerge23(store);
+    // B's analysis lands with no sentences: the slice keeps A's array but is now B's.
+    store.dispatch(manuscriptSlice.actions.hydrateFromAnalysis({ bookId: 'b2' } as never));
+    resolve();
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    expect(keys(store)).toEqual(['1:1:one:', '2:1:two:', '3:1:three:', '4:1:four:']);
+  });
+
   it('applies the remap once when the slice still holds the sentences captured at click time', async () => {
     const store = makeStore();
     const sentence = (chapterId: number, id: number, text: string) => ({ id, chapterId, characterId: 'c', text });

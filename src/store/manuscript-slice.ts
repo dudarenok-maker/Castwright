@@ -21,6 +21,12 @@ export interface ManuscriptState {
       manuscriptId+title guard short-circuited the per-book disk hydrate. */
   bookId: string | null;
   manuscriptId: string | null;
+  /** #3400 — bumped by every hydrateFromBookState. A caller that captured it
+      before an await can tell "the slice was re-read from disk meanwhile"
+      (hydrateSeq moved) from "an in-place edit replaced the array" (it did
+      not): array identity cannot, since every Immer write replaces it.
+      Optional so hand-built test states need not carry it. */
+  hydrateSeq?: number;
   title: string | null;
   format: UploadResponse['format'] | null;
   wordCount: number;
@@ -86,6 +92,7 @@ export interface PendingReupload {
 const initialState: ManuscriptState = {
   bookId: null,
   manuscriptId: null,
+  hydrateSeq: 0,
   title: null,
   format: null,
   wordCount: 0,
@@ -216,6 +223,7 @@ export const manuscriptSlice = createSlice({
       }>,
     ) => {
       const { state, sentences, wordCount, format } = a.payload;
+      s.hydrateSeq = (s.hydrateSeq ?? 0) + 1;
       s.bookId = state.bookId;
       s.manuscriptId = state.manuscriptId;
       s.title = state.title;
