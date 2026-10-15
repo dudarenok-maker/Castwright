@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { withStateLock } from '../workspace/state-lock.js';
 import { type BookStateJson } from '../workspace/scan.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
 import { recordPending, dropPendingForChapter, type ChapterRef } from '../workspace/revisions-store.js';
@@ -724,31 +725,38 @@ export async function finalizeChapterAudioWrite(
   /* Stamp duration / model / QA into state.json (read-modify-write, keyed by
      chapter id so concurrent sibling writes can't clobber each other). */
   const statePath = stateJsonPath(bookDir);
-  const prev = await readJson<BookStateJson>(statePath);
-  if (prev) {
-    const formatted = formatDuration(durationSec);
-    const next: BookStateJson = {
-      ...prev,
-      chapters: prev.chapters.map((c) =>
-        c.id === chapter.id
-          ? {
-              ...c,
-              duration: formatted,
-              audioModelKey: effectiveModelKey,
-              audioEngines,
-              audioRenderedAt: segmentsFile.synthesizedAt,
-              audioQa,
-              generationState: undefined,
-              generationError: undefined,
-              generationErrorCode: undefined,
-              generationRemediation: undefined,
-            }
-          : c,
-      ),
-      updatedAt: new Date().toISOString(),
-    };
-    await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
-  }
+  /* #3625 — the read-through-write runs under the per-book state lock, with the
+     read INSIDE it: a sibling chapter's finalize (splice, QA repair or
+     generation) can overlap, and a stale snapshot would drop its stamp. A lock
+     timeout propagates like a write failure: this stamp is authoritative. */
+  const prev = await withStateLock(bookDir, async () => {
+    const current = await readJson<BookStateJson>(statePath);
+    if (current) {
+      const formatted = formatDuration(durationSec);
+      const next: BookStateJson = {
+        ...current,
+        chapters: current.chapters.map((c) =>
+          c.id === chapter.id
+            ? {
+                ...c,
+                duration: formatted,
+                audioModelKey: effectiveModelKey,
+                audioEngines,
+                audioRenderedAt: segmentsFile.synthesizedAt,
+                audioQa,
+                generationState: undefined,
+                generationError: undefined,
+                generationErrorCode: undefined,
+                generationRemediation: undefined,
+              }
+            : c,
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+      await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
+    }
+    return current;
+  });
 
   /* Plan 285 — AFTER the last disk write (audio rename, peaks, state.json):
      a throw earlier in finalize therefore never leaves an entry for a
