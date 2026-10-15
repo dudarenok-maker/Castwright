@@ -986,7 +986,8 @@ export function classifyRunResult(r, reportText) {
 export function runVitestJson(cwd, config, files, spawn = spawnSync) {
   if (files.length === 0) return { runOutcome: 'ok', testResults: [] };
   // The report goes to a private temp dir (outside the repo, removed in the
-  // finally below) so a run never leaves an untracked server/.vitest/ behind.
+  // finally below, which also covers a spawn that throws) so a run never
+  // leaves an untracked server/.vitest/ behind.
   const tmp = mkdtempSync(join(tmpdir(), 'quarantine-health-'));
   const outputFile = join(tmp, 'report.json');
   const args = buildVitestArgs(config, files, outputFile);
@@ -1002,25 +1003,28 @@ export function runVitestJson(cwd, config, files, spawn = spawnSync) {
   // node_modules/npm/bin/npx-cli.js relative to the wrong place and crashed
   // with MODULE_NOT_FOUND), verified against this repo's node_modules.
   const command = `npx ${args.map((a) => `"${a}"`).join(' ')}`;
-  const r = spawn(command, {
-    cwd,
-    encoding: 'utf8',
-    shell: true,
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: VITEST_RUN_TIMEOUT_MS,
-    windowsHide: true,
-    // RUN_QUARANTINE=1 is what turns quarantinedIt/quarantinedDescribe from
-    // it.skip into a real it — without it every quarantined test reports
-    // 'skipped' here and would misclassify as never-passes for EVERY test,
-    // register-wide. Real env var, not a vitest `env:` config key (mirrors
-    // `cross-env RUN_QUARANTINE=1` in the `test:quarantine` script).
-    env: { ...process.env, RUN_QUARANTINE: '1' },
-  });
+  let r;
   let reportText;
   try {
-    reportText = readFileSync(outputFile, 'utf8');
-  } catch {
-    // No report file: classifyRunResult falls back to stdout, then flags it.
+    r = spawn(command, {
+      cwd,
+      encoding: 'utf8',
+      shell: true,
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: VITEST_RUN_TIMEOUT_MS,
+      windowsHide: true,
+      // RUN_QUARANTINE=1 is what turns quarantinedIt/quarantinedDescribe from
+      // it.skip into a real it — without it every quarantined test reports
+      // 'skipped' here and would misclassify as never-passes for EVERY test,
+      // register-wide. Real env var, not a vitest `env:` config key (mirrors
+      // `cross-env RUN_QUARANTINE=1` in the `test:quarantine` script).
+      env: { ...process.env, RUN_QUARANTINE: '1' },
+    });
+    try {
+      reportText = readFileSync(outputFile, 'utf8');
+    } catch {
+      // No report file: classifyRunResult falls back to stdout, then flags it.
+    }
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

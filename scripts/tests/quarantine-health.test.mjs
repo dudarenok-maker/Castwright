@@ -1203,6 +1203,17 @@ test('runVitestJson: vitest exits without writing any report -> unparseable, sur
   assert.equal(result.unparseable, true);
 });
 
+test('runVitestJson: a spawn that THROWS still removes the temp report dir (and rethrows)', () => {
+  let outPath;
+  const fakeSpawn = (command) => {
+    outPath = /--outputFile\.json=([^"]+)"/.exec(command)[1];
+    throw new Error('spawn exploded');
+  };
+  assert.throws(() => runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn), /spawn exploded/);
+  assert.ok(outPath, 'fake spawn must have been reached');
+  assert.ok(!existsSync(dirname(outPath)), 'temp dir must be removed even when spawn throws');
+});
+
 test('unparseableRunNotice is silent at zero and loud (names the count) otherwise', () => {
   assert.equal(unparseableRunNotice(0), null);
   const n = unparseableRunNotice(3);
