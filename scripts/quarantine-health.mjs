@@ -1051,7 +1051,7 @@ function checkIssueState(issueNumber) {
 // still concludes green (#3626). null when there is nothing to flag.
 export function unparseableRunNotice(count) {
   if (count === 0) return null;
-  return `**Runner problem: vitest output for ${count} run(s) could not be parsed**, so affected rows are reported \`unknown\` — this is a broken harness, not a verdict on the tests.`;
+  return `**Runner problem: vitest output for ${count} invocation(s) could not be parsed**, so affected rows are reported \`unknown\` — this is a broken harness, not a verdict on the tests.`;
 }
 
 export function emit(report) {

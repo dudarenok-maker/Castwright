@@ -1218,7 +1218,7 @@ test('unparseableRunNotice is silent at zero and loud (names the count) otherwis
   assert.equal(unparseableRunNotice(0), null);
   const n = unparseableRunNotice(3);
   assert.match(n, /3/);
-  assert.match(n, /could not be parsed/i);
+  assert.match(n, /3 invocation\(s\) could not be parsed/i);
 });
 
 // --- classifyRunResult: maxBuffer overflow / OOM misdiagnosis (finding 2) --
@@ -1544,7 +1544,7 @@ for (const [label, stdout] of [
       // Frontend run + both server configs, every planned run: all counted.
       assert.ok(calls >= 3, 'frontend and both server configs should have run');
       assert.ok(
-        written.includes(`**Runner problem: vitest output for ${calls} run(s) could not be parsed**`),
+        written.includes(`**Runner problem: vitest output for ${calls} invocation(s) could not be parsed**`),
         `summary should count all ${calls} unparseable runs`,
       );
       assert.ok(
