@@ -628,6 +628,18 @@ describe('renumbering honours titleSynthesized (#3628)', () => {
     ]);
   });
 
+  it('(B2) keeps hint titles in step with renumbered state titles', () => {
+    const result = applyExclude(book(true), bookHints(), bookSentences(), {
+      chapterIds: [4],
+      excluded: true,
+    });
+    const stateTitles = result.state.chapters.map((c) => c.title);
+    expect(stateTitles).not.toEqual(titles); // renumbering really happened
+    for (const c of result.state.chapters) {
+      expect(result.hints.find((h) => h.id === c.id)?.title).toBe(c.title);
+    }
+  });
+
   it('(C) reorder and title-less merge carry the flag to the new chapter', () => {
     const reordered = applyReorder(book(true), bookHints(), bookSentences(), {
       order: [1, 3, 2, 4],

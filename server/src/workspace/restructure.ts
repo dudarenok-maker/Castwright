@@ -532,7 +532,12 @@ function postProcessRestructure(result: RestructureResult): RestructureResult {
 
   return {
     state: { ...pruned.state, chapters: titled.chapters },
-    hints: pruned.hints,
+    // Hints get the renumbered titles too, so the in-memory manuscript record
+    // agrees with state.json (same shape as applyRefreshTitles).
+    hints: pruned.hints.map((h) => {
+      const ch = renumberedById.get(h.id);
+      return ch ? { ...h, title: ch.title } : h;
+    }),
     sentences: pruned.sentences,
     remap: pruned.remap,
     audioOps: adjustedAudioOps,
