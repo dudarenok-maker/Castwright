@@ -253,9 +253,15 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
        has manually renamed them and the heuristic refresh MUST NOT
        clobber their work. The chapterTitleParserVersion bump below
        still happens so the refresh isn't re-attempted on every GET. */
-    const newChapters = state.chapters.map((c, i) =>
-      c.titleOverridden ? c : { ...c, title: parsed.chapters[i].title },
-    );
+    const newChapters = state.chapters.map((c, i) => {
+      if (c.titleOverridden) return c;
+      const { titleSynthesized: _stale, ...rest } = c;
+      return {
+        ...rest,
+        title: parsed.chapters[i].title,
+        titleSynthesized: parsed.chapters[i].titleSynthesized || undefined,
+      };
+    });
     const titlesChanged = newChapters.some((c, i) => c.title !== state.chapters[i].title);
     const nextState: BookStateJson = {
       ...state,
@@ -1210,6 +1216,7 @@ async function applyReparse(
       slug: newSlug,
       duration: '00:00',
       excluded: carryover ? true : undefined,
+      titleSynthesized: c.titleSynthesized || undefined,
     };
   });
 
