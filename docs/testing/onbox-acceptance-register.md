@@ -102,31 +102,23 @@ The live view carries derived figures — owed count, per-group counts, oldest
 debt — that are **generated** on every build. Rows can be right while the
 summary strip lies. `npm run register:build` generates the summary strip and all
 its derived figures; `npm run check:onbox-register` verifies the row IDs are
-unique across the document and that each group's `next-id` marker sits at or
-above the shared allocation floor (never that a row ID itself sits below the
-floor — the floor gates the NEXT id a group may mint, not the ids already in
-use), and that each group's glance-table count matches the rows in its body
-section. Both fail CI when rows are added, removed, or miscounted, so
+unique across the document and that each group's `next-id` marker (and the
+`BLK` / `UNC` marker of the Blocked and Unconfirmed sections, once they carry
+one) sits at or above the shared allocation floor (never that a row ID itself
+sits below the floor — the floor gates the NEXT id a group may mint, not the
+ids already in use), and that each group's glance-table count matches the rows
+in its body section. Both fail CI when rows are added, removed, or miscounted, so
 **adding or removing a row here and missing the live view build fails CI**.
 Know its edges, because three of them are wide:
 
-- **A wording-only edit to a numbered Group row does not fail — but the same
-  edit to a Blocked/Unconfirmed row does.** Rewording a Group row (`A12`,
-  `E9`, …), recording a run result, changing a hardware note or a criteria
-  link — the most common edit this register gets — changes nothing either
-  check compares for a Group row, since those are matched by ID. The live
-  view mirrors that prose in its own row bodies and will silently fall behind
-  (the generator does not rewrite a row's title if you changed only the
-  body; it preserves hand-authored titles). Blocked and Unconfirmed rows are
-  matched by TITLE, not ID. A Blocked row's title must match EXACTLY (after
-  normalisation) — rewording one WITHOUT the matching live-view edit makes
-  `register:build`/`--check` fail with a clean, actionable "no shell title
-  matches" error (not a crash) naming the mismatched title. An Unconfirmed
-  row's title matches by PREFIX, though — lengthening it (adding text) fails
-  the same way, but *shortening* it (or any edit that keeps the new title a
-  prefix of the unchanged live-view iname) still matches and passes
-  silently, exactly like the numbered-Group case above; only the failure
-  mode changed shape, not the coverage gap for that one direction.
+- **A wording-only edit to ANY row does not fail.** Rewording a row (`A12`,
+  `E9`, `BLK101`, `UNC101`, …), recording a run result, changing a hardware
+  note or a criteria link — the most common edit this register gets — changes
+  nothing either check compares, since every row, Blocked and Unconfirmed
+  included, is matched by ID. The live view mirrors that prose in its own row
+  bodies and will silently fall behind (the generator does not rewrite a
+  row's title if you changed only the body; it preserves hand-authored
+  titles). Mirror the edit into the live view yourself.
 - **The markdown's own `## At a glance` table is hand-maintained input, not
   generated output — only the LIVE VIEW's mirrored glance table and strip are
   generated.** `register:build` reads the markdown's `## At a glance` table
@@ -248,13 +240,8 @@ comparison, see the edge list above). The merge step that closes this, run
      has.
    - **in no history this checkout has**: FAILS as `unknown-provenance`.
 
-   **Not covered: the Blocked and Unconfirmed sections.** Their rows carry no
-   ID (`—`), so this comparison does not check them at all. Another lane's
-   Blocked or Unconfirmed row on the live page is dropped silently when you
-   publish, and `--build-union` cannot carry one. Compare those two sections
-   with the saved live page by eye before you publish. Tracked in #3587; the
-   design decision owed there is what identifies a title-keyed row, which has
-   no allocate-once ID.
+   Blocked and Unconfirmed rows carry `BLK` / `UNC` IDs, so they are compared,
+   carried and unioned exactly like lettered rows.
 
    A row ID you share with the live page under a different title FAILS as
    `row-id-collision` (unless the page is your own earlier publish and its
@@ -616,6 +603,16 @@ setup rather than repeatedly loading and evicting models.
 > `CANNOT_VERIFY_BASELINE_ERROR`, until a follow-up PR adds the marker on
 > `main`. Copy an existing group's bare `<!-- next-id: X101 -->` line — no
 > extra caveat comment needed.
+
+> **Blocked and Unconfirmed rows allocate the same way.** Each of those two
+> sections has its own `next-id` marker directly under its heading
+> (`<!-- next-id: BLK107 -->`, `<!-- next-id: UNC103 -->`), floor 101. A new
+> Blocked row is a `### BLK107 · <title>` heading and a new Unconfirmed row is
+> a `- **UNC103 · <title>** (…)` bullet; bump the marker in the same commit.
+> IDs are allocate-once and never reused, exactly like lettered rows, and
+> `register:build` rejects a Blocked or Unconfirmed row that has none. These
+> rows never count toward `**N owed.**`, a group's glance count or the strip's
+> Owed tile.
 
 > **Adding a new row to an existing group? Allocate from its `next-id`
 > marker.** Take the marker's current value as the new row's ID, then bump
