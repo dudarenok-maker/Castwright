@@ -214,7 +214,7 @@ describe('cover router — error paths', () => {
 /* ---------- Plan 40 — upload + framing endpoints ---------- */
 
 describe('POST /:bookId/cover/upload (plan 40)', () => {
-  it('accepts a JPEG upload, writes cover.jpg verbatim, patches state with source=local', async () => {
+  it('accepts a JPEG upload, stores a re-encoded cover.jpg, patches state with source=local', async () => {
     // Build a small valid JPEG via sharp so the bytes pass validateUpload.
     const sharp = (await import('sharp')).default;
     const jpeg = await sharp({
@@ -233,7 +233,16 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
 
     const onDisk = join(bookDir, '.audiobook', 'cover.jpg');
     expect(existsSync(onDisk)).toBe(true);
-    expect(Buffer.compare(readFileSync(onDisk), jpeg)).toBe(0);
+    /* #3642 / #3535: the route now re-encodes every upload, so the stored
+       cover is a clean sharp-written JPEG (a sharp-written fixture at the
+       same quality may round-trip byte-identically, so the EOI + decode
+       assertions pin the clean-JPEG guarantee). */
+    const written = readFileSync(onDisk);
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBe(8);
+    expect(meta.height).toBe(8);
 
     const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(state.coverImage.source).toBe('local');
@@ -329,7 +338,7 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
     expect(coverOnDisk()).toEqual(before);
   });
 
-  it('accepts a real JPEG labelled image/png and stores that JPEG', async () => {
+  it('accepts a real JPEG labelled image/png and stores a re-encoded JPEG', async () => {
     const sharp = (await import('sharp')).default;
     const jpeg = await sharp({
       create: { width: 4, height: 4, channels: 3, background: { r: 0, g: 0, b: 0 } },
@@ -340,7 +349,10 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
       .post(`/api/books/${bookId}/cover/upload`)
       .attach('image', jpeg, { filename: 'x.png', contentType: 'image/png' });
     expect(res.status).toBe(200);
-    expect(Buffer.compare(coverOnDisk()!, jpeg)).toBe(0);
+    /* #3642 / #3535: bytes decide the branch, and every branch re-encodes. */
+    const written = coverOnDisk()!;
+    expect(Buffer.compare(written, jpeg)).not.toBe(0);
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
   });
 
   it('accepts a real PNG labelled image/jpeg and stores a JPEG', async () => {
@@ -359,7 +371,7 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
     expect(written[1]).toBe(0xd8);
   });
 
-  it('200s and stores a real JPEG missing only its end-of-image marker, byte-identical', async () => {
+  it('200s on a real JPEG missing only its end-of-image marker and stores a whole re-encoded JPEG', async () => {
     const sharp = (await import('sharp')).default;
     const jpeg = await sharp({
       create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
@@ -371,7 +383,9 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
       .post(`/api/books/${bookId}/cover/upload`)
       .attach('image', cut, { filename: 'x.jpg', contentType: 'image/jpeg' });
     expect(res.status).toBe(200);
-    expect(Buffer.compare(coverOnDisk()!, cut)).toBe(0);
+    /* The damaged JPEG is tolerated and re-encoded whole (#3642 / #3535). */
+    const written = coverOnDisk()!;
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
   });
 
   it('502s on JPEG-signature bytes that do not decode and writes nothing', async () => {

@@ -180,14 +180,57 @@ describe('validateUpload', () => {
 });
 
 describe('writeUploadedCover', () => {
-  it('writes JPEG bytes verbatim when MIME is image/jpeg', async () => {
+  /* #3535 regression: a tiny valid JPEG with an MPEG-TS-looking stream
+     appended used to be stored verbatim, and ffmpeg's byte-probing then
+     picked the mpegts demuxer over the JPEG one, breaking the m4b export.
+     The upload path must re-encode, so the stored cover is only ever a
+     clean sharp-written JPEG. */
+  it('re-encodes a JPEG with an appended MPEG-TS-looking tail so no trailing bytes survive (#3535)', async () => {
+    const dest = join(bookDir, '.audiobook', 'cover.jpg');
+    const jpeg = await sharp({
+      create: { width: 2, height: 2, channels: 3, background: { r: 200, g: 100, b: 50 } },
+    })
+      .jpeg()
+      .toBuffer();
+    // A few 188-byte MPEG-TS packets starting with the 0x47 sync byte —
+    // enough for ffmpeg's auto-probing to prefer mpegts/h264 over the JPEG.
+    const packets = Array.from({ length: 3 }, () => {
+      const packet = Buffer.alloc(188, 0x00);
+      packet[0] = 0x47;
+      return packet;
+    });
+    const input = Buffer.concat([jpeg, ...packets]);
+    const result = await writeUploadedCover(input, 'image/jpeg', dest);
+    const written = readFileSync(dest);
+    expect(Buffer.compare(written, input)).not.toBe(0);
+    expect(written.length).toBeLessThan(input.length);
+    expect(result.bytes).toBe(written.length);
+    // Clean sharp-written JPEG: ends with the EOI marker and decodes as a
+    // JPEG with the original pixel dimensions.
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBe(2);
+    expect(meta.height).toBe(2);
+  });
+
+  it('re-encodes a JPEG upload to a clean sharp-written JPEG with the same dimensions', async () => {
     const dest = join(bookDir, '.audiobook', 'cover.jpg');
     const jpeg = await makeJpeg();
     const result = await writeUploadedCover(jpeg, 'image/jpeg', dest);
     expect(existsSync(dest)).toBe(true);
-    expect(result.bytes).toBe(jpeg.length);
     const written = readFileSync(dest);
-    expect(Buffer.compare(written, jpeg)).toBe(0);
+    expect(result.bytes).toBe(written.length);
+    /* Behaviour change (#3642 / #3535): every upload is re-encoded through
+       sharp. A sharp-written fixture at the same quality may round-trip
+       byte-identically, so the guarantee under test is that the stored file
+       is a clean, whole, decodable JPEG — the appended-tail test carries the
+       trailing-junk difference assertion. */
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBe(10);
+    expect(meta.height).toBe(10);
   });
 
   it('transcodes PNG to JPEG on disk', async () => {
@@ -202,7 +245,7 @@ describe('writeUploadedCover', () => {
     expect(Buffer.compare(written, png)).not.toBe(0);
   });
 
-  it('keeps real baseline, progressive and EXIF JPEGs byte-for-byte', async () => {
+  it('re-encodes baseline, progressive and EXIF JPEGs to clean JPEGs with the same dimensions', async () => {
     const base = { create: { width: 16, height: 16, channels: 3 as const, background: '#c86432' } };
     const variants = [
       await sharp(base).jpeg().toBuffer(),
@@ -212,18 +255,51 @@ describe('writeUploadedCover', () => {
     for (const jpeg of variants) {
       const dest = join(bookDir, '.audiobook', 'cover.jpg');
       await writeUploadedCover(jpeg, 'image/jpeg', dest);
-      expect(Buffer.compare(readFileSync(dest), jpeg)).toBe(0);
+      const written = readFileSync(dest);
+      expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+      const meta = await sharp(written).metadata();
+      expect(meta.format).toBe('jpeg');
+      expect(meta.width).toBe(16);
+      expect(meta.height).toBe(16);
     }
   });
 
-  it('keeps a real JPEG missing only its end-of-image marker byte-for-byte', async () => {
+  it('accepts a real JPEG missing only its end-of-image marker and repairs it (tolerant decode)', async () => {
     const jpeg = await makeJpeg();
     expect([...jpeg.subarray(jpeg.length - 2)]).toEqual([0xff, 0xd9]);
     const cut = jpeg.subarray(0, jpeg.length - 2);
     const dest = join(bookDir, '.audiobook', 'cover.jpg');
     const result = await writeUploadedCover(cut, 'image/jpeg', dest);
-    expect(result.bytes).toBe(cut.length);
-    expect(Buffer.compare(readFileSync(dest), cut)).toBe(0);
+    const written = readFileSync(dest);
+    /* The damaged input is re-encoded, so the stored cover is whole again. */
+    expect(result.bytes).toBe(written.length);
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBe(10);
+    expect(meta.height).toBe(10);
+  });
+
+  /* .rotate() in reencodeToJpeg applies EXIF orientation before sharp drops
+     the metadata — a rotated phone photo must not land sideways (#3642). */
+  it('applies EXIF orientation on re-encode so a rotated phone photo lands upright', async () => {
+    const input = await sharp({
+      create: { width: 32, height: 16, channels: 3, background: { r: 10, g: 200, b: 90 } },
+    })
+      .withMetadata({ orientation: 6 })
+      .jpeg()
+      .toBuffer();
+    const dest = join(bookDir, '.audiobook', 'cover.jpg');
+    await writeUploadedCover(input, 'image/jpeg', dest);
+    const written = readFileSync(dest);
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('jpeg');
+    // Orientation 6 (rotate 90 CW to display): the stored pixels are already
+    // rotated, so the cover is 16x32 portrait, not the raw 32x16 landscape.
+    expect(meta.width).toBe(16);
+    expect(meta.height).toBe(32);
+    // The orientation tag is consumed, not carried forward.
+    expect(meta.orientation).toBeUndefined();
   });
 
   it('refuses JPEG-signature bytes that do not decode and writes nothing', async () => {
