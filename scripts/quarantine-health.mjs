@@ -155,15 +155,16 @@
 
    Non-blocking by design: this ALWAYS exits 0 for test outcomes (any bucket,
    including "never-passes" and "unknown") — that's the whole point, the lane
-   must never gate a merge. The one case that exits non-zero is the register
-   file itself being unreadable (ENOENT/permission error), or a vitest run
-   whose JSON report could not be parsed (#3626: vitest 5 writes the report to
-   a file, so the script names a temp `--outputFile.json` and reads that) — a
-   genuinely broken setup, not a test-outcome verdict; the report also carries
-   a loud "Runner problem" line and CI gets an `::error` annotation. Even then nothing depends on this
+   must never gate a merge. Three cases exit non-zero, all a genuinely broken
+   setup rather than a test-outcome verdict: the register file being unreadable
+   (ENOENT/permission error); a register whose rows fail to parse
+   (reportParseFailure); or a vitest run whose JSON report could not be parsed
+   (#3626: vitest 5 writes the report to a file, so the script names a temp
+   `--outputFile.json` and reads that — the report also carries a loud "Runner
+   problem" line and CI gets an `::error` annotation). Even then nothing depends on this
    script's exit code: it isn't wired into verify.yml or any required check,
-   and the workflow step also sets `continue-on-error: true` as a second
-   layer.
+   and the workflow JOB also sets `continue-on-error: true` as a second
+   layer (the step/job shows red but the run concludes success).
 
    Run: `node scripts/quarantine-health.mjs`
    Override run count for local iteration: `QUARANTINE_HEALTH_RUNS=2 node scripts/quarantine-health.mjs`
