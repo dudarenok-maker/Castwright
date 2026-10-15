@@ -50,7 +50,8 @@ export interface ManuscriptState {
       reassignment. Holds each moved key's PRIOR characterId so a single Undo
       restores them. NOT persisted (a full reload drops it — "undoable" is
       satisfied by in-session one-level undo). Cleared by any book transition
-      (reset / hydrate*) and by a later edit that touches a moved key. */
+      (reset / hydrate*) and by a later edit that touches a moved key; a chapter
+      restructure (applyChapterRestructure) re-keys it instead. */
   lastBulkReassign:
     | {
         moves: { chapterId: number; sentenceId: number; prevCharacterId: string }[];
@@ -606,6 +607,19 @@ export const manuscriptSlice = createSlice({
       }
       next.sort((x, y) => x.chapterId - y.chapterId || x.id - y.id);
       s.sentences = next;
+      /* #3400 — the bulk-undo slot is keyed by (chapterId, sentenceId), so it
+         moves with its lines: re-key each move through the same table, drop a
+         move whose sentence the restructure dropped (nothing left to revert),
+         and null the slot when none survive. */
+      if (s.lastBulkReassign) {
+        const moves = s.lastBulkReassign.moves.flatMap((m) => {
+          const mapped = remapByOld.get(key(m.chapterId, m.sentenceId));
+          return mapped
+            ? [{ ...m, chapterId: mapped.newChapterId, sentenceId: mapped.newSentenceId }]
+            : [];
+        });
+        s.lastBulkReassign = moves.length > 0 ? { ...s.lastBulkReassign, moves } : null;
+      }
     },
 
     /* fs-58 — User edit: merge adjacent sentences into the lowest id.

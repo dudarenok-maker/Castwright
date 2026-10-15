@@ -1506,4 +1506,41 @@ describe('#1676(c) — bulk line-reassign reducer + one-level undo slot', () => 
       expect(s2.lastBulkReassign).not.toBeNull();
     });
   });
+
+  describe('applyChapterRestructure re-keys the undo slot (#3400)', () => {
+    const remap = (o: number, n: number) => ({
+      oldChapterId: 1, oldSentenceId: o, newChapterId: 1, newSentenceId: n,
+    });
+    const bulkFirst = (s0: ManuscriptState) =>
+      reducer(
+        s0,
+        manuscriptActions.setSentencesCharacterBulk({
+          keys: [{ chapterId: 1, sentenceId: 1 }],
+          characterId: 'carol',
+          targetLabel: 'Carol',
+        }),
+      );
+
+    it('a reorder moves the slot with its line, so Undo reverts the right line', () => {
+      const s1 = bulkFirst(bulkBaseState([sent(1, 1, 'alice'), sent(1, 2, 'bob')]));
+      const s2 = reducer(
+        s1,
+        manuscriptActions.applyChapterRestructure({ sentenceRemap: [remap(1, 2), remap(2, 1)] }),
+      );
+      const s3 = reducer(s2, manuscriptActions.undoBulkReassign());
+      expect(s3.sentences.map((x) => `${x.chapterId}:${x.id}:${x.characterId}`)).toEqual([
+        '1:1:bob',
+        '1:2:alice',
+      ]);
+    });
+
+    it('nulls the slot when the restructure dropped every moved sentence', () => {
+      const s1 = bulkFirst(bulkBaseState([sent(1, 1, 'alice'), sent(1, 2, 'bob')]));
+      const s2 = reducer(
+        s1,
+        manuscriptActions.applyChapterRestructure({ sentenceRemap: [remap(2, 1)] }),
+      );
+      expect(s2.lastBulkReassign).toBeNull();
+    });
+  });
 });
