@@ -6515,3 +6515,12 @@ test('#3587 review: the legacy-row warning is non-blocking through the real CLI 
     assert.match(res.stderr, /Blocked section has \d+ legacy rows? with no BLK ID/);
   });
 });
+
+test('#3587 review: a carried row into an EMPTY section with no <header> falls back to anchoring after </h3>', () => {
+  const live = buildRowContentLiveView([theirsB103], 'B');
+  const tracked = buildRowContentLiveView([], 'B');
+  assert.ok(!tracked.includes('</header>'), 'the fixture section is bare-<h3>, the shape the fallback serves');
+  const union = onbox.buildUnionLiveView(tracked, live, ['B103']);
+  assert.ok(union.includes('<span class="num">B103</span>'), union);
+  assert.ok(union.indexOf('</h3>') < union.indexOf('<span class="num">B103</span>'), 'the block lands after the heading');
+});

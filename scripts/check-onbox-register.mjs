@@ -527,7 +527,8 @@ export function buildUnionLiveView(trackedHtml, liveHtml, carriedIds) {
       html = `${html.slice(0, last.end)}\n${indentBefore(html, last.index)}${block}${html.slice(last.end)}`;
     } else {
       // register:build places rows after </header> (reconcileTitledSection); a
-      // bare-<h3> section (lettered groups) has no <header>, so fall back to </h3>.
+      // section with no <header> (test fixtures; every real section has one)
+      // falls back to </h3>.
       const closeHeader = html.indexOf('</header>', section.start);
       const anchor = closeHeader !== -1 && closeHeader < section.end ? closeHeader : html.indexOf('</h3>', section.start);
       const headerEnd = html.indexOf('\n', anchor);
