@@ -44,8 +44,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     # 30 (not 20): the matrix runs the full verify:quick (test:all) + audit +
     # build. Windows' Verify step grew from 10.8 min (09-27) to 17.8 min (job
-    # 12.8 -> ~20.3 min), so run 38498989695 was cancelled at 20m07s; macOS
-    # also hung once (10-07). Matches verify.yml's windows-tests cap (#3696).
+    # 12.8 -> ~20.3 min), so run 38498989695 was cancelled at 20m07s.
+    # Matches verify.yml's windows-tests cap (#3696). The 10-07 macOS cancel
+    # was a stall, not a slow run: no cap covers it (#3699).
     timeout-minutes: 30
     strategy:
       fail-fast: false
