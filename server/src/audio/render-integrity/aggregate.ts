@@ -710,7 +710,7 @@ export async function scoreBook(
   const currentVoiceNameFor = (charId: string): string | undefined => {
     const current = castResolver.resolve(charId)?.character;
     if (!current) return undefined;
-    return currentCastVoiceName(current, defaultEngine);
+    return currentCastVoiceName(current, defaultEngine, bookLanguage);
   };
   const currentVoiceByChar = new Map<string, string | undefined>();
   const currentVoiceFor = (charId: string): string | undefined => {
@@ -847,7 +847,7 @@ export async function scoreBook(
     const currentVoice = currentVoiceFor(charId);
     const castChar = castResolver.resolve(charId)?.character;
     if (!info || currentVoice === undefined || !castChar) continue;
-    const engine = currentCharacterEngine(castChar, defaultEngine);
+    const engine = currentCharacterEngine(castChar, defaultEngine, bookLanguage);
     const modelKey = canonicalModelKeyForEngine(engine, info.modelKey);
     if (info.voiceName !== currentVoice || info.modelKey !== modelKey) {
       voiceInfoByChar.set(charId, {

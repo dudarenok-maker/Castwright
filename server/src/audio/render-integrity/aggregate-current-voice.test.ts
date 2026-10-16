@@ -586,3 +586,41 @@ describe("scoreBook — the current voice's engine is the book's CURRENT default
     });
   });
 });
+
+/* #3524 pass 2 — A(i): generation forces a non-English book's un-pinned characters
+   onto Qwen (or their cloned engine) whatever the default engine is, so scoring must
+   resolve the engine the same way. */
+function writeCastRow(dir: string, row: Record<string, unknown>) {
+  mkdirSync(join(dir, '.audiobook'), { recursive: true });
+  writeFileSync(join(dir, '.audiobook', 'cast.json'), JSON.stringify({ characters: [{ id: 'thurid', name: 'Thurid', ...row }] }));
+}
+/** 12 on-axis lines in `voice` plus one off-axis outlier (sid 99). */
+const withOutlier = (voice: string): Line[] => [
+  ...Array.from({ length: 12 }, (_, i) => ({ sid: i, axis: 0, jitter: i, voice })),
+  { sid: 99, axis: 5, jitter: 0, voice },
+];
+
+describe('scoreBook — a non-English book scores against the engine generation actually retargets to (#3524 pass 2 A(i))', () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 0;
+    defaultModelKey.value = 'coqui-xtts-v2';
+  });
+
+  it('explicit default Coqui, un-pinned character on a non-English book: the current voice is the Qwen voice, so the outlier is voice-mismatch (not the marker)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-nonenglish-retarget-'));
+    writeCastRow(dir, { overrideTtsVoices: { qwen: { name: 'Thurid voice', libraryUuid: 'h' } } });
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(join(dir, '.audiobook', 'state.json'), JSON.stringify({ language: 'ru' }));
+    await writeChapterLines(dir, 'ch1', 1, withOutlier('qwen-h'), 'qwen-h');
+
+    await scoreBook(dir, [CHAPTERS[0]]);
+
+    const row = (await readCentroids(dir))!['thurid'];
+    expect(row.noCurrentVoiceReference).toBeUndefined();
+    expect(row.referenceKind).toBe('in-book');
+    expect(row.inBookVoiceName).toBe('qwen-h');
+    const rows = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(rows!.find((r) => r.sentenceIds[0] === 99)!.verdict).toBe('voice-mismatch');
+  });
+});
