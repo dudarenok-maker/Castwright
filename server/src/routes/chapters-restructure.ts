@@ -43,6 +43,7 @@ import {
   type RestructureResult,
   type RestructureSentence,
 } from '../workspace/restructure.js';
+import { withBookLock } from '../workspace/book-lock.js';
 import { dropPendingForChapters } from '../workspace/revisions-store.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import {
@@ -63,40 +64,6 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const chaptersRestructureRouter = Router();
-
-/* Per-book write lock — serialises concurrent restructure requests on the
-   same book so the three-file write order (state.json → manuscript-edits.json
-   → in-memory hints) can't interleave between requests. Lock is held for
-   the duration of one handler call; releases happen in finally{} so a
-   throw inside the handler doesn't leak. */
-const bookWriteLock = new Map<string, Promise<void>>();
-
-async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T> {
-  const prev = bookWriteLock.get(bookId) ?? Promise.resolve();
-  let release!: () => void;
-  const next = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  // `mine` is what actually goes in the map. The old code compared the
-  // cleanup below against `prev.then(() => next)` called a second time —
-  // `.then()` always returns a new Promise object, so that comparison was
-  // never equal to what was stored and this delete never ran: the map grew
-  // one entry per bookId for the process lifetime.
-  const mine = prev.then(() => next);
-  bookWriteLock.set(bookId, mine);
-  try {
-    await prev;
-    return await fn();
-  } finally {
-    release();
-    // Best-effort cleanup: if no further requests queued behind us, drop
-    // the entry so the map doesn't grow unboundedly over a long server
-    // lifetime.
-    if (bookWriteLock.get(bookId) === mine) {
-      bookWriteLock.delete(bookId);
-    }
-  }
-}
 
 /** Shared "load → transform → write" prologue. Returns the new result and
     side-effects: writes state.json + manuscript-edits.json, mutates the

@@ -1823,3 +1823,71 @@ describe('restructure carries mergedAwayKeys where sentence ids are unchanged (#
     expect('mergedAwayKeys' in readEdits()).toBe(false);
   });
 });
+
+/* -- state / manuscript saves vs a restructure (#3400) ------------------ */
+
+describe('book-state saves take the book lock a restructure holds (#3400)', () => {
+  const RUNS = 24;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  /* Start the POST at t=0 and the PUT at `offsetMs` (negative = PUT first). */
+  async function race(
+    offsetMs: number,
+    put: () => Promise<unknown>,
+  ): Promise<void> {
+    const post = (async () => {
+      if (offsetMs < 0) await sleep(-offsetMs);
+      return request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    })();
+    const putP = (async () => {
+      if (offsetMs > 0) await sleep(offsetMs);
+      return put();
+    })();
+    const [m, p] = await Promise.all([post, putP]);
+    expect((m as { status: number }).status).toBe(200);
+    expect((p as { status: number }).status).toBe(204);
+  }
+
+  async function reset(): Promise<void> {
+    seedState();
+    seedManuscriptEdits();
+    const raw = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    raw.prosodyAnnotated = true;
+    writeFileSync(join(bookDir, '.audiobook', 'state.json'), JSON.stringify(raw));
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+  }
+
+  it('a state PUT racing a merge never reverts the merged chapter list', async () => {
+    for (let i = 0; i < RUNS; i++) {
+      await reset();
+      await race((i % 8) - 3, () =>
+        request(app)
+          .put(`/api/books/${bookId}/state`)
+          .send({ slice: 'state', patch: { prosodyAnnotated: false } }),
+      );
+      const state = readState() as { chapters: unknown[]; prosodyAnnotated?: boolean };
+      expect(state.chapters, `run ${i}`).toHaveLength(2);
+      expect(state.prosodyAnnotated, `run ${i}`).toBe(false);
+    }
+  });
+
+  it('a manuscript PUT racing a merge is never lost', async () => {
+    for (let i = 0; i < RUNS; i++) {
+      await reset();
+      const base = readEdits().sentences.map((s) =>
+        s.chapterId === 1 && s.id === 1 ? { ...s, text: `Edited ${i}.` } : s,
+      );
+      await race((i % 8) - 3, () =>
+        request(app)
+          .put(`/api/books/${bookId}/state`)
+          .send({ slice: 'manuscript', patch: { sentences: base } }),
+      );
+      const edits = readEdits();
+      expect(edits.sentences.find((s) => s.chapterId === 1 && s.id === 1)?.text, `run ${i}`).toBe(
+        `Edited ${i}.`,
+      );
+      expect(readState().chapters, `run ${i}`).toHaveLength(2);
+    }
+  });
+});
