@@ -1533,10 +1533,28 @@ function pidAlive(pid) {
     return e.code !== 'ESRCH';
   }
 }
+// null unless the file holds a real pid: a read landing between the fixture's
+// truncating open and its write sees '' -> Number('') === 0, and pid 0 means
+// "this process" (the whole group on POSIX) to process.kill — it would SIGKILL
+// the test runner itself.
 function readHangPid(dir) {
   const pidFile = join(dir, 'hang.pid');
-  return existsSync(pidFile) ? Number(readFileSync(pidFile, 'utf8')) : null;
+  if (!existsSync(pidFile)) return null;
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
+
+test('readHangPid: only a positive integer pid is returned; empty / 0 / garbled / negative content is null', () => {
+  const dir = mkTmp();
+  assert.equal(readHangPid(dir), null, 'absent file');
+  for (const content of ['', '0', 'abc', '-5', '1.5', '  ']) {
+    writeFileSync(join(dir, 'hang.pid'), content, 'utf8');
+    assert.equal(readHangPid(dir), null, `content ${JSON.stringify(content)}`);
+  }
+  writeFileSync(join(dir, 'hang.pid'), '12345', 'utf8');
+  assert.equal(readHangPid(dir), 12345);
+});
+
 function armSurvivorWatch(dir) {
   const watch = { survivorPid: null, disarm: () => clearTimeout(timer) };
   const timer = setTimeout(() => {
