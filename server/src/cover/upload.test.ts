@@ -23,6 +23,7 @@ import {
   validateUpload,
   writeUploadedCover,
 } from './upload.js';
+import { withStateLock } from '../workspace/state-lock.js';
 
 let workspaceRoot: string;
 let bookDir: string;
@@ -207,7 +208,10 @@ describe('writeUploadedCover', () => {
     const variants = [
       await sharp(base).jpeg().toBuffer(),
       await sharp(base).jpeg({ progressive: true }).toBuffer(),
-      await sharp(base).withExif({ IFD0: { Copyright: 'x' } }).jpeg().toBuffer(),
+      await sharp(base)
+        .withExif({ IFD0: { Copyright: 'x' } })
+        .jpeg()
+        .toBuffer(),
     ];
     for (const jpeg of variants) {
       const dest = join(bookDir, '.audiobook', 'cover.jpg');
@@ -316,5 +320,46 @@ describe('clampFraming', () => {
       zoom: 3,
     });
     expect(clampFraming({ offsetX: 0, offsetY: 0, zoom: 0.5 }).zoom).toBe(1);
+  });
+});
+
+describe('cover state.json helpers wait on the state lock (#3625)', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  const readState = () => JSON.parse(readFileSync(statePath(), 'utf8'));
+
+  async function holdLock(): Promise<{ release: () => void; held: Promise<void> }> {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateLock(bookDir, async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    return { release, held };
+  }
+
+  it('patchStateLocalCover does not write while the lock is held, then lands', async () => {
+    const before = readFileSync(statePath(), 'utf8');
+    const { release, held } = await holdLock();
+    const p = patchStateLocalCover(bookDir, 'locked.png');
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readFileSync(statePath(), 'utf8')).toBe(before);
+    release();
+    await Promise.all([held, p]);
+    expect(readState().coverImage.originalFilename).toBe('locked.png');
+  });
+
+  it('patchStateFraming does not write while the lock is held, then lands', async () => {
+    const before = readFileSync(statePath(), 'utf8');
+    const { release, held } = await holdLock();
+    const p = patchStateFraming(bookDir, { offsetX: 10, offsetY: 20, zoom: 2 });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(readFileSync(statePath(), 'utf8')).toBe(before);
+    release();
+    const [, ok] = await Promise.all([held, p]);
+    expect(ok).toBe(true);
+    expect(readState().coverImage.framing).toEqual({ offsetX: 10, offsetY: 20, zoom: 2 });
   });
 });
