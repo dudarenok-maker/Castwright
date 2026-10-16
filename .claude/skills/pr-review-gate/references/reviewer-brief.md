@@ -291,6 +291,20 @@ recite:
     `Object.is` guard on store state, ask what ELSE replaces that reference;
     then ask whether the work the guard drops is retried. Test by making an
     unrelated write between capture and use.
+29. **A debounced save that captures its payload when the action fires, racing
+    a server-side rewrite of the same file, where the client's in-memory
+    correction is never itself saved** — `src/views/restructure.tsx` and the
+    persistence middleware, PR #3594 gate pass 5: a manuscript edit queued
+    before (or during) a restructure was built from the old chapter ids and
+    sent one debounce later, so it landed AFTER the route's own rewrite of
+    `manuscript-edits.json` and put the old ids back on disk, while the client
+    fixed up only its in-memory sentences and never saved them. Fixed in
+    2fc93b50 by flushing and awaiting the book's queued saves before the
+    request, and saving the remapped state after the response. Checkable: for
+    every server route that rewrites a file the client also saves, ask what a
+    save queued before the rewrite does when it lands after it, and whether the
+    client re-saves its corrected state. Test with a slow or debounced PUT
+    queued around the rewrite and assert on the final disk state.
 
 ### Keeping the catalogue current
 
