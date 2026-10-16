@@ -320,12 +320,12 @@ export const HELP_TOPICS: HelpTopic[] = [
     category: 'analysis',
     title: 'I chose a model on my machine, but the analysis ran on Gemini',
     body:
-      "When your analyzer engine is set to Local and Ollama can't be reached, Castwright falls back " +
-      "to Gemini — if you've added a Gemini API key and Cloud fallback is on — so a stalled daemon " +
-      "doesn't stall your book. The on-machine models still show in the menu while Ollama is down, " +
-      'which is why a "Local" choice can land on Gemini. Want it to stop and tell you instead? Start ' +
-      'Ollama before you analyse, turn off Cloud fallback in analyzer settings, or set the analyzer engine ' +
-      'to Gemini outright.',
+      "When your analyzer runs on Ollama and Ollama can't be reached, Castwright hands the analysis to " +
+      'the analyzer fallback target — Gemini by default, if you have added a Gemini API key — so a ' +
+      "stalled daemon doesn't stall your book. The on-machine models still show in the menu while " +
+      'Ollama is down, which is why a "Local" choice can land on Gemini. Want it to stop and tell you ' +
+      'instead? Start Ollama before you analyse, set Advanced Settings → Analyzer fallback to off, or ' +
+      'set the analyzer engine to Gemini outright.',
   },
   {
     id: 'is-my-data-private',
@@ -334,23 +334,32 @@ export const HELP_TOPICS: HelpTopic[] = [
     body:
       'Your books, voices, library and rendered audio stay on your machine — nothing is uploaded to ' +
       'a Castwright server, and there is no account. Working out who speaks each line reads your ' +
-      'chapter text on a local model by default too. The one thing that can leave your machine is ' +
-      'the optional cloud analyzer (the free Gemini tier): if you have set a Gemini key, it sends ' +
-      "chapter text only when your local model isn't running. Cloud fallback stays on by default, " +
-      'and a single switch in analyzer settings turns it off for good — and whenever Castwright does ' +
-      'fall back to Gemini it tells you, rather than switching behind your back.',
+      'chapter text on a local model by default too. Text leaves your machine only on these paths: ' +
+      'analysis on the Gemini API sends it the chapter text; an OpenAI-compatible endpoint on another ' +
+      'machine or a hosted service such as OpenRouter receives the text of every chapter it analyses; ' +
+      "when your chosen analyzer can't be reached, the analyzer fallback target (Gemini by default, if " +
+      'you have set a key) receives the chapters it takes over, only when it takes over; attribution ' +
+      'escalation set to cloud sends Gemini the dialogue lines the first pass could not place; persona ' +
+      'generation, whose engine defaults to Gemini, sends it the dialogue quotes a voice is designed ' +
+      'from; and a Gemini voice, when you pick one, sends Google the text of each sentence it speaks. ' +
+      'That fallback is on by default, and setting Advanced Settings → Analyzer fallback to off turns ' +
+      'it off for good — and whenever Castwright does fall back it tells you, rather than switching ' +
+      'behind your back.',
   },
   {
     id: 'does-it-work-offline',
     category: 'analysis',
     title: 'Does it work offline?',
     body:
-      'Yes, once the models are installed. Rendering the audio and playing it back are fully ' +
-      'offline — nothing is sent anywhere while Castwright synthesises — and working out who speaks ' +
-      'each line runs on a local Ollama model by default. The optional cloud analyzer (Gemini) is ' +
-      'the one part that wants a connection: leave it switched off in analyzer settings, or keep ' +
-      'your local model running, and the whole pipeline works with no internet at all. Voice design ' +
-      'has its own Persona generation engine in Advanced settings, which defaults to Gemini; set it ' +
-      'to Local and a no-key, fully-offline setup can still design a full cast from scratch.',
+      'Yes, once the models are installed. Rendering the audio with a local voice engine and playing ' +
+      'it back are fully offline, and working out who speaks each line runs on a local Ollama model by ' +
+      'default. These want a connection: analysis on Gemini or on a remote OpenAI-compatible endpoint, ' +
+      'the analyzer fallback when it targets one of those, attribution escalation set to cloud, ' +
+      'persona generation on Gemini, and Gemini voices. Keep analysis on a local model or a server on ' +
+      'your own network, set Advanced Settings → Analyzer fallback to off or local, leave attribution ' +
+      'escalation off or local, use local voices, and the whole pipeline works with no internet at ' +
+      'all. Voice design has its own Persona generation engine in Advanced settings, which defaults to ' +
+      'Gemini; set it to Local and a no-key, fully-offline setup can still design a full cast from ' +
+      'scratch.',
   },
 ];

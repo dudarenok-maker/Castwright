@@ -2439,6 +2439,7 @@ describe('Layout — analysis sub-stage runtime fields forward to the Status pil
         engine: 'gemini',
         activityState: 'streaming',
         fallbackActive: true,
+        fallbackReason: 'Ollama unreachable (qwen3.5:4b) — switched to Gemini (gemini-3.5-flash-lite)',
         now: Date.now(),
       }),
     );
@@ -2465,7 +2466,7 @@ describe('Layout — analysis sub-stage runtime fields forward to the Status pil
     fireEvent.click(pill);
     expect(await findByTestId('substage-engine-model')).toHaveTextContent(/^Gemini ·/);
     expect(await findByTestId('substage-fallback-note')).toHaveTextContent(
-      'Switched to Gemini — Ollama unreachable',
+      'Ollama unreachable (qwen3.5:4b) — switched to Gemini (gemini-3.5-flash-lite)',
     );
   });
 });

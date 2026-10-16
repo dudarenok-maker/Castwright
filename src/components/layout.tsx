@@ -1953,6 +1953,7 @@ export function Layout() {
           activityState: analysisSubstage.activityState,
           activitySince: analysisSubstage.activitySince,
           fallbackActive: analysisSubstage.fallbackActive,
+          fallbackReason: analysisSubstage.fallbackReason,
         }
       : null,
     readiness: setupReadiness,

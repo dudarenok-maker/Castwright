@@ -124,7 +124,7 @@ export async function runReviewScript(bookId: string, opts: RunReviewScriptOpts)
             activityState,
             model: phaseModel,
             engine,
-            ...(fallbackReason ? { fallbackActive: true } : {}),
+            ...(fallbackReason ? { fallbackActive: true, fallbackReason } : {}),
             now: Date.now(),
           }),
         );
@@ -413,7 +413,7 @@ export async function attachToRunningReview(
             activityState,
             model,
             engine,
-            ...(fallbackReason ? { fallbackActive: true } : {}),
+            ...(fallbackReason ? { fallbackActive: true, fallbackReason } : {}),
             now: Date.now(),
           }),
         );

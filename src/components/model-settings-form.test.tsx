@@ -95,34 +95,32 @@ describe('ModelSettingsForm — analyzer readiness badge (fe-49 mirror #1641)', 
   });
 });
 
-describe('ModelSettingsForm — Cloud fallback toggle (Part 1)', () => {
+describe('ModelSettingsForm — fallback lives in Advanced Settings (#3084 P30)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getSetupReadiness).mockResolvedValue(readinessWith(PASS));
   });
 
-  it('defaults the Cloud fallback toggle to ON (opt-out)', async () => {
+  it('has no Cloud fallback row, and the engine sublabel points to Advanced Settings → Analyzer fallback', async () => {
     renderForm();
-    const toggle = (await screen.findByTestId('account-allow-cloud-fallback')) as HTMLInputElement;
-    expect(toggle.checked).toBe(true);
+    expect(await screen.findByText(/Advanced Settings → Analyzer fallback/)).toBeInTheDocument();
+    expect(screen.queryByTestId('account-allow-cloud-fallback')).toBeNull();
+    expect(screen.queryByText('Cloud fallback')).toBeNull();
+    expect(screen.getByRole('option', { name: 'Local Ollama (default — on-device)' })).toBeInTheDocument();
   });
 
-  it('turning it off and saving PATCHes allowCloudFallback:false', async () => {
+  it('saving never writes allowCloudFallback', async () => {
     vi.mocked(api.putUserSettings).mockImplementation(
       async (patch) =>
         ({ ...accountSlice.getInitialState(), ...(patch as object) }) as never,
     );
     renderForm();
-    const toggle = (await screen.findByTestId('account-allow-cloud-fallback')) as HTMLInputElement;
-    fireEvent.click(toggle);
-    expect(toggle.checked).toBe(false);
-
-    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
-    await waitFor(() => {
-      expect(vi.mocked(api.putUserSettings)).toHaveBeenCalledWith(
-        expect.objectContaining({ allowCloudFallback: false }),
-      );
+    fireEvent.change(await screen.findByPlaceholderText('http://localhost:9000'), {
+      target: { value: 'http://localhost:9001' },
     });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(vi.mocked(api.putUserSettings)).toHaveBeenCalled());
+    expect(vi.mocked(api.putUserSettings).mock.calls[0][0]).not.toHaveProperty('allowCloudFallback');
   });
 
   it('clears the save-confirmation timeout on unmount to prevent setState after unmount', async () => {

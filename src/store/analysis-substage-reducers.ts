@@ -35,6 +35,7 @@ export interface UpdateSubstageProgressPayload {
   engine?: AnalysisEngine;
   activityState?: 'loading' | 'waiting' | 'streaming';
   fallbackActive?: boolean;
+  fallbackReason?: string;
   /** Client timestamp used to stamp activitySince when activityState changes. */
   now?: number;
 }
@@ -74,6 +75,7 @@ export function updateSubstageProgress(
   if (payload.model !== undefined) e.model = payload.model;
   if (payload.engine !== undefined) e.engine = payload.engine;
   if (payload.fallbackActive !== undefined) e.fallbackActive = payload.fallbackActive;
+  if (payload.fallbackReason !== undefined) e.fallbackReason = payload.fallbackReason;
   if (payload.activityState !== undefined && payload.activityState !== e.activityState) {
     e.activityState = payload.activityState;
     if (payload.now !== undefined) e.activitySince = payload.now;

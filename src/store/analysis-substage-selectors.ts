@@ -62,6 +62,7 @@ export const selectAnalysisSubstage = createSelector(
     activityState?: 'loading' | 'waiting' | 'streaming';
     activitySince?: number;
     fallbackActive?: boolean;
+    fallbackReason?: string;
   } | null => {
     const p = firstByLowestBookId(prosody);
     if (p)
@@ -77,6 +78,7 @@ export const selectAnalysisSubstage = createSelector(
         activityState: p.entry.activityState,
         activitySince: p.entry.activitySince,
         fallbackActive: p.entry.fallbackActive,
+        fallbackReason: p.entry.fallbackReason,
       };
     const r = firstByLowestBookId(review);
     if (r)
@@ -92,6 +94,7 @@ export const selectAnalysisSubstage = createSelector(
         activityState: r.entry.activityState,
         activitySince: r.entry.activitySince,
         fallbackActive: r.entry.fallbackActive,
+        fallbackReason: r.entry.fallbackReason,
       };
     return null;
   },
