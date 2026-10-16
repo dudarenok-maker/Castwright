@@ -6495,8 +6495,10 @@ test('#3587 review: legacy `—` rows on the live Blocked/Unconfirmed sections r
   assert.notEqual(legacy, REAL_LIVE_VIEW_HTML);
   const warnings = run(legacy);
   assert.equal(warnings.length, 2, JSON.stringify(warnings));
-  assert.match(warnings[0], /Blocked section has 6 legacy rows with no BLK ID/);
-  assert.match(warnings[1], /Unconfirmed section has 2 legacy rows with no UNC ID/);
+  const countRows = (prefix) => (REAL_LIVE_VIEW_HTML.match(new RegExp(`<span class="num">${prefix}\\d+</span>`, 'g')) ?? []).length;
+  const plural = (n) => `row${n === 1 ? '' : 's'}`;
+  assert.match(warnings[0], new RegExp(`Blocked section has ${countRows('BLK')} legacy ${plural(countRows('BLK'))} with no BLK ID`));
+  assert.match(warnings[1], new RegExp(`Unconfirmed section has ${countRows('UNC')} legacy ${plural(countRows('UNC'))} with no UNC ID`));
   const idless = REAL_REGISTER_TEXT.replace(/^### BLK\d+ · /gm, '### ').replace(/^(- \*\*)UNC\d+ · /gm, '$1').replace(/^<!-- next-id: (?:BLK|UNC)\d+ -->\r?\n/gm, '');
   assert.notEqual(idless, REAL_REGISTER_TEXT);
   assert.deepEqual(run(legacy, idless), [], 'a register with no BLK/UNC IDs is the pre-#3587 state: no warning');
