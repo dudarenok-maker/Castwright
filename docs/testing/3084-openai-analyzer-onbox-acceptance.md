@@ -251,4 +251,63 @@ small `--max-model-len` or an OpenRouter key.
    build of the tag (new digest in `ollama list`); the catalog entry has no `capability`, and an
    analysis on it starts rather than refusing. Old digest ___ new digest ___ Result:
 
+### Real chapters (added in W3d, extends A113)
+
+8. Pick the llama-swap model as the per-run model; analyse one chapter with thinking on,
+   then off (`chat_template_kwargs` / server config). Result:
+9. Same chapter on `gemma-4-31b-it` and `gemini-3.6-flash` in `schema`, then `json`
+   (Advanced → `analyzer.gemini.structuredOutput`). Compare attributions. Result:
+10. For the thinking-on llama-swap model and `gemini-3.6-flash`: did any call end
+    `analyzer-reasoning-overflow` in a mode the Test recorded `enforced`/`accepted`? Result:
+
+Run by / date / SHA:
+
+## 7. Long silent prefill — register row A114
+
+1. Endpoint on the slower card, context ≥ 64k; chapter whose stage-1 prompt > 64k tokens.
+2. Time to first token: ___  Total: ___  Timeouts/retries/fallbacks in the log: ___
+   Result:
+
+Run by / date / SHA:
+
+## 8. Fallback to a smaller context — register row A116
+
+1. Endpoint (context ≥ 64k) primary, target `local` with `num_ctx` ≤ 16k; stop `llama-server` during phase 0.
+   Per target chunk: `prompt_eval_count` ___ `eval_count` ___ `num_ctx` ___ `done_reason` ___ context shift or error ___
+   Result:
+2. Ollama primary, llama.cpp target started with `-c 16384`; stop Ollama mid-run.
+   Per request: `timings.prompt_n` ___ `timings.predicted_n` ___ context-shift or "exceeds the available context size" lines ___
+   Result:
+3. A chunk the target cannot take: input-too-large failure (or escalation-skip warning) logged, no request in the target's log. Result:
+
+Run by / date / SHA:
+
+## 9. Same-card eviction — register row A115
+
+1. Idle, one served model: Qwen on the endpoint's card → one unload POST logged, Qwen loaded. Result:
+2. Qwen on the other card → no unload POST. Result:
+3. Mid-run, between two chunk calls (log shows a finished chunk, the next not yet sent): Qwen
+   load on the endpoint's card → no unload POST; the next chunk call needs no model reload;
+   Resume prompts. Timestamps of chunk end / Qwen request / next chunk start: ___ Result:
+4. Two served models (phase 0 and phase 1 on different models of the endpoint), run finished →
+   two unload POSTs, both models unloaded. Unload Qwen, load it again without analysing → no
+   unload POST (the models left the served set). Result:
+5. Unload URL without `{model}` → the Settings warning shows; the save succeeds. Result:
+6. Unload URL removed → NoCapacityError text names "Unload URL" and the endpoint. Result:
+7. Run starts during a blocking unload POST (time the Qwen load so the next chunk call begins
+   while the POST is out): chapter continues, one model reload, admission retries, and exactly
+   one "busy; not unloading" line for that admission. Timestamps: ___ Result:
+8. Restart with the endpoint still holding a model, no analysis yet, then load Qwen on its card:
+   no unload POST, and the failure names the endpoint and "since Castwright started". Result:
+9. Unload URL points at a server that never answers (or answers past 10 s), two served models:
+   load Qwen on its card and let the admission poll several times before giving up. Exactly ONE
+   unload POST per model across the whole admission (two), the lever's share of the wait near
+   2 × 10 s (Σ served models × 10 s), not `maxAttempts` × 10 s, and the failure says every unload
+   request to that endpoint failed. Then render a chapter on that card: number of denied synth
+   ops ___, time lost ___ (each denied synthesize call repays the bound). Result:
+10. Two endpoints on one card, analysis running on B only: Qwen load → A unloaded at once, one
+    "busy; not unloading" line for B. B's run ends while the admission polls → B unloaded within
+    the same admission; or, if it gave up first, the failure names B as busy for the whole wait.
+    Timestamps of A's POST / B's run end / B's POST: ___ Result:
+
 Run by / date / SHA:
