@@ -1908,20 +1908,141 @@ test('runStepProcess re-sweep: pre-kill snapshot failed => root bounded by spawn
   }
 });
 
-test('runStepProcess re-sweep: pre-kill snapshot failed + root pid later recycled => the unverifiable holder and its child are not swept (#3695)', async () => {
+test('runStepProcess re-sweep: pre-kill snapshot failed + a live row under the root pid that predates the spawn => not the root, neither it nor its child is swept (#3695)', async () => {
   const dir = mkTmp();
-  const KID = 2147480040;
+  const KID = 2147480045;
   const now = Date.now();
   const h = resweepStaleHarness(dir, {
     preKill: () => null,
-    reSweep: (root) => [row(root, 1, now + 30_000), row(KID, root, now + 31_000)],
+    reSweep: (root) => [row(root, 1, now - 60_000), row(KID, root, now - 59_000)],
   });
   try {
     await h.run();
-    assert.deepEqual(h.swept, [], `the old null-startedAt root disabled this check: ${JSON.stringify(h.swept)}`);
+    assert.deepEqual(h.swept, [], `a process older than the step's spawn cannot be its root: ${JSON.stringify(h.swept)}`);
   } finally {
     h.cleanup();
   }
+});
+
+// A step root that exits ON ITS OWN while a detached descendant keeps the piped
+// stderr open: Node fires 'exit' (and releases the root's pid for reuse) but
+// never 'close', so the budget timer still fires. The holder pid is written to
+// leak.pid so the test can clean it up.
+function writeLeakFixture(dir) {
+  writeFileSync(
+    join(dir, 'leak.mjs'),
+    "import { spawn } from 'node:child_process';\nimport { writeFileSync } from 'node:fs';\n" +
+      "const c = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], { stdio: ['ignore', 'ignore', 'inherit'], detached: true, windowsHide: true });\n" +
+      "writeFileSync('leak.pid', String(c.pid));\nc.unref();\nprocess.exit(0);\n",
+    'utf8',
+  );
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'leak-fixture', private: true, scripts: { leak: 'node leak.mjs' } }),
+    'utf8',
+  );
+}
+function killLeakHolder(dir) {
+  const pidFile = join(dir, 'leak.pid');
+  if (!existsSync(pidFile)) return;
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  if (!Number.isInteger(pid) || pid <= 0 || !pidAlive(pid)) return;
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch {
+    // already gone
+  }
+}
+
+// Pass-2 review 🟠2: once Node has seen the root's 'exit' it has released the
+// root's process handle, so the pid may already belong to an unrelated process X.
+test('runStepProcess re-sweep: root exited on its own and its pid was recycled before the pre-kill snapshot => X and its child are never killed, the genuine child is (#3695)', { timeout: 60_000 }, async () => {
+  const dir = mkTmp();
+  writeLeakFixture(dir);
+  const K = 2147480060; // X's own child
+  const L = 2147480061; // the real root's child, started long before the root exited
+  const t0 = Date.now();
+  let xStart = null;
+  let killCalls = 0;
+  const swept = [];
+  try {
+    const result = await runStepProcess('leak', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      // The fixture's root exits within ~1-2s of launch; the budget fires well after.
+      timeoutMs: 6000,
+      killTreeFn: () => {
+        killCalls += 1;
+      },
+      snapshotFn: (root) => {
+        xStart ??= Date.now(); // X took the pid after the root's exit
+        return [row(root, 1, xStart), row(K, root, xStart + 1), row(L, root, t0 + 100)];
+      },
+      censusFn: NO_CENSUS,
+      logFn: () => {},
+      windows: true,
+      resweepGraceMs: RESWEEP_TEST_GRACE_MS,
+      resweepMax: 1,
+      sweepKillFn: (pid) => swept.push(pid),
+    });
+    assert.equal(result.timedOut, true);
+    assert.equal(killCalls, 0, 'the by-pid kill must be skipped once the root has exited: that pid is now X');
+    assert.ok(swept.includes(L), `the root's genuine child is swept: ${JSON.stringify(swept)}`);
+    assert.equal(swept.length, 1, `only the genuine child — never X (the pid's new holder) or X's child: ${JSON.stringify(swept)}`);
+  } finally {
+    killLeakHolder(dir);
+  }
+});
+
+test('runStepProcess re-sweep: pre-kill snapshot failed + short budget + root pid recycled after its exit => the holder and its child are not swept, the genuine child is (#3695)', { timeout: 60_000 }, async () => {
+  const dir = mkTmp();
+  writeLeakFixture(dir);
+  const HK = 2147480040; // the holder's child
+  const G = 2147480041; // the real root's child
+  const t0 = Date.now();
+  let calls = 0;
+  const swept = [];
+  try {
+    await runStepProcess('leak', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      // A run-deadline-clamped budget, far under 5s. The re-sweep lands ~4s
+      // after spawn, after the fixture's root has exited.
+      timeoutMs: 500,
+      killTreeFn: () => {},
+      snapshotFn: (root) => {
+        calls += 1;
+        if (calls === 1) throw new Error('snapshot failed');
+        const now = Date.now();
+        return [row(root, 1, now - 50), row(HK, root, now - 40), row(G, root, t0 + 100)];
+      },
+      censusFn: NO_CENSUS,
+      logFn: () => {},
+      windows: true,
+      resweepGraceMs: 3500,
+      resweepMax: 1,
+      sweepKillFn: (pid) => swept.push(pid),
+    });
+    assert.deepEqual(swept, [G], `only the genuine child; the pid's post-exit holder and its child are never the step's: ${JSON.stringify(swept)}`);
+  } finally {
+    killLeakHolder(dir);
+  }
+});
+
+// The SIGINT/SIGTERM/SIGHUP forwarder kills through killStepChildTree, which on
+// Windows must not taskkill a pid Node has already released. The pids are far
+// above any live one, so even a broken gate falling through to the real kill
+// cannot hit a real process.
+test('killStepChildTree: on Windows, a child Node has seen exit is not killed by its (released) pid; a live one is (#3695)', () => {
+  const killed = [];
+  const treeKill = (pid) => killed.push(pid);
+  _internals.killStepChildTree({ pid: 2147480092, exitCode: 0, signalCode: null }, { windows: true, treeKill });
+  _internals.killStepChildTree({ pid: 2147480096, exitCode: null, signalCode: 'SIGTERM' }, { windows: true, treeKill });
+  assert.deepEqual(killed, [], `a released pid may belong to an unrelated process: ${JSON.stringify(killed)}`);
+  _internals.killStepChildTree({ pid: 2147480100, exitCode: null, signalCode: null }, { windows: true, treeKill });
+  assert.deepEqual(killed, [2147480100]);
 });
 
 test('runStepProcess re-sweep: seeds from every recorded pid, so the orphan of a dead intermediate is found (#3695)', async () => {
@@ -1936,6 +2057,68 @@ test('runStepProcess re-sweep: seeds from every recorded pid, so the orphan of a
   try {
     await h.run();
     assert.ok(h.swept.includes(L), `the orphan hangs off a recorded-but-dead pid and is only reachable by seeding from it: ${JSON.stringify(h.swept)}`);
+  } finally {
+    h.cleanup();
+  }
+});
+
+// Pass-2 review 🟠1: the PRE-KILL closure must apply the same start ordering,
+// or an unrelated process whose stale ppid names a step member becomes a seed.
+// U is explorer-shaped: long-lived, its ppid a number a step process now holds.
+const D_ = 2147480070;
+const U_ = 2147480071;
+const OLDV_ = 2147480072;
+const V_ = 2147480073;
+const V2_ = 2147480074;
+test('runStepProcess re-sweep: a stale-ppid orphan in the PRE-KILL snapshot never becomes a seed, so neither it nor its children are swept (#3695)', async () => {
+  const dir = mkTmp();
+  const T = Date.now() + 100;
+  const rows = (root) => [
+    row(root, 1, T),
+    row(D_, root, T + 10),
+    row(U_, D_, T - 3_600_000),
+    row(OLDV_, U_, T - 1_000_000),
+    row(V_, U_, T + 50),
+  ];
+  const h = resweepStaleHarness(dir, { preKill: rows, reSweep: rows });
+  try {
+    await h.run();
+    assert.deepEqual(
+      [...h.swept].sort(),
+      [h.child.pid, D_].sort(),
+      `only the step's own members; U, OLDV and V are another tree: ${JSON.stringify(h.swept)}`,
+    );
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('runStepProcess re-sweep: stale-ppid orphan in the pre-kill snapshot, D dead by the re-sweep, U spawns V2 after the kill => V2 not swept (#3695)', async () => {
+  const dir = mkTmp();
+  const T = Date.now() + 100;
+  const h = resweepStaleHarness(dir, {
+    preKill: (root) => [row(root, 1, T), row(D_, root, T + 10), row(U_, D_, T - 3_600_000)],
+    reSweep: () => [row(U_, D_, T - 3_600_000), row(V2_, U_, T + 1500)],
+  });
+  try {
+    await h.run();
+    assert.deepEqual(h.swept, [], `V2 is U's child, not the step's: ${JSON.stringify(h.swept)}`);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('runStepProcess re-sweep: an edge whose child started in the same ms as its parent is followed (the >= tie rule), for a non-seed child (#3695)', async () => {
+  const dir = mkTmp();
+  const TIE = 2147480080; // not in the pre-kill snapshot, so not a seed
+  const T = Date.now() + 100;
+  const h = resweepStaleHarness(dir, {
+    preKill: (root) => [row(root, 1, T)],
+    reSweep: (root) => [row(root, 1, T), row(TIE, root, T)],
+  });
+  try {
+    await h.run();
+    assert.ok(h.swept.includes(TIE), `an equal-start child is the parent's (taskkill /T's own tie rule): ${JSON.stringify(h.swept)}`);
   } finally {
     h.cleanup();
   }
