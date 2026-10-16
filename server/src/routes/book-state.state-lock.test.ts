@@ -214,3 +214,41 @@ for (const kind of ['exclude', 'held'] as const) {
     });
   });
 }
+
+const sendPutState = (patch: Record<string, unknown>) =>
+  request(app)
+    .put(`/api/books/${bookId}/state`)
+    .set('Content-Type', 'application/json')
+    .send({ slice: 'state', patch })
+    .then((r) => r);
+
+describe('PUT /:bookId/state (slice state) waits on the state lock', () => {
+  it('does not write while the lock is held, then the patch lands', async () => {
+    writeState(plain(true), CHAPTER_TITLE_PARSER_VERSION);
+    const before = readFileSync(statePath, 'utf8');
+    const { release, held } = await holdLock();
+    const p = sendPutState({ notes: 'locked note' });
+    await settle();
+    expect(readFileSync(statePath, 'utf8')).toBe(before);
+    release();
+    const [res] = await Promise.all([p, held]);
+    expect(res.status).toBe(204);
+    expect(readState().notes).toBe('locked note');
+  });
+
+  it('builds the next document from the fresh read, not the snapshot', async () => {
+    writeState(plain(true), CHAPTER_TITLE_PARSER_VERSION);
+    const { release, held } = await holdLock();
+    const p = sendPutState({ notes: 'stale-safe' });
+    await settle();
+    /* A concurrent finalize stamps chapter 1 while the PUT waits. */
+    mutateOnDisk((s) => {
+      s.chapters[0].audioRenderedAt = '2026-10-16T00:00:00.000Z';
+    });
+    release();
+    await Promise.all([p, held]);
+    const onDisk = readState();
+    expect(onDisk.notes).toBe('stale-safe');
+    expect(onDisk.chapters[0].audioRenderedAt).toBe('2026-10-16T00:00:00.000Z');
+  });
+});

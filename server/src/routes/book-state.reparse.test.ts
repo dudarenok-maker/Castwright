@@ -1122,3 +1122,38 @@ describe('reparse handler â€” #2099 round-2 finding 1: a non-parse cast.json rea
     }
   });
 });
+
+describe('#3625 — reparse waits on the state lock', () => {
+  const statePath = () => join(bookDir, '.audiobook', 'state.json');
+  async function hold() {
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateLock(bookDir, async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    return { release, held };
+  }
+
+  it('does not write state.json while the lock is held, then lands', async () => {
+    const before = readFileSync(statePath(), 'utf8');
+    const { release, held } = await hold();
+    try {
+      const p = request(app).post(`/api/books/${bookId}/reparse`).then((r) => r);
+      await new Promise((r) => setTimeout(r, 300));
+      expect(readFileSync(statePath(), 'utf8')).toBe(before);
+      release();
+      const [res] = await Promise.all([p, held]);
+      expect(res.status).toBe(200);
+      expect(JSON.parse(readFileSync(statePath(), 'utf8')).castConfirmed).toBe(false);
+    } finally {
+      release();
+      await held;
+    }
+  });
+
+});

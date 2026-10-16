@@ -868,7 +868,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'slice and patch are required.' });
     }
 
-    const { bookDir, state } = located;
+    const { bookDir } = located;
     switch (body.slice) {
       case 'cast': {
         /* #1981 — the read inside `preserveDesignedVoices` (the on-disk
@@ -1028,145 +1028,159 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
            seriesPosition is meaningless. We do NOT overwrite state.series —
            the user-typed label is preserved in state.json so a future
            "un-standalone" doesn't lose the series name they had. */
-        const nextIsStandalone = pickStandalone(patch.isStandalone, state.isStandalone);
-        const next: BookStateJson = {
-          ...state,
-          castConfirmed: patch.castConfirmed ?? state.castConfirmed,
-          /* srv-35 — the frontend round-trips state.chapters but doesn't
-             track the server-only `uuid`, so a wholesale replace would
-             strip it. reconcileChapterUuids carries each uuid across by id
-             (and mints for a genuinely-new chapter). */
-          chapters: patch.chapters
-            ? reconcileChapterUuids(patch.chapters, state.chapters)
-            : state.chapters,
-          title: pickString(patch.title, state.title),
-          author: pickString(patch.author, state.author),
-          series: pickString(patch.series, state.series),
-          seriesPosition: nextIsStandalone
-            ? null
-            : pickSeriesPosition(patch.seriesPosition, state.seriesPosition),
-          isStandalone: nextIsStandalone,
-          narratorCredit: pickNullable(patch.narratorCredit, state.narratorCredit),
-          genre: pickNullable(patch.genre, state.genre),
-          publicationDate: pickNullable(patch.publicationDate, state.publicationDate),
-          description: pickNullable(patch.description, state.description),
-          notes: pickNotes(patch.notes, state.notes),
-          audioFormat: pickAudioFormat(patch.audioFormat, state.audioFormat),
-          language: pickLanguage(patch.language, state.language),
-          tags: pickTags(patch.tags, state.tags),
-          prosodyEnabled: typeof (patch as { prosodyEnabled?: unknown }).prosodyEnabled === 'boolean'
-            ? (patch as { prosodyEnabled: boolean }).prosodyEnabled
-            : state.prosodyEnabled,
-          prosodyAnnotated: typeof (patch as { prosodyAnnotated?: unknown }).prosodyAnnotated === 'boolean'
-            ? (patch as { prosodyAnnotated: boolean }).prosodyAnnotated
-            : state.prosodyAnnotated,
-          updatedAt: new Date().toISOString(),
-        };
+        /* #3625 — the fresh read, the guards, the rename and the write are ONE
+           hold, keyed on the OLD bookDir (the folder this read comes from).
+           `next` is built from a read taken INSIDE the lock, never from
+           `located.state`: a finalize that stamped a chapter while this PUT
+           waited would otherwise be overwritten by the stale snapshot. No
+           scan helper is called in here (they take this lock themselves).
+           The empty-parent rmdir cleanup stays inside the hold: it is a
+           cosmetic best-effort that never takes a lock. */
+        const early = await withStateLock(bookDir, async () => {
+          const cur = await readJson<BookStateJson>(stateJsonPath(bookDir));
+          if (!cur) return res.status(404).json({ error: 'Book not found.' });
+          const nextIsStandalone = pickStandalone(patch.isStandalone, cur.isStandalone);
+          const next: BookStateJson = {
+            ...cur,
+            castConfirmed: patch.castConfirmed ?? cur.castConfirmed,
+            /* srv-35 — the frontend round-trips state.chapters but doesn't
+               track the server-only `uuid`, so a wholesale replace would
+               strip it. reconcileChapterUuids carries each uuid across by id
+               (and mints for a genuinely-new chapter). */
+            chapters: patch.chapters
+              ? reconcileChapterUuids(patch.chapters, cur.chapters)
+              : cur.chapters,
+            title: pickString(patch.title, cur.title),
+            author: pickString(patch.author, cur.author),
+            series: pickString(patch.series, cur.series),
+            seriesPosition: nextIsStandalone
+              ? null
+              : pickSeriesPosition(patch.seriesPosition, cur.seriesPosition),
+            isStandalone: nextIsStandalone,
+            narratorCredit: pickNullable(patch.narratorCredit, cur.narratorCredit),
+            genre: pickNullable(patch.genre, cur.genre),
+            publicationDate: pickNullable(patch.publicationDate, cur.publicationDate),
+            description: pickNullable(patch.description, cur.description),
+            notes: pickNotes(patch.notes, cur.notes),
+            audioFormat: pickAudioFormat(patch.audioFormat, cur.audioFormat),
+            language: pickLanguage(patch.language, cur.language),
+            tags: pickTags(patch.tags, cur.tags),
+            prosodyEnabled: typeof (patch as { prosodyEnabled?: unknown }).prosodyEnabled === 'boolean'
+              ? (patch as { prosodyEnabled: boolean }).prosodyEnabled
+              : cur.prosodyEnabled,
+            prosodyAnnotated: typeof (patch as { prosodyAnnotated?: unknown }).prosodyAnnotated === 'boolean'
+              ? (patch as { prosodyAnnotated: boolean }).prosodyAnnotated
+              : cur.prosodyAnnotated,
+            updatedAt: new Date().toISOString(),
+          };
 
-        /* On-disk folder layout follows the displayed metadata: Author/Series/
-           Title. When any of those changes (or isStandalone flips), move the
-           folder before writing state.json so the new state lands at its new
-           path atomically. The bookId itself is unchanged — it's persisted
-           inside state.json and findBookByBookId resolves it regardless of
-           where the folder sits. */
-        const folderSeries = nextIsStandalone ? STANDALONES_SERIES : next.series;
-        const newDir = bookDirByDisplay(next.author, folderSeries, next.title);
-        if (newDir !== bookDir) {
-          /* #2165 — refuse while an analysis is registered for this book. A
-             running analysis writes follow a rename (layer 2), but the busy
-             key stays pinned by design. Moving the folder out from under a
-             running job would recreate the pre-rename directory and split the
-             book's state across two folders. The rename guard here keeps the
-             two layers synchronized.
+          /* On-disk folder layout follows the displayed metadata: Author/Series/
+             Title. When any of those changes (or isStandalone flips), move the
+             folder before writing state.json so the new state lands at its new
+             path atomically. The bookId itself is unchanged — it's persisted
+             inside state.json and findBookByBookId resolves it regardless of
+             where the folder sits. */
+          const folderSeries = nextIsStandalone ? STANDALONES_SERIES : next.series;
+          const newDir = bookDirByDisplay(next.author, folderSeries, next.title);
+          if (newDir !== bookDir) {
+            /* #2165 — refuse while an analysis is registered for this book. A
+               running analysis writes follow a rename (layer 2), but the busy
+               key stays pinned by design. Moving the folder out from under a
+               running job would recreate the pre-rename directory and split the
+               book's state across two folders. The rename guard here keeps the
+               two layers synchronized.
 
-             A pure predicate over a ref-counted in-memory Map — NO lock is
-             taken here, so it cannot interact with the global
-             design → library-voice → cast lock order. Refuse only; never wait.
-             Waiting would hold a request open across a multi-minute run.
+               A pure predicate over a ref-counted in-memory Map — NO lock is
+               taken here, so it cannot interact with the global
+               design → library-voice → cast lock order. Refuse only; never wait.
+               Waiting would hold a request open across a multi-minute run.
 
-             Reported BEFORE the path-collision 409 below on purpose: this one
-             is transient and self-clearing, so naming it first stops the user
-             changing a title they didn't need to change.
+               Reported BEFORE the path-collision 409 below on purpose: this one
+               is transient and self-clearing, so naming it first stops the user
+               changing a title they didn't need to change.
 
-             Deliberately inside this branch — a PUT that moves no folder
-             (castConfirmed, prosody flags, notes, tags: the autosaves the
-             persistence middleware fires constantly, including during an
-             analysis) must keep returning 204. */
-          if (isAnalysisBusy(bookDir)) {
-            return res.status(409).json({
-              error:
-                'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
-            });
-          }
-          if (existsSync(newDir)) {
-            return res.status(409).json({
-              error:
-                'A book already exists at that Author/Series/Title path. Pick a different title or series.',
-            });
-          }
-          /* Make sure the new parent (and grandparent) directories exist
-             before the rename — fs.rename on Windows fails with ENOENT if
-             they don't. */
-          await mkdir(dirname(newDir), { recursive: true });
-          /* #2165 — re-check after the mkdir yield. The guard above reads
-             in-memory state, and there are two `await`s between it and the
-             move; an analysis start that lands in that window would call
-             markAnalysisBusy(record.bookDir) against the PRE-rename path
-             (analysis.ts:2764), and since the busy key is pinned by design,
-             isAnalysisBusy(newDir) would then be false for that run's whole
-             life — silently disabling cast-design.ts:684's analysis-vs-design
-             mutual exclusion for this book.
-
-             ACCEPTED RESIDUAL RISK: this narrows the window to the rename call
-             itself, it does NOT close it. Check-then-rename is still two
-             operations. Additionally, a writeChecked that resolved the old
-             directory before the rename would still write there afterwards,
-             recreating the pre-rename folder — the original #2165 symptom, at
-             much lower probability since layer 2 now follows the rename.
-             Closing it fully needs a primitive that spans the analysis
-             registration and the rename (a per-book lock, or keying busy state
-             on book id rather than path) — out of scope for #2165,
-             deliberately, not by oversight. */
-          if (isAnalysisBusy(bookDir)) {
-            return res.status(409).json({
-              error:
-                'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
-            });
-          }
-          /* renameWithRetry handles OneDrive's EPERM/EBUSY/ENOENT windows
-             (atomic-rename.ts). Any other failure surfaces immediately. */
-          await renameWithRetry(bookDir, newDir);
-          /* Refresh the in-memory ManuscriptRecord so subsequent analysis /
-             generation requests find the manuscript file at the new path.
-             Direct mutation is safe — the store holds the record by
-             reference. */
-          if (state.manuscriptId) {
-            const rec = getManuscript(state.manuscriptId);
-            if (rec) {
-              rec.bookDir = newDir;
-              putManuscript(rec);
+               Deliberately inside this branch — a PUT that moves no folder
+               (castConfirmed, prosody flags, notes, tags: the autosaves the
+               persistence middleware fires constantly, including during an
+               analysis) must keep returning 204. */
+            if (isAnalysisBusy(bookDir)) {
+              return res.status(409).json({
+                error:
+                  'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
+              });
             }
+            if (existsSync(newDir)) {
+              return res.status(409).json({
+                error:
+                  'A book already exists at that Author/Series/Title path. Pick a different title or series.',
+              });
+            }
+            /* Make sure the new parent (and grandparent) directories exist
+               before the rename — fs.rename on Windows fails with ENOENT if
+               they don't. */
+            await mkdir(dirname(newDir), { recursive: true });
+            /* #2165 — re-check after the mkdir yield. The guard above reads
+               in-memory state, and there are two `await`s between it and the
+               move; an analysis start that lands in that window would call
+               markAnalysisBusy(record.bookDir) against the PRE-rename path
+               (analysis.ts:2764), and since the busy key is pinned by design,
+               isAnalysisBusy(newDir) would then be false for that run's whole
+               life — silently disabling cast-design.ts:684's analysis-vs-design
+               mutual exclusion for this book.
+
+               ACCEPTED RESIDUAL RISK: this narrows the window to the rename call
+               itself, it does NOT close it. Check-then-rename is still two
+               operations. Additionally, a writeChecked that resolved the old
+               directory before the rename would still write there afterwards,
+               recreating the pre-rename folder — the original #2165 symptom, at
+               much lower probability since layer 2 now follows the rename.
+               Closing it fully needs a primitive that spans the analysis
+               registration and the rename (a per-book lock, or keying busy state
+               on book id rather than path) — out of scope for #2165,
+               deliberately, not by oversight. */
+            if (isAnalysisBusy(bookDir)) {
+              return res.status(409).json({
+                error:
+                  'Analysis is running for this book. Wait for it to finish before renaming it — a rename mid-analysis would split the book across two folders.',
+              });
+            }
+            /* renameWithRetry handles OneDrive's EPERM/EBUSY/ENOENT windows
+               (atomic-rename.ts). Any other failure surfaces immediately. */
+            await renameWithRetry(bookDir, newDir);
+            /* Refresh the in-memory ManuscriptRecord so subsequent analysis /
+               generation requests find the manuscript file at the new path.
+               Direct mutation is safe — the store holds the record by
+               reference. */
+            if (cur.manuscriptId) {
+              const rec = getManuscript(cur.manuscriptId);
+              if (rec) {
+                rec.bookDir = newDir;
+                putManuscript(rec);
+              }
+            }
+            /* Write the new state.json to the post-rename location BEFORE
+               trying to clean up empty parents — writeJsonAtomic creates the
+               tmp file then renames into place, and we want the destination
+               stable on disk before we start removing sibling parent dirs.
+               Empty-parent cleanup is best-effort: rmdir refuses on non-
+               empty directories so it naturally leaves siblings alone, and
+               errors are swallowed (orphan empty dirs are cosmetic, not a
+               correctness problem). */
+            await writeStateJsonAtomic(stateJsonPath(newDir), { ...next, language: next.language ?? null });
+            const oldSeriesDir = dirname(bookDir);
+            const oldAuthorDir = dirname(oldSeriesDir);
+            await rmdir(oldSeriesDir).catch(() => {
+              /* not empty or locked → leave it */
+            });
+            await rmdir(oldAuthorDir).catch(() => {
+              /* not empty or locked → leave it */
+            });
+          } else {
+            await writeStateJsonAtomic(stateJsonPath(bookDir), { ...next, language: next.language ?? null });
           }
-          /* Write the new state.json to the post-rename location BEFORE
-             trying to clean up empty parents — writeJsonAtomic creates the
-             tmp file then renames into place, and we want the destination
-             stable on disk before we start removing sibling parent dirs.
-             Empty-parent cleanup is best-effort: rmdir refuses on non-
-             empty directories so it naturally leaves siblings alone, and
-             errors are swallowed (orphan empty dirs are cosmetic, not a
-             correctness problem). */
-          await writeStateJsonAtomic(stateJsonPath(newDir), { ...next, language: next.language ?? null });
-          const oldSeriesDir = dirname(bookDir);
-          const oldAuthorDir = dirname(oldSeriesDir);
-          await rmdir(oldSeriesDir).catch(() => {
-            /* not empty or locked → leave it */
-          });
-          await rmdir(oldAuthorDir).catch(() => {
-            /* not empty or locked → leave it */
-          });
-        } else {
-          await writeStateJsonAtomic(stateJsonPath(bookDir), { ...next, language: next.language ?? null });
-        }
+          return undefined;
+        });
+        if (early) return early;
         break;
       }
       default:
@@ -1218,32 +1232,44 @@ async function applyReparse(
     ? existingEdits!.sentences!.length
     : 0;
 
-  const prevExcludedIds = new Set<number>(
-    state.chapters.filter((c) => c.excluded).map((c) => c.id),
-  );
-  const prevExcludedSlugs = new Set<string>(
-    state.chapters.filter((c) => c.excluded).map((c) => c.slug),
-  );
-  const newChapters: BookStateJson['chapters'] = parsed.chapters.map((c) => {
-    const newSlug = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
-    const carryover = prevExcludedIds.has(c.id) || prevExcludedSlugs.has(newSlug);
-    return {
-      id: c.id,
-      title: c.title,
-      slug: newSlug,
-      duration: '00:00',
-      excluded: carryover ? true : undefined,
-    };
-  });
+  /* #3625 — the fresh read, the excluded carryover derived from it and the
+     state.json write are one state-lock hold. `state` (the caller's snapshot)
+     is used ONLY for `manuscriptFile`: replace-manuscript mutates it before
+     calling and relies on this write to persist it. The Promise.all below
+     (cast lock, revisions reset, cache, audio) runs AFTER the hold is
+     released — taking `cast` while holding `state` would violate the lock
+     order. The parse above/in the caller stays outside the lock. */
+  const { newChapters, nextState } = await withStateLock(bookDir, async () => {
+    const base = (await readJson<BookStateJson>(stateJsonPath(bookDir))) ?? state;
+    const prevExcludedIds = new Set<number>(
+      base.chapters.filter((c) => c.excluded).map((c) => c.id),
+    );
+    const prevExcludedSlugs = new Set<string>(
+      base.chapters.filter((c) => c.excluded).map((c) => c.slug),
+    );
+    const chapters: BookStateJson['chapters'] = parsed.chapters.map((c) => {
+      const newSlug = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
+      const carryover = prevExcludedIds.has(c.id) || prevExcludedSlugs.has(newSlug);
+      return {
+        id: c.id,
+        title: c.title,
+        slug: newSlug,
+        duration: '00:00',
+        excluded: carryover ? true : undefined,
+      };
+    });
 
-  const nextState: BookStateJson = {
-    ...state,
-    chapters: newChapters,
-    chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
-    castConfirmed: false,
-    updatedAt: new Date().toISOString(),
-  };
-  await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
+    const next: BookStateJson = {
+      ...base,
+      manuscriptFile: state.manuscriptFile,
+      chapters,
+      chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+      castConfirmed: false,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeStateJsonAtomic(stateJsonPath(bookDir), { ...next, language: next.language ?? null });
+    return { newChapters: chapters, nextState: next };
+  });
 
   const carryoverPath = castReuseCarryoverJsonPath(bookDir);
   const ad = audioDir(bookDir);
