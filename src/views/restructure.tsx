@@ -58,7 +58,7 @@ export function RestructureView({ bookId }: Props) {
     const epoch = store.getState().ui.restructureEpochs[bookId];
     return () => {
       if (store.getState().ui.restructureEpochs[bookId] === epoch) {
-        dispatch(uiActions.setRestructuringBook(null));
+        dispatch(uiActions.clearRestructuringBook(bookId));
       }
     };
   }, [bookId, dispatch]);

@@ -109,9 +109,13 @@ import { QueueModalContainer } from '../modals/queue-modal';
 import { loadQueue, enqueueQueueEntries } from '../store/queue-thunks';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { importGenerationView, importUploadView } from '../routes/prefetch';
-import { runProsodyPasses, buildProsodyProgressPayload } from '../store/prosody-thunk';
+import { runProsodyPasses, buildProsodyProgressPayload, markProsodyUnfinished } from '../store/prosody-thunk';
 import { prosodyActions } from '../store/prosody-slice';
-import { selectAnalysisSubstage, selectBookHasForegroundWork } from '../store/analysis-substage-selectors';
+import {
+  selectAnalysisSubstage,
+  selectBookHasForegroundWork,
+  selectBookRestructuring,
+} from '../store/analysis-substage-selectors';
 import { shouldAutoTriggerProsody } from '../store/should-auto-trigger-prosody';
 import { ToastStack } from './toast-stack';
 import { TourOverlay } from './tour/tour-overlay';
@@ -1323,9 +1327,8 @@ export function Layout() {
   useEffect(
     () =>
       store.subscribe(() => {
-        const restructuring = store.getState().ui.restructuringBookId;
-        const libraryRun = restructuring ? prosodyLibraryRuns.current.get(restructuring) : undefined;
-        if (restructuring && libraryRun && !libraryRun.signal.aborted) {
+        for (const [restructuring, libraryRun] of prosodyLibraryRuns.current) {
+          if (libraryRun.signal.aborted || !selectBookRestructuring(store.getState(), restructuring)) continue;
           libraryRun.abort();
           // Its pill blocks the book; drop it now, not when the passes return.
           if (store.getState().prosody.activeStreams[restructuring])
@@ -1356,6 +1359,15 @@ export function Layout() {
         /* The open trigger re-runs only a book marked unfinished — never one
            whose watermark is unset (fs-65: no retro-annotation on upgrade). */
         if (background && st.state.prosodyAnnotated !== false) return;
+        /* #3400 — a library run does not start while the book's chapters are
+           being restructured: the start mark below is a state.json write that
+           would race the restructure's own. The book is marked unfinished once
+           the restructure ends instead (held, never dropped), so the open
+           trigger runs it the next time the book is open. */
+        if (!background && selectBookRestructuring(store.getState(), id)) {
+          markProsodyUnfinished(store, id);
+          return;
+        }
         const book = { bookId: id, manuscriptId: st.state.manuscriptId };
         const isOpen = () => {
           const s = store.getState();

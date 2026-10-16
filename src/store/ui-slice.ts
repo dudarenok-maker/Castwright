@@ -180,15 +180,18 @@ export interface UiState {
       analysis run started from that view; never written to UserSettings.
       Cleared for a manuscript once its pick has been sent on a start request. */
   analyzerPhasePicks: Record<string, { phase0?: string; phase1?: string }>;
-  /** #3400 — the book whose chapter restructure (merge / split / reorder /
-      exclude / refresh titles) is in flight, else null. A restructure re-keys
-      the book's sentences, so it counts as foreground work for the book
+  /** #3400 — the books whose chapter restructure (merge / split / reorder /
+      exclude / refresh titles) is in flight. A restructure re-keys the book's
+      sentences, so it counts as foreground work for the book
       (selectBookHasForegroundWork): an emotion-detection run snapshotted the
-      old structure and ends, and none starts, until it is over. Transient. */
-  restructuringBookId: string | null;
+      old structure and ends, and none starts, until it is over; and no other
+      writer touches the book's manuscript or state.json meanwhile
+      (restructure-guard-middleware). One marker per book, so one book's
+      request ending never lowers another's. Transient. */
+  restructuringBooks: Record<string, true>;
   /** #3400 — per book, how many restructures have BEGUN (bumped by
-      setRestructuringBook with a book id). A detached run captures its book's
-      count at start and ends once it moves: `restructuringBookId` alone cannot
+      setRestructuringBook). A detached run captures its book's
+      count at start and ends once it moves: `restructuringBooks` alone cannot
       tell a restructure that began and finished between two of its
       annotations. Transient. */
   restructureEpochs: Record<string, number>;
@@ -225,7 +228,7 @@ const initialState: UiState = {
   cloneReadinessGate: null,
   startGenerationPending: false,
   analyzerPhasePicks: {},
-  restructuringBookId: null,
+  restructuringBooks: {},
   restructureEpochs: {},
 };
 
@@ -419,9 +422,12 @@ export const uiSlice = createSlice({
     clearPreviewForBook: (s, a: PayloadAction<string>) => {
       if (s.previewRegen?.bookId === a.payload) s.previewRegen = null;
     },
-    setRestructuringBook: (s, a: PayloadAction<string | null>) => {
-      s.restructuringBookId = a.payload;
-      if (a.payload) s.restructureEpochs[a.payload] = (s.restructureEpochs[a.payload] ?? 0) + 1;
+    setRestructuringBook: (s, a: PayloadAction<string>) => {
+      s.restructuringBooks[a.payload] = true;
+      s.restructureEpochs[a.payload] = (s.restructureEpochs[a.payload] ?? 0) + 1;
+    },
+    clearRestructuringBook: (s, a: PayloadAction<string>) => {
+      delete s.restructuringBooks[a.payload];
     },
     setOpenRevision: (s, a: PayloadAction<OpenRevision | null>) => {
       s.openRevision = a.payload;
