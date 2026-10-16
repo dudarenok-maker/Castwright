@@ -55,7 +55,7 @@ function makeStore({
     cloneReadinessGate: null,
     startGenerationPending: false,
     analyzerPhasePicks: {},
-    restructuringBookId: null,
+    restructuringBooks: {},
     restructureEpochs: {},
   };
   const accountPreloaded: AccountState = {

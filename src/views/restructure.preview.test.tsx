@@ -380,7 +380,7 @@ describe('RestructureView — #3400 the remapped manuscript is what ends up on d
    under the old structure; it must be up for the whole request and must not be lowered
    by a request that has been superseded. */
 describe('RestructureView — #3400 restructure flag', () => {
-  const flag = (store: ReturnType<typeof makeStore>) => store.getState().ui.restructuringBookId;
+  const flag = (store: ReturnType<typeof makeStore>) => store.getState().ui.restructuringBooks['b1'] ? 'b1' : null;
   async function startRefresh() {
     fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
     fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
@@ -427,5 +427,25 @@ describe('RestructureView — #3400 restructure flag', () => {
     resolvers[1]({ sentenceRemap: [], warnings: [] });
     await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(flag(store)).toBeNull());
+  });
+
+  it("book A's request ending does not lower book B's flag (pass-6 cross-book)", async () => {
+    const store = makeStore();
+    const resolvers: Array<(v: unknown) => void> = [];
+    apiMock.refreshChapterTitles.mockImplementation(() => new Promise((r) => resolvers.push(r)));
+    const a = render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    await startRefresh();
+    await waitFor(() => expect(resolvers).toHaveLength(1));
+    a.unmount();
+    render(<Provider store={store}><RestructureView bookId="b2" /></Provider>);
+    await startRefresh();
+    await waitFor(() => expect(resolvers).toHaveLength(2));
+    expect(store.getState().ui.restructuringBooks).toEqual({ b1: true, b2: true });
+    resolvers[0]({ sentenceRemap: [], warnings: [] });
+    await waitFor(() => expect(store.getState().ui.restructuringBooks).toEqual({ b2: true }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(store.getState().ui.restructuringBooks).toEqual({ b2: true });
+    resolvers[1]({ sentenceRemap: [], warnings: [] });
+    await waitFor(() => expect(store.getState().ui.restructuringBooks).toEqual({}));
   });
 });

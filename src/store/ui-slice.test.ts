@@ -45,7 +45,7 @@ const baseState = (stage: Stage): UiState => ({
   cloneReadinessGate: null,
   startGenerationPending: false,
   analyzerPhasePicks: {},
-  restructuringBookId: null,
+  restructuringBooks: {},
   restructureEpochs: {},
 });
 
@@ -614,10 +614,21 @@ describe('uiSlice — #3400 restructure epochs', () => {
     let s = baseState({ kind: 'voices' });
     s = uiSlice.reducer(s, uiActions.setRestructuringBook('b1'));
     expect(s.restructureEpochs).toEqual({ b1: 1 });
-    s = uiSlice.reducer(s, uiActions.setRestructuringBook(null));
+    s = uiSlice.reducer(s, uiActions.clearRestructuringBook('b1'));
     expect(s.restructureEpochs).toEqual({ b1: 1 });
     s = uiSlice.reducer(s, uiActions.setRestructuringBook('b1'));
     s = uiSlice.reducer(s, uiActions.setRestructuringBook('b2'));
     expect(s.restructureEpochs).toEqual({ b1: 2, b2: 1 });
+  });
+
+  it('keeps one in-flight marker per book: clearing book A leaves book B marked (pass-6)', () => {
+    let s = baseState({ kind: 'voices' });
+    s = uiSlice.reducer(s, uiActions.setRestructuringBook('A'));
+    s = uiSlice.reducer(s, uiActions.setRestructuringBook('B'));
+    expect(s.restructuringBooks).toEqual({ A: true, B: true });
+    s = uiSlice.reducer(s, uiActions.clearRestructuringBook('A'));
+    expect(s.restructuringBooks).toEqual({ B: true });
+    s = uiSlice.reducer(s, uiActions.clearRestructuringBook('B'));
+    expect(s.restructuringBooks).toEqual({});
   });
 });

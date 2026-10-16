@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { combineReducers, configureStore } from '@reduxjs/toolkit';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice } from '../store/ui-slice';
@@ -139,10 +139,13 @@ describe('fs-33 — DetectEmotionsButton', () => {
       }) as unknown as ReturnType<typeof makeStore>;
     }
 
+    let runSignal: AbortSignal | undefined;
     function deferredRun() {
       let resolveEmotions!: () => void;
+      runSignal = undefined;
       detectEmotions.mockImplementation((_id: string, opts?: any) => {
         if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
+        runSignal = opts.signal;
         return new Promise((resolve) => {
           resolveEmotions = () => {
             opts.onAnnotation({ chapterId: 1, annotations: [{ sentenceId: 1, emotion: 'angry' }] });
@@ -305,11 +308,20 @@ describe('fs-33 — DetectEmotionsButton', () => {
       fireEvent.click(screen.getByTestId('detect-emotions-button'));
       await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
 
+      expect(runSignal?.aborted).toBe(false);
       store.dispatch(uiSlice.actions.setRestructuringBook('bX'));
+      /* pass-6 — the subscriber's abort itself, not just "applies nothing": a
+         no-op here keeps the analyzer running and the book's pill held. */
+      expect(runSignal?.aborted).toBe(true);
       resolve();
 
       await waitFor(() => expect(store.getState().prosody.activeStreams['bX']).toBeUndefined());
       expect(store.getState().manuscript.sentences[0].emotion).toBeUndefined();
+      /* The unfinished mark is a state.json write: held until the restructure
+         settles, so it never races the restructure's own state.json write. */
+      expect(putBookState).not.toHaveBeenCalled();
+      store.dispatch(uiSlice.actions.clearRestructuringBook('bX'));
+      expect(putBookState).toHaveBeenCalledTimes(1);
       expect(putBookState).toHaveBeenCalledWith('bX', { slice: 'state', patch: { prosodyAnnotated: false } });
       const toasts = (store.getState() as unknown as { notifications: { toasts: Array<{ message: string }> } })
         .notifications.toasts;
@@ -324,7 +336,7 @@ describe('fs-33 — DetectEmotionsButton', () => {
       await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
 
       store.dispatch(uiSlice.actions.setRestructuringBook('bX'));
-      store.dispatch(uiSlice.actions.setRestructuringBook(null));
+      store.dispatch(uiSlice.actions.clearRestructuringBook('bX'));
       resolve();
 
       await waitFor(() => expect(store.getState().prosody.activeStreams['bX']).toBeUndefined());
@@ -340,10 +352,25 @@ describe('fs-33 — DetectEmotionsButton', () => {
       await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
 
       store.dispatch(uiSlice.actions.setRestructuringBook('other'));
-      store.dispatch(uiSlice.actions.setRestructuringBook(null));
+      store.dispatch(uiSlice.actions.clearRestructuringBook('other'));
       resolve();
 
       await waitFor(() => expect(store.getState().manuscript.sentences[0].emotion).toBe('angry'));
+    });
+
+    it('#3400: a restructure of the book makes Detect not startable until it ends', async () => {
+      const store = makeSwitchableStore();
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      expect(screen.getByTestId('detect-emotions-button')).not.toBeDisabled();
+      act(() => {
+        store.dispatch(uiSlice.actions.setRestructuringBook('bX'));
+      });
+      expect(screen.getByTestId('detect-emotions-button')).toBeDisabled();
+      expect(screen.getByTestId('detect-emotions-menu-toggle')).toBeDisabled();
+      act(() => {
+        store.dispatch(uiSlice.actions.clearRestructuringBook('bX'));
+      });
+      expect(screen.getByTestId('detect-emotions-button')).not.toBeDisabled();
     });
 
     it('control: staying on the book applies the annotations', async () => {

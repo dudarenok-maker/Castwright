@@ -1311,7 +1311,7 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     await settle(200);
     expect(detectEmotionsMock).not.toHaveBeenCalled();
     await act(async () => {
-      store.dispatch(uiActions.setRestructuringBook(null));
+      store.dispatch(uiActions.clearRestructuringBook('b1'));
     });
     await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
     expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
@@ -1345,7 +1345,7 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     expect(unfinishedPuts()).toEqual(['b1']);
   });
 
-  it('restructure: a library run that starts during one is aborted and stays unfinished; opening the book afterwards runs it', async () => {
+  it('restructure: a library run that would start during one does not start and sends no state write until it ends; then the book is unfinished, and opening it runs it', async () => {
     const store = makeStore(true);
     renderAnyPath(store);
     await settle(30);
@@ -1354,13 +1354,17 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
       store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
     });
     await settle(300);
-    expect(marks.get('b1')).toBe(false); // started, then ended at once: unfinished, never done
+    // pass-6: a state.json write must not overlap the restructure's own
+    expect(unfinishedPuts()).toEqual([]);
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
     expect(watermarkPuts('b1')).toEqual([]);
     expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
 
     await act(async () => {
-      store.dispatch(uiActions.setRestructuringBook(null));
+      store.dispatch(uiActions.clearRestructuringBook('b1'));
     });
+    expect(unfinishedPuts()).toEqual(['b1']); // held, then sent: the book ends unfinished
+    expect(marks.get('b1')).toBe(false);
     const before = detectEmotionsMock.mock.calls.length;
     await act(async () => {
       store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));

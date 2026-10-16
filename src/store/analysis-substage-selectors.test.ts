@@ -5,6 +5,7 @@ import {
   selectAnalysisBusyForBook,
   selectAnalysisSubstage,
   selectBookHasForegroundWork,
+  selectBookRestructuring,
   analysisBusyMessage,
 } from './analysis-substage-selectors';
 import type { RootState } from './index';
@@ -75,9 +76,21 @@ describe('analysis-substage selectors', () => {
     expect(selectBookHasForegroundWork(st(run('b1', 'halted')), 'b1')).toBe(false);
     expect(selectBookHasForegroundWork(st(run('b2', 'running')), 'b1')).toBe(false);
     // #3400 — a chapter restructure in flight for the book re-keys its sentences
-    expect(selectBookHasForegroundWork(st({ ui: { restructuringBookId: 'b1' } }), 'b1')).toBe(true);
-    expect(selectBookHasForegroundWork(st({ ui: { restructuringBookId: 'b2' } }), 'b1')).toBe(false);
-    expect(selectBookHasForegroundWork(st({ ui: { restructuringBookId: null } }), 'b1')).toBe(false);
+    expect(selectBookHasForegroundWork(st({ ui: { restructuringBooks: { b1: true } } }), 'b1')).toBe(true);
+    expect(selectBookHasForegroundWork(st({ ui: { restructuringBooks: { b2: true } } }), 'b1')).toBe(false);
+    expect(selectBookHasForegroundWork(st({ ui: { restructuringBooks: {} } }), 'b1')).toBe(false);
+    // two books restructuring at once: each is protected on its own
+    const both = st({ ui: { restructuringBooks: { b1: true, b2: true } } });
+    expect(selectBookHasForegroundWork(both, 'b1')).toBe(true);
+    expect(selectBookHasForegroundWork(both, 'b2')).toBe(true);
+  });
+
+  it('#3400 — selectBookRestructuring reads the per-book marker (Detect is not startable mid-restructure)', () => {
+    const mkUi = (over: Record<string, unknown>) => over as unknown as RootState;
+    const s = mkUi({ ui: { restructuringBooks: { b1: true } } });
+    expect(selectBookRestructuring(s, 'b1')).toBe(true);
+    expect(selectBookRestructuring(s, 'b2')).toBe(false);
+    expect(selectBookRestructuring(mkUi({}), 'b1')).toBe(false);
   });
 
   it('selectAnalysisSubstage prefers prosody, then lowest bookId', () => {
