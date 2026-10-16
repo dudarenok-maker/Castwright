@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { configSlice } from '../store/config-slice';
 import { uiSlice } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
@@ -1174,6 +1174,27 @@ describe('AdvancedView — analyzer-engine picker', () => {
     });
     renderView('local', { groups: [{ kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [{ id: 'llama3.1:8b', label: 'llama3.1:8b' }] }] } as unknown as AnalyzerCatalog);
     expect(await screen.findByTestId('analyzer-engine-local-warning')).toHaveTextContent('ollama pull qwen3.5:4b');
+  });
+});
+
+describe('AdvancedView — dropped endpoint entries (#3084 P31)', () => {
+  it('shows the banner in the analyzer models section', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...FIXTURE_CONFIG,
+      groups: [{ id: 'analyzer-models', label: 'Analyzer models & endpoints', help: 'Models.', risk: 'medium', collapsedByDefault: false }],
+      descriptors: [],
+      values: {},
+    });
+    const { store } = renderView();
+    store.dispatch({
+      type: 'account/fetch/fulfilled',
+      payload: { hydrated: true, droppedEndpointEntries: [{ archiveId: 'a1', kind: 'endpoint', name: 'Old box', issues: ['analyzerEndpoints.0.baseUrl: invalid_format'], droppedAt: '2026-09-13T10:00:00.000Z' }] },
+    });
+    /* SettingsSection renders a plain <section id="cfg-section-<group>"> with no region role. */
+    const banner = await screen.findByTestId('dropped-endpoint-banner');
+    const section = document.getElementById('cfg-section-analyzer-models') as HTMLElement;
+    expect(within(section).getByTestId('dropped-endpoint-banner')).toBe(banner);
+    expect(within(section).getByTestId('dropped-endpoint-banner')).toHaveTextContent('Endpoint "Old box"');
   });
 });
 

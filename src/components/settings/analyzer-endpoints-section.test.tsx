@@ -260,4 +260,13 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
     fireEvent.click(screen.getByTestId('endpoint-use-free-model-lab'));
     await waitFor(() => expect(api.putUserSettings).toHaveBeenCalledWith({ defaultAnalysisModel: 'openai:lab::qwen3-30b-a3b' }));
   });
+
+  it('shows the dropped entries banner above the endpoints (P31)', () => {
+    const store = renderSection({ endpoints: [LAB] });
+    store.dispatch({
+      type: 'account/fetch/fulfilled',
+      payload: { droppedEndpointEntries: [{ archiveId: 'a1', kind: 'endpoint', name: 'Old box', issues: ['analyzerEndpoints.1.baseUrl: invalid_format'], droppedAt: '2026-09-13T10:00:00.000Z' }] },
+    });
+    return waitFor(() => expect(screen.getByTestId('analyzer-endpoints-section').firstElementChild).toHaveAttribute('data-testid', 'dropped-endpoint-banner'));
+  });
 });
