@@ -1544,3 +1544,65 @@ describe('#1676(c) — bulk line-reassign reducer + one-level undo slot', () => 
     });
   });
 });
+
+describe('applyChapterRestructure carries mergedAwayKeys where sentence ids are unchanged (#3400)', () => {
+  const r = (oc: number, os: number, nc: number, ns: number) => ({
+    oldChapterId: oc, oldSentenceId: os, newChapterId: nc, newSentenceId: ns,
+  });
+  const run = (keys: string[], sentenceRemap: ReturnType<typeof r>[]) => {
+    const sentences = sentenceRemap.map(
+      (m) => ({ chapterId: m.oldChapterId, id: m.oldSentenceId, text: 't', characterId: 'a' }) as Sentence,
+    );
+    const s0: ManuscriptState = {
+      ...manuscriptSlice.getInitialState(),
+      sentences,
+      mergedAwayKeys: keys,
+    };
+    return manuscriptSlice.reducer(s0, manuscriptActions.applyChapterRestructure({ sentenceRemap }))
+      .mergedAwayKeys.slice()
+      .sort();
+  };
+  // Three chapters of two sentences each, with a trailing tombstone at 3.
+  const ident = (map: Record<number, number>) =>
+    Object.entries(map).flatMap(([o, n]) => [r(Number(o), 1, n, 1), r(Number(o), 2, n, 2)]);
+  const KEYS = ['1:3', '2:3', '3:3'];
+
+  it('reorder re-keys each tombstone to its chapter new id', () => {
+    expect(run(['1:5'], [
+      r(1, 1, 2, 1), r(1, 2, 2, 2), r(1, 3, 2, 3), r(1, 4, 2, 4), r(2, 1, 3, 1), r(3, 1, 1, 1),
+    ])).toEqual(['2:5']);
+    expect(run(KEYS, ident({ 1: 2, 2: 3, 3: 1 }))).toEqual(['1:3', '2:3', '3:3']);
+  });
+
+  it('merge drops the merged chapters tombstones and keeps the untouched chapter', () => {
+    expect(
+      run(KEYS, [r(1, 1, 1, 1), r(1, 2, 1, 2), r(2, 1, 2, 1), r(2, 2, 2, 2), r(3, 1, 2, 3), r(3, 2, 2, 4)]),
+    ).toEqual(['1:3']);
+  });
+
+  it('merge re-keys a shifted later chapter', () => {
+    expect(
+      run(KEYS, [r(1, 1, 1, 1), r(1, 2, 1, 2), r(2, 1, 1, 3), r(2, 2, 1, 4), r(3, 1, 2, 1), r(3, 2, 2, 2)]),
+    ).toEqual(['2:3']);
+  });
+
+  it('split drops the split chapter and re-keys the chapters after it', () => {
+    expect(
+      run(KEYS, [r(1, 1, 1, 1), r(1, 2, 1, 2), r(2, 1, 2, 1), r(2, 2, 3, 1), r(3, 1, 4, 1), r(3, 2, 4, 2)]),
+    ).toEqual(['1:3', '4:3']);
+  });
+
+  it('exclude / rename (identity remap) keep every tombstone', () => {
+    expect(run(KEYS, ident({ 1: 1, 2: 2, 3: 3 }))).toEqual(KEYS);
+  });
+
+  it('drops a tombstone when the old chapter spreads over two new chapters, even at unchanged ids', () => {
+    expect(run(['1:3'], [r(1, 1, 1, 1), r(1, 2, 2, 2)])).toEqual([]);
+  });
+
+  it('drops a tombstone in a chapter a gap renumbered, and one with no live sentence', () => {
+    expect(
+      run(['1:2', '2:3', '9:1'], [r(1, 1, 1, 1), r(1, 3, 1, 2), r(2, 1, 2, 1), r(2, 2, 2, 2)]),
+    ).toEqual(['2:3']);
+  });
+});

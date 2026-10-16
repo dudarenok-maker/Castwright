@@ -3,6 +3,7 @@
    object the backend returns alongside chapters. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { carryMergedAwayKeys } from '../lib/restructure-tombstones';
 import type {
   Sentence,
   UploadResponse,
@@ -607,6 +608,10 @@ export const manuscriptSlice = createSlice({
       }
       next.sort((x, y) => x.chapterId - y.chapterId || x.id - y.id);
       s.sentences = next;
+      /* #3400 — the tombstones follow their chapters under the same rule the
+         server applied to manuscript-edits.json (the save after this is the
+         last write); a chapter the op renumbered loses them. */
+      s.mergedAwayKeys = carryMergedAwayKeys(s.mergedAwayKeys, a.payload.sentenceRemap);
       /* #3400 — the bulk-undo slot is keyed by (chapterId, sentenceId), so it
          moves with its lines: re-key each move through the same table, drop a
          move whose sentence the restructure dropped (nothing left to revert),

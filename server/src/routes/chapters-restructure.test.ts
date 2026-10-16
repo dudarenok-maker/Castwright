@@ -1727,3 +1727,99 @@ describe('#3400 — a failed restructure drop leaves an entry that is refused, n
     expect(readFileSync(join(audioRoot, '01-chapter-one.mp3'), 'utf8')).toBe('ORIGINAL');
   });
 });
+
+/* -- merged-away tombstones (#3400) --------------------------------- */
+
+describe('restructure carries mergedAwayKeys where sentence ids are unchanged (#3400)', () => {
+  /* Each chapter ends at sentence 2 and has a trailing tombstone at 3, so the
+     chapter's live ids are gap-free and an op that leaves it alone keeps them. */
+  function seedTombstones(keys: string[], sentences?: unknown[]): void {
+    const base = JSON.parse(
+      readFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), 'utf8'),
+    ) as { sentences: unknown[] };
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({ sentences: sentences ?? base.sentences, mergedAwayKeys: keys }),
+    );
+  }
+  function readKeys(): string[] {
+    const e = JSON.parse(
+      readFileSync(join(bookDir, '.audiobook', 'manuscript-edits.json'), 'utf8'),
+    ) as { mergedAwayKeys?: string[] };
+    return [...(e.mergedAwayKeys ?? [])].sort();
+  }
+
+  it('reorder re-keys each tombstone to its chapter new id', async () => {
+    seedTombstones(['1:3', '2:3', '3:3']);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [3, 1, 2] });
+    expect(res.status).toBe(200);
+    // old 3 -> 1, old 1 -> 2, old 2 -> 3
+    expect(readKeys()).toEqual(['1:3', '2:3', '3:3']);
+  });
+
+  it('reorder re-keys to DIFFERENT ids when the chapter moves (not a no-op)', async () => {
+    seedTombstones(['1:5'], [
+      { id: 1, chapterId: 1, characterId: 'narr', text: 'a' },
+      { id: 2, chapterId: 1, characterId: 'narr', text: 'b' },
+      { id: 3, chapterId: 1, characterId: 'narr', text: 'c' },
+      { id: 4, chapterId: 1, characterId: 'narr', text: 'd' },
+      { id: 1, chapterId: 2, characterId: 'narr', text: 'e' },
+      { id: 1, chapterId: 3, characterId: 'narr', text: 'f' },
+    ]);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [3, 1, 2] });
+    expect(res.status).toBe(200);
+    expect(readKeys()).toEqual(['2:5']);
+  });
+
+  it('merge drops the merged chapters tombstones and keeps the untouched chapter', async () => {
+    seedTombstones(['1:3', '2:3', '3:3']);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+    expect(readKeys()).toEqual(['1:3']);
+  });
+
+  it('merge re-keys a shifted later chapter', async () => {
+    seedTombstones(['1:3', '2:3', '3:3']);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(200);
+    expect(readKeys()).toEqual(['2:3']);
+  });
+
+  it('split drops the split chapter and re-keys the chapters after it', async () => {
+    seedTombstones(['1:3', '2:3', '3:3']);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/split`).send({ chapterId: 2, afterSentenceId: 1 });
+    expect(res.status).toBe(200);
+    expect(readKeys()).toEqual(['1:3', '4:3']);
+  });
+
+  it('exclude and rename keep every tombstone', async () => {
+    seedTombstones(['1:3', '2:3', '3:3']);
+    const ex = await request(app).post(`/api/books/${bookId}/chapters/exclude`).send({ chapterIds: [2], excluded: true });
+    expect(ex.status).toBe(200);
+    expect(readKeys()).toEqual(['1:3', '2:3', '3:3']);
+    const rn = await request(app).post(`/api/books/${bookId}/chapters/1/rename`).send({ title: 'Opening' });
+    expect(rn.status).toBe(200);
+    expect(readKeys()).toEqual(['1:3', '2:3', '3:3']);
+  });
+
+  it('drops a tombstone in a chapter whose live ids the op renumbered (a gap shifts them)', async () => {
+    // chapter 1 has ids 1,3 live (2 merged away): the remap renumbers 3 -> 2,
+    // so a surviving "1:2" would shadow the live sentence.
+    seedTombstones(['1:2', '2:3'], [
+      { id: 1, chapterId: 1, characterId: 'narr', text: 'a' },
+      { id: 3, chapterId: 1, characterId: 'narr', text: 'c' },
+      { id: 1, chapterId: 2, characterId: 'narr', text: 'e' },
+      { id: 2, chapterId: 2, characterId: 'narr', text: 'f' },
+      { id: 1, chapterId: 3, characterId: 'narr', text: 'g' },
+    ]);
+    const res = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [1, 2, 3] });
+    expect(res.status).toBe(200);
+    expect(readKeys()).toEqual(['2:3']);
+  });
+
+  it('leaves manuscript-edits.json without a mergedAwayKeys field when it had none', async () => {
+    const res = await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [3, 1, 2] });
+    expect(res.status).toBe(200);
+    expect('mergedAwayKeys' in readEdits()).toBe(false);
+  });
+});

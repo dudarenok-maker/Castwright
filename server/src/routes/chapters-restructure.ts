@@ -34,6 +34,7 @@ import {
   applyRefreshTitles,
   applyRename,
   touchedChapterIds,
+  carryMergedAwayKeys,
   type MergeOp,
   type SplitOp,
   type ReorderOp,
@@ -147,7 +148,7 @@ async function applyRestructure(
   // for a fresh book — that's fine, transform handles it). Each transform
   // requires sentences for split when it needs to locate the body offset.
   const editsPath = manuscriptEditsJsonPath(bookDir);
-  const edits = await readJson<{ sentences?: RestructureSentence[] }>(editsPath);
+  const edits = await readJson<{ sentences?: RestructureSentence[]; mergedAwayKeys?: string[] }>(editsPath);
   const sentences = edits?.sentences ?? [];
 
   /* srv-35 — ensure the OLD chapters carry uuids before the transform so
@@ -175,7 +176,14 @@ async function applyRestructure(
   // here, earlier writes are already on disk; partial state is recoverable
   // via the reconciliation filter in book-state.ts:166-185.
   await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
-  await writeJsonAtomic(editsPath, { sentences: result.sentences });
+  /* #3400 — merged-away tombstones ride along (the client's save after the
+     remap applies the same rule), so a restructure no longer wipes them. */
+  await writeJsonAtomic(editsPath, {
+    sentences: result.sentences,
+    ...(edits?.mergedAwayKeys
+      ? { mergedAwayKeys: carryMergedAwayKeys(edits.mergedAwayKeys, result.remap) }
+      : {}),
+  });
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
   // pick up the new structure without a server restart.

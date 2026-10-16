@@ -19,6 +19,7 @@ import {
   applyExclude,
   computeBodySplitIndex,
   touchedChapterIds,
+  carryMergedAwayKeys,
   type RestructureSentence,
   type AudioOp,
 } from './restructure.js';
@@ -668,5 +669,26 @@ describe('post-process passes move audio with the slug (#3400)', () => {
     const r = applyExclude(state, hints, sentences, { chapterIds: [1], excluded: false });
     expect(slugs(r.audioOps, 'delete')).toEqual(['02-chapter-2']);
     expect(slugs(r.audioOps, 'rename')).toEqual(['03-chapter-3>02-chapter-2']);
+  });
+});
+
+describe('carryMergedAwayKeys (#3400)', () => {
+  const r = (oc: number, os: number, nc: number, ns: number) => ({
+    oldChapterId: oc, oldSentenceId: os, newChapterId: nc, newSentenceId: ns,
+  });
+
+  it('re-keys a chapter whose ids are unchanged and drops the rest', () => {
+    expect(carryMergedAwayKeys(['1:3', '2:3', '9:1'], [r(1, 1, 2, 1), r(2, 1, 1, 1)])).toEqual([
+      '2:3',
+      '1:3',
+    ]);
+  });
+
+  it('drops a chapter spread over two new chapters even at unchanged ids', () => {
+    expect(carryMergedAwayKeys(['1:3'], [r(1, 1, 1, 1), r(1, 2, 2, 2)])).toEqual([]);
+  });
+
+  it('drops a chapter that shares its new chapter with another (merge)', () => {
+    expect(carryMergedAwayKeys(['1:3', '2:3'], [r(1, 1, 1, 1), r(2, 1, 1, 2)])).toEqual([]);
   });
 });
