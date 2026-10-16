@@ -49,6 +49,20 @@ export function RestructureView({ bookId }: Props) {
     if (writes instanceof Promise) await writes;
   }, [bookId, dispatch]);
 
+  /* #3400 — raise the book's restructure flag and return the matching release. A
+     request lowers it only while no later request has raised it again (each raise
+     bumps restructureEpochs), so leaving and re-entering Restructure mid-request
+     cannot let the first request's end drop the second one's protection. */
+  const beginRestructure = useCallback(() => {
+    dispatch(uiActions.setRestructuringBook(bookId));
+    const epoch = store.getState().ui.restructureEpochs[bookId];
+    return () => {
+      if (store.getState().ui.restructureEpochs[bookId] === epoch) {
+        dispatch(uiActions.setRestructuringBook(null));
+      }
+    };
+  }, [bookId, dispatch]);
+
   const applyResponse = useCallback(
     async (res: ChapterRestructureResponse, hydrateSeqAtStart: number) => {
       // OD31 — the restructure dropped any pending entry for the touched
@@ -126,7 +140,7 @@ export function RestructureView({ bookId }: Props) {
   const handleMerge = useCallback(
     async (chapterIds: number[]) => {
       setBusy(true);
-      dispatch(uiActions.setRestructuringBook(bookId));
+      const endRestructure = beginRestructure();
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
@@ -138,16 +152,16 @@ export function RestructureView({ bookId }: Props) {
         throw e;
       } finally {
         setBusy(false);
-        dispatch(uiActions.setRestructuringBook(null));
+        endRestructure();
       }
     },
-    [bookId, applyResponse, flushQueuedSaves, dispatch],
+    [bookId, applyResponse, flushQueuedSaves, beginRestructure],
   );
 
   const handleSplit = useCallback(
     async (chapterId: number, afterSentenceId: number) => {
       setBusy(true);
-      dispatch(uiActions.setRestructuringBook(bookId));
+      const endRestructure = beginRestructure();
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
@@ -159,16 +173,16 @@ export function RestructureView({ bookId }: Props) {
         throw e;
       } finally {
         setBusy(false);
-        dispatch(uiActions.setRestructuringBook(null));
+        endRestructure();
       }
     },
-    [bookId, applyResponse, flushQueuedSaves, dispatch],
+    [bookId, applyResponse, flushQueuedSaves, beginRestructure],
   );
 
   const handleReorder = useCallback(
     async (order: number[]) => {
       setBusy(true);
-      dispatch(uiActions.setRestructuringBook(bookId));
+      const endRestructure = beginRestructure();
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
@@ -180,16 +194,16 @@ export function RestructureView({ bookId }: Props) {
         throw e;
       } finally {
         setBusy(false);
-        dispatch(uiActions.setRestructuringBook(null));
+        endRestructure();
       }
     },
-    [bookId, applyResponse, flushQueuedSaves, dispatch],
+    [bookId, applyResponse, flushQueuedSaves, beginRestructure],
   );
 
   const handleExclude = useCallback(
     async (chapterId: number, excluded: boolean) => {
       setBusy(true);
-      dispatch(uiActions.setRestructuringBook(bookId));
+      const endRestructure = beginRestructure();
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
@@ -201,15 +215,15 @@ export function RestructureView({ bookId }: Props) {
         throw e;
       } finally {
         setBusy(false);
-        dispatch(uiActions.setRestructuringBook(null));
+        endRestructure();
       }
     },
-    [bookId, applyResponse, flushQueuedSaves, dispatch],
+    [bookId, applyResponse, flushQueuedSaves, beginRestructure],
   );
 
   const handleRefreshTitles = useCallback(async () => {
     setBusy(true);
-    dispatch(uiActions.setRestructuringBook(bookId));
+    const endRestructure = beginRestructure();
     setErrorBanner(null);
     try {
       const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
@@ -221,9 +235,9 @@ export function RestructureView({ bookId }: Props) {
       throw e;
     } finally {
       setBusy(false);
-      dispatch(uiActions.setRestructuringBook(null));
+      endRestructure();
     }
-  }, [bookId, applyResponse, flushQueuedSaves, dispatch]);
+  }, [bookId, applyResponse, flushQueuedSaves, beginRestructure]);
 
   return (
     <div className="max-w-3xl mx-auto py-6">

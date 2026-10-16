@@ -357,3 +357,57 @@ describe('RestructureView — #3400 the remapped manuscript is what ends up on d
     expect(disk).toEqual(REMAPPED);
   });
 });
+
+/* #3400 pass 5 — the restructure flag keeps an emotion run's book from being filled in
+   under the old structure; it must be up for the whole request and must not be lowered
+   by a request that has been superseded. */
+describe('RestructureView — #3400 restructure flag', () => {
+  const flag = (store: ReturnType<typeof makeStore>) => store.getState().ui.restructuringBookId;
+  async function startRefresh() {
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+  }
+
+  it('is set while the request is in flight and cleared once it has been applied', async () => {
+    const store = makeStore();
+    let resolve!: (v: unknown) => void;
+    apiMock.refreshChapterTitles.mockReturnValue(new Promise((r) => (resolve = r)));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    expect(flag(store)).toBeNull();
+    await startRefresh();
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalledWith('b1'));
+    expect(flag(store)).toBe('b1');
+    resolve({ sentenceRemap: [], warnings: [] });
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    await waitFor(() => expect(flag(store)).toBeNull());
+  });
+
+  it('is cleared when the request fails', async () => {
+    const store = makeStore();
+    apiMock.refreshChapterTitles.mockRejectedValue(new Error('boom'));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    await startRefresh();
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalled());
+    await waitFor(() => expect(flag(store)).toBeNull());
+  });
+
+  it('stays up for a second request when the first, from a view that was left, finishes first', async () => {
+    const store = makeStore();
+    const resolvers: Array<(v: unknown) => void> = [];
+    apiMock.refreshChapterTitles.mockImplementation(() => new Promise((r) => resolvers.push(r)));
+    const first = render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    await startRefresh();
+    await waitFor(() => expect(resolvers).toHaveLength(1));
+    first.unmount(); // leave Restructure mid-request, then come back to a fresh view
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    await startRefresh();
+    await waitFor(() => expect(resolvers).toHaveLength(2));
+    resolvers[0]({ sentenceRemap: [], warnings: [] });
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(flag(store)).toBe('b1'); // the second request is still running
+    resolvers[1]({ sentenceRemap: [], warnings: [] });
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(flag(store)).toBeNull());
+  });
+});
