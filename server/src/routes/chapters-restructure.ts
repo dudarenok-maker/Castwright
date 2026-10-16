@@ -31,6 +31,7 @@ import {
   applySplit,
   applyReorder,
   applyExclude,
+  backfillTitleSynthesized,
   applyRefreshTitles,
   applyRename,
   type MergeOp,
@@ -95,6 +96,32 @@ async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T>
   }
 }
 
+/* Best-effort: any parse failure leaves the state untouched. Skips the parse
+   when every chapter already has the key (or is user-titled). */
+async function backfillLegacyTitleFlags(
+  state: Parameters<typeof backfillTitleSynthesized>[0],
+  bookDir: string,
+): Promise<Parameters<typeof backfillTitleSynthesized>[0]> {
+  if (!state.chapters.some((c) => !Object.hasOwn(c, 'titleSynthesized') && !c.titleOverridden)) {
+    return state;
+  }
+  const manuscriptPath = join(bookDir, state.manuscriptFile);
+  if (!existsSync(manuscriptPath)) return state;
+  try {
+    const parsed = await parseManuscript({
+      buffer: await readFile(manuscriptPath),
+      fileName: state.manuscriptFile,
+      sourcePath: manuscriptPath,
+    });
+    return backfillTitleSynthesized(
+      state,
+      parsed.chapters.map((c) => c.title),
+      parsed.chapters.map((c) => c.titleSynthesized === true),
+    );
+  } catch {
+    return state;
+  }
+}
 /** Shared "load → transform → write" prologue. Returns the new result and
     side-effects: writes state.json + manuscript-edits.json, mutates the
     in-memory ManuscriptRecord.chapterHints, applies audio ops, clears the
@@ -113,7 +140,8 @@ async function applyRestructure(
   const located = await findBookByBookId(bookId);
   if (!located) return { status: 404, body: { error: 'Book not found.' } };
 
-  const { bookDir, state } = located;
+  const { bookDir } = located;
+  let { state } = located;
   if (!state.manuscriptId) {
     return {
       status: 400,
@@ -130,6 +158,10 @@ async function applyRestructure(
     };
   }
 
+  // Legacy book: chapters imported before titleSynthesized existed carry no
+  // flag. Recognise the app-made ones against a fresh parse (#3628) so every
+  // operation below renumbers them like a freshly imported book's.
+  state = await backfillLegacyTitleFlags(state, bookDir);
   // Align hint titles with state.json's user-facing chapter titles.
   // The parser-derived hint titles can diverge (e.g. when state.json
   // captures a more refined title from a later parser-version refresh,

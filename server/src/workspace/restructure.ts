@@ -364,6 +364,28 @@ function withExplicitTitle(
   return { ...rest, titleOverridden: true };
 }
 
+/** Backfill `titleSynthesized` on chapters of a book imported before the flag
+    existed (#3628). A chapter with NO `titleSynthesized` key is flagged only
+    when the book's chapter count equals the current parse's, its stored title
+    equals the parse's title at the same position, the parse marks that
+    position app-made, and it is not `titleOverridden`. A chapter that already
+    has the key (including `false`) is never touched. Returns `state` itself
+    when nothing changes. */
+export function backfillTitleSynthesized(
+  state: BookStateJson,
+  parsedTitles: readonly string[],
+  parsedTitleSynthesized: readonly boolean[],
+): BookStateJson {
+  if (parsedTitles.length !== state.chapters.length) return state;
+  let changed = false;
+  const chapters = state.chapters.map((c, i) => {
+    if (Object.hasOwn(c, 'titleSynthesized') || c.titleOverridden) return c;
+    if (c.title !== parsedTitles[i] || parsedTitleSynthesized[i] !== true) return c;
+    changed = true;
+    return { ...c, titleSynthesized: true };
+  });
+  return changed ? { ...state, chapters } : state;
+}
 function renumberGenericTitlesInChapters(
   chapters: BookStateJson['chapters'],
 ): { chapters: BookStateJson['chapters']; renumbered: number } {

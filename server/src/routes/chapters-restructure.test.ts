@@ -1582,3 +1582,84 @@ describe('#3628 — refresh-titles hands the parser\'s app-made flags to the tra
     expect(ch.titleSynthesized).toBe(true);
   });
 });
+
+describe('#3628 — a legacy book (no titleSynthesized key) is backfilled before a restructure', () => {
+  // Parses to [Chapter 1 (app-made: prose before any heading), Prologue, Epilogue].
+  const LEGACY_MANUSCRIPT =
+    'Opening prose here.\n\nPrologue\n\nProse two.\n\nEpilogue\n\nProse three.\n';
+
+  function seedLegacy(titles: string[], extra: Record<number, object> = {}): void {
+    writeFileSync(join(bookDir, 'manuscript.md'), LEGACY_MANUSCRIPT);
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: titles.map((t, i) => ({
+          id: i + 1,
+          title: t,
+          slug: `0${i + 1}-x`,
+          ...(extra[i + 1] ?? {}),
+        })),
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [1, 2, 3].map((c) => ({ id: 1, chapterId: c, characterId: 'narr', text: `S${c}.` })),
+      }),
+    );
+  }
+
+  const reorder = () =>
+    request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [2, 1, 3] });
+
+  it('a title that still matches the import is recognised as app-made and renumbered', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue']);
+    expect((await reorder()).status).toBe(200);
+    // Old chapter 1 is now id 2: renumbered because the backfill flagged it.
+    expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 2', 'Epilogue']);
+  });
+
+  it('a user-edited title is not backfilled', async () => {
+    seedLegacy(['Chapter 1 — My Own Subtitle', 'Prologue', 'Epilogue']);
+    expect((await reorder()).status).toBe(200);
+    expect(readState().chapters.map((c) => c.title)).toEqual([
+      'Prologue',
+      'Chapter 1 — My Own Subtitle',
+      'Epilogue',
+    ]);
+  });
+
+  it('a chapter-count mismatch causes no backfill', async () => {
+    seedLegacy(['Chapter 1', 'Prologue']);
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [1, 2].map((c) => ({ id: 1, chapterId: c, characterId: 'narr', text: `S${c}.` })),
+      }),
+    );
+    // The manuscript parses to 3 chapters, the book has 2: no backfill.
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [2], excluded: true });
+    expect(res.status).toBe(200);
+    expect(readState().chapters.some((c) => 'titleSynthesized' in c)).toBe(false);
+  });
+
+  it('an explicit titleSynthesized: false is preserved', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue'], { 1: { titleSynthesized: false } });
+    expect((await reorder()).status).toBe(200);
+    expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 1', 'Epilogue']);
+  });
+});

@@ -18,6 +18,7 @@ import {
   applyRename,
   applyExclude,
   applyRefreshTitles,
+  backfillTitleSynthesized,
   computeBodySplitIndex,
   type RefreshTitlesOptions,
   type RestructureSentence,
@@ -768,5 +769,53 @@ describe('applyRefreshTitles honours titleSynthesized (#3628)', () => {
     );
     expect(cleared.state.chapters[0].title).toBe('Opening');
     expect('titleSynthesized' in cleared.state.chapters[0]).toBe(false);
+  });
+});
+
+/* -- title source (#3628): backfilling the flag on legacy chapters --- */
+
+describe('backfillTitleSynthesized (#3628)', () => {
+  const parsedTitles = ['Chapter 1', 'Prologue', 'Chapter 3'];
+  const parsedSynth = [true, false, true];
+
+  it('flags a keyless chapter whose title matches an app-made parse position', () => {
+    const out = backfillTitleSynthesized(
+      makeState([
+        { id: 1, title: 'Chapter 1' },
+        { id: 2, title: 'Prologue' },
+        { id: 3, title: 'Chapter 3' },
+      ]),
+      parsedTitles,
+      parsedSynth,
+    );
+    expect(out.chapters.map((c) => c.titleSynthesized)).toEqual([true, undefined, true]);
+  });
+
+  it('does not backfill an edited title, a titleOverridden chapter, or a position the parse took from a heading', () => {
+    const state = makeState([
+      { id: 1, title: 'Chapter 1 — Mine' },
+      { id: 2, title: 'Prologue' },
+      { id: 3, title: 'Chapter 3' },
+    ]);
+    state.chapters[2].titleOverridden = true;
+    const out = backfillTitleSynthesized(state, parsedTitles, parsedSynth);
+    expect(out.chapters.some((c) => 'titleSynthesized' in c)).toBe(false);
+  });
+
+  it('does nothing when the chapter counts differ', () => {
+    const state = makeState([{ id: 1, title: 'Chapter 1' }]);
+    expect(backfillTitleSynthesized(state, parsedTitles, parsedSynth)).toBe(state);
+  });
+
+  it('never touches a chapter that already has the key, including false', () => {
+    const state = makeState([
+      { id: 1, title: 'Chapter 1' },
+      { id: 2, title: 'Prologue' },
+      { id: 3, title: 'Chapter 3' },
+    ]);
+    state.chapters[0].titleSynthesized = false; // makeState only writes the key when true
+    const out = backfillTitleSynthesized(state, parsedTitles, parsedSynth);
+    expect(out.chapters[0].titleSynthesized).toBe(false);
+    expect(out.chapters[2].titleSynthesized).toBe(true);
   });
 });
