@@ -23,12 +23,6 @@ import { scoreBook } from './aggregate.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 import { retireCharacterId } from '../../store/cast-id-history.js';
 
-// #3524 — scoreBook reads the book's CURRENT default engine; these fixtures assume Qwen.
-vi.mock('../../workspace/user-settings.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../workspace/user-settings.js')>()),
-  getResolvedTtsModelKey: () => 'qwen3-tts-0.6b',
-}));
-
 // A unit vector in a given axis direction, dim=8, tiny deterministic jitter.
 function axisVec(axis: number, i: number, dim = 8): number[] {
   const dir = new Array(dim).fill(0);

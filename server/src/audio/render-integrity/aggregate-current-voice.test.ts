@@ -39,7 +39,8 @@ const { auditionSpy, audition } = vi.hoisted(() => {
     })),
   };
 });
-// The book's CURRENT default engine is read at scoring time (#3524); pin it per test.
+// The server's saved default engine must play no part in scoring (#3524 pass 2); the engine
+// tests below set it to something other than the engine rendered, to prove it is ignored.
 const { defaultModelKey } = vi.hoisted(() => ({ defaultModelKey: { value: 'qwen3-tts-0.6b' } }));
 vi.mock('../../workspace/user-settings.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../workspace/user-settings.js')>()),
@@ -354,7 +355,7 @@ describe('scoreBook — old-voice lines score inconclusive (#3524)', () => {
 /** Per-line stamped chapter: each line carries its own `voiceName`/`baseVoiceName`
  *  (as a real render stamps them) and the chapter snapshot names `snapshotVoice`. */
 type Line = { sid: number; axis: number; jitter: number; voice: string; fallback?: string | null };
-async function writeChapterLines(dir: string, slug: string, chapterId: number, lines: Line[], snapshotVoice: string, charId = 'thurid', engine = 'qwen') {
+async function writeChapterLines(dir: string, slug: string, chapterId: number, lines: Line[], snapshotVoice: string, charId = 'thurid', engine = 'qwen', snapModelKey = engine === 'qwen' ? 'qwen3-tts-1.7b' : 'coqui-xtts-v2') {
   mkdirSync(join(dir, 'audio'), { recursive: true });
   const rows = lines.map((l) => ({ characterId: charId, sentenceIds: [l.sid], vec: vec(l.axis, l.jitter) }));
   await writeEmbeddings(join(dir, 'audio', `${slug}.embeddings.json`), rows, EMBEDDINGS_VERSION);
@@ -371,7 +372,7 @@ async function writeChapterLines(dir: string, slug: string, chapterId: number, l
         baseVoiceName: l.voice,
       })),
       characterSnapshots: {
-        [charId]: { voiceEngine: engine, modelKey: engine === 'qwen' ? 'qwen3-tts-1.7b' : 'coqui-xtts-v2', resolvedVoiceName: snapshotVoice },
+        [charId]: { voiceEngine: engine, modelKey: snapModelKey, resolvedVoiceName: snapshotVoice },
       },
     }),
   );
@@ -562,7 +563,8 @@ describe("scoreBook — the current voice's engine is the book's CURRENT default
         ],
       }),
     );
-    // The chapter snapshot is stale (last-wins over an untouched Coqui line); two lines were re-recorded on Qwen.
+    // finalize's real shape: the snapshot stamps the FRESH render's engine (Qwen) and tier, with
+    // `resolvedVoiceName` last-wins over the untouched Coqui line; two lines were re-recorded on Qwen.
     await writeChapterLines(
       dir,
       'ch1',
@@ -574,7 +576,8 @@ describe("scoreBook — the current voice's engine is the book's CURRENT default
       ],
       'Ana Florence',
       'thurid',
-      'coqui',
+      'qwen',
+      'qwen3-tts-0.6b',
     );
     audition.axis = 1;
     await scoreBook(dir, [CHAPTERS[0]]);
@@ -622,5 +625,63 @@ describe('scoreBook — a non-English book scores against the engine generation 
     expect(row.inBookVoiceName).toBe('qwen-h');
     const rows = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
     expect(rows!.find((r) => r.sentenceIds[0] === 99)!.verdict).toBe('voice-mismatch');
+  });
+});
+
+/* #3524 pass 2 A(ii) — "the engine actually rendered": the character's own `ttsEngine`,
+   else the scoring run's model key, else (Resume scoring, no run) the engine stamped on its
+   most recently rendered lines. The server's saved default plays no part. */
+describe('scoreBook — the current engine is the one actually rendered, not the server default (#3524 pass 2 A(ii))', () => {
+  const BOTH_SLOTS = {
+    overrideTtsVoices: { qwen: { name: 'Thurid voice', libraryUuid: 'hq' }, coqui: { name: 'Ana Florence' } },
+  };
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 0;
+    defaultModelKey.value = 'qwen3-tts-0.6b'; // the server default is Qwen; the book was rendered on Coqui
+  });
+
+  async function coquiBook(): Promise<string> {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-session-engine-'));
+    writeCastRow(dir, BOTH_SLOTS);
+    await writeChapterLines(dir, 'ch1', 1, withOutlier('Ana Florence'), 'Ana Florence', 'thurid', 'coqui');
+    return dir;
+  }
+  const expectRealCoquiReference = async (dir: string) => {
+    const row = (await readCentroids(dir))!['thurid'];
+    expect(row.noCurrentVoiceReference).toBeUndefined();
+    expect(row.referenceKind).toBe('in-book');
+    expect(row.inBookVoiceName).toBe('Ana Florence');
+    const rows = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(rows!.find((r) => r.sentenceIds[0] === 99)!.verdict).toBe('voice-mismatch');
+  };
+
+  it("scoring that follows a render uses that run's model key: a Coqui-rendered book under a Qwen server default builds a real Coqui reference", async () => {
+    const dir = await coquiBook();
+    await scoreBook(dir, [CHAPTERS[0]], undefined, { runModelKey: 'coqui-xtts-v2' });
+    await expectRealCoquiReference(dir);
+  });
+
+  it("Resume scoring (no run key) resolves the engine from the character's most recently rendered lines", async () => {
+    const dir = await coquiBook();
+    await scoreBook(dir, [CHAPTERS[0]]);
+    await expectRealCoquiReference(dir);
+  });
+
+  it('a settings default that reads kokoro (remote sidecar not yet polled as Qwen-installed) cannot overwrite a real reference with a marker', async () => {
+    const dir = await coquiBook();
+    defaultModelKey.value = 'kokoro-v1';
+    await scoreBook(dir, [CHAPTERS[0]]);
+    await expectRealCoquiReference(dir);
+    await scoreBook(dir, [CHAPTERS[0]]); // a second pass keeps the real reference
+    await expectRealCoquiReference(dir);
+  });
+
+  it("the character's own ttsEngine wins over the run key", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-own-engine-'));
+    writeCastRow(dir, { ...BOTH_SLOTS, ttsEngine: 'coqui' });
+    await writeChapterLines(dir, 'ch1', 1, withOutlier('Ana Florence'), 'Ana Florence', 'thurid', 'coqui');
+    await scoreBook(dir, [CHAPTERS[0]], undefined, { runModelKey: 'qwen3-tts-0.6b' });
+    await expectRealCoquiReference(dir);
   });
 });

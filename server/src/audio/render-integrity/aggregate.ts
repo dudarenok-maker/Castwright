@@ -26,7 +26,7 @@
  */
 
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { audioDir, castJsonPath, stateJsonPath } from '../../workspace/paths.js';
 import { readJson } from '../../workspace/state-io.js';
 import { bookStateLanguage, type BookStateJson } from '../../workspace/scan.js';
@@ -49,9 +49,9 @@ import {
 } from './score.js';
 import { auditionCentroid, type AuditionCharacter, type AuditionCentroidOpts } from './audition-centroid.js';
 import { readPendingAttempts, writePendingAttempts } from './pending-attempts-io.js';
-import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-keys.js';
+import { canonicalModelKeyForEngine, engineForModelKey, type TtsEngine, type TtsModelKey } from '../../tts/model-keys.js';
 import { buildHintFromCast, type CastCharacter } from '../../tts/synthesise-chapter.js';
-import { currentCastVoiceName, currentCharacterEngine, currentDefaultEngine } from './current-voice.js';
+import { currentCastVoiceName, currentCharacterEngine } from './current-voice.js';
 import { hasClonedProvenance } from '../../tts/clone-engines.js';
 import { buildCastResolver } from '../../store/cast-resolve.js';
 import { loadCastIdHistory } from '../../store/cast-id-history.js';
@@ -544,6 +544,11 @@ export async function scoreBook(
     /** Test-only — forwarded to every auditionCentroid call this run. */
     __testSynthFn?: AuditionCentroidOpts['synthFn'];
     __testEmbedFn?: AuditionCentroidOpts['embedFn'];
+    /** #3524 — the model key of the render run this pass follows. Its engine is the
+        default engine for a character with no `ttsEngine` of its own. Omitted by Resume
+        scoring (no run): the engine then comes from the character's most recently
+        rendered lines. */
+    runModelKey?: TtsModelKey;
   },
 ): Promise<{ usedQwenTiers: { keep06: boolean; keep17: boolean }; mismatchCount: number }> {
   const NO_TIERS = { usedQwenTiers: { keep06: false, keep17: false }, mismatchCount: 0 };
@@ -570,6 +575,8 @@ export async function scoreBook(
     /** Render tier this chapter's audio was synthesised under (segments.json
      *  `modelKey`), used to render the Option-B audition on the SAME tier. */
     modelKey?: TtsModelKey;
+    /** segments.json mtime — orders chapters by how recently they were rendered. */
+    mtimeMs: number;
   };
 
   const chapterData: ChapterData[] = [];
@@ -637,6 +644,7 @@ export async function scoreBook(
       segsByKey,
       snapshots: segFile.characterSnapshots ?? {},
       modelKey: segFile.modelKey,
+      mtimeMs: await stat(segPath).then((s) => s.mtimeMs, () => 0),
     });
   }
 
@@ -700,17 +708,36 @@ export async function scoreBook(
   const bookLanguage = await readBookLanguage(bookDir);
   // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
   const voiceInfoByChar = new Map<string, AuditionCharacter>();
+  /* #3524 — "the engine actually rendered", the fallback engine for a character with no
+     `ttsEngine` of its own: this pass's run model key when scoring follows a render, else
+     (Resume scoring) the engine stamped on the character's most recently rendered
+     non-fallback lines (chapters ordered by segments.json mtime, ties by book order — a
+     chapter snapshot's engine is the fresh render's, so it is current for those lines),
+     else, for a character rendered only on a fallback engine, its configured engine.
+     The server's saved default plays no part: a session-picker run, a non-English retarget
+     and a remote sidecar's boot-time install state all make it diverge from what rendered. */
+  const runEngine: TtsEngine | undefined = opts?.runModelKey ? engineForModelKey(opts.runModelKey) : undefined;
+  const stampedEngineByChar = new Map<string, TtsEngine>();
+  for (const cd of [...chapterData].sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+    for (const row of cd.embRows) {
+      const seg = cd.segsByKey.get(segKey(row.characterId, row.sentenceIds));
+      if (seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '') continue;
+      const id = resolveRowCharId(seg, row.characterId, cd.snapshots);
+      const stamped = id !== undefined ? cd.snapshots[id]?.voiceEngine : undefined;
+      if (id !== undefined && stamped) stampedEngineByChar.set(id, stamped as TtsEngine);
+    }
+  }
+  const defaultEngineFor = (charId: string): TtsEngine | undefined =>
+    runEngine ?? stampedEngineByChar.get(charId) ?? (configuredEngineByChar.get(charId) as TtsEngine | undefined);
   /* #3524 — the character's CURRENT cast.json voice for a snapshot key: the
      live row through castResolver, then the helper shared with
-     chapter-qa-repair.ts (#3449), with the book's CURRENT default engine (read
-     now — never a chapter snapshot's engine) as the fallback engine. `undefined` = no
-     current voice known (no live cast row, or an undesigned voice → ''), and
-     that character keeps first-chapter-wins with no filtering. */
-  const defaultEngine = currentDefaultEngine();
+     chapter-qa-repair.ts (#3449). `undefined` = no current voice known (no live
+     cast row, an undesigned voice → '', or no engine known), and that character
+     keeps first-chapter-wins with no filtering. */
   const currentVoiceNameFor = (charId: string): string | undefined => {
     const current = castResolver.resolve(charId)?.character;
     if (!current) return undefined;
-    return currentCastVoiceName(current, defaultEngine, bookLanguage);
+    return currentCastVoiceName(current, defaultEngineFor(charId), bookLanguage);
   };
   const currentVoiceByChar = new Map<string, string | undefined>();
   const currentVoiceFor = (charId: string): string | undefined => {
@@ -847,7 +874,8 @@ export async function scoreBook(
     const currentVoice = currentVoiceFor(charId);
     const castChar = castResolver.resolve(charId)?.character;
     if (!info || currentVoice === undefined || !castChar) continue;
-    const engine = currentCharacterEngine(castChar, defaultEngine, bookLanguage);
+    const engine = currentCharacterEngine(castChar, defaultEngineFor(charId), bookLanguage);
+    if (!engine) continue;
     const modelKey = canonicalModelKeyForEngine(engine, info.modelKey);
     if (info.voiceName !== currentVoice || info.modelKey !== modelKey) {
       voiceInfoByChar.set(charId, {

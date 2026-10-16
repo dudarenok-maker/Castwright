@@ -30,12 +30,6 @@ vi.mock('./audition-centroid.js', async (importOriginal) => ({
 import { scoreBook } from './aggregate.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 
-// #3524 — scoreBook reads the book's CURRENT default engine; these fixtures assume Qwen.
-vi.mock('../../workspace/user-settings.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../workspace/user-settings.js')>()),
-  getResolvedTtsModelKey: () => 'qwen3-tts-0.6b',
-}));
-
 const vec = (θ: number) => Float32Array.from([Math.cos(θ), Math.sin(θ), 0, 0, 0, 0, 0, 0]);
 
 /** A book whose single character is too-thin (3 anchors < CENTROID_MIN_N), so
