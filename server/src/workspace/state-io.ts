@@ -59,6 +59,11 @@ export async function readJson<T>(path: string): Promise<T | null> {
  *  recovered backup so the operator can audit the corruption event;
  *  callers do NOT see the underlying parse error.
  *
+ *  Any non-parse read error (EBUSY / EPERM / EIO — a transient lock on a
+ *  HEALTHY file) is re-thrown untouched: `.bak.1` is the state before the
+ *  last write, so substituting it and writing back would silently revert
+ *  that write.
+ *
  *  When the main file is missing entirely (`existsSync === false`) we
  *  return `null` like `readJson` — recovery is only for "file exists
  *  but JSON.parse rejects it". When the main file is corrupt AND every
@@ -72,8 +77,9 @@ export async function readJsonWithRecovery<T>(
   opts: { keep: number },
 ): Promise<T | null> {
   if (!existsSync(path)) return null;
+  /* The read sits OUTSIDE the try: only a parse failure may fall back. */
+  const raw = await readFile(path, 'utf8');
   try {
-    const raw = await readFile(path, 'utf8');
     /* Strip a leading UTF-8 BOM (U+FEFF) if present. Node does not strip it
        when reading with 'utf8' encoding, and JSON.parse rejects the BOM as
        invalid. Windows editors and PowerShell 5.1's -Encoding utf8 write a
@@ -81,6 +87,7 @@ export async function readJsonWithRecovery<T>(
     const stripped = raw.startsWith('\ufeff') ? raw.slice(1) : raw;
     return JSON.parse(stripped) as T;
   } catch (originalErr) {
+    if (!(originalErr instanceof SyntaxError)) throw originalErr;
     for (let i = 1; i <= opts.keep; i += 1) {
       const backupPath = `${path}.bak.${i}`;
       if (!existsSync(backupPath)) continue;
