@@ -149,9 +149,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
            it is re-run (fill-only) the next time it is opened, and say so
            in a toast: leaving the book unmounts this button, so a status line
            here would never be seen. */
-        void api
-          .putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: false } })
-          .catch(() => {});
+        markUnfinished();
         dispatch(
           notificationsActions.pushToast({
             kind: 'warn',
