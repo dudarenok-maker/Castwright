@@ -41,6 +41,7 @@ import {
   makeBookId,
   stateJsonPath,
 } from '../workspace/paths.js';
+import { reencodeToJpeg } from '../cover/reencode.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import {
   PORTABLE_SCHEMA_VERSION,
@@ -278,7 +279,16 @@ export async function importPortableBundle(
       continue;
     }
     if (name.startsWith('cover.')) {
-      planEntry(join(dotAudiobook(bookDir), name), buf, name);
+      /* #3535: re-encode to a clean JPEG like every other cover path, and
+         store it as cover.jpg whatever the entry's extension. An
+         undecodable cover is skipped (the book still imports), like an
+         unknown entry. */
+      try {
+        const jpeg = await reencodeToJpeg(buf, { tolerant: true });
+        planEntry(join(dotAudiobook(bookDir), 'cover.jpg'), jpeg, name);
+      } catch (e) {
+        console.warn(`[import] skipping undecodable cover entry ${name}: ${(e as Error).message}`);
+      }
       continue;
     }
     /* Forward-compat: skip silently. */

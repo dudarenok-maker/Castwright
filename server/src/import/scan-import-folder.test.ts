@@ -5,7 +5,7 @@
    workspace dir → asserts every chapter mp3 + state.json + manuscript are
    byte-identical. */
 
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
@@ -16,13 +16,20 @@ import {
   importPortableBundle,
 } from './scan-import-folder.js';
 import { ZipFile } from 'yazl';
+import sharp from 'sharp';
 import { audioDir, dotAudiobook, stateJsonPath } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 /** Build a tiny portable bundle in-memory without going through the real
     build pipeline — gives the import-side tests a stable, ffmpeg-free
     input. The bundle layout matches what build-portable-book.ts writes. */
-function makeBundleFixture(state: BookStateJson): Promise<Buffer> {
+function tinyImage(format: 'jpeg' | 'png' | 'gif' | 'webp'): Promise<Buffer> {
+  return sharp({ create: { width: 8, height: 12, channels: 3, background: '#c33' } })
+    .toFormat(format)
+    .toBuffer();
+}
+
+function makeBundleFixture(state: BookStateJson, cover: Buffer): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const zip = new ZipFile();
     const chunks: Buffer[] = [];
@@ -35,7 +42,6 @@ function makeBundleFixture(state: BookStateJson): Promise<Buffer> {
     const audio1 = Buffer.from('mp3-bytes-1');
     const audio2 = Buffer.from('mp3-bytes-2');
     const peaks = Buffer.from('{"peaks":[]}', 'utf8');
-    const cover = Buffer.from('cover-stub');
     const changeLog = Buffer.from(JSON.stringify({ events: [] }), 'utf8');
 
     const manifest = {
@@ -117,7 +123,7 @@ function targetDirFor(state: BookStateJson, title?: string): string {
 describe('importPortableBundle', () => {
   it('writes state.json, manuscript, cover, change-log, and audio files to the workspace', async () => {
     const state = fixtureState({ title: 'Import Basic Test' });
-    const bundle = await makeBundleFixture(state);
+    const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
     const result = await importPortableBundle(bundle, { onConflict: 'fail' });
 
     expect(result.bookId).toBe(state.bookId);
@@ -138,6 +144,36 @@ describe('importPortableBundle', () => {
 
     /* Cleanup */
     rmSync(target, { recursive: true, force: true });
+  });
+
+  it.each(['gif', 'webp', 'png'] as const)(
+    'stores a %s cover.jpg entry as a real JPEG (#3535)',
+    async (format) => {
+      const state = fixtureState({ title: `Import Cover ${format} Test` });
+      const bundle = await makeBundleFixture(state, await tinyImage(format));
+      await importPortableBundle(bundle, { onConflict: 'fail' });
+      const target = targetDirFor(state);
+      try {
+        const stored = readFileSync(join(dotAudiobook(target), 'cover.jpg'));
+        expect((await sharp(stored).metadata()).format).toBe('jpeg');
+      } finally {
+        rmSync(target, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it('skips an undecodable cover entry and still imports the book (#3535)', async () => {
+    const state = fixtureState({ title: 'Import Bad Cover Test' });
+    const bundle = await makeBundleFixture(state, Buffer.from('not-an-image'));
+    const result = await importPortableBundle(bundle, { onConflict: 'fail' });
+    const target = targetDirFor(state);
+    try {
+      expect(result.bookId).toBe(state.bookId);
+      expect(existsSync(join(dotAudiobook(target), 'cover.jpg'))).toBe(false);
+      expect(readFileSync(join(audioDir(target), '01-chapter-1.mp3')).toString()).toBe('mp3-bytes-1');
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
   });
 
   it('rejects a bundle missing MANIFEST.json', async () => {
@@ -189,7 +225,7 @@ describe('importPortableBundle', () => {
 
   it("default 'rename' strategy appends ' (imported)' on conflict and rewrites bookId/title in state.json", async () => {
     const state = fixtureState({ title: 'Rename Test' });
-    const bundle = await makeBundleFixture(state);
+    const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
 
     /* Pre-create the target dir to force a collision. */
     const existing = targetDirFor(state);
@@ -216,7 +252,7 @@ describe('importPortableBundle', () => {
 
   it("'fail' strategy throws BundleConflictError without writing", async () => {
     const state = fixtureState({ title: 'Fail Conflict Test' });
-    const bundle = await makeBundleFixture(state);
+    const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
     const target = targetDirFor(state);
     mkdirSync(target, { recursive: true });
     try {
@@ -230,7 +266,7 @@ describe('importPortableBundle', () => {
 
   it("'overwrite' strategy writes into the existing dir, preserving files not in the bundle", async () => {
     const state = fixtureState({ title: 'Overwrite Test' });
-    const bundle = await makeBundleFixture(state);
+    const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
     const target = targetDirFor(state);
     mkdirSync(join(target, 'audio'), { recursive: true });
     mkdirSync(dotAudiobook(target), { recursive: true });
@@ -304,7 +340,7 @@ describe('importPortableBundle', () => {
 
   it("imports a bundle whose state.json has no language as language:null (key present)", async () => {
     const state = fixtureState({ title: 'No Language Import' }); // no `language` key
-    const bundle = await makeBundleFixture(state);
+    const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
     const target = targetDirFor(state);
     rmSync(target, { recursive: true, force: true });
     try {
@@ -319,7 +355,7 @@ describe('importPortableBundle', () => {
 
   it('round-trips a language a bundle carries', async () => {
     const state = fixtureState({ title: 'Language Import', language: 'fr' });
-    const bundle = await makeBundleFixture(state);
+    const bundle = await makeBundleFixture(state, await tinyImage('jpeg'));
     const target = targetDirFor(state);
     rmSync(target, { recursive: true, force: true });
     try {
