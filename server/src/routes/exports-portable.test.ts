@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
   readFileSync,
@@ -109,6 +110,28 @@ describe('GET /api/books/:bookId/export/portable', () => {
   it('returns 404 when the book does not exist', async () => {
     const res = await request(app).get('/api/books/nonexistent__nope__nope/export/portable');
     expect(res.status).toBe(404);
+  });
+
+  it('answers a build failure with a fixed message, never an absolute path (#3535)', async () => {
+    /* A missing manuscript makes buildPortableBundle throw an Error whose
+       message names the absolute manuscript path. */
+    const manuscript = join(bookDir, 'manuscript.txt');
+    const hidden = `${manuscript}.hidden`;
+    renameSync(manuscript, hidden);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app).get(
+        `/api/books/${encodeURIComponent(bookId)}/export/portable`,
+      );
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('portable_export_failed');
+      expect(String(res.body.message)).not.toContain(workspaceRoot);
+      expect(String(res.body.message)).not.toContain('manuscript.txt');
+      expect(err).toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+      renameSync(hidden, manuscript);
+    }
   });
 
   /* Plan 79 — portable bundle also writes a local copy into
