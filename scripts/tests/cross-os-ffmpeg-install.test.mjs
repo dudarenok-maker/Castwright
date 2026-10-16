@@ -626,3 +626,24 @@ for (const path of WORKFLOWS) {
     );
   });
 }
+
+// #3696: release.yml's Ubuntu `verify` leg runs the full `npm run verify`
+// (incl. e2e/a11y/build) serially. v1.14.0 (run 30049534151) took 25m14s and
+// the Ubuntu work has grown ~34% since, so a 30-min cap would cancel the next
+// release after the tag is pushed, skipping companion-apk-build + publish.
+const RELEASE_VERIFY_MIN_TIMEOUT = 45;
+
+test(`release.yml: verify job timeout-minutes is >= ${RELEASE_VERIFY_MIN_TIMEOUT} (#3696)`, () => {
+  const source = readNormalized(resolve(repoRoot, '.github', 'workflows', 'release.yml'));
+  const start = source.indexOf('\n  verify:\n');
+  assert.ok(start !== -1, 'no verify job found in release.yml -- did it get renamed?');
+  const rest = source.slice(start + 1);
+  const next = rest.slice(1).search(/\n {2}[A-Za-z][\w-]*:\n/);
+  const job = next === -1 ? rest : rest.slice(0, next + 1);
+  const m = job.match(/\n {4}timeout-minutes:\s*(\d+)\b/);
+  assert.ok(m, 'release.yml verify job has no timeout-minutes');
+  assert.ok(
+    Number(m[1]) >= RELEASE_VERIFY_MIN_TIMEOUT,
+    `release.yml verify timeout-minutes is ${m[1]}, below the ${RELEASE_VERIFY_MIN_TIMEOUT}-min floor (#3696)`,
+  );
+});
