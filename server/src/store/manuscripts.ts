@@ -100,7 +100,18 @@ export async function getOrHydrateManuscript(
   for (const c of book.state.chapters) {
     if (c.excluded) excludedById.set(c.id, true);
   }
-  const chapterHints: ChapterHint[] = parsed.chapters.map((c) => ({
+  /* A fresh parse also loses titles state.json has since moved on (a restructure
+     renumbered app-made "Chapter N" titles). Align them by id, only while the
+     chapter counts agree — after a merge/split the parse's ids no longer line
+     up with state's, and an id match would graft a title onto the wrong body. */
+  const stateById = new Map(book.state.chapters.map((c) => [c.id, c]));
+  const aligned = book.state.chapters.length === parsed.chapters.length;
+  const chapterHints: ChapterHint[] = parsed.chapters.map((p) => {
+    const sc = aligned ? stateById.get(p.id) : undefined;
+    if (!sc) return p;
+    const { titleSynthesized: _drop, ...rest } = p;
+    return { ...rest, title: sc.title, ...(sc.titleSynthesized === true ? { titleSynthesized: true } : {}) };
+  }).map((c) => ({
     ...c,
     /* User's prior exclusions win; otherwise fall back to the parser's
        front/back-matter default so re-parse doesn't silently re-admit

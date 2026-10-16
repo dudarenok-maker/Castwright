@@ -6624,10 +6624,12 @@ export async function runMainAnalyzerJob(
     }
 
     /* ── Compose the AnalyseResponse. */
-    const chapterTitleById = new Map(stage1.chapters.map((c) => [c.id, c.title]));
+    /* The hint title is authoritative (kept in step with state.json by the
+       restructure route and by hydration); the cached stage1 chapter list is
+       only a snapshot keyed by pre-restructure ids (#3681). */
     const chapters = record.chapterHints.map((h) => ({
       id: h.id,
-      title: chapterTitleById.get(h.id) ?? h.title,
+      title: h.title,
       duration: durationPlaceholder(),
       state: 'queued' as const,
       progress: 0,
@@ -8870,10 +8872,9 @@ export async function runSubsetAnalyzerJob(
       folded.sentences.length,
     );
 
-    const chapterTitleById = new Map(stage1.chapters.map((c) => [c.id, c.title]));
     const chaptersOut = record.chapterHints.map((h) => ({
       id: h.id,
-      title: chapterTitleById.get(h.id) ?? h.title,
+      title: h.title,
       duration: durationPlaceholder(),
       state: 'queued' as const,
       progress: 0,
