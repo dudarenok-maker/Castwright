@@ -244,7 +244,7 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
     const jpeg = await sharp({
       create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
     })
-      .jpeg({ quality: 85 })
+      .jpeg({ quality: 100, progressive: true })
       .toBuffer();
 
     const res = await request(app)
@@ -257,11 +257,12 @@ describe('POST /:bookId/cover/upload (plan 40)', () => {
 
     const onDisk = join(bookDir, '.audiobook', 'cover.jpg');
     expect(existsSync(onDisk)).toBe(true);
-    /* #3642 / #3535: the route now re-encodes every upload, so the stored
-       cover is a clean sharp-written JPEG (a sharp-written fixture at the
-       same quality may round-trip byte-identically, so the EOI + decode
-       assertions pin the clean-JPEG guarantee). */
+    /* #3642 / #3535: the route re-encodes every upload. The fixture is a
+       quality-100 progressive JPEG, so only a real re-encode yields a
+       baseline file that differs from the input. */
     const written = readFileSync(onDisk);
+    expect(Buffer.compare(written, jpeg)).not.toBe(0);
+    expect((await sharp(written).metadata()).isProgressive).toBe(false);
     expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
     const meta = await sharp(written).metadata();
     expect(meta.format).toBe('jpeg');

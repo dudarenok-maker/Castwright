@@ -192,8 +192,10 @@ describe('writeUploadedCover', () => {
     })
       .jpeg()
       .toBuffer();
-    // A few 188-byte MPEG-TS packets starting with the 0x47 sync byte —
-    // enough for ffmpeg's auto-probing to prefer mpegts/h264 over the JPEG.
+    // A few 188-byte MPEG-TS-shaped packets (0x47 sync byte, zero-filled
+    // payload) appended as trailing bytes. They are NOT a real stream and
+    // this fixture does not make ffmpeg probe the file as mpegts; the test
+    // only pins that trailing bytes do not survive the re-encode.
     const packets = Array.from({ length: 3 }, () => {
       const packet = Buffer.alloc(188, 0x00);
       packet[0] = 0x47;
@@ -216,16 +218,21 @@ describe('writeUploadedCover', () => {
 
   it('re-encodes a JPEG upload to a clean sharp-written JPEG with the same dimensions', async () => {
     const dest = join(bookDir, '.audiobook', 'cover.jpg');
-    const jpeg = await makeJpeg();
+    /* Behaviour change (#3642 / #3535): every upload is re-encoded through
+       sharp. The input is written at quality 100, so only a real re-encode
+       (quality 85) can make the stored file differ from — and be smaller
+       than — the input. */
+    const jpeg = await sharp({
+      create: { width: 10, height: 10, channels: 3, background: { r: 200, g: 100, b: 50 } },
+    })
+      .jpeg({ quality: 100 })
+      .toBuffer();
     const result = await writeUploadedCover(jpeg, 'image/jpeg', dest);
     expect(existsSync(dest)).toBe(true);
     const written = readFileSync(dest);
     expect(result.bytes).toBe(written.length);
-    /* Behaviour change (#3642 / #3535): every upload is re-encoded through
-       sharp. A sharp-written fixture at the same quality may round-trip
-       byte-identically, so the guarantee under test is that the stored file
-       is a clean, whole, decodable JPEG — the appended-tail test carries the
-       trailing-junk difference assertion. */
+    expect(Buffer.compare(written, jpeg)).not.toBe(0);
+    expect(written.length).toBeLessThan(jpeg.length);
     expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
     const meta = await sharp(written).metadata();
     expect(meta.format).toBe('jpeg');
@@ -261,6 +268,9 @@ describe('writeUploadedCover', () => {
       expect(meta.format).toBe('jpeg');
       expect(meta.width).toBe(16);
       expect(meta.height).toBe(16);
+      // Only a real re-encode flattens a progressive scan and drops EXIF.
+      expect(meta.isProgressive).toBe(false);
+      expect(meta.exif).toBeUndefined();
     }
   });
 
