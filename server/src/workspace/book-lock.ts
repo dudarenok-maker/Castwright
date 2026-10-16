@@ -14,10 +14,13 @@
    they run both bare AND from inside a handler that already holds it (the
    state PUT, `applyRestructure`). The lock is a promise chain, so a second
    acquisition of the same book from inside `fn` would wait on itself forever.
-   An AsyncLocalStorage set of held book ids makes `withBookLock` run `fn`
+   An AsyncLocalStorage map of held book ids makes `withBookLock` run `fn`
    inline when the current async context already holds that book — nested
-   acquisition is a no-op, never a deadlock. Work detached from the holder's
-   async context (not awaited by it) sees no store and queues normally. */
+   acquisition is a no-op, never a deadlock. AsyncLocalStorage also flows into
+   work the holder spawns and does NOT await (a timer, a floating promise), so
+   each hold carries a `live` token cleared when the holder settles: detached
+   work that outlives its holder sees a dead token and queues like anyone else
+   instead of running its locked section unlocked. */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 
@@ -28,11 +31,15 @@ import { AsyncLocalStorage } from 'node:async_hooks';
    doesn't leak. */
 const bookWriteLock = new Map<string, Promise<void>>();
 
-const heldBooks = new AsyncLocalStorage<ReadonlySet<string>>();
+interface Hold {
+  live: boolean;
+}
+
+const heldBooks = new AsyncLocalStorage<ReadonlyMap<string, Hold>>();
 
 export async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T> {
   const held = heldBooks.getStore();
-  if (held?.has(bookId)) return fn();
+  if (held?.get(bookId)?.live) return fn();
   const prev = bookWriteLock.get(bookId) ?? Promise.resolve();
   let release!: () => void;
   const next = new Promise<void>((resolve) => {
@@ -43,12 +50,14 @@ export async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Pro
   // `.then()` always returns a new Promise object, so that comparison was
   // never equal to what was stored and this delete never ran: the map grew
   // one entry per bookId for the process lifetime.
+  const hold: Hold = { live: true };
   const mine = prev.then(() => next);
   bookWriteLock.set(bookId, mine);
   try {
     await prev;
-    return await heldBooks.run(new Set([...(held ?? []), bookId]), fn);
+    return await heldBooks.run(new Map([...(held ?? []), [bookId, hold]]), fn);
   } finally {
+    hold.live = false;
     release();
     // Best-effort cleanup: if no further requests queued behind us, drop
     // the entry so the map doesn't grow unboundedly over a long server
