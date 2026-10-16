@@ -34,6 +34,7 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withKeyLock, requestFailureMessage } from '../workspace/file-lock.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { withStateLock } from '../workspace/state-lock.js';
 import { assertRevisionsResettable, resetRevisions } from '../workspace/revisions-store.js';
 import { z } from 'zod';
 import { sentenceSchema } from '../handoff/schemas.js';
@@ -238,33 +239,44 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
           sourcePath: manuscriptPath,
         });
 
-    if (parsed.chapters.length !== state.chapters.length) {
-      console.warn(
-        `[book-state] title-refresh skipped for ${state.bookId}: parsed ${parsed.chapters.length} chapters, state has ${state.chapters.length}. Chapter split logic changed — won't risk misalignment.`,
+    /* The parse above is slow and stays outside the lock. Everything derived
+       from state.json — the count check, the version check, the new titles —
+       is decided on a read taken INSIDE the lock, never on the caller's
+       snapshot (#3625): another writer may have stamped a chapter, or
+       refreshed the titles itself, while we were parsing. */
+    return await withStateLock(bookDir, async () => {
+      const fresh = await readJson<BookStateJson>(stateJsonPath(bookDir));
+      if (!fresh) return state;
+      if ((fresh.chapterTitleParserVersion ?? 1) >= CHAPTER_TITLE_PARSER_VERSION) return fresh;
+
+      if (parsed.chapters.length !== fresh.chapters.length) {
+        console.warn(
+          `[book-state] title-refresh skipped for ${fresh.bookId}: parsed ${parsed.chapters.length} chapters, state has ${fresh.chapters.length}. Chapter split logic changed — won't risk misalignment.`,
+        );
+        return fresh;
+      }
+
+      /* Replace titles in order; everything else (slug, excluded, audio
+         state) stays put. Skip the write when nothing actually changed
+         to avoid touching mtime / triggering watchers.
+
+         Chapters with `titleOverridden: true` are pass-through — the user
+         has manually renamed them and the heuristic refresh MUST NOT
+         clobber their work. The chapterTitleParserVersion bump below
+         still happens so the refresh isn't re-attempted on every GET. */
+      const newChapters = fresh.chapters.map((c, i) =>
+        c.titleOverridden ? c : { ...c, title: parsed.chapters[i].title },
       );
-      return state;
-    }
-
-    /* Replace titles in order; everything else (slug, excluded, audio
-       state) stays put. Skip the write when nothing actually changed
-       to avoid touching mtime / triggering watchers.
-
-       Chapters with `titleOverridden: true` are pass-through — the user
-       has manually renamed them and the heuristic refresh MUST NOT
-       clobber their work. The chapterTitleParserVersion bump below
-       still happens so the refresh isn't re-attempted on every GET. */
-    const newChapters = state.chapters.map((c, i) =>
-      c.titleOverridden ? c : { ...c, title: parsed.chapters[i].title },
-    );
-    const titlesChanged = newChapters.some((c, i) => c.title !== state.chapters[i].title);
-    const nextState: BookStateJson = {
-      ...state,
-      chapters: newChapters,
-      chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
-      updatedAt: titlesChanged ? new Date().toISOString() : state.updatedAt,
-    };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
-    return nextState;
+      const titlesChanged = newChapters.some((c, i) => c.title !== fresh.chapters[i].title);
+      const nextState: BookStateJson = {
+        ...fresh,
+        chapters: newChapters,
+        chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+        updatedAt: titlesChanged ? new Date().toISOString() : fresh.updatedAt,
+      };
+      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
+      return nextState;
+    });
   } catch (err) {
     console.warn(`[book-state] title-refresh failed for ${state.bookId}:`, (err as Error).message);
     return state;
@@ -277,12 +289,21 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     if (!located) return res.status(404).json({ error: 'Book not found.' });
 
     const { bookDir } = located;
-    const state = await refreshChapterTitles(located.state, bookDir);
+    let state = await refreshChapterTitles(located.state, bookDir);
     /* srv-35 — lazy-migrate chapter uuids on the canonical book read (the
        web player's source of truth), persisting once so the Listen view's
-       resume can resolve by uuid. Idempotent. */
-    if (ensureChapterUuids(state)) {
-      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null });
+       resume can resolve by uuid. Idempotent. Taken under the state lock on
+       a fresh read (#3625); the snapshot only gates whether to bother, so a
+       book that already has every uuid never touches the lock. */
+    if (state.chapters.some((c) => !c.uuid)) {
+      state = await withStateLock(bookDir, async () => {
+        const fresh = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        if (!fresh) return state;
+        if (ensureChapterUuids(fresh)) {
+          await writeStateJsonAtomic(stateJsonPath(bookDir), { ...fresh, language: fresh.language ?? null });
+        }
+        return fresh;
+      });
     }
     const cast = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
     let edits = await readJson<{ sentences?: unknown[]; mergedAwayKeys?: string[] }>(manuscriptEditsJsonPath(bookDir));
@@ -733,7 +754,9 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     });
   } catch (e) {
     console.error('[book-state] GET failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Failed to read book state.' });
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Failed to read book state.'),
+    });
   }
 });
 
@@ -1546,23 +1569,33 @@ bookStateRouter.post(
 
       const located = await findBookByBookId(req.params.bookId);
       if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
-
-      const idx = state.chapters.findIndex((c) => c.id === chapterId);
-      if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
-
-      const current = state.chapters[idx];
-      const updated = { ...current, excluded: excluded ? true : undefined };
-      const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
+      const { bookDir } = located;
 
       /* Write state.json first so a crash mid-call leaves the user's
-       choice on disk; audio cleanup is best-effort below. */
-      const nextState: BookStateJson = {
-        ...state,
-        chapters: nextChapters,
-        updatedAt: new Date().toISOString(),
-      };
-      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
+       choice on disk; audio cleanup is best-effort below. The chapter is
+       looked up on a read taken inside the state lock (#3625), never on
+       `located.state`; the audio cleanup and the record propagation stay
+       outside it. */
+      const outcome = await withStateLock(bookDir, async () => {
+        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        if (!state) return 'no-book' as const;
+        const idx = state.chapters.findIndex((c) => c.id === chapterId);
+        if (idx === -1) return 'no-chapter' as const;
+
+        const current = state.chapters[idx];
+        const updated = { ...current, excluded: excluded ? true : undefined };
+        const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
+        const nextState: BookStateJson = {
+          ...state,
+          chapters: nextChapters,
+          updatedAt: new Date().toISOString(),
+        };
+        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
+        return { state, current, updated };
+      });
+      if (outcome === 'no-book') return res.status(404).json({ error: 'Book not found.' });
+      if (outcome === 'no-chapter') return res.status(404).json({ error: 'Chapter not found.' });
+      const { state, current, updated } = outcome;
 
       /* Propagate to the live ManuscriptRecord if it's loaded. The
        analysis route reads chapterHints directly from this; without
@@ -1604,7 +1637,9 @@ bookStateRouter.post(
       });
     } catch (e) {
       console.error('[book-state] exclude toggle failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Failed to toggle exclude.' });
+      res.status(500).json({
+        error: requestFailureMessage(e, (e as Error).message || 'Failed to toggle exclude.'),
+      });
     }
   },
 );
@@ -1636,21 +1671,28 @@ bookStateRouter.post(
 
       const located = await findBookByBookId(req.params.bookId);
       if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
+      const { bookDir } = located;
 
-      const idx = state.chapters.findIndex((c) => c.id === chapterId);
-      if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
+      /* Chapter lookup and write on a read taken inside the state lock (#3625). */
+      const outcome = await withStateLock(bookDir, async () => {
+        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        if (!state) return 'no-book' as const;
+        const idx = state.chapters.findIndex((c) => c.id === chapterId);
+        if (idx === -1) return 'no-chapter' as const;
 
-      const current = state.chapters[idx];
-      const updated = { ...current, held: held ? true : undefined };
-      const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
-
-      const nextState: BookStateJson = {
-        ...state,
-        chapters: nextChapters,
-        updatedAt: new Date().toISOString(),
-      };
-      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
+        const updated = { ...state.chapters[idx], held: held ? true : undefined };
+        const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
+        const nextState: BookStateJson = {
+          ...state,
+          chapters: nextChapters,
+          updatedAt: new Date().toISOString(),
+        };
+        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
+        return updated;
+      });
+      if (outcome === 'no-book') return res.status(404).json({ error: 'Book not found.' });
+      if (outcome === 'no-chapter') return res.status(404).json({ error: 'Chapter not found.' });
+      const updated = outcome;
 
       res.json({
         id: updated.id,
@@ -1660,7 +1702,9 @@ bookStateRouter.post(
       });
     } catch (e) {
       console.error('[book-state] held toggle failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Failed to toggle held.' });
+      res.status(500).json({
+        error: requestFailureMessage(e, (e as Error).message || 'Failed to toggle held.'),
+      });
     }
   },
 );
