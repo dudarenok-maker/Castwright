@@ -119,6 +119,7 @@ import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.
 import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
 import { rollManuscriptEdits } from '../workspace/edits-roll.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { withStateLock } from '../workspace/state-lock.js';
 import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import {
   readJsonWithFingerprint,
@@ -4540,15 +4541,21 @@ export async function runMainAnalyzerJob(
                a stale path (moved book, or one now holding another book) is
                never written. */
             const freshStatePath = stateJsonPath(freshBookDir);
-            const freshState = await readJson<BookStateJson>(freshStatePath);
-            if (freshState?.castConfirmed) {
-              await writeStateJsonAtomic(freshStatePath, {
-                ...freshState,
-                castConfirmed: false,
-                updatedAt: new Date().toISOString(),
-                language: freshState.language ?? null,
-              });
-            }
+            /* #3625 — read-through-write under the per-book state lock (after the
+               cast hold above has closed; never nested in it). Fail loud: a lock
+               timeout propagates to the run's top-level catch, which classifies
+               it as `lock-contention` via classifyAnalysisFailure. */
+            await withStateLock(freshBookDir, async () => {
+              const freshState = await readJson<BookStateJson>(freshStatePath);
+              if (freshState?.castConfirmed) {
+                await writeStateJsonAtomic(freshStatePath, {
+                  ...freshState,
+                  castConfirmed: false,
+                  updatedAt: new Date().toISOString(),
+                  language: freshState.language ?? null,
+                });
+              }
+            });
           },
         );
       }

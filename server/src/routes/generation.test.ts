@@ -1981,6 +1981,54 @@ describe('POST /api/books/:bookId/generation — persists generationState on fai
     expect(state.chapters.find((c) => c.id === 2)!.generationState).toBeUndefined();
   });
 
+  /* #3625 — the failure stamp is a state.json read-modify-write, so it must
+     wait on the per-book state lock: held by the test, the stamp must not land;
+     released, it must. (No timeout-direction test: a lock timeout here is
+     swallowed by the persist catch exactly as a disk fault is — the failure was
+     already delivered over SSE.) */
+  it('waits on the state lock before stamping generationState:"failed"', async () => {
+    synthesiseImpl = async () => {
+      throw new Error('Local TTS sidecar returned 400: {"detail":"boom"}');
+    };
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let acquired!: () => void;
+    const acquiredSignal = new Promise<void>((resolve) => {
+      acquired = resolve;
+    });
+    const holder = withStateLock(bookDir, async () => {
+      acquired();
+      await held;
+    });
+    try {
+      await acquiredSignal;
+      const resPromise = request(app)
+        .post(`/api/books/${bookId}/generation`)
+        .send({ modelKey: 'gemini-2.5-flash', chapterIds: [1], force: true });
+      resPromise.then(
+        () => {},
+        () => {},
+      );
+      /* Give the run a real chance to fail the chapter and attempt the stamp. */
+      await new Promise((r) => setTimeout(r, 400));
+      expect((await readState()).chapters.find((c) => c.id === 1)!.generationState).not.toBe(
+        'failed',
+      );
+
+      release();
+      await holder;
+      const res = await resPromise;
+      expect(res.status).toBe(200);
+      expect((await readState()).chapters.find((c) => c.id === 1)!.generationState).toBe('failed');
+    } finally {
+      release();
+      await holder.catch(() => {});
+    }
+  }, 30_000);
+
   it('clears generationState + generationError on a subsequent successful render', async () => {
     /* First fail chapter 1 so the failure is persisted. */
     synthesiseImpl = async () => {
