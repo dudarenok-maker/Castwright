@@ -902,9 +902,7 @@ export function applyRefreshTitles(
     if (!parsedAligned) return c;
     // Hard gate: the user has manually renamed this chapter, so the
     // heuristic title-refresh MUST leave it alone regardless of what
-    // the source manuscript currently parses to. GENERIC_TITLE_RE
-    // below is the legacy backup gate (catches chapters that pre-date
-    // the override flag).
+    // the source manuscript currently parses to.
     if (c.titleOverridden) return c;
     // Only an app-made title may be replaced; an unflagged chapter holds a
     // manuscript heading (or a legacy title) and is left alone.

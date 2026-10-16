@@ -5945,8 +5945,9 @@ export interface components {
              *     `/chapters/refresh-titles`) MUST leave the title alone.
              *     Set by `renameChapter` and by merge/split when a caller
              *     supplies an explicit `mergedTitle` / `newTitle`. Absent or
-             *     false on parser-derived titles so heuristic improvements can
-             *     still land.
+             *     false on a title the app made up itself (see the server-only
+             *     `titleSynthesized` flag), so a re-parse can still replace it;
+             *     a manuscript heading is never rewritten by those passes.
              */
             titleOverridden?: boolean;
         };
