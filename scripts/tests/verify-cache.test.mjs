@@ -1498,11 +1498,119 @@ test('runStepProcess: a non-retriable step always records 1 attempt, even given 
 
 // --- Part 2 (ops-72) time budgets ----------------------------------------
 
+// #3682: a 30s bound flaked on CI Windows at 60553ms. That is the old 60s
+// fixture self-exit plus ~0.5s of fixture start, i.e. the signature of a
+// PARTIAL kill, not a slow one: the old 400ms budget fired right as npm was
+// launching `node hang.mjs`, `taskkill /T` walks a one-instant snapshot of the
+// tree, so a fixture spawned just after it survived, kept the piped stderr
+// open, and runStepProcess (which resolves on 'close') waited for its
+// self-exit. The tests now give the budget STEP_BUDGET_PAST_LAUNCH_MS of
+// headroom so the tree is fully spawned when the timer fires, and the fixture
+// records its pid so a survivor is named as such instead of as a slow kill.
+// The production-side gap (a /T survivor holding the pipe holds the step past
+// its budget) is tracked separately in #3695.
+// The self-exit must still outlive the bound, or a kill that never lands is
+// rescued by the fixture's own exit inside the bound and it can no longer fail.
+const KILL_PATH_BOUND_MS = 120_000;
+const HANG_FIXTURE_SELF_EXIT_MS = 300_000;
+// npm starts `node hang.mjs` ~0.4s after spawn locally and slower under CI
+// contention; 5s leaves an order of magnitude of headroom while keeping the
+// passing path to ~5-6s.
+const STEP_BUDGET_PAST_LAUNCH_MS = 5_000;
+
+// A partial kill leaves a descendant holding the piped stderr, so the call under
+// test would not return until the fixture's own 300s self-exit — by which time
+// the survivor is dead and invisible to a post-hoc pid check. This watch looks
+// at the recorded pid SURVIVOR_GRACE_MS after the budget fired (past every
+// 15s-capped taskkill/census call in the kill path); a survivor is recorded and
+// killed, which also lets the call return promptly instead of after ~300s.
+const SURVIVOR_GRACE_MS = 20_000;
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e.code !== 'ESRCH';
+  }
+}
+// null unless the file holds a real pid: a read landing between the fixture's
+// truncating open and its write sees '' -> Number('') === 0, and pid 0 means
+// "this process" (the whole group on POSIX) to process.kill — it would SIGKILL
+// the test runner itself.
+function readHangPid(dir) {
+  const pidFile = join(dir, 'hang.pid');
+  if (!existsSync(pidFile)) return null;
+  const pid = Number(readFileSync(pidFile, 'utf8'));
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+test('readHangPid: only a positive integer pid is returned; empty / 0 / garbled / negative content is null', () => {
+  const dir = mkTmp();
+  assert.equal(readHangPid(dir), null, 'absent file');
+  for (const content of ['', '0', 'abc', '-5', '1.5', '  ']) {
+    writeFileSync(join(dir, 'hang.pid'), content, 'utf8');
+    assert.equal(readHangPid(dir), null, `content ${JSON.stringify(content)}`);
+  }
+  writeFileSync(join(dir, 'hang.pid'), '12345', 'utf8');
+  assert.equal(readHangPid(dir), 12345);
+});
+
+function armSurvivorWatch(dir) {
+  const watch = { survivorPid: null, disarm: () => clearTimeout(timer) };
+  const timer = setTimeout(() => {
+    const pid = readHangPid(dir);
+    if (pid !== null && pidAlive(pid)) {
+      watch.survivorPid = pid;
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
+  }, STEP_BUDGET_PAST_LAUNCH_MS + SURVIVOR_GRACE_MS);
+  return watch;
+}
+
+// Proves the fixture was running (pid marker exists) before the kill and that
+// the WHOLE tree went down (no survivor, recorded pid dead), then checks the
+// bound. Always best-effort kills a leftover so a failing run leaves no orphan.
+function assertHangFixtureKilled(dir, elapsed, watch) {
+  watch.disarm();
+  const pid = readHangPid(dir);
+  try {
+    assert.ok(
+      pid !== null,
+      'hang.pid is missing: the fixture never started before the budget fired, so the kill was not exercising a full process tree — raise STEP_BUDGET_PAST_LAUNCH_MS',
+    );
+    assert.equal(
+      watch.survivorPid,
+      null,
+      `fixture survived the kill (partial kill): pid ${watch.survivorPid} was still alive ${SURVIVOR_GRACE_MS}ms after the budget fired — the tree kill missed a descendant (call returned after ${elapsed}ms)`,
+    );
+    assert.ok(
+      !pidAlive(pid),
+      `fixture survived the kill (partial kill): pid ${pid} is still alive after the call returned (took ${elapsed}ms)`,
+    );
+    assert.ok(
+      elapsed < KILL_PATH_BOUND_MS,
+      `fixture is dead and no survivor was seen, but the kill path was slow (bound ${KILL_PATH_BOUND_MS}ms, fixture self-exit ${HANG_FIXTURE_SELF_EXIT_MS}ms) — took ${elapsed}ms`,
+    );
+  } finally {
+    if (pid !== null && pidAlive(pid)) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
+  }
+}
+
 function writeHangingFixture(dir, npmScriptName) {
   // Deliberately never exits on its own — simulates a genuinely wedged
   // process (the 4h34m incident this feature exists to bound), so a real
   // timeout kill is exercised rather than a step that would have finished by
-  // itself. The 60s self-exit is a safety net, not the mechanism under test:
+  // itself. The 300s self-exit is a safety net, not the mechanism under test:
   // if the kill path being tested is itself broken (the exact class of bug
   // this fixture caught on Linux CI — killTree() was a no-op there), this
   // process must not become an unreapable orphan that outlives the test run
@@ -1513,7 +1621,8 @@ function writeHangingFixture(dir, npmScriptName) {
   const fixtureFile = 'hang.mjs';
   writeFileSync(
     join(dir, fixtureFile),
-    'setInterval(() => {}, 1000);\nsetTimeout(() => process.exit(0), 60_000);\n',
+    `import { writeFileSync } from 'node:fs';\nwriteFileSync('hang.pid', String(process.pid));\n` +
+      `setInterval(() => {}, 1000);\nsetTimeout(() => process.exit(0), ${HANG_FIXTURE_SELF_EXIT_MS});\n`,
     'utf8',
   );
   const packageJsonPath = join(dir, 'package.json');
@@ -1530,31 +1639,36 @@ function writeHangingFixture(dir, npmScriptName) {
 test('runStepProcess: a step exceeding its budget is classified TIMEOUT, not a crash-retry exhaustion (mutation test)', async () => {
   const dir = mkTmp();
   writeHangingFixture(dir, 'hang');
+  const watch = armSurvivorWatch(dir);
   const start = Date.now();
   // retryKey IS in RETRIABLE_POOL_STEPS on purpose — this is exactly the
   // shape that could be mistaken for a crash-retry exhaustion (attempts ===
   // MAX_POOL_ATTEMPTS) if the timeout classification were folded into, or
   // ordered after, the isVitestPoolCrash check instead of short-circuiting
   // before it.
-  const result = await runStepProcess('hang', {
-    cwd: dir,
-    env: process.env,
-    retryKey: 'test:server',
-    timeoutMs: 400,
-  });
-  const elapsed = Date.now() - start;
-  assert.equal(result.timedOut, true, 'a wedged process must be classified as a timeout');
-  assert.notEqual(result.code, 0);
-  assert.equal(
-    result.attempts,
-    1,
-    'a timed-out attempt must never be retried as a vitest pool crash — attempts must stay at 1, ' +
-      'not climb to MAX_POOL_ATTEMPTS (3) the way a real fork-pool crash would',
-  );
-  assert.ok(
-    elapsed < 30000,
-    `the taskkill /T /F path should land well under a real multi-hour wedge — took ${elapsed}ms`,
-  );
+  // The finally disarms the survivor watch (clearTimeout only — its recorded
+  // verdict stays readable) on every exit, so a throwing call or a failing
+  // assertion neither holds the file open nor SIGKILLs a reused pid later.
+  try {
+    const result = await runStepProcess('hang', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      timeoutMs: STEP_BUDGET_PAST_LAUNCH_MS,
+    });
+    const elapsed = Date.now() - start;
+    assert.equal(result.timedOut, true, 'a wedged process must be classified as a timeout');
+    assert.notEqual(result.code, 0);
+    assert.equal(
+      result.attempts,
+      1,
+      'a timed-out attempt must never be retried as a vitest pool crash — attempts must stay at 1, ' +
+        'not climb to MAX_POOL_ATTEMPTS (3) the way a real fork-pool crash would',
+    );
+    assertHangFixtureKilled(dir, elapsed, watch);
+  } finally {
+    watch.disarm();
+  }
 });
 
 // PR #3260 review pass 1, B2: a budget calibrated at full concurrency is too
@@ -2723,6 +2837,7 @@ test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout
   const logs = [];
   const originalLog = console.log;
   console.log = (...args) => logs.push(args.join(' '));
+  const watch = armSurvivorWatch(dir);
   const start = Date.now();
   try {
     const result = await runPipeline({
@@ -2731,22 +2846,21 @@ test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout
       env: {
         ...scrubGitEnvForThrowawayRepo(process.env),
         SKIP_CONTENTION_CHECK: '1',
-        CASTWRIGHT_STEP_TIMEOUT_MIN: '0.01', // 600ms — deliberately tiny for the mutation test
+        CASTWRIGHT_STEP_TIMEOUT_MIN: String(STEP_BUDGET_PAST_LAUNCH_MS / 60_000), // small, but past npm's launch of the fixture
       },
     });
     const elapsed = Date.now() - start;
     // Without this, a genuinely broken kill (killStepChildTree() a no-op) is
-    // indistinguishable from a real one: the hanging fixture's own 60s
+    // indistinguishable from a real one: the hanging fixture's own 300s
     // self-exit (added for B1, PR #3260 review pass 1 — an orphan-prevention
     // safety net, not the mechanism under test) supplies a clean exit that
     // satisfies every assertion below just as well as a fast kill would,
-    // taking ~61s instead of ~1s to do it (PR #3260 review pass 2, B4 — this
-    // guard mirrors the one runStepProcess's own equivalent test already has
-    // a few lines up).
-    assert.ok(
-      elapsed < 30000,
-      `the kill path should land well under the fixture's own 60s self-exit safety net — took ${elapsed}ms`,
-    );
+    // taking ~300s instead of ~6s to do it; the survivor watch now cuts a
+    // broken kill short at ~25s, and a pass takes ~5-6s (PR #3260 review
+    // pass 2, B4 — this guard mirrors the one runStepProcess's own equivalent test already has
+    // a few lines up). The bound sits below the self-exit so it stays
+    // falsifiable (#3682).
+    assertHangFixtureKilled(dir, elapsed, watch);
     assert.notEqual(result, 0, 'a timed-out step must fail the pipeline');
     const timeoutLine = logs.find((l) => l.includes('[timeout]') && l.includes('test:server'));
     assert.ok(timeoutLine, `expected a [timeout] line, got:\n${logs.join('\n')}`);
@@ -2759,6 +2873,7 @@ test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout
       'must not be reported as a MAX_POOL_ATTEMPTS-exhausted crash-retry outcome',
     );
   } finally {
+    watch.disarm();
     console.log = originalLog;
   }
 });
