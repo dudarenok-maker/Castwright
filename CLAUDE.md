@@ -590,7 +590,15 @@ Design rationale:
   `…/audio/previous` routes) additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
-  while holding `revisions`. Since #2260 that
+  while holding `revisions`. Every `state.json` read-modify-write goes through
+  `withStateLock` (`workspace/state-lock.ts`, #3625), keyed per book by
+  `stateLockKey(bookDir)`; the full order is **`revision-op` → `state` →
+  `revisions`**. `state` may be taken while holding `design`, `library-voice`,
+  `cast` or `revision-op`; while holding `state` nothing but `revisions` may be
+  acquired; `state` is never taken while holding `revisions`; and never call a
+  `findBookBy*`/scan helper inside a state hold (they lazily take it, so it
+  would wait on itself for 10s). `server/src/workspace/state-lock.guard.test.ts`
+  fails the build on an unlocked `state.json` write. Since #2260 that
   no longer hangs forever: `withKeyLock` bounds each acquisition at 10s and
   throws a `LockAcquisitionTimeoutError`
   (`server/src/workspace/file-lock.ts`) naming the key and both rules. It is a
@@ -600,16 +608,21 @@ Design rationale:
   means "look at the holder first, then the rules". **WHICH WRITE the timeout
   came out of decides the outcome — never which handler caught it** (#2295:
   discriminating by handler is what produced that bug, since one handler can
-  cover an authoritative write and a best-effort one at once). EIGHT sites fail
+  cover an authoritative write and a best-effort one at once). TWELVE sites fail
   loud *by rethrowing into their job's or request's terminal outcome*: the six
   best-effort `catch` blocks around identity writes, plus the two
   AUTHORITATIVE `castBase.writeChecked` calls in the analysis persist blocks,
   each wrapped at its own call rather than at the enclosing
   `catch (persistErr)` — that handler also covers the fold/dedup/suggestions
-  journals, which are lineage and must stay best-effort. Swallowing at an
+  journals, which are lineage and must stay best-effort — plus four
+  `state.json` sites (#3625): finalize's duration/model/render stamp
+  (`server/src/audio/finalize-chapter-write.ts`), Start fresh's `castConfirmed`
+  un-confirm (`analysis.ts`), and the two analysis persist `state.json` writes
+  (parked in `persistLockTimeout` and rethrown after the remaining writes, like
+  the `cast.json` ones). Swallowing at an
   identity site would report success with `cast.json` written and the
   retirement lost; swallowing at an authoritative write reported success with
-  `cast.json` and `state.json` never written at all. FIVE handlers swallow it
+  `cast.json` and `state.json` never written at all. ELEVEN handlers swallow it
   deliberately: `reconcileRejectEdgesOnDisk`
   (`server/src/routes/analysis.ts`), which runs after every retirement has
   landed and writes only cosmetic `notLinkedTo` edges the next persist
@@ -619,7 +632,16 @@ Design rationale:
   (`server/src/audio/finalize-chapter-write.ts`, plan 285), whose A/B
   review record on the per-book revisions lock is best-effort with respect
   to a render that has already landed — it logs in full and surfaces only
-  `reviewRecorded: false`, never the lock key. A NINTH site fails loud in a
+  `reviewRecorded: false`, never the lock key; and six `state.json` sites
+  (#3625), each logged in full: generation's failure stamp
+  (`routes/generation.ts`), which only annotates a reload after `chapter_failed`
+  already went out over SSE; `refreshChapterTitles` (`routes/book-state.ts`),
+  whose re-derived titles are recomputed on the next read; the sync-manifest
+  chapter-uuid migration (`routes/library-sync-manifest.ts`), whose in-memory
+  uuids still serve the response and re-mint next time; `scan.ts`'s two lazy
+  migrations (uuid mint and segments backfill), which the next scan repeats;
+  and the cover background-fetch hook (`cover/store.ts`), which must never fail
+  an import. A THIRTEENTH site fails loud in a
   different shape and is
   counted separately for that reason: `cast-reject-orphan`'s
   `forgetSupersededId` handler answers its OWN 500 rather than rethrowing,
@@ -641,10 +663,13 @@ Design rationale:
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
   and leaves every other body verbatim — `git grep requestFailureMessage`
-  enumerates all twenty-one sites (`book-state` ×4, `voice-library` ×3,
-  `revision-ops` ×3, `cast-design` ×2 (both arms of its defensive outer),
-  `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET and `resume-scoring`), `voices`,
-  `qwen-voice`, `voice-style`, `single-design`, `script-review`),
+  enumerates all forty sites (`book-state` ×7, `chapters-restructure` ×6,
+  `cover` ×4, `voice-library` ×3, `revision-ops` ×3, `cast-design` ×2 (both
+  arms of its defensive outer), `revisions` ×2 (the single-book and bulk
+  polls), `qa-report` ×2 (the GET and `resume-scoring`), and one each in
+  `backup`, `chapter-qa-repair`, `chapter-splice`, `exports-portable`,
+  `import`, `qwen-voice`, `samples`, `script-review`, `single-design`,
+  `voice-style`, `voices`),
   alongside the explicit `LOCK_CONTENTION_REQUEST_ERROR` branch of the two
   merge routes and of the two legacy `…/audio/previous` routes in
   `chapter-audio.ts` (`DELETE` and `…/restore`); and
