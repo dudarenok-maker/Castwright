@@ -313,20 +313,24 @@ export async function importPortableBundle(
      mid-rename is the half-imported case called out in the header.
      This is the one state.json writer that does not go through
      writeStateJsonAtomic, so the state-lock guard cannot see it: it is locked
-     by hand (#3625). Phase 1 (tmp writes) stays outside the lock. */
-  await withStateLock(bookDir, async () => {
-    try {
+     by hand (#3625). Phase 1 (tmp writes) stays outside the lock.
+     The cleanup wraps the lock acquisition itself, not just the renames:
+     `withKeyLock` never runs its callback when acquisition times out, so a
+     catch inside the callback would leak every staged tmp file on exactly
+     that failure. */
+  try {
+    await withStateLock(bookDir, async () => {
       for (const s of staged) {
         await rename(s.tmp, s.dest);
       }
-    } catch (e) {
-      /* Best-effort cleanup of remaining tmp files (the ones we hadn't
-         renamed yet); already-renamed live files are left in place because
-         we don't have their pre-import bytes any more. */
-      for (const t of tmpsWritten) await unlink(t).catch(() => {});
-      throw e;
-    }
-  });
+    });
+  } catch (e) {
+    /* Best-effort cleanup of the tmp files not yet renamed (a renamed one no
+       longer exists at its tmp path); already-renamed live files are left in
+       place because we don't have their pre-import bytes any more. */
+    for (const t of tmpsWritten) await unlink(t).catch(() => {});
+    throw e;
+  }
 
   return {
     bookId: resolvedBookId,
