@@ -298,9 +298,10 @@ export default defineConfig({
          textually-identical entry; force-rerun-triggers.test.ts checks this
          entry against BOTH guards' constants independently. Also part of
          spawn-windows-hide.guard-targets.ts's SPAWN_WINDOWS_HIDE_GUARD_SCAN_
-         GLOBS[0] for the same reason — three independent guards, one
-         trigger, because their real scan target is textually the same
-         tree. */
+         GLOBS[0] for the same reason, and so is state-lock.guard.test.ts
+         (#3625; STATE_LOCK_GUARD_SCAN_GLOB in state-lock.guard-targets.ts) —
+         four independent guards, one trigger, because their real scan
+         target is textually the same tree. */
       '{**/server/src/**,**/.*/**/server/src/**}',
     ],
     pool: 'forks',

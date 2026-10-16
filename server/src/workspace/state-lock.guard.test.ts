@@ -401,4 +401,97 @@ describe('state.json write lock — static guard (#3625)', () => {
 
     expect(problems, problems.join('\n\n')).toEqual([]);
   });
+
+  /* ===== Fixture self-tests (pure, no disk). Each mirrors a fail-open the
+     cast-lock scanner once had (see `cast-lock.guard.test.ts` and the tokenizer
+     header above): without them a scanner regression passes silently. ===== */
+
+  // A nested template literal holding a `(` must not desync the paren balancer.
+  it('a nested template literal inside a lock callback does not desync the paren balancer', () => {
+    const src = [
+      'await withStateLock(dir, async () => {',
+      '  log(`a ${flag ? `b(` : `c`} d`);',
+      '  await writeStateJsonAtomic(dir, next);',
+      '});',
+      'await writeStateJsonAtomic(other, next2);',
+    ].join('\n');
+
+    const result = scanFile(src);
+    expect(result?.writes, JSON.stringify(result)).toBe(1);
+    expect(result?.details.join('\n')).toContain('line 5');
+  });
+
+  // Prose quoting an unbalanced lock opener must not wrap the following real code.
+  it('a withStateLock( that exists only in a // comment does not fabricate a lock range', () => {
+    const src = [
+      '// historical: this used to be withStateLock(dir, async () => {',
+      'await writeStateJsonAtomic(dir, next);',
+    ].join('\n');
+
+    const result = scanFile(src);
+    expect(result?.writes, `fabricated lock range: ${JSON.stringify(result)}`).toBe(1);
+    expect(collectLockRanges(src, computeOpaqueRanges(src))).toEqual([]);
+  });
+
+  it('a withStateLock( in a /* */ comment on the LAST LINE OF A BLOCK fabricates no lock range either', () => {
+    const src = [
+      'await run(async () => {',
+      '  try {',
+      '    await doSomething();',
+      '  } catch {',
+      '    /* historical: this used to be withStateLock(dir, async () => { */',
+      '  }',
+      '  await writeStateJsonAtomic(dir, next);',
+      '});',
+    ].join('\n');
+
+    const result = scanFile(src);
+    expect(result?.writes, `fabricated lock range: ${JSON.stringify(result)}`).toBe(1);
+    expect(result?.details.join('\n')).toContain('line 7');
+    expect(collectLockRanges(src, computeOpaqueRanges(src))).toEqual([]);
+  });
+
+  it('a withStateLock( inside a string literal fabricates no lock range', () => {
+    const src = [
+      "const doc = 'withStateLock(dir, async () => {';",
+      'await writeStateJsonAtomic(dir, next);',
+    ].join('\n');
+
+    const result = scanFile(src);
+    expect(result?.writes, `fabricated lock range: ${JSON.stringify(result)}`).toBe(1);
+    expect(collectLockRanges(src, computeOpaqueRanges(src))).toEqual([]);
+  });
+
+  it('the writeStateJsonAtomic definition is not counted as a call', () => {
+    const src = 'export async function writeStateJsonAtomic(dir: string, doc: unknown) {}';
+
+    expect(scanFile(src)).toBeNull();
+  });
+
+  it('an unlocked writeJsonAtomicOrdered(stateJsonPath(...)) is reported', () => {
+    const src = 'await writeJsonAtomicOrdered(stateJsonPath(dir), doc);';
+
+    const result = scanFile(src);
+    expect(result?.writes, JSON.stringify(result)).toBe(1);
+    expect(result?.details.join('\n')).toContain('line 1');
+  });
+
+  it('an unlocked writeJsonAtomic(stateJsonPath(...)) is reported', () => {
+    const src = 'await writeJsonAtomic(stateJsonPath(dir), doc);';
+
+    const result = scanFile(src);
+    expect(result?.writes, JSON.stringify(result)).toBe(1);
+    expect(result?.details.join('\n')).toContain('line 1');
+  });
+
+  it('a writeStateJsonAtomic( correctly inside withStateLock is not reported', () => {
+    const src = [
+      'await withStateLock(dir, async () => {',
+      '  const state = await readJson(stateJsonPath(dir));',
+      '  await writeStateJsonAtomic(dir, { ...state });',
+      '});',
+    ].join('\n');
+
+    expect(scanFile(src)).toBeNull();
+  });
 });
