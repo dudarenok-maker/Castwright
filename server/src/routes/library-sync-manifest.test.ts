@@ -210,3 +210,52 @@ describe('GET /api/library/sync-manifest?bookId= — detail', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('GET /api/library/sync-manifest?bookId= — chapter-uuid migration state lock (#3625)', () => {
+  it('waits on the state lock: no uuids on disk while held, persisted after release', async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    const id = makeBookId('Gamma Author', SERIES, 'Gamma Book');
+    const { bookDir } = seedBook('Gamma Author', 'Gamma Book', id, {
+      updatedAt: '2026-02-01T00:00:00.000Z',
+      chapters: [
+        { id: 1, slug: '01-g', title: 'G One' },
+        { id: 2, slug: '02-g', title: 'G Two' },
+      ],
+    });
+    const uuidsOnDisk = () =>
+      (
+        JSON.parse(readFileSync(stateJsonPathFn(bookDir), 'utf8')) as {
+          chapters: Array<{ uuid?: string }>;
+        }
+      ).chapters.map((c) => c.uuid);
+
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateLock(bookDir, async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    try {
+      const pending = request(app)
+        .get('/api/library/sync-manifest')
+        .query({ bookId: id })
+        .then((r) => r);
+      await new Promise((r) => setTimeout(r, 200));
+      expect(uuidsOnDisk()).toEqual([undefined, undefined]);
+      release();
+      await held;
+      const res = await pending;
+      expect(res.status).toBe(200);
+      const onDisk = uuidsOnDisk();
+      expect(onDisk.every((u) => typeof u === 'string' && u.length > 0)).toBe(true);
+      // The response carries the same uuids that were persisted.
+      expect(res.body.chapters.map((c: { uuid: string }) => c.uuid).sort()).toEqual([...onDisk].sort());
+    } finally {
+      release();
+    }
+  });
+});

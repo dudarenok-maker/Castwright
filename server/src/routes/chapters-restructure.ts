@@ -48,6 +48,8 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withStateLock } from '../workspace/state-lock.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
@@ -130,17 +132,6 @@ async function applyRestructure(
     };
   }
 
-  // Align hint titles with state.json's user-facing chapter titles.
-  // The parser-derived hint titles can diverge (e.g. when state.json
-  // captures a more refined title from a later parser-version refresh,
-  // or the user has renamed chapters inline). State titles are the
-  // source of truth for slugs and display; hints contribute the body
-  // text only.
-  const alignedHints = record.chapterHints.map((h) => {
-    const sc = state.chapters.find((c) => c.id === h.id);
-    return sc ? { ...h, title: sc.title } : h;
-  });
-
   // Read current sentences from manuscript-edits.json (may be empty/missing
   // for a fresh book — that's fine, transform handles it). Each transform
   // requires sentences for split when it needs to locate the body offset.
@@ -148,27 +139,61 @@ async function applyRestructure(
   const edits = await readJson<{ sentences?: RestructureSentence[] }>(editsPath);
   const sentences = edits?.sentences ?? [];
 
-  /* srv-35 — ensure the OLD chapters carry uuids before the transform so
-     buildNewStateChapters can inherit them by identity (a book that has
-     never been written since the upgrade has none yet). The result.state
-     is persisted below, so this also migrates the book. */
-  ensureChapterUuids(state);
+  /* #3625 — state.json read-modify-write: the lock spans the fresh re-read
+     through the write, and every decision derived from the state (hint-title
+     alignment, uuid stamping, the transform) uses THAT read, never
+     `located.state`. The manuscript hydrate and the sentences read stay
+     outside; the manuscript-edits write, hint update, audio ops and cache
+     rebuild stay after the hold. */
+  type Outcome =
+    | { early: { status: number; body: unknown } }
+    | { result: RestructureResult };
+  const outcome: Outcome = await withStateLock(bookDir, async () => {
+    const fresh = await readJson<BookStateJson>(stateJsonPath(bookDir));
+    if (!fresh) return { early: { status: 404, body: { error: 'Book not found.' } } };
 
-  let result: RestructureResult;
-  try {
-    result = transform(state, alignedHints, sentences);
-  } catch (e) {
-    return {
-      status: 400,
-      body: { error: (e as Error).message || 'Invalid restructure operation.' },
-    };
-  }
+    // Align hint titles with state.json's user-facing chapter titles.
+    // The parser-derived hint titles can diverge (e.g. when state.json
+    // captures a more refined title from a later parser-version refresh,
+    // or the user has renamed chapters inline). State titles are the
+    // source of truth for slugs and display; hints contribute the body
+    // text only.
+    const alignedHints = record.chapterHints.map((h) => {
+      const sc = fresh.chapters.find((c) => c.id === h.id);
+      return sc ? { ...h, title: sc.title } : h;
+    });
 
-  // Write order: state.json (rotating backup) → manuscript-edits.json →
-  // in-memory hints → audio ops → analysis cache. If any step throws past
-  // here, earlier writes are already on disk; partial state is recoverable
-  // via the reconciliation filter in book-state.ts:166-185.
-  await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
+    /* srv-35 — ensure the OLD chapters carry uuids before the transform so
+       buildNewStateChapters can inherit them by identity (a book that has
+       never been written since the upgrade has none yet). The result.state
+       is persisted below, so this also migrates the book. */
+    ensureChapterUuids(fresh);
+
+    let transformed: RestructureResult;
+    try {
+      transformed = transform(fresh, alignedHints, sentences);
+    } catch (e) {
+      return {
+        early: {
+          status: 400,
+          body: { error: (e as Error).message || 'Invalid restructure operation.' },
+        },
+      };
+    }
+
+    // Write order: state.json (rotating backup) → manuscript-edits.json →
+    // in-memory hints → audio ops → analysis cache. If any step throws past
+    // here, earlier writes are already on disk; partial state is recoverable
+    // via the reconciliation filter in book-state.ts:166-185.
+    await writeStateJsonAtomic(stateJsonPath(bookDir), {
+      ...transformed.state,
+      language: transformed.state.language ?? null,
+    });
+    return { result: transformed };
+  });
+  if ('early' in outcome) return outcome.early;
+  const result = outcome.result;
+
   await writeJsonAtomic(editsPath, { sentences: result.sentences });
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
@@ -221,7 +246,9 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] merge failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Merge failed.' });
+      res.status(500).json({
+        error: requestFailureMessage(e, (e as Error).message || 'Merge failed.'),
+      });
     }
   },
 );
@@ -249,7 +276,9 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] split failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Split failed.' });
+      res.status(500).json({
+        error: requestFailureMessage(e, (e as Error).message || 'Split failed.'),
+      });
     }
   },
 );
@@ -301,7 +330,7 @@ chaptersRestructureRouter.post(
     } catch (e) {
       console.error('[chapters-restructure] refresh-titles failed', e);
       res.status(500).json({
-        error: (e as Error).message || 'Refresh chapter titles failed.',
+        error: requestFailureMessage(e, (e as Error).message || 'Refresh chapter titles failed.'),
       });
     }
   },
@@ -332,7 +361,9 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] exclude failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Exclude failed.' });
+      res.status(500).json({
+        error: requestFailureMessage(e, (e as Error).message || 'Exclude failed.'),
+      });
     }
   },
 );
@@ -387,7 +418,7 @@ chaptersRestructureRouter.post(
         titleOverridden: updated.titleOverridden === true,
       });
     } catch (e) {
-      const msg = (e as Error).message || 'Rename failed.';
+      const msg = requestFailureMessage(e, (e as Error).message || 'Rename failed.');
       // Surface validation errors from applyRename as 400, anything
       // else (filesystem write failures, etc.) as 500.
       if (/not found/.test(msg)) {
@@ -419,7 +450,9 @@ chaptersRestructureRouter.post(
       res.status(result.status).json(result.body);
     } catch (e) {
       console.error('[chapters-restructure] reorder failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Reorder failed.' });
+      res.status(500).json({
+        error: requestFailureMessage(e, (e as Error).message || 'Reorder failed.'),
+      });
     }
   },
 );
