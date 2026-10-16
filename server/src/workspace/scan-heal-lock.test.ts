@@ -11,6 +11,8 @@ import { join } from 'node:path';
 
 const hooks = vi.hoisted(() => ({
   onSegmentsRead: undefined as undefined | ((path: string) => Promise<void>),
+  segmentsSeen: false,
+  afterStateReread: undefined as undefined | (() => Promise<void>),
 }));
 
 vi.mock('./state-io.js', async (importOriginal) => {
@@ -18,9 +20,31 @@ vi.mock('./state-io.js', async (importOriginal) => {
   return {
     ...orig,
     readJson: (async (path: string, ...rest: unknown[]) => {
-      if (path.endsWith('.segments.json')) await hooks.onSegmentsRead?.(path);
+      if (path.endsWith('.segments.json')) {
+        hooks.segmentsSeen = true;
+        await hooks.onSegmentsRead?.(path);
+      }
       return (orig.readJson as (...a: unknown[]) => unknown)(path, ...rest);
     }) as typeof orig.readJson,
+  };
+});
+
+/* The heal's fresh re-read is `readStateJsonWithRecovery` (state-io's own
+   internal read, not interceptable there). Fire once, AFTER it has read and
+   before the heal merges and writes — the window the book lock must cover. */
+vi.mock('./state-migrate.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('./state-migrate.js')>();
+  return {
+    ...orig,
+    readStateJsonWithRecovery: (async (path: string) => {
+      const out = await orig.readStateJsonWithRecovery(path);
+      const fire = hooks.segmentsSeen ? hooks.afterStateReread : undefined;
+      if (fire) {
+        hooks.afterStateReread = undefined;
+        await fire();
+      }
+      return out;
+    }) as typeof orig.readStateJsonWithRecovery,
   };
 });
 
@@ -141,6 +165,29 @@ describe('segments backfill (findBookByBookId) merges under the book lock', () =
       /* the heal still filled the chapters that survived */
       expect(s.chapters.filter((c: { audioModelKey?: string }) => c.audioModelKey)).toHaveLength(8);
     }
+  });
+
+  it('holds the lock across the fresh re-read: a lock-respecting writer after the re-read survives', async () => {
+    const { bookId, statePath } = seedBook(4);
+    hooks.segmentsSeen = false;
+    /* The writer is started from the test's own async context (no held-lock
+       store), parked on a gate, and released only once the heal has re-read.
+       With the lock it queues behind the heal and writes after it; without
+       the lock it lands between the re-read and the heal's write, which then
+       overwrites it from the stale re-read. */
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const writer = gate.then(() => restructureAddChapter(bookId, statePath));
+    hooks.afterStateReread = async () => {
+      open();
+      await tick(30);
+    };
+    await scan.findBookByBookId(bookId);
+    await writer;
+    hooks.afterStateReread = undefined;
+    const s = readState(statePath);
+    expect(s.chapters.map((c: { id: number }) => c.id)).toContain(99);
+    expect(s.chapters.filter((c: { audioModelKey?: string }) => c.audioModelKey)).toHaveLength(4);
   });
 
   it('skips a chapter whose slug changed under it', async () => {
