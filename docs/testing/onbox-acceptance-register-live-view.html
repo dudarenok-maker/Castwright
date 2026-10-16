@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="54" data-publish-id="c7e3d48e450d"></div>
+  <div hidden data-published-as="53" data-publish-id="92f1fc6be603"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -1389,28 +1389,28 @@
       <h3 class="gtitle"><span class="gtag">BLK</span> Blocked — hardware not available <span class="gcount">6 rows</span></h3>
     </header>
     <details class="item">
-      <summary><span class="num">—</span><span class="iname">AMD GPU support Phase 2</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <summary><span class="num">BLK101</span><span class="iname">AMD GPU support Phase 2</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Waves A–G were built and merged <b>dormant</b> — the code path exists but has never run against real ROCm hardware. A dormant capability, not an active bug. This box is dual-NVIDIA; this will not move until AMD/ROCm hardware exists.</p>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/1335">#1335</a></p>
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">—</span><span class="iname">ORT pip-consistency marker — AMD box</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <summary><span class="num">BLK102</span><span class="iname">ORT pip-consistency marker — AMD box</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Design doc criterion 5: &ldquo;no marker is written&rdquo; on AMD. <code>planOrtSwap('amd', …)</code> resolves to plain <code>onnxruntime</code>, so AMD takes the same <code>marker.action === 'delete'</code> branch as cpu and apple — both reachable on this box. What is genuinely AMD-specific and unverified is the ordering that branch protects: the AMD→ROCm-failure→CPU fallback inside <code>installForProfile</code> (<code>cpu.txt</code> carries an <b>explicit</b> <code>onnxruntime</code> line the fallback needs to actually install). That fallback only fires on real AMD hardware attempting a ROCm bootstrap that then fails over to CPU — nothing on a dual-NVIDIA box can reach it. This box is dual-NVIDIA; this will not move until AMD/ROCm hardware exists.</p>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2192">#2192</a> · plan 282, design doc item 5</p>
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">—</span><span class="iname">CPU-only RAM_HEAVY_MODELS clamp (B2 step 7)</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <summary><span class="num">BLK103</span><span class="iname">CPU-only RAM_HEAVY_MODELS clamp (B2 step 7)</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Formerly step 7 of B2 (per-model analyzer keep-alive). A <code>RAM_HEAVY_MODELS</code> clamp is meant to override a configured positive keep-alive back to <code>0</code> when the analyzer runs CPU-only. Dormant on this box: two resident NVIDIA GPUs mean <code>accelerator</code> structurally resolves to <code>'cuda'</code>, and forcing <code>'cpu'</code> would require disabling GPU visibility, risking other lanes' concurrent work. This box is dual-NVIDIA; this will not move until a CPU-only box exists, or one where GPU visibility can safely be disabled.</p>
         <p class="src">plan 263</p>
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">—</span><span class="iname">ops-36 golden-assembly on a second ffmpeg build</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <summary><span class="num">BLK104</span><span class="iname">ops-36 golden-assembly on a second ffmpeg build</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p><b>What is dormant.</b> The cross-build half of the ops-36 design — whether L1/L2/L3's hard assertions survive a genuinely different ffmpeg build, and what L4-loose's RMS-error actually is when the encoder really differs. The LOOSE branch itself is not dormant: the ops-36 demonstration forced it with a synthetic banner mismatch plus 2.0 LU of drift and it rejected at 24.79% RMS-error against a 16% tolerance.</p>
         <p><b>Why this box cannot reach it.</b> No Docker, no WSL, no container runtime of any kind on this box, and the only other <code>ffmpeg.exe</code> present is the same <code>8.1.1-full_build-www.gyan.dev</code> binary already on PATH — not a different build.</p>
@@ -1419,7 +1419,7 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">—</span><span class="iname">ops-35 ffmpeg floor — below-floor + Re-check walkthrough</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <summary><span class="num">BLK105</span><span class="iname">ops-35 ffmpeg floor — below-floor + Re-check walkthrough</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p><b>What is dormant.</b> The below-floor preflight exit, the amber outdated Setup Wizard card, the Admin diagnostics <code>warn</code> row and amber health dot, and the Re-check-without-restart flip back to green (plan 269 invariant 6). Also owed: the Pinokio <code>ffmpeg&gt;=6</code> constraint, install and update.</p>
         <p><b>Why this box cannot reach it.</b> Every unit test drives the floor through a mocked <code>spawnSync</code>. Per wave-3 step 7's verification (shared with the ops-36 golden-assembly blocked row, above), this box has no ffmpeg swap available and no container runtime, so there is no way to put a genuinely-below-floor ffmpeg on PATH here.</p>
@@ -1428,7 +1428,7 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">—</span><span class="iname">ROCm/AMD admitted device-key normalisation — real GPU engine load, pinned/resident, and idle-eviction</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
+      <summary><span class="num">BLK106</span><span class="iname">ROCm/AMD admitted device-key normalisation — real GPU engine load, pinned/resident, and idle-eviction</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
       <div class="body">
         <p><b>What is dormant.</b> The VRAM-ledger admission layer (<code>PlacementController.admit()</code>) hands engines a device key like <code>"rocm:N"</code> on a ROCm/AMD box (<code>probe()</code>'s own honest ROCm-vs-CUDA accounting), but a ROCm/HIP torch build only ever understands <code>"cuda:N"</code> at the API level — <code>torch.device("rocm:N")</code> raises, and CTranslate2/speechbrain likewise have no <code>"rocm"</code> device. Three seams of the same two-vocabulary split, all now closed in <code>server/tts-sidecar/main.py</code>. <b>Forward</b> (an admitted key reaching a real device call): <code>_resolve_torch_device</code>, <code>_ct2_kwargs</code>, <code>_spk_run_device</code>, <code>WhisperEngine._ensure_loaded</code>, and <code>SpeakerEngine.ensure_loaded</code> all convert an explicit <code>"rocm:N"</code> to <code>"cuda:N"</code> (index preserved) via the shared <code>_normalise_rocm_device_key</code> helper before it reaches <code>.to()</code>/<code>WhisperModel(...)</code>/<code>EncoderClassifier(...)</code>; Coqui's <code>_resolve_runtime_options</code> calls the resolver unconditionally (not just for <code>"auto"</code>) so an admitted value actually reaches it. <b>Reverse</b> (an operator's pin, or a resident engine's own device string, matching the ledger's own candidate keys): config validation only ever lets an operator set an indexed pin as <code>"cuda:N"</code> — never <code>"rocm:N"</code> — and a resident engine's <code>self._device</code> is now always <code>"cuda:N"</code> too, so <code>_engine_env_pin</code> and <code>_is_resident</code> re-tag their output back to <code>"rocm:N"</code> via the shared <code>_report_rocm_device_key</code> helper before <code>admit()</code> compares it against a probed candidate, or a pinned OR resident engine on a real ROCm box would report permanent <code>noCapacity</code> even with room free on its own card. <b>Idle-eviction</b>: <code>_same_card</code>, the comparison every <code>_idle_evict_steps</code> step is built from, required family <code>"cuda"</code> on BOTH the resident engine's device string AND the probe-derived eviction target — but the target is always probe-native (<code>"rocm:N"</code> on a ROCm box), so the entire eviction ladder silently emptied and every admission that needed an eviction fell straight to <code>noCapacity</code> instead of freeing an idle engine; <code>_same_card</code> now normalises both sides via the shared <code>_normalise_rocm_device_key</code> helper before comparing. The unit tests prove every conversion in isolation against stubbed <code>torch</code>/<code>_cuda_is_rocm</code> — they do not prove a real ROCm/HIP torch build, CTranslate2, and speechbrain actually accept the converted values end to end, load real models onto a real AMD card, and correctly evict an idle one to make room, with <code>SEG_CAPACITY_ADMISSION</code> on (the default).</p>
         <p><b>Why this box cannot reach it.</b> This box is dual-NVIDIA; this will not move until AMD/ROCm hardware exists — same constraint as the AMD GPU support Phase 2 and ORT pip-consistency marker rows above.</p>
@@ -1440,18 +1440,18 @@
 
   <section class="group is-soft" id="unconfirmed">
     <header>
-      <h3 class="gtitle"><span class="gtag">?</span> Unconfirmed — not debts until substantiated <span class="gcount">2 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">UNC</span> Unconfirmed — not debts until substantiated <span class="gcount">2 rows</span></h3>
       <p class="setup">Kept separate on purpose. Listing a suspicion as debt is how a register stops being trusted.</p>
     </header>
     <details class="item">
-      <summary><span class="num">—</span><span class="iname">fs-38 Wave 1 — designed-voice authoring</span><span class="risk low">Probably exercised</span><span class="chev">›</span></summary>
+      <summary><span class="num">UNC101</span><span class="iname">fs-38 Wave 1 — designed-voice authoring</span><span class="risk low">Probably exercised</span><span class="chev">›</span></summary>
       <div class="body">
         <p>No explicit owed callout beyond a generic “Live-GPU acceptance” line in plan 194 that is about cloning generally (Wave 3's concern), not marked outstanding the way 267/268/264/216/263 are. Closed bugs #1802/#1833/#1836 show live “My voices” use, consistent with informal exercise. <b>Not confirmed either way.</b></p>
         <p class="src">PR #1800</p>
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">—</span><span class="iname">Ollama concurrency (K&gt;1) real-VRAM validation</span><span class="risk low">Don't double-count</span><span class="chev">›</span></summary>
+      <summary><span class="num">UNC102</span><span class="iname">Ollama concurrency (K&gt;1) real-VRAM validation</span><span class="risk low">Don't double-count</span><span class="chev">›</span></summary>
       <div class="body">
         <p>PR #1707 fixed a case where K never took effect and ships <code>peak==K</code> telemetry so a future run self-verifies. The UI half is <a href="#gb">B1</a>'s K=4 step. If a separate <code>n_slots=1</code> physics check is owed, its written criteria were not found in this repo — <b>do not double-count it.</b></p>
       </div>

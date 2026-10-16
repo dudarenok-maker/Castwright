@@ -3,9 +3,11 @@
    - validateUpload(buffer, mimeType): throws UploadError on size/MIME unless
      the magic bytes are a PNG or JPEG; returns the sniffed type (the label
      only gates the allowlist, so a real JPEG named .png still uploads).
-   - writeUploadedCover(buffer, mimeType, destPath): transcodes PNG→JPEG
-     via sharp (q=85), decode-validates JPEG (bytes kept), writes atomically (tmp + rename) — same pattern
-     as `downloadCover` in openlibrary.ts.
+   - writeUploadedCover(buffer, mimeType, destPath): re-encodes every upload
+     (PNG and JPEG) to a clean sharp-written JPEG (q=85, EXIF orientation
+     applied) so trailing bytes never survive into cover.jpg (#3535), writes
+     atomically (tmp + rename) — same pattern as `downloadCover` in
+     openlibrary.ts.
    - patchStateLocalCover(bookDir, originalFilename): replaces
      state.json.coverImage with the `source: 'local'` shape, dropping
      any prior OpenLibrary fields. Resets framing — a fresh image
@@ -15,16 +17,15 @@
 
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import sharp from 'sharp';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { readJson } from '../workspace/state-io.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { stateJsonPath } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
+import { reencodeToJpeg } from './reencode.js';
 
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-export const JPEG_QUALITY = 85;
 
 export type UploadMimeType = (typeof ACCEPTED_MIME_TYPES)[number];
 
@@ -86,27 +87,19 @@ export async function writeUploadedCover(
   mimeType: UploadMimeType,
   destPath: string,
 ): Promise<{ bytes: number }> {
+  // Both branches re-encode through the shared sharp helper (reencode.ts) so
+  // cover.jpg on disk is always a clean sharp-written JPEG and trailing junk
+  // can never survive (#3535). PNG keeps the strict decode; JPEG stays
+  // tolerant so a damaged-but-real JPEG missing only its EOI marker is still
+  // accepted, as before.
+  const tolerant = mimeType === 'image/jpeg';
+  const prefix =
+    mimeType === 'image/png' ? 'PNG → JPEG transcode failed:' : 'JPEG decode failed:';
   let jpegBytes: Buffer;
-  if (mimeType === 'image/png') {
-    try {
-      jpegBytes = await sharp(buffer).jpeg({ quality: JPEG_QUALITY }).toBuffer();
-    } catch (e) {
-      throw new UploadError(
-        'transcode_failed',
-        `PNG → JPEG transcode failed: ${(e as Error).message}`,
-      );
-    }
-  } else {
-    // Keep the original bytes (no re-encode), but a bare FF D8 FF prefix is not
-    // enough: decode it so non-image bytes are never stored as the cover.
-    // failOn 'none' keeps a damaged-but-real JPEG (e.g. missing only its EOI
-    // marker) accepted, as it was before the decode check and as PNG is.
-    try {
-      await sharp(buffer, { failOn: 'none' }).raw().toBuffer();
-    } catch (e) {
-      throw new UploadError('transcode_failed', `JPEG decode failed: ${(e as Error).message}`);
-    }
-    jpegBytes = buffer;
+  try {
+    jpegBytes = await reencodeToJpeg(buffer, { tolerant });
+  } catch (e) {
+    throw new UploadError('transcode_failed', `${prefix} ${(e as Error).message}`);
   }
 
   await mkdir(dirname(destPath), { recursive: true });

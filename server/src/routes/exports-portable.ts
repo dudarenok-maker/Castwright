@@ -62,7 +62,12 @@ portableExportRouter.get('/:bookId/export/portable', async (req: Request, res: R
     res.status(200).send(result.buffer);
   } catch (e) {
     console.error('[portable-export] build failed', e);
-    res.status(500).json({ error: 'portable_export_failed', message: (e as Error).message });
+    res.status(500).json({
+      error: 'portable_export_failed',
+      /* Fixed sentence: a raw error can name the absolute manuscript path, and
+         this app is served over LAN HTTPS. The raw error is logged above. */
+      message: 'Exporting the bundle failed. See the server log for details.',
+    });
   }
 });
 
@@ -121,9 +126,12 @@ portableImportRouter.post(
           .json({ error: 'invalid_bundle', reason: e.reason, message: e.message });
       }
       console.error('[portable-import] failed', e);
-      return res
-        .status(500)
-        .json({ error: 'portable_import_failed', message: (e as Error).message });
+      return res.status(500).json({
+        error: 'portable_import_failed',
+        /* Fixed sentence: a raw fs error names the absolute workspace path,
+           and this app is served over LAN HTTPS. The raw error is logged above. */
+        message: 'Importing the bundle failed. See the server log for details.',
+      });
     }
   },
 );

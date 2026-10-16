@@ -60,6 +60,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import yaml from 'js-yaml';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -600,3 +601,47 @@ for (const path of WORKFLOWS) {
     );
   });
 }
+
+// #3696: the macOS + Windows cross-os-verify matrix runs the full
+// verify:quick (test:all) + build (cross-os.yml also audits). Windows' Verify
+// step grew from 10.8 to 17.8 min (job 12.8 -> ~20.3 min); run 38498989695 was
+// cancelled at 20m07s by the old 20-min cap. 30 is verify.yml's windows-tests
+// cap, which these legs are kept level with -- it is not a measurement.
+const CROSS_OS_VERIFY_MIN_TIMEOUT = 30;
+
+// Parsed (not text-sliced) so a comment or reordering near a job key can never
+// make the cap be read from a neighbouring job.
+function jobTimeout(path, job) {
+  const doc = yaml.load(readFileSync(path, 'utf8'));
+  const spec = doc?.jobs?.[job];
+  assert.ok(spec, `no ${job} job found in ${path} -- did it get renamed?`);
+  const cap = spec['timeout-minutes'];
+  assert.equal(typeof cap, 'number', `${job} job has no numeric timeout-minutes`);
+  return cap;
+}
+
+for (const path of WORKFLOWS) {
+  const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
+
+  test(`${rel}: cross-os-verify job timeout-minutes is >= ${CROSS_OS_VERIFY_MIN_TIMEOUT} (#3696)`, () => {
+    const cap = jobTimeout(path, 'cross-os-verify');
+    assert.ok(
+      cap >= CROSS_OS_VERIFY_MIN_TIMEOUT,
+      `cross-os-verify timeout-minutes is ${cap}, below the ${CROSS_OS_VERIFY_MIN_TIMEOUT}-min floor (verify.yml's windows-tests cap) (#3696)`,
+    );
+  });
+}
+
+// #3696: release.yml's Ubuntu `verify` leg runs the full `npm run verify`
+// (incl. e2e/a11y/build) serially. v1.14.0 (run 30049534151) took 25m14s and
+// the Ubuntu work has grown ~34% since, so a 30-min cap would cancel the next
+// release after the tag is pushed, skipping companion-apk-build + publish.
+const RELEASE_VERIFY_MIN_TIMEOUT = 45;
+
+test(`release.yml: verify job timeout-minutes is >= ${RELEASE_VERIFY_MIN_TIMEOUT} (#3696)`, () => {
+  const cap = jobTimeout(resolve(repoRoot, '.github', 'workflows', 'release.yml'), 'verify');
+  assert.ok(
+    cap >= RELEASE_VERIFY_MIN_TIMEOUT,
+    `release.yml verify timeout-minutes is ${cap}, below the ${RELEASE_VERIFY_MIN_TIMEOUT}-min floor (#3696)`,
+  );
+});

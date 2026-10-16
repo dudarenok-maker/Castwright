@@ -31,9 +31,12 @@ jobs:
   verify:
     name: Verify (ubuntu-latest, full)
     runs-on: ubuntu-latest
-    # 30 (not 20): the full battery + e2e runs ~15-20 min on a cold runner, past
-    # the 20-min PR cap. Releases are rare, so the headroom costs nothing.
-    timeout-minutes: 30
+    # 45: the serial full battery took 25m14s at v1.14.0 (run 30049534151) and
+    # the Ubuntu work has grown ~34% since (verify.yml run 38194494362: 35.7 min
+    # of work steps vs 26.6 in July), so ~31-35 min is estimated now -- past the
+    # old 30. A cancel here skips companion-apk-build + publish after the tag is
+    # pushed (#3696). Releases are rare, so the headroom costs nothing.
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -83,7 +86,11 @@ jobs:
   cross-os-verify:
     name: Verify (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # 30 (not 25): same verify:quick + build as cross-os.yml (no Audit step
+    # here), whose Windows Verify step grew from 10.8 to 17.8 min (job 12.8 ->
+    # ~20.3 min) and hit the old cap; keeps both at verify.yml's windows-tests
+    # cap (#3696).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
