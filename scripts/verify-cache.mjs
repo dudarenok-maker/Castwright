@@ -1603,22 +1603,31 @@ function killStepChildTree(child) {
 // (~1s each, up to 15s each if WMI is wedged) plus the one pre-kill snapshot.
 export const TIMEOUT_RESWEEP_GRACE_MS = 2000;
 export const TIMEOUT_RESWEEP_MAX = 3;
+// A root whose pre-kill snapshot failed is only known to have started at or
+// after its spawn time. The live root is accepted as genuine if it started
+// within this window of that bound; a recycled holder of its pid can only have
+// started after the step's whole budget elapsed.
+const APPROX_ROOT_WINDOW_MS = 5000;
 
-/** Pre-kill record of `rootPid`'s OS descendant closure: pid -> startedAt, so
- *  the re-sweep can tell a surviving member from a recycled pid. Best-effort:
- *  a failed snapshot yields just the root, never throws. */
-function snapshotTree(snapshotFn, rootPid) {
+/** Pre-kill record of `rootPid`'s OS descendant closure: pid -> { startedAt,
+ *  approx }, so the re-sweep can tell a surviving member from a recycled pid and
+ *  apply `taskkill /T`'s own parent-older-than-child ordering. Best-effort, never
+ *  throws: a failed snapshot yields just the root, bounded below by
+ *  `spawnedAt` (ms epoch, taken just before spawn, so <= the real creation
+ *  time) and flagged `approx` — never `null`, which would disable both checks. */
+function snapshotTree(snapshotFn, rootPid, spawnedAt) {
   const known = new Map();
   try {
     const rows = snapshotFn();
     const byPid = new Map(rows.map((r) => [r.pid, r]));
     for (const pid of computeOsDescendants(rootPid, rows)) {
-      known.set(pid, byPid.get(pid)?.startedAt ?? null);
+      const startedAt = byPid.get(pid)?.startedAt;
+      if (startedAt != null) known.set(pid, { startedAt, approx: false });
     }
   } catch {
     // Best-effort — the root alone still seeds the walk.
   }
-  if (!known.has(rootPid)) known.set(rootPid, null);
+  if (!known.has(rootPid)) known.set(rootPid, { startedAt: spawnedAt, approx: true });
   return known;
 }
 
@@ -1626,8 +1635,17 @@ function snapshotTree(snapshotFn, rootPid) {
  *  (a dead intermediate's orphaned children keep their ParentProcessId on
  *  Windows, so they are found by walking FROM the dead pid), drop pids that
  *  were recycled to an unrelated process, never touch pid 0 / this process /
- *  its ancestors, and taskkill the rest. Returns the pids it targeted. */
-function resweepTree({ known, snapshotFn, sweepKillFn }) {
+ *  its ancestors, and taskkill the rest. Returns the pids it targeted.
+ *
+ *  The walk follows a parent -> child edge only when the child started no
+ *  earlier than the parent (the recorded start for a dead recorded parent, the
+ *  live row's otherwise) — the ordering `taskkill /T` applies. An orphan keeps
+ *  its dead parent's pid, so without this an unrelated process that merely
+ *  names a recycled pid would be swept. Unknown start times fail closed. A
+ *  live `approx` root (snapshot failed) is accepted only if it started within
+ *  APPROX_ROOT_WINDOW_MS of the spawn bound. Finally no target may predate the step
+ *  root's recorded start. */
+function resweepTree({ known, rootPid, snapshotFn, sweepKillFn }) {
   let rows;
   try {
     rows = snapshotFn();
@@ -1635,15 +1653,51 @@ function resweepTree({ known, snapshotFn, sweepKillFn }) {
     return [];
   }
   const byPid = new Map(rows.map((r) => [r.pid, r]));
+  const childrenByPpid = new Map();
+  for (const r of rows) {
+    if (!childrenByPpid.has(r.ppid)) childrenByPpid.set(r.ppid, []);
+    childrenByPpid.get(r.ppid).push(r);
+  }
+  const startOf = (pid) => byPid.get(pid)?.startedAt ?? known.get(pid)?.startedAt ?? null;
   const protectedPids = new Set([0, process.pid, ...ownAncestryPids(rows)]);
   const closure = new Set();
-  for (const [seed, startedAt] of known) {
+  for (const [seed, rec] of known) {
     const live = byPid.get(seed);
-    // Alive under the same pid with a different start time => recycled.
-    if (live && startedAt != null && live.startedAt !== startedAt) continue;
-    for (const pid of computeOsDescendants(seed, rows)) closure.add(pid);
+    // Alive under the same pid with a different start time => recycled. An
+    // approx root has only a spawn-time lower bound, so it gets the window.
+    if (live) {
+      const genuine = rec.approx
+        ? live.startedAt != null &&
+          live.startedAt >= rec.startedAt &&
+          live.startedAt - rec.startedAt <= APPROX_ROOT_WINDOW_MS
+        : live.startedAt === rec.startedAt;
+      if (!genuine) continue;
+    }
+    const visited = new Set([seed]);
+    if (live) closure.add(seed);
+    const queue = [seed];
+    while (queue.length > 0) {
+      const current = queue.shift();
+      const parentStart = startOf(current);
+      if (parentStart == null) continue;
+      for (const child of childrenByPpid.get(current) ?? []) {
+        if (visited.has(child.pid)) continue;
+        if (child.startedAt == null || child.startedAt < parentStart) continue;
+        visited.add(child.pid);
+        closure.add(child.pid);
+        queue.push(child.pid);
+      }
+    }
   }
-  const targets = [...closure].filter((pid) => !protectedPids.has(pid) && byPid.has(pid));
+  const rootStart = known.get(rootPid)?.startedAt ?? null;
+  const targets = [...closure].filter(
+    (pid) =>
+      !protectedPids.has(pid) &&
+      byPid.has(pid) &&
+      rootStart != null &&
+      byPid.get(pid).startedAt != null &&
+      byPid.get(pid).startedAt >= rootStart,
+  );
   for (const pid of targets) {
     try {
       sweepKillFn(pid);
@@ -1696,6 +1750,7 @@ export async function runStepProcess(
 
   const runOnce = (capture) =>
     new Promise((settlePromise) => {
+      const spawnedAt = Date.now();
       const child = spawn('npm', ['run', npmScript], {
         cwd,
         shell: true,
@@ -1737,7 +1792,7 @@ export async function runStepProcess(
         // snapshot lists), so a walk from the root pid alone cannot reach it.
         // The pre-kill closure supplies the intermediate pids to seed the
         // re-sweep's walk. The normal path never reaches this timer's body.
-        const known = windows ? snapshotTree(snapshotFn, child.pid) : null;
+        const known = windows ? snapshotTree(snapshotFn, child.pid, spawnedAt) : null;
         killTreeFn(child);
         try {
           // Provably-orphaned only (dead parent) — mirrors the pre-push
@@ -1770,7 +1825,7 @@ export async function runStepProcess(
               finish(1);
               return;
             }
-            lastTargets = resweepTree({ known, snapshotFn, sweepKillFn });
+            lastTargets = resweepTree({ known, rootPid: child.pid, snapshotFn, sweepKillFn });
             step(k + 1);
           }, resweepGraceMs);
         };

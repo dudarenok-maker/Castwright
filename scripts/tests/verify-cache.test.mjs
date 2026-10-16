@@ -1705,13 +1705,14 @@ test('runStepProcess re-sweep: a descendant the first kill missed is found and k
   const dir = mkTmp();
   const h = resweepHarness(dir);
   const SURVIVOR = 987654321;
+  const T = Date.now() + 100; // the step root started just after the test began
   // Pre-kill snapshot: root only. Re-sweep snapshot: root's tree PLUS a late
   // child (spawned after the kill's snapshot) hanging off the root pid.
   let calls = 0;
   const snapshotFn = () => {
     calls += 1;
-    const rows = [{ pid: h.child?.pid ?? process.pid + 1, ppid: 1, name: 'x', commandLine: '', cpuSeconds: 0, startedAt: 1 }];
-    if (calls > 1) rows.push({ pid: SURVIVOR, ppid: rows[0].pid, name: 'y', commandLine: '', cpuSeconds: 0, startedAt: 2 });
+    const rows = [{ pid: h.child?.pid ?? process.pid + 1, ppid: 1, name: 'x', commandLine: '', cpuSeconds: 0, startedAt: T }];
+    if (calls > 1) rows.push({ pid: SURVIVOR, ppid: rows[0].pid, name: 'y', commandLine: '', cpuSeconds: 0, startedAt: T + 1 });
     return rows;
   };
   const start = Date.now();
@@ -1747,8 +1748,9 @@ test('runStepProcess re-sweep: survivors that never die => bounded sweeps, then 
   const dir = mkTmp();
   const h = resweepHarness(dir);
   let sweeps = 0;
+  const T = Date.now() + 100;
   const snapshotFn = () => [
-    { pid: h.child?.pid ?? 1, ppid: 1, name: 'x', commandLine: '', cpuSeconds: 0, startedAt: 1 },
+    { pid: h.child?.pid ?? 1, ppid: 1, name: 'x', commandLine: '', cpuSeconds: 0, startedAt: T },
   ];
   const start = Date.now();
   try {
@@ -1783,6 +1785,7 @@ test('runStepProcess re-sweep: never targets pid 0, this process or its ancestor
   const dir = mkTmp();
   const h = resweepHarness(dir);
   const swept = [];
+  const T = Date.now() + 100;
   try {
     await runStepProcess('hang', {
       cwd: dir,
@@ -1794,10 +1797,10 @@ test('runStepProcess re-sweep: never targets pid 0, this process or its ancestor
       snapshotFn: () => {
         const root = h.child?.pid ?? 4242;
         return [
-          { pid: root, ppid: 1, name: 'r', commandLine: '', cpuSeconds: 0, startedAt: 1 },
-          { pid: 0, ppid: root, name: 'z', commandLine: '', cpuSeconds: 0, startedAt: 1 },
-          { pid: process.pid, ppid: root, name: 'me', commandLine: '', cpuSeconds: 0, startedAt: 1 },
-          { pid: 2147480002, ppid: root, name: 'ok', commandLine: '', cpuSeconds: 0, startedAt: 1 },
+          { pid: root, ppid: 1, name: 'r', commandLine: '', cpuSeconds: 0, startedAt: T },
+          { pid: 0, ppid: root, name: 'z', commandLine: '', cpuSeconds: 0, startedAt: T },
+          { pid: process.pid, ppid: root, name: 'me', commandLine: '', cpuSeconds: 0, startedAt: T },
+          { pid: 2147480002, ppid: root, name: 'ok', commandLine: '', cpuSeconds: 0, startedAt: T },
         ];
       },
       censusFn: NO_CENSUS,
@@ -1811,6 +1814,110 @@ test('runStepProcess re-sweep: never targets pid 0, this process or its ancestor
     // (The root is itself an "ancestor" of this process in the fake snapshot,
     // so it is protected too — the point is the ordinary pid IS swept.)
     assert.ok(swept.includes(2147480002), 'an ordinary descendant is still a target');
+  } finally {
+    h.cleanup();
+  }
+});
+
+// Start-time-aware walk (#3695 review): on Windows an orphan keeps its dead
+// parent's pid as ParentProcessId, so once that number is recycled an unrelated
+// process reads as a "child" of a recorded pid. `taskkill /T` refuses such an
+// edge (child older than parent); the re-sweep must too.
+function resweepStaleHarness(dir, { preKill, reSweep }) {
+  const h = resweepHarness(dir);
+  let calls = 0;
+  h.snapshotFn = () => {
+    calls += 1;
+    const root = h.child?.pid ?? 4242;
+    const rows = calls === 1 ? preKill(root) : reSweep(root);
+    if (rows === null) throw new Error('snapshot failed');
+    return rows;
+  };
+  h.run = (extra = {}) =>
+    runStepProcess('hang', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      timeoutMs: 1000,
+      killTreeFn: h.killTreeFn,
+      snapshotFn: h.snapshotFn,
+      censusFn: NO_CENSUS,
+      logFn: h.logFn,
+      windows: true,
+      resweepGraceMs: RESWEEP_TEST_GRACE_MS,
+      resweepMax: 1,
+      sweepKillFn: (pid) => h.swept.push(pid),
+      ...extra,
+    });
+  return h;
+}
+const row = (pid, ppid, startedAt) => ({ pid, ppid, name: 'p', commandLine: '', cpuSeconds: 0, startedAt });
+
+test('runStepProcess re-sweep: a stale-ppid process older than its parent is not followed, a genuine later child is (#3695)', async () => {
+  const dir = mkTmp();
+  const LATE = 2147480010;
+  const STALE = 2147480011; // names LATE's pid but started BEFORE LATE: not its child
+  const KID = 2147480012; // genuine child of LATE
+  const T = Date.now() + 100;
+  const h = resweepStaleHarness(dir, {
+    preKill: () => [],
+    reSweep: (root) => [row(root, 1, T), row(LATE, root, T + 500), row(STALE, LATE, T + 200), row(KID, LATE, T + 600)],
+  });
+  try {
+    await h.run();
+    assert.ok(h.swept.includes(LATE) && h.swept.includes(KID), `genuine later descendants are swept: ${JSON.stringify(h.swept)}`);
+    assert.ok(!h.swept.includes(STALE), `a child older than its parent must not be followed (taskkill /T refuses it): ${JSON.stringify(h.swept)}`);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('runStepProcess re-sweep: a recycled root pid (new holder + its child) is not swept (#3695)', async () => {
+  const dir = mkTmp();
+  const KID = 2147480020;
+  const h = resweepStaleHarness(dir, {
+    preKill: (root) => [row(root, 1, 1000)],
+    // The root pid is now held by an unrelated, newer process with its own child.
+    reSweep: (root) => [row(root, 1, 9000), row(KID, root, 9100)],
+  });
+  try {
+    await h.run();
+    assert.deepEqual(h.swept, [], `neither the recycled holder nor its child may be swept: ${JSON.stringify(h.swept)}`);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('runStepProcess re-sweep: pre-kill snapshot failed => root bounded by spawn time, an older stale-ppid process is not swept, a newer child is (#3695)', async () => {
+  const dir = mkTmp();
+  const OLD = 2147480030;
+  const NEW = 2147480031;
+  const now = Date.now();
+  const h = resweepStaleHarness(dir, {
+    preKill: () => null,
+    // Root is dead by the re-sweep; OLD predates the step's spawn, NEW postdates it.
+    reSweep: (root) => [row(OLD, root, now - 60_000), row(NEW, root, now + 50)],
+  });
+  try {
+    await h.run();
+    assert.ok(!h.swept.includes(OLD), `a process older than the step's spawn must not be swept: ${JSON.stringify(h.swept)}`);
+    assert.ok(h.swept.includes(NEW), `a child newer than the spawn is still swept: ${JSON.stringify(h.swept)}`);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('runStepProcess re-sweep: pre-kill snapshot failed + root pid later recycled => the unverifiable holder and its child are not swept (#3695)', async () => {
+  const dir = mkTmp();
+  const KID = 2147480040;
+  const now = Date.now();
+  const h = resweepStaleHarness(dir, {
+    preKill: () => null,
+    reSweep: (root) => [row(root, 1, now + 30_000), row(KID, root, now + 31_000)],
+  });
+  try {
+    await h.run();
+    assert.deepEqual(h.swept, [], `the old null-startedAt root disabled this check: ${JSON.stringify(h.swept)}`);
   } finally {
     h.cleanup();
   }
