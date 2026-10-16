@@ -10,7 +10,10 @@
  *       current cast.json voice, the line was rendered in that voice — #3524).
  *   3. buildCentroid per character; compute clean cosine spread; persist via writeCentroids.
  *   4. Score every embedding row for every chapter; write one
- *      `<slug>.render-integrity.json` per chapter.
+ *      `<slug>.render-integrity.json` per chapter. A row rendered under a voice
+ *      the character no longer has is `inconclusive`, not scored against the
+ *      current-voice reference, and a character with no line in its current
+ *      voice yet gets no new reference at all (#3524).
  *
  * Idempotent: safe to re-run; verdict + centroid files are overwritten each call.
  * Skips Kokoro-configured characters entirely (deterministic engine, no drift risk).
@@ -701,6 +704,14 @@ export async function scoreBook(
     if (!currentVoiceByChar.has(charId)) currentVoiceByChar.set(charId, currentVoiceNameFor(charId));
     return currentVoiceByChar.get(charId);
   };
+  /* #3524 — the voice a line was rendered in: `baseVoiceName ?? voiceName ??`
+     the chapter snapshot's `resolvedVoiceName`; `undefined` when unknown. Shared
+     by the anchor pool, the old-voice scoring rule and the no-current-line skip. */
+  const lineVoiceOf = (
+    seg: { baseVoiceName?: string | null; voiceName?: string | null } | undefined,
+    snapshots: Record<string, { resolvedVoiceName?: string } | undefined>,
+    charId: string,
+  ): string | undefined => seg?.baseVoiceName ?? seg?.voiceName ?? snapshots[charId]?.resolvedVoiceName;
   const matchedCurrentVoice = new Set<string>();
   for (const cd of chapterData) {
     for (const [charId, snap] of Object.entries(cd.snapshots)) {
@@ -708,8 +719,11 @@ export async function scoreBook(
          cast voice, the FIRST chapter (book order) whose snapshot
          `resolvedVoiceName` equals that voice wins, so a partial re-render
          after a voice change builds/keeps the audition from the new voice, not
-         ch1's stale one. With no such chapter (or no current voice known) it is
-         still the first chapter's snapshot that wins (#3650 changes the former). */
+         ch1's stale one. First-chapter-wins remains for (a) a character with no
+         current voice known, and (b) a character whose lines are stamped in the
+         current voice while no chapter snapshot names it. A character with a
+         current voice and NO line in it never reaches the audition (see the
+         character loop). */
       const currentVoice = currentVoiceFor(charId);
       const isCurrentVoiceMatch =
         currentVoice !== undefined && !matchedCurrentVoice.has(charId) && snap.resolvedVoiceName === currentVoice;
@@ -776,6 +790,8 @@ export async function scoreBook(
   // snapshot's resolvedVoiceName`; a line whose voice is unknown is not an
   // anchor. A character with no current voice keeps today's unfiltered pool.
   const anchorVecsByChar = new Map<string, Float32Array[]>();
+  // #3524 — characters with a current voice that have at least one rendered line in it.
+  const hasCurrentVoiceLine = new Set<string>();
   for (const charId of stochasticChars) anchorVecsByChar.set(charId, []);
 
   for (const cd of chapterData) {
@@ -789,14 +805,18 @@ export async function scoreBook(
       const rowCharId = resolveRowCharId(seg, row.characterId, cd.snapshots);
       if (rowCharId === undefined || !stochasticChars.has(rowCharId)) continue;
 
+      const rowCurrentVoice = currentVoiceFor(rowCharId);
+      if (rowCurrentVoice !== undefined && lineVoiceOf(seg, cd.snapshots, rowCharId) === rowCurrentVoice) {
+        hasCurrentVoiceLine.add(rowCharId);
+      }
+
       // Anchor-eligible: no per-segment fallback (use the per-segment field,
       // NOT characterSnapshots.renderedFallbackEngine which over-excludes)
       const hasFallback = seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '';
       if (!hasFallback) {
         const currentVoice = currentVoiceFor(rowCharId);
         if (currentVoice !== undefined) {
-          const lineVoice = seg?.baseVoiceName ?? seg?.voiceName ?? cd.snapshots[rowCharId]?.resolvedVoiceName;
-          if (lineVoice !== currentVoice) continue;
+          if (lineVoiceOf(seg, cd.snapshots, rowCharId) !== currentVoice) continue;
         }
         anchorVecsByChar.get(rowCharId)!.push(row.vec);
       }
@@ -823,7 +843,11 @@ export async function scoreBook(
   });
   opts?.onRosterKnown?.(orderedChars.length);
 
-  /** Returns the number of `voice-mismatch` rows written for this character
+  /** #3524 — for a character with a current cast voice, a row whose line voice is
+   *  not that voice (unknown included) is written `inconclusive`, never scored
+   *  against `ref` and not counted below.
+   *
+   *  Returns the number of `voice-mismatch` rows written for this character
    *  this call — accumulated by the caller into a run-total mismatch count
    *  (round-2 plan-review fix: `scoring_complete`'s `mismatchCount` must be
    *  a real count, not the hardcoded 0 an earlier draft shipped, which
@@ -832,6 +856,7 @@ export async function scoreBook(
    *  result). */
   async function scoreAndMergeCharacter(charId: string, ref: CharacterReference): Promise<number> {
     const configuredEngine = configuredEngineByChar.get(charId) ?? '';
+    const currentVoice = currentVoiceFor(charId);
     let mismatchCount = 0;
     for (const cd of chapterData) {
       const rowsForChar: VerdictRow[] = [];
@@ -859,6 +884,16 @@ export async function scoreBook(
           });
           continue;
         }
+        // #3524 — a line rendered under a voice the character no longer has is not
+        // scored against the current-voice reference (unknown voice counts as old).
+        if (currentVoice !== undefined && lineVoiceOf(seg, cd.snapshots, charId) !== currentVoice) {
+          rowsForChar.push({
+            characterId: charId, sentenceIds: row.sentenceIds, verdict: 'inconclusive',
+            cosine: 0, severity: 'inconclusive', fixable: false,
+            expectedEngine: configuredEngine, renderedEngine, referenceKind: ref.referenceKind, windowed: false, chapterId: cd.id,
+          });
+          continue;
+        }
         const cosine = cosineToCentroid(Array.from(row.vec), ref.centroid);
         const { verdict, severity } = scoreSegment(cosine, ref, ASSUMED_DURATION_SEC);
         const fixable = verdict === 'voice-mismatch' && severity === 'severe' && STOCHASTIC_ENGINES.has(configuredEngine);
@@ -879,6 +914,17 @@ export async function scoreBook(
   for (const charId of orderedChars) {
     const anchorVecs = anchorVecsByChar.get(charId)!;
     const persisted = centroidsMap[charId];
+
+    /* #3524 — a character with a current voice but no line rendered in it yet
+       gets no new reference (resolveCharacterReference would audition from, or
+       persist an absorbing too-short row for, a voice it no longer has): its
+       centroids row and pending entry stay untouched and every row is inconclusive. */
+    if (currentVoiceFor(charId) !== undefined && !hasCurrentVoiceLine.has(charId)) {
+      totalMismatches += await scoreAndMergeCharacter(charId, TOO_SHORT_REF);
+      scoredCount++;
+      opts?.onCharacterScored?.(charId, scoredCount, orderedChars.length);
+      continue;
+    }
 
     const outcome = await resolveCharacterReference(
       anchorVecs,

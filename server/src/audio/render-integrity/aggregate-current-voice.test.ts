@@ -13,7 +13,7 @@
    count, the persisted `auditionVoice` identity, and ch2's verdict rows. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -47,7 +47,7 @@ vi.mock('./audition-centroid.js', async (importOriginal) => ({
 import { scoreBook } from './aggregate.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 import { readCentroids } from './centroids-io.js';
-import { readVerdicts } from './verdicts-io.js';
+import { readVerdicts, deriveBookOutline } from './verdicts-io.js';
 
 const CHAPTERS = [
   { id: 1, slug: 'ch1' },
@@ -257,5 +257,88 @@ describe('scoreBook — in-book anchors pool only from the current cast voice (#
     expect(row.inBookVoiceName).toBeUndefined();
     expect(cos(row.centroid, newVec)).toBeGreaterThan(0.97);
     expect(cos(row.centroid, newVec)).toBeLessThan(0.995);
+  });
+});
+
+/* #3524 child 4 — a line rendered under a voice the character no longer has is
+   `inconclusive`, never scored against the current-voice reference; and a
+   character with no line in its current voice yet gets no new reference. */
+describe('scoreBook — old-voice lines score inconclusive (#3524)', () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 0;
+  });
+
+  async function repro(dir: string) {
+    writeCast(dir, 'old');
+    await writeChapter(dir, 'ch1', 1, 0, 'qwen-old');
+    await writeChapter(dir, 'ch2', 2, 0, 'qwen-old');
+    await scoreBook(dir, CHAPTERS);
+    writeCast(dir, 'new');
+    await writeChapter(dir, 'ch2', 2, 1, 'qwen-new');
+    audition.axis = 1;
+    return scoreBook(dir, CHAPTERS, ['ch2']);
+  }
+
+  it('writes every ch1 (old-voice) row inconclusive and counts no mismatch', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-old-voice-'));
+    const result = await repro(dir);
+
+    const ch1 = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(ch1!.length).toBe(3);
+    for (const r of ch1!) {
+      expect(r.verdict).toBe('inconclusive');
+      expect(r.fixable).toBe(false);
+    }
+    const ch2 = await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'));
+    expect(ch2!.filter((r) => r.verdict === 'voice-mismatch')).toEqual([]);
+    expect(result.mismatchCount).toBe(0);
+  });
+
+  it('flags ch1 as inconclusive in the book outline, not as an issue', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-old-voice-outline-'));
+    await repro(dir);
+
+    const outline = await deriveBookOutline(dir, CHAPTERS);
+    expect(outline.inconclusiveChapterIds).toContain(1);
+    expect(outline.issues.filter((r) => r.chapterId === 1)).toEqual([]);
+  });
+
+  it('builds no reference for a character with no current-voice line yet', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-no-cur-line-'));
+    writeCast(dir, 'old');
+    await writeChapter(dir, 'ch1', 1, 0, 'qwen-old');
+    await writeChapter(dir, 'ch2', 2, 0, 'qwen-old');
+    await scoreBook(dir, CHAPTERS);
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    const centroidsFile = join(dir, 'audio', 'render-integrity.centroids.json');
+    const before = readFileSync(centroidsFile, 'utf8');
+
+    writeCast(dir, 'new'); // reassigned, nothing re-rendered
+    const scored: string[] = [];
+    await scoreBook(dir, CHAPTERS, undefined, { onCharacterScored: (id) => scored.push(id) });
+
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    expect(readFileSync(centroidsFile, 'utf8')).toBe(before);
+    expect(scored).toEqual(['thurid']);
+    for (const slug of ['ch1', 'ch2']) {
+      const rows = await readVerdicts(join(dir, 'audio', `${slug}.render-integrity.json`));
+      expect(rows!.length).toBe(3);
+      for (const r of rows!) {
+        expect(r.verdict).toBe('inconclusive');
+        expect(r.referenceKind).toBe('too-short');
+      }
+    }
+  });
+
+  it('still scores old lines against the reference when the character has no cast.json row', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-old-voice-nocast-'));
+    await writeChapter(dir, 'ch1', 1, 0, 'qwen-old');
+    await writeChapter(dir, 'ch2', 2, 0, 'qwen-old');
+    await scoreBook(dir, CHAPTERS);
+
+    const ch1 = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(ch1!.length).toBe(3);
+    expect(ch1!.every((r) => r.verdict !== 'inconclusive')).toBe(true);
   });
 });

@@ -86,6 +86,7 @@ describe("scoreBook — the audition renders in the book's language", () => {
 
   it('passes the book language AND cloned:true for a cloned Qwen character', async () => {
     const dir = await makeBook({
+      resolvedVoiceName: 'qwen-lib1',
       state: { language: 'de' },
       cast: {
         characters: [
@@ -112,6 +113,7 @@ describe("scoreBook — the audition renders in the book's language", () => {
      unconditionally); it is the flag that gates the Qwen mapping. */
   it('passes cloned:false for a designed Qwen character', async () => {
     const dir = await makeBook({
+      resolvedVoiceName: 'qwen-lib1',
       state: { language: 'de' },
       cast: {
         characters: [
@@ -159,6 +161,7 @@ describe("scoreBook — the audition renders in the book's language", () => {
      voice's own manifest language), not to a guess. */
   it('passes no language at all when the book has no state.json', async () => {
     const dir = await makeBook({
+      resolvedVoiceName: 'qwen-lib1',
       cast: {
         characters: [
           {
