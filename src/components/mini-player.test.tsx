@@ -1165,6 +1165,7 @@ describe('MiniPlayer — jump-to-issue + auto-seek', () => {
        wins. */
     await screen.findByLabelText(/Next issue/);
     await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await waitFor(() => expect(el.getAttribute('src')).toBe('blob:x'));
     await act(async () => { fireEvent.loadedMetadata(el); });
     expect(el.currentTime).toBe(8); // first issue seekSec, NOT the 25s resume
   });
@@ -1179,6 +1180,7 @@ describe('MiniPlayer — jump-to-issue + auto-seek', () => {
        loadedMetadata so pendingSeekRef carries the 25 s resume point. */
     await screen.findByLabelText(/Next issue/);
     await waitFor(() => expect(getListenProgressMock).toHaveBeenCalled());
+    await waitFor(() => expect(el.getAttribute('src')).toBe('blob:x'));
     await act(async () => { fireEvent.loadedMetadata(el); });
     expect(el.currentTime).toBe(25); // resume bookmark wins
   });
