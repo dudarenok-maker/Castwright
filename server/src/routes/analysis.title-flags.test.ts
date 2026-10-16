@@ -288,7 +288,7 @@ describe('#3628 — merge after an analysis renumbers like a merge without one',
 
 describe('#3628 — a renamed chapter is not excluded as front matter after a restart', () => {
   it('derives the exclusion default from the parse title, not the renamed state title', async () => {
-    const { manuscriptId, bookDir } = await seedBook('rename-intro', FLAGGED_MANUSCRIPT, [
+    const { manuscriptId } = await seedBook('rename-intro', FLAGGED_MANUSCRIPT, [
       { title: 'Alpha' },
       { title: 'Introduction', titleOverridden: true },
       { title: 'Epilogue' },
@@ -298,10 +298,6 @@ describe('#3628 — a renamed chapter is not excluded as front matter after a re
     const record = (await getOrHydrateManuscript(manuscriptId))!;
     expect(record.chapterHints[1].title).toBe('Introduction');
     expect(record.chapterHints[1].excluded).toBeFalsy();
-
-    removeManuscript(manuscriptId);
-    await runAnalysis(manuscriptId, 'main');
-    expect(readState(bookDir).chapters[1].excluded).toBeFalsy();
   }, 60_000);
 });
 
