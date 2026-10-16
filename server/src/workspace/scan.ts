@@ -19,6 +19,7 @@ import {
 import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from './state-migrate.js';
 import { ensureChapterUuids } from './chapter-uuid.js';
+import { withBookLock } from './book-lock.js';
 import {
   analysisCompleteFor,
   hasCurrentTake,
@@ -762,9 +763,21 @@ async function scanBook(
        one and persist once. Idempotent; subsequent scans are no-ops. Runs
        before the segments backfill so a freshly-uuid'd book is on disk
        even if the segments pass finds nothing to write. */
+    const unminted = state.chapters.filter((c) => !c.uuid);
     if (ensureChapterUuids(state)) {
       try {
-        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null });
+        /* #3400 — locked fresh-read merge (fills only chapters still lacking a
+           uuid), then adopt whatever uuid won on disk so a concurrent mint
+           can't leave this caller holding a different one. */
+        const merged = await persistHealPatches(
+          bookDir,
+          state.bookId ?? bookDir,
+          unminted.map((c) => ({ id: c.id, slug: c.slug, set: { uuid: c.uuid } })),
+        );
+        for (const c of unminted) {
+          const onDisk = merged?.chapters.find((m) => m.id === c.id && m.slug === c.slug);
+          if (onDisk?.uuid) c.uuid = onDisk.uuid;
+        }
       } catch {
         /* best-effort — the next scan retries; in-memory state already
            carries the uuids for this caller. */
@@ -1062,6 +1075,58 @@ export async function collectBooks(): Promise<Array<{ bookDir: string; state: Bo
   return out;
 }
 
+/* The chapter fields a scan self-heal may fill (#3400). */
+const HEALED_KEYS = ['audioModelKey', 'audioRenderedAt', 'duration', 'audioEngines', 'uuid'] as const;
+
+type ChapterHealPatch = {
+  id: number;
+  slug: string;
+  /** The chapter's uuid when the heal read it (undefined before a mint). */
+  uuid?: string;
+  set: Partial<BookStateJson['chapters'][number]>;
+};
+
+/** Persist self-heal fills as a locked, fresh-read merge (#3400). A heal reads
+ *  state.json outside any lock and used to write it back whole, reverting a
+ *  concurrent writer's chapter list (a restructure rewrites it under
+ *  `withBookLock`). Here the book lock is taken (inline when this async
+ *  context already holds it — see book-lock.ts), state.json is re-read, and
+ *  each patch is applied only to a chapter that still has the same id + slug
+ *  (and uuid, when both carry one), and only for fields still unset — so a
+ *  concurrent mint or fill is never overwritten. Returns the merged state, or
+ *  null when nothing needed writing / the file could not be read. */
+async function persistHealPatches(
+  bookDir: string,
+  lockKey: string,
+  patches: ChapterHealPatch[],
+): Promise<BookStateJson | null> {
+  if (patches.length === 0) return null;
+  return withBookLock(lockKey, async () => {
+    const fresh = await readStateJsonWithRecovery(stateJsonPath(bookDir)).catch(() => null);
+    if (!fresh) return null;
+    let changed = false;
+    const chapters = fresh.chapters.map((ch) => {
+      const patch = patches.find(
+        (p) => p.id === ch.id && p.slug === ch.slug && (!p.uuid || !ch.uuid || p.uuid === ch.uuid),
+      );
+      if (!patch) return ch;
+      const fill: Partial<typeof ch> = {};
+      for (const key of HEALED_KEYS) {
+        if (patch.set[key] === undefined) continue;
+        const unset = key === 'duration' ? !ch.duration || ch.duration === '00:00' : !ch[key];
+        if (unset) Object.assign(fill, { [key]: patch.set[key] });
+      }
+      if (Object.keys(fill).length === 0) return ch;
+      changed = true;
+      return { ...ch, ...fill };
+    });
+    if (!changed) return fresh;
+    const merged: BookStateJson = { ...fresh, chapters };
+    await writeStateJsonAtomic(stateJsonPath(bookDir), { ...merged, language: merged.language ?? null });
+    return merged;
+  });
+}
+
 /** Lazy-migrate `audioModelKey` and `audioRenderedAt` onto every chapter
     in `state.chapters` by reading the corresponding `audio/<slug>.segments.json`
     file. Used by both the library-scan path (where the segments read is
@@ -1135,7 +1200,20 @@ export async function backfillAudioModelKeysFromSegments(
   if (backfillNeeded) {
     const upgraded: BookStateJson = { ...state, chapters: next };
     try {
-      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...upgraded, language: upgraded.language ?? null });
+      /* #3400 — merge into a fresh read under the book lock rather than
+         rewriting `state` (read long before, outside any lock): a chapter
+         restructure that landed meanwhile must keep its chapter list. Only the
+         fields this pass filled are applied, to chapters that still exist. */
+      const patches: ChapterHealPatch[] = [];
+      for (let i = 0; i < state.chapters.length; i++) {
+        if (next[i] === state.chapters[i]) continue;
+        const set: Partial<BookStateJson['chapters'][number]> = {};
+        for (const key of HEALED_KEYS) {
+          if (next[i][key] !== state.chapters[i][key]) Object.assign(set, { [key]: next[i][key] });
+        }
+        patches.push({ id: state.chapters[i].id, slug: state.chapters[i].slug, uuid: state.chapters[i].uuid, set });
+      }
+      await persistHealPatches(bookDir, state.bookId ?? bookDir, patches);
       return { state: upgraded, totalSec };
     } catch {
       /* Best-effort upgrade — a failed write just means the next call
