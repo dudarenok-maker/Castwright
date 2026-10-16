@@ -64,6 +64,7 @@ function makeConfigState(values: ConfigValues = {}): ConfigState {
     hydrated: true,
     cudaEnvShadow: false,
     envCleanupCandidates: [],
+    ttsReportedDevices: null,
   };
 }
 

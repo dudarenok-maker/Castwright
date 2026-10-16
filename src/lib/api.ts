@@ -6892,6 +6892,12 @@ export interface SidecarHealth {
   asrEnabled?: boolean;
   asrLoaded?: boolean;
   asrDevice?: string | null;
+  /* #3084 N5 — both are already on the wire (server/src/routes/sidecar-health.ts:540, :548);
+     the frontend type simply stopped omitting them. `qwenDeviceKey` is the concrete "cuda:N" a
+     resident QwenEngine sits on (null when none is resident, or on an older sidecar);
+     `devices` is the per-engine device FAMILY, never a card index. */
+  qwenDeviceKey?: string | null;
+  devices?: { kokoro: string | null; coqui: string | null; qwen: string | null } | null;
   device?: string | null;
 }
 

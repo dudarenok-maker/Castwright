@@ -124,6 +124,10 @@ export interface TtsLifecycle {
       (older builds / partial deploys) — UI degrades to no prefix in that
       case. */
   gpuQueueDepth?: number;
+  /** #3084 N5 — the last /health snapshot this hook read, so Layout can put the resolved TTS
+      devices into the config slice. Optional so existing LayoutContext fixtures still type-check;
+      no second poll is added — the pills already read this snapshot. */
+  sidecarHealth?: SidecarHealth | null;
   /** Task 16/16.5 (#1230 item 2, #2974) — "Auto-reverted: GPU pin for ... was
       reset to auto." (a card-specific code-43 streak was reverted and TTS
       brought back) or "...not tied to a specific GPU card... manual
@@ -430,6 +434,7 @@ export function useTtsLifecycle(): TtsLifecycle {
     loadErrorNotice,
     dismissNotices,
     gpuQueueDepth: gpuQueue?.queueDepth,
+    sidecarHealth,
     tripNotice,
   };
 }

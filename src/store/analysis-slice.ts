@@ -37,6 +37,10 @@ export interface AnalysisStreamSnapshot {
       `ui.selectedModel`) so a user model-switch mid-stream cannot
       misclassify the running analysis. */
   engine?: AnalysisEngine;
+  /** #3084 — card tag of the endpoint(s) the run uses ('none' | 'any' | 'cuda:N'),
+      captured with `engine`. Absent for Ollama/Gemini runs and for cold-boot snapshots,
+      where the reverse guard treats an openai run as 'any'. */
+  gpu?: string;
   /** Server-resolved analyzer model id, carried from the `model` field on SSE
       phase events (the same source the analysing view's PhaseModelChip reads).
       Captured so the global Status popover can show WHICH model the run is on —

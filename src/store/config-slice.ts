@@ -3,9 +3,10 @@
    Prompt thunks live here alongside the knob thunks so the UI has a
    single import point for all config mutations. */
 
-import { createSlice, createAsyncThunk } from '@reduxjs/toolkit';
+import { createSlice, createAsyncThunk, type PayloadAction } from '@reduxjs/toolkit';
 import type { ConfigGroup, KnobDescriptor, ConfigValues, PromptState } from '../lib/types';
 import { api } from '../lib/api';
+import type { TtsReportedDevices } from '../lib/analyzer-endpoints';
 
 export type ConfigStatus = 'idle' | 'loading' | 'saving' | 'error';
 
@@ -18,6 +19,10 @@ export interface ConfigState {
   hydrated: boolean;
   cudaEnvShadow: boolean;
   envCleanupCandidates: string[];
+  /** #3084 N5 — where the sidecar says each TTS engine runs (a resident Qwen's card, and the
+      per-engine family). `null` until the first reachable /health poll. The guards read it only
+      when a `tts.<engine>.device` knob is `auto`. */
+  ttsReportedDevices: TtsReportedDevices | null;
 }
 
 const initialState: ConfigState = {
@@ -29,6 +34,7 @@ const initialState: ConfigState = {
   hydrated: false,
   cudaEnvShadow: false,
   envCleanupCandidates: [],
+  ttsReportedDevices: null,
 };
 
 /* ── thunks ─────────────────────────────────────────────────────────────── */
@@ -102,7 +108,11 @@ export const revertPrompt = createAsyncThunk<PromptState, string>(
 export const configSlice = createSlice({
   name: 'config',
   initialState,
-  reducers: {},
+  reducers: {
+    ttsDevicesReported(s, a: PayloadAction<TtsReportedDevices | null>) {
+      s.ttsReportedDevices = a.payload;
+    },
+  },
   extraReducers: (builder) => {
     builder
       /* fetchConfig */
