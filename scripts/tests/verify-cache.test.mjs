@@ -1646,22 +1646,29 @@ test('runStepProcess: a step exceeding its budget is classified TIMEOUT, not a c
   // MAX_POOL_ATTEMPTS) if the timeout classification were folded into, or
   // ordered after, the isVitestPoolCrash check instead of short-circuiting
   // before it.
-  const result = await runStepProcess('hang', {
-    cwd: dir,
-    env: process.env,
-    retryKey: 'test:server',
-    timeoutMs: STEP_BUDGET_PAST_LAUNCH_MS,
-  });
-  const elapsed = Date.now() - start;
-  assert.equal(result.timedOut, true, 'a wedged process must be classified as a timeout');
-  assert.notEqual(result.code, 0);
-  assert.equal(
-    result.attempts,
-    1,
-    'a timed-out attempt must never be retried as a vitest pool crash — attempts must stay at 1, ' +
-      'not climb to MAX_POOL_ATTEMPTS (3) the way a real fork-pool crash would',
-  );
-  assertHangFixtureKilled(dir, elapsed, watch);
+  // The finally disarms the survivor watch (clearTimeout only — its recorded
+  // verdict stays readable) on every exit, so a throwing call or a failing
+  // assertion neither holds the file open nor SIGKILLs a reused pid later.
+  try {
+    const result = await runStepProcess('hang', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      timeoutMs: STEP_BUDGET_PAST_LAUNCH_MS,
+    });
+    const elapsed = Date.now() - start;
+    assert.equal(result.timedOut, true, 'a wedged process must be classified as a timeout');
+    assert.notEqual(result.code, 0);
+    assert.equal(
+      result.attempts,
+      1,
+      'a timed-out attempt must never be retried as a vitest pool crash — attempts must stay at 1, ' +
+        'not climb to MAX_POOL_ATTEMPTS (3) the way a real fork-pool crash would',
+    );
+    assertHangFixtureKilled(dir, elapsed, watch);
+  } finally {
+    watch.disarm();
+  }
 });
 
 // PR #3260 review pass 1, B2: a budget calibrated at full concurrency is too
@@ -2848,8 +2855,9 @@ test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout
     // self-exit (added for B1, PR #3260 review pass 1 — an orphan-prevention
     // safety net, not the mechanism under test) supplies a clean exit that
     // satisfies every assertion below just as well as a fast kill would,
-    // taking ~300s instead of ~1s to do it (PR #3260 review pass 2, B4 — this
-    // guard mirrors the one runStepProcess's own equivalent test already has
+    // taking ~300s instead of ~6s to do it; the survivor watch now cuts a
+    // broken kill short at ~25s, and a pass takes ~5-6s (PR #3260 review
+    // pass 2, B4 — this guard mirrors the one runStepProcess's own equivalent test already has
     // a few lines up). The bound sits below the self-exit so it stays
     // falsifiable (#3682).
     assertHangFixtureKilled(dir, elapsed, watch);
@@ -2865,6 +2873,7 @@ test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout
       'must not be reported as a MAX_POOL_ATTEMPTS-exhausted crash-retry outcome',
     );
   } finally {
+    watch.disarm();
     console.log = originalLog;
   }
 });
