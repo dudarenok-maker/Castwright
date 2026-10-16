@@ -30,10 +30,12 @@
  *     `revision-op`; the reverse (taking any of those while holding `state`)
  *     is forbidden.
  *   - The `findBookBy*` / scan helpers (findBookByBookId, findBookByManuscriptId,
- *     findBookBy, scanLibrary, scanSeriesBooks, scanBook, collectBooks,
+ *     findBookBy, scanLibrary, scanSeriesBooks, scanBook,
  *     backfillAudioModelKeysFromSegments) must not be called inside a hold:
- *     they take the state lock themselves, so calling one inside a hold
- *     self-deadlocks into the 10s timeout.
+ *     they take the state lock themselves (through the uuid migration and the
+ *     segments backfill), so calling one inside a hold self-deadlocks into the
+ *     10s timeout. `collectBooks` is NOT one of them: it only reads (with
+ *     recovery) and never calls the backfill, so it takes no lock.
  *
  * A TIMEOUT NEVER REACHES A CLIENT AS-IS: `LockAcquisitionTimeoutError`'s
  * message names the lock key, which embeds the ABSOLUTE workspace path. Callers
