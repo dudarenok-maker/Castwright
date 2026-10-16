@@ -5,10 +5,10 @@
    workspace dir → asserts every chapter mp3 + state.json + manuscript are
    byte-identical. */
 
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import { buildPortableBundle } from '../export/build-portable-book.js';
 import {
   BundleConflictError,
@@ -29,7 +29,11 @@ function tinyImage(format: 'jpeg' | 'png' | 'gif' | 'webp'): Promise<Buffer> {
     .toBuffer();
 }
 
-function makeBundleFixture(state: BookStateJson, cover: Buffer): Promise<Buffer> {
+function makeBundleFixture(
+  state: BookStateJson,
+  cover: Buffer,
+  extraCovers: [string, Buffer][] = [],
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const zip = new ZipFile();
     const chunks: Buffer[] = [];
@@ -64,6 +68,7 @@ function makeBundleFixture(state: BookStateJson, cover: Buffer): Promise<Buffer>
     zip.addBuffer(Buffer.from(JSON.stringify(manifest, null, 2), 'utf8'), 'MANIFEST.json');
     zip.addBuffer(stateBuf, 'state.json');
     zip.addBuffer(manuscriptBuf, state.manuscriptFile);
+    for (const [n, b] of extraCovers) zip.addBuffer(b, n);
     zip.addBuffer(cover, 'cover.jpg');
     zip.addBuffer(changeLog, 'change-log.json');
     zip.addBuffer(audio1, 'audio/01-chapter-1.mp3');
@@ -175,6 +180,31 @@ describe('importPortableBundle', () => {
       rmSync(target, { recursive: true, force: true });
     }
   });
+
+  it.each([['cover.png', 'png'], ['cover.thumb.jpg', 'jpeg']] as const)(
+    'imports a bundle with cover.jpg plus a second %s entry: audio lands, one JPEG cover (#3535)',
+    async (extraName, format) => {
+      const state = fixtureState({ title: `Import Two Covers ${format} Test` });
+      const bundle = await makeBundleFixture(state, await tinyImage('jpeg'), [
+        [extraName, await tinyImage(format)],
+      ]);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const target = targetDirFor(state);
+      try {
+        await importPortableBundle(bundle, { onConflict: 'fail' });
+        const stored = readFileSync(join(dotAudiobook(target), 'cover.jpg'));
+        expect((await sharp(stored).metadata()).format).toBe('jpeg');
+        expect(readFileSync(join(audioDir(target), '01-chapter-1.mp3')).toString()).toBe(
+          'mp3-bytes-1',
+        );
+        expect(readdirSync(dotAudiobook(target)).filter((f) => f.includes('.tmp-'))).toEqual([]);
+        expect(warn).toHaveBeenCalled();
+      } finally {
+        warn.mockRestore();
+        rmSync(target, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('rejects a bundle missing MANIFEST.json', async () => {
     const zip = new ZipFile();

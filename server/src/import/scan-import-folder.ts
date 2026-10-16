@@ -267,6 +267,7 @@ export async function importPortableBundle(
   planEntry(join(bookDir, state.manuscriptFile), manuscriptBuf, state.manuscriptFile);
 
   /* Optional top-level entries: cover.{jpg,png,…} and change-log.json. */
+  const coverEntries: [string, Buffer][] = [];
   for (const [name, buf] of entries.entries()) {
     if (name === 'MANIFEST.json' || name === 'state.json') continue;
     if (name === state.manuscriptFile) continue;
@@ -279,19 +280,31 @@ export async function importPortableBundle(
       continue;
     }
     if (name.startsWith('cover.')) {
-      /* #3535: re-encode to a clean JPEG like every other cover path, and
-         store it as cover.jpg whatever the entry's extension. An
-         undecodable cover is skipped (the book still imports), like an
-         unknown entry. */
-      try {
-        const jpeg = await reencodeToJpeg(buf, { tolerant: true });
-        planEntry(join(dotAudiobook(bookDir), 'cover.jpg'), jpeg, name);
-      } catch (e) {
-        console.warn(`[import] skipping undecodable cover entry ${name}: ${(e as Error).message}`);
-      }
+      coverEntries.push([name, buf]);
       continue;
     }
     /* Forward-compat: skip silently. */
+  }
+
+  /* #3535: re-encode the cover to a clean JPEG like every other cover path,
+     and store it as cover.jpg whatever the entry's extension. Every cover.*
+     entry shares that one destination (and so one tmp file), so stage at most
+     one: an exact cover.jpg first, else the first that decodes. An undecodable
+     entry is skipped (the book still imports), like an unknown entry. */
+  coverEntries.sort(([a], [b]) => Number(b === 'cover.jpg') - Number(a === 'cover.jpg'));
+  let coverStaged = false;
+  for (const [name, buf] of coverEntries) {
+    if (coverStaged) {
+      console.warn(`[import] skipping extra cover entry ${name}: one cover per bundle`);
+      continue;
+    }
+    try {
+      const jpeg = await reencodeToJpeg(buf, { tolerant: true });
+      planEntry(join(dotAudiobook(bookDir), 'cover.jpg'), jpeg, name);
+      coverStaged = true;
+    } catch (e) {
+      console.warn(`[import] skipping undecodable cover entry ${name}: ${(e as Error).message}`);
+    }
   }
 
   /* Audio entries — audio/<slug>.<ext>. Restored into <bookDir>/audio/. */
