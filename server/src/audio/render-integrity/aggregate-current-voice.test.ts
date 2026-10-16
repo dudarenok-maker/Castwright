@@ -13,7 +13,7 @@
    count, the persisted `auditionVoice` identity, and ch2's verdict rows. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { mkdtempSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -48,6 +48,7 @@ import { scoreBook } from './aggregate.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 import { readCentroids } from './centroids-io.js';
 import { readVerdicts, deriveBookOutline } from './verdicts-io.js';
+import { buildAudioQaReport } from '../qa-report.js';
 
 const CHAPTERS = [
   { id: 1, slug: 'ch1' },
@@ -311,15 +312,16 @@ describe('scoreBook — old-voice lines score inconclusive (#3524)', () => {
     await writeChapter(dir, 'ch2', 2, 0, 'qwen-old');
     await scoreBook(dir, CHAPTERS);
     expect(auditionSpy).toHaveBeenCalledTimes(1);
-    const centroidsFile = join(dir, 'audio', 'render-integrity.centroids.json');
-    const before = readFileSync(centroidsFile, 'utf8');
 
     writeCast(dir, 'new'); // reassigned, nothing re-rendered
     const scored: string[] = [];
     await scoreBook(dir, CHAPTERS, undefined, { onCharacterScored: (id) => scored.push(id) });
 
     expect(auditionSpy).toHaveBeenCalledTimes(1);
-    expect(readFileSync(centroidsFile, 'utf8')).toBe(before);
+    // The stale old-voice audition is replaced by a marker row: no usable reference.
+    const row = (await readCentroids(dir))!['thurid'];
+    expect(row.referenceKind).toBe('too-short');
+    expect(row.noCurrentVoiceReference).toBe(true);
     expect(scored).toEqual(['thurid']);
     for (const slug of ['ch1', 'ch2']) {
       const rows = await readVerdicts(join(dir, 'audio', `${slug}.render-integrity.json`));
@@ -451,5 +453,51 @@ describe('scoreBook — fallback lines and partial re-records (#3524 review pass
     await scoreBook(dir, [CHAPTERS[0]]);
     expect(auditionSpy).toHaveBeenCalledTimes(2);
     expect((auditionSpy.mock.calls[1] as unknown[])[0]).toMatchObject({ voiceName: 'qwen-new' });
+  });
+});
+
+describe('scoreBook — a character with no current-voice line is not pending forever (#3524)', () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 0;
+  });
+  const CH1 = [CHAPTERS[0]];
+
+  it('A: reassigned before it was ever scored — one pass clears charactersPending, lines stay inconclusive, a later current-voice line rebuilds a real reference', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-pending-reassigned-'));
+    writeCast(dir, 'new');
+    await writeChapterLines(dir, 'ch1', 1, [0, 1, 2].map((sid) => ({ sid, axis: 0, jitter: sid, voice: 'qwen-old' })), 'qwen-old');
+
+    await scoreBook(dir, CH1);
+    const report = await buildAudioQaReport(dir, CH1);
+    expect(report.voiceDrift.charactersPending).toEqual([]);
+    const marked = (await readCentroids(dir))!['thurid'];
+    expect(marked.noCurrentVoiceReference).toBe(true);
+    const rows = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(rows!.every((r) => r.verdict === 'inconclusive')).toBe(true);
+    expect(auditionSpy).not.toHaveBeenCalled();
+
+    // The chapter is re-rendered in the new voice: the marked row is not reused.
+    await writeChapterLines(dir, 'ch1', 1, [0, 1, 2].map((sid) => ({ sid, axis: 1, jitter: sid, voice: 'qwen-new' })), 'qwen-new');
+    audition.axis = 1;
+    await scoreBook(dir, CH1);
+    const rebuilt = (await readCentroids(dir))!['thurid'];
+    expect(rebuilt.noCurrentVoiceReference).toBeUndefined();
+    expect(rebuilt.referenceKind).toBe('audition');
+    expect(rebuilt.auditionVoice?.voiceName).toBe('qwen-new');
+  });
+
+  it('B: rendered entirely on the fallback engine — one pass clears charactersPending', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-pending-allfallback-'));
+    writeCast(dir, 'h');
+    await writeChapterLines(
+      dir, 'ch1', 1,
+      [0, 1, 2].map((sid) => ({ sid, axis: 5, jitter: sid, voice: 'af_heart', fallback: 'kokoro' })),
+      'af_heart',
+    );
+    await scoreBook(dir, CH1);
+    const report = await buildAudioQaReport(dir, CH1);
+    expect(report.voiceDrift.charactersPending).toEqual([]);
+    expect(auditionSpy).not.toHaveBeenCalled();
   });
 });

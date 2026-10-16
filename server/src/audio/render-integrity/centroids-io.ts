@@ -71,6 +71,12 @@ export interface CharacterCentroid {
    *  had a current voice; absent on 'audition'/'too-short' rows and on legacy rows. Lets the
    *  qa-repair route tell when the in-book reference has gone stale after a voice change. */
   inBookVoiceName?: string;
+  /** #3524 — marker on a 'too-short' row written for a character that has a current cast voice
+   *  but NO rendered line in it yet (reassigned before any re-render, or rendered only on a
+   *  fallback engine). It is a conclusive "nothing to check yet", not a reference: it takes the
+   *  character off the qa-report's `charactersPending`, is never reused as a reference, and the
+   *  next pass that finds a current-voice line rebuilds a real one over it. */
+  noCurrentVoiceReference?: true;
   /** A36 fix — detection of pre-fix persisted audition rows. Records which band-computation
    *  method was used on post-fix audition centroid rows:
    *  - 'percentile': percentile-of-pool method (used on real-anchor paths, or on synthetic-only

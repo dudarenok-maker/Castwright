@@ -13,7 +13,8 @@
  *      `<slug>.render-integrity.json` per chapter. A row rendered under a voice
  *      the character no longer has is `inconclusive`, not scored against the
  *      current-voice reference, and a character with no line in its current
- *      voice yet gets no new reference at all (#3524).
+ *      voice yet gets no reference at all — a marked `noCurrentVoiceReference`
+ *      row, every line inconclusive (#3524).
  *
  * Idempotent: safe to re-run; verdict + centroid files are overwritten each call.
  * Skips Kokoro-configured characters entirely (deterministic engine, no drift risk).
@@ -372,7 +373,7 @@ async function resolveCharacterReference(
     return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'in-book', ...(inBookVoiceName !== undefined ? { inBookVoiceName } : {}) } };
   }
 
-  if (persisted?.referenceKind === 'too-short' && (!voiceInfo || sameVoiceIdentity(persisted.auditionVoice, voiceInfo))) {
+  if (persisted?.referenceKind === 'too-short' && !persisted.noCurrentVoiceReference && (!voiceInfo || sameVoiceIdentity(persisted.auditionVoice, voiceInfo))) {
     return { status: 'too-short', ref: persistedAsRef(persisted) };
   }
   if (
@@ -954,9 +955,14 @@ export async function scoreBook(
 
     /* #3524 — a character with a current voice but no line rendered in it yet
        gets no new reference (resolveCharacterReference would audition from, or
-       persist an absorbing too-short row for, a voice it no longer has): its
-       centroids row and pending entry stay untouched and every row is inconclusive. */
+       persist an absorbing too-short row for, a voice it no longer has): it gets a
+       `noCurrentVoiceReference` marker row instead (so it leaves `charactersPending`
+       and is never reused as a reference), its pending entry is cleared, and every
+       row is inconclusive. The next pass with a current-voice line rebuilds it. */
     if (currentVoiceFor(charId) !== undefined && !hasCurrentVoiceLine.has(charId)) {
+      delete pendingMap[charId];
+      centroidsMap[charId] = { characterId: charId, ...TOO_SHORT_REF, noCurrentVoiceReference: true };
+      await writeCentroids(bookDir, Object.values(centroidsMap));
       totalMismatches += await scoreAndMergeCharacter(charId, TOO_SHORT_REF);
       scoredCount++;
       opts?.onCharacterScored?.(charId, scoredCount, orderedChars.length);
