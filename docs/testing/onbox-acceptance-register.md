@@ -735,6 +735,15 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > § "Live structured output"). Group A 34 → 35. `next-id` bumped A113 → A114
 > in the same change. Row is owed; not run here.
 >
+> **Prior change: 2026-10-16 (#3524), 64 → 64.** Row **A112**'s text corrected, no
+> row added or removed and the owed count unchanged: the audition-voice
+> precondition now says `scoreBook` takes it from a chapter rendered in the
+> character's current cast voice (not the first chapter in book order), and
+> the closing "Known limit" is replaced — an in-book centroid recorded from a
+> voice the character no longer has is now dropped too (a legacy in-book row
+> with no recorded voice is still kept). Behaviour proven by mocked unit
+> tests; A112 still owns the real-ECAPA hardware check.
+>
 > **Prior change: 2026-10-09 (#3440), 62 → 63.** Row **E113** added — the real-book
 > line-count and Fix-audio check for the drifted-attribution-id fix, owed because
 > unit/integration/e2e coverage all run in mock mode and nobody has yet confirmed the
@@ -5978,12 +5987,14 @@ embedder. Neither test touches a real sidecar or a real ECAPA model.
   that character carrying a `voice-mismatch` / `fixable: true` row in its
   `<slug>.render-integrity.json`;
 - the character's `auditionVoice.voiceName` in that same centroids row equals
-  the character's snapshot voice in **both** X and Y. `scoreBook` takes the
-  audition voice from the character's FIRST chapter in book order
-  (`aggregate.ts`), so after an earlier partial re-render (or a voice change)
-  the two can differ — and the control then correctly drops the reference,
-  which would misread as a Fail. If they differ, re-render so they match
-  before starting;
+  the character's snapshot voice in **both** X and Y, and that voice is the
+  character's **current** cast voice. `scoreBook` takes the audition voice from
+  a chapter rendered in the character's current cast voice (`aggregate.ts`,
+  #3524), so after a voice change the row only matches once such a chapter
+  exists; lines still in an older voice are written `inconclusive`, not scored.
+  If the row's `voiceName` is not the character's current voice, re-render so
+  they match before starting, or the control will correctly drop the reference
+  and misread as a Fail;
 - **Render-integrity QA (voice match)** (`qa.speaker.enabled`, env
   `SEG_SPK_ENABLED`) switched **on** *before the chapters are rendered* — it
   defaults off, and it is what makes `scoreBook` run at all, writing the
@@ -6054,9 +6065,11 @@ Network tab (that request → EventStream/Response) when the button was used.
   **Pass:** that line (`acousticOnly: true` in `qa_scan`) gets **no**
   `progress` frame and appears in `qa_repair_complete`'s `stillSuspect` — the
   stale `audition` centroid was dropped, not reused. An inconclusive verdict
-  here is the designed outcome, not a regression. Known limit: an in-book
-  centroid is still judged against the old voice (#3517) — do not expect it to
-  switch.
+  here is the designed outcome, not a regression. After #3524 an
+  in-book centroid row that recorded a voice the character no longer has is
+  dropped too, just like an audition one; a legacy in-book row with no
+  recorded voice is still kept until the next scoring pass, so do not expect
+  that one to switch.
 
 *Needs:* a real GPU box with the speech sidecar and a real ECAPA
 speaker-embedding model running (the mocked unit tests cover the logic branch
