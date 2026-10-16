@@ -685,3 +685,38 @@ describe('scoreBook — the current engine is the one actually rendered, not the
     await expectRealCoquiReference(dir);
   });
 });
+
+describe("scoreBook — the audition renders at the character's Qwen tier (#3524 pass 2 B)", () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 1;
+    defaultModelKey.value = 'qwen3-tts-0.6b';
+  });
+
+  it('a character pinned to 1.7B, moved from Coqui to Qwen with a partial re-record, auditions at 1.7B (not the canonical 0.6B)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-tier-pinned-'));
+    writeCastRow(dir, {
+      ttsEngine: 'qwen',
+      ttsModelKey: 'qwen3-tts-1.7b',
+      overrideTtsVoices: { qwen: { name: 'Thurid voice', libraryUuid: 'hq' }, coqui: { name: 'Ana Florence' } },
+    });
+    // ch1 still on Coqui; in ch2 lines 0-1 were re-recorded on Qwen at the character's 1.7B tier and
+    // line 2 was left untouched — finalize stamps the fresh render's engine/tier on the snapshot, with
+    // `resolvedVoiceName` last-wins over the untouched line.
+    await writeChapterLines(dir, 'ch1', 1, [0, 1, 2].map((sid) => ({ sid, axis: 3, jitter: sid, voice: 'Ana Florence' })), 'Ana Florence', 'thurid', 'coqui');
+    await writeChapterLines(
+      dir, 'ch2', 2,
+      [
+        { sid: 0, axis: 1, jitter: 0, voice: 'qwen-hq' },
+        { sid: 1, axis: 1, jitter: 1, voice: 'qwen-hq' },
+        { sid: 2, axis: 3, jitter: 2, voice: 'Ana Florence' },
+      ],
+      'Ana Florence', 'thurid', 'qwen', 'qwen3-tts-1.7b',
+    );
+
+    await scoreBook(dir, CHAPTERS);
+
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    expect((auditionSpy.mock.calls[0] as unknown[])[0]).toMatchObject({ voiceName: 'qwen-hq', modelKey: 'qwen3-tts-1.7b' });
+  });
+});

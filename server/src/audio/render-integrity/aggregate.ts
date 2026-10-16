@@ -53,6 +53,7 @@ import { canonicalModelKeyForEngine, engineForModelKey, type TtsEngine, type Tts
 import { buildHintFromCast, type CastCharacter } from '../../tts/synthesise-chapter.js';
 import { currentCastVoiceName, currentCharacterEngine } from './current-voice.js';
 import { hasClonedProvenance } from '../../tts/clone-engines.js';
+import { resolveCharacterQwenTier } from '../../tts/per-character-engine.js';
 import { buildCastResolver } from '../../store/cast-resolve.js';
 import { loadCastIdHistory } from '../../store/cast-id-history.js';
 
@@ -867,8 +868,8 @@ export async function scoreBook(
      a partial re-record leaves its chapter's last-wins snapshot on the OLD voice
      while the re-recorded lines are stamped NEW, so when any rendered line carries
      the current voice, the audition (and the #3676 re-audition's identity match)
-     is built for it — in the current voice's engine and tier (the character's own
-     engine, else the book's current default), not the old snapshot's. */
+     is built for it — in the current voice's engine and tier (the engine actually
+     rendered, and the character's elevate-only Qwen tier), not the old snapshot's. */
   for (const charId of hasCurrentVoiceLine) {
     const info = voiceInfoByChar.get(charId);
     const currentVoice = currentVoiceFor(charId);
@@ -876,7 +877,12 @@ export async function scoreBook(
     if (!info || currentVoice === undefined || !castChar) continue;
     const engine = currentCharacterEngine(castChar, defaultEngineFor(charId), bookLanguage);
     if (!engine) continue;
-    const modelKey = canonicalModelKeyForEngine(engine, info.modelKey);
+    /* Tier: a Qwen audition renders at the tier the render itself stamps — the
+       character's elevate-only pin over the run key (else the old snapshot's key) —
+       via the same resolveCharacterQwenTier buildCharacterSnapshots uses, so a 1.7B
+       pin is never auditioned on the 0.6B base (8 GB OOM; non-comparable speaker space). */
+    const baseKey = canonicalModelKeyForEngine(engine, opts?.runModelKey ?? info.modelKey);
+    const modelKey = engine === 'qwen' ? resolveCharacterQwenTier(castChar, baseKey) : baseKey;
     if (info.voiceName !== currentVoice || info.modelKey !== modelKey) {
       voiceInfoByChar.set(charId, {
         ...info,
