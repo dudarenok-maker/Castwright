@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,12 +15,25 @@ let workspaceRoot: string;
 let bookDir: string;
 
 const fetchMock = vi.fn();
-function imageResponse(bytes: Uint8Array): Response {
-  return new Response(bytes, { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
+function imageResponse(bytes: Uint8Array, contentType = 'image/jpeg'): Response {
+  return new Response(bytes, { status: 200, headers: { 'Content-Type': contentType } });
 }
-const SAMPLE_JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
 
-beforeAll(() => {
+/* #3640 / #3535: downloadCover now re-encodes every fetched body before it
+   lands as cover.jpg, so the fixture must be a real decodable image. The old
+   six-byte JPEG-header stub (ff d8 ff e0 00 10) was never decodable and is
+   gone. */
+let SAMPLE_JPEG: Uint8Array;
+
+beforeAll(async () => {
+  const sharp = (await import('sharp')).default;
+  SAMPLE_JPEG = new Uint8Array(
+    await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    })
+      .jpeg({ quality: 85 })
+      .toBuffer(),
+  );
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-store-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
   bookDir = join(workspaceRoot, 'books', 'A', 'S', 'T');
@@ -72,3 +93,104 @@ describe('downloadCover containment', () => {
     ).rejects.toThrow();
   });
 });
+
+/* #3640 / #3535: every provider body is normalised through the shared
+   re-encode helper (server/src/cover/reencode.ts) before it lands as
+   cover.jpg — a GIF/WebP stored verbatim breaks the m4b export, and a JPEG
+   with trailing junk defeats ffmpeg's content probing. All fixtures are
+   generated in-test with sharp; no committed binaries. */
+describe('downloadCover re-encodes provider bodies to JPEG (#3640)', () => {
+  const fixtureDir = (name: string) => join(bookDir, 'covers', name);
+  const destPath = (name: string) => join(fixtureDir(name), 'cover.jpg');
+  const tmpFiles = (name: string) => {
+    const dir = fixtureDir(name);
+    return existsSync(dir)
+      ? readdirSync(dir).filter((f) => f.startsWith('cover.jpg.tmp-'))
+      : [];
+  };
+
+  async function makeFixture(format: 'gif' | 'webp' | 'png'): Promise<Buffer> {
+    const sharp = (await import('sharp')).default;
+    return sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    })
+      [format]()
+      .toBuffer();
+  }
+
+  async function assertCoverIsJpeg(written: Buffer): Promise<void> {
+    expect([...written.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+    const sharp = (await import('sharp')).default;
+    expect((await sharp(written).metadata()).format).toBe('jpeg');
+  }
+
+  it('stores a sharp-written JPEG when the provider serves a GIF', async () => {
+    fetchMock.mockResolvedValue(imageResponse(await makeFixture('gif'), 'image/gif'));
+    const { downloadCover } = await import('./store.js');
+
+    const { bytes } = await downloadCover('https://x/cover.gif', destPath('gif'));
+
+    const written = readFileSync(destPath('gif'));
+    expect(bytes).toBe(written.length);
+    await assertCoverIsJpeg(written);
+  });
+
+  it('stores a sharp-written JPEG when the provider serves a WebP', async () => {
+    fetchMock.mockResolvedValue(imageResponse(await makeFixture('webp'), 'image/webp'));
+    const { downloadCover } = await import('./store.js');
+
+    const { bytes } = await downloadCover('https://x/cover.webp', destPath('webp'));
+
+    const written = readFileSync(destPath('webp'));
+    expect(bytes).toBe(written.length);
+    await assertCoverIsJpeg(written);
+  });
+
+  it('stores a sharp-written JPEG when the provider serves a PNG', async () => {
+    fetchMock.mockResolvedValue(imageResponse(await makeFixture('png'), 'image/png'));
+    const { downloadCover } = await import('./store.js');
+
+    const { bytes } = await downloadCover('https://x/cover.png', destPath('png'));
+
+    const written = readFileSync(destPath('png'));
+    expect(bytes).toBe(written.length);
+    await assertCoverIsJpeg(written);
+  });
+
+  it('drops trailing junk after a real JPEG and keeps a clean EOI', async () => {
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    const junk = Buffer.concat([jpeg, Buffer.from([0x47]), Buffer.alloc(16)]);
+    fetchMock.mockResolvedValue(imageResponse(junk));
+    const { downloadCover } = await import('./store.js');
+
+    const { bytes } = await downloadCover('https://x/cover.jpg', destPath('junk'));
+
+    const written = readFileSync(destPath('junk'));
+    expect(bytes).toBe(written.length);
+    expect(written.length).toBeLessThan(junk.length);
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+  });
+
+  it('rejects a non-decodable body with kind invalid and leaves nothing at destPath', async () => {
+    fetchMock.mockResolvedValue(imageResponse(Buffer.from('<html>'), 'image/png'));
+    const { downloadCover, CoverDownloadError } = await import('./store.js');
+
+    const dest = destPath('invalid');
+    let caught: unknown;
+    try {
+      await downloadCover('https://x/cover.png', dest);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(CoverDownloadError);
+    expect((caught as InstanceType<typeof CoverDownloadError>).kind).toBe('invalid');
+    expect(existsSync(dest)).toBe(false);
+    expect(tmpFiles('invalid')).toEqual([]);
+  });
+});
+

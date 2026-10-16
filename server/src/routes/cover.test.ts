@@ -31,6 +31,14 @@ let bookId: string;
 const fetchMock = vi.fn();
 
 beforeAll(async () => {
+  const sharp = (await import('sharp')).default;
+  SAMPLE_JPEG = new Uint8Array(
+    await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    })
+      .jpeg({ quality: 85 })
+      .toBuffer(),
+  );
   workspaceRoot = mkdtempSync(join(tmpdir(), 'audiobook-cover-test-'));
   process.env.WORKSPACE_DIR = workspaceRoot;
 
@@ -92,9 +100,10 @@ function imageResponse(bytes: Uint8Array): Response {
   return new Response(bytes, { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
 }
 
-const SAMPLE_JPEG = new Uint8Array([
-  0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00,
-]);
+/* #3640 / #3535: downloadCover now re-encodes every fetched body, so the
+   download fixture must be a real decodable image — the old 11-byte JFIF
+   header stub was never decodable. Generated in beforeAll (sharp is async). */
+let SAMPLE_JPEG: Uint8Array;
 
 describe('cover router — happy path', () => {
   it('GET /candidates aggregates sources and returns composite-id candidates', async () => {
@@ -134,7 +143,17 @@ describe('cover router — happy path', () => {
 
     const onDisk = join(bookDir, '.audiobook', 'cover.jpg');
     expect(existsSync(onDisk)).toBe(true);
-    expect(Array.from(readFileSync(onDisk))).toEqual(Array.from(SAMPLE_JPEG));
+    /* #3640 / #3535: the body is re-encoded before it lands, so assert a
+       clean decodable JPEG (SOI + sharp metadata) instead of verbatim bytes —
+       a sharp-written JPEG at the same quality may round-trip byte-identically
+       (#3642), so verbatim equality pins nothing either way. */
+    const written = readFileSync(onDisk);
+    expect([...written.subarray(0, 3)]).toEqual([0xff, 0xd8, 0xff]);
+    const sharp = (await import('sharp')).default;
+    const meta = await sharp(written).metadata();
+    expect(meta.format).toBe('jpeg');
+    expect(meta.width).toBe(8);
+    expect(meta.height).toBe(8);
 
     const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
     expect(state.coverImage.candidateId).toBe('openlibrary:555');
@@ -147,7 +166,12 @@ describe('cover router — happy path', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('image/jpeg');
     expect(res.headers['cache-control']).toContain('max-age=3600');
-    expect(Array.from(res.body)).toEqual(Array.from(SAMPLE_JPEG));
+    /* #3640 / #3535: the cached file is the re-encoded cover written by the
+       POST test above — compare against the file on disk, not the raw fixture. */
+    const onDisk = readFileSync(join(bookDir, '.audiobook', 'cover.jpg'));
+    expect(Array.from(res.body)).toEqual(Array.from(onDisk));
+    expect(onDisk[0]).toBe(0xff);
+    expect(onDisk[1]).toBe(0xd8);
   });
 
   it('DELETE removes the cached file and clears state.json coverImage', async () => {
