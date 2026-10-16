@@ -1374,13 +1374,6 @@ export function Layout() {
           ctrl = new AbortController();
           prosodyBackground.current = { id, ctrl };
         } else {
-          /* A restructure in flight re-keys the sentences this run would apply
-             by. Never started, so it is not kept in `considered` (the next
-             library change retries it), like a run whose read threw. */
-          if (store.getState().ui.restructuringBookId === id) {
-            prosodyConsidered.current.delete(id);
-            return;
-          }
           ctrl = new AbortController();
           prosodyLibraryRuns.current.set(id, ctrl);
         }

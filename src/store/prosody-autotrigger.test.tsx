@@ -1345,7 +1345,7 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     expect(unfinishedPuts()).toEqual(['b1']);
   });
 
-  it('restructure: a library-triggered run refused during one never started, so the next library change retries it (watermark unset)', async () => {
+  it('restructure: a library run that starts during one is aborted and stays unfinished; opening the book afterwards runs it', async () => {
     const store = makeStore(true);
     renderAnyPath(store);
     await settle(30);
@@ -1353,18 +1353,21 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     await act(async () => {
       store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
     });
-    await settle(100);
-    expect(detectEmotionsMock).not.toHaveBeenCalled();
-    expect(marks.has('b1')).toBe(false); // refused, so nothing was marked
+    await settle(300);
+    expect(marks.get('b1')).toBe(false); // started, then ended at once: unfinished, never done
+    expect(watermarkPuts('b1')).toEqual([]);
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
 
     await act(async () => {
       store.dispatch(uiActions.setRestructuringBook(null));
     });
+    const before = detectEmotionsMock.mock.calls.length;
     await act(async () => {
-      store.dispatch(librarySlice.actions.addBook(makeBook('b2', 'cast_pending')));
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
     });
-    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledWith('b1', expect.anything()));
-    await settle(300);
+    await waitFor(() => expect(detectEmotionsMock.mock.calls.length).toBeGreaterThan(before));
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+    expect(marks.get('b1')).toBe(true);
   });
 
   it('restructure: an aborted library-triggered run loses its pill at once, not when its passes return', async () => {
