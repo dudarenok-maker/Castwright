@@ -186,6 +186,12 @@ export interface UiState {
       (selectBookHasForegroundWork): an emotion-detection run snapshotted the
       old structure and ends, and none starts, until it is over. Transient. */
   restructuringBookId: string | null;
+  /** #3400 — per book, how many restructures have BEGUN (bumped by
+      setRestructuringBook with a book id). A detached run captures its book's
+      count at start and ends once it moves: `restructuringBookId` alone cannot
+      tell a restructure that began and finished between two of its
+      annotations. Transient. */
+  restructureEpochs: Record<string, number>;
 }
 
 const initialState: UiState = {
@@ -220,6 +226,7 @@ const initialState: UiState = {
   startGenerationPending: false,
   analyzerPhasePicks: {},
   restructuringBookId: null,
+  restructureEpochs: {},
 };
 
 export const uiSlice = createSlice({
@@ -414,6 +421,7 @@ export const uiSlice = createSlice({
     },
     setRestructuringBook: (s, a: PayloadAction<string | null>) => {
       s.restructuringBookId = a.payload;
+      if (a.payload) s.restructureEpochs[a.payload] = (s.restructureEpochs[a.payload] ?? 0) + 1;
     },
     setOpenRevision: (s, a: PayloadAction<OpenRevision | null>) => {
       s.openRevision = a.payload;

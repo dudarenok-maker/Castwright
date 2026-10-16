@@ -294,6 +294,58 @@ describe('fs-33 — DetectEmotionsButton', () => {
       expect(toasts).toEqual([]);
     });
 
+    /* #3400 — a chapter restructure re-keys the sentences the run snapshotted,
+       so a later annotation keyed to the old structure would land on the wrong
+       line. The run ends when a restructure of its book BEGINS, even one that
+       is over again before the next annotation. */
+    it('#3400: a restructure that begins mid-run stops the run — a later annotation is not applied', async () => {
+      const resolve = deferredRun();
+      const store = makeSwitchableStore();
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
+
+      store.dispatch(uiSlice.actions.setRestructuringBook('bX'));
+      resolve();
+
+      await waitFor(() => expect(store.getState().prosody.activeStreams['bX']).toBeUndefined());
+      expect(store.getState().manuscript.sentences[0].emotion).toBeUndefined();
+      expect(putBookState).toHaveBeenCalledWith('bX', { slice: 'state', patch: { prosodyAnnotated: false } });
+      const toasts = (store.getState() as unknown as { notifications: { toasts: Array<{ message: string }> } })
+        .notifications.toasts;
+      expect(toasts.map((t) => t.message).join(' ')).toMatch(/restructur/i);
+    });
+
+    it('#3400: a restructure that starts AND finishes between two annotations still stops the run', async () => {
+      const resolve = deferredRun();
+      const store = makeSwitchableStore();
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
+
+      store.dispatch(uiSlice.actions.setRestructuringBook('bX'));
+      store.dispatch(uiSlice.actions.setRestructuringBook(null));
+      resolve();
+
+      await waitFor(() => expect(store.getState().prosody.activeStreams['bX']).toBeUndefined());
+      expect(store.getState().manuscript.sentences[0].emotion).toBeUndefined();
+      expect(putBookState).toHaveBeenCalledWith('bX', { slice: 'state', patch: { prosodyAnnotated: false } });
+    });
+
+    it('#3400 control: a restructure of ANOTHER book does not stop the run', async () => {
+      const resolve = deferredRun();
+      const store = makeSwitchableStore();
+      render(<Provider store={store}><DetectEmotionsButton /></Provider>);
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await waitFor(() => expect(detectEmotions).toHaveBeenCalled());
+
+      store.dispatch(uiSlice.actions.setRestructuringBook('other'));
+      store.dispatch(uiSlice.actions.setRestructuringBook(null));
+      resolve();
+
+      await waitFor(() => expect(store.getState().manuscript.sentences[0].emotion).toBe('angry'));
+    });
+
     it('control: staying on the book applies the annotations', async () => {
       const resolve = deferredRun();
       const store = makeSwitchableStore();

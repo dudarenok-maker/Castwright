@@ -55,6 +55,7 @@ function makeStore({
     startGenerationPending: false,
     analyzerPhasePicks: {},
     restructuringBookId: null,
+    restructureEpochs: {},
   };
   const accountPreloaded: AccountState = {
     ...FRONTEND_ACCOUNT_DEFAULTS,

@@ -97,6 +97,28 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
        gate to the book at click time and apply only while the slices hold it
        AND the stage names it (same gate as the layout's auto-trigger). */
     const book = { bookId, manuscriptId: store.getState().manuscript.manuscriptId as string };
+    /* #3400 — a chapter restructure re-keys the sentences this run snapshotted,
+       so a later annotation would land on the wrong line. The run ends when a
+       restructure of its book BEGINS (the counter, not restructuringBookId:
+       one can start and finish between two annotations). */
+    const epoch = () => store.getState().ui.restructureEpochs[bookId] ?? 0;
+    const startEpoch = epoch();
+    const restructured = () => epoch() !== startEpoch;
+    const unsubscribe = store.subscribe(() => {
+      if (restructured() && !controller.signal.aborted) controller.abort();
+    });
+    const markUnfinished = () =>
+      void api
+        .putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: false } })
+        .catch(() => {});
+    const toastRestructured = () =>
+      dispatch(
+        notificationsActions.pushToast({
+          kind: 'warn',
+          message:
+            'Emotion detection stopped because the chapters were restructured — the rest will be filled in the next time you open the book.',
+        }),
+      );
     try {
       const { totalAnnotations, totalChapters, skipped } = await runProsodyPasses(bookId, {
         dispatch,
@@ -104,7 +126,9 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         chapterId: scope.chapterId,
         canApply: () => {
           const s = store.getState();
-          return selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true;
+          return (
+            !restructured() && selectIsOpenBook(s, book) && stageNamesBook(s.ui.stage, book) === true
+          );
         },
         onProgress: (fraction, d) => {
           setProgress(fraction);
@@ -115,7 +139,11 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         onThrottle: () => setStatus('Waiting on the analyzer rate limit…'),
       });
       const lines = `${totalAnnotations} line${totalAnnotations === 1 ? '' : 's'}`;
-      if (skipped > 0) {
+      if (restructured()) {
+        markUnfinished();
+        toastRestructured();
+        setStatus(null);
+      } else if (skipped > 0) {
         /* #3435 (PR #3505 review passes 6-7) — mark the book unfinished
            (false, not cleared: the layout re-runs only an explicit false) so
            it is re-run (fill-only) the next time it is opened, and say so
@@ -142,6 +170,10 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
       setPhase('idle');
     } catch (e) {
       if ((e as Error).name === 'AbortError') {
+        if (restructured()) {
+          markUnfinished();
+          toastRestructured();
+        }
         setStatus(null);
         setPhase('idle');
       } else if (e instanceof DetectEmotionsError && e.code === 'no_attribution') {
@@ -155,6 +187,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
         setPhase('idle');
       }
     } finally {
+      unsubscribe();
       dispatch(prosodyActions.clear({ bookId }));
       abortRef.current = null;
     }

@@ -46,6 +46,7 @@ const baseState = (stage: Stage): UiState => ({
   startGenerationPending: false,
   analyzerPhasePicks: {},
   restructuringBookId: null,
+  restructureEpochs: {},
 });
 
 describe('uiSlice — openBook status→stage routing', () => {
@@ -605,5 +606,18 @@ describe('uiSlice — #3141 step 5: per-run phase-model picks', () => {
     const s = uiSlice.reducer(undefined, { type: '@@init' });
     expect(s).not.toHaveProperty('showRevisionPlayer');
     expect('setShowRevisionPlayer' in uiActions).toBe(false);
+  });
+});
+
+describe('uiSlice — #3400 restructure epochs', () => {
+  it('setRestructuringBook bumps the book epoch when a restructure begins, not when it ends', () => {
+    let s = baseState({ kind: 'voices' });
+    s = uiSlice.reducer(s, uiActions.setRestructuringBook('b1'));
+    expect(s.restructureEpochs).toEqual({ b1: 1 });
+    s = uiSlice.reducer(s, uiActions.setRestructuringBook(null));
+    expect(s.restructureEpochs).toEqual({ b1: 1 });
+    s = uiSlice.reducer(s, uiActions.setRestructuringBook('b1'));
+    s = uiSlice.reducer(s, uiActions.setRestructuringBook('b2'));
+    expect(s.restructureEpochs).toEqual({ b1: 2, b2: 1 });
   });
 });
