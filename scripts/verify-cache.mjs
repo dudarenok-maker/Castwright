@@ -1599,8 +1599,13 @@ function killStepChildTree(child) {
 // 'close'. 2s: a clean kill closes in milliseconds, so 2s separates "straggler"
 // from "normal" without making a hung step linger. 3 sweeps: the first catches
 // the late-spawn race, the next two cover a survivor that itself spawns again.
-// Worst case past the budget ~= 4 graces (8s) + 3 Win32_Process snapshots
-// (~1s each, up to 15s each if WMI is wedged) plus the one pre-kill snapshot.
+// Worst case past the budget: the pre-kill snapshot runs BEFORE the kill, so it
+// also delays the kill itself (~0.9s local / ~2.5s on CI typically; a wedged WMI
+// makes one collectProcessSnapshot up to ~30.25s: a 15s timeout, one retry, a
+// 250ms gap). Then killTreeFn (up to KILL_TIMEOUT_MS = 15s), the census's own
+// snapshot, 4 graces (8s) and up to TIMEOUT_RESWEEP_MAX re-sweep snapshots (each
+// up to ~30.25s) plus a killTree spawn (up to 15s) per target. Typical is a few
+// seconds; the wedged worst case is minutes, not the grace arithmetic alone.
 export const TIMEOUT_RESWEEP_GRACE_MS = 2000;
 export const TIMEOUT_RESWEEP_MAX = 3;
 // A root whose pre-kill snapshot failed is only known to have started at or
@@ -1618,7 +1623,7 @@ const APPROX_ROOT_WINDOW_MS = 5000;
 function snapshotTree(snapshotFn, rootPid, spawnedAt) {
   const known = new Map();
   try {
-    const rows = snapshotFn();
+    const rows = snapshotFn(rootPid);
     const byPid = new Map(rows.map((r) => [r.pid, r]));
     for (const pid of computeOsDescendants(rootPid, rows)) {
       const startedAt = byPid.get(pid)?.startedAt;
@@ -1648,7 +1653,7 @@ function snapshotTree(snapshotFn, rootPid, spawnedAt) {
 function resweepTree({ known, rootPid, snapshotFn, sweepKillFn }) {
   let rows;
   try {
-    rows = snapshotFn();
+    rows = snapshotFn(rootPid);
   } catch {
     return [];
   }
@@ -1735,7 +1740,9 @@ export async function runStepProcess(
     retryKey = npmScript,
     timeoutMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000,
     // Injectable purely so the timeout re-sweep (#3695) is testable without a
-    // real race; nothing in production passes them.
+    // real race; nothing in production passes them. `snapshotFn` is called with
+    // the step root's pid so a test can build rows relative to it (the real
+    // collectProcessSnapshot destructures its first arg and ignores a number).
     killTreeFn = killStepChildTree,
     snapshotFn = collectProcessSnapshot,
     sweepKillFn = killTree,

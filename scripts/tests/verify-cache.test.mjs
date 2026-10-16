@@ -1556,7 +1556,7 @@ test('readHangPid: only a positive integer pid is returned; empty / 0 / garbled 
   assert.equal(readHangPid(dir), 12345);
 });
 
-function armSurvivorWatch(dir) {
+function armSurvivorWatch(dir, afterMs = STEP_BUDGET_PAST_LAUNCH_MS + SURVIVOR_GRACE_MS) {
   const watch = { survivorPid: null, disarm: () => clearTimeout(timer) };
   const timer = setTimeout(() => {
     const pid = readHangPid(dir);
@@ -1568,7 +1568,7 @@ function armSurvivorWatch(dir) {
         // already gone
       }
     }
-  }, STEP_BUDGET_PAST_LAUNCH_MS + SURVIVOR_GRACE_MS);
+  }, afterMs);
   return watch;
 }
 
@@ -1776,6 +1776,7 @@ test('runStepProcess re-sweep: survivors that never die => bounded sweeps, then 
     assert.equal(h.logs.length, 1);
     assert.match(h.logs[0], /\[timeout\] hang: 'close' not seen after the kill and 2 re-sweep\(s\)/);
     assert.match(h.logs[0], new RegExp(`${h.child.pid}`), 'names the surviving pid');
+    assert.equal(h.child.stderr.destroyed, true, "give-up must destroy the piped stderr so a surviving holder can't keep the process open");
   } finally {
     h.cleanup();
   }
@@ -1794,8 +1795,7 @@ test('runStepProcess re-sweep: never targets pid 0, this process or its ancestor
       timeoutMs: 1000,
       killTreeFn: h.killTreeFn,
       // A snapshot that makes this process and a parent hang off the step root.
-      snapshotFn: () => {
-        const root = h.child?.pid ?? 4242;
+      snapshotFn: (root) => {
         return [
           { pid: root, ppid: 1, name: 'r', commandLine: '', cpuSeconds: 0, startedAt: T },
           { pid: 0, ppid: root, name: 'z', commandLine: '', cpuSeconds: 0, startedAt: T },
@@ -1811,8 +1811,9 @@ test('runStepProcess re-sweep: never targets pid 0, this process or its ancestor
       sweepKillFn: (pid) => swept.push(pid),
     });
     assert.ok(!swept.includes(0) && !swept.includes(process.pid), `protected pids swept: ${JSON.stringify(swept)}`);
-    // (The root is itself an "ancestor" of this process in the fake snapshot,
-    // so it is protected too — the point is the ordinary pid IS swept.)
+    // The root is an "ancestor" of this process in the fake snapshot (process.pid
+    // hangs off it), so the ancestry guard must keep it out of the sweep too.
+    assert.ok(!swept.includes(h.child.pid), `an ancestor of this process (the step root) must not be swept: ${JSON.stringify(swept)}`);
     assert.ok(swept.includes(2147480002), 'an ordinary descendant is still a target');
   } finally {
     h.cleanup();
@@ -1826,9 +1827,8 @@ test('runStepProcess re-sweep: never targets pid 0, this process or its ancestor
 function resweepStaleHarness(dir, { preKill, reSweep }) {
   const h = resweepHarness(dir);
   let calls = 0;
-  h.snapshotFn = () => {
+  h.snapshotFn = (root) => {
     calls += 1;
-    const root = h.child?.pid ?? 4242;
     const rows = calls === 1 ? preKill(root) : reSweep(root);
     if (rows === null) throw new Error('snapshot failed');
     return rows;
@@ -1875,10 +1875,11 @@ test('runStepProcess re-sweep: a stale-ppid process older than its parent is not
 test('runStepProcess re-sweep: a recycled root pid (new holder + its child) is not swept (#3695)', async () => {
   const dir = mkTmp();
   const KID = 2147480020;
+  const T = Date.now() + 100;
   const h = resweepStaleHarness(dir, {
-    preKill: (root) => [row(root, 1, 1000)],
+    preKill: (root) => [row(root, 1, T)],
     // The root pid is now held by an unrelated, newer process with its own child.
-    reSweep: (root) => [row(root, 1, 9000), row(KID, root, 9100)],
+    reSweep: (root) => [row(root, 1, T + 9000), row(KID, root, T + 9100)],
   });
   try {
     await h.run();
@@ -1923,6 +1924,56 @@ test('runStepProcess re-sweep: pre-kill snapshot failed + root pid later recycle
   }
 });
 
+test('runStepProcess re-sweep: seeds from every recorded pid, so the orphan of a dead intermediate is found (#3695)', async () => {
+  const dir = mkTmp();
+  const M = 2147480050; // alive pre-kill, dead by the re-sweep
+  const L = 2147480051; // M's late child, orphaned: keeps ppid M
+  const T = Date.now() + 100;
+  const h = resweepStaleHarness(dir, {
+    preKill: (root) => [row(root, 1, T), row(M, root, T + 10)],
+    reSweep: (root) => [row(root, 1, T), row(L, M, T + 20)],
+  });
+  try {
+    await h.run();
+    assert.ok(h.swept.includes(L), `the orphan hangs off a recorded-but-dead pid and is only reachable by seeding from it: ${JSON.stringify(h.swept)}`);
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('runStepProcess re-sweep: windows:false => no process-table query, settles after one grace with the [timeout] line (#3695)', { timeout: 30_000 }, async () => {
+  const dir = mkTmp();
+  const h = resweepHarness(dir);
+  let queried = 0;
+  const start = Date.now();
+  try {
+    const result = await runStepProcess('hang', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      timeoutMs: 500,
+      killTreeFn: h.killTreeFn,
+      snapshotFn: () => {
+        queried += 1;
+        return [];
+      },
+      censusFn: NO_CENSUS,
+      logFn: h.logFn,
+      windows: false,
+      resweepGraceMs: RESWEEP_TEST_GRACE_MS,
+      sweepKillFn: (pid) => h.swept.push(pid),
+    });
+    assert.equal(result.timedOut, true);
+    assert.equal(queried, 0, 'POSIX never queries the process table');
+    assert.deepEqual(h.swept, []);
+    assert.equal(h.logs.length, 1);
+    assert.match(h.logs[0], /\[timeout\] hang: 'close' not seen after the kill and 0 re-sweep\(s\)/);
+    assert.ok(Date.now() - start < 500 + 5_000, 'must settle one grace after the kill, not at the fixture self-exit');
+  } finally {
+    h.cleanup();
+  }
+});
+
 test('runStepProcess re-sweep: a step finishing inside its budget never queries the process table (#3695)', async () => {
   const dir = mkTmp();
   writeFileSync(join(dir, 'ok.mjs'), 'process.exit(0);\n', 'utf8');
@@ -1957,7 +2008,11 @@ test(
   async () => {
     const dir = mkTmp();
     writeHangingFixture(dir, 'hang');
-    const watch = armSurvivorWatch(dir);
+    // The watch is only an orphan backstop here: arm it PAST the elapsed bound
+    // below, so a slow pre-kill snapshot (up to ~30s on a wedged WMI) trips that
+    // bound with its own "took Nms" message instead of the watch killing the
+    // fixture first and misreporting a partial kill.
+    const watch = armSurvivorWatch(dir, STEP_BUDGET_PAST_LAUNCH_MS + 45_000);
     const start = Date.now();
     try {
       const result = await runStepProcess('hang', {
