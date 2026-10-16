@@ -27,6 +27,10 @@ import {
   htmlCellText,
   ALLOCATION_FLOOR,
   parseNextIdMarker,
+  ROW_ID_REGEX,
+  splitRowId,
+  parseTitledSections,
+  parseRegisterRowTitles,
 } from '../check-onbox-register.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
@@ -279,6 +283,231 @@ test('4a: the same row ID twice in the SAME section is reported', () => {
     ],
     '4a must fire alone, with check 1 satisfied by the matching glance count',
   );
+});
+
+// ---------------------------------------------------------------------------
+// #3587: allocate-once BLK/UNC IDs in the Blocked and Unconfirmed sections.
+// ---------------------------------------------------------------------------
+const BLOCKED_TITLE = '## Blocked — hardware not available';
+const UNCONFIRMED_TITLE = '## Unconfirmed — not debts until substantiated';
+function titledFixture({ blocked, unconfirmed }) {
+  const extraSections = [];
+  if (blocked !== undefined) extraSections.push(`${BLOCKED_TITLE}\n${blocked}\n`);
+  if (unconfirmed !== undefined) extraSections.push(`${UNCONFIRMED_TITLE}\n${unconfirmed}\n`);
+  return registerFixture({
+    glance: [['A', 1]],
+    groups: [{ letter: 'A', nextId: 101, rows: [1] }],
+    extraSections,
+  });
+}
+
+test('BLK/UNC (a): numbered rows with markers above them produce zero errors', () => {
+  const text = titledFixture({
+    blocked: '\n<!-- next-id: BLK102 -->\n\n### BLK101 · x\n\nText.\n',
+    unconfirmed: '\n<!-- next-id: UNC102 -->\n\n- **UNC101 · y** (z)\n',
+  });
+  assert.deepEqual(checkRegister(text), []);
+});
+
+test('BLK/UNC (b): a duplicated BLK heading or UNC bullet is a duplicate-ID error', () => {
+  const blk = titledFixture({
+    blocked: '\n<!-- next-id: BLK102 -->\n\n### BLK101 · x\n\n### BLK101 · again\n',
+  });
+  assert.ok(checkRegister(blk).some((e) => e.includes('Row ID BLK101 appears more than once')));
+  const unc = titledFixture({
+    unconfirmed: '\n<!-- next-id: UNC102 -->\n\n- **UNC101 · y** (z)\n- **UNC101 · again**\n',
+  });
+  assert.ok(checkRegister(unc).some((e) => e.includes('Row ID UNC101 appears more than once')));
+});
+
+for (const [prefix, section, rowLine, name] of [
+  ['BLK', 'blocked', (n) => `### BLK${n} · x\n`, 'Blocked'],
+  ['UNC', 'unconfirmed', (n) => `- **UNC${n} · x** (z)\n`, 'Unconfirmed'],
+]) {
+  const build = (body) => titledFixture({ [section]: body });
+
+  test(`${prefix} (c): a numbered row with no next-id marker is reported`, () => {
+    const errors = checkRegister(build(`\n${rowLine(101)}`));
+    assert.ok(
+      errors.some((e) => e.includes(`The ${name} section has ${prefix} rows but no "<!-- next-id: ${prefix}N -->"`)),
+      `got: ${JSON.stringify(errors)}`,
+    );
+  });
+
+  test(`${prefix} (c): a marker below the floor is reported`, () => {
+    const errors = checkRegister(build(`\n<!-- next-id: ${prefix}100 -->\n\n`));
+    assert.ok(
+      errors.some((e) => e.includes(`next-id (${prefix}100) is below the allocation floor ${prefix}101`)),
+      `got: ${JSON.stringify(errors)}`,
+    );
+  });
+
+  test(`${prefix} (c): a row at or above the marker is reported`, () => {
+    const errors = checkRegister(build(`\n<!-- next-id: ${prefix}101 -->\n\n${rowLine(101)}`));
+    assert.ok(
+      errors.some((e) => e.includes(`${prefix}101 is at or above the ${name} section's next-id (${prefix}101)`)),
+      `got: ${JSON.stringify(errors)}`,
+    );
+  });
+
+  test(`${prefix} (c): a look-alike row number is reported as invalid`, () => {
+    const bad = prefix === 'BLK' ? '### BLK19b · x\n' : '- **UNC5a · x**\n';
+    const errors = checkRegister(build(`\n<!-- next-id: ${prefix}102 -->\n\n${bad}`));
+    assert.ok(
+      errors.some((e) => e.includes(`is not a valid row number`) && e.includes(`${prefix}${prefix === 'BLK' ? '19b' : '5a'}`)),
+      `got: ${JSON.stringify(errors)}`,
+    );
+  });
+}
+
+test('BLK (c): a dotted look-alike heading is reported as invalid', () => {
+  const errors = checkRegister(
+    titledFixture({ blocked: '\n<!-- next-id: BLK102 -->\n\n### BLK2.1 · x\n' }),
+  );
+  assert.ok(errors.some((e) => e.includes('BLK2.1') && e.includes('is not a valid row number')));
+});
+
+test('BLK/UNC (d): unnumbered legacy rows and no markers still produce zero errors', () => {
+  const text = titledFixture({
+    blocked: '\n### AMD GPU support Phase 2\n\nText.\n',
+    unconfirmed: '\n- **fs-38 Wave 1** (not a debt yet)\n',
+  });
+  assert.deepEqual(checkRegister(text), []);
+});
+
+test('BLK/UNC (e): the retired table accepts a BLK row id and still rejects malformed ones', () => {
+  const retired = (id) =>
+    `${registerFixture({ glance: [['A', 1]], groups: [{ letter: 'A', nextId: 101, rows: [1] }] })}
+## Retired carried rows
+
+| Row | Owning PR | Closed unmerged | Reason |
+|---|---|---|---|
+| ${id} | #3505 | 2026-10-01 | lane closed |
+`;
+  assert.deepEqual(checkRegister(retired('BLK101')), []);
+  assert.deepEqual(checkRegister(retired('UNC101')), []);
+  assert.ok(checkRegister(retired('BLK')).some((e) => e.includes('is not a row ID')));
+  assert.ok(checkRegister(retired('AB101')).some((e) => e.includes('is not a row ID')));
+});
+
+test('BLK/UNC (f): parseRegisterRowTitles returns BLK and UNC titles', () => {
+  const titles = parseRegisterRowTitles(
+    titledFixture({
+      blocked: '\n<!-- next-id: BLK102 -->\n\n### BLK101 · no   GPU here\n',
+      unconfirmed: '\n<!-- next-id: UNC102 -->\n\n- **UNC101 · maybe  a thing** (z)\n',
+    }),
+  );
+  assert.equal(titles.get('BLK101'), '· no GPU here');
+  assert.equal(titles.get('UNC101'), 'maybe a thing');
+  assert.equal(titles.get('A1'), '· thing 1');
+});
+
+test('BLK/UNC (f): splitRowId and ROW_ID_REGEX', () => {
+  assert.deepEqual(splitRowId('BLK101'), { prefix: 'BLK', number: 101 });
+  assert.deepEqual(splitRowId('UNC7'), { prefix: 'UNC', number: 7 });
+  assert.deepEqual(splitRowId('A1'), { prefix: 'A', number: 1 });
+  for (const bad of ['BLK', 'X', 'BL101', 'A1b']) {
+    assert.equal(splitRowId(bad), null, bad);
+    assert.equal(ROW_ID_REGEX.test(bad), false, bad);
+  }
+});
+
+test('BLK/UNC (g): parseTitledSections keys a section iff it exists, even with no ID rows', () => {
+  const sec = (title, body) => ({ title, body });
+  const both = parseTitledSections([
+    sec('Blocked — hardware not available', '\n### Not numbered\n'),
+    sec('Unconfirmed — not debts', '\n- **fs-38** x\n'),
+  ]);
+  assert.deepEqual([...both.groups], [['BLK', []], ['UNC', []]]);
+  assert.deepEqual(both.invalid, []);
+  const none = parseTitledSections([sec('Group A — x', '\n### A1 · x\n')]);
+  assert.equal(none.groups.size, 0);
+  const one = parseTitledSections([sec('Blocked — x', '\n### BLK101 · x\n\n### BLK103 · y\n')]);
+  assert.deepEqual([...one.groups], [['BLK', [101, 103]]]);
+});
+
+// #3587 child 3: the live-view parse layer and baseline helpers read BLK/UNC IDs.
+const item = (id, title) =>
+  `<details class="item"><summary><span class="num">${id}</span><span class="iname">${title}</span></summary><div class="body"><p>b ${id}</p></div></details>`;
+const blkUncLiveView = ({ blkTag = 'BLK', uncTag = 'UNC', extraBlk = '' } = {}) => `
+<section class="group is-blocked" id="blocked"><h3><span class="gtag">${blkTag}</span> Blocked <span class="gcount">2 rows</span></h3>
+${item('BLK101', 'no gpu')}${item('—', 'legacy blocked')}${extraBlk}</section>
+<section class="group is-soft" id="unconfirmed"><h3><span class="gtag">${uncTag}</span> Unconfirmed <span class="gcount">1 row</span></h3>
+${item('UNC101', 'maybe')}${item('—', 'legacy unconfirmed')}</section>
+`;
+
+test('BLK/UNC child3 (a): row bodies, titles and blocks read BLK/UNC rows and ignore a — row', () => {
+  const html = blkUncLiveView();
+  const { bodies, errors } = onbox.parseLiveViewRowBodies(html);
+  assert.deepEqual(errors, []);
+  assert.deepEqual([...bodies.keys()], ['BLK101', 'UNC101']);
+  assert.deepEqual([...onbox.parseLiveViewRowTitles(html)], [['BLK101', 'no gpu'], ['UNC101', 'maybe']]);
+  assert.deepEqual([...onbox.parseLiveViewRowBlocks(html).keys()], ['BLK101', 'UNC101']);
+});
+
+test('BLK/UNC child3 (b): parseLiveViewSections yields BLK/UNC keys; the old ? page yields no UNC key', () => {
+  const { sections, duplicateLetters, invalidRowIds } = onbox.parseLiveViewSections(blkUncLiveView());
+  assert.deepEqual(sections.get('BLK'), { headerCount: 2, rowIds: ['BLK101'] });
+  assert.deepEqual(sections.get('UNC'), { headerCount: 1, rowIds: ['UNC101'] });
+  assert.equal(duplicateLetters.size, 0);
+  assert.deepEqual(invalidRowIds, []);
+  const old = onbox.parseLiveViewSections(blkUncLiveView({ uncTag: '?' }));
+  assert.equal(old.sections.has('UNC'), false);
+  assert.deepEqual(old.invalidRowIds, []);
+  const dup = onbox.parseLiveViewSections(blkUncLiveView() + blkUncLiveView().split('\n').slice(0, 3).join('\n') + '</section>');
+  assert.ok(dup.duplicateLetters.has('BLK'));
+});
+
+test('BLK/UNC child3 (b): an old-format page and a BLK/UNC page add no checkLiveView error', () => {
+  const reg = buildRegister();
+  assert.deepEqual(checkLiveView(reg, buildLiveView()), []);
+  const numbered = buildLiveView().replace(
+    '<span class="num">—</span><span class="iname">something</span>',
+    '<span class="num">BLK101</span><span class="iname">something</span>',
+  );
+  assert.deepEqual(checkLiveView(reg, numbered), []);
+});
+
+test('BLK/UNC child3 (c): resolveBaselineGroups carries BLK/UNC into bodyGroups/nextIds/rowTitles, not tableLetters', () => {
+  const withIds = onbox.resolveBaselineGroups(
+    titledFixture({
+      blocked: '\n<!-- next-id: BLK103 -->\n\n### BLK101 · x\n\n### BLK102 · y\n',
+      unconfirmed: '\n<!-- next-id: UNC102 -->\n\n- **UNC101 · u** (z)\n',
+    }),
+  );
+  assert.deepEqual(withIds.bodyGroups.get('BLK'), [101, 102]);
+  assert.deepEqual(withIds.bodyGroups.get('UNC'), [101]);
+  assert.equal(withIds.nextIds.get('BLK'), 103);
+  assert.equal(withIds.nextIds.get('UNC'), 102);
+  assert.equal(withIds.rowTitles.get('UNC101'), 'u');
+  assert.deepEqual([...withIds.tableLetters], ['A']);
+  const legacy = onbox.resolveBaselineGroups(
+    titledFixture({ blocked: '\n### Not numbered\n', unconfirmed: '\n- **fs-38** x\n' }),
+  );
+  assert.notEqual(legacy, null);
+  assert.equal(legacy.bodyGroups.has('BLK'), false);
+  assert.equal(legacy.bodyGroups.has('UNC'), false);
+  assert.equal(legacy.nextIds.has('BLK'), false);
+  assert.equal(legacy.nextIds.has('UNC'), false);
+});
+
+test('BLK/UNC child3 (d): resolveMainEverCarried and resolveRowOwner accept BLK/UNC IDs', () => {
+  const calls = [];
+  const runner = (args) => {
+    calls.push(args);
+    return { status: 0, stdout: 'abc123\n' };
+  };
+  assert.equal(onbox.resolveMainEverCarried('/r', 'reg.md', 'main', 'BLK101', runner), true);
+  assert.equal(onbox.resolveMainEverCarried('/r', 'reg.md', 'main', 'UNC101', runner), true);
+  assert.equal(onbox.resolveMainEverCarried('/r', 'reg.md', 'main', 'nope', runner), false);
+  assert.ok(calls[0].includes('^### BLK101[^0-9]'));
+  assert.ok(calls[1].includes('^- \\*\\*UNC101[^0-9]'));
+  assert.equal(calls.length, 2, 'a non-ID makes no git call');
+  for (const id of ['BLK101', 'UNC101']) {
+    const seen = [];
+    onbox.resolveRowOwner('/r', 'live.html', id, { title: 't', mainRef: 'main' }, (args) => (seen.push(args), { status: 0, stdout: '' }));
+    assert.ok(seen.length > 0, `${id} reaches git`);
+  }
 });
 
 test('4b: a row ID at or above its group next-id is reported', () => {
@@ -5839,4 +6068,459 @@ test('#3529 pass 5: an incomplete commit list fails closed and says so, not "nam
     assert.ok(!/names the wrong PR/.test(retired[0]), retired[0]);
     assert.match(retired[0], /must still be carried/);
   });
+});
+
+// ---------------------------------------------------------------------------
+// #3587: --against-published classifies Blocked/Unconfirmed rows by ID, with
+// the same verdicts a lettered row gets. Fixtures reuse the #3529 harness
+// (`merged`/`own`/`UNMERGED`, `withRetired`) with a Blocked or Unconfirmed
+// section appended to the Group B register and live view.
+// ---------------------------------------------------------------------------
+const TITLED_CASES = [
+  {
+    prefix: 'BLK',
+    heading: '## Blocked — hardware not available',
+    row: (n, title) => `### BLK${n} · ${title}\n\nText.\n`,
+    sectionAttrs: 'class="group is-blocked" id="blocked"',
+    label: 'Blocked',
+  },
+  {
+    prefix: 'UNC',
+    heading: '## Unconfirmed — not debts until substantiated',
+    row: (n, title) => `- **UNC${n} · ${title}** (z)\n`,
+    sectionAttrs: 'class="group is-soft" id="unconfirmed"',
+    label: 'Unconfirmed',
+  },
+];
+
+function titledRegister(tc, rows, nextId) {
+  const body = rows.map(([n, title]) => tc.row(n, title)).join('\n');
+  return `${MAIN_B()}\n${tc.heading}\n\n<!-- next-id: ${tc.prefix}${nextId} -->\n\n${body}`;
+}
+
+function titledLiveView(tc, rows) {
+  const details = rows
+    .map(
+      ({ id, body, title }) => `    <details class="item">
+      <summary><span class="num">${id}</span><span class="iname">${title ?? 't'}</span><span class="risk">default</span></summary>
+      <div class="body">
+        <p>${body}</p>
+      </div>
+    </details>`,
+    )
+    .join('\n');
+  return `${buildRowContentLiveView(baseRows, 'B')}
+  <section ${tc.sectionAttrs}>
+    <h3 class="gtitle"><span class="gtag">${tc.prefix}</span> ${tc.label} <span class="gcount">${rows.length} rows</span></h3>
+${details}
+  </section>
+`;
+}
+
+for (const tc of TITLED_CASES) {
+  const P = tc.prefix;
+  const id1 = `${P}101`;
+  const id2 = `${P}102`;
+  const reg = (rows = [[101, 'mine one']], next = 102) => titledRegister(tc, rows, next);
+  const own1 = { id: id1, body: 'x', title: 'mine one' };
+  const theirs2 = { id: id2, body: 'theirs', title: THEIRS_TITLE };
+  const ownerOfId2 = (id) => (id === id2 ? OWNER_X : null);
+  const run = ({ working, baseline, tracked, published, extra = {} }) =>
+    checkLiveView(working ?? reg(), titledLiveView(tc, published ?? [own1, theirs2]), {
+      direction: 'extraOnly',
+      baselineText: baseline ?? reg(),
+      trackedLiveViewHtml: titledLiveView(tc, tracked ?? [own1]),
+      publishedProvenance: UNMERGED,
+      ...extra,
+    });
+
+  test(`#3587 ${P} (a): a live-only ${id2} from an unmerged lane fails as unmerged-lane-row, in the ${tc.label} section's words`, () => {
+    const errors = run({ extra: { rowOwnerLookup: ownerOfId2 } });
+    const unmerged = ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX);
+    assert.equal(unmerged.length, 1, JSON.stringify(errors));
+    assert.match(unmerged[0], new RegExp(`^unmerged-lane-row: ${id2}:`));
+    assert.ok(unmerged[0].includes(`${tc.label} section`), unmerged[0]);
+    assert.ok(!/Group (BLK|UNC)/.test(unmerged[0]), unmerged[0]);
+    assert.ok(unmerged[0].includes(OWNER_X.commit.slice(0, 12)), 'names the owner commit');
+    assert.match(unmerged[0], /--publishing/);
+  });
+
+  test(`#3587 ${P} (b): the same row is silent on a merged or own publish, and unknown-provenance when the publish is untraceable`, () => {
+    for (const provenance of [merged(['B101', 'B102', id1, id2]), own(['B101', 'B102', id1, id2])]) {
+      assert.deepEqual(run({ extra: { publishedProvenance: provenance } }), [], provenance.kind);
+    }
+    const errors = run({
+      extra: { publishedProvenance: { kind: 'unknown', nonce: 'ghost0x1', reason: 'not found in any git history' } },
+    });
+    const unknown = ofPrefix(errors, UNKNOWN_PROVENANCE_ERROR_PREFIX);
+    assert.equal(unknown.length, 1, JSON.stringify(errors));
+    assert.match(unknown[0], new RegExp(id2));
+    assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 0);
+  });
+
+  test(`#3587 ${P} (b): a live-only row origin/main has ever carried is a discharge, whatever the provenance`, () => {
+    assert.deepEqual(run({ extra: { mainEverCarried: (id) => id === id2 } }), []);
+  });
+
+  test(`#3587 ${P} (b): a row the --publishing file carries verbatim is not dropped`, () => {
+    const errors = run({ extra: { publishingHtml: titledLiveView(tc, [own1, theirs2]) } });
+    assert.equal(ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 0, JSON.stringify(errors));
+  });
+
+  test(`#3587 ${P} (c): the same ${id2} under a different title on the live page is a row-id-collision naming both titles`, () => {
+    const errors = run({
+      working: reg([[101, 'mine one'], [102, MINE_TITLE]], 103),
+      tracked: [own1, { id: id2, body: 'mine', title: MINE_TITLE }],
+      published: [own1, theirs2],
+    });
+    const collision = ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX);
+    assert.equal(collision.length, 1, JSON.stringify(errors));
+    assert.match(collision[0], new RegExp(`^row-id-collision: ${id2}:`));
+    assert.ok(collision[0].includes(MINE_TITLE) && collision[0].includes(THEIRS_TITLE), collision[0]);
+    // the register's next-id (103) and the live page's highest + 1 (103)
+    assert.match(collision[0], new RegExp(`Renumber your row to ${P}103\\b`));
+  });
+
+  test(`#3587 ${P} (c): ${id2} on origin/main under a different title, with a merge-base lacking it, is the merged-lane collision`, () => {
+    const mineRegister = reg([[101, 'mine one'], [102, 'Mine']], 103);
+    const mainRegister = reg([[101, 'mine one'], [102, 'Theirs']], 104);
+    const mainPage = titledLiveView(tc, [own1, { id: id2, body: 'theirs', title: 'Theirs' }]);
+    const options = (mergeBaseText) => ({
+      direction: 'extraOnly',
+      baselineText: mainRegister,
+      trackedLiveViewHtml: titledLiveView(tc, [own1, { id: id2, body: 'mine', title: 'Mine' }]),
+      baselineLiveViewText: mainPage,
+      publishedProvenance: merged(['B101', 'B102', id1, id2]),
+      mergeBaseText,
+    });
+    const errors = checkLiveView(mineRegister, mainPage, options(reg()));
+    const collision = ofPrefix(errors, ROW_ID_COLLISION_ERROR_PREFIX);
+    assert.equal(collision.length, 1, JSON.stringify(errors));
+    assert.match(collision[0], new RegExp(`^row-id-collision: ${id2}:`));
+    // origin/main's next-id (104) clears the register's (103)
+    assert.match(collision[0], new RegExp(`Renumber your row to ${P}104\\b`));
+    // rebased onto main (the merge-base has it): main's own row, no collision
+    const rebased = checkLiveView(mineRegister, mainPage, options(mainRegister));
+    assert.equal(ofPrefix(rebased, ROW_ID_COLLISION_ERROR_PREFIX).length, 0, JSON.stringify(rebased));
+  });
+
+  test(`#3587 ${P} (d): --discharging ${id1} for a row the register dropped is consumed and silent; a name that is not live-only is refused`, () => {
+    const dropped = reg([[102, 'later row']], 103);
+    assert.deepEqual(
+      run({ working: dropped, tracked: [], published: [own1], extra: { dischargingIds: [id1] } }),
+      [],
+    );
+    // Without the name the register is BEHIND what is published.
+    const unnamed = run({ working: dropped, tracked: [], published: [own1] });
+    assert.equal(unnamed.length, 1, JSON.stringify(unnamed));
+    assert.match(unnamed[0], new RegExp(`${tc.label} section has row ${id1}`));
+    // Naming an ID the live page does not carry is the existing #2272 refusal.
+    const notLive = run({ published: [own1], extra: { dischargingIds: [id2] } });
+    assert.equal(ofPrefix(notLive, DISCHARGE_NAME_ERROR_PREFIX).length, 1, JSON.stringify(notLive));
+  });
+
+  test(`#3587 ${P} (e): a row in "Retired carried rows" (PR closed unmerged, owner confirmed) is not required to be carried`, () => {
+    const retired = `| ${id2} | #3505 | 2026-10-07 | closed in favour of #3525 |\n`;
+    const extra = { retiredPrStates: closedStates('CLOSED'), rowOwnerLookup: ownerOfId2 };
+    assert.deepEqual(run({ working: withRetired(reg(), retired), extra }), []);
+    const stillOwed = run({ extra });
+    assert.equal(ofPrefix(stillOwed, UNMERGED_LANE_ROW_ERROR_PREFIX).length, 1, JSON.stringify(stillOwed));
+  });
+
+  test(`#3587 ${P}: a register with no ${P} row or marker still classifies the page's ${id2}`, () => {
+    const errors = run({
+      working: MAIN_B(),
+      baseline: MAIN_B(),
+      tracked: [],
+      published: [theirs2],
+      extra: { rowOwnerLookup: ownerOfId2 },
+    });
+    const unmerged = ofPrefix(errors, UNMERGED_LANE_ROW_ERROR_PREFIX);
+    assert.equal(unmerged.length, 1, JSON.stringify(errors));
+    assert.ok(unmerged[0].includes(`${tc.label} section`), unmerged[0]);
+  });
+}
+
+test("#3587 (f): a live page with — rows and a ? Unconfirmed section against today's register shape has no new error", () => {
+  const legacyRegister = `${MAIN_B()}
+## Blocked — hardware not available
+
+### Not numbered yet
+
+Text.
+
+## Unconfirmed — not debts until substantiated
+
+- **fs-38** x
+`;
+  assert.deepEqual(checkRegister(legacyRegister), []);
+  const live = `${buildRowContentLiveView(baseRows, 'B')}
+  <section class="group is-blocked" id="blocked">
+    <h3 class="gtitle"><span class="gtag">BLK</span> Blocked <span class="gcount">1 rows</span></h3>
+    <details class="item"><summary><span class="num">—</span><span class="iname">t</span></summary></details>
+  </section>
+  <section class="group is-soft" id="unconfirmed">
+    <h3 class="gtitle"><span class="gtag">?</span> Unconfirmed <span class="gcount">1 rows</span></h3>
+    <details class="item"><summary><span class="num">—</span><span class="iname">t</span></summary></details>
+  </section>
+`;
+  for (const direction of ['extraOnly', 'both']) {
+    const errors = checkLiveView(legacyRegister, live, {
+      direction,
+      baselineText: legacyRegister,
+      publishedProvenance: UNMERGED,
+    });
+    assert.deepEqual(errors, [], `${direction}: ${JSON.stringify(errors)}`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// #3587 child 5 (#3643): --build-union / --publishing carry BLK/UNC row blocks
+// and raise their strip tiles and section gcounts — never the owed count.
+// ---------------------------------------------------------------------------
+function unionDetails(rows) {
+  return rows
+    .map(
+      ({ id, body, title }) => `    <details class="item">
+      <summary><span class="num">${id}</span><span class="iname">${title ?? 't'}</span><span class="risk">default</span></summary>
+      <div class="body">
+        <p>${body}</p>
+      </div>
+    </details>`,
+    )
+    .join('\n');
+}
+const plural = (n) => `${n} ${n === 1 ? 'row' : 'rows'}`;
+// A page with a lettered group (E), a Blocked section and an Unconfirmed
+// section, and a strip carrying the owed, Blocked and Unconfirmed tiles.
+function blkUncUnionView({ eRows = [], blkRows = [], uncRows = [] }) {
+  return `<title>On-box acceptance register — Castwright</title>
+
+  <div class="strip">
+    <div class="stat"><div class="n owed">${10 + eRows.length}</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n blk">${blkRows.length}</div><div class="l">Blocked</div></div>
+    <div class="stat"><div class="n">${uncRows.length}</div><div class="l">Unconfirmed</div></div>
+  </div>
+
+  <table class="glance">
+    <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
+    <tbody>
+      <tr><td><a href="#ge">E</a></td><td>Setup E</td><td>${eRows.length}</td></tr>
+    </tbody>
+  </table>
+
+  <section class="group" id="ge">
+    <h3 class="gtitle"><span class="gtag">E</span> Setup E <span class="gcount">${plural(eRows.length)}</span></h3>
+${unionDetails(eRows)}
+  </section>
+
+  <section class="group is-blocked" id="blocked">
+    <header>
+      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked <span class="gcount">${plural(blkRows.length)}</span></h3>
+      <p class="setup">Blocked setup.</p>
+    </header>
+${unionDetails(blkRows)}
+  </section>
+
+  <section class="group is-soft" id="unconfirmed">
+    <header>
+      <h3 class="gtitle"><span class="gtag">UNC</span> Unconfirmed <span class="gcount">${plural(uncRows.length)}</span></h3>
+      <p class="setup">Unconfirmed setup.</p>
+    </header>
+${unionDetails(uncRows)}
+  </section>
+`;
+}
+const uRow = (id) => ({ id, body: `body ${id}`, title: `title ${id}` });
+
+for (const tc of TITLED_CASES) {
+  const P = tc.prefix;
+  const key = P === 'BLK' ? 'blkRows' : 'uncRows';
+  const id1 = `${P}101`;
+  const id2 = `${P}102`;
+  const view = (ids, eRows = []) => blkUncUnionView({ eRows, [key]: ids.map(uRow) });
+  const reg = (rows = [[101, 'mine one']], next = 102) => titledRegister(tc, rows, next);
+  const mineRow = { id: id1, body: 'x', title: 'mine one' };
+  const theirsRow = { id: id2, body: 'theirs', title: THEIRS_TITLE };
+  const tiled = (rows) =>
+    titledLiveView(tc, rows).replace(
+      '<div class="l">Owed</div>',
+      `<div class="l">Owed</div><div class="n${P === 'BLK' ? ' blk' : ''}">${rows.length}</div><div class="l">${tc.label}</div>`,
+    );
+  const checkPublishing = (publishingHtml) =>
+    checkLiveView(reg(), tiled([mineRow, theirsRow]), {
+      direction: 'extraOnly',
+      baselineText: reg(),
+      trackedLiveViewHtml: tiled([mineRow]),
+      publishedProvenance: UNMERGED,
+      rowOwnerLookup: (id) => (id === id2 ? OWNER_X : null),
+      ...(publishingHtml === undefined ? {} : { publishingHtml }),
+    });
+  const stripTile = (html, label) => html.match(new RegExp(`<div class="n[^"]*">(\\d+)</div><div class="l">${label}</div>`))[1];
+
+  test(`#3587 ${P} (a): a carried ${id2} lands after ${id1}, raises the ${tc.label} tile and gcount, and leaves owed alone`, () => {
+    const union = onbox.buildUnionLiveView(view([id1]), view([id1, id2]), [id2]);
+    assert.equal(union, view([id1, id2]));
+    assert.ok(union.indexOf(`>${id1}<`) < union.indexOf(`>${id2}<`), 'block order');
+    assert.equal(stripTile(union, tc.label), '2');
+    assert.ok(union.includes('<span class="gcount">2 rows</span>'));
+    assert.ok(union.includes('<div class="n owed">10</div>'), 'owed untouched');
+    assert.ok(union.includes('<td>0</td>'), 'glance cell untouched');
+  });
+
+  test(`#3587 ${P} (a): the carried-row union passes --publishing, where the same run without it fails unmerged-lane-row`, () => {
+    const unmerged = ofPrefix(checkPublishing(), UNMERGED_LANE_ROW_ERROR_PREFIX);
+    assert.equal(unmerged.length, 1, JSON.stringify(unmerged));
+    const union = onbox.buildUnionLiveView(tiled([mineRow]), tiled([mineRow, theirsRow]), [id2]);
+    assert.deepEqual(checkPublishing(union), []);
+  });
+
+  test(`#3587 ${P} (d): a hand-built union with owed raised, or the ${tc.label} tile not raised, fails --publishing naming --build-union`, () => {
+    const good = onbox.buildUnionLiveView(tiled([mineRow]), tiled([mineRow, theirsRow]), [id2]);
+    assert.equal(stripTile(good, tc.label), '2');
+    const owedRaised = good.replace('<div class="n owed">2</div>', '<div class="n owed">3</div>');
+    const tileStale = good.replace(new RegExp(`(<div class="n[^"]*">)2(</div><div class="l">${tc.label}</div>)`), '$11$2');
+    for (const bad of [owedRaised, tileStale]) {
+      assert.notEqual(bad, good);
+      const pub = ofPrefix(checkPublishing(bad), PUBLISHING_FILE_ERROR_PREFIX);
+      assert.equal(pub.length, 1, JSON.stringify(pub));
+      assert.match(pub[0], /--build-union/);
+    }
+  });
+
+  test(`#3587 ${P} (f): a ${id2} absent from the live page, or already in the tracked view, is refused in the existing words`, () => {
+    const tracked = view([id1]);
+    assert.throws(() => onbox.buildUnionLiveView(tracked, view([id1]), [id2]), /not on the live page/);
+    assert.throws(() => onbox.buildUnionLiveView(tracked, view([id1, id2]), [id1]), /already in your live view/);
+    const noSection = tracked.replace(`<span class="gtag">${P}</span>`, '<span class="gtag">?</span>');
+    assert.throws(() => onbox.buildUnionLiveView(noSection, view([id1, id2]), [id2]), new RegExp(`${tc.label} section`));
+  });
+}
+
+for (const [P, key, id] of [['BLK', 'blkRows', 'BLK102'], ['UNC', 'uncRows', 'UNC102']]) {
+  test(`#3587 (b): a ${P} row carries into an empty section after </header>, never inside it, and raises only its tile and gcount`, () => {
+    const live = blkUncUnionView({ [key]: [uRow(id)] });
+    const tracked = blkUncUnionView({});
+    const union = onbox.buildUnionLiveView(tracked, live, [id]);
+    const sec = union.match(new RegExp(`<section[^>]*id="${P === 'BLK' ? 'blocked' : 'unconfirmed'}"[\\s\\S]*?</section>`))[0];
+    assert.ok(sec.indexOf('</header>') < sec.indexOf(`>${id}<`), 'block sits after </header>');
+    assert.ok(sec.includes('<span class="gcount">1 row</span>'));
+    assert.ok(union.includes(`<div class="l">${P === 'BLK' ? 'Blocked' : 'Unconfirmed'}</div>`) && !union.includes('<div class="n owed">11'), 'owed untouched');
+    assert.equal(union.replace(/\n\n( {2}<\/section>)/g, '\n$1'), live.replace(/\n\n( {2}<\/section>)/g, '\n$1'));
+  });
+}
+
+test('#3587 (c): a mixed E + BLK carry raises owed by one, the E glance cell by one, and the Blocked tile by one', () => {
+  const tracked = blkUncUnionView({ eRows: [uRow('E101')], blkRows: [uRow('BLK101')] });
+  const live = blkUncUnionView({ eRows: [uRow('E101'), uRow('E115')], blkRows: [uRow('BLK101'), uRow('BLK102')] });
+  const union = onbox.buildUnionLiveView(tracked, live, ['BLK102', 'E115']);
+  assert.equal(union, live);
+  assert.ok(union.includes('<div class="n owed">12</div>'), 'owed 11 -> 12');
+  assert.ok(union.includes('<td>2</td>'), 'E glance cell 1 -> 2');
+});
+
+test('#3587 (c): a BLK-only carry does not need an owed tile to exist; a lettered one still does', () => {
+  const owedTile = /<div class="stat"><div class="n owed">\d+<\/div><div class="l">Owed<\/div><\/div>\n/;
+  const tracked = blkUncUnionView({ blkRows: [uRow('BLK101')] }).replace(owedTile, '');
+  assert.ok(!tracked.includes('n owed'));
+  const union = onbox.buildUnionLiveView(tracked, blkUncUnionView({ blkRows: [uRow('BLK101'), uRow('BLK102')] }), ['BLK102']);
+  assert.ok(union.includes('<span class="num">BLK102</span>'));
+  const lettered = blkUncUnionView({ eRows: [uRow('E101')] }).replace(owedTile, '');
+  assert.throws(() => onbox.buildUnionLiveView(lettered, blkUncUnionView({ eRows: [uRow('E101'), uRow('E102')] }), ['E102']), /n owed/);
+});
+
+test('#3587 (c): a BLK row is placed among BLK rows by number', () => {
+  const tracked = blkUncUnionView({ blkRows: [uRow('BLK101'), uRow('BLK105')] });
+  const live = blkUncUnionView({ blkRows: [uRow('BLK101'), uRow('BLK103'), uRow('BLK104'), uRow('BLK105')] });
+  assert.equal(onbox.buildUnionLiveView(tracked, live, ['BLK104', 'BLK103']), live);
+});
+
+test('#3587 (e) CLI: --build-union writes a union carrying a BLK row, and --publishing of it exits 0', () => {
+  const block = `    <details class="item">
+      <summary><span class="num">BLK107</span><span class="iname">other lane blocked row</span><span class="risk">default</span></summary>
+      <div class="body">
+        <p>body BLK107</p>
+      </div>
+    </details>`;
+  const section = REAL_LIVE_VIEW_HTML.match(/<section\b[^>]*id="blocked"[\s\S]*?<\/section>/);
+  assert.ok(section, 'the tracked live view has a Blocked section');
+  const mutated = REAL_LIVE_VIEW_HTML.replace(section[0], (s) => s.replace(/(\s*)<\/section>$/, `\n${block}$1</section>`));
+  assert.notEqual(mutated, REAL_LIVE_VIEW_HTML);
+  withHermeticBaseline(mutated, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const env = { ONBOX_TEST_BASELINE_FILE: baselinePath, ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged' };
+    const unionPath = join(dirname(publishedPath), 'union.html');
+    const without = runCli(['--against-published', publishedPath], env);
+    assert.equal(without.status, 1, without.stderr);
+    assert.match(without.stderr, /unmerged-lane-row: BLK107/);
+    const built = runCli(['--against-published', publishedPath, '--build-union', unionPath], env);
+    assert.equal(built.status, 0, `stdout: ${built.stdout}\nstderr: ${built.stderr}`);
+    assert.ok(readFileSync(unionPath, 'utf8').includes('<span class="num">BLK107</span>'));
+    const checked = runCli(['--against-published', publishedPath, '--publishing', unionPath], env);
+    assert.equal(checked.status, 0, `stdout: ${checked.stdout}\nstderr: ${checked.stderr}`);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #3587 review: the glance table's Blocked/Unconfirmed cells feed the strip
+// tiles, so they are checked against the body like a lettered group's.
+// ---------------------------------------------------------------------------
+for (const [label, cellRegex] of [
+  ['Blocked', /(\| — \| \*\*Blocked\*\*[^|]*\| )(\d+)( \|)/],
+  ['Unconfirmed', /(\| — \| \*\*Unconfirmed\*\*[^|]*\| )(\d+)( \|)/],
+]) {
+  test(`#3587 review: a stale ${label} glance cell is reported against the body, the real register is clean`, () => {
+    assert.deepEqual(checkRegister(REAL_REGISTER_TEXT), []);
+    const stale = REAL_REGISTER_TEXT.replace(cellRegex, (_m, a, n, c) => `${a}${Number(n) + 1}${c}`);
+    assert.notEqual(stale, REAL_REGISTER_TEXT);
+    const errors = checkRegister(stale);
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.ok(errors[0].startsWith(`${label}: glance table says `), errors[0]);
+    assert.match(errors[0], /, body has \d+ rows?\. Update the table or the body\.$/);
+  });
+}
+
+test('#3587 review: legacy `—` rows on the live Blocked/Unconfirmed sections raise an advisory warning only when the register carries IDs', () => {
+  const run = (html, register = REAL_REGISTER_TEXT) =>
+    ofPrefix(
+      checkLiveView(register, html, {
+        direction: 'extraOnly',
+        baselineText: register,
+        trackedLiveViewHtml: REAL_LIVE_VIEW_HTML,
+        publishedProvenance: UNMERGED,
+      }),
+      onbox.LEGACY_LIVE_ROW_WARNING_PREFIX,
+    );
+  assert.deepEqual(run(REAL_LIVE_VIEW_HTML), [], 'the tracked page has IDs, so nothing to warn about');
+  const legacy = REAL_LIVE_VIEW_HTML.replace(/<span class="num">(?:BLK|UNC)\d+<\/span>/g, '<span class="num">—</span>');
+  assert.notEqual(legacy, REAL_LIVE_VIEW_HTML);
+  const warnings = run(legacy);
+  assert.equal(warnings.length, 2, JSON.stringify(warnings));
+  const countRows = (prefix) => (REAL_LIVE_VIEW_HTML.match(new RegExp(`<span class="num">${prefix}\\d+</span>`, 'g')) ?? []).length;
+  const plural = (n) => `row${n === 1 ? '' : 's'}`;
+  assert.match(warnings[0], new RegExp(`Blocked section has ${countRows('BLK')} legacy ${plural(countRows('BLK'))} with no BLK ID`));
+  assert.match(warnings[1], new RegExp(`Unconfirmed section has ${countRows('UNC')} legacy ${plural(countRows('UNC'))} with no UNC ID`));
+  const idless = REAL_REGISTER_TEXT.replace(/^### BLK\d+ · /gm, '### ').replace(/^(- \*\*)UNC\d+ · /gm, '$1').replace(/^<!-- next-id: (?:BLK|UNC)\d+ -->\r?\n/gm, '');
+  assert.notEqual(idless, REAL_REGISTER_TEXT);
+  assert.deepEqual(run(legacy, idless), [], 'a register with no BLK/UNC IDs is the pre-#3587 state: no warning');
+});
+
+test('#3587 review: the legacy-row warning is non-blocking through the real CLI (exit 0, warning on stderr)', () => {
+  const legacy = REAL_LIVE_VIEW_HTML.replace(/<span class="num">(?:BLK|UNC)\d+<\/span>/g, '<span class="num">—</span>');
+  assert.notEqual(legacy, REAL_LIVE_VIEW_HTML);
+  withHermeticBaseline(legacy, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const env = { ONBOX_TEST_BASELINE_FILE: baselinePath, ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged' };
+    const res = runCli(['--against-published', publishedPath], env);
+    assert.equal(res.status, 0, `stdout: ${res.stdout}\nstderr: ${res.stderr}`);
+    assert.match(res.stderr, /Legacy live-page rows \(not blocking/);
+    assert.match(res.stderr, /Blocked section has \d+ legacy rows? with no BLK ID/);
+  });
+});
+
+test('#3587 review: a carried row into an EMPTY section with no <header> falls back to anchoring after </h3>', () => {
+  const live = buildRowContentLiveView([theirsB103], 'B');
+  const tracked = buildRowContentLiveView([], 'B');
+  assert.ok(!tracked.includes('</header>'), 'the fixture section is bare-<h3>, the shape the fallback serves');
+  const union = onbox.buildUnionLiveView(tracked, live, ['B103']);
+  assert.ok(union.includes('<span class="num">B103</span>'), union);
+  assert.ok(union.indexOf('</h3>') < union.indexOf('<span class="num">B103</span>'), 'the block lands after the heading');
 });

@@ -13,8 +13,6 @@ import {
   parseBodyGroupCounts,
   parseTitledSectionBodyCounts,
   reconcileRowShells,
-  normaliseTitle,
-  decodeHtmlEntities,
   rewriteGcountInSection,
   main,
 } from '../build-register-live-view.mjs';
@@ -130,7 +128,7 @@ ${sections}
       <h3 class="gtitle"><span class="gtag">BLK</span> Blocked <span class="gcount">${blocked} rows</span></h3>
     </header>
     <details class="item">
-      <summary><span class="num">—</span><span class="iname">fixture blocked item</span><span class="chev">›</span></summary>
+      <summary><span class="num">BLK101</span><span class="iname">fixture blocked item</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Fixture body.</p>
       </div>
@@ -142,7 +140,7 @@ ${sections}
       <h3 class="gtitle"><span class="gtag">?</span> Unconfirmed <span class="gcount">${unconfirmed} rows</span></h3>
     </header>
     <details class="item">
-      <summary><span class="num">—</span><span class="iname">fixture unconfirmed item</span><span class="chev">›</span></summary>
+      <summary><span class="num">UNC101</span><span class="iname">fixture unconfirmed item</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Fixture body.</p>
       </div>
@@ -262,11 +260,11 @@ test('buildLiveView writes Blocked/Unconfirmed gcount from real body rows, even 
   const md = buildRegisterFixture({ blocked: 99, unconfirmed: 99 }) + `
 ## Blocked — hardware not available
 
-### fixture blocked item
+### BLK101 · fixture blocked item
 
 ## Unconfirmed — not debts until substantiated
 
-- **fixture unconfirmed item** — needs a real GPU.
+- **UNC101 · fixture unconfirmed item** — needs a real GPU.
 `;
   // The previously-committed live view claims 5/2 -- also stale, also wrong.
   const html = buildLiveViewFixture({ blocked: 5, unconfirmed: 2 });
@@ -357,87 +355,169 @@ test('reordered .md rows reorder shells, each body following its own ID', () => 
   assert.ok(next.indexOf('body two') < next.indexOf('body one'), 'A2 (now first in .md order) must come before A1');
 });
 
-test('normaliseTitle strips a balanced, markdown-linked trailing parenthetical', () => {
-  const md = 'AMD GPU support Phase 2 ([#1335](https://github.com/dudarenok-maker/Castwright/issues/1335))';
-  assert.equal(normaliseTitle(md), 'AMD GPU support Phase 2');
-});
+// --- BLK/UNC allocate-once IDs (#3587): Blocked/Unconfirmed shells keyed by ID ---
 
-test('normaliseTitle applied to both sides matches the RAM_HEAVY_MODELS case', () => {
-  const md = 'CPU-only `RAM_HEAVY_MODELS` clamp (plan 263, B2 step 7)';
-  const iname = decodeHtmlEntities('CPU-only RAM_HEAVY_MODELS clamp (B2 step 7)');
-  assert.equal(normaliseTitle(md), normaliseTitle(iname));
-});
+function blkUncShell(num, iname, body) {
+  return `      <details class="item">
+        <summary><span class="num">${num}</span><span class="iname">${iname}</span><span class="risk">r</span><span class="chev">›</span></summary>
+        <div class="body">${body}</div>
+      </details>`;
+}
 
-test('a Blocked heading matches its shell by exact normalised title, not position', () => {
-  const md = `## Blocked — hardware not available
-
-### First blocked thing (#111)
-### Second blocked thing (#222)
-`;
-  const html = `<section class="group is-blocked" id="blocked">
-      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
-      <details class="item">
-        <summary><span class="num">—</span><span class="iname">Second blocked thing</span><span class="risk">r</span><span class="chev">›</span></summary>
-        <div class="body">second body</div>
-      </details>
-      <details class="item">
-        <summary><span class="num">—</span><span class="iname">First blocked thing</span><span class="risk">r</span><span class="chev">›</span></summary>
-        <div class="body">first body</div>
-      </details>
+function blockedSection(shells) {
+  return `<section class="group is-blocked" id="blocked">
+      <header><h3 class="gtitle">…<span class="gcount">${shells.length} rows</span></h3></header>
+${shells.join('\n')}
   </section>`;
+}
+
+function unconfirmedSection(shells) {
+  return `<section class="group is-soft" id="unconfirmed">
+      <header><h3 class="gtitle">…<span class="gcount">${shells.length} rows</span></h3></header>
+${shells.join('\n')}
+  </section>`;
+}
+
+test('a Blocked heading matches its shell by ID, not position or title', () => {
+  const md = `## Blocked — hardware not available
+<!-- next-id: BLK103 -->
+
+### BLK101 · First blocked thing (#111)
+### BLK102 · Second blocked thing (#222)
+`;
+  const html = blockedSection([
+    blkUncShell('BLK102', 'Second blocked thing', 'second body'),
+    blkUncShell('BLK101', 'First blocked thing', 'first body'),
+  ]);
   const next = reconcileRowShells(md, html);
-  assert.ok(next.indexOf('First blocked thing') < next.indexOf('Second blocked thing'), 'md order must be preserved, not html order');
-  assert.match(next, /First blocked thing[\s\S]*?first body/);
+  assert.ok(next.indexOf('BLK101') < next.indexOf('BLK102'), 'md order must be preserved, not html order');
+  assert.match(next, /BLK101<\/span>[\s\S]*?first body/);
+  assert.match(next, /BLK102<\/span>[\s\S]*?second body/);
 });
 
-test('a Blocked title matching zero shells is an error', () => {
+test('a Blocked ID with no shell yields a placeholder shell numbered with that ID', () => {
   const md = `## Blocked — hardware not available
+<!-- next-id: BLK102 -->
 
-### Something with no shell (#333)
+### BLK101 · Something with no shell (#333)
 `;
-  const html = `<section class="group is-blocked" id="blocked">
-      <header><h3 class="gtitle">…<span class="gcount">0 rows</span></h3></header>
-  </section>`;
-  assert.throws(() => reconcileRowShells(md, html), /Something with no shell/);
+  const next = reconcileRowShells(md, blockedSection([]));
+  assert.match(next, /<span class="num">BLK101<\/span><span class="iname">Something with no shell \(#333\)<\/span>/);
+  assert.match(next, /class="body-placeholder"/);
 });
 
-test('an Unconfirmed bullet is matched by its bold-span text as a PREFIX of the decoded iname, not exact match', () => {
+test('a stale Blocked shell whose ID left the markdown is dropped, the rest kept', () => {
+  const md = `## Blocked — hardware not available
+<!-- next-id: BLK103 -->
+
+### BLK101 · Kept thing
+`;
+  const html = blockedSection([
+    blkUncShell('BLK101', 'Kept thing', 'kept body'),
+    blkUncShell('BLK102', 'Discharged thing', 'stale body'),
+  ]);
+  const next = reconcileRowShells(md, html);
+  assert.match(next, /kept body/);
+  assert.doesNotMatch(next, /stale body/);
+});
+
+test('an Unconfirmed bullet is matched by its UNC ID, not by title or title prefix', () => {
   const md = `## Unconfirmed — not debts until substantiated
+<!-- next-id: UNC102 -->
 
-- **fs-38 Wave 1** (designed-voice authoring, PR #1800) — no explicit owed callout
+- **UNC101 · fs-38 Wave 1** (designed-voice authoring, PR #1800) — no explicit owed callout
 `;
-  const html = `<section class="group is-soft" id="unconfirmed">
-      <header><h3 class="gtitle">…<span class="gcount">1 row</span></h3></header>
-      <details class="item">
-        <summary><span class="num">—</span><span class="iname">fs-38 Wave 1 — designed-voice authoring</span><span class="risk">r</span><span class="chev">›</span></summary>
-        <div class="body">b</div>
-      </details>
-  </section>`;
+  const html = unconfirmedSection([blkUncShell('UNC101', 'a wholly different iname', 'unc body')]);
   const next = reconcileRowShells(md, html);
-  assert.match(next, /fs-38 Wave 1 — designed-voice authoring/);
+  assert.match(next, /unc body/);
+  assert.doesNotMatch(next, /body-placeholder/);
 });
 
 test('reordering the two Unconfirmed bullets does not re-pair their bodies', () => {
   const md = `## Unconfirmed — not debts until substantiated
+<!-- next-id: UNC103 -->
 
-- **Second bullet**
-- **First bullet**
+- **UNC102 · Second bullet**
+- **UNC101 · First bullet**
 `;
-  const html = `<section class="group is-soft" id="unconfirmed">
-      <header><h3 class="gtitle">…<span class="gcount">2 rows</span></h3></header>
-      <details class="item">
-        <summary><span class="num">—</span><span class="iname">First bullet</span><span class="risk">r</span><span class="chev">›</span></summary>
-        <div class="body">first body</div>
-      </details>
-      <details class="item">
-        <summary><span class="num">—</span><span class="iname">Second bullet</span><span class="risk">r</span><span class="chev">›</span></summary>
-        <div class="body">second body</div>
-      </details>
-  </section>`;
+  const html = unconfirmedSection([
+    blkUncShell('UNC101', 'First bullet', 'first body'),
+    blkUncShell('UNC102', 'Second bullet', 'second body'),
+  ]);
   const next = reconcileRowShells(md, html);
   assert.ok(next.indexOf('Second bullet') < next.indexOf('First bullet'));
   assert.match(next, /Second bullet[\s\S]*?second body/);
   assert.match(next, /First bullet[\s\S]*?first body/);
+});
+
+test('an id-less Blocked heading throws the BLK-ID error, even when a shell with that title exists', () => {
+  const md = `## Blocked — hardware not available
+<!-- next-id: BLK102 -->
+
+### Legacy thing
+`;
+  const html = blockedSection([blkUncShell('—', 'Legacy thing', 'legacy body')]);
+  assert.throws(
+    () => reconcileRowShells(md, html),
+    /Blocked row \u0022Legacy thing\u0022 has no BLK ID: allocate one from the section\u0027s next-id marker \(e\.g\. BLK102\) and bump the marker/,
+  );
+});
+
+test('the id-less hint reads the section marker, and says nothing of an example when there is none', () => {
+  const html = blockedSection([]);
+  const withMarker = `## Blocked — hardware not available
+<!-- next-id: BLK131 -->
+
+### Legacy thing
+`;
+  assert.throws(() => reconcileRowShells(withMarker, html), /\(e\.g\. BLK131\) and bump the marker/);
+  const noMarker = `## Blocked — hardware not available
+
+### Legacy thing
+`;
+  assert.throws(
+    () => reconcileRowShells(noMarker, html),
+    (err) => /has no BLK ID/.test(err.message) && !/e\.g\./.test(err.message) && /next-id/.test(err.message),
+  );
+});
+
+test('a heading with the right ID but the wrong separator names the expected separator, not "no ID"', () => {
+  const md = `## Blocked — hardware not available
+<!-- next-id: BLK108 -->
+
+### BLK107 - Hyphen separated thing
+`;
+  assert.throws(
+    () => reconcileRowShells(md, blockedSection([])),
+    (err) => /separator/.test(err.message) && /BLK107 · /.test(err.message) && !/has no BLK ID/.test(err.message),
+  );
+  const unc = `## Unconfirmed — not debts until substantiated
+<!-- next-id: UNC103 -->
+
+- **UNC102 - dash thing**
+`;
+  assert.throws(() => reconcileRowShells(unc, unconfirmedSection([])), /separator[\s\S]*UNC102 · /);
+});
+
+test('an id-less Unconfirmed bullet throws the UNC-ID error', () => {
+  const md = `## Unconfirmed — not debts until substantiated
+<!-- next-id: UNC102 -->
+
+- **Legacy bullet** — no id
+`;
+  const html = unconfirmedSection([blkUncShell('—', 'Legacy bullet', 'legacy body')]);
+  assert.throws(
+    () => reconcileRowShells(md, html),
+    /Unconfirmed row \u0022Legacy bullet\u0022 has no UNC ID: allocate one from the section\u0027s next-id marker \(e\.g\. UNC102\) and bump the marker/,
+  );
+});
+
+test('a Blocked heading carrying a UNC ID (wrong section prefix) counts as id-less', () => {
+  const md = `## Blocked — hardware not available
+
+### UNC101 · Misfiled thing
+`;
+  assert.throws(() => reconcileRowShells(md, blockedSection([])), /has no BLK ID/);
 });
 
 test('the publish-token heading is not treated as a row', () => {
@@ -507,14 +587,10 @@ test('main() writes LF even when the tracked file is CRLF, and --check passes af
   }
 });
 
-test('main() reports a clean exit-1, not an uncaught crash, when a Blocked/Unconfirmed title no longer matches the live view', () => {
-  // Regression test: reconcileTitledSection throws when a Blocked/Unconfirmed
-  // row's title in the .md doesn't match any shell's iname in the .html (e.g.
-  // the row was reworded in one file but not the other — a real edit this
-  // register's own docs call "the most common edit it gets"). Before this
-  // fix, that Error propagated out of main() uncaught, crashing the CLI (and
-  // the CI step that runs it) with a raw stack trace instead of the same
-  // clean, actionable exit-1 every other drift case in main() reports.
+test('main() reports a clean exit-1 with the new error, not an uncaught crash, for an id-less Blocked row', () => {
+  // reconcileTitledSection throws on a Blocked/Unconfirmed row without a
+  // BLK/UNC ID. main() must turn that into the same clean, actionable exit-1
+  // every other drift case reports, not a raw stack trace out of the CI step.
   const dir = mkdtempSync(join(tmpdir(), 'register-build-'));
   try {
     const mdPath = join(dir, 'register.md');
@@ -522,12 +598,21 @@ test('main() reports a clean exit-1, not an uncaught crash, when a Blocked/Uncon
     const md = buildRegisterFixture() + `
 ## Blocked — hardware not available
 
-### a reworded title that no longer matches the live view
+### an id-less blocked row
 `;
     writeFileSync(mdPath, md);
     writeFileSync(htmlPath, buildLiveViewFixture());
-    const exit = main('register.md', 'live-view.html', { repoRoot: dir, check: true });
+    const errors = [];
+    const original = console.error;
+    console.error = (...args) => errors.push(args.join(' '));
+    let exit;
+    try {
+      exit = main('register.md', 'live-view.html', { repoRoot: dir, check: true });
+    } finally {
+      console.error = original;
+    }
     assert.equal(exit, 1);
+    assert.match(errors.join('\n'), /Blocked row "an id-less blocked row" has no BLK ID/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -599,7 +684,7 @@ test('reconcileOneSection preserves literal $1 and $& in row body text (string.r
 
 test('reconcileTitledSection preserves literal $1 and $& in row body text (string.replace special-pattern corruption bug)', () => {
   // Test the same bug in reconcileTitledSection (Blocked/Unconfirmed sections).
-  // The Blocked section uses prefixMatch: false, matching titles exactly (after normalisation).
+  // The Blocked section keys its shells by BLK ID.
   //
   // A prior version of this test used "$PORT" and a whole-string substring
   // match, and it passed even against the un-fixed (buggy) code: "$P" is not
@@ -616,12 +701,12 @@ test('reconcileTitledSection preserves literal $1 and $& in row body text (strin
   // each reinsert a copy of the section's own opening tag.
   const md = `## Blocked — hardware not available
 
-### Server config
+### BLK101 · Server config
 `;
   const html = `<section class="group is-blocked" id="blocked">
       <header><h3 class="gtitle">…<span class="gcount">1 row</span></h3></header>
       <details class="item">
-        <summary><span class="num">—</span><span class="iname">Server config</span><span class="chev">›</span></summary>
+        <summary><span class="num">BLK101</span><span class="iname">Server config</span><span class="chev">›</span></summary>
         <div class="body">Port is $1 and full match is $&amp; below</div>
       </details>
   </section>`;
@@ -678,23 +763,18 @@ test('SHELL_BY_ID_REGEX matches a shell with <summary> on its own line (hand-aut
   assert.deepEqual(rowIds, ['A1', 'A2']);
 });
 
-test('SHELL_BY_TITLE_REGEX matches a Blocked shell with <summary> on its own line (hand-authored formatting)', () => {
-  // Companion to the SHELL_BY_ID_REGEX test above, for the title-matched path
-  // (Blocked/Unconfirmed sections) — that fix widened BOTH SHELL_BY_ID_REGEX
-  // and SHELL_BY_TITLE_REGEX with the same \s* tolerance, but the original
-  // regression test only exercised the ID-matched path (a numbered Group
-  // section), leaving the title-matched widening completely unproven:
-  // reverting SHELL_BY_TITLE_REGEX's \s* additions left every existing test
-  // green.
+test('SHELL_BY_ID_REGEX matches a BLK-numbered Blocked shell with <summary> on its own line (hand-authored formatting)', () => {
+  // Companion to the Group A test above, for the Blocked section, which
+  // reuses the same shell regex now that the title-matching path is retired.
   const md = `## Blocked — hardware not available
 
-### Server config
+### BLK101 · Server config
 `;
   const html = `<section class="group is-blocked" id="blocked">
       <header><h3 class="gtitle">…<span class="gcount">1 row</span></h3></header>
       <details class="item">
         <summary>
-          <span class="num">—</span><span class="iname">Server config</span><span class="chev">›</span>
+          <span class="num">BLK101</span><span class="iname">Server config</span><span class="chev">›</span>
         </summary>
         <div class="body">Real hand-authored content for the Blocked row</div>
       </details>
@@ -788,13 +868,13 @@ test('build then build is a no-op when the .md has Blocked and Unconfirmed secti
   const md = buildRegisterFixture() + `
 ## Blocked — hardware not available
 
-### fixture blocked item
+### BLK101 · fixture blocked item
 
 Needs a real GPU.
 
 ## Unconfirmed — not debts until substantiated
 
-- **fixture unconfirmed item** — not yet run on real hardware.
+- **UNC101 · fixture unconfirmed item** — not yet run on real hardware.
 `;
   const html = buildLiveViewFixture();
   const once = buildLiveView(md, html);
@@ -806,16 +886,89 @@ test('build then --check passes when the .md has Blocked and Unconfirmed section
   const md = buildRegisterFixture() + `
 ## Blocked — hardware not available
 
-### fixture blocked item
+### BLK101 · fixture blocked item
 
 Needs a real GPU.
 
 ## Unconfirmed — not debts until substantiated
 
-- **fixture unconfirmed item** — not yet run on real hardware.
+- **UNC101 · fixture unconfirmed item** — not yet run on real hardware.
 `;
   const html = buildLiveViewFixture();
   const built = buildLiveView(md, html);
   assert.equal(buildLiveView(md, built), built);
 });
 
+
+// --- BLK/UNC allocate-once IDs (#3587): Blocked/Unconfirmed shells keyed by ID ---
+
+test('ID-bearing Blocked rows are keyed by ID, not position: swapping them in the markdown moves each body with its ID', () => {
+  const md = `## Blocked — hardware not available
+<!-- next-id: BLK103 -->
+
+### BLK102 · Second blocked thing
+### BLK101 · First blocked thing
+`;
+  const html = blockedSection([
+    blkUncShell('BLK101', 'First blocked thing', 'first body'),
+    blkUncShell('BLK102', 'Second blocked thing', 'second body'),
+  ]);
+  const next = reconcileRowShells(md, html);
+  assert.ok(next.indexOf('BLK102') < next.indexOf('BLK101'), 'md order must win');
+  assert.match(next, /BLK102<\/span>[\s\S]*?second body/);
+  assert.match(next, /BLK101<\/span>[\s\S]*?first body/);
+  assert.ok(next.indexOf('second body') < next.indexOf('BLK101'), 'second body stays with BLK102');
+});
+
+test('a new BLK102 row with no shell gets a placeholder shell numbered BLK102, which --check then reports as body-placeholder', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'register-build-'));
+  try {
+    const md = buildRegisterFixture() + `
+## Blocked — hardware not available
+<!-- next-id: BLK103 -->
+
+### BLK101 · fixture blocked item
+### BLK102 · A brand new blocked row
+`;
+    const html = buildLiveViewFixture().replace(
+      '<span class="num">—</span><span class="iname">fixture blocked item',
+      '<span class="num">BLK101</span><span class="iname">fixture blocked item',
+    );
+    const built = buildLiveView(md, html);
+    assert.match(built, /<span class="num">BLK102<\/span><span class="iname">A brand new blocked row<\/span>/);
+    assert.match(built, /class="body-placeholder"/);
+    writeFileSync(join(dir, 'register.md'), md);
+    writeFileSync(join(dir, 'live-view.html'), built);
+    const errors = [];
+    const original = console.error;
+    console.error = (...args) => errors.push(args.join(' '));
+    let exit;
+    try {
+      exit = main('register.md', 'live-view.html', { repoRoot: dir, check: true });
+    } finally {
+      console.error = original;
+    }
+    assert.equal(exit, 1);
+    assert.match(errors.join('\n'), /body-placeholder/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('building twice is idempotent for ID-bearing Blocked and Unconfirmed sections', () => {
+  const md = buildRegisterFixture() + `
+## Blocked — hardware not available
+<!-- next-id: BLK102 -->
+
+### BLK101 · fixture blocked item
+
+## Unconfirmed — not debts until substantiated
+<!-- next-id: UNC102 -->
+
+- **UNC101 · fixture unconfirmed item** (note)
+`;
+  const first = buildLiveView(md, buildLiveViewFixture());
+  assert.match(first, /<span class="num">BLK101<\/span>/);
+  assert.match(first, /<span class="num">UNC101<\/span>/);
+  assert.equal(buildLiveView(md, first), first);
+});
