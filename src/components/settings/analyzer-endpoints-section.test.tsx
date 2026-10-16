@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import { accountSlice } from '../../store/account-slice';
 import { uiSlice } from '../../store/ui-slice';
 import { chaptersSlice } from '../../store/chapters-slice';
@@ -268,5 +268,32 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
       payload: { droppedEndpointEntries: [{ archiveId: 'a1', kind: 'endpoint', name: 'Old box', issues: ['analyzerEndpoints.1.baseUrl: invalid_format'], droppedAt: '2026-09-13T10:00:00.000Z' }] },
     });
     return waitFor(() => expect(screen.getByTestId('analyzer-endpoints-section').firstElementChild).toHaveAttribute('data-testid', 'dropped-endpoint-banner'));
+  });
+
+  it("a fix deep link opens that endpoint's editor with the field focused (P34)", async () => {
+    const store = renderSection({ endpoints: [LAB] });
+    store.dispatch(uiSlice.actions.openModelManager({ endpointId: 'lab', endpointField: 'contextTokens' }));
+    expect(await screen.findByTestId('endpoint-editor')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId('endpoint-context-tokens')).toHaveFocus());
+    expect(screen.getByTestId('endpoint-context-tokens')).toHaveValue(32768);
+  });
+
+  it('a deep link is handled once: a later settings refresh does not reopen the editor over edits (P34)', async () => {
+    const store = renderSection({ endpoints: [LAB] });
+    store.dispatch(uiSlice.actions.openModelManager({ endpointId: 'lab', endpointField: 'contextTokens' }));
+    await screen.findByTestId('endpoint-editor');
+    fireEvent.change(screen.getByTestId('endpoint-context-tokens'), { target: { value: '16384' } });
+    await act(async () => {
+      store.dispatch({ type: 'account/fetch/fulfilled', payload: { analyzerEndpoints: [{ ...LAB }] } });
+    });
+    expect(screen.getByTestId('endpoint-context-tokens')).toHaveValue(16384);
+  });
+
+  it('a deep link to an endpoint that is not saved opens nothing (P34)', async () => {
+    const store = renderSection({ endpoints: [LAB] });
+    await act(async () => {
+      store.dispatch(uiSlice.actions.openModelManager({ endpointId: 'gone', endpointField: 'contextTokens' }));
+    });
+    expect(screen.queryByTestId('endpoint-editor')).toBeNull();
   });
 });

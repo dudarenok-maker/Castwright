@@ -2,7 +2,7 @@
    compatible servers (llama.cpp / llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter…).
    Context size is required and only prefilled from served values; keys bind to the base
    URL's origin; the GPU card drives guards and TTS eviction; nothing probes on its own. */
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAppDispatch, useAppSelector } from '../../store';
 import {
   createAnalyzerEndpoint,
@@ -170,11 +170,12 @@ export function splitEndpointIssues(err: AnalyzerEndpointRejection | unknown): {
 }
 
 /* A stable fallback, so a missing slice field does not hand useMemo a new object every render. */
+const NO_ENDPOINTS: AnalyzerEndpoint[] = [];
 const NO_KEY_STATUS: Record<string, 'set' | 'unset' | 'origin-mismatch'> = {};
 
 export function AnalyzerEndpointsSection() {
   const dispatch = useAppDispatch();
-  const endpoints = useAppSelector((s) => s.account.analyzerEndpoints) ?? [];
+  const endpoints = useAppSelector((s) => s.account.analyzerEndpoints) ?? NO_ENDPOINTS;
   const keyStatus = useAppSelector((s) => s.account.analyzerEndpointKeyStatus) ?? NO_KEY_STATUS;
   const catalog = useAppSelector((s) => s.account.analyzerCatalog);
   const [devices, setDevices] = useState<GpuDevice[]>([]);
@@ -207,6 +208,31 @@ export function AnalyzerEndpointsSection() {
     setPreview(null);
     setDetectNote(null);
   };
+
+  /* #3084 P34 — a "How to fix" link opens #/models?endpoint=<id>&field=<field>: open that editor
+     once the endpoint is loaded and focus the field. Each link is handled once, so a later
+     settings refresh never reopens the editor over the user's edits. */
+  const stage = useAppSelector((s) => s.ui.stage);
+  const focusEndpointId = stage.kind === 'model-manager' ? stage.endpointId : undefined;
+  const focusField = stage.kind === 'model-manager' ? stage.endpointField : undefined;
+  const handledFocus = useRef('');
+  const [pendingFocus, setPendingFocus] = useState<string | null>(null);
+  useEffect(() => {
+    const key = focusEndpointId ? `${focusEndpointId}|${focusField ?? ''}` : '';
+    if (!key || handledFocus.current === key) return;
+    const endpoint = endpoints.find((e) => e.id === focusEndpointId);
+    if (!endpoint) return;
+    handledFocus.current = key;
+    open(endpoint);
+    setPendingFocus(focusField && focusField in ENDPOINT_FIELD_TEST_IDS ? ENDPOINT_FIELD_TEST_IDS[focusField as IssueField] : null);
+  }, [focusEndpointId, focusField, endpoints]);
+  useEffect(() => {
+    if (!pendingFocus || editing === undefined) return;
+    const el = document.querySelector<HTMLElement>(`[data-testid="${pendingFocus}"]`);
+    el?.scrollIntoView?.({ block: 'center' });
+    el?.focus();
+    setPendingFocus(null);
+  }, [pendingFocus, editing]);
 
   const set = <K extends keyof EndpointDraft>(key: K, value: EndpointDraft[K]) =>
     setDraft((d) => {

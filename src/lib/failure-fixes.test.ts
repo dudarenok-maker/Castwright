@@ -24,4 +24,9 @@ describe('fixHref (#3084 wave 2b, F7)', () => {
   it('a label-only fix (e.g. "switch model") returns null', () => {
     expect(fixHref({ label: 'Switch to a different analyzer model' })).toBeNull();
   });
+
+  it('an endpoint fix links to that endpoint editor field (#3084 P34)', () => {
+    expect(fixHref({ label: 'Raise the endpoint context size', endpointField: { endpointId: 'lab', field: 'contextTokens' } })).toBe('#/models?endpoint=lab&field=contextTokens');
+    expect(fixHref({ label: 'Both', settingKey: 'analyzer.stage1.localInputFraction', endpointField: { endpointId: 'lab', field: 'contextTokens' } })).toBe('#/advanced?focus=analyzer.stage1.localInputFraction');
+  });
 });

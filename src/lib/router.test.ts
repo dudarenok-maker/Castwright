@@ -30,6 +30,12 @@ describe('stageToHash', () => {
     expect(stageToHash({ kind: 'model-manager' })).toBe('#/models');
   });
 
+  it('model-manager with an endpoint field → #/models?endpoint=&field= (#3084 P34)', () => {
+    expect(stageToHash({ kind: 'model-manager', endpointId: 'lab', endpointField: 'contextTokens' })).toBe('#/models?endpoint=lab&field=contextTokens');
+    expect(stageToHash({ kind: 'model-manager', endpointId: 'my box' })).toBe('#/models?endpoint=my+box');
+    expect(stageToHash({ kind: 'model-manager' })).toBe('#/models');
+  });
+
   it('about → #/about', () => {
     expect(stageToHash({ kind: 'about' })).toBe('#/about');
   });
@@ -110,6 +116,12 @@ describe('stageToHash', () => {
 });
 
 describe('stageEqual', () => {
+  it('model-manager stages differ by endpoint and field (#3084 P34)', () => {
+    expect(stageEqual({ kind: 'model-manager', endpointId: 'lab', endpointField: 'contextTokens' }, { kind: 'model-manager' })).toBe(false);
+    expect(stageEqual({ kind: 'model-manager', endpointId: 'lab', endpointField: 'contextTokens' }, { kind: 'model-manager', endpointId: 'lab', endpointField: 'maxOutputTokens' })).toBe(false);
+    expect(stageEqual({ kind: 'model-manager', endpointId: 'lab', endpointField: 'contextTokens' }, { kind: 'model-manager', endpointId: 'lab', endpointField: 'contextTokens' })).toBe(true);
+  });
+
   it('both null/undefined', () => {
     expect(stageEqual(null, null)).toBe(true);
     expect(stageEqual(undefined, undefined)).toBe(true);

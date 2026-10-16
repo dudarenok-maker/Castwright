@@ -22,6 +22,9 @@ import { stageToHash } from './router';
    wave 5 (task 5a) a `reasoningSetting` branch to this same function, so both
    renderers keep calling `fixHref(fix)` unchanged. */
 export function fixHref(fix: AnalysisFailureFix): string | null {
-  if (!fix.settingKey) return null;
-  return stageToHash({ kind: 'advanced', focusKey: fix.settingKey });
+  if (fix.settingKey) return stageToHash({ kind: 'advanced', focusKey: fix.settingKey });
+  if (fix.endpointField) {
+    return stageToHash({ kind: 'model-manager', endpointId: fix.endpointField.endpointId, endpointField: fix.endpointField.field });
+  }
+  return null;
 }

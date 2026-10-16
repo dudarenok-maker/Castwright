@@ -1112,7 +1112,9 @@ export type Stage =
   /* fs-23 — In-app Model Manager. Top-level view (like account/admin), reached
      from the Admin view. Consolidates all model install/inventory/residency
      controls that used to live in the Account view. */
-  | { kind: 'model-manager' }
+  /* #3084 P34 — endpointId/endpointField open that endpoint's editor at the field; both are
+     untrusted strings from the URL hash, and the view ignores an unknown one. */
+  | { kind: 'model-manager'; endpointId?: string; endpointField?: string }
   /* fs-21 — first-run setup wizard, reached on the boot gate or from Account. */
   | { kind: 'setup' }
   /* Wave 3 — /about brand page, reached from the Admin view. */

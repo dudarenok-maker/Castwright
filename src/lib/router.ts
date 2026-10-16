@@ -9,6 +9,7 @@ import type { Stage } from './types';
      #/log                               → { kind: 'changelog' }
      #/account                           → { kind: 'account' }
      #/admin                             → { kind: 'admin' }
+     #/models?endpoint=&field=            → { kind: 'model-manager', endpointId?, endpointField? }
                                            (#/worktrees kept as an inbound alias)
      #/stats                             → { kind: 'stats' }
      #/help?code=                        → { kind: 'help', focusCode? }
@@ -35,8 +36,13 @@ export function stageToHash(stage: Stage | null | undefined): string {
       return '#/account';
     case 'admin':
       return '#/admin';
-    case 'model-manager':
-      return '#/models';
+    case 'model-manager': {
+      const q = new URLSearchParams();
+      if (stage.endpointId) q.set('endpoint', stage.endpointId);
+      if (stage.endpointField) q.set('field', stage.endpointField);
+      const qs = q.toString();
+      return `#/models${qs ? '?' + qs : ''}`;
+    }
     case 'setup':
       return '#/setup';
     case 'about':
@@ -111,6 +117,9 @@ export function stageEqual(a: Stage | null | undefined, b: Stage | null | undefi
      5.5c extends this SAME branch to compare `reasoningFocus` too. */
   if (a.kind === 'advanced' && b.kind === 'advanced') {
     return a.focusKey === b.focusKey;
+  }
+  if (a.kind === 'model-manager' && b.kind === 'model-manager') {
+    return a.endpointId === b.endpointId && a.endpointField === b.endpointField;
   }
   return true;
 }

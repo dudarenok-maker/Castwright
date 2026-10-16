@@ -433,7 +433,10 @@ function AdminRoute() {
 
 /* fs-23 — In-app Model Manager, reached from the Admin view. */
 function ModelManagerRoute() {
-  useHydrateStage({ kind: 'model-manager' }, []);
+  const [searchParams] = useSearchParams();
+  const endpointId = searchParams.get('endpoint') ?? undefined;
+  const endpointField = searchParams.get('field') ?? undefined;
+  useHydrateStage({ kind: 'model-manager', endpointId, endpointField }, [endpointId, endpointField]);
   return <ModelManagerView />;
 }
 
