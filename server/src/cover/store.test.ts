@@ -176,6 +176,35 @@ describe('downloadCover re-encodes provider bodies to JPEG (#3640)', () => {
     expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
   });
 
+  it('accepts a JPEG missing only its EOI marker and stores a whole JPEG (tolerant decode)', async () => {
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({
+      create: { width: 300, height: 450, channels: 3, background: { r: 10, g: 20, b: 30 } },
+    })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+    expect([...jpeg.subarray(jpeg.length - 2)]).toEqual([0xff, 0xd9]);
+    const noEoi = jpeg.subarray(0, jpeg.length - 2);
+    fetchMock.mockResolvedValue(imageResponse(noEoi));
+    const { downloadCover } = await import('./store.js');
+
+    const { bytes } = await downloadCover('https://x/cover.jpg', destPath('noeoi'));
+
+    const written = readFileSync(destPath('noeoi'));
+    expect(bytes).toBe(written.length);
+    await assertCoverIsJpeg(written);
+    expect([...written.subarray(written.length - 2)]).toEqual([0xff, 0xd9]);
+  });
+
+  it('still rejects a bare JPEG SOI header, even in tolerant mode', async () => {
+    fetchMock.mockResolvedValue(imageResponse(Buffer.from([0xff, 0xd8, 0xff])));
+    const { downloadCover } = await import('./store.js');
+    await expect(downloadCover('https://x/cover.jpg', destPath('bare'))).rejects.toMatchObject({
+      kind: 'invalid',
+    });
+    expect(existsSync(destPath('bare'))).toBe(false);
+  });
+
   it('rejects a non-decodable body with kind invalid and leaves nothing at destPath', async () => {
     fetchMock.mockResolvedValue(imageResponse(Buffer.from('<html>'), 'image/png'));
     const { downloadCover, CoverDownloadError } = await import('./store.js');

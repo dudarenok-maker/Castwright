@@ -70,11 +70,12 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
   /* #3535 (operator decision, option a): normalise every provider body to a
      clean sharp-written JPEG before it lands as cover.jpg — a GIF/WebP stored
      verbatim fails the m4b export's content probing, and a JPEG with trailing
-     bytes defeats it the same way. Strict: the declared content-type already
-     said image/, so a body sharp cannot decode is an invalid cover. */
+     bytes defeats it the same way. Tolerant: a provider JPEG that is merely
+     damaged (e.g. missing its EOI) still decodes, so it is kept; a body
+     sharp cannot decode at all is an invalid cover. */
   let reencoded: Buffer;
   try {
-    reencoded = await reencodeToJpeg(buffer);
+    reencoded = await reencodeToJpeg(buffer, { tolerant: true });
   } catch (e) {
     throw new CoverDownloadError('invalid', `Cover is not a decodable image: ${(e as Error).message}`);
   }
