@@ -50,7 +50,7 @@ import {
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withStateLock } from '../workspace/state-lock.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
@@ -149,7 +149,7 @@ async function applyRestructure(
     | { early: { status: number; body: unknown } }
     | { result: RestructureResult };
   const outcome: Outcome = await withStateLock(bookDir, async () => {
-    const fresh = await readJson<BookStateJson>(stateJsonPath(bookDir));
+    const fresh = await readStateJsonWithRecovery(stateJsonPath(bookDir));
     if (!fresh) return { early: { status: 404, body: { error: 'Book not found.' } } };
 
     // Align hint titles with state.json's user-facing chapter titles.

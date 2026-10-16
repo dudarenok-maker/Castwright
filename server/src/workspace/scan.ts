@@ -1163,7 +1163,7 @@ export async function backfillAudioModelKeysFromSegments(
          outer `state` snapshot, which would revert a stamp a finalize landed
          while this scan was reading segments files. */
       const fresh = await withStateLock(bookDir, async () => {
-        const cur = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const cur = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!cur) throw new Error('state.json vanished before the backfill write');
         let changed = false;
         const chapters = cur.chapters.map((c) => {
@@ -1206,7 +1206,7 @@ export async function backfillAudioModelKeysFromSegments(
     `backfillAudioModelKeysFromSegments` call (which takes the lock itself). */
 async function mintChapterUuidsLocked(bookDir: string): Promise<BookStateJson> {
   return withStateLock(bookDir, async () => {
-    const fresh = await readJson<BookStateJson>(stateJsonPath(bookDir));
+    const fresh = await readStateJsonWithRecovery(stateJsonPath(bookDir));
     if (!fresh) throw new Error('state.json vanished before the uuid write');
     if (ensureChapterUuids(fresh)) {
       await writeStateJsonAtomic(stateJsonPath(bookDir), {

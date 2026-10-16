@@ -17,10 +17,8 @@ import { gzipSync } from 'node:zlib';
 import type { Request, Response } from '../http.js';
 import { collectBooks, findBookByBookId } from '../workspace/scan.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { readJson } from '../workspace/state-io.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { withStateLock } from '../workspace/state-lock.js';
-import type { BookStateJson } from '../workspace/scan.js';
 import { audioDir, coverImagePath, listenProgressJsonPath, stateJsonPath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import {
@@ -65,7 +63,7 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
            on the snapshot still serve this response, as before. */
         try {
           state = await withStateLock(bookDir, async () => {
-            const fresh = await readJson<BookStateJson>(stateJsonPath(bookDir));
+            const fresh = await readStateJsonWithRecovery(stateJsonPath(bookDir));
             if (!fresh) return state;
             if (ensureChapterUuids(fresh)) {
               await writeStateJsonAtomic(stateJsonPath(bookDir), {

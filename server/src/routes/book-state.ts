@@ -43,7 +43,7 @@ import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { pruneByBook } from '../workspace/queue-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { ensureChapterUuids, reconcileChapterUuids } from '../workspace/chapter-uuid.js';
 import {
   putManuscript,
@@ -245,7 +245,7 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
        snapshot (#3625): another writer may have stamped a chapter, or
        refreshed the titles itself, while we were parsing. */
     return await withStateLock(bookDir, async () => {
-      const fresh = await readJson<BookStateJson>(stateJsonPath(bookDir));
+      const fresh = await readStateJsonWithRecovery(stateJsonPath(bookDir));
       if (!fresh) return state;
       if ((fresh.chapterTitleParserVersion ?? 1) >= CHAPTER_TITLE_PARSER_VERSION) return fresh;
 
@@ -297,7 +297,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        book that already has every uuid never touches the lock. */
     if (state.chapters.some((c) => !c.uuid)) {
       state = await withStateLock(bookDir, async () => {
-        const fresh = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const fresh = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!fresh) return state;
         if (ensureChapterUuids(fresh)) {
           await writeStateJsonAtomic(stateJsonPath(bookDir), { ...fresh, language: fresh.language ?? null });
@@ -1037,7 +1037,7 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
            The empty-parent rmdir cleanup stays inside the hold: it is a
            cosmetic best-effort that never takes a lock. */
         const early = await withStateLock(bookDir, async () => {
-          const cur = await readJson<BookStateJson>(stateJsonPath(bookDir));
+          const cur = await readStateJsonWithRecovery(stateJsonPath(bookDir));
           if (!cur) return res.status(404).json({ error: 'Book not found.' });
           const nextIsStandalone = pickStandalone(patch.isStandalone, cur.isStandalone);
           const next: BookStateJson = {
@@ -1240,7 +1240,7 @@ async function applyReparse(
      released — taking `cast` while holding `state` would violate the lock
      order. The parse above/in the caller stays outside the lock. */
   const { newChapters, nextState } = await withStateLock(bookDir, async () => {
-    const base = (await readJson<BookStateJson>(stateJsonPath(bookDir))) ?? state;
+    const base = (await readStateJsonWithRecovery(stateJsonPath(bookDir))) ?? state;
     const prevExcludedIds = new Set<number>(
       base.chapters.filter((c) => c.excluded).map((c) => c.id),
     );
@@ -1603,7 +1603,7 @@ bookStateRouter.post(
        `located.state`; the audio cleanup and the record propagation stay
        outside it. */
       const outcome = await withStateLock(bookDir, async () => {
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state) return 'no-book' as const;
         const idx = state.chapters.findIndex((c) => c.id === chapterId);
         if (idx === -1) return 'no-chapter' as const;
@@ -1701,7 +1701,7 @@ bookStateRouter.post(
 
       /* Chapter lookup and write on a read taken inside the state lock (#3625). */
       const outcome = await withStateLock(bookDir, async () => {
-        const state = await readJson<BookStateJson>(stateJsonPath(bookDir));
+        const state = await readStateJsonWithRecovery(stateJsonPath(bookDir));
         if (!state) return 'no-book' as const;
         const idx = state.chapters.findIndex((c) => c.id === chapterId);
         if (idx === -1) return 'no-chapter' as const;
