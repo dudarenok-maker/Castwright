@@ -985,8 +985,10 @@ export const KILL_TIMEOUT_MS = 15000;
  *  survivors until the step's 'close' fires or a bounded number of sweeps
  *  elapses, so the step's BUDGET is honoured. It does not close the gap in
  *  general: a non-capture step settles on its root's exit and any survivors
- *  are left running, and a process spawned between the pre-kill snapshot and
- *  taskkill's own snapshot was never recorded, so no seed reaches it. */
+ *  are left running. A late child of a recorded member is still reached by
+ *  walking from that member, dead or alive; only a process whose whole chain
+ *  back to a recorded pid was born between the pre-kill snapshot and
+ *  taskkill's own snapshot is missed. */
 export function killTree(pid, { spawn = spawnSync, windows = isWindows, isAlive = pidIsAlive, descendantPids } = {}) {
   if (!windows) return false;
   const result = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
