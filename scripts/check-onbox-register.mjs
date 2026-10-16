@@ -35,12 +35,16 @@ import { ghSpawn } from './gh.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { parsePublishToken, publishTokenRegex } from './publish-token.mjs';
 
-// Deliberately out of scope: the "Blocked" and "Unconfirmed" sections. They
-// use a different structure (one uses `###` headings, the other a bullet
-// list) and their rows are not part of the owed total — the glance table
-// itself marks them with `—` instead of a letter, which this parser treats
-// as "not a group" rather than special-casing two sections whose rows would
-// buy little coverage for a lot of parser fragility.
+// The "Blocked" and "Unconfirmed" sections are not groups: their rows are not
+// part of the owed total, and the glance table marks them with `—` instead of
+// a letter, which the glance parser treats as "not a group". They do carry
+// allocate-once IDs (#3587): `### BLK101 · …` headings under Blocked and
+// `- **UNC101 · …**` bullets under Unconfirmed, each section with its own
+// `<!-- next-id: BLK107 -->` marker. `parseTitledSections` and check 4c cover
+// them. The checker ACCEPTS those IDs and never REQUIRES them: unnumbered
+// legacy rows and a section with no marker are still legal here, because the
+// checker is retro-applied to `origin/main`'s copy (see above). Requiring an
+// ID on every row is `register:build`'s job (#3646), not this file's.
 
 // ops-44 (issue #1913) added two edge-case behaviours on top of the above: a
 // row heading that looks row-shaped but isn't a strict `<Letter><N>` (e.g. a
@@ -193,6 +197,64 @@ function parseBodyGroups(sections) {
   return { groups, duplicateLetters, invalidRowHeadings };
 }
 
+// One pinned row-ID vocabulary (#3587): a lettered group's `A101`, or a
+// `BLK`/`UNC` prefix for the Blocked/Unconfirmed sections. Reused by every
+// later consumer in the chain; do not write a second ID regex.
+export const ROW_ID_REGEX = /^(BLK|UNC|[A-Z])(\d+)$/;
+
+// Splits a row ID into `{ prefix, number }` (number a Number), or null.
+export function splitRowId(id) {
+  const match = ROW_ID_REGEX.exec(id);
+  return match ? { prefix: match[1], number: Number(match[2]) } : null;
+}
+
+// The titled (non-group) sections that carry allocate-once IDs: the register
+// section-title test, the ID prefix, how a row is written, and the name error
+// messages use. Blocked rows are `### BLK<N>` headings; Unconfirmed rows are
+// `- **UNC<N> · …**` bullets.
+const TITLED_SECTIONS = [
+  {
+    prefix: 'BLK',
+    titleRegex: /^Blocked\b/,
+    name: 'the Blocked section',
+    candidateRegex: /^### (BLK\d[^\r\n]*?)\r?$/gm,
+  },
+  {
+    prefix: 'UNC',
+    titleRegex: /^Unconfirmed\b/,
+    name: 'the Unconfirmed section',
+    candidateRegex: /^- \*\*(UNC\d[^\r\n]*?)(?:\*\*|\r?$)/gm,
+  },
+];
+
+// Collects the `BLK`/`UNC` row numbers of the Blocked and Unconfirmed sections,
+// mirroring `parseBodyGroups`: a candidate regex per section, a strict row
+// test, and an `invalid` list for look-alikes (`### BLK19b`, `### BLK2.1`,
+// `- **UNC5a · x**`). `groups` has a key iff that section exists, even with
+// zero ID rows. Rows with no ID prefix are not candidates and stay legal.
+export function parseTitledSections(sections) {
+  const groups = new Map();
+  const invalid = [];
+  for (const { prefix, titleRegex, candidateRegex } of TITLED_SECTIONS) {
+    const rowRegex = new RegExp(`^${prefix}(\\d+)(?=\\s|$)`);
+    for (const section of sections) {
+      if (!titleRegex.test(section.title)) continue;
+      const numbers = groups.get(prefix) ?? [];
+      for (const match of section.body.matchAll(candidateRegex)) {
+        const headingText = match[1].trim();
+        const rowMatch = headingText.match(rowRegex);
+        if (rowMatch) {
+          numbers.push(Number(rowMatch[1]));
+        } else {
+          invalid.push({ prefix, headingText });
+        }
+      }
+      groups.set(prefix, numbers);
+    }
+  }
+  return { groups, invalid };
+}
+
 // Formats a group's found row numbers for an error message: a single row is
 // just "E1"; a contiguous run collapses to "E1–E7" — under stable IDs that
 // run no longer has to start at 1, so "E3–E5" collapses too; otherwise a
@@ -241,6 +303,14 @@ export function parseAllRowHeadings(strippedText) {
   for (const match of strippedText.matchAll(/^### ([A-Z])(\d+)(?=\s|\r?$)/gm)) {
     found.push({ id: `${match[1]}${match[2]}` });
   }
+  // #3587: Blocked rows (`### BLK101`) and Unconfirmed bullets
+  // (`- **UNC101 · …**`) share the one document-wide ID space.
+  for (const match of strippedText.matchAll(/^### (BLK)(\d+)(?=\s|\r?$)/gm)) {
+    found.push({ id: `${match[1]}${match[2]}` });
+  }
+  for (const match of strippedText.matchAll(/^- \*\*(UNC)(\d+)(?=\s|\*)/gm)) {
+    found.push({ id: `${match[1]}${match[2]}` });
+  }
   return found;
 }
 
@@ -272,9 +342,9 @@ export function parseAllRowHeadings(strippedText) {
 // and the `<div class="body">...</div>` content. The summary is included to
 // catch drifts in the risk badge or title, which are part of the row's
 // documented state — a stale risk badge is a content regression like a changed
-// body paragraph. A row whose ID isn't a plain `<Letter><N>` (the
-// Blocked/Unconfirmed sections use `—`) is skipped, the same convention
-// `parseLiveViewSections` already filters on. A block with no matching
+// body paragraph. A row whose ID isn't a row ID (`<Letter><N>`, `BLK<N>` or
+// `UNC<N>`; a legacy page's Blocked/Unconfirmed rows have `—`) is skipped, the
+// same convention `parseLiveViewSections` already filters on. A block with no matching
 // `<summary>...</summary>` or `<div class="body">...</div>` (an extraction
 // failure, e.g. the markup changed) is an error rather than silently skipped —
 // a silent skip would mean comparing fewer rows than the page carries and
@@ -298,7 +368,7 @@ export function parseLiveViewRowBodies(liveViewHtml) {
       continue;
     }
     const id = idMatch[1].trim();
-    if (!/^[A-Z]\d+$/.test(id)) continue;
+    if (!ROW_ID_REGEX.test(id)) continue;
     const summaryMatch = block.match(/<summary>([\s\S]*?)<\/summary>/);
     if (!summaryMatch) {
       errors.push(
@@ -329,7 +399,8 @@ function hashRowContent(plainText) {
 // `parseLiveViewRowBodies` reads rows. Normalised with `htmlCellText` (tags
 // and whitespace) plus the handful of entities a hand-authored page uses, so
 // only a genuinely different title compares unequal. Rows whose ID is not a
-// plain `<Letter><N>` (Blocked/Unconfirmed use `—`) are skipped, as there.
+// row ID (`<Letter><N>`, `BLK<N>`, `UNC<N>`; a legacy `—` Blocked/Unconfirmed
+// row has none) are skipped, as there.
 const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
 function rowTitleKey(html) {
   return htmlCellText(html)
@@ -348,7 +419,7 @@ export function parseLiveViewRowTitles(liveViewHtml) {
     const nameMatch = block.match(/<span class="iname">([\s\S]*?)<\/span>/);
     if (!idMatch || !nameMatch) continue;
     const id = idMatch[1].trim();
-    if (/^[A-Z]\d+$/.test(id)) titles.set(id, rowTitleKey(nameMatch[1]));
+    if (ROW_ID_REGEX.test(id)) titles.set(id, rowTitleKey(nameMatch[1]));
   }
   return titles;
 }
@@ -363,7 +434,7 @@ export function parseLiveViewRowBlocks(liveViewHtml) {
     const idMatch = m[0].match(/<span class="num">([^<]*)<\/span>/);
     if (!idMatch) continue;
     const id = idMatch[1].trim();
-    if (/^[A-Z]\d+$/.test(id)) blocks.set(id, m[0].replace(/\r\n/g, '\n'));
+    if (ROW_ID_REGEX.test(id)) blocks.set(id, m[0].replace(/\r\n/g, '\n'));
   }
   return blocks;
 }
@@ -383,10 +454,16 @@ export function parseLiveViewRowBlocks(liveViewHtml) {
 // - The derived figures are what `register:build` writes for a register
 //   holding your rows plus the carried ones: the owed count, the group's
 //   glance-table count and its section's `gcount`, each raised by the number
-//   of rows carried. The strip's other tiles — groups, Blocked, Unconfirmed,
-//   A1, oldest debt — are your register's: a carried row is another lane's
-//   numbered row in a group your page already has, and the oldest debt stays
-//   yours (a carried row's own date is not on this branch to compare).
+//   of lettered rows carried. The strip's other tiles — groups, A1, oldest
+//   debt — are your register's: a carried row is another lane's numbered row
+//   in a group your page already has, and the oldest debt stays yours (a
+//   carried row's own date is not on this branch to compare).
+// - A carried `BLK` / `UNC` row (#3587) goes into the Blocked / Unconfirmed
+//   section (matched by its `gtag`, `BLK` / `UNC`), ordered among that
+//   section's own rows by number. It is not owed: it raises the strip's
+//   Blocked / Unconfirmed tile and that section's `gcount` by one, and
+//   neither the owed count nor any glance-table cell (there is no row for
+//   either section).
 // - A carried row whose group has no section in your live view is refused
 //   (that lane added a new group: let it merge first), as is a row already
 //   in your view or absent from the live page.
@@ -410,18 +487,27 @@ function indentBefore(html, index) {
 export function buildUnionLiveView(trackedHtml, liveHtml, carriedIds) {
   const liveBlocks = parseLiveViewRowBlocks(stripHtmlComments(liveHtml.replace(/\r\n/g, '\n')));
   let html = trackedHtml.replace(/\r\n/g, '\n');
-  const ids = [...new Set(carriedIds)].sort((a, b) =>
-    a[0] === b[0] ? Number(a.slice(1)) - Number(b.slice(1)) : a < b ? -1 : 1,
-  );
+  const ids = [...new Set(carriedIds)].sort((a, b) => {
+    const x = splitRowId(a);
+    const y = splitRowId(b);
+    if (!x || !y) return a < b ? -1 : a > b ? 1 : 0;
+    return x.prefix === y.prefix ? x.number - y.number : x.prefix < y.prefix ? -1 : 1;
+  });
   const added = new Map();
   for (const id of ids) {
     const block = liveBlocks.get(id);
     if (block === undefined) throw new Error(`row ${id} is not on the live page, so there is no live block to carry.`);
-    const letter = id[0];
+    const parts = splitRowId(id);
+    if (!parts) throw new Error(`row ${id} is not a row ID, so there is no live block to carry.`);
+    const letter = parts.prefix;
+    const titled = letter === 'BLK' || letter === 'UNC';
+    const sectionName = letter === 'BLK' ? 'the Blocked section' : letter === 'UNC' ? 'the Unconfirmed section' : `Group ${letter}`;
     const section = findGroupSection(html, letter);
     if (!section) {
       throw new Error(
-        `row ${id} belongs to Group ${letter}, which has no section in your live view — the lane that owns it added a new group. Let that lane merge first rather than carrying a whole group.`,
+        titled
+          ? `row ${id} belongs to ${sectionName}, which has no section in your live view (no \`${letter}\` group tag) — the lane that owns it added it. Let that lane merge first rather than carrying a whole section.`
+          : `row ${id} belongs to Group ${letter}, which has no section in your live view — the lane that owns it added a new group. Let that lane merge first rather than carrying a whole group.`,
       );
     }
     const rows = [...html.slice(section.start, section.end).matchAll(ROW_BLOCK_REGEX)].map((m) => ({
@@ -430,24 +516,48 @@ export function buildUnionLiveView(trackedHtml, liveHtml, carriedIds) {
       id: (m[0].match(/<span class="num">([^<]*)<\/span>/)?.[1] ?? '').trim(),
     }));
     if (rows.some((r) => r.id === id)) throw new Error(`row ${id} is already in your live view; only carry rows it lacks.`);
-    const next = rows.find((r) => /^[A-Z]\d+$/.test(r.id) && r.id[0] === letter && Number(r.id.slice(1)) > Number(id.slice(1)));
+    const next = rows.find((r) => {
+      const rp = splitRowId(r.id);
+      return rp !== null && rp.prefix === letter && rp.number > parts.number;
+    });
     if (next) {
       html = `${html.slice(0, next.index)}${block}\n${indentBefore(html, next.index)}${html.slice(next.index)}`;
     } else if (rows.length > 0) {
       const last = rows[rows.length - 1];
       html = `${html.slice(0, last.end)}\n${indentBefore(html, last.index)}${block}${html.slice(last.end)}`;
     } else {
-      const headerEnd = html.indexOf('\n', html.indexOf('</h3>', section.start));
-      if (headerEnd === -1 || headerEnd > section.end) throw new Error(`Group ${letter}'s section in your live view has no header to place row ${id} after.`);
+      // register:build places rows after </header> (reconcileTitledSection); a
+      // section with no <header> (test fixtures; every real section has one)
+      // falls back to </h3>.
+      const closeHeader = html.indexOf('</header>', section.start);
+      const anchor = closeHeader !== -1 && closeHeader < section.end ? closeHeader : html.indexOf('</h3>', section.start);
+      const headerEnd = html.indexOf('\n', anchor);
+      if (headerEnd === -1 || headerEnd > section.end) throw new Error(`${sectionName[0].toUpperCase()}${sectionName.slice(1)}'s section in your live view has no header to place row ${id} after.`);
       html = `${html.slice(0, headerEnd)}\n    ${block}${html.slice(headerEnd)}`;
     }
     added.set(letter, (added.get(letter) ?? 0) + 1);
   }
   if (ids.length === 0) return html;
-  const owed = html.match(/<div class="n owed">(\d+)<\/div>/);
-  if (!owed) throw new Error('your live view has no `<div class="n owed">N</div>` to raise.');
-  html = html.replace(owed[0], () => `<div class="n owed">${Number(owed[1]) + ids.length}</div>`);
+  const lettered = ids.filter((id) => !/^(BLK|UNC)/.test(id)).length;
+  if (lettered > 0) {
+    const owed = html.match(/<div class="n owed">(\d+)<\/div>/);
+    if (!owed) throw new Error('your live view has no `<div class="n owed">N</div>` to raise.');
+    html = html.replace(owed[0], () => `<div class="n owed">${Number(owed[1]) + lettered}</div>`);
+  }
   for (const [letter, count] of added) {
+    if (letter === 'BLK' || letter === 'UNC') {
+      const label = letter === 'BLK' ? 'Blocked' : 'Unconfirmed';
+      const tile = html.match(new RegExp(`<div class="n( blk)?">(\\d+)</div><div class="l">${label}</div>`));
+      if (!tile) throw new Error(`your live view has no ${label} tile to raise.`);
+      html = html.replace(tile[0], () => tile[0].replace(`>${tile[2]}<`, `>${Number(tile[2]) + count}<`));
+      const named = findGroupSection(html, letter);
+      const namedHtml = html.slice(named.start, named.end);
+      const namedCount = namedHtml.match(/<span class="gcount">(\d+) rows?<\/span>/);
+      if (!namedCount) throw new Error(`${label === 'Blocked' ? 'the Blocked' : 'the Unconfirmed'} section in your live view has no gcount to raise.`);
+      const total = Number(namedCount[1]) + count;
+      html = `${html.slice(0, named.start)}${namedHtml.replace(namedCount[0], () => `<span class="gcount">${total} ${total === 1 ? 'row' : 'rows'}</span>`)}${html.slice(named.end)}`;
+      continue;
+    }
     const table = html.match(/<table class="glance">[\s\S]*?<\/table>/);
     const row = table && [...table[0].matchAll(/<tr\b[^>]*>[\s\S]*?<\/tr>/g)].find((tr) => {
       const first = tr[0].match(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/);
@@ -475,7 +585,7 @@ function liveViewRowIdSet(liveViewHtml) {
   const ids = new Set();
   for (const m of stripHtmlComments(liveViewHtml).matchAll(/<span class="num">([^<]*)<\/span>/g)) {
     const id = m[1].trim();
-    if (/^[A-Z]\d+$/.test(id)) ids.add(id);
+    if (ROW_ID_REGEX.test(id)) ids.add(id);
   }
   return ids;
 }
@@ -486,8 +596,12 @@ function liveViewRowIdSet(liveViewHtml) {
 export function parseRegisterRowTitles(registerText) {
   const titles = new Map();
   const { text } = stripFences(registerText);
-  for (const m of text.matchAll(/^### ([A-Z]\d+)(?=\s|\r?$)([^\r\n]*)\r?$/gm)) {
+  for (const m of text.matchAll(/^### ((?:BLK|[A-Z])\d+)(?=\s|\r?$)([^\r\n]*)\r?$/gm)) {
     titles.set(m[1], m[2].replace(/\s+/g, ' ').trim());
+  }
+  // #3587: an Unconfirmed bullet's title is the bold text after `UNC101 · `.
+  for (const m of text.matchAll(/^- \*\*(UNC\d+)(?=\s|\*)([^\r\n]*?)(?:\*\*|\r?$)/gm)) {
+    titles.set(m[1], m[2].replace(/^\s*·/, '').replace(/\s+/g, ' ').trim());
   }
   return titles;
 }
@@ -552,7 +666,7 @@ export function parseRetiredCarriedRows(registerText) {
     }
     const [id, pr, date, reason] = cells;
     const problems = [];
-    if (!/^[A-Z]\d+$/.test(id)) problems.push(`"${id}" is not a row ID (a letter and a number, e.g. B103)`);
+    if (!ROW_ID_REGEX.test(id)) problems.push(`"${id}" is not a row ID (a letter or BLK/UNC prefix and a number, e.g. B103 or BLK101)`);
     if (!/^#\d+$/.test(pr)) problems.push(`the owning PR "${pr}" must be a PR reference such as #3505`);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) problems.push(`the closed-unmerged date "${date}" must be YYYY-MM-DD`);
     if (!reason) problems.push('the reason is empty');
@@ -767,8 +881,67 @@ export function checkRegister(text) {
     }
   }
 
+  // Check 4c (#3587): the Blocked/Unconfirmed sections' `BLK`/`UNC` IDs follow
+  // the same allocate-once rules as a group's. Accept, never require: a section
+  // with no ID row and no marker (today's `main`) adds no error here.
+  const titled = parseTitledSections(sections);
+  for (const { prefix, headingText } of titled.invalid) {
+    const { name } = TITLED_SECTIONS.find((s) => s.prefix === prefix);
+    errors.push(
+      `Row "${headingText}" in ${name} is not a valid row number. Row numbers are plain integers (${prefix}101, ${prefix}102, …), allocated once from the section's next-id — for a row covering more than one debt, annotate its title instead of sub-numbering.`,
+    );
+  }
+  for (const { prefix, titleRegex, name } of TITLED_SECTIONS) {
+    const rows = titled.groups.get(prefix);
+    if (rows === undefined) continue;
+    const section = sections.find((s) => titleRegex.test(s.title));
+    const marker = parseNextIdMarker(section.body, prefix);
+    if (rows.length === 0 && marker === null) continue;
+    if (marker === null) {
+      errors.push(
+        `${name[0].toUpperCase()}${name.slice(1)} has ${prefix} rows but no "<!-- next-id: ${prefix}N -->" allocation marker. Add one directly under the section heading — without it there is nothing to allocate new row IDs from.`,
+      );
+      continue;
+    }
+    if (marker < ALLOCATION_FLOOR) {
+      errors.push(
+        `${name[0].toUpperCase()}${name.slice(1)}'s next-id (${prefix}${marker}) is below the allocation floor ${prefix}${ALLOCATION_FLOOR}. IDs below the floor have been used before; reusing one silently re-points every existing citation.`,
+      );
+    }
+    for (const n of rows) {
+      if (n >= marker) {
+        errors.push(
+          `${prefix}${n} is at or above ${name}'s next-id (${prefix}${marker}). Bump next-id past every allocated ID.`,
+        );
+      }
+    }
+  }
+
+  // Check 4d (#3587 review): the glance table's `—` Blocked/Unconfirmed cells
+  // feed the live view's strip tiles and nothing else compares them with the
+  // body, so a row added without bumping the cell left the tile one short.
+  // Counts every `### ` heading / `- **` bullet — the same rows
+  // `register:build`'s gcount counts, ID or no ID. A register with no such
+  // glance row (a fixture) is not checked.
+  for (const { label, titleRegex, rowRegex } of GLANCE_TITLED_ROWS) {
+    const cell = glanceSection.body.match(new RegExp(`^\\|\\s*—\\s*\\|\\s*\\*\\*${label}\\*\\*[^|]*\\|\\s*(\\d+)\\s*\\|\\s*$`, 'm'));
+    const section = sections.find((s) => titleRegex.test(s.title));
+    if (!cell || !section) continue;
+    const bodyCount = [...section.body.matchAll(rowRegex)].length;
+    if (Number(cell[1]) !== bodyCount) {
+      errors.push(
+        `${label}: glance table says ${cell[1]}, body has ${bodyCount} ${bodyCount === 1 ? 'row' : 'rows'}. Update the table or the body.`,
+      );
+    }
+  }
+
   return errors;
 }
+
+const GLANCE_TITLED_ROWS = [
+  { label: 'Blocked', titleRegex: /^Blocked\b/, rowRegex: /^### .+?\r?$/gm },
+  { label: 'Unconfirmed', titleRegex: /^Unconfirmed\b/, rowRegex: /^- \*\*.+?\*\*/gm },
+];
 
 // ---------------------------------------------------------------------------
 // The live view (docs/testing/onbox-acceptance-register-live-view.html)
@@ -928,12 +1101,14 @@ function parseLiveViewGlance(html) {
   return { groups, malformedLetters, duplicateLetters };
 }
 
-// Parses the live view's group sections into letter → { headerCount, rowIds }.
+// Parses the live view's group sections into tag → { headerCount, rowIds }.
 // Rows are collected per SECTION rather than by their own ID letter, so a row
 // filed under the wrong group is caught rather than silently landing in the
-// right bucket. Sections whose `gtag` is not a single uppercase letter (the
-// `BLK` and `?` sections) are skipped — the markdown's own glance table marks
-// their rows with `—` and excludes them from the owed total too.
+// right bucket. A section whose `gtag` is a single uppercase letter, `BLK` or
+// `UNC` (#3587) is parsed; any other tag (the legacy `?` Unconfirmed section)
+// is skipped. A legacy Blocked/Unconfirmed row's `—` is tolerated and carries
+// no ID, as the markdown's glance table marks those rows; none of these rows
+// count toward the owed total.
 //
 // The split marker matches a whole `<section>` tag whose class list CONTAINS
 // `group`, wherever the class attribute sits among the others. Two rounds of
@@ -951,29 +1126,31 @@ function parseLiveViewGlance(html) {
 //     quietly rather than failing loudly (#4, #5).
 // `(?:\s[^"]*)?` requires whitespace after `group`, so `grouping` no longer
 // matches; the leading `[^>]*` makes attribute order irrelevant.
-function parseLiveViewSections(html) {
+export function parseLiveViewSections(html) {
   const sections = new Map();
   const duplicateLetters = new Set();
   const invalidRowIds = [];
   const blocks = html.split(/<section\b[^>]*\bclass=\u0022group(?:\s[^\u0022]*)?\u0022[^>]*>/).slice(1);
   for (const block of blocks) {
     const tagMatch = block.match(/<span class="gtag">([^<]*)<\/span>/);
-    if (!tagMatch || !/^[A-Z]$/.test(tagMatch[1].trim())) continue;
+    // A lettered group, or a `BLK`/`UNC` section (#3587); the legacy `?`
+    // Unconfirmed tag (and any other non-letter tag) stays skipped.
+    if (!tagMatch || !/^(?:[A-Z]|BLK|UNC)$/.test(tagMatch[1].trim())) continue;
     const letter = tagMatch[1].trim();
     const countMatch = block.match(/<span class="gcount">(\d+) rows?<\/span>/);
     const allIds = [...block.matchAll(/<span class="num">([^<]*)<\/span>/g)].map((m) =>
       m[1].trim(),
     );
-    const rowIds = allIds.filter((id) => /^[A-Z]\d+$/.test(id));
-    // A `num` that is neither a row ID nor the `—` used by the Blocked and
-    // Unconfirmed sections is REPORTED, not dropped. Silently filtering it was
+    const rowIds = allIds.filter((id) => ROW_ID_REGEX.test(id));
+    // A `num` that is neither a row ID nor the legacy `—` of an unnumbered
+    // Blocked/Unconfirmed row is REPORTED, not dropped. Silently filtering it was
     // the inverse of the markdown side, which rejects the same convention
     // violation loudly (`### A19b` → invalidRowHeadings): a live-view row
     // numbered `A31b`, `a32` or `A&nbsp;32` used to vanish from the comparison
     // entirely, so the page carried a row the register did not and the check
     // stayed green (round 2, #1).
     for (const id of allIds) {
-      if (!/^[A-Z]\d+$/.test(id) && id !== '—') invalidRowIds.push({ letter, id });
+      if (!ROW_ID_REGEX.test(id) && id !== '—') invalidRowIds.push({ letter, id });
     }
     // Same last-writer-wins hazard as the glance table above: two sections
     // carrying the same `gtag` would leave only one visible, and the page
@@ -1020,7 +1197,7 @@ function parseLiveViewSections(html) {
 // extraction — no second parser — once `checkRegister` has already vouched
 // for the text; the fence-stripping/glance-section lookups below are just
 // pulling out what `checkRegister` already confirmed is there.
-function resolveBaselineGroups(baselineText) {
+export function resolveBaselineGroups(baselineText) {
   if (typeof baselineText !== 'string') return null;
   if (checkRegister(baselineText).length > 0) return null;
   const { text: strippedBaseline } = stripFences(baselineText);
@@ -1045,6 +1222,20 @@ function resolveBaselineGroups(baselineText) {
     const titleMatch = section.title.match(/^Group ([A-Z])\b/);
     if (!titleMatch) continue;
     nextIds.set(titleMatch[1], parseNextIdMarker(section.body, titleMatch[1]));
+  }
+  // #3587: the Blocked/Unconfirmed sections' BLK/UNC rows and markers join
+  // `bodyGroups` and `nextIds` (but NOT `tableLetters`, which mirrors the glance
+  // table). Accept, never require: a section with no ID row and no marker (the
+  // legacy unnumbered form, today's `main`) adds no key.
+  const { groups: baselineTitledGroups } = parseTitledSections(baselineSections);
+  for (const { prefix, titleRegex } of TITLED_SECTIONS) {
+    const rows = baselineTitledGroups.get(prefix);
+    if (rows === undefined) continue;
+    const section = baselineSections.find((s) => titleRegex.test(s.title));
+    const marker = parseNextIdMarker(section.body, prefix);
+    if (rows.length === 0 && marker === null) continue;
+    baselineBodyGroups.set(prefix, rows);
+    nextIds.set(prefix, marker);
   }
   return {
     tableLetters: new Set(baselineTableGroups.keys()),
@@ -1130,6 +1321,11 @@ export const PUBLISHING_FILE_ERROR_PREFIX = 'publishing-file: ';
 // cannot confirm an entry, which is then accepted.
 export const RETIRED_ROW_ERROR_PREFIX = 'retired-carried-row: ';
 export const RETIRED_ROW_WARNING_PREFIX = 'retired-row-warning: ';
+// #3587 review: advisory, non-blocking. The live page's Blocked/Unconfirmed
+// section still has legacy `—` rows (no BLK/UNC ID) while the register's
+// section carries IDs. Those rows cannot be compared, carried or unioned, so
+// the comparison is blind to them until a publish replaces the page.
+export const LEGACY_LIVE_ROW_WARNING_PREFIX = 'legacy-live-row-warning: ';
 
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
@@ -1327,7 +1523,20 @@ export function checkLiveView(
     return ['No "## At a glance" section in the markdown — cannot check the live view against it.'];
   }
   const { groups: mdGroups } = parseGlanceTable(glanceSection.body);
-  const { groups: mdBodyGroups } = parseBodyGroups(sections);
+  const { groups: lettersBodyGroups } = parseBodyGroups(sections);
+  // #3587: the Blocked/Unconfirmed sections' BLK/UNC rows are classified by ID
+  // exactly like a lettered group's. They join the id-to-section map used by the
+  // verdict loops below, but never `mdGroups` (no glance row). Accept, never
+  // require: a section with no ID row and no marker (today's `main`) adds no key.
+  const mdBodyGroups = new Map(lettersBodyGroups);
+  const { groups: titledGroups } = parseTitledSections(sections);
+  for (const { prefix, titleRegex } of TITLED_SECTIONS) {
+    const rows = titledGroups.get(prefix);
+    if (rows === undefined) continue;
+    const section = sections.find((s) => titleRegex.test(s.title));
+    if (rows.length === 0 && parseNextIdMarker(section.body, prefix) === null) continue;
+    mdBodyGroups.set(prefix, rows);
+  }
 
   // 'extraOnly' needs a baseline to tell a discharge apart from a genuine
   // competing-lane row (#2199) — resolve it once, up front, and fail closed
@@ -1502,11 +1711,13 @@ export function checkLiveView(
   // register's next-id, the live page's highest ID, and origin/main's next-id
   // (an ID main minted and since dropped is still spent — allocate-once).
   const renumberAdvice = (letter) => {
+    const titled = TITLED_SECTIONS.find((t) => t.prefix === letter);
     const mineNext = parseNextIdMarker(
-      sections.find((s) => s.title.startsWith(`Group ${letter}`))?.body ?? '',
+      sections.find((s) => (titled ? titled.titleRegex.test(s.title) : s.title.startsWith(`Group ${letter}`)))
+        ?.body ?? '',
       letter,
     );
-    const liveNumbers = (lvSections.get(letter)?.rowIds ?? []).map((r) => Number(r.slice(1)));
+    const liveNumbers = (lvSections.get(letter)?.rowIds ?? []).map((r) => splitRowId(r).number);
     const liveNext = liveNumbers.length > 0 ? Math.max(...liveNumbers) + 1 : 0;
     const target = Math.max(mineNext ?? 0, liveNext, baselineNextIds?.get(letter) ?? 0);
     return `Renumber your row to ${letter}${target} (the highest of your next-id, the live page's highest ID + 1 and origin/main's next-id), then re-run.`;
@@ -1521,8 +1732,12 @@ export function checkLiveView(
     }
     return `No branch this checkout has fetched committed it, so its owner cannot be named here — fetch every branch (git fetch origin '+refs/heads/*:refs/remotes/origin/*') and re-run to name it. The page's publish id "${provenance.nonce}" names whoever PUBLISHED the page, which for a union publish is not the row's owner.`;
   };
+  // "Group A" for a lettered group; the Blocked/Unconfirmed sections are named
+  // for what they are, not for their BLK/UNC prefix (#3587).
+  const sectionLabel = (letter) =>
+    TITLED_SECTIONS.find((t) => t.prefix === letter)?.name.replace(/^the | section$/g, '') ?? `Group ${letter}`;
   const unmergedLaneError = (id, letter) =>
-    `${UNMERGED_LANE_ROW_ERROR_PREFIX}${id}: the live page's Group ${letter} section has row ${id}, which origin/main lacks; it belongs to a lane that has not merged. ${ownerText(id)} Publishing a file without it drops it: carry its live block verbatim in the file you publish (--build-union <out> builds it) and name that file with --publishing <file>; if that lane's PR was closed without merging, retire the row in the register's "Retired carried rows" table instead.`;
+    `${UNMERGED_LANE_ROW_ERROR_PREFIX}${id}: the live page's ${sectionLabel(letter)} section has row ${id}, which origin/main lacks; it belongs to a lane that has not merged. ${ownerText(id)} Publishing a file without it drops it: carry its live block verbatim in the file you publish (--build-union <out> builds it) and name that file with --publishing <file>; if that lane's PR was closed without merging, retire the row in the register's "Retired carried rows" table instead.`;
   // A live-only row origin/main lacks: 'yours' (silent: your own or a
   // merged publish's row, a row main's register has ever carried, or a
   // retired one), 'foreign' (another unmerged lane's) or 'unknown'.
@@ -1546,8 +1761,8 @@ export function checkLiveView(
     return 'foreign';
   };
   const baselineHasRow = (id) => {
-    const [, idLetter, idNumber] = id.match(/^([A-Z])(\d+)$/);
-    return (baselineBodyGroups.get(idLetter) ?? []).includes(Number(idNumber));
+    const { prefix, number } = splitRowId(id);
+    return (baselineBodyGroups.get(prefix) ?? []).includes(number);
   };
 
   // The owed total, as the summary strip states it.
@@ -1578,6 +1793,21 @@ export function checkLiveView(
     duplicateLetters: duplicateSectionLetters,
     invalidRowIds,
   } = parseLiveViewSections(liveViewHtml);
+  if (direction === 'extraOnly') {
+    for (const { prefix, sectionId, name } of [
+      { prefix: 'BLK', sectionId: 'blocked', name: 'Blocked' },
+      { prefix: 'UNC', sectionId: 'unconfirmed', name: 'Unconfirmed' },
+    ]) {
+      if (!mdBodyGroups.has(prefix)) continue;
+      const block = liveViewHtml.match(new RegExp(`<section\\b[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?</section>`));
+      const legacy = block ? [...block[0].matchAll(/<span class="num">\s*—\s*<\/span>/g)].length : 0;
+      if (legacy > 0) {
+        errors.push(
+          `${LEGACY_LIVE_ROW_WARNING_PREFIX}the live page's ${name} section has ${legacy} legacy row${legacy === 1 ? '' : 's'} with no ${prefix} ID, while this register's ${name} rows carry IDs. Those rows are invisible to this comparison (they cannot be compared, carried or unioned) — read the live ${name} section by hand before you publish.`,
+        );
+      }
+    }
+  }
   if (lvGroups === null) {
     errors.push(
       'Live view: no `<table class="glance">` found — the per-group counts could not be read. If the markup changed, update scripts/check-onbox-register.mjs.',
@@ -1666,10 +1896,10 @@ export function checkLiveView(
   // earlier, alongside the glance table — see the comment there for why.
   for (const { letter, id } of invalidRowIds) {
     errors.push(
-      `Live view: Group ${letter} has a row numbered "${id}", which is not a valid row ID. Rows are ${letter}1, ${letter}2, … — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
+      `Live view: ${sectionLabel(letter)} has a row numbered "${id}", which is not a valid row ID. Rows are ${letter}1, ${letter}2, … — for a row covering more than one debt, annotate its title instead of sub-lettering.`,
     );
   }
-  if (lvSections.size === 0) {
+  if (![...lvSections.keys()].some((key) => /^[A-Z]$/.test(key))) {
     errors.push(
       'Live view: no `<section class="group…">` blocks with a single-letter `gtag` found — no rows could be read. If the markup changed, update scripts/check-onbox-register.mjs.',
     );
@@ -1685,14 +1915,14 @@ export function checkLiveView(
     if (!section) {
       // Normal pre-publish state in 'extraOnly' mode — see the function
       // header comment.
-      if (direction === 'both') errors.push(`Live view: no group section for Group ${letter}.`);
+      if (direction === 'both') errors.push(`Live view: no group section for ${sectionLabel(letter)}.`);
       continue;
     }
     if (section.headerCount === null) {
       // An extraction failure, not a directional comparison — the header IS
       // there, its `gcount` span just couldn't be read. Fires in both modes.
       errors.push(
-        `Live view: Group ${letter}'s header has no \`<span class="gcount">N rows</span>\`.`,
+        `Live view: ${sectionLabel(letter)}'s header has no \`<span class="gcount">N rows</span>\`.`,
       );
     }
     const expected = new Set(mdNumbers.map((n) => `${letter}${n}`));
@@ -1731,19 +1961,16 @@ export function checkLiveView(
     // #3529: "origin/main lacks it" alone is NOT proof of a discharge — a row
     // an UNMERGED lane added has the same shape. Provenance decides (see the
     // header comment): only a row the page's own merged/own publish committed
-    // is silent. (Only rows with numeric IDs reach here: Blocked/Unconfirmed
-    // rows use `—` and are never in `rowIds`, so their handling is
-    // unchanged.) `--discharging` does NOT suppress another lane's row: it
+    // is silent. (Only rows with a row ID reach here, BLK/UNC included; a
+    // legacy `—` Blocked/Unconfirmed row has none, is never in `rowIds`, and
+    // is reported only by the advisory LEGACY_LIVE_ROW_WARNING_PREFIX.) `--discharging` does NOT suppress another lane's row: it
     // names rows THIS change discharged, and those are already silent.
     const unmergedExtra = [];
     const staleExtra =
       direction === 'extraOnly'
         ? extra.filter((id) => {
-            const idMatch = id.match(/^([A-Z])(\d+)$/);
-            if (!idMatch) return true; // shouldn't happen — rowIds is pre-filtered to this shape
-            const [, idLetter, idNumber] = idMatch;
-            const baselineNumbers = baselineBodyGroups.get(idLetter) ?? [];
-            if (!baselineNumbers.includes(Number(idNumber))) {
+            if (!splitRowId(id)) return true; // shouldn't happen — rowIds is pre-filtered to this shape
+            if (!baselineHasRow(id)) {
               if (liveOnlyVerdict(id) === 'foreign') unmergedExtra.push(id);
               return false;
             }
@@ -1757,18 +1984,31 @@ export function checkLiveView(
     if (staleExtra.length > 0) {
       errors.push(
         direction === 'extraOnly'
-          ? `The live page's Group ${letter} section has ${staleExtra.length === 1 ? 'row' : 'rows'} ${staleExtra.join(', ')} that this register does not yet have — the register is BEHIND what is already published. Merge ${staleExtra.length === 1 ? 'it' : 'them'} in before publishing.`
-          : `Live view's Group ${letter} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's Group ${letter} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
+          ? `The live page's ${sectionLabel(letter)} section has ${staleExtra.length === 1 ? 'row' : 'rows'} ${staleExtra.join(', ')} that this register does not yet have — the register is BEHIND what is already published. Merge ${staleExtra.length === 1 ? 'it' : 'them'} in before publishing.`
+          : `Live view's ${sectionLabel(letter)} section has ${extra.length === 1 ? 'row' : 'rows'} ${extra.join(', ')} that the register's ${sectionLabel(letter)} does not. A row published from an unmerged branch, or a row filed under the wrong group, is the usual cause.`,
       );
     }
     for (const id of unmergedExtra) errors.push(unmergedLaneError(id, letter));
     if (section.rowIds.length !== found.size) {
       const seen = new Set();
       const dupes = [...new Set(section.rowIds.filter((id) => seen.has(id) || !seen.add(id)))];
-      errors.push(`Live view: Group ${letter} lists ${dupes.join(', ')} more than once.`);
+      errors.push(`Live view: ${sectionLabel(letter)} lists ${dupes.join(', ')} more than once.`);
     }
   }
   for (const letter of lvSections.keys()) {
+    // #3587: a `BLK`/`UNC` section the register has no ID row or marker for is
+    // today's legacy unnumbered form (`—` rows): nothing to compare, so it must
+    // not read as a section the register lacks (accept, never require). In
+    // 'extraOnly' mode a page ID row for it is still classified below like a
+    // lettered group's; the tracked-pair 'both' comparison only starts once the
+    // register itself carries BLK/UNC IDs.
+    if (
+      TITLED_SECTIONS.some((t) => t.prefix === letter) &&
+      !mdBodyGroups.has(letter) &&
+      (direction === 'both' || lvSections.get(letter).rowIds.length === 0)
+    ) {
+      continue;
+    }
     if (!mdBodyGroups.has(letter)) {
       if (direction === 'extraOnly') {
         // #2199: whole-group discharge — same baseline check as the
@@ -1804,11 +2044,11 @@ export function checkLiveView(
             // group actually matched, so a plain, flag-less run keeps its
             // original wording verbatim.
             errors.push(
-              `The live page has a Group ${letter} section that this register's body does not — the register is BEHIND what is already published. ${unnamedIds.length === 1 ? 'Row' : 'Rows'} ${unnamedIds.join(', ')} ${unnamedIds.length === 1 ? 'is' : 'are'} not named via --discharging; add ${unnamedIds.length === 1 ? 'it' : 'them'} to the register before publishing.`,
+              `The live page has a ${sectionLabel(letter)} section that this register's body does not — the register is BEHIND what is already published. ${unnamedIds.length === 1 ? 'Row' : 'Rows'} ${unnamedIds.join(', ')} ${unnamedIds.length === 1 ? 'is' : 'are'} not named via --discharging; add ${unnamedIds.length === 1 ? 'it' : 'them'} to the register before publishing.`,
             );
           } else {
             errors.push(
-              `The live page has a Group ${letter} section that this register's body does not — the register is BEHIND what is already published. Add the section before publishing.`,
+              `The live page has a ${sectionLabel(letter)} section that this register's body does not — the register is BEHIND what is already published. Add the section before publishing.`,
             );
           }
         } else {
@@ -1823,7 +2063,7 @@ export function checkLiveView(
         continue;
       }
       errors.push(
-        `Live view has a Group ${letter} section that the register's body does not. Remove it or add the section to the register.`,
+        `Live view has a ${sectionLabel(letter)} section that the register's body does not. Remove it or add the section to the register.`,
       );
     }
   }
@@ -1924,15 +2164,14 @@ export function checkLiveView(
     for (const [id, trackedTitle] of trackedTitles) {
       const publishedTitle = publishedTitles.get(id);
       if (publishedTitle === undefined || publishedTitle === trackedTitle) continue;
-      const [, idLetter, idNumber] = id.match(/^([A-Z])(\d+)$/);
-      if ((baselineBodyGroups.get(idLetter) ?? []).includes(Number(idNumber))) continue;
+      if (baselineHasRow(id)) continue;
       if (provenance.kind === 'own' && stampedRowIds.has(id)) continue;
       if (provenance.kind === 'unknown') {
         unknownProvenanceIds.push(id);
         continue;
       }
       errors.push(
-        `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${trackedTitle}" but the live page's ${id} is "${publishedTitle}" — two lanes allocated the same ID. ${renumberAdvice(idLetter)}`,
+        `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${trackedTitle}" but the live page's ${id} is "${publishedTitle}" — two lanes allocated the same ID. ${renumberAdvice(splitRowId(id).prefix)}`,
       );
     }
     for (const [id, trackedBody] of trackedRowBodies) {
@@ -2060,7 +2299,7 @@ export function checkLiveView(
         }
         if (mergeBaseIds.has(id)) continue;
         errors.push(
-          `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${mineTitle}" but origin/main's ${id} is "${mainTitle}", and the merge-base your branch forked from has no ${id} — two lanes allocated the same ID and the other merged first. ${renumberAdvice(id[0])}`,
+          `${ROW_ID_COLLISION_ERROR_PREFIX}${id}: your row is "${mineTitle}" but origin/main's ${id} is "${mainTitle}", and the merge-base your branch forked from has no ${id} — two lanes allocated the same ID and the other merged first. ${renumberAdvice(splitRowId(id)?.prefix ?? id[0])}`,
         );
       }
       if (undecidable.length > 0) {
@@ -2341,9 +2580,12 @@ export function resolveMergeBaseRegister(repoRoot, registerPath, mainRef, gitRun
 // common run makes no call. `true`/`false`, or `null` when git failed,
 // which grants no exemption.
 export function resolveMainEverCarried(repoRoot, registerPath, mainRef, id, gitRunner = runGitCommand) {
-  if (!/^[A-Z]\d+$/.test(id)) return false;
+  const parts = splitRowId(id);
+  if (!parts) return false;
+  // An Unconfirmed row is a `- **UNC<N> · …**` bullet (#3587), not a heading.
+  const anchor = parts.prefix === 'UNC' ? `^- \\*\\*${id}[^0-9]` : `^### ${id}[^0-9]`;
   const log = gitRunner(
-    ['log', '--format=%H', '-s', '-n', '1', '--first-parent', '--diff-merges=first-parent', '-G', `^### ${id}[^0-9]`, mainRef, '--', registerPath],
+    ['log', '--format=%H', '-s', '-n', '1', '--first-parent', '--diff-merges=first-parent', '-G', anchor, mainRef, '--', registerPath],
     repoRoot,
   );
   if (log.error || log.status !== 0 || typeof log.stdout !== 'string') return null;
@@ -2374,7 +2616,7 @@ export function resolveMainEverCarried(repoRoot, registerPath, mainRef, id, gitR
 // `missingCommits`. `null` when no commit introduced the row and none was
 // missing, when the title or `mainRef` is unknown, or when git failed.
 export function resolveRowOwner(repoRoot, liveViewPath, id, { title, mainRef, extraCommits } = {}, gitRunner = runGitCommand) {
-  if (typeof title !== 'string' || typeof mainRef !== 'string' || !mainRef || !/^[A-Z]\d+$/.test(id)) return null;
+  if (typeof title !== 'string' || typeof mainRef !== 'string' || !mainRef || !ROW_ID_REGEX.test(id)) return null;
   const roots = [];
   const missingCommits = [];
   for (const oid of Array.isArray(extraCommits) ? extraCommits : []) {
@@ -3211,6 +3453,9 @@ function runCheckOnboxRegisterCli() {
     const retiredWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(RETIRED_ROW_WARNING_PREFIX));
+    const legacyLiveRowWarnings = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(LEGACY_LIVE_ROW_WARNING_PREFIX));
     const threeWayWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX));
@@ -3225,6 +3470,7 @@ function runCheckOnboxRegisterCli() {
             !e.startsWith(PUBLISHING_FILE_ERROR_PREFIX) &&
             !e.startsWith(RETIRED_ROW_ERROR_PREFIX) &&
             !e.startsWith(RETIRED_ROW_WARNING_PREFIX) &&
+            !e.startsWith(LEGACY_LIVE_ROW_WARNING_PREFIX) &&
             !e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX) &&
             !e.startsWith(EXTRACTION_ERROR_PREFIX) &&
             !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX),
@@ -3287,6 +3533,12 @@ function runCheckOnboxRegisterCli() {
       if (retiredWarnings.length > 0) {
         console.warn(`\n${RETIRED_SECTION_TITLE} accepted WITHOUT a gh check (not blocking — confirm each by hand):`);
         for (const warning of retiredWarnings) console.warn(`  ${warning}`);
+      }
+      if (legacyLiveRowWarnings.length > 0) {
+        console.warn('\nLegacy live-page rows (not blocking — check by hand):');
+        for (const warning of legacyLiveRowWarnings) {
+          console.warn(`  ${warning.substring(LEGACY_LIVE_ROW_WARNING_PREFIX.length)}`);
+        }
       }
       if (unknownProvenanceErrors.length > 0) {
         publishedFailed =

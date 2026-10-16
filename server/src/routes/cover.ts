@@ -10,8 +10,8 @@
    - DELETE /:bookId/cover          → remove the cached file and clear the
      state.json metadata; UI falls back to the procedural gradient.
    - POST /:bookId/cover/upload     → (plan 40) multipart upload of local
-     cover JPEG/PNG (PNG transcoded server-side), atomic write, patches
-     state.json with `source: 'local'`.
+     cover JPEG/PNG (every upload re-encoded to a clean JPEG server-side),
+     atomic write, patches state.json with `source: 'local'`.
    - PATCH /:bookId/cover/framing   → (plan 40) persist render-time pan +
      zoom onto state.json.coverImage.framing.
 

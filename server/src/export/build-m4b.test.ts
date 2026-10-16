@@ -17,7 +17,9 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import sharp from 'sharp';
 import { encodePcmToAudio } from '../tts/mp3.js';
+import { reencodeToJpeg } from '../cover/reencode.js';
 import {
   buildM4b,
   buildConcatList,
@@ -328,6 +330,59 @@ describeIfTools('buildM4b', () => {
     /* Clean up so the absence-test below sees no cover file. */
     rmSync(coverPath, { force: true });
   }, 30_000);
+
+  it('exports a cover whose JPEG carries a trailing MPEG-TS stream only after the upload re-encode (#3535)', async () => {
+    /* The #3535 failure: a tiny single-channel JPEG followed by a real TS
+       stream auto-probes as mpegts, so the m4b mux fails when the bytes are
+       stored verbatim. ffmpeg's native mpeg2video encoder is enough to build
+       the tail (no libx264 needed). */
+    const tsPath = join(tmpRoot, 'tail.ts');
+    const gen = spawnSync(
+      'ffmpeg',
+      ['-y', '-f', 'lavfi', '-i', 'testsrc=d=1:s=64x64:r=10', '-c:v', 'mpeg2video', '-f', 'mpegts', tsPath],
+      { encoding: 'utf8', windowsHide: true },
+    );
+    /* Fail loudly: a silent return here would make a broken generator look like a pass. */
+    expect(gen.status, String(gen.stderr)).toBe(0);
+    const jpeg = await sharp({
+      create: { width: 1, height: 1, channels: 3, background: '#fff' },
+    })
+      .toColourspace('b-w')
+      .jpeg()
+      .toBuffer();
+    const poisoned = Buffer.concat([jpeg, readFileSync(tsPath)]);
+
+    const probeFormat = (path: string): string => {
+      const r = spawnSync(
+        'ffprobe',
+        ['-v', 'error', '-show_entries', 'format=format_name', '-of', 'csv=p=0', path],
+        { encoding: 'utf8', windowsHide: true },
+      );
+      return String(r.stdout).trim();
+    };
+
+    const coverDir = join(bookDir, '.audiobook');
+    mkdirSync(coverDir, { recursive: true });
+    const coverPath = join(coverDir, 'cover.jpg');
+    try {
+      /* Verbatim: ffmpeg sees the TS stream and the mux fails. */
+      writeFileSync(coverPath, poisoned);
+      expect(probeFormat(coverPath)).toContain('mpegts');
+      await expect(
+        buildM4b({ bookDir, state: makeState(), outPath: join(tmpRoot, 'poisoned.m4b') }),
+      ).rejects.toThrow(/ffmpeg exited/);
+
+      /* After the upload path's re-encode the same bytes mux cleanly. */
+      writeFileSync(coverPath, await reencodeToJpeg(poisoned, { tolerant: true }));
+      expect(probeFormat(coverPath)).not.toContain('mpegts');
+      const fixedOut = join(tmpRoot, 'fixed.m4b');
+      await buildM4b({ bookDir, state: makeState(), outPath: fixedOut });
+      const video = ffprobeJson(fixedOut).streams.find((st) => st.codec_type === 'video');
+      expect(video?.disposition?.attached_pic).toBe(1);
+    } finally {
+      rmSync(coverPath, { force: true });
+    }
+  }, 60_000);
 
   it('still produces a valid M4B with no video stream when no cover is cached on disk', async () => {
     /* Negative path — the export pipeline must remain resilient to the
