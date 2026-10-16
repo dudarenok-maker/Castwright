@@ -107,17 +107,22 @@ export async function getOrHydrateManuscript(
   const stateById = new Map(book.state.chapters.map((c) => [c.id, c]));
   const aligned = book.state.chapters.length === parsed.chapters.length;
   const chapterHints: ChapterHint[] = parsed.chapters.map((p) => {
-    const sc = aligned ? stateById.get(p.id) : undefined;
-    if (!sc) return p;
-    const { titleSynthesized: _drop, ...rest } = p;
-    return { ...rest, title: sc.title, ...(sc.titleSynthesized === true ? { titleSynthesized: true } : {}) };
-  }).map((c) => ({
-    ...c,
     /* User's prior exclusions win; otherwise fall back to the parser's
        front/back-matter default so re-parse doesn't silently re-admit
-       Acknowledgments/Copyright/CONTENTS to the queue (plan 148). */
-    excluded: excludedById.get(c.id) || isLikelyFrontMatterTitle(c.title) || undefined,
-  }));
+       Acknowledgments/Copyright/CONTENTS to the queue (plan 148). The default
+       reads the PARSE title: a chapter the user renamed to "Introduction" and
+       kept included must not come back excluded after a restart. */
+    const excluded = excludedById.get(p.id) || isLikelyFrontMatterTitle(p.title) || undefined;
+    const sc = aligned ? stateById.get(p.id) : undefined;
+    if (!sc) return { ...p, excluded };
+    const { titleSynthesized: _drop, ...rest } = p;
+    return {
+      ...rest,
+      title: sc.title,
+      ...(sc.titleSynthesized === true ? { titleSynthesized: true } : {}),
+      excluded,
+    };
+  });
 
   const record: ManuscriptRecord = {
     manuscriptId,
