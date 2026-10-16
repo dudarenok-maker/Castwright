@@ -7533,6 +7533,14 @@ async function mockUpgradeState(): Promise<UpgradeStatePayload> {
 
 async function mockGetUserSettings(): Promise<UserSettings> {
   await wait(50);
+  /* #3084 P31 e2e — a one-shot seed of dropped endpoint entries, consumed on the first settings
+     read so mockAcknowledgeDroppedEndpointEntries can remove them afterwards. */
+  const seededDrops = (globalThis as { __SEED_DROPPED_ENDPOINT_ENTRIES__?: UserSettings['droppedEndpointEntries'] })
+    .__SEED_DROPPED_ENDPOINT_ENTRIES__;
+  if (seededDrops) {
+    (MOCK_USER_SETTINGS as { droppedEndpointEntries: UserSettings['droppedEndpointEntries'] }).droppedEndpointEntries = seededDrops;
+    delete (globalThis as { __SEED_DROPPED_ENDPOINT_ENTRIES__?: unknown }).__SEED_DROPPED_ENDPOINT_ENTRIES__;
+  }
   return { ...MOCK_USER_SETTINGS };
 }
 
@@ -9288,7 +9296,10 @@ export async function mockGetConfig(): Promise<ConfigResponse> {
   return {
     groups: MOCK_CONFIG_GROUPS,
     descriptors: MOCK_CONFIG_DESCRIPTORS,
-    values: { ...MOCK_CONFIG_VALUES },
+    values: {
+      ...MOCK_CONFIG_VALUES,
+      ...((globalThis as unknown as { __SEED_CONFIG_VALUES__?: ConfigValues }).__SEED_CONFIG_VALUES__ ?? {}),
+    },
     restartPending: false,
     cudaEnvShadow: false,
     // Mock mode has no real server/.env, so it never has anything to clean.

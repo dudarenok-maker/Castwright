@@ -412,3 +412,17 @@ describe('mock config parity with the server registry', () => {
     }
   });
 });
+
+describe('mockGetConfig seed (#3084 e2e)', () => {
+  it('merges __SEED_CONFIG_VALUES__ over the mock values', async () => {
+    (globalThis as Record<string, unknown>).__SEED_CONFIG_VALUES__ = {
+      'tts.kokoro.device': { key: 'tts.kokoro.device', effective: 'cuda:0', source: 'override', locked: false, overridden: true },
+    };
+    try {
+      const res = await mockGetConfig();
+      expect(res.values['tts.kokoro.device']?.effective).toBe('cuda:0');
+    } finally {
+      delete (globalThis as Record<string, unknown>).__SEED_CONFIG_VALUES__;
+    }
+  });
+});
