@@ -121,9 +121,12 @@ portableImportRouter.post(
           .json({ error: 'invalid_bundle', reason: e.reason, message: e.message });
       }
       console.error('[portable-import] failed', e);
-      return res
-        .status(500)
-        .json({ error: 'portable_import_failed', message: (e as Error).message });
+      return res.status(500).json({
+        error: 'portable_import_failed',
+        /* Fixed sentence: a raw fs error names the absolute workspace path,
+           and this app is served over LAN HTTPS. The raw error is logged above. */
+        message: 'Importing the bundle failed. See the server log for details.',
+      });
     }
   },
 );
