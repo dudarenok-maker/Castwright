@@ -503,11 +503,11 @@ test('BLK/UNC child3 (d): resolveMainEverCarried and resolveRowOwner accept BLK/
   assert.ok(calls[0].includes('^### BLK101[^0-9]'));
   assert.ok(calls[1].includes('^- \\*\\*UNC101[^0-9]'));
   assert.equal(calls.length, 2, 'a non-ID makes no git call');
-  const owner = (id) => onbox.resolveRowOwner('/r', 'live.html', id, { title: 't', mainRef: 'main' }, () => ({ status: 0, stdout: '' }));
-  for (const id of ['BLK101', 'UNC101']) assert.notEqual(owner(id), undefined, id);
-  const seen = [];
-  onbox.resolveRowOwner('/r', 'live.html', 'UNC101', { title: 't', mainRef: 'main' }, (args) => (seen.push(args), { status: 0, stdout: '' }));
-  assert.ok(seen.length > 0, 'UNC101 reaches git');
+  for (const id of ['BLK101', 'UNC101']) {
+    const seen = [];
+    onbox.resolveRowOwner('/r', 'live.html', id, { title: 't', mainRef: 'main' }, (args) => (seen.push(args), { status: 0, stdout: '' }));
+    assert.ok(seen.length > 0, `${id} reaches git`);
+  }
 });
 
 test('4b: a row ID at or above its group next-id is reported', () => {
