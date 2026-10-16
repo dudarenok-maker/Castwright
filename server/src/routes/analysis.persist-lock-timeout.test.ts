@@ -170,6 +170,38 @@ vi.mock('../store/cast-merge-suggestions.js', async (importOriginal) => {
   };
 });
 
+/* #3625 child 5 — a seam on `withStateLock` itself, aimed at the persist
+   block's terminal state.json read-modify-write. `timeout` makes the lock
+   acquire reject with the real error class; `diskFault` runs the REAL lock but
+   throws from inside its callback (so the lock is released and the error
+   propagates exactly as a failed write would). Both fire only for the
+   fixture's own book dir (runJob's mkdtemp prefix below), and every other
+   call passes straight through to the real lock. */
+const stateLockStep = vi.hoisted(() => ({
+  timeout: null as unknown,
+  diskFault: null as unknown,
+  calls: 0,
+}));
+
+vi.mock('../workspace/state-lock.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../workspace/state-lock.js')>();
+  return {
+    ...actual,
+    withStateLock: async <T,>(bookDir: string, fn: () => Promise<T>): Promise<T> => {
+      if (bookDir.includes('audiobook-persist-lock-timeout-')) {
+        stateLockStep.calls += 1;
+        if (stateLockStep.timeout) throw stateLockStep.timeout;
+        if (stateLockStep.diskFault) {
+          return actual.withStateLock(bookDir, async () => {
+            throw stateLockStep.diskFault;
+          });
+        }
+      }
+      return actual.withStateLock(bookDir, fn);
+    },
+  };
+});
+
 /* Same three environment mocks the sibling runMainAnalyzerJob fixture files
    use to keep the job off a real Ollama / real GPU-cost state and to let the
    test inject the Phase-1 analyzer selection. */
@@ -1057,6 +1089,75 @@ describe('persist block — the INTERIM snapshot writes keep swallowing (#2292)'
         expect(
           run.warnings.some((w) => w.includes('[analysis-subset] interim cast.json write failed')),
         ).toBe(true);
+      } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+});
+
+
+/* #3625 child 5 — the terminal state.json read-modify-write is the persist
+ * block's AUTHORITATIVE state write (CLAUDE.md: WHICH WRITE the timeout came
+ * out of decides the outcome, #2295). A state-lock timeout there must fail the
+ * job as `lock-contention`; a disk fault out of the same locked span keeps
+ * today's swallow. Both jobs, both directions.
+ */
+describe.each([
+  ['runMainAnalyzerJob', 'main' as const],
+  ['runSubsetAnalyzerJob', 'subset' as const],
+])('%s persist block — the terminal state.json write is locked (#3625)', (_name, kind) => {
+  afterEach(() => {
+    stateLockStep.timeout = null;
+    stateLockStep.diskFault = null;
+    stateLockStep.calls = 0;
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  });
+
+  it(
+    'a state-lock timeout ends the job with a lock-contention ERROR, not a result',
+    async () => {
+      stateLockStep.timeout = new LockAcquisitionTimeoutError('state:/abs/secret/path', 10_000);
+
+      const run = await runJob(`state-timeout-${kind}`, kind);
+      try {
+        // The seam fired: the write really goes through withStateLock.
+        expect(stateLockStep.calls).toBeGreaterThan(0);
+
+        // The earlier persist writes completed; state.json is the one that did not.
+        expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(3);
+        expect(run.state.updatedAt).toBe(STALE_UPDATED_AT);
+
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('error');
+        expect(run.events.some((e) => e.kind === 'result')).toBe(false);
+        expectCuratedContentionTerminal(terminal, '/abs/secret/path');
+        expect(JSON.stringify(run.events)).not.toContain('/abs/secret/path');
+      } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'an EPERM disk fault inside the locked span is still swallowed — the job ends with a result',
+    async () => {
+      stateLockStep.diskFault = Object.assign(
+        new Error("EPERM: operation not permitted, rename 'state.json'"),
+        { code: 'EPERM' },
+      );
+
+      const run = await runJob(`state-eperm-${kind}`, kind);
+      try {
+        expect(stateLockStep.calls).toBeGreaterThan(0);
+        expect(run.cast.characters.find((c) => c.id === 'nova')?.lines).toBe(3);
+
+        const terminal = run.events[run.events.length - 1];
+        expect(terminal?.kind).toBe('result');
+        expect(run.events.some((e) => e.kind === 'error')).toBe(false);
+        expect(run.errors.some((e) => e.includes('failed to persist .audiobook/*'))).toBe(true);
       } finally {
         await run.cleanup();
       }
