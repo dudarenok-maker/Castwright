@@ -1542,3 +1542,43 @@ describe('#3628 — titleSynthesized does not outlive the title it describes', (
     expect(titles[2]).toBe('Chapter 9'); // user-retitled: left alone
   });
 });
+
+describe('#3628 — refresh-titles hands the parser\'s app-made flags to the transform', () => {
+  it('a re-derived title the parser itself made up stays flagged', async () => {
+    // No heading in the manuscript: the parser titles the lone chapter "Chapter 1" (app-made).
+    writeFileSync(join(bookDir, 'manuscript.md'), 'Just some opening prose here.\nAnd more of it.\n');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 7', slug: '01-chapter-7', titleSynthesized: true }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [{ id: 1, chapterId: 1, characterId: 'narr', text: 'Just some opening prose here.' }],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: false });
+    expect(res.status).toBe(200);
+
+    const ch = readState().chapters[0] as { title: string; titleSynthesized?: boolean };
+    expect(ch.title).toBe('Chapter 1');
+    expect(ch.titleSynthesized).toBe(true);
+  });
+});

@@ -663,7 +663,7 @@ describe('renumbering honours titleSynthesized (#3628)', () => {
     expect(mergedHeading.state.chapters[0].titleSynthesized).toBeUndefined();
   });
 
-  it('(D) rename, merge mergedTitle and split newTitle drop the flag for good', () => {
+  it('(D) rename and merge mergedTitle drop the flag for good', () => {
     const renamed = applyRename(book(true), bookHints(), bookSentences(), {
       chapterId: 3,
       title: 'Chapter 9',
@@ -672,24 +672,10 @@ describe('renumbering honours titleSynthesized (#3628)', () => {
       chapterIds: [2, 3],
       mergedTitle: 'Chapter 9',
     });
-    const longHints = makeHints([
-      { id: 1, title: 'Prologue', body: 'p' },
-      { id: 2, title: 'Chapter 1', body: 'Alpha one. Beta two.' },
-    ]);
-    const splitExplicit = applySplit(
-      makeState([
-        { id: 1, title: 'Prologue' },
-        { id: 2, title: 'Chapter 1', titleSynthesized: true },
-      ]),
-      longHints,
-      [s(1, 1, 'narr', 'P.'), s(1, 2, 'narr', 'Alpha one.'), s(2, 2, 'narr', 'Beta two.')],
-      { chapterId: 2, afterSentenceId: 1, newTitle: 'Chapter 9' },
-    );
 
     const cases: Array<[string, ReturnType<typeof applyRename>, number]> = [
       ['rename', renamed, 3],
       ['merge', mergedExplicit, 2],
-      ['split', splitExplicit, 3],
     ];
     for (const [label, result, id] of cases) {
       const ch = result.state.chapters.find((c) => c.id === id)!;
@@ -703,8 +689,24 @@ describe('renumbering honours titleSynthesized (#3628)', () => {
       expect(later.state.chapters.find((c) => c.id === id)!.title, label).toBe('Chapter 9');
     }
   });
-});
 
+  it('(E) split keeps the flag on the first half and never gives it to the second', () => {
+    const split = applySplit(
+      makeState([
+        { id: 1, title: 'Prologue' },
+        { id: 2, title: 'Chapter 1', titleSynthesized: true },
+      ]),
+      makeHints([
+        { id: 1, title: 'Prologue', body: 'p' },
+        { id: 2, title: 'Chapter 1', body: 'Alpha one. Beta two.' },
+      ]),
+      [s(1, 1, 'narr', 'P.'), s(1, 2, 'narr', 'Alpha one.'), s(2, 2, 'narr', 'Beta two.')],
+      { chapterId: 2, afterSentenceId: 1, newTitle: 'Chapter 9' },
+    );
+    expect(split.state.chapters[1].titleSynthesized).toBe(true);
+    expect('titleSynthesized' in split.state.chapters[2]).toBe(false);
+  });
+});
 /* -- title source (#3628): the title-refresh passes honour the flag -- */
 
 describe('applyRefreshTitles honours titleSynthesized (#3628)', () => {

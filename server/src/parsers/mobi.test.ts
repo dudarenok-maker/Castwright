@@ -300,3 +300,20 @@ describe('resolveMobiChapterTitle — titleSynthesized (#3628)', () => {
     });
   });
 });
+
+/* #3628 — call-site wiring: parseMobi must put `titleSynthesized` on a chapter
+   whose title it made up. resolveMobiChapterTitle's own tests cannot see a
+   dropped spread at the push site. */
+describe('parseMobi — titleSynthesized wiring (#3628)', () => {
+  it('flags a chapter with no TOC label and no heading, not one with a TOC label', async () => {
+    chaptersMock = [
+      { id: 'c1', html: '<p>Just some prose.</p>' },
+      { id: 'c2', html: '<p>More prose.</p>' },
+    ];
+    tocMock = [{ label: 'Real Heading', href: 'c2' }];
+    const out = await parseMobi(mobiBufferWithEncryption(0), { fileName: 'book.mobi' });
+    expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 1', 'Real Heading']);
+    expect(out.chapters[0].titleSynthesized).toBe(true);
+    expect('titleSynthesized' in out.chapters[1]).toBe(false);
+  });
+});
