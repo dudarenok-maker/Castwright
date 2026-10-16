@@ -26,7 +26,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readNormalized } from './lib/read-normalized.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
-import { splitRowId } from './check-onbox-register.mjs';
+import { splitRowId, parseNextIdMarker } from './check-onbox-register.mjs';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const DEFAULT_REGISTER_PATH = 'docs/testing/onbox-acceptance-register.md';
@@ -301,7 +301,7 @@ function parseTitledRow(rawText, idPrefix) {
   return { id: null, title: rawText };
 }
 
-function reconcileTitledSection(html, sectionId, rows, idPrefix) {
+function reconcileTitledSection(html, sectionId, rows, idPrefix, nextId = null) {
   const sectionRegex = new RegExp(
     `(<section[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?<\\/header>\\s*\\n)([\\s\\S]*?)(\\s*<\\/section>)`,
   );
@@ -313,8 +313,17 @@ function reconcileTitledSection(html, sectionId, rows, idPrefix) {
   const newBody = rows
     .map(({ id, title }) => {
       if (id === null) {
+        // Text that already starts with this section's own ID is a separator
+        // slip (`BLK107 - x`), not a missing ID: say what to write instead.
+        const slip = title.match(new RegExp(`^(${idPrefix}[0-9]+)(?![0-9A-Za-z])`));
+        if (slip) {
+          throw new Error(
+            `${sectionName} row "${title}" carries ${slip[1]} but the wrong separator: write "${slip[1]} · <title>" — the ID, a space, a middle dot (·), a space, then the title`,
+          );
+        }
+        const hint = nextId === null ? '' : ` (e.g. ${idPrefix}${nextId})`;
         throw new Error(
-          `${sectionName} row "${title}" has no ${idPrefix} ID: allocate one from the section's next-id marker (e.g. ${idPrefix}107) and bump the marker`,
+          `${sectionName} row "${title}" has no ${idPrefix} ID: allocate one from the section's next-id marker${hint} and bump the marker`,
         );
       }
       // Keyed by ID: a shell already numbered with this ID is kept as-is; with
@@ -350,10 +359,10 @@ export function reconcileRowShells(mdText, html) {
     // test below covers the real titles without assuming the whole line.
     if (/^Blocked\b/.test(section.title)) {
       const blockedRows = [...section.body.matchAll(BLOCKED_HEADING_REGEX)].map((m) => parseTitledRow(m[1], 'BLK'));
-      result = reconcileTitledSection(result, 'blocked', blockedRows, 'BLK');
+      result = reconcileTitledSection(result, 'blocked', blockedRows, 'BLK', parseNextIdMarker(section.body, 'BLK'));
     } else if (/^Unconfirmed\b/.test(section.title)) {
       const unconfirmedRows = [...section.body.matchAll(UNCONFIRMED_BULLET_REGEX)].map((m) => parseTitledRow(m[1], 'UNC'));
-      result = reconcileTitledSection(result, 'unconfirmed', unconfirmedRows, 'UNC');
+      result = reconcileTitledSection(result, 'unconfirmed', unconfirmedRows, 'UNC', parseNextIdMarker(section.body, 'UNC'));
     }
   }
   return result;

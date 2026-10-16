@@ -459,8 +459,44 @@ test('an id-less Blocked heading throws the BLK-ID error, even when a shell with
   const html = blockedSection([blkUncShell('—', 'Legacy thing', 'legacy body')]);
   assert.throws(
     () => reconcileRowShells(md, html),
-    /Blocked row \u0022Legacy thing\u0022 has no BLK ID: allocate one from the section\u0027s next-id marker \(e\.g\. BLK107\) and bump the marker/,
+    /Blocked row \u0022Legacy thing\u0022 has no BLK ID: allocate one from the section\u0027s next-id marker \(e\.g\. BLK102\) and bump the marker/,
   );
+});
+
+test('the id-less hint reads the section marker, and says nothing of an example when there is none', () => {
+  const html = blockedSection([]);
+  const withMarker = `## Blocked — hardware not available
+<!-- next-id: BLK131 -->
+
+### Legacy thing
+`;
+  assert.throws(() => reconcileRowShells(withMarker, html), /\(e\.g\. BLK131\) and bump the marker/);
+  const noMarker = `## Blocked — hardware not available
+
+### Legacy thing
+`;
+  assert.throws(
+    () => reconcileRowShells(noMarker, html),
+    (err) => /has no BLK ID/.test(err.message) && !/e\.g\./.test(err.message) && /next-id/.test(err.message),
+  );
+});
+
+test('a heading with the right ID but the wrong separator names the expected separator, not "no ID"', () => {
+  const md = `## Blocked — hardware not available
+<!-- next-id: BLK108 -->
+
+### BLK107 - Hyphen separated thing
+`;
+  assert.throws(
+    () => reconcileRowShells(md, blockedSection([])),
+    (err) => /separator/.test(err.message) && /BLK107 · /.test(err.message) && !/has no BLK ID/.test(err.message),
+  );
+  const unc = `## Unconfirmed — not debts until substantiated
+<!-- next-id: UNC103 -->
+
+- **UNC102 - dash thing**
+`;
+  assert.throws(() => reconcileRowShells(unc, unconfirmedSection([])), /separator[\s\S]*UNC102 · /);
 });
 
 test('an id-less Unconfirmed bullet throws the UNC-ID error', () => {
@@ -472,7 +508,7 @@ test('an id-less Unconfirmed bullet throws the UNC-ID error', () => {
   const html = unconfirmedSection([blkUncShell('—', 'Legacy bullet', 'legacy body')]);
   assert.throws(
     () => reconcileRowShells(md, html),
-    /Unconfirmed row \u0022Legacy bullet\u0022 has no UNC ID: allocate one from the section\u0027s next-id marker \(e\.g\. UNC107\) and bump the marker/,
+    /Unconfirmed row \u0022Legacy bullet\u0022 has no UNC ID: allocate one from the section\u0027s next-id marker \(e\.g\. UNC102\) and bump the marker/,
   );
 });
 
