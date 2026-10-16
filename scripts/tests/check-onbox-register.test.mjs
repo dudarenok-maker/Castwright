@@ -6459,3 +6459,22 @@ test('#3587 (e) CLI: --build-union writes a union carrying a BLK row, and --publ
     assert.equal(checked.status, 0, `stdout: ${checked.stdout}\nstderr: ${checked.stderr}`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #3587 review: the glance table's Blocked/Unconfirmed cells feed the strip
+// tiles, so they are checked against the body like a lettered group's.
+// ---------------------------------------------------------------------------
+for (const [label, cellRegex] of [
+  ['Blocked', /(\| — \| \*\*Blocked\*\*[^|]*\| )(\d+)( \|)/],
+  ['Unconfirmed', /(\| — \| \*\*Unconfirmed\*\*[^|]*\| )(\d+)( \|)/],
+]) {
+  test(`#3587 review: a stale ${label} glance cell is reported against the body, the real register is clean`, () => {
+    assert.deepEqual(checkRegister(REAL_REGISTER_TEXT), []);
+    const stale = REAL_REGISTER_TEXT.replace(cellRegex, (_m, a, n, c) => `${a}${Number(n) + 1}${c}`);
+    assert.notEqual(stale, REAL_REGISTER_TEXT);
+    const errors = checkRegister(stale);
+    assert.equal(errors.length, 1, JSON.stringify(errors));
+    assert.ok(errors[0].startsWith(`${label}: glance table says `), errors[0]);
+    assert.match(errors[0], /, body has \d+ rows?\. Update the table or the body\.$/);
+  });
+}

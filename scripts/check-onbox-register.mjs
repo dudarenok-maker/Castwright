@@ -916,8 +916,31 @@ export function checkRegister(text) {
     }
   }
 
+  // Check 4d (#3587 review): the glance table's `—` Blocked/Unconfirmed cells
+  // feed the live view's strip tiles and nothing else compares them with the
+  // body, so a row added without bumping the cell left the tile one short.
+  // Counts every `### ` heading / `- **` bullet — the same rows
+  // `register:build`'s gcount counts, ID or no ID. A register with no such
+  // glance row (a fixture) is not checked.
+  for (const { label, titleRegex, rowRegex } of GLANCE_TITLED_ROWS) {
+    const cell = glanceSection.body.match(new RegExp(`^\\|\\s*—\\s*\\|\\s*\\*\\*${label}\\*\\*[^|]*\\|\\s*(\\d+)\\s*\\|\\s*$`, 'm'));
+    const section = sections.find((s) => titleRegex.test(s.title));
+    if (!cell || !section) continue;
+    const bodyCount = [...section.body.matchAll(rowRegex)].length;
+    if (Number(cell[1]) !== bodyCount) {
+      errors.push(
+        `${label}: glance table says ${cell[1]}, body has ${bodyCount} ${bodyCount === 1 ? 'row' : 'rows'}. Update the table or the body.`,
+      );
+    }
+  }
+
   return errors;
 }
+
+const GLANCE_TITLED_ROWS = [
+  { label: 'Blocked', titleRegex: /^Blocked\b/, rowRegex: /^### .+?\r?$/gm },
+  { label: 'Unconfirmed', titleRegex: /^Unconfirmed\b/, rowRegex: /^- \*\*.+?\*\*/gm },
+];
 
 // ---------------------------------------------------------------------------
 // The live view (docs/testing/onbox-acceptance-register-live-view.html)

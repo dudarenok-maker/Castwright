@@ -611,8 +611,12 @@ setup rather than repeatedly loading and evicting models.
 > a `- **UNC103 · <title>** (…)` bullet; bump the marker in the same commit.
 > IDs are allocate-once and never reused, exactly like lettered rows, and
 > `register:build` rejects a Blocked or Unconfirmed row that has none. These
-> rows never count toward `**N owed.**`, a group's glance count or the strip's
-> Owed tile.
+> rows never count toward `**N owed.**`, a lettered group's glance count or the
+> strip's Owed tile. They DO have their own `— | **Blocked**` / `— |
+> **Unconfirmed**` glance-table cell: bump it by hand when you add or remove a
+> row — it drives the strip's Blocked/Unconfirmed tile, and
+> `check:onbox-register` fails ("glance table says N, body has M") if it
+> disagrees with the body.
 
 > **Adding a new row to an existing group? Allocate from its `next-id`
 > marker.** Take the marker's current value as the new row's ID, then bump
