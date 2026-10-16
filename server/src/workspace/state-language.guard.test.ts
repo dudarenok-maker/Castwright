@@ -280,7 +280,10 @@ function countRawStateWrites(
    its `voice-not-designed` failure persist; analysis.ts went from 2 to 3
    when #3435's Start fresh began un-confirming the book, and to 4 when the
    subset route began reading castConfirmed at load for its result gate —
-   a read, not a write). Asserted BOTH
+   a read, not a write; routes/book-state.ts 9→15, routes/chapters-restructure.ts
+   1→2, routes/library-sync-manifest.ts 1→2 and workspace/scan.ts 4→6 because
+   #3625 took fresh state.json reads inside the per-book state lock — the
+   read-inside-the-lock rule, not aliased imports). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
@@ -289,11 +292,11 @@ const G3_STATE_SITES: Record<string, number> = {
   'cover/upload.ts': 2,
   'import/scan-import-folder.ts': 1,
   'routes/analysis.ts': 4,
-  'routes/book-state.ts': 9,
-  'routes/chapters-restructure.ts': 1,
+  'routes/book-state.ts': 15,
+  'routes/chapters-restructure.ts': 2,
   'routes/generation.ts': 1,
   'routes/import.ts': 1,
-  'routes/library-sync-manifest.ts': 1,
+  'routes/library-sync-manifest.ts': 2,
   'routes/samples.ts': 2,
   'routes/voices.ts': 4,
   'store/attribution-health-io.ts': 2,
@@ -301,7 +304,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'workspace/auto-backup.ts': 3,
   'workspace/book-dir-guard.ts': 1,
   'workspace/library-cast-scan.ts': 1,
-  'workspace/scan.ts': 4,
+  'workspace/scan.ts': 6,
   'workspace/series-cast-scan.ts': 2,
   'workspace/series-full-cast-scan.ts': 1,
   'workspace/series-reuse-link.ts': 1,
