@@ -11,7 +11,9 @@ import {
   getResolvedSetupCompletedAt,
   writeSetupCompletedAt,
   isUserSettingsFileCorrupt,
+  getCachedUserSettings,
 } from '../workspace/user-settings.js';
+import { parseEndpointModelId } from '../analyzer/model-id.js';
 import { getResolvedOllamaModel } from '../config/ollama-resolved.js';
 import { selectTtsProvider } from '../tts/index.js';
 import { encodePcmToAudio } from '../tts/mp3.js';
@@ -38,6 +40,12 @@ import { dirname, resolve } from 'node:path';
    workspace/paths.ts exports WORKSPACE_ROOT, NOT a repo root — don't import. */
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
+function defaultEndpointConfigured(): boolean {
+  const settings = getCachedUserSettings();
+  const parsed = parseEndpointModelId(settings.defaultAnalysisModel);
+  return parsed !== null && settings.analyzerEndpoints.some((e) => e.id === parsed.endpointId);
+}
+
 export type BlockerCause =
   // sidecar
   | 'python-missing' | 'venv-missing' | 'venv-broken' | 'supervisor-exhausted'
@@ -48,7 +56,7 @@ export type BlockerCause =
   // ffmpeg
   | 'ffmpeg-missing' | 'ffprobe-missing' | 'both-missing' | 'ffmpeg-too-old'
   // analyzer
-  | 'ollama-unreachable' | 'model-not-pulled' | 'no-gemini-key'
+  | 'ollama-unreachable' | 'model-not-pulled' | 'no-gemini-key' | 'endpoint-missing'
   // shared terminal
   | 'pass';
 
@@ -163,6 +171,7 @@ setupReadinessRouter.get('/readiness', async (_req: Request, res: Response) => {
     expectedModel: ollama.expectedModel ?? getResolvedOllamaModel(),
     pullable: ollama.pullable ?? [],
     geminiKeySet,
+    defaultEndpointConfigured: engine === 'openai' && defaultEndpointConfigured(),
   });
 
   res.json(
@@ -202,9 +211,13 @@ setupReadinessRouter.post('/smoke', async (_req: Request, res: Response) => {
   let analyzerOk = false;
   let analyzerDetail = '';
   try {
-    if (getResolvedAnalysisEngine() === 'gemini') {
+    const engine = getResolvedAnalysisEngine();
+    if (engine === 'gemini') {
       analyzerOk = getResolvedGeminiApiKey() != null;
       analyzerDetail = analyzerOk ? 'API key set' : 'no key';
+    } else if (engine === 'openai') {
+      analyzerOk = defaultEndpointConfigured();
+      analyzerDetail = analyzerOk ? 'endpoint configured' : 'endpoint not configured';
     } else {
       const o = await probeOllamaHealth();
       analyzerOk = o.status === 'reachable';

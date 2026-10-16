@@ -108,7 +108,7 @@ const BLOCKER_CAUSES = {
   'weights-missing': 1, 'cannot-confirm-engine': 1, 'package-broken': 1,
   'ffmpeg-missing': 1, 'ffprobe-missing': 1, 'both-missing': 1,
   'ffmpeg-too-old': 1, 'ollama-unreachable': 1, 'model-not-pulled': 1,
-  'no-gemini-key': 1, pass: 1,
+  'no-gemini-key': 1, 'endpoint-missing': 1, pass: 1,
 } satisfies Record<BlockerCause, 1>;
 
 const BLOCKER_ACTION_KINDS = {

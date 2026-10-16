@@ -6856,7 +6856,7 @@ export interface components {
          *     server/src/routes/setup-readiness.ts — keep them in lockstep.
          * @enum {string}
          */
-        BlockerCause: "python-missing" | "venv-missing" | "venv-broken" | "supervisor-exhausted" | "supervisor-tripped" | "unreachable-transient" | "unreachable-no-supervisor" | "sidecar-blocked" | "no-engine-installed" | "weights-missing" | "cannot-confirm-engine" | "package-broken" | "ffmpeg-missing" | "ffprobe-missing" | "both-missing" | "ffmpeg-too-old" | "ollama-unreachable" | "model-not-pulled" | "no-gemini-key" | "pass";
+        BlockerCause: "python-missing" | "venv-missing" | "venv-broken" | "supervisor-exhausted" | "supervisor-tripped" | "unreachable-transient" | "unreachable-no-supervisor" | "sidecar-blocked" | "no-engine-installed" | "weights-missing" | "cannot-confirm-engine" | "package-broken" | "ffmpeg-missing" | "ffprobe-missing" | "both-missing" | "ffmpeg-too-old" | "ollama-unreachable" | "model-not-pulled" | "no-gemini-key" | "endpoint-missing" | "pass";
         /** @enum {string} */
         BlockerActionKind: "venv-bootstrap" | "qwen-install" | "kokoro-install" | "coqui-install" | "sidecar-restart" | "ollama-install" | "ollama-pull" | "navigate";
         /** @description A safe automated fix offered alongside a diagnosis. */

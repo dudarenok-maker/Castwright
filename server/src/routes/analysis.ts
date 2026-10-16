@@ -86,7 +86,7 @@ import {
   type MissingSpeaker,
 } from '../analyzer/roster-coverage.js';
 import { stripFrontMatterBoilerplate } from '../analyzer/strip-front-matter.js';
-import { readUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
+import { readUserSettings, getCachedUserSettings, getResolvedGeminiApiKey } from '../workspace/user-settings.js';
 import { preflightTargets, resolvePreflightDigests, runAnalyzerPreflight, type PreflightTarget } from '../analyzer/preflight.js';
 import {
   clearAnalysisCache,
@@ -565,15 +565,16 @@ function humanModel(modelId: string | undefined): string {
   return MODEL_LABELS[modelId] ?? modelId;
 }
 
-/** Engine-aware label so SSE chunks read "Ollama (qwen3.5:9b)" for the
-    local analyzer, "Gemma 4 31B" for Gemini, and "Endpoint lab (qwen3:30b)"
-    for an OpenAI-compatible endpoint (#3084; PR 3d swaps the endpoint id for
-    its saved name). The MODEL_LABELS lookup only covers Gemini ids, so the
-    local branch surfaces the raw tag — Ollama tags are already readable. */
+/** Engine-aware label so SSE chunks read "Ollama (qwen3.5:9b)" for the local analyzer,
+    "Gemma 4 31B" for Gemini, and "<endpoint name> (qwen3:30b)" for an OpenAI-compatible
+    endpoint (#3084). The MODEL_LABELS lookup only covers Gemini ids, so the local
+    branch surfaces the raw tag — Ollama tags are already readable. */
 export function engineLabel(engine: AnalysisEngine, modelId: string): string {
   if (engine === 'openai') {
     const parsed = parseEndpointModelId(modelId);
-    return parsed ? `Endpoint ${parsed.endpointId} (${parsed.model})` : `Endpoint (${modelId})`;
+    if (!parsed) return `Endpoint (${modelId})`;
+    const name = getCachedUserSettings().analyzerEndpoints.find((e) => e.id === parsed.endpointId)?.name;
+    return name ? `${name} (${parsed.model})` : `Endpoint ${parsed.endpointId} (${parsed.model})`;
   }
   return engine === 'local' ? `Ollama (${modelId})` : humanModel(modelId);
 }
@@ -1230,8 +1231,17 @@ export function localFallbackMsPerChar(device: 'cuda' | 'cpu' | 'unknown'): numb
 export function engineFallbackMsPerChar(
   engine: AnalysisEngine,
   device: 'cuda' | 'cpu' | 'unknown',
+  endpointGpu?: string,
 ): number {
-  return engine === 'local' ? localFallbackMsPerChar(device) : GEMINI_FALLBACK_MS_PER_CHAR;
+  if (engine === 'local') return localFallbackMsPerChar(device);
+  if (engine === 'openai' && endpointGpu !== undefined && endpointGpu !== 'none') return localFallbackMsPerChar(device);
+  return GEMINI_FALLBACK_MS_PER_CHAR;
+}
+
+/** The saved endpoint's gpu for an endpoint model id (#3084); undefined otherwise. */
+function endpointGpuFor(modelId: string): string | undefined {
+  const parsed = parseEndpointModelId(modelId);
+  return parsed ? getCachedUserSettings().analyzerEndpoints.find((e) => e.id === parsed.endpointId)?.gpu : undefined;
 }
 
 /* Mid-chapter ETA refinement (issue 3, 2026-06-14). Project a chapter's total
@@ -4793,7 +4803,7 @@ export async function runMainAnalyzerJob(
        any chapter completes. Uses cached durations when present (typical
        resume case); otherwise falls back to the per-engine ms/char rate. */
     {
-      const fallbackMsPerChar = engineFallbackMsPerChar(selection.engine, analyzerDevice);
+      const fallbackMsPerChar = engineFallbackMsPerChar(selection.engine, analyzerDevice, endpointGpuFor(selection.model));
       const phase0CharsRemainingInitial = Math.max(0, totalCastCharsAll - castActualCharsTotal);
       const initialRemainingMs = projectRemainingMs({
         phase0WallClockMs: 0,
@@ -5062,7 +5072,7 @@ export async function runMainAnalyzerJob(
            ~0:40 even when prior chapters averaged 4-5ms/char. Falls
            back to the TTFT-dominated baseline only on the first
            chapter of the phase, when no samples exist yet. */
-        const msPerCharFallback = engineFallbackMsPerChar(selection.engine, analyzerDevice);
+        const msPerCharFallback = engineFallbackMsPerChar(selection.engine, analyzerDevice, endpointGpuFor(selection.model));
         const fallback = PHASE0_PER_CHAPTER_BASELINE_MS + msPerCharFallback * ch.body.length;
         const chapterEstMs = chapterEstFromObserved(
           ch.body.length,

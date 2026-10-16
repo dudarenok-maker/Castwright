@@ -9425,7 +9425,7 @@ components:
              sidecar-blocked, no-engine-installed, weights-missing,
              cannot-confirm-engine, package-broken, ffmpeg-missing,
              ffprobe-missing, both-missing, ffmpeg-too-old, ollama-unreachable,
-             model-not-pulled, no-gemini-key, pass]
+             model-not-pulled, no-gemini-key, endpoint-missing, pass]
 
     BlockerActionKind:
       type: string
