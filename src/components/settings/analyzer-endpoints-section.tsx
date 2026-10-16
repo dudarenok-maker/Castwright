@@ -20,6 +20,8 @@ import { modelLabel } from '../../lib/model-label';
 import type { AnalyzerEndpoint, AnalyzerEndpointInput, AnalyzerEndpointModelsPreview, GpuDevice } from '../../lib/types';
 import { ConfirmDialog } from '../../modals/confirm-dialog';
 import { FieldRow } from '../account-forms';
+import { WikiLink } from '../wiki-link';
+import { ADMIN_WIKI } from '../../lib/wiki-links';
 import { DroppedEndpointEntriesBanner } from './dropped-endpoint-entries-banner';
 import { ModelTestButton } from './model-test-button';
 
@@ -316,6 +318,7 @@ export function AnalyzerEndpointsSection() {
   return (
     <div data-testid="analyzer-endpoints-section" className="space-y-4">
       <DroppedEndpointEntriesBanner />
+      <WikiLink page={ADMIN_WIKI.analyzerEndpoints} label="Setup guide for each server" />
       {endpoints.map((e) => {
         const group = catalog?.groups.find((g) => g.kind === 'endpoint' && g.id === e.id);
         return (

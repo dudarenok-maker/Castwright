@@ -296,4 +296,12 @@ describe('AnalyzerEndpointsSection (#3084)', () => {
     });
     expect(screen.queryByTestId('endpoint-editor')).toBeNull();
   });
+
+  it('links to the endpoints setup guide on the wiki (P33)', () => {
+    renderSection();
+    expect(screen.getByRole('link', { name: /Setup guide for each server/ })).toHaveAttribute(
+      'href',
+      'https://github.com/dudarenok-maker/Castwright/wiki/OpenAI-Compatible-Analyzer-Endpoints',
+    );
+  });
 });

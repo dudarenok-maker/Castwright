@@ -659,9 +659,8 @@ export function reasoningOverflowFixes(ctx: {
   } else if (ctx.transport === 'openai' && ctx.endpointId) {
     /* #3084 F7 (Task 3b.1b) — the endpoint's own output and context caps, plus the
        stage input fractions. Named by saved name, falling back to the id when the
-       endpoint was deleted after the failure. No wikiPage yet: the endpoints page
-       (F3) lands in PR 3d, which adds it with the page file. No reasoning or payload
-       rows: those are 5a and 5b. */
+       endpoint was deleted after the failure. No reasoning or payload rows: those
+       are 5a and 5b. */
     const name = listAnalyzerEndpoints().find((e) => e.id === ctx.endpointId)?.name ?? ctx.endpointId;
     fixes.push(
       { label: `Lower ${name}'s max output tokens`, endpointField: { endpointId: ctx.endpointId, field: 'maxOutputTokens' } },
@@ -669,6 +668,11 @@ export function reasoningOverflowFixes(ctx: {
       { label: 'Shrink Stage 1 chunks', settingKey: 'analyzer.stage1.localInputFraction' },
       { label: 'Shrink Stage 2 chunks', settingKey: 'analyzer.stage2.localInputFraction' },
     );
+    /* #3084 P33 — the endpoints wiki page ships with this PR; this entry links it, and its label names the section. */
+    reads.push({
+      label: 'Read: When a model thinks past its output limit',
+      wikiPage: 'OpenAI-Compatible-Analyzer-Endpoints',
+    });
   }
 
   /* The thinking window (analyzer.gemini.thinkingIdleTimeoutMs) never appears
