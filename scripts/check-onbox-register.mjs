@@ -342,9 +342,9 @@ export function parseAllRowHeadings(strippedText) {
 // and the `<div class="body">...</div>` content. The summary is included to
 // catch drifts in the risk badge or title, which are part of the row's
 // documented state — a stale risk badge is a content regression like a changed
-// body paragraph. A row whose ID isn't a plain `<Letter><N>` (the
-// Blocked/Unconfirmed sections use `—`) is skipped, the same convention
-// `parseLiveViewSections` already filters on. A block with no matching
+// body paragraph. A row whose ID isn't a row ID (`<Letter><N>`, `BLK<N>` or
+// `UNC<N>`; a legacy page's Blocked/Unconfirmed rows have `—`) is skipped, the
+// same convention `parseLiveViewSections` already filters on. A block with no matching
 // `<summary>...</summary>` or `<div class="body">...</div>` (an extraction
 // failure, e.g. the markup changed) is an error rather than silently skipped —
 // a silent skip would mean comparing fewer rows than the page carries and
@@ -1960,9 +1960,9 @@ export function checkLiveView(
     // #3529: "origin/main lacks it" alone is NOT proof of a discharge — a row
     // an UNMERGED lane added has the same shape. Provenance decides (see the
     // header comment): only a row the page's own merged/own publish committed
-    // is silent. (Only rows with numeric IDs reach here: Blocked/Unconfirmed
-    // rows use `—` and are never in `rowIds`, so their handling is
-    // unchanged.) `--discharging` does NOT suppress another lane's row: it
+    // is silent. (Only rows with a row ID reach here, BLK/UNC included; a
+    // legacy `—` Blocked/Unconfirmed row has none, is never in `rowIds`, and
+    // is reported only by the advisory LEGACY_LIVE_ROW_WARNING_PREFIX.) `--discharging` does NOT suppress another lane's row: it
     // names rows THIS change discharged, and those are already silent.
     const unmergedExtra = [];
     const staleExtra =

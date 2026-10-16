@@ -3,7 +3,7 @@
 //
 // Reconciles derived figures and row shells in
 // docs/testing/onbox-acceptance-register-live-view.html against
-// docs/testing/onbox-acceptance-register.md. Each row shell matched by ID/title
+// docs/testing/onbox-acceptance-register.md. Each row shell matched by ID
 // (its <details class="item">…</details> block) is preserved verbatim; inter-shell
 // content in a section body (blank lines, stray HTML markup between shells) is
 // NOT preserved — shells are rebuilt in markdown order, joined by newlines. See
@@ -145,9 +145,9 @@ export function main(
   const currentHtml = readNormalized(htmlPath);
 
   // buildLiveView's own helpers throw on a structural mismatch between the
-  // markdown and the live view (e.g. a Blocked/Unconfirmed row's title was
-  // reworded in the .md but not the .html, so reconcileTitledSection can no
-  // longer find its shell by title). Uncaught, that crashes this CLI with a
+  // markdown and the live view (e.g. a Blocked/Unconfirmed row has no BLK/UNC
+  // ID, or its section lost its <header>, so reconcileTitledSection cannot
+  // place its shell). Uncaught, that crashes this CLI with a
   // raw stack trace instead of the checked, actionable exit-1 every other
   // drift case in this function already reports — the one path here that
   // didn't match the rest.
@@ -264,12 +264,12 @@ const UNCONFIRMED_BULLET_REGEX = /^- \*\*(.+?)\*\*/gm;
 // sourced from the hand-typed "## At a glance" table cell (parseRegisterFigures'
 // blockedCount/unconfirmedCount) rather than the actual body rows — so a row
 // added or removed from '## Blocked'/'## Unconfirmed' without a matching
-// glance-table edit went undetected by both register:build --check (which
-// wrote the stale, hand-typed number right back) and check-onbox-register
-// (whose Check 1 iterates lettered groups only, by design, per its own
-// header comment). Lettered groups derive their gcount from the body
-// (parseBodyGroupCounts) precisely so this class of drift self-corrects;
-// this mirrors that for the two title-matched sections.
+// glance-table edit went undetected by register:build --check (which wrote
+// the stale, hand-typed number right back). check-onbox-register's check 4d
+// now also compares that cell with the body, but the section's gcount still
+// derives from the body (parseBodyGroupCounts does the same for lettered
+// groups) so this class of drift self-corrects; this mirrors that for the
+// Blocked/Unconfirmed sections.
 export function parseTitledSectionBodyCounts(mdText) {
   let blockedCount = 0;
   let unconfirmedCount = 0;
