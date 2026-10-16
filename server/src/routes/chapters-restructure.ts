@@ -32,6 +32,7 @@ import {
   applyReorder,
   applyExclude,
   backfillTitleSynthesized,
+  GENERIC_TITLE_RE,
   applyRefreshTitles,
   applyRename,
   type MergeOp,
@@ -97,12 +98,22 @@ async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T>
 }
 
 /* Best-effort: any parse failure leaves the state untouched. Skips the parse
-   when every chapter already has the key (or is user-titled). */
+   unless some keyless, non-user-titled chapter has a generic "Chapter N" title. */
 async function backfillLegacyTitleFlags(
   state: Parameters<typeof backfillTitleSynthesized>[0],
   bookDir: string,
 ): Promise<Parameters<typeof backfillTitleSynthesized>[0]> {
-  if (!state.chapters.some((c) => !Object.hasOwn(c, 'titleSynthesized') && !c.titleOverridden)) {
+  /* Only a keyless, non-overridden chapter whose title looks generic can be
+     flagged (renumbering and both refresh passes act on that shape alone), so
+     a book without one never needs the parse. */
+  if (
+    !state.chapters.some(
+      (c) =>
+        !Object.hasOwn(c, 'titleSynthesized') &&
+        !c.titleOverridden &&
+        GENERIC_TITLE_RE.test(c.title.trim()),
+    )
+  ) {
     return state;
   }
   const manuscriptPath = join(bookDir, state.manuscriptFile);

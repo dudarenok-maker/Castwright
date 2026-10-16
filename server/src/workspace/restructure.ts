@@ -353,7 +353,7 @@ function buildAudioOps(
    for round-tripping. A chapter without the flag — a manuscript heading,
    a user title, or any legacy chapter — is preserved verbatim even when
    its title looks generic. */
-const GENERIC_TITLE_RE = /^Chapter\s+\d+(\s*[—\-:]\s*(.+))?$/;
+export const GENERIC_TITLE_RE = /^Chapter\s+\d+(\s*[—\-:]\s*(.+))?$/;
 
 /** A user-supplied title is never app-made: mark it overridden and drop
     `titleSynthesized` so no later restructure renumbers it. */

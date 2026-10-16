@@ -16,7 +16,7 @@
  * imports so paths.ts picks up WORKSPACE_DIR, supertest against the real
  * router. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import {
   rmSync,
   mkdirSync,
@@ -31,6 +31,15 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* #3628 — a passthrough spy so a test can assert the legacy-title backfill
+   does not parse the manuscript when no chapter could need it. */
+const parseManuscriptSpy = vi.hoisted(() => vi.fn());
+vi.mock('../parsers/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../parsers/index.js')>();
+  parseManuscriptSpy.mockImplementation(actual.parseManuscript);
+  return { ...actual, parseManuscript: parseManuscriptSpy };
+});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -1655,6 +1664,24 @@ describe('#3628 — a legacy book (no titleSynthesized key) is backfilled before
       .send({ chapterIds: [2], excluded: true });
     expect(res.status).toBe(200);
     expect(readState().chapters.some((c) => 'titleSynthesized' in c)).toBe(false);
+  });
+
+  // The backfill is the only caller that passes `sourcePath` (the hydrate path doesn't).
+  const backfillParses = () =>
+    parseManuscriptSpy.mock.calls.filter(([arg]) => (arg as { sourcePath?: string }).sourcePath).length;
+
+  it('a book with no generic-looking titles does not parse the manuscript', async () => {
+    seedLegacy(['Opening', 'Prologue', 'Epilogue']);
+    parseManuscriptSpy.mockClear();
+    expect((await reorder()).status).toBe(200);
+    expect(backfillParses()).toBe(0);
+  });
+
+  it('control: a generic-looking keyless title still triggers the parse', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue']);
+    parseManuscriptSpy.mockClear();
+    expect((await reorder()).status).toBe(200);
+    expect(backfillParses()).toBe(1);
   });
 
   it('an explicit titleSynthesized: false is preserved', async () => {
