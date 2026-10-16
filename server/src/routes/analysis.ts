@@ -118,6 +118,7 @@ import {
 import { readJson, writeJsonAtomic, enqueuePathOp } from '../workspace/state-io.js';
 import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
 import { rollManuscriptEdits } from '../workspace/edits-roll.js';
+import { carryTitleSynthesized } from '../workspace/chapter-uuid.js';
 import { withCastLock } from '../workspace/cast-lock.js';
 import { isLockAcquisitionTimeout } from '../workspace/file-lock.js';
 import {
@@ -7169,20 +7170,30 @@ export async function runMainAnalyzerJob(
                workspace/scan.ts. */
             const prevExcludedById = new Map<number, boolean>();
             const prevHeldById = new Map<number, boolean>();
+            const prevOverriddenById = new Map<number, boolean>();
             for (const c of prev.chapters) {
               if (c.excluded) prevExcludedById.set(c.id, true);
               if (c.held) prevHeldById.set(c.id, true);
+              if (c.titleOverridden) prevOverriddenById.set(c.id, true);
             }
             const next: BookStateJson = {
               ...prev,
-              chapters: chapters.map((c) => ({
-                id: c.id,
-                title: c.title,
-                slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
-                duration: c.duration,
-                excluded: prevExcludedById.get(c.id) || undefined,
-                held: prevHeldById.get(c.id) || undefined,
-              })),
+              /* #3628 — the title-source flags are not re-derivable here, so
+                 carry them from prev (titleSynthesized only while the title is
+                 unchanged; titleOverridden by id) or a re-analysis would
+                 strip them and a later restructure would misjudge the title. */
+              chapters: carryTitleSynthesized(
+                chapters.map((c) => ({
+                  id: c.id,
+                  title: c.title,
+                  slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+                  duration: c.duration,
+                  excluded: prevExcludedById.get(c.id) || undefined,
+                  held: prevHeldById.get(c.id) || undefined,
+                  titleOverridden: prevOverriddenById.get(c.id) || undefined,
+                })),
+                prev.chapters,
+              ),
               /* srv-59 Task 11 — record which analyzer produced this cast/
                  sentence set and, when the dialogue-structure engine ran,
                  the aggregated run report. Additive + schema-tolerant: no
@@ -9100,20 +9111,30 @@ export async function runSubsetAnalyzerJob(
                re-derivable from disk, so it must ride through here. */
             const prevExcludedById = new Map<number, boolean>();
             const prevHeldById = new Map<number, boolean>();
+            const prevOverriddenById = new Map<number, boolean>();
             for (const c of prev.chapters) {
               if (c.excluded) prevExcludedById.set(c.id, true);
               if (c.held) prevHeldById.set(c.id, true);
+              if (c.titleOverridden) prevOverriddenById.set(c.id, true);
             }
             const next: BookStateJson = {
               ...prev,
-              chapters: chaptersOut.map((c) => ({
-                id: c.id,
-                title: c.title,
-                slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
-                duration: c.duration,
-                excluded: prevExcludedById.get(c.id) || undefined,
-                held: prevHeldById.get(c.id) || undefined,
-              })),
+              /* #3628 — the title-source flags are not re-derivable here, so
+                 carry them from prev (titleSynthesized only while the title is
+                 unchanged; titleOverridden by id) or a re-analysis would
+                 strip them and a later restructure would misjudge the title. */
+              chapters: carryTitleSynthesized(
+                chaptersOut.map((c) => ({
+                  id: c.id,
+                  title: c.title,
+                  slug: `${String(c.id).padStart(2, '0')}-${slug(c.title)}`,
+                  duration: c.duration,
+                  excluded: prevExcludedById.get(c.id) || undefined,
+                  held: prevHeldById.get(c.id) || undefined,
+                  titleOverridden: prevOverriddenById.get(c.id) || undefined,
+                })),
+                prev.chapters,
+              ),
               /* srv-59 Task 11 — a subset retry supersedes whatever
                  provenance the last full run left, so this REWRITES the
                  block wholesale (fresh `at` + a report recomputed from just
