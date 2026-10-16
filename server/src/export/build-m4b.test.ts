@@ -340,9 +340,10 @@ describeIfTools('buildM4b', () => {
     const gen = spawnSync(
       'ffmpeg',
       ['-y', '-f', 'lavfi', '-i', 'testsrc=d=1:s=64x64:r=10', '-c:v', 'mpeg2video', '-f', 'mpegts', tsPath],
-      { stdio: 'ignore', windowsHide: true },
+      { encoding: 'utf8', windowsHide: true },
     );
-    if (gen.status !== 0) return; // no mpeg2video encoder in this ffmpeg build
+    /* Fail loudly: a silent return here would make a broken generator look like a pass. */
+    expect(gen.status, String(gen.stderr)).toBe(0);
     const jpeg = await sharp({
       create: { width: 1, height: 1, channels: 3, background: '#fff' },
     })
