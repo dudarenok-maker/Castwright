@@ -526,7 +526,11 @@ export function buildUnionLiveView(trackedHtml, liveHtml, carriedIds) {
       const last = rows[rows.length - 1];
       html = `${html.slice(0, last.end)}\n${indentBefore(html, last.index)}${block}${html.slice(last.end)}`;
     } else {
-      const headerEnd = html.indexOf('\n', html.indexOf('</h3>', section.start));
+      // register:build places rows after </header> (reconcileTitledSection); a
+      // bare-<h3> section (lettered groups) has no <header>, so fall back to </h3>.
+      const closeHeader = html.indexOf('</header>', section.start);
+      const anchor = closeHeader !== -1 && closeHeader < section.end ? closeHeader : html.indexOf('</h3>', section.start);
+      const headerEnd = html.indexOf('\n', anchor);
       if (headerEnd === -1 || headerEnd > section.end) throw new Error(`${sectionName[0].toUpperCase()}${sectionName.slice(1)}'s section in your live view has no header to place row ${id} after.`);
       html = `${html.slice(0, headerEnd)}\n    ${block}${html.slice(headerEnd)}`;
     }

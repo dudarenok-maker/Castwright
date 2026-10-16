@@ -6315,12 +6315,18 @@ ${unionDetails(eRows)}
   </section>
 
   <section class="group is-blocked" id="blocked">
-    <h3 class="gtitle"><span class="gtag">BLK</span> Blocked <span class="gcount">${plural(blkRows.length)}</span></h3>
+    <header>
+      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked <span class="gcount">${plural(blkRows.length)}</span></h3>
+      <p class="setup">Blocked setup.</p>
+    </header>
 ${unionDetails(blkRows)}
   </section>
 
   <section class="group is-soft" id="unconfirmed">
-    <h3 class="gtitle"><span class="gtag">UNC</span> Unconfirmed <span class="gcount">${plural(uncRows.length)}</span></h3>
+    <header>
+      <h3 class="gtitle"><span class="gtag">UNC</span> Unconfirmed <span class="gcount">${plural(uncRows.length)}</span></h3>
+      <p class="setup">Unconfirmed setup.</p>
+    </header>
 ${unionDetails(uncRows)}
   </section>
 `;
@@ -6391,11 +6397,18 @@ for (const tc of TITLED_CASES) {
   });
 }
 
-test('#3587 (b): a UNC row carries into an empty Unconfirmed section and raises only its tile and gcount', () => {
-  const live = blkUncUnionView({ uncRows: [uRow('UNC102')] });
-  const tracked = blkUncUnionView({}).replace(/<\/h3>\n\n( {2}<\/section>\n)$/, '</h3>\n$1');
-  assert.equal(onbox.buildUnionLiveView(tracked, live, ['UNC102']), live);
-});
+for (const [P, key, id] of [['BLK', 'blkRows', 'BLK102'], ['UNC', 'uncRows', 'UNC102']]) {
+  test(`#3587 (b): a ${P} row carries into an empty section after </header>, never inside it, and raises only its tile and gcount`, () => {
+    const live = blkUncUnionView({ [key]: [uRow(id)] });
+    const tracked = blkUncUnionView({});
+    const union = onbox.buildUnionLiveView(tracked, live, [id]);
+    const sec = union.match(new RegExp(`<section[^>]*id="${P === 'BLK' ? 'blocked' : 'unconfirmed'}"[\\s\\S]*?</section>`))[0];
+    assert.ok(sec.indexOf('</header>') < sec.indexOf(`>${id}<`), 'block sits after </header>');
+    assert.ok(sec.includes('<span class="gcount">1 row</span>'));
+    assert.ok(union.includes(`<div class="l">${P === 'BLK' ? 'Blocked' : 'Unconfirmed'}</div>`) && !union.includes('<div class="n owed">11'), 'owed untouched');
+    assert.equal(union.replace(/\n\n( {2}<\/section>)/g, '\n$1'), live.replace(/\n\n( {2}<\/section>)/g, '\n$1'));
+  });
+}
 
 test('#3587 (c): a mixed E + BLK carry raises owed by one, the E glance cell by one, and the Blocked tile by one', () => {
   const tracked = blkUncUnionView({ eRows: [uRow('E101')], blkRows: [uRow('BLK101')] });
