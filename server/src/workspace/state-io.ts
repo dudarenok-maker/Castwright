@@ -17,7 +17,7 @@
    (cast.json, revisions.json, ...) keep the single-file atomic write —
    they're cheaper to re-derive on loss and not worth the disk-multiplier. */
 
-import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname } from 'node:path';
@@ -33,7 +33,7 @@ import { renameWithRetry } from './atomic-rename.js';
 let tmpSeq = 0;
 
 export interface WriteJsonOpts {
-  /** Rotate `path` -> `path.bak.1`, shift `path.bak.{i}` -> `path.bak.{i+1}`,
+  /** Copy `path` -> `path.bak.1` (main stays in place), shift `path.bak.{i}` -> `path.bak.{i+1}`,
    *  keep the newest `keep` backups (oldest is dropped). Skipped on first
    *  write (no existing file to rotate). Each rename uses `renameWithRetry`,
    *  so the rotation chain is self-healing across OneDrive/AV races —
@@ -167,8 +167,8 @@ export async function enqueuePathOp(path: string, op: () => Promise<void>): Prom
 /** Shift the backup chain up by one slot before a new write lands.
  *  `path.bak.{keep-1}` → `path.bak.{keep}` first (drops what was in
  *  `bak.{keep}`), then `bak.{keep-2}` → `bak.{keep-1}`, …, finally
- *  `path` → `path.bak.1`. Walking top-down means each destination is
- *  vacant by the time we rename to it.
+ *  `path` is COPIED to `path.bak.1` (main stays in place). Walking top-down
+ *  means each destination is vacant by the time we rename to it.
  *
  *  Each step is `renameWithRetry`, so a partial failure (e.g. EPERM mid-
  *  rotation) aborts but leaves the chain in a state the next call can
@@ -185,5 +185,9 @@ async function rotateBackups(path: string, keep: number): Promise<void> {
       await renameWithRetry(src, dest);
     }
   }
-  await renameWithRetry(path, `${path}.bak.1`);
+  /* COPY, not rename: the caller's tmp write comes next, and if it fails
+     (ENOSPC) a renamed-away main would leave NO state.json at all — readers
+     treat a missing main as "no file" and never consult the backups. With a
+     copy, main stays in place until the atomic tmp -> main rename. */
+  await copyFile(path, `${path}.bak.1`);
 }
