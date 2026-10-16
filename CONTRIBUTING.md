@@ -686,7 +686,7 @@ $EDITOR docs/release-notes-next.md
 
 # 3. Bump versions, GATE on a green cross-OS run, then create the chore commit
 #    + annotated tag. Same command on Windows, macOS, Linux. This fires
-#    cross-os.yml on main and BLOCKS (~15–20 min); if it fails the tag is NOT
+#    cross-os.yml on main and BLOCKS (~20–30 min); if it fails the tag is NOT
 #    created — fix main and re-run. --skip-cross-os bypasses the gate.
 #    The bump REFUSES if the notes are missing or their version marker is stale
 #    (a release can't ship a placeholder body); --allow-placeholder overrides.
@@ -713,7 +713,8 @@ Step 3's cross-OS gate (plan 127) is the macOS + Windows verify/build + mobile-e
 smoke that plan 103 moved out of `release.yml` into `cross-os.yml` to cut Actions
 minutes. The bumper now fires + blocks on it before tagging, so a cross-OS break
 can't ship — without re-paying the matrix on every PR. `release.yml` then runs
-`verify:quick` on Ubuntu against the tagged commit and publishes the
+the full `npm run verify` on Ubuntu against the tagged commit (plus the
+macOS/Windows matrix, mobile e2e and the companion build) and publishes the
 platform-independent zip + SHA-256 using the tag annotation as the body. Full spec:
 [`docs/features/archive/127-release-cross-os-gate.md`](docs/features/archive/127-release-cross-os-gate.md)
 
