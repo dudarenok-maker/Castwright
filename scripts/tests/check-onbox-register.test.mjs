@@ -6503,3 +6503,15 @@ test('#3587 review: legacy `—` rows on the live Blocked/Unconfirmed sections r
   assert.notEqual(idless, REAL_REGISTER_TEXT);
   assert.deepEqual(run(legacy, idless), [], 'a register with no BLK/UNC IDs is the pre-#3587 state: no warning');
 });
+
+test('#3587 review: the legacy-row warning is non-blocking through the real CLI (exit 0, warning on stderr)', () => {
+  const legacy = REAL_LIVE_VIEW_HTML.replace(/<span class="num">(?:BLK|UNC)\d+<\/span>/g, '<span class="num">—</span>');
+  assert.notEqual(legacy, REAL_LIVE_VIEW_HTML);
+  withHermeticBaseline(legacy, REAL_REGISTER_TEXT, (publishedPath, baselinePath) => {
+    const env = { ONBOX_TEST_BASELINE_FILE: baselinePath, ONBOX_TEST_PUBLISHED_PROVENANCE: 'unmerged' };
+    const res = runCli(['--against-published', publishedPath], env);
+    assert.equal(res.status, 0, `stdout: ${res.stdout}\nstderr: ${res.stderr}`);
+    assert.match(res.stderr, /Legacy live-page rows \(not blocking/);
+    assert.match(res.stderr, /Blocked section has \d+ legacy rows? with no BLK ID/);
+  });
+});
