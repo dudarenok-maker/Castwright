@@ -610,9 +610,11 @@ setup rather than repeatedly loading and evicting models.
 
 > **Blocked and Unconfirmed rows allocate the same way.** Each of those two
 > sections has its own `next-id` marker directly under its heading
-> (`<!-- next-id: BLK107 -->`, `<!-- next-id: UNC103 -->`), floor 101. A new
-> Blocked row is a `### BLK107 · <title>` heading and a new Unconfirmed row is
-> a `- **UNC103 · <title>** (…)` bullet; bump the marker in the same commit.
+> (`<!-- next-id: BLK… -->`, `<!-- next-id: UNC… -->`), floor 101. A new
+> Blocked row is a `### <ID> · <title>` heading and a new Unconfirmed row is
+> a `- **<ID> · <title>** (…)` bullet, where `<ID>` is the ID named by that
+> section's own next-id marker (e.g. `BLK107` / `UNC103` when this note was
+> written; take the marker's current value); bump the marker in the same commit.
 > IDs are allocate-once and never reused, exactly like lettered rows, and
 > `register:build` rejects a Blocked or Unconfirmed row that has none. These
 > rows never count toward `**N owed.**`, a lettered group's glance count or the
