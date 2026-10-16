@@ -304,6 +304,24 @@ describe('RestructureView — #3400 the remapped manuscript is what ends up on d
     store.dispatch(manuscriptSlice.actions.setSentenceEmotion({ chapterId: 4, sentenceId: 1, emotion: 'sad' } as never));
   const settle = () => new Promise((r) => setTimeout(r, 150));
 
+  it('waits for a queued save to finish before it sends the restructure request', async () => {
+    const { store, confirm } = await setup();
+    const order: string[] = [];
+    apiMock.putBookState.mockImplementation(async () => {
+      order.push('put-start');
+      await new Promise((r) => setTimeout(r, 120));
+      order.push('put-end');
+    });
+    apiMock.refreshChapterTitles.mockImplementation(async () => {
+      order.push('restructure');
+      return { sentenceRemap: [], warnings: [] };
+    });
+    edit(store);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalled());
+    expect(order).toEqual(['put-start', 'put-end', 'restructure']);
+  });
+
   it('a write made just before the click is sent before the request, and the remap is saved after it', async () => {
     const { store, confirm } = await setup();
     edit(store);
