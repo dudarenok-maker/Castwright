@@ -60,18 +60,20 @@ export function reconcileChapterUuids(
 /** Carry the server-owned `titleSynthesized` flag across a wholesale chapter
  *  replace. The frontend never tracks the flag, and a client value is
  *  ignored: for each incoming chapter the flag is taken from the existing
- *  chapter with the same `id` (kept only when `true`, otherwise the key is
- *  removed). Returns a new array; the incoming array is not mutated. */
+ *  chapter with the same `id` (kept only when `true` AND the incoming title
+ *  still equals the stored one, otherwise the key is removed: a retitled
+ *  chapter is no longer app-made). Returns a new array; the incoming array is
+ *  not mutated. */
 export function carryTitleSynthesized(
   incoming: readonly Chapter[],
   existing: readonly Chapter[],
 ): Chapter[] {
-  const synthesizedIds = new Set<number>();
+  const synthesizedTitleById = new Map<number, string>();
   for (const c of existing) {
-    if (c.titleSynthesized === true) synthesizedIds.add(c.id);
+    if (c.titleSynthesized === true) synthesizedTitleById.set(c.id, c.title);
   }
   return incoming.map((c) => {
     const { titleSynthesized: _clientValue, ...rest } = c;
-    return synthesizedIds.has(c.id) ? { ...rest, titleSynthesized: true } : rest;
+    return synthesizedTitleById.get(c.id) === c.title ? { ...rest, titleSynthesized: true } : rest;
   });
 }

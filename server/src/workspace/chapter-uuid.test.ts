@@ -148,6 +148,15 @@ describe('carryTitleSynthesized', () => {
     expect('titleSynthesized' in out[1]).toBe(false);
   });
 
+  it('drops the flag when the incoming title differs from the stored one', () => {
+    const existing = [ch({ id: 1, title: 'Chapter 1', titleSynthesized: true })];
+    const incoming = [ch({ id: 1, title: 'Chapter 9' })];
+
+    const out = carryTitleSynthesized(incoming, existing);
+
+    expect('titleSynthesized' in out[0]).toBe(false);
+  });
+
   it('does not mutate the incoming array', () => {
     const existing = [ch({ id: 1, titleSynthesized: true })];
     const incoming = [ch({ id: 1 })];

@@ -1509,3 +1509,36 @@ describe('merge/split propagate titleOverridden (plan 78)', () => {
     expect(sticky?.titleOverridden).toBe(true);
   });
 });
+
+describe('#3628 — titleSynthesized does not outlive the title it describes', () => {
+  it('a chapter retitled through PUT /state is no longer renumbered by a later restructure', async () => {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const seeded = JSON.parse(readFileSync(statePath, 'utf8'));
+    seeded.chapters[1] = { ...seeded.chapters[1], title: 'Chapter 2', titleSynthesized: true };
+    seeded.chapters[2] = { ...seeded.chapters[2], title: 'Chapter 3', titleSynthesized: true };
+    writeFileSync(statePath, JSON.stringify(seeded));
+
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'state',
+        patch: {
+          chapters: readState().chapters.map((c) => (c.id === 3 ? { ...c, title: 'Chapter 9' } : c)),
+        },
+      });
+    expect(put.status).toBe(204);
+    expect(
+      (JSON.parse(readFileSync(statePath, 'utf8')).chapters[2] as { titleSynthesized?: boolean })
+        .titleSynthesized,
+    ).toBeUndefined();
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [1], excluded: true });
+    expect(res.status).toBe(200);
+    const titles = readState().chapters.map((c) => c.title);
+    expect(titles[1]).toBe('Chapter 2'); // still app-made: kept (and renumbered to its own id)
+    expect(titles[2]).toBe('Chapter 9'); // user-retitled: left alone
+  });
+});
