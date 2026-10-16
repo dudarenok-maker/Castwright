@@ -305,6 +305,37 @@ recite:
     save queued before the rewrite does when it lands after it, and whether the
     client re-saves its corrected state. Test with a slow or debounced PUT
     queued around the rewrite and assert on the final disk state.
+30. **A cancellation that sends a cleanup write at the same moment as the
+    operation that caused it, through a route whose read-modify-write of the
+    same file is not under the operation's lock** —
+    `src/components/detect-emotions-button.tsx` (`markUnfinished`), PR #3594
+    gate pass 6: starting a chapter restructure aborted a running emotion run
+    synchronously, and the abort path sent `PUT /state {prosodyAnnotated:false}`
+    in the same tick as the restructure's own `POST`. The state PUT read,
+    patched and rewrote `state.json` without the lock the restructure held, so
+    in 8 of 20 runs the pre-merge chapter list was written back over the
+    restructure's. The compensating write was sent BY the cancellation the
+    operation itself triggers, so it overlaps the operation by construction.
+    Fixed in 982a59d9 (the state and manuscript PUT slices take the book lock)
+    and c3c63f90 (the client holds the mark until the restructure ends).
+    Checkable: for every write an abort or cancel path sends, name the server
+    write it can overlap and whether both routes take the same lock. Test with
+    both requests against the real routes, started in the same tick, and assert
+    on the files.
+31. **A read path that "heals" by rewriting a whole file from an unlocked
+    earlier read, so every reader is a potential writer** —
+    `server/src/workspace/scan.ts` (segments backfill, srv-35 uuid mint), PR
+    #3594 gate pass 6: `findBookByBookId` and `scanLibrary` read `state.json`,
+    derived missing chapter fields from the audio sidecars, and rewrote the
+    entire file. Any locate, including the one the state PUT does, could revert
+    a concurrent locked writer's chapter list with its stale copy. Fixed in
+    27c1297c: the heal re-reads under the book lock and fills only unset fields
+    of chapters whose id and slug still match; 9490ed06 pins the re-read-to-write
+    window with a lock-respecting writer. Checkable: for every function a read
+    path calls that writes, ask what lock it holds across its read and its
+    write, and whether it writes back its own earlier snapshot or a fresh one
+    merged field by field. Test by landing a locked writer between the re-read
+    and the write, and assert it survives.
 
 ### Keeping the catalogue current
 
