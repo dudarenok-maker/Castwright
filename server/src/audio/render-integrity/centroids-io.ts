@@ -123,7 +123,7 @@ export async function readCentroids(
  *  cast). Voice name staleness after a reassignment with no re-render is caught here
  *  (#3449). An in-book row is usable when it recorded NO `inBookVoiceName` (a legacy
  *  row, or one built when no current voice was known — kept as before, rebuilt with
- *  the field on the next `scoreBook` pass) or when that name equals the character's
+ *  the field once a line is rendered in the current voice and `scoreBook` runs) or when that name equals the character's
  *  current voice; a recorded name that differs (or a missing current voice) means the
  *  anchors came from a voice the character no longer has and the row is dropped
  *  (#3524, settles #3517's in-book half). An 'audition' row is

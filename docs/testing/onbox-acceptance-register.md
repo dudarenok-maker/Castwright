@@ -729,13 +729,7 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-10-10 (#3084 W3c, PR 3c), 63 → 64.** Row **A113** (live
-> structured output — Test action records match real model behaviour) added
-> from #3084 PR 3c's run sheet (`3084-openai-analyzer-onbox-acceptance.md`
-> § "Live structured output"). Group A 34 → 35. `next-id` bumped A113 → A114
-> in the same change. Row is owed; not run here.
->
-> **Prior change: 2026-10-16 (#3524), 64 → 64.** Row **A112**'s text corrected, no
+> **Last change: 2026-10-16 (#3524), 64 → 64.** Row **A112**'s text corrected, no
 > row added or removed and the owed count unchanged: the audition-voice
 > precondition now says `scoreBook` takes it from a chapter rendered in the
 > character's current cast voice (not the first chapter in book order), and
@@ -743,6 +737,12 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > voice the character no longer has is now dropped too (a legacy in-book row
 > with no recorded voice is still kept). Behaviour proven by mocked unit
 > tests; A112 still owns the real-ECAPA hardware check.
+>
+> **Prior change: 2026-10-10 (#3084 W3c, PR 3c), 63 → 64.** Row **A113** (live
+> structured output — Test action records match real model behaviour) added
+> from #3084 PR 3c's run sheet (`3084-openai-analyzer-onbox-acceptance.md`
+> § "Live structured output"). Group A 34 → 35. `next-id` bumped A113 → A114
+> in the same change. Row is owed; not run here.
 >
 > **Prior change: 2026-10-09 (#3440), 62 → 63.** Row **E113** added — the real-book
 > line-count and Fix-audio check for the drifted-attribution-id fix, owed because
@@ -6068,8 +6068,8 @@ Network tab (that request → EventStream/Response) when the button was used.
   here is the designed outcome, not a regression. After #3524 an
   in-book centroid row that recorded a voice the character no longer has is
   dropped too, just like an audition one; a legacy in-book row with no
-  recorded voice is still kept until the next scoring pass, so do not expect
-  that one to switch.
+  recorded voice is still kept until a line is re-rendered in the new voice and
+  a scoring pass rebuilds it, so do not expect that one to switch.
 
 *Needs:* a real GPU box with the speech sidecar and a real ECAPA
 speaker-embedding model running (the mocked unit tests cover the logic branch
