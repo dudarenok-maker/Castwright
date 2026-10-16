@@ -904,7 +904,13 @@ export async function scoreBook(
         }
         // #3524 — a line rendered under a voice the character no longer has is not
         // scored against the current-voice reference (unknown voice counts as old).
-        if (currentVoice !== undefined && lineVoiceOf(seg, cd.snapshots, charId) !== currentVoice) {
+        // A fallback-engine line is stamped with the FALLBACK engine's voice — not a
+        // voice choice (as in renderedSegmentVoices) — so it keeps scoring acoustically.
+        if (
+          currentVoice !== undefined &&
+          (renderedFallback == null || renderedFallback === '') &&
+          lineVoiceOf(seg, cd.snapshots, charId) !== currentVoice
+        ) {
           rowsForChar.push({
             characterId: charId, sentenceIds: row.sentenceIds, verdict: 'inconclusive',
             cosine: 0, severity: 'inconclusive', fixable: false,

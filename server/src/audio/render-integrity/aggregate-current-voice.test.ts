@@ -342,3 +342,52 @@ describe('scoreBook — old-voice lines score inconclusive (#3524)', () => {
     expect(ch1!.every((r) => r.verdict !== 'inconclusive')).toBe(true);
   });
 });
+
+/** Per-line stamped chapter: each line carries its own `voiceName`/`baseVoiceName`
+ *  (as a real render stamps them) and the chapter snapshot names `snapshotVoice`. */
+type Line = { sid: number; axis: number; jitter: number; voice: string; fallback?: string | null };
+async function writeChapterLines(dir: string, slug: string, chapterId: number, lines: Line[], snapshotVoice: string, charId = 'thurid') {
+  mkdirSync(join(dir, 'audio'), { recursive: true });
+  const rows = lines.map((l) => ({ characterId: charId, sentenceIds: [l.sid], vec: vec(l.axis, l.jitter) }));
+  await writeEmbeddings(join(dir, 'audio', `${slug}.embeddings.json`), rows, EMBEDDINGS_VERSION);
+  writeFileSync(
+    join(dir, 'audio', `${slug}.segments.json`),
+    JSON.stringify({
+      chapterId,
+      modelKey: 'qwen3-tts-1.7b',
+      segments: lines.map((l) => ({
+        characterId: charId,
+        sentenceIds: [l.sid],
+        renderedFallbackEngine: l.fallback ?? null,
+        voiceName: l.voice,
+        baseVoiceName: l.voice,
+      })),
+      characterSnapshots: {
+        [charId]: { voiceEngine: 'qwen', modelKey: 'qwen3-tts-1.7b', resolvedVoiceName: snapshotVoice },
+      },
+    }),
+  );
+}
+
+describe('scoreBook — fallback lines and partial re-records (#3524 review pass 1)', () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 0;
+  });
+
+  it('a Kokoro-fallback line of a designed-voice character is still scored acoustically (voice-mismatch, fixable), not inconclusive', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-fallback-cast-'));
+    writeCast(dir, 'h');
+    // The fallback line is stamped with the FALLBACK engine's voice (synthesise-chapter.ts).
+    const lines: Line[] = [{ sid: 100, axis: 5, jitter: 0, voice: 'af_heart', fallback: 'kokoro' }];
+    for (let i = 0; i < 12; i++) lines.push({ sid: i, axis: 0, jitter: i, voice: 'qwen-h' });
+    await writeChapterLines(dir, 'ch1', 1, lines, 'qwen-h');
+    // `writeCast` pins the id to 'thurid'; the lines above use it too.
+
+    await scoreBook(dir, [{ id: 1, slug: 'ch1' }]);
+    const rows = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    const fb = rows!.find((r) => r.sentenceIds[0] === 100)!;
+    expect(fb.verdict).toBe('voice-mismatch');
+    expect(fb.fixable).toBe(true);
+  });
+});
