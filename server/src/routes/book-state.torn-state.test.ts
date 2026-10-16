@@ -58,7 +58,7 @@ afterAll(() => {
 });
 
 /* A good `.bak.1`, then the main file torn mid-string. */
-function seedTorn(withUuids = true): void {
+function seedTorn(withUuids = true, staleTitles = false): void {
   writeFileSync(join(bookDir, 'manuscript.md'), MANUSCRIPT_BODY);
   const state = {
     bookId,
@@ -71,10 +71,15 @@ function seedTorn(withUuids = true): void {
     manuscriptFile: 'manuscript.md',
     castConfirmed: true,
     chapters: [
-      { id: 1, title: 'Chapter One', slug: '01-chapter-one', ...(withUuids ? { uuid: 'u-1' } : {}) },
+      {
+        id: 1,
+        title: staleTitles ? 'Stale One' : 'Chapter One',
+        slug: '01-chapter-one',
+        ...(withUuids ? { uuid: 'u-1' } : {}),
+      },
       { id: 2, title: 'Chapter Two', slug: '02-chapter-two', ...(withUuids ? { uuid: 'u-2' } : {}) },
     ],
-    chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+    ...(staleTitles ? {} : { chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION }),
     coverGradient: ['#000', '#fff'],
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
@@ -117,6 +122,14 @@ describe('a torn state.json is recovered and healed by the in-lock re-read (#362
     const res = await request(app).get(`/api/books/${bookId}/state`);
     expect(res.status).toBe(200);
     expect(readState().chapters.every((c: { uuid?: string }) => !!c.uuid)).toBe(true);
+  });
+
+  it('the GET title refresh (refreshChapterTitles) refreshes titles and heals the file', async () => {
+    seedTorn(true, true);
+    const res = await request(app).get(`/api/books/${bookId}/state`);
+    expect(res.status).toBe(200);
+    expect(readState().chapters[0].title).not.toBe('Stale One');
+    expect(readState().chapterTitleParserVersion).toBe(CHAPTER_TITLE_PARSER_VERSION);
   });
 
   it('reparse succeeds and heals the file', async () => {

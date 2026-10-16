@@ -86,12 +86,27 @@ describe('a torn state.json is recovered by the locked cover helpers (#3625)', (
 });
 
 describe('the library scan lists a torn book that has a good .bak (#3625)', () => {
-  it('scanLibrary includes it, with its title, not as unreadable', async () => {
+  /* `unreadable` falls back to the folder name, which IS TITLE — so the title
+     proves nothing. chapterCount (1) only comes from a parsed state. */
+  it('scanLibrary lists it from the recovered state, not as unreadable', async () => {
     const { scanLibrary } = await import('./scan.js');
     const lib = await scanLibrary();
     const books = lib.authors.flatMap((a) => a.series.flatMap((s) => s.books));
     const b = books.find((x) => x.bookId === bookId);
     expect(b).toBeDefined();
-    expect(b!.title).toBe(TITLE);
+    expect(b!.status).not.toBe('unreadable');
+    expect(b!.chapterCount).toBe(1);
+  });
+
+  /* Site 1 (mintChapterUuidsLocked): a torn book whose chapters lack uuids is
+     minted + healed in one scan. Strict-read there throws and the file stays
+     torn (the catch in scanBook swallows it). */
+  it('the uuid mint inside the scan heals a torn file', async () => {
+    const full = JSON.parse(readFileSync(`${statePath}.bak.1`, 'utf8'));
+    delete full.chapters[0].uuid;
+    writeFileSync(`${statePath}.bak.1`, JSON.stringify(full));
+    const { scanLibrary } = await import('./scan.js');
+    await scanLibrary();
+    expect(readState().chapters[0].uuid).toBeTruthy();
   });
 });
