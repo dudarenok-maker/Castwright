@@ -25,6 +25,7 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { findBookByBookId } from '../workspace/scan.js';
 import { coverImagePath } from '../workspace/paths.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { CoverSourceError } from '../cover/sources/types.js';
 import { findCandidateById, aggregateCovers } from '../cover/search.js';
 import {
@@ -90,7 +91,9 @@ coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
       return res.status(502).json({ error: e.message, kind: e.kind });
     }
     console.error('[cover] POST failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Cover save failed.' });
+    res
+      .status(500)
+      .json({ error: requestFailureMessage(e, (e as Error).message || 'Cover save failed.') });
   }
 });
 
@@ -137,7 +140,9 @@ coverRouter.delete('/:bookId/cover', async (req: Request, res: Response) => {
     res.status(204).end();
   } catch (e) {
     console.error('[cover] DELETE failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Cover delete failed.' });
+    res
+      .status(500)
+      .json({ error: requestFailureMessage(e, (e as Error).message || 'Cover delete failed.') });
   }
 });
 
@@ -206,7 +211,9 @@ coverRouter.post(
       });
     } catch (e) {
       console.error('[cover] upload failed', e);
-      res.status(500).json({ error: (e as Error).message || 'Cover upload failed.' });
+      res
+        .status(500)
+        .json({ error: requestFailureMessage(e, (e as Error).message || 'Cover upload failed.') });
     }
   },
 );
@@ -234,6 +241,10 @@ coverRouter.patch('/:bookId/cover/framing', async (req: Request, res: Response) 
     res.status(204).end();
   } catch (e) {
     console.error('[cover] framing PATCH failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Cover framing save failed.' });
+    res
+      .status(500)
+      .json({
+        error: requestFailureMessage(e, (e as Error).message || 'Cover framing save failed.'),
+      });
   }
 });
