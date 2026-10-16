@@ -1508,7 +1508,8 @@ test('runStepProcess: a non-retriable step always records 1 attempt, even given 
 // headroom so the tree is fully spawned when the timer fires, and the fixture
 // records its pid so a survivor is named as such instead of as a slow kill.
 // The production-side gap (a /T survivor holding the pipe holds the step past
-// its budget) is tracked separately in #3695.
+// its budget) is closed by runStepProcess's timeout re-sweep (#3695); the tests
+// after this block cover it.
 // The self-exit must still outlive the bound, or a kill that never lands is
 // rescued by the fixture's own exit inside the bound and it can no longer fail.
 const KILL_PATH_BOUND_MS = 120_000;
@@ -1670,6 +1671,213 @@ test('runStepProcess: a step exceeding its budget is classified TIMEOUT, not a c
     watch.disarm();
   }
 });
+
+// #3695: timeout re-sweep. DI tests drive runStepProcess with a kill that
+// misses a descendant (so 'close' never fires) and a fake process snapshot, so
+// the sweep logic is tested without a real race. The real-process Windows test
+// below proves the same against a genuine survivor.
+const RESWEEP_TEST_GRACE_MS = 100;
+const NO_CENSUS = () => {};
+// A fixture step plus the harness shared by the DI tests: `killTreeFn` captures
+// the child (to clean it up) and does nothing else, i.e. the kill missed.
+function resweepHarness(dir) {
+  writeHangingFixture(dir, 'hang');
+  const h = { child: null, logs: [], swept: [] };
+  h.killTreeFn = (child) => {
+    h.child = child;
+  };
+  h.logFn = (m) => h.logs.push(m);
+  h.cleanup = () => {
+    if (h.child) _internals.killStepChildTree(h.child);
+    const pid = readHangPid(dir);
+    if (pid !== null && pidAlive(pid)) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
+  };
+  return h;
+}
+
+test('runStepProcess re-sweep: a descendant the first kill missed is found and killed, the step settles as a timeout (#3695)', async () => {
+  const dir = mkTmp();
+  const h = resweepHarness(dir);
+  const SURVIVOR = 987654321;
+  // Pre-kill snapshot: root only. Re-sweep snapshot: root's tree PLUS a late
+  // child (spawned after the kill's snapshot) hanging off the root pid.
+  let calls = 0;
+  const snapshotFn = () => {
+    calls += 1;
+    const rows = [{ pid: h.child?.pid ?? process.pid + 1, ppid: 1, name: 'x', commandLine: '', cpuSeconds: 0, startedAt: 1 }];
+    if (calls > 1) rows.push({ pid: SURVIVOR, ppid: rows[0].pid, name: 'y', commandLine: '', cpuSeconds: 0, startedAt: 2 });
+    return rows;
+  };
+  const start = Date.now();
+  try {
+    const result = await runStepProcess('hang', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      timeoutMs: 1500,
+      killTreeFn: h.killTreeFn,
+      snapshotFn,
+      censusFn: NO_CENSUS,
+      logFn: h.logFn,
+      windows: true,
+      resweepGraceMs: RESWEEP_TEST_GRACE_MS,
+      sweepKillFn: (pid) => {
+        h.swept.push(pid);
+        // Killing the late child "releases the pipe": really kill the tree.
+        if (pid === SURVIVOR) _internals.killStepChildTree(h.child);
+      },
+    });
+    assert.equal(result.timedOut, true);
+    assert.equal(result.attempts, 1);
+    assert.ok(h.swept.includes(SURVIVOR), `the re-sweep must kill the late descendant; swept ${JSON.stringify(h.swept)}`);
+    assert.ok(Date.now() - start < 1500 + 5_000, 'must settle promptly after the sweep, not wait for the fixture');
+    assert.equal(h.logs.length, 0, 'a successful sweep settles on close, with no give-up line');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('runStepProcess re-sweep: survivors that never die => bounded sweeps, then settles as a timeout and names the pids (#3695)', async () => {
+  const dir = mkTmp();
+  const h = resweepHarness(dir);
+  let sweeps = 0;
+  const snapshotFn = () => [
+    { pid: h.child?.pid ?? 1, ppid: 1, name: 'x', commandLine: '', cpuSeconds: 0, startedAt: 1 },
+  ];
+  const start = Date.now();
+  try {
+    const result = await runStepProcess('hang', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      timeoutMs: 1500,
+      killTreeFn: h.killTreeFn,
+      snapshotFn,
+      censusFn: NO_CENSUS,
+      logFn: h.logFn,
+      windows: true,
+      resweepGraceMs: RESWEEP_TEST_GRACE_MS,
+      resweepMax: 2,
+      sweepKillFn: () => {
+        sweeps += 1; // the kill "fails": the root stays alive and holds the pipe
+      },
+    });
+    assert.equal(result.timedOut, true);
+    assert.equal(sweeps, 2, 'exactly resweepMax sweeps, each targeting the live root');
+    assert.ok(Date.now() - start < 1500 + 5_000, 'must settle within budget + a few graces, not at the fixture self-exit');
+    assert.equal(h.logs.length, 1);
+    assert.match(h.logs[0], /\[timeout\] hang: 'close' not seen after the kill and 2 re-sweep\(s\)/);
+    assert.match(h.logs[0], new RegExp(`${h.child.pid}`), 'names the surviving pid');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('runStepProcess re-sweep: never targets pid 0, this process or its ancestors (#3695)', async () => {
+  const dir = mkTmp();
+  const h = resweepHarness(dir);
+  const swept = [];
+  try {
+    await runStepProcess('hang', {
+      cwd: dir,
+      env: process.env,
+      retryKey: 'test:server',
+      timeoutMs: 1000,
+      killTreeFn: h.killTreeFn,
+      // A snapshot that makes this process and a parent hang off the step root.
+      snapshotFn: () => {
+        const root = h.child?.pid ?? 4242;
+        return [
+          { pid: root, ppid: 1, name: 'r', commandLine: '', cpuSeconds: 0, startedAt: 1 },
+          { pid: 0, ppid: root, name: 'z', commandLine: '', cpuSeconds: 0, startedAt: 1 },
+          { pid: process.pid, ppid: root, name: 'me', commandLine: '', cpuSeconds: 0, startedAt: 1 },
+          { pid: 2147480002, ppid: root, name: 'ok', commandLine: '', cpuSeconds: 0, startedAt: 1 },
+        ];
+      },
+      censusFn: NO_CENSUS,
+      logFn: h.logFn,
+      windows: true,
+      resweepGraceMs: RESWEEP_TEST_GRACE_MS,
+      resweepMax: 1,
+      sweepKillFn: (pid) => swept.push(pid),
+    });
+    assert.ok(!swept.includes(0) && !swept.includes(process.pid), `protected pids swept: ${JSON.stringify(swept)}`);
+    // (The root is itself an "ancestor" of this process in the fake snapshot,
+    // so it is protected too — the point is the ordinary pid IS swept.)
+    assert.ok(swept.includes(2147480002), 'an ordinary descendant is still a target');
+  } finally {
+    h.cleanup();
+  }
+});
+
+test('runStepProcess re-sweep: a step finishing inside its budget never queries the process table (#3695)', async () => {
+  const dir = mkTmp();
+  writeFileSync(join(dir, 'ok.mjs'), 'process.exit(0);\n', 'utf8');
+  writeFileSync(
+    join(dir, 'package.json'),
+    JSON.stringify({ name: 'ok-fixture', private: true, scripts: { ok: 'node ok.mjs' } }),
+    'utf8',
+  );
+  let queried = 0;
+  const result = await runStepProcess('ok', {
+    cwd: dir,
+    env: process.env,
+    retryKey: 'test:server',
+    timeoutMs: 60_000,
+    snapshotFn: () => {
+      queried += 1;
+      return [];
+    },
+    windows: true,
+  });
+  assert.equal(result.code, 0);
+  assert.equal(result.timedOut, false);
+  assert.equal(queried, 0);
+});
+
+// Real-process proof: the first kill takes out ONLY the root (the partial-kill
+// shape), leaving `npm`/`node hang.mjs` holding the piped stderr. Without the
+// re-sweep the call would not return until the fixture's 300s self-exit.
+test(
+  'runStepProcess re-sweep: the real re-sweep reaps a surviving `node hang.mjs` and returns in seconds (#3695, win32)',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    const dir = mkTmp();
+    writeHangingFixture(dir, 'hang');
+    const watch = armSurvivorWatch(dir);
+    const start = Date.now();
+    try {
+      const result = await runStepProcess('hang', {
+        cwd: dir,
+        env: process.env,
+        retryKey: 'test:server',
+        timeoutMs: STEP_BUDGET_PAST_LAUNCH_MS,
+        censusFn: NO_CENSUS,
+        resweepGraceMs: 1000,
+        killTreeFn: (child) => {
+          // Root only: no /T, so every descendant survives.
+          spawnSync('taskkill', ['/PID', String(child.pid), '/F'], { stdio: 'ignore', windowsHide: true });
+        },
+      });
+      const elapsed = Date.now() - start;
+      assert.equal(result.timedOut, true);
+      assert.equal(result.attempts, 1);
+      assert.ok(
+        elapsed < STEP_BUDGET_PAST_LAUNCH_MS + 40_000,
+        `the re-sweep must release the step within seconds, not the fixture's ${HANG_FIXTURE_SELF_EXIT_MS}ms self-exit — took ${elapsed}ms`,
+      );
+      assertHangFixtureKilled(dir, elapsed, watch);
+    } finally {
+      watch.disarm();
+    }
+  },
+);
 
 // PR #3260 review pass 1, B2: a budget calibrated at full concurrency is too
 // tight once LOW_CONCURRENCY has actually throttled the fork pool for THIS

@@ -977,7 +977,12 @@ export const KILL_TIMEOUT_MS = 15000;
  *  outright and has the exact same blindness: taskkill's `/T` walk is a
  *  point-in-time snapshot of its own, taken independently of the census's.
  *  Closing either needs a second `Win32_Process` query per kill — the same
- *  cost N4 already declined. */
+ *  cost N4 already declined. That still holds for the census / pre-push reap,
+ *  which this function serves unchanged. The STEP-TIMEOUT path in
+ *  verify-cache.mjs (`runStepProcess`, #3695) no longer carries the gap: it
+ *  pays that second query only after a timeout, re-walking the tree and
+ *  re-killing survivors until the step's 'close' fires or a bounded number
+ *  of sweeps elapses. */
 export function killTree(pid, { spawn = spawnSync, windows = isWindows, isAlive = pidIsAlive, descendantPids } = {}) {
   if (!windows) return false;
   const result = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {

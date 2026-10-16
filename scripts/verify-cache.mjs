@@ -18,7 +18,14 @@ import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 // taskkill /PID <pid> /T /F wrapper (Windows-only, no-op elsewhere) and
 // runCensus is the classify+kill sweep. Both are called from the timeout-kill
 // path below — see Part 2's design doc section, "Tree-kill on Windows".
-import { killTree, runCensus } from './reap-stale-batteries.mjs';
+import {
+  killTree,
+  runCensus,
+  computeOsDescendants,
+  collectProcessSnapshot,
+  ownAncestryPids,
+} from './reap-stale-batteries.mjs';
+import { pidIsAlive } from './lib/pid-alive.mjs';
 
 const SCHEMA_VERSION = 1;
 const CACHE_FILENAME = '.verify-cache.json';
@@ -1586,6 +1593,67 @@ function killStepChildTree(child) {
   }
 }
 
+// Timeout re-sweep (#3695). After a step-timeout kill, if the child's 'close'
+// has not fired within TIMEOUT_RESWEEP_GRACE_MS, re-walk the original tree and
+// taskkill survivors; up to TIMEOUT_RESWEEP_MAX sweeps, then settle without
+// 'close'. 2s: a clean kill closes in milliseconds, so 2s separates "straggler"
+// from "normal" without making a hung step linger. 3 sweeps: the first catches
+// the late-spawn race, the next two cover a survivor that itself spawns again.
+// Worst case past the budget ~= 4 graces (8s) + 3 Win32_Process snapshots
+// (~1s each, up to 15s each if WMI is wedged) plus the one pre-kill snapshot.
+export const TIMEOUT_RESWEEP_GRACE_MS = 2000;
+export const TIMEOUT_RESWEEP_MAX = 3;
+
+/** Pre-kill record of `rootPid`'s OS descendant closure: pid -> startedAt, so
+ *  the re-sweep can tell a surviving member from a recycled pid. Best-effort:
+ *  a failed snapshot yields just the root, never throws. */
+function snapshotTree(snapshotFn, rootPid) {
+  const known = new Map();
+  try {
+    const rows = snapshotFn();
+    const byPid = new Map(rows.map((r) => [r.pid, r]));
+    for (const pid of computeOsDescendants(rootPid, rows)) {
+      known.set(pid, byPid.get(pid)?.startedAt ?? null);
+    }
+  } catch {
+    // Best-effort — the root alone still seeds the walk.
+  }
+  if (!known.has(rootPid)) known.set(rootPid, null);
+  return known;
+}
+
+/** One re-sweep: snapshot now, expand the closure from every pre-kill pid
+ *  (a dead intermediate's orphaned children keep their ParentProcessId on
+ *  Windows, so they are found by walking FROM the dead pid), drop pids that
+ *  were recycled to an unrelated process, never touch pid 0 / this process /
+ *  its ancestors, and taskkill the rest. Returns the pids it targeted. */
+function resweepTree({ known, snapshotFn, sweepKillFn }) {
+  let rows;
+  try {
+    rows = snapshotFn();
+  } catch {
+    return [];
+  }
+  const byPid = new Map(rows.map((r) => [r.pid, r]));
+  const protectedPids = new Set([0, process.pid, ...ownAncestryPids(rows)]);
+  const closure = new Set();
+  for (const [seed, startedAt] of known) {
+    const live = byPid.get(seed);
+    // Alive under the same pid with a different start time => recycled.
+    if (live && startedAt != null && live.startedAt !== startedAt) continue;
+    for (const pid of computeOsDescendants(seed, rows)) closure.add(pid);
+  }
+  const targets = [...closure].filter((pid) => !protectedPids.has(pid) && byPid.has(pid));
+  for (const pid of targets) {
+    try {
+      sweepKillFn(pid);
+    } catch {
+      // Best-effort — a kill that throws must not stop the remaining ones.
+    }
+  }
+  return targets;
+}
+
 /** Run one pipeline step (`npm run <npmScript>`) and return
     `{ code, attempts, timedOut }` — `attempts` is how many times the
     underlying process actually ran (always 1 for a non-retriable step).
@@ -1607,7 +1675,22 @@ function killStepChildTree(child) {
     different underlying script. */
 export async function runStepProcess(
   npmScript,
-  { cwd, env, retryKey = npmScript, timeoutMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000 },
+  {
+    cwd,
+    env,
+    retryKey = npmScript,
+    timeoutMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000,
+    // Injectable purely so the timeout re-sweep (#3695) is testable without a
+    // real race; nothing in production passes them.
+    killTreeFn = killStepChildTree,
+    snapshotFn = collectProcessSnapshot,
+    sweepKillFn = killTree,
+    censusFn = runCensus,
+    logFn = (m) => process.stderr.write(m),
+    windows = process.platform === 'win32',
+    resweepGraceMs = TIMEOUT_RESWEEP_GRACE_MS,
+    resweepMax = TIMEOUT_RESWEEP_MAX,
+  } = {},
 ) {
   const deadline = Date.now() + timeoutMs;
 
@@ -1644,18 +1727,54 @@ export async function runStepProcess(
       let settled = false;
       let timedOut = false;
       const remainingMs = Math.max(0, deadline - Date.now());
+      let resweepTimer = null;
       const timer = setTimeout(() => {
         if (settled) return; // the step closed right at the deadline — nothing left to kill or reclassify
         timedOut = true;
-        killStepChildTree(child);
+        // Timeout path only (#3695): record the tree BEFORE the kill. `taskkill
+        // /T` is a one-instant snapshot, and once the root dies a survivor's
+        // chain back to it is cut (its parent pid is a dead process no later
+        // snapshot lists), so a walk from the root pid alone cannot reach it.
+        // The pre-kill closure supplies the intermediate pids to seed the
+        // re-sweep's walk. The normal path never reaches this timer's body.
+        const known = windows ? snapshotTree(snapshotFn, child.pid) : null;
+        killTreeFn(child);
         try {
           // Provably-orphaned only (dead parent) — mirrors the pre-push
           // reap's own narrow scope; a merely-slow-but-live subtree is not
           // this sweep's job.
-          runCensus({ kill: true, killReasons: ['orphaned-unreachable'] });
+          censusFn({ kill: true, killReasons: ['orphaned-unreachable'] });
         } catch {
           // Best-effort — never let the reaper sweep mask the timeout outcome.
         }
+        // 'close' normally fires within milliseconds of the kill. If it has
+        // not after a grace, a descendant spawned after the kill's snapshot is
+        // still holding the inherited stderr pipe: re-walk and kill it, a
+        // bounded number of times, then settle as a timeout anyway so the
+        // budget is honoured. POSIX has no re-sweep (the process-group SIGKILL
+        // already covers late children), but keeps the final settle bound for a
+        // descendant that escaped the group (setsid) while holding the pipe.
+        const sweepsAllowed = windows ? resweepMax : 0;
+        let lastTargets = [];
+        const step = (k) => {
+          resweepTimer = setTimeout(() => {
+            if (settled) return;
+            if (k >= sweepsAllowed) {
+              const alive = lastTargets.filter((p) => pidIsAlive(p));
+              logFn(
+                `[timeout] ${npmScript}: 'close' not seen after the kill and ${k} re-sweep(s); ` +
+                  `settling as a timeout without it. Surviving pids still holding the step's pipe: ` +
+                  `${alive.length > 0 ? alive.join(', ') : 'none identified'}\n`,
+              );
+              child.stderr?.destroy();
+              finish(1);
+              return;
+            }
+            lastTargets = resweepTree({ known, snapshotFn, sweepKillFn });
+            step(k + 1);
+          }, resweepGraceMs);
+        };
+        step(0);
       }, remainingMs);
       if (typeof timer.unref === 'function') timer.unref();
 
@@ -1663,6 +1782,7 @@ export async function runStepProcess(
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(resweepTimer);
         if (activeStepChild === child) activeStepChild = null;
         const stderr = stderrAcc ? stderrAcc.toString() : '';
         if (stderr) process.stderr.write(stderr); // captured stderr isn't echoed live — surface it
