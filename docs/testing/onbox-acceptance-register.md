@@ -735,7 +735,10 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > character's current cast voice (not the first chapter in book order), and
 > the closing "Known limit" is replaced — an in-book centroid recorded from a
 > voice the character no longer has is now dropped too (a legacy in-book row
-> with no recorded voice is still kept). Behaviour proven by mocked unit
+> with no recorded voice is still kept). A character reassigned but not yet
+> re-rendered now gets a marker row from the scoring pass (it leaves the QA
+> card's "pending" state), and the "current voice" engine is the character's own
+> engine else the book's current default. Behaviour proven by mocked unit
 > tests; A112 still owns the real-ECAPA hardware check.
 >
 > **Prior change: 2026-10-10 (#3084 W3c, PR 3c), 63 → 64.** Row **A113** (live
@@ -6069,7 +6072,10 @@ Network tab (that request → EventStream/Response) when the button was used.
   in-book centroid row that recorded a voice the character no longer has is
   dropped too, just like an audition one; a legacy in-book row with no
   recorded voice is still kept until a line is re-rendered in the new voice and
-  a scoring pass rebuilds it, so do not expect that one to switch.
+  a scoring pass rebuilds it, so do not expect that one to switch. A scoring
+  pass in this state writes a marker row for the character ("no current-voice
+  reference"); the repair treats it as no centroid, and the QA card no longer
+  shows Resume scoring for that character.
 
 *Needs:* a real GPU box with the speech sidecar and a real ECAPA
 speaker-embedding model running (the mocked unit tests cover the logic branch
