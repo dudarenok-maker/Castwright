@@ -1872,7 +1872,7 @@ bookStateRouter.get('/:bookId/listen-progress', async (req: Request, res: Respon
        chapter. Falls back to the stored chapterId when the record predates
        uuids or the chapter has since been deleted. */
     if (progress?.chapterUuid) {
-      const current = await readJson<BookStateJson>(stateJsonPath(located.bookDir));
+      const current = await readStateJsonWithRecovery(stateJsonPath(located.bookDir));
       const match = current?.chapters.find((c) => c.uuid === progress.chapterUuid);
       if (match && match.id !== progress.chapterId) {
         return res.json({ ...progress, chapterId: match.id });
@@ -1969,7 +1969,7 @@ bookStateRouter.put('/:bookId/listen-progress', async (req: Request, res: Respon
        current chapterId) so GET can re-derive the chapterId after a
        restructure. Absent when the chapterId doesn't map to a chapter (or
        a legacy book without uuids) — GET then keeps the stored chapterId. */
-    const stateForUuid = await readJson<BookStateJson>(stateJsonPath(located.bookDir));
+    const stateForUuid = await readStateJsonWithRecovery(stateJsonPath(located.bookDir));
     const chapterUuid = stateForUuid?.chapters.find((c) => c.id === body.chapterId)?.uuid;
     /* fs-15 shelf controls — merge the prior record's shelf flags rather than
        clobbering them: `finished` is sticky (a user "Mark as finished" survives

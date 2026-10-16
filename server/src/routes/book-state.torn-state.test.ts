@@ -132,6 +132,32 @@ describe('a torn state.json is recovered and healed by the in-lock re-read (#362
     expect(readState().chapterTitleParserVersion).toBe(CHAPTER_TITLE_PARSER_VERSION);
   });
 
+  const progressPath = () => join(bookDir, '.audiobook', 'listen-progress.json');
+
+  it('GET listen-progress resolves the chapter uuid through a torn state.json', async () => {
+    writeFileSync(
+      progressPath(),
+      JSON.stringify({
+        chapterId: 1,
+        chapterUuid: 'u-2',
+        currentSec: 5,
+        updatedAt: '2026-01-02T00:00:00.000Z',
+      }),
+    );
+    const res = await request(app).get(`/api/books/${bookId}/listen-progress`);
+    expect(res.status).toBe(200);
+    expect(res.body.chapterId).toBe(2);
+  });
+
+  it('PUT listen-progress stamps the chapter uuid through a torn state.json', async () => {
+    rmSync(progressPath(), { force: true });
+    const res = await request(app)
+      .put(`/api/books/${bookId}/listen-progress`)
+      .send({ chapterId: 2, currentSec: 7 });
+    expect(res.status).toBe(200);
+    expect(JSON.parse(readFileSync(progressPath(), 'utf8')).chapterUuid).toBe('u-2');
+  });
+
   it('reparse succeeds and heals the file', async () => {
     const res = await request(app).post(`/api/books/${bookId}/reparse`).send({});
     expect(res.status).toBe(200);
