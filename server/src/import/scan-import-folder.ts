@@ -217,25 +217,45 @@ export async function importPortableBundle(
   let resolvedBookId = state.bookId || makeBookId(author, series, baseTitle);
   let renamedTo: string | undefined;
 
-  if (existsSync(bookDir)) {
-    if (strategy === 'fail') {
-      throw new BundleConflictError(bookDir);
+  /* The conflict decision is made, and the target dir CLAIMED (mkdir), inside
+     the target's state lock (#3625): decided outside it, two concurrent
+     imports of one title both saw "free" ('fail' both succeeded) or both
+     picked the same "(2)" ('rename'). The unlocked pick below only chooses a
+     candidate; the in-lock re-check is authoritative. A 'rename' candidate is
+     always a dir that did not exist at pick time, so finding it present under
+     the lock means another import claimed it first — re-pick. Phase 1's tmp
+     writes still stay outside the lock. */
+  for (let attempt = 0; ; attempt += 1) {
+    if (attempt >= 100) {
+      throw new Error('bundle_conflict: too many colliding imports; aborting after 100 attempts');
     }
-    if (strategy === 'rename') {
+    bookDir = bookDirByDisplay(author, series, baseTitle);
+    resolvedTitle = baseTitle;
+    resolvedBookId = state.bookId || makeBookId(author, series, baseTitle);
+    renamedTo = undefined;
+    if (existsSync(bookDir) && strategy === 'rename') {
       const renamed = resolveRenamedTarget(author, series, baseTitle);
       bookDir = renamed.bookDir;
       resolvedTitle = renamed.title;
       resolvedBookId = renamed.bookId;
       renamedTo = bookDir;
-      state = { ...state, title: resolvedTitle, bookId: resolvedBookId };
     }
-    /* 'overwrite' falls through — bookDir stays as the existing path. */
+    const claimed = await withStateLock(bookDir, async () => {
+      if (existsSync(bookDir)) {
+        if (strategy === 'fail') throw new BundleConflictError(bookDir);
+        /* 'overwrite' keeps the existing path; 'rename' lost the race. */
+        if (strategy === 'rename') return false;
+      }
+      await mkdir(bookDir, { recursive: true });
+      return true;
+    });
+    if (claimed) break;
   }
+  if (renamedTo) state = { ...state, title: resolvedTitle, bookId: resolvedBookId };
 
   /* Stage every entry into a tmp file alongside its eventual home, then
      promote all of them via rename. Per-file atomicity (see file-header
      comment for the caveat about bundle-atomicity). */
-  await mkdir(bookDir, { recursive: true });
   await mkdir(dotAudiobook(bookDir), { recursive: true });
   await mkdir(audioDir(bookDir), { recursive: true });
 
