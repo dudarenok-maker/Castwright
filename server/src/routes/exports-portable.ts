@@ -31,6 +31,7 @@ import {
 import { findBookByBookId } from '../workspace/scan.js';
 import { bookExportsDir, slug as slugify } from '../workspace/paths.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -123,7 +124,10 @@ portableImportRouter.post(
       console.error('[portable-import] failed', e);
       return res
         .status(500)
-        .json({ error: 'portable_import_failed', message: (e as Error).message });
+        .json({
+          error: 'portable_import_failed',
+          message: requestFailureMessage(e, (e as Error).message),
+        });
     }
   },
 );

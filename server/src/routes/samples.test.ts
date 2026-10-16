@@ -137,3 +137,54 @@ describe('samples router — no-language bundle normalisation', () => {
     expect(state.language).toBeNull();
   });
 });
+
+describe('samples router — load waits on the state lock (#3625)', () => {
+  let ws: string;
+  let app3: Express;
+  let resetSamples: () => void;
+
+  beforeAll(async () => {
+    ws = mkdtempSync(join(tmpdir(), 'audiobook-samples-lock-'));
+    process.env.WORKSPACE_DIR = ws;
+    vi.resetModules();
+    const { samplesRouter, setSamplesRoot, _resetSamplesRoot } = await import('./samples.js');
+    setSamplesRoot(SAMPLES_ROOT);
+    resetSamples = _resetSamplesRoot;
+    app3 = express();
+    app3.use(express.json());
+    app3.use('/api/samples', samplesRouter);
+  });
+
+  afterAll(() => {
+    if (ws) rmSync(ws, { recursive: true, force: true });
+    delete process.env.WORKSPACE_DIR;
+    if (resetSamples) resetSamples();
+  });
+
+  it('does not write state.json while the lock is held, then lands', async () => {
+    if (!bundleReady()) return;
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    const bookDir = join(ws, 'books', 'Castwright', 'Standalones', 'The Coalfall Commission');
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateLock(bookDir, async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+
+    const pending = request(app3)
+      .post(`/api/samples/${SLUG}/load`)
+      .then((r) => r);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(existsSync(statePath)).toBe(false);
+    release();
+    const [res] = await Promise.all([pending, held]);
+    expect(res.status).toBe(200);
+    expect(res.body.alreadyLoaded).toBe(false);
+    expect(existsSync(statePath)).toBe(true);
+  });
+});

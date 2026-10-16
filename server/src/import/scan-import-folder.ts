@@ -42,6 +42,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
+import { withStateLock } from '../workspace/state-lock.js';
 import {
   PORTABLE_SCHEMA_VERSION,
   type PortableBundleManifest,
@@ -309,18 +310,23 @@ export async function importPortableBundle(
   }
 
   /* Phase 2: rename each tmp file over its final destination. Failure
-     mid-rename is the half-imported case called out in the header. */
-  try {
-    for (const s of staged) {
-      await rename(s.tmp, s.dest);
+     mid-rename is the half-imported case called out in the header.
+     This is the one state.json writer that does not go through
+     writeStateJsonAtomic, so the state-lock guard cannot see it: it is locked
+     by hand (#3625). Phase 1 (tmp writes) stays outside the lock. */
+  await withStateLock(bookDir, async () => {
+    try {
+      for (const s of staged) {
+        await rename(s.tmp, s.dest);
+      }
+    } catch (e) {
+      /* Best-effort cleanup of remaining tmp files (the ones we hadn't
+         renamed yet); already-renamed live files are left in place because
+         we don't have their pre-import bytes any more. */
+      for (const t of tmpsWritten) await unlink(t).catch(() => {});
+      throw e;
     }
-  } catch (e) {
-    /* Best-effort cleanup of remaining tmp files (the ones we hadn't
-       renamed yet); already-renamed live files are left in place because
-       we don't have their pre-import bytes any more. */
-    for (const t of tmpsWritten) await unlink(t).catch(() => {});
-    throw e;
-  }
+  });
 
   return {
     bookId: resolvedBookId,

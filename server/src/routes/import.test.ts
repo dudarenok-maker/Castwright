@@ -930,3 +930,43 @@ describe('POST /api/import — CJK-aware word count (fs-59 W2)', () => {
     expect(ch1.wordCount).toBe(4);
   });
 });
+
+describe('POST /api/books — new-book state.json write waits on the state lock (#3625)', () => {
+  it('does not write state.json while the lock is held, then lands', async () => {
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    const { bookDirByDisplay, stateJsonPath } = await import('../workspace/paths.js');
+    const md = `# Lock Title\n\n## Chapter One\n\nA short opening.\n`;
+    const importRes = await request(app)
+      .post('/api/import')
+      .send({ text: md, fileName: 'lock.md' });
+    expect(importRes.status).toBe(200);
+
+    const bookDir = bookDirByDisplay('Lock Author', 'Standalones', 'Lock Book');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateLock(bookDir, async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+
+    const pending = request(app)
+      .post('/api/books')
+      .send({
+        tempId: importRes.body.tempId,
+        author: 'Lock Author',
+        title: 'Lock Book',
+        seriesPosition: null,
+        isStandalone: true,
+      })
+      .then((r) => r);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(existsSync(stateJsonPath(bookDir))).toBe(false);
+    release();
+    const [confirmRes] = await Promise.all([pending, held]);
+    expect(confirmRes.status).toBe(201);
+    expect(existsSync(stateJsonPath(bookDir))).toBe(true);
+  });
+});

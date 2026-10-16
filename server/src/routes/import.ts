@@ -35,6 +35,8 @@ import {
   slug,
 } from '../workspace/paths.js';
 import { writeStateJsonAtomic, type BookStateJsonWrite } from '../workspace/state-migrate.js';
+import { withStateLock } from '../workspace/state-lock.js';
+import { requestFailureMessage } from '../workspace/file-lock.js';
 import { normaliseBookLanguage } from '../tts/language.js';
 import { detectManuscriptLanguageFromChapters } from '../tts/detect-language.js';
 import { isSupportedLanguage, supportedLanguages } from '../tts/language-registry.js';
@@ -441,7 +443,7 @@ importRouter.post('/books', async (req: Request, res: Response) => {
       chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
       language,
     };
-    await writeStateJsonAtomic(stateJsonPath(bookDir), state);
+    await withStateLock(bookDir, () => writeStateJsonAtomic(stateJsonPath(bookDir), state));
 
     /* Fire-and-forget cover fetch from OpenLibrary. The import response
        does NOT wait for this — covers can be slow and OpenLibrary can be
@@ -496,6 +498,8 @@ importRouter.post('/books', async (req: Request, res: Response) => {
     });
   } catch (e) {
     console.error('[import] confirm failed', e);
-    res.status(500).json({ error: (e as Error).message || 'Confirm failed.' });
+    res.status(500).json({
+      error: requestFailureMessage(e, (e as Error).message || 'Confirm failed.'),
+    });
   }
 });

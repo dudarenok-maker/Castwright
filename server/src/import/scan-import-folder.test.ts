@@ -330,4 +330,36 @@ describe('importPortableBundle', () => {
       rmSync(target, { recursive: true, force: true });
     }
   });
+
+  it("'overwrite' promotes state.json only after the state lock is released (#3625)", async () => {
+    const { withStateLock } = await import('../workspace/state-lock.js');
+    const state = fixtureState({ title: 'Overwrite Lock Test' });
+    const bundle = await makeBundleFixture(state);
+    const target = targetDirFor(state);
+    mkdirSync(dotAudiobook(target), { recursive: true });
+    const existing = JSON.stringify({ ...state, title: 'Existing Book' });
+    writeFileSync(stateJsonPath(target), existing);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let acquired!: () => void;
+    const got = new Promise<void>((r) => (acquired = r));
+    const held = withStateLock(target, async () => {
+      acquired();
+      await gate;
+    });
+    await got;
+    try {
+      const pending = importPortableBundle(bundle, { onConflict: 'overwrite' });
+      await new Promise((r) => setTimeout(r, 200));
+      expect(readFileSync(stateJsonPath(target), 'utf8')).toBe(existing);
+      release();
+      await Promise.all([pending, held]);
+      expect(JSON.parse(readFileSync(stateJsonPath(target), 'utf8')).title).toBe(
+        'Overwrite Lock Test',
+      );
+    } finally {
+      release();
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
 });
