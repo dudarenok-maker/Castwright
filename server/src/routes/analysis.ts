@@ -6626,8 +6626,9 @@ export async function runMainAnalyzerJob(
 
     /* ── Compose the AnalyseResponse. */
     /* The hint title is authoritative (kept in step with state.json by the
-       restructure route and by hydration); the cached stage1 chapter list is
-       only a snapshot keyed by pre-restructure ids (#3681). */
+       restructure route, and by hydration only when the chapter counts match
+       and the ids line up); the cached stage1 chapter list is only a snapshot
+       keyed by pre-restructure ids (#3681). */
     const chapters = record.chapterHints.map((h) => ({
       id: h.id,
       title: h.title,
