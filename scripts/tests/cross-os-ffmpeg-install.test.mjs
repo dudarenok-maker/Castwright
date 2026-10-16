@@ -60,6 +60,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
+import yaml from 'js-yaml';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -602,27 +603,31 @@ for (const path of WORKFLOWS) {
 }
 
 // #3696: the macOS + Windows cross-os-verify matrix runs the full
-// verify:quick (test:all) + audit + build. Windows grew from ~11 min to
-// ~19.4 min (run 38498989695 was cancelled at 20m07s by the old 20-min cap),
-// so a cap below 30 (verify.yml's windows-tests cap) cancels a healthy run.
+// verify:quick (test:all) + build (cross-os.yml also audits). Windows' Verify
+// step grew from 10.8 to 17.8 min (job 12.8 -> ~20.3 min); run 38498989695 was
+// cancelled at 20m07s by the old 20-min cap. 30 is verify.yml's windows-tests
+// cap, which these legs are kept level with -- it is not a measurement.
 const CROSS_OS_VERIFY_MIN_TIMEOUT = 30;
+
+// Parsed (not text-sliced) so a comment or reordering near a job key can never
+// make the cap be read from a neighbouring job.
+function jobTimeout(path, job) {
+  const doc = yaml.load(readFileSync(path, 'utf8'));
+  const spec = doc?.jobs?.[job];
+  assert.ok(spec, `no ${job} job found in ${path} -- did it get renamed?`);
+  const cap = spec['timeout-minutes'];
+  assert.equal(typeof cap, 'number', `${job} job has no numeric timeout-minutes`);
+  return cap;
+}
 
 for (const path of WORKFLOWS) {
   const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
 
   test(`${rel}: cross-os-verify job timeout-minutes is >= ${CROSS_OS_VERIFY_MIN_TIMEOUT} (#3696)`, () => {
-    const source = readNormalized(path);
-    const start = source.indexOf('\n  cross-os-verify:');
-    assert.ok(start !== -1, 'no cross-os-verify job found -- did it get renamed?');
-    // The job ends at the next job key (2-space indent) or end of file.
-    const rest = source.slice(start + 1);
-    const next = rest.slice(1).search(/\n {2}[A-Za-z][\w-]*:\n/);
-    const job = next === -1 ? rest : rest.slice(0, next + 1);
-    const m = job.match(/\n {4}timeout-minutes:\s*(\d+)\b/);
-    assert.ok(m, 'cross-os-verify job has no timeout-minutes');
+    const cap = jobTimeout(path, 'cross-os-verify');
     assert.ok(
-      Number(m[1]) >= CROSS_OS_VERIFY_MIN_TIMEOUT,
-      `cross-os-verify timeout-minutes is ${m[1]}, below the measured battery's ${CROSS_OS_VERIFY_MIN_TIMEOUT}-min floor (#3696)`,
+      cap >= CROSS_OS_VERIFY_MIN_TIMEOUT,
+      `cross-os-verify timeout-minutes is ${cap}, below the ${CROSS_OS_VERIFY_MIN_TIMEOUT}-min floor (verify.yml's windows-tests cap) (#3696)`,
     );
   });
 }
@@ -634,16 +639,9 @@ for (const path of WORKFLOWS) {
 const RELEASE_VERIFY_MIN_TIMEOUT = 45;
 
 test(`release.yml: verify job timeout-minutes is >= ${RELEASE_VERIFY_MIN_TIMEOUT} (#3696)`, () => {
-  const source = readNormalized(resolve(repoRoot, '.github', 'workflows', 'release.yml'));
-  const start = source.indexOf('\n  verify:\n');
-  assert.ok(start !== -1, 'no verify job found in release.yml -- did it get renamed?');
-  const rest = source.slice(start + 1);
-  const next = rest.slice(1).search(/\n {2}[A-Za-z][\w-]*:\n/);
-  const job = next === -1 ? rest : rest.slice(0, next + 1);
-  const m = job.match(/\n {4}timeout-minutes:\s*(\d+)\b/);
-  assert.ok(m, 'release.yml verify job has no timeout-minutes');
+  const cap = jobTimeout(resolve(repoRoot, '.github', 'workflows', 'release.yml'), 'verify');
   assert.ok(
-    Number(m[1]) >= RELEASE_VERIFY_MIN_TIMEOUT,
-    `release.yml verify timeout-minutes is ${m[1]}, below the ${RELEASE_VERIFY_MIN_TIMEOUT}-min floor (#3696)`,
+    cap >= RELEASE_VERIFY_MIN_TIMEOUT,
+    `release.yml verify timeout-minutes is ${cap}, below the ${RELEASE_VERIFY_MIN_TIMEOUT}-min floor (#3696)`,
   );
 });
