@@ -1019,6 +1019,12 @@ export async function scoreBook(
       const prior = pendingMap[charId] ?? 0;
       if (prior + 1 < MAX_PENDING_ATTEMPTS) {
         pendingMap[charId] = prior + 1;
+        /* #3524 — a no-current-voice marker row would hide this mid-retry character
+           from `charactersPending` (and the Resume affordance); the retry is not over. */
+        if (persisted?.noCurrentVoiceReference) {
+          delete centroidsMap[charId];
+          await writeCentroids(bookDir, Object.values(centroidsMap));
+        }
         continue; // genuinely unresolved this run — nothing written, retried next trigger
       }
       delete pendingMap[charId];

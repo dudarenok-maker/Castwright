@@ -720,3 +720,34 @@ describe("scoreBook — the audition renders at the character's Qwen tier (#3524
     expect((auditionSpy.mock.calls[0] as unknown[])[0]).toMatchObject({ voiceName: 'qwen-hq', modelKey: 'qwen3-tts-1.7b' });
   });
 });
+
+describe('scoreBook — a transient audition failure keeps a marked character pending (#3524 pass 2 C)', () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 0;
+    defaultModelKey.value = 'qwen3-tts-0.6b';
+  });
+  const CH1 = [CHAPTERS[0]];
+
+  it('drops the no-current-voice marker so the character stays in charactersPending while retries continue, then a retry that succeeds builds a real reference', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-marker-transient-'));
+    writeCast(dir, 'new');
+    await writeChapterLines(dir, 'ch1', 1, [0, 1, 2].map((sid) => ({ sid, axis: 0, jitter: sid, voice: 'qwen-old' })), 'qwen-old');
+    await scoreBook(dir, CH1);
+    expect((await readCentroids(dir))!['thurid'].noCurrentVoiceReference).toBe(true);
+
+    // The chapter is re-rendered in the new voice, but the audition's synth fails transiently.
+    await writeChapterLines(dir, 'ch1', 1, [0, 1, 2].map((sid) => ({ sid, axis: 1, jitter: sid, voice: 'qwen-new' })), 'qwen-new');
+    auditionSpy.mockImplementationOnce((async () => null) as never);
+    await scoreBook(dir, CH1);
+
+    expect((await readCentroids(dir))?.['thurid']).toBeUndefined();
+    expect((await buildAudioQaReport(dir, CH1)).voiceDrift.charactersPending).toEqual(['thurid']);
+
+    audition.axis = 1;
+    await scoreBook(dir, CH1);
+    const rebuilt = (await readCentroids(dir))!['thurid'];
+    expect(rebuilt.noCurrentVoiceReference).toBeUndefined();
+    expect(rebuilt.referenceKind).toBe('audition');
+  });
+});
