@@ -7171,17 +7171,17 @@ export async function runMainAnalyzerJob(
                workspace/scan.ts. */
             const prevExcludedById = new Map<number, boolean>();
             const prevHeldById = new Map<number, boolean>();
-            const prevOverriddenById = new Map<number, boolean>();
+            const prevOverriddenById = new Map<number, string>();
             for (const c of prev.chapters) {
               if (c.excluded) prevExcludedById.set(c.id, true);
               if (c.held) prevHeldById.set(c.id, true);
-              if (c.titleOverridden) prevOverriddenById.set(c.id, true);
+              if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
             }
             const next: BookStateJson = {
               ...prev,
               /* #3628 — the title-source flags are not re-derivable here, so
-                 carry them from prev (titleSynthesized only while the title is
-                 unchanged; titleOverridden by id) or a re-analysis would
+                 carry them from prev (both only while the title is unchanged,
+                 so a mis-aligned parse cannot move a flag onto another heading) or a re-analysis would
                  strip them and a later restructure would misjudge the title. */
               chapters: carryTitleSynthesized(
                 chapters.map((c) => ({
@@ -7191,7 +7191,7 @@ export async function runMainAnalyzerJob(
                   duration: c.duration,
                   excluded: prevExcludedById.get(c.id) || undefined,
                   held: prevHeldById.get(c.id) || undefined,
-                  titleOverridden: prevOverriddenById.get(c.id) || undefined,
+                  titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
                 })),
                 prev.chapters,
               ),
@@ -9112,17 +9112,17 @@ export async function runSubsetAnalyzerJob(
                re-derivable from disk, so it must ride through here. */
             const prevExcludedById = new Map<number, boolean>();
             const prevHeldById = new Map<number, boolean>();
-            const prevOverriddenById = new Map<number, boolean>();
+            const prevOverriddenById = new Map<number, string>();
             for (const c of prev.chapters) {
               if (c.excluded) prevExcludedById.set(c.id, true);
               if (c.held) prevHeldById.set(c.id, true);
-              if (c.titleOverridden) prevOverriddenById.set(c.id, true);
+              if (c.titleOverridden) prevOverriddenById.set(c.id, c.title);
             }
             const next: BookStateJson = {
               ...prev,
               /* #3628 — the title-source flags are not re-derivable here, so
-                 carry them from prev (titleSynthesized only while the title is
-                 unchanged; titleOverridden by id) or a re-analysis would
+                 carry them from prev (both only while the title is unchanged,
+                 so a mis-aligned parse cannot move a flag onto another heading) or a re-analysis would
                  strip them and a later restructure would misjudge the title. */
               chapters: carryTitleSynthesized(
                 chaptersOut.map((c) => ({
@@ -9132,7 +9132,7 @@ export async function runSubsetAnalyzerJob(
                   duration: c.duration,
                   excluded: prevExcludedById.get(c.id) || undefined,
                   held: prevHeldById.get(c.id) || undefined,
-                  titleOverridden: prevOverriddenById.get(c.id) || undefined,
+                  titleOverridden: prevOverriddenById.get(c.id) === c.title || undefined,
                 })),
                 prev.chapters,
               ),

@@ -304,3 +304,22 @@ describe('#3628 — a renamed chapter is not excluded as front matter after a re
     expect(readState(bookDir).chapters[1].excluded).toBeFalsy();
   }, 60_000);
 });
+
+describe('#3703 — titleOverridden does not land on a different chapter after a restart', () => {
+  it('carries the flag only while the persisted title is unchanged', async () => {
+    // Chapter 2 is a merge the user titled "Part Two"; the manuscript still has four headings.
+    const ms = `# Prologue\n\n${LINE}\n\n# Alpha\n\n${LINE}\n\n# Beta\n\n${LINE}\n\n# Gamma\n\n${LINE}\n`;
+    const { manuscriptId, bookDir } = await seedBook('misaligned', ms, [
+      { title: 'Prologue' },
+      { title: 'Part Two', titleOverridden: true },
+      { title: 'Gamma' },
+    ]);
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(manuscriptId); // a restart: hints come from a fresh parse of the 4 headings
+    await runAnalysis(manuscriptId, 'main');
+    const ch = readState(bookDir).chapters;
+    expect(readState(bookDir).analysisProvenance?.scope).toBe('book');
+    expect(ch.length).toBe(4);
+    expect(ch.filter((c) => c.titleOverridden)).toEqual([]);
+  }, 60_000);
+});
