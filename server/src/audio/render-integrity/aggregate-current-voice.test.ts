@@ -390,4 +390,66 @@ describe('scoreBook — fallback lines and partial re-records (#3524 review pass
     expect(fb.verdict).toBe('voice-mismatch');
     expect(fb.fixable).toBe(true);
   });
+
+  it('a partial re-record that leaves the chapter snapshot on the OLD voice still rebuilds the audition from the NEW voice', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-partial-rerecord-'));
+    writeCast(dir, 'old');
+    const old3: Line[] = [0, 1, 2].map((sid) => ({ sid, axis: 0, jitter: sid, voice: 'qwen-old' }));
+    await writeChapterLines(dir, 'ch1', 1, old3, 'qwen-old');
+    await writeChapterLines(dir, 'ch2', 2, old3, 'qwen-old');
+    await scoreBook(dir, CHAPTERS);
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+
+    // The cast moves to NEW; a Fix-audio splice re-records ch2 lines 0-1 (stamped NEW);
+    // line 2 is untouched, so finalize's last-wins snapshot still names OLD.
+    writeCast(dir, 'new');
+    await writeChapterLines(
+      dir,
+      'ch2',
+      2,
+      [
+        { sid: 0, axis: 1, jitter: 0, voice: 'qwen-new' },
+        { sid: 1, axis: 1, jitter: 1, voice: 'qwen-new' },
+        { sid: 2, axis: 0, jitter: 2, voice: 'qwen-old' },
+      ],
+      'qwen-old',
+    );
+    audition.axis = 1;
+    await scoreBook(dir, CHAPTERS, ['ch2']);
+
+    expect(auditionSpy).toHaveBeenCalledTimes(2);
+    expect((await readCentroids(dir))!['thurid'].auditionVoice?.voiceName).toBe('qwen-new');
+    const ch2 = await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'));
+    const by = Object.fromEntries(ch2!.map((r) => [r.sentenceIds[0], r]));
+    expect(by[0].verdict).not.toBe('voice-mismatch');
+    expect(by[1].verdict).not.toBe('voice-mismatch');
+    expect(by[2].verdict).toBe('inconclusive');
+  });
+
+  it('#3676 — a too-short row built from the OLD voice is re-auditioned after a partial re-record leaves the snapshot on OLD', async () => {
+    auditionSpy.mockImplementationOnce((async () => ({ kind: 'too-short' as const })) as never);
+    const dir = mkdtempSync(join(tmpdir(), 'spk-partial-tooshort-'));
+    writeCast(dir, 'old');
+    const old3: Line[] = [0, 1, 2].map((sid) => ({ sid, axis: 0, jitter: sid, voice: 'qwen-old' }));
+    await writeChapterLines(dir, 'ch1', 1, old3, 'qwen-old');
+    await scoreBook(dir, [CHAPTERS[0]]);
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    expect((await readCentroids(dir))!['thurid'].auditionVoice?.voiceName).toBe('qwen-old');
+
+    writeCast(dir, 'new');
+    await writeChapterLines(
+      dir,
+      'ch1',
+      1,
+      [
+        { sid: 0, axis: 1, jitter: 0, voice: 'qwen-new' },
+        { sid: 1, axis: 0, jitter: 1, voice: 'qwen-old' },
+        { sid: 2, axis: 0, jitter: 2, voice: 'qwen-old' },
+      ],
+      'qwen-old',
+    );
+    await scoreBook(dir, [CHAPTERS[0]]);
+    expect(auditionSpy).toHaveBeenCalledTimes(2);
+    expect((auditionSpy.mock.calls[1] as unknown[])[0]).toMatchObject({ voiceName: 'qwen-new' });
+  });
 });

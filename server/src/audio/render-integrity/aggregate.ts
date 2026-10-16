@@ -841,6 +841,19 @@ export async function scoreBook(
     }
   }
 
+  /* #3524 — the audition's voice comes from the cast, not from a chapter snapshot:
+     a partial re-record leaves its chapter's last-wins snapshot on the OLD voice
+     while the re-recorded lines are stamped NEW, so when any rendered line carries
+     the current voice, the audition (and the #3676 re-audition's identity match)
+     is built for it. Engine / tier still come from the snapshot that supplied them. */
+  for (const charId of hasCurrentVoiceLine) {
+    const info = voiceInfoByChar.get(charId);
+    const currentVoice = currentVoiceFor(charId);
+    if (info && currentVoice !== undefined && info.voiceName !== currentVoice) {
+      voiceInfoByChar.set(charId, { ...info, voiceName: currentVoice });
+    }
+  }
+
   // ── Phase 3+4: resolve, persist, and score each character as it resolves ──
   // srv-36 hardening: interleaved instead of two separate batch phases, so
   // a cheap character's result is visible on disk immediately instead of
