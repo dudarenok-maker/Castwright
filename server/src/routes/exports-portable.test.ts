@@ -5,11 +5,12 @@
    endpoint with supertest to download the zip, then POSTs the same zip
    back to the import endpoint and verifies the new book lands on disk. */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import {
   mkdtempSync,
   mkdirSync,
   readdirSync,
+  renameSync,
   rmSync,
   writeFileSync,
   readFileSync,
@@ -19,6 +20,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
+import { ZipFile } from 'yazl';
 
 const AUTHOR = 'Portable Test Author';
 const SERIES = 'Standalones';
@@ -110,6 +112,28 @@ describe('GET /api/books/:bookId/export/portable', () => {
     expect(res.status).toBe(404);
   });
 
+  it('answers a build failure with a fixed message, never an absolute path (#3535)', async () => {
+    /* A missing manuscript makes buildPortableBundle throw an Error whose
+       message names the absolute manuscript path. */
+    const manuscript = join(bookDir, 'manuscript.txt');
+    const hidden = `${manuscript}.hidden`;
+    renameSync(manuscript, hidden);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app).get(
+        `/api/books/${encodeURIComponent(bookId)}/export/portable`,
+      );
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('portable_export_failed');
+      expect(String(res.body.message)).not.toContain(workspaceRoot);
+      expect(String(res.body.message)).not.toContain('manuscript.txt');
+      expect(err).toHaveBeenCalled();
+    } finally {
+      err.mockRestore();
+      renameSync(hidden, manuscript);
+    }
+  });
+
   /* Plan 79 — portable bundle also writes a local copy into
      <bookDir>/exports/<slug>.portable.zip so the user can pick it up
      from File Explorer without re-running the download. The HTTP stream
@@ -190,5 +214,47 @@ describe('POST /api/import/portable', () => {
     const res = await request(app).post('/api/import/portable');
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('missing_file');
+  });
+
+  it('answers a non-bundle import failure with a fixed message, never an absolute path (#3535)', async () => {
+    /* `audio/x` (a file) + `audio/x/y.mp3` (under it) pass validation, then
+       phase 2's rename fails with an fs error naming the workspace path. */
+    const zipBytes = await new Promise<Buffer>((resolve, reject) => {
+      const zip = new ZipFile();
+      const chunks: Buffer[] = [];
+      zip.outputStream.on('data', (c: Buffer) => chunks.push(c));
+      zip.outputStream.on('end', () => resolve(Buffer.concat(chunks)));
+      zip.outputStream.on('error', reject);
+      const state = {
+        bookId: 'leak__standalones__leak-test',
+        manuscriptId: 'mns_leak',
+        title: 'Leak Test',
+        author: 'Leak Author',
+        series: 'Standalones',
+        manuscriptFile: 'manuscript.txt',
+        chapters: [],
+        createdAt: '2025-01-01T00:00:00Z',
+        updatedAt: '2025-01-01T00:00:00Z',
+      };
+      zip.addBuffer(Buffer.from(JSON.stringify({ schemaVersion: 1, book: {} })), 'MANIFEST.json');
+      zip.addBuffer(Buffer.from(JSON.stringify(state)), 'state.json');
+      zip.addBuffer(Buffer.from('body'), 'manuscript.txt');
+      zip.addBuffer(Buffer.from('a'), 'audio/x');
+      zip.addBuffer(Buffer.from('b'), 'audio/x/y.mp3');
+      zip.end();
+    });
+    const leakZip = join(workspaceRoot, 'leak-upload.zip');
+    writeFileSync(leakZip, zipBytes);
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app).post('/api/import/portable').attach('file', leakZip);
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('portable_import_failed');
+      expect(res.body.message).not.toContain(workspaceRoot);
+      expect(res.body.message).not.toMatch(/ENOENT|ENOTDIR|EPERM|rename/);
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 });

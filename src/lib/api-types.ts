@@ -829,9 +829,10 @@ export interface paths {
          * Upload a local cover image (JPEG/PNG) and pin it as this book's cover
          * @description Multipart upload route for user-supplied cover art. Accepts a
          *     single `image` field with `image/jpeg` or `image/png` content
-         *     type, up to 10 MB. PNG payloads are transcoded server-side to
-         *     JPEG (q=85) so the export pipeline's `covr` / `APIC` frames
-         *     stay JPEG. Writes atomically to `<bookDir>/.audiobook/cover.jpg`,
+         *     type, up to 10 MB. Every upload (JPEG and PNG alike) is re-encoded
+         *     server-side to a clean JPEG (q=85, EXIF orientation applied, trailing
+         *     bytes and metadata dropped) so the export pipeline's `covr` / `APIC`
+         *     frames stay JPEG. Writes atomically to `<bookDir>/.audiobook/cover.jpg`,
          *     replacing any prior cover, and patches `state.json.coverImage`
          *     with `source: 'local'`, `originalFilename`, and `uploadedAt`.
          *     Plan [40](docs/features/archive/40-cover-framing-and-upload.md).
@@ -8504,7 +8505,7 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description PNG → JPEG transcode failed, or the JPEG could not be decoded */
+            /** @description The image could not be decoded and re-encoded to JPEG */
             502: {
                 headers: {
                     [name: string]: unknown;
