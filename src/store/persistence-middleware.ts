@@ -181,6 +181,15 @@ const PERSIST_RULES: Record<
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
   },
+  /* #3400 — a chapter restructure re-keys the sentences, and the route has
+     already rewritten manuscript-edits.json. A save built before (or during)
+     the request carries the old chapter ids and lands after that rewrite, so
+     the remap must be the last write queued: this rule replaces any pending
+     patch and restarts the debounce. */
+  'manuscript/applyChapterRestructure': {
+    slice: 'manuscript',
+    build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),
+  },
   'manuscript/splitSentence': {
     slice: 'manuscript',
     build: (s) => ({ sentences: s.manuscript.sentences, mergedAwayKeys: s.manuscript.mergedAwayKeys }),

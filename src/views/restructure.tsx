@@ -20,6 +20,7 @@ import { libraryActions } from '../store/library-slice';
 import { revisionsActions } from '../store/revisions-slice';
 import { activeBookId } from '../store/revisions-thunks';
 import { notificationsActions } from '../store/notifications-slice';
+import { flushBookPersistence } from '../store/persistence-middleware';
 import { api, type ChapterRestructureResponse } from '../lib/api';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
 import { EditChapterTitleModal } from '../modals/edit-chapter-title';
@@ -38,6 +39,15 @@ export function RestructureView({ bookId }: Props) {
   /* Plan 78 — rename modal hoisted to view level so the per-row pencil
      button just opens it. */
   const [renamingChapter, setRenamingChapter] = useState<Chapter | null>(null);
+
+  /* #3400 — send this book's queued saves and wait for them before a restructure
+     request: one still waiting out its debounce would land after the route's own
+     rewrite of manuscript-edits.json, carrying the old chapter ids. `null` (or the
+     bare action, without the persistence middleware) means nothing to wait for. */
+  const flushQueuedSaves = useCallback(async () => {
+    const writes = dispatch(flushBookPersistence(bookId)) as unknown;
+    if (writes instanceof Promise) await writes;
+  }, [bookId, dispatch]);
 
   const applyResponse = useCallback(
     async (res: ChapterRestructureResponse, hydrateSeqAtStart: number) => {
@@ -120,6 +130,7 @@ export function RestructureView({ bookId }: Props) {
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
+        await flushQueuedSaves();
         const res = await api.mergeChapters(bookId, chapterIds);
         await applyResponse(res, hydrateSeqAtStart);
       } catch (e) {
@@ -130,7 +141,7 @@ export function RestructureView({ bookId }: Props) {
         dispatch(uiActions.setRestructuringBook(null));
       }
     },
-    [bookId, applyResponse, dispatch],
+    [bookId, applyResponse, flushQueuedSaves, dispatch],
   );
 
   const handleSplit = useCallback(
@@ -140,6 +151,7 @@ export function RestructureView({ bookId }: Props) {
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
+        await flushQueuedSaves();
         const res = await api.splitChapter(bookId, chapterId, afterSentenceId);
         await applyResponse(res, hydrateSeqAtStart);
       } catch (e) {
@@ -150,7 +162,7 @@ export function RestructureView({ bookId }: Props) {
         dispatch(uiActions.setRestructuringBook(null));
       }
     },
-    [bookId, applyResponse, dispatch],
+    [bookId, applyResponse, flushQueuedSaves, dispatch],
   );
 
   const handleReorder = useCallback(
@@ -160,6 +172,7 @@ export function RestructureView({ bookId }: Props) {
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
+        await flushQueuedSaves();
         const res = await api.reorderChapters(bookId, order);
         await applyResponse(res, hydrateSeqAtStart);
       } catch (e) {
@@ -170,7 +183,7 @@ export function RestructureView({ bookId }: Props) {
         dispatch(uiActions.setRestructuringBook(null));
       }
     },
-    [bookId, applyResponse, dispatch],
+    [bookId, applyResponse, flushQueuedSaves, dispatch],
   );
 
   const handleExclude = useCallback(
@@ -180,6 +193,7 @@ export function RestructureView({ bookId }: Props) {
       setErrorBanner(null);
       try {
         const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
+        await flushQueuedSaves();
         const res = await api.excludeChapters(bookId, [chapterId], excluded);
         await applyResponse(res, hydrateSeqAtStart);
       } catch (e) {
@@ -190,7 +204,7 @@ export function RestructureView({ bookId }: Props) {
         dispatch(uiActions.setRestructuringBook(null));
       }
     },
-    [bookId, applyResponse, dispatch],
+    [bookId, applyResponse, flushQueuedSaves, dispatch],
   );
 
   const handleRefreshTitles = useCallback(async () => {
@@ -199,6 +213,7 @@ export function RestructureView({ bookId }: Props) {
     setErrorBanner(null);
     try {
       const hydrateSeqAtStart = store.getState().manuscript.hydrateSeq ?? 0;
+      await flushQueuedSaves();
       const res = await api.refreshChapterTitles(bookId);
       await applyResponse(res, hydrateSeqAtStart);
     } catch (e) {
@@ -208,7 +223,7 @@ export function RestructureView({ bookId }: Props) {
       setBusy(false);
       dispatch(uiActions.setRestructuringBook(null));
     }
-  }, [bookId, applyResponse, dispatch]);
+  }, [bookId, applyResponse, flushQueuedSaves, dispatch]);
 
   return (
     <div className="max-w-3xl mx-auto py-6">

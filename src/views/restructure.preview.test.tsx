@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
-import { configureStore } from '@reduxjs/toolkit';
+import { configureStore, Tuple } from '@reduxjs/toolkit';
 import { uiSlice, uiActions } from '../store/ui-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
@@ -10,10 +10,12 @@ import { librarySlice } from '../store/library-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { castSlice } from '../store/cast-slice';
 import { revisionsSlice, revisionsActions } from '../store/revisions-slice';
+import { settingsSlice } from '../store/settings-slice';
+import { persistenceMiddleware } from '../store/persistence-middleware';
 
 const { holder, apiMock } = vi.hoisted(() => ({
   holder: { store: null as null | { getState: () => unknown } },
-  apiMock: { refreshChapterTitles: vi.fn(), getBookState: vi.fn(), getLibrary: vi.fn() },
+  apiMock: { refreshChapterTitles: vi.fn(), getBookState: vi.fn(), getLibrary: vi.fn(), putBookState: vi.fn() },
 }));
 vi.mock('../lib/api', async (orig) => ({ ...(await orig<typeof import('../lib/api')>()), api: apiMock }));
 vi.mock('../store', async () => {
@@ -248,5 +250,110 @@ describe('RestructureView — #3400 cross-book slices', () => {
     await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
     expect(store.getState().chapters.currentBookId).toBe('b2');
     expect(store.getState().chapters.chapters.map((c) => c.id)).toEqual([7]);
+  });
+});
+
+/* #3400 pass 5 — the disk half of the remap. A save is built when its action is
+   dispatched and sent one debounce later, so one queued before (or during) a
+   restructure lands AFTER the server's own manuscript-edits.json rewrite carrying
+   the old chapter ids; the remap has to be saved last. The mock "disk" is whatever
+   the server rewrite or the latest manuscript PUT left, applied in arrival order. */
+describe('RestructureView — #3400 the remapped manuscript is what ends up on disk', () => {
+  const sentence = (chapterId: number, id: number, text: string) => ({ id, chapterId, characterId: 'c', text });
+  const remap = [
+    { oldChapterId: 1, oldSentenceId: 1, newChapterId: 1, newSentenceId: 1 },
+    { oldChapterId: 2, oldSentenceId: 1, newChapterId: 2, newSentenceId: 1 },
+    { oldChapterId: 3, oldSentenceId: 1, newChapterId: 2, newSentenceId: 2 },
+    { oldChapterId: 4, oldSentenceId: 1, newChapterId: 3, newSentenceId: 1 },
+  ];
+  const REMAPPED = ['1:1:one', '2:1:two', '2:2:three', '3:1:four'];
+  let disk: string[];
+  let resolveRestructure: () => void;
+
+  async function setup() {
+    disk = [];
+    apiMock.putBookState.mockReset().mockImplementation(async (_id: string, w: { slice: string; patch: { sentences?: Array<{ chapterId: number; id: number; text: string }> } }) => {
+      if (w.slice === 'manuscript') disk = w.patch.sentences!.map((x) => `${x.chapterId}:${x.id}:${x.text}`);
+    });
+    apiMock.refreshChapterTitles.mockReset().mockImplementation(
+      () =>
+        new Promise((r) => {
+          disk = REMAPPED; // the route rewrites manuscript-edits.json before it answers
+          resolveRestructure = () => r({ sentenceRemap: remap, warnings: [] });
+        }),
+    );
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, settings: settingsSlice.reducer },
+      preloadedState: { settings: { ...settingsSlice.getInitialState(), autosaveDebounceMs: 40 } },
+      middleware: () => new Tuple(persistenceMiddleware),
+    });
+    holder.store = store;
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' } as never));
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'A' } as never,
+        sentences: [sentence(1, 1, 'one'), sentence(2, 1, 'two'), sentence(3, 1, 'three'), sentence(4, 1, 'four')] as never,
+      }),
+    );
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    const confirm = await screen.findByTestId('restructure-confirm-apply');
+    return { store, confirm };
+  }
+  const edit = (store: Awaited<ReturnType<typeof setup>>['store']) =>
+    store.dispatch(manuscriptSlice.actions.setSentenceEmotion({ chapterId: 4, sentenceId: 1, emotion: 'sad' } as never));
+  const settle = () => new Promise((r) => setTimeout(r, 150));
+
+  it('a write made just before the click is sent before the request, and the remap is saved after it', async () => {
+    const { store, confirm } = await setup();
+    edit(store);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalled());
+    resolveRestructure();
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    await settle();
+    expect(disk).toEqual(REMAPPED);
+  });
+
+  it("a write made just before the click cannot land after the rewrite when the remap is skipped because the slice was already re-hydrated", async () => {
+    const { store, confirm } = await setup();
+    edit(store);
+    fireEvent.click(confirm);
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalled());
+    // A's own layout read landed post-restructure, so applyResponse skips the remap and saves nothing.
+    store.dispatch(
+      manuscriptSlice.actions.hydrateFromBookState({
+        state: { bookId: 'b1', manuscriptId: 'm1', title: 'A' } as never,
+        sentences: [sentence(1, 1, 'one'), sentence(2, 1, 'two'), sentence(2, 2, 'three'), sentence(3, 1, 'four')] as never,
+      }),
+    );
+    resolveRestructure();
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    await settle();
+    expect(disk).toEqual(REMAPPED);
+  });
+
+  it('a write made mid-request, still queued when the answer arrives, does not outlive the remap', async () => {
+    const { store, confirm } = await setup();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalled());
+    edit(store);
+    resolveRestructure();
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    await settle();
+    expect(disk).toEqual(REMAPPED);
+  });
+
+  it('a write made mid-request and already sent before the answer arrives is overwritten by the remap', async () => {
+    const { store, confirm } = await setup();
+    fireEvent.click(confirm);
+    await waitFor(() => expect(apiMock.refreshChapterTitles).toHaveBeenCalled());
+    edit(store);
+    await settle(); // the debounce fires: old keys reach disk after the server's rewrite
+    expect(disk).toEqual(['1:1:one', '2:1:two', '3:1:three', '4:1:four']);
+    resolveRestructure();
+    await waitFor(() => expect(apiMock.getLibrary).toHaveBeenCalled());
+    await settle();
+    expect(disk).toEqual(REMAPPED);
   });
 });
