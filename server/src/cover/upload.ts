@@ -26,9 +26,6 @@ import { reencodeToJpeg } from './reencode.js';
 
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
-// JPEG_QUALITY now lives in reencode.ts (the shared re-encode helper); keep
-// re-exporting it from here so existing JPEG_QUALITY importers still work.
-export { JPEG_QUALITY } from './reencode.js';
 
 export type UploadMimeType = (typeof ACCEPTED_MIME_TYPES)[number];
 
