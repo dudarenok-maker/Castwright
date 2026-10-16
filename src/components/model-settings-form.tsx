@@ -10,12 +10,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { PrimaryButton, Checkbox } from './primitives';
 import { FieldRow, ReadOnlyRow, GeminiKeyField, analyzerModelLabel } from './account-forms';
+import { catalogEntryFor, runLabelSuffixes } from '../lib/model-label';
 import {
   SettingsAccordion,
   SettingsSection,
   type SectionNavItem,
 } from './settings/settings-accordion';
-import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
+import { buildAnalyzerPickerGroups } from '../lib/models';
 import { TTS_ENGINES, type TtsEngineId } from '../lib/tts-models';
 import type { ConfigGroup, TtsModelKey, UserSettingsPatch } from '../lib/types';
 import { useAppDispatch, useAppSelector } from '../store';
@@ -120,9 +121,11 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
      pickers (default + phase 0 + phase 1), so a pulled-but-uncurated tag is
      selectable. Populated by fetchAnalyzerModels on mount; empty (offline)
      falls back to the curated catalog. */
-  const analyzerModelGroups = buildModelOptionGroups(
-    buildLocalModelOptions(account.localAnalyzerModels),
-  );
+  const analyzerModelGroups = buildAnalyzerPickerGroups({
+    localTags: account.localAnalyzerModels,
+    catalog: account.analyzerCatalog ?? null,
+    endpoints: account.analyzerEndpoints ?? [],
+  });
   useEffect(() => {
     void dispatch(fetchAnalyzerModels());
   }, [dispatch]);
@@ -263,12 +266,13 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
       <SettingsSection group={GROUP_DEFAULTS} overriddenCount={0}>
         <FieldRow label="Analysis model">
           <select
+            data-testid="account-default-analysis-model"
             value={defaultAnalysisModel}
             onChange={(e) => setDefaultAnalysisModel(e.target.value)}
             className="w-full px-3 py-2 rounded-xl border border-ink/15 bg-white text-sm text-ink focus:outline-hidden focus:ring-2 focus:ring-magenta/30"
           >
             {analyzerModelGroups.map((g) => (
-              <optgroup key={g.engine} label={g.label}>
+              <optgroup key={g.id} label={g.label}>
                 {g.models.map((m) => (
                   <option key={m.id} value={m.id} title={m.hint}>
                     {m.label}
@@ -328,8 +332,8 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
             <>
               <span className="font-semibold">Currently OFF</span> — both phases run on the default
               analysis model (
-              <span className="font-medium text-ink">
-                {analyzerModelLabel(defaultAnalysisModel, account.analyzerCatalog)}
+              <span data-testid="analyzer-default-model-label" className="font-medium text-ink">
+                {[analyzerModelLabel(defaultAnalysisModel, account.analyzerCatalog), ...runLabelSuffixes(catalogEntryFor(defaultAnalysisModel, account.analyzerCatalog))].join(' · ')}
               </span>
               ).
             </>

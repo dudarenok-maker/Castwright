@@ -18,8 +18,7 @@ import { computeOverallProgress } from '../lib/analysis-progress';
 import { derivePhaseState, isNotAFailureHaltCode } from '../lib/analysis-phase-state';
 import {
   MODEL_OPTIONS,
-  buildLocalModelOptions,
-  buildModelOptionGroups,
+  buildAnalyzerPickerGroups,
   engineForModelId,
   localRunModelIds,
   runModelsAllResident,
@@ -439,7 +438,9 @@ export function AnalysingView({
      failure (gated on `error` below) — a healthy cloud run never probes Ollama,
      preserving the cloud-no-probe invariant. */
   const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
-  const analyzerModelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
+  const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog ?? null);
+  const analyzerEndpointList = useAppSelector((s) => s.account.analyzerEndpoints);
+  const analyzerModelGroups = buildAnalyzerPickerGroups({ localTags: localAnalyzerModels, catalog: analyzerCatalog, endpoints: analyzerEndpointList ?? [] });
   /* fs-65 Task 12 — per-book prosody annotation toggle. Eager default: absent
      (undefined) or true → checked; only an explicit false → unchecked. */
   const prosodyStored = useAppSelector(selectProsodyEnabled(bookId ?? null));
@@ -1796,7 +1797,7 @@ export function AnalysingView({
                     className="px-3 py-1.5 rounded-full border border-red-300/60 bg-white text-xs font-medium text-ink focus:outline-hidden focus:ring-2 focus:ring-red-400/40"
                   >
                     {analyzerModelGroups.map((g) => (
-                      <optgroup key={g.engine} label={g.label}>
+                      <optgroup key={g.id} label={g.label}>
                         {g.models.map((m) => (
                           <option key={m.id} value={m.id} title={m.hint}>
                             {m.label}

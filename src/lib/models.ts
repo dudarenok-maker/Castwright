@@ -175,18 +175,10 @@ export function buildLocalModelOptions(
     stay in sync. Local Ollama is the default analyzer engine now; the Gemini
     group still renders first as the curated static catalog (the pre-selected
     model — a local id — is driven by the saved default, not group order). */
-export function buildModelOptionGroups(localOptions: ModelOption[]): Array<{
-  engine: AnalysisEngine;
-  label: string;
-  models: ModelOption[];
-}> {
+export function buildModelOptionGroups(localOptions: ModelOption[]): ModelOptionGroup[] {
   return [
-    {
-      engine: 'gemini',
-      label: 'Gemini API (cloud)',
-      models: MODEL_OPTIONS.filter((m) => m.engine === 'gemini'),
-    },
-    { engine: 'local', label: 'Local Ollama (default, on-device)', models: localOptions },
+    { id: 'gemini', kind: 'gemini', engine: 'gemini', label: 'Gemini API (cloud)', status: 'ok', models: MODEL_OPTIONS.filter((m) => m.engine === 'gemini') },
+    { id: 'ollama', kind: 'ollama', engine: 'local', label: 'Local Ollama (default, on-device)', status: 'ok', models: localOptions },
   ];
 }
 
@@ -264,4 +256,31 @@ export function buildCatalogOptionGroups(
         }))
     : [];
   return [gemini, local, ...endpoints];
+}
+
+/** Every analyzer picker's groups (#3084): Gemini (catalog, curated fallback), the
+    installed Ollama tags, then each saved endpoint that has listed models. */
+export function buildAnalyzerPickerGroups(
+  input: {
+    localTags: Array<{ name: string; size?: number }>;
+    catalog: AnalyzerCatalog | null;
+    endpoints: ReadonlyArray<{ id: string; name: string }>;
+  },
+  curated: ModelOption[] = MODEL_OPTIONS,
+): ModelOptionGroup[] {
+  const fromCatalog = buildCatalogOptionGroups(input.catalog, { includeEndpoints: true }, curated);
+  const gemini = fromCatalog.find((g) => g.kind === 'gemini')!;
+  const local: ModelOptionGroup = {
+    id: 'ollama',
+    kind: 'ollama',
+    engine: 'local',
+    label: 'Local Ollama (default, on-device)',
+    status: 'ok',
+    models: buildLocalModelOptions(input.localTags, curated.filter((m) => m.engine === 'local')),
+  };
+  const endpointGroups = input.endpoints
+    .map((e) => fromCatalog.find((g) => g.kind === 'endpoint' && g.id === e.id))
+    .filter((g): g is ModelOptionGroup => g !== undefined && g.models.length > 0)
+    .map((g) => ({ ...g, label: `${g.label} (OpenAI-compatible)` }));
+  return [gemini, local, ...endpointGroups];
 }

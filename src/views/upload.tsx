@@ -7,7 +7,7 @@ import type { UploadArgs } from '../lib/api';
 import { TAGLINE_SHORT } from '../lib/brand';
 import { AnalysisModelPicker } from '../components/analysis-model-picker';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
-import { buildLocalModelOptions, buildModelOptionGroups } from '../lib/models';
+import { buildAnalyzerPickerGroups } from '../lib/models';
 import { useAppDispatch, useAppSelector } from '../store';
 import { fetchAnalyzerModels } from '../store/account-slice';
 import { uiActions } from '../store/ui-slice';
@@ -38,7 +38,8 @@ export function UploadView() {
      mount; empty (offline) falls back to the curated catalog. */
   const localAnalyzerModels = useAppSelector((s) => s.account.localAnalyzerModels);
   const analyzerCatalog = useAppSelector((s) => s.account.analyzerCatalog ?? null);
-  const analysisModelGroups = buildModelOptionGroups(buildLocalModelOptions(localAnalyzerModels));
+  const analyzerEndpoints = useAppSelector((s) => s.account.analyzerEndpoints);
+  const analysisModelGroups = buildAnalyzerPickerGroups({ localTags: localAnalyzerModels, catalog: analyzerCatalog, endpoints: analyzerEndpoints ?? [] });
   useEffect(() => {
     void dispatch(fetchAnalyzerModels());
   }, [dispatch]);

@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from 'react';
 import { TTS_ENGINES, type TtsEngineId } from '../../lib/tts-models';
-import { buildLocalModelOptions, buildModelOptionGroups, engineForModelId } from '../../lib/models';
+import { buildAnalyzerPickerGroups, engineForModelId } from '../../lib/models';
 import type { TtsModelKey } from '../../lib/types';
 import type { ThemePreference } from '../../lib/use-theme';
 import { useAppDispatch, useAppSelector } from '../../store';
@@ -41,9 +41,11 @@ export function StepDefaults({ readiness: _readiness }: Props) {
   /* Dynamic curated ∪ live-Ollama-tag union for the analysis-model picker, so a
      pulled-but-uncurated tag is selectable. Populated by fetchAnalyzerModels on
      mount; empty (offline) falls back to the curated catalog. */
-  const analysisModelGroups = buildModelOptionGroups(
-    buildLocalModelOptions(account.localAnalyzerModels),
-  );
+  const analysisModelGroups = buildAnalyzerPickerGroups({
+    localTags: account.localAnalyzerModels,
+    catalog: account.analyzerCatalog ?? null,
+    endpoints: account.analyzerEndpoints ?? [],
+  });
   useEffect(() => {
     void dispatch(fetchAnalyzerModels());
   }, [dispatch]);
@@ -171,7 +173,7 @@ export function StepDefaults({ readiness: _readiness }: Props) {
             className={SELECT_CLS}
           >
             {analysisModelGroups.map((g) => (
-              <optgroup key={g.engine} label={g.label}>
+              <optgroup key={g.id} label={g.label}>
                 {g.models.map((m) => (
                   <option key={m.id} value={m.id} title={m.hint}>
                     {m.label}
