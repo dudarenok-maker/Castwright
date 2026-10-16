@@ -23,15 +23,15 @@ import type { BookStateJson } from '../workspace/scan.js';
 /** Build a tiny portable bundle in-memory without going through the real
     build pipeline — gives the import-side tests a stable, ffmpeg-free
     input. The bundle layout matches what build-portable-book.ts writes. */
-function tinyImage(format: 'jpeg' | 'png' | 'gif' | 'webp'): Promise<Buffer> {
-  return sharp({ create: { width: 8, height: 12, channels: 3, background: '#c33' } })
+function tinyImage(format: 'jpeg' | 'png' | 'gif' | 'webp', width = 8, height = 12): Promise<Buffer> {
+  return sharp({ create: { width, height, channels: 3, background: '#c33' } })
     .toFormat(format)
     .toBuffer();
 }
 
 function makeBundleFixture(
   state: BookStateJson,
-  cover: Buffer,
+  cover: Buffer | null,
   extraCovers: [string, Buffer][] = [],
 ): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -69,7 +69,7 @@ function makeBundleFixture(
     zip.addBuffer(stateBuf, 'state.json');
     zip.addBuffer(manuscriptBuf, state.manuscriptFile);
     for (const [n, b] of extraCovers) zip.addBuffer(b, n);
-    zip.addBuffer(cover, 'cover.jpg');
+    if (cover) zip.addBuffer(cover, 'cover.jpg');
     zip.addBuffer(changeLog, 'change-log.json');
     zip.addBuffer(audio1, 'audio/01-chapter-1.mp3');
     zip.addBuffer(audio2, 'audio/02-chapter-2.mp3');
@@ -205,6 +205,44 @@ describe('importPortableBundle', () => {
       }
     },
   );
+
+  it.each([
+    {
+      label: 'an exact cover.jpg wins over an earlier cover.png',
+      cover: () => tinyImage('jpeg', 6, 6),
+      extras: async (): Promise<[string, Buffer][]> => [['cover.png', await tinyImage('png', 20, 10)]],
+      expected: [6, 6],
+    },
+    {
+      label: 'an undecodable cover.jpg falls through to a decodable cover.png',
+      cover: async () => Buffer.from('not-an-image'),
+      extras: async (): Promise<[string, Buffer][]> => [['cover.png', await tinyImage('png', 7, 3)]],
+      expected: [7, 3],
+    },
+    {
+      label: 'with no cover.jpg the first decodable cover.* entry wins',
+      cover: async () => null,
+      extras: async (): Promise<[string, Buffer][]> => [
+        ['cover.bad', Buffer.from('not-an-image')],
+        ['cover.png', await tinyImage('png', 9, 5)],
+        ['cover.gif', await tinyImage('gif', 4, 4)],
+      ],
+      expected: [9, 5],
+    },
+  ])('cover selection: $label (#3535)', async ({ cover, extras, expected }) => {
+    const state = fixtureState({ title: `Import Cover Select ${expected.join('x')} Test` });
+    const bundle = await makeBundleFixture(state, await cover(), await extras());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const target = targetDirFor(state);
+    try {
+      await importPortableBundle(bundle, { onConflict: 'fail' });
+      const meta = await sharp(readFileSync(join(dotAudiobook(target), 'cover.jpg'))).metadata();
+      expect([meta.width, meta.height]).toEqual(expected);
+    } finally {
+      warn.mockRestore();
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
 
   it('rejects a bundle missing MANIFEST.json', async () => {
     const zip = new ZipFile();
