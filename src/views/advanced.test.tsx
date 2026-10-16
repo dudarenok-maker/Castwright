@@ -9,10 +9,10 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { configSlice } from '../store/config-slice';
 import { uiSlice } from '../store/ui-slice';
 import { notificationsSlice } from '../store/notifications-slice';
-import { accountSlice, fetchAccountSettings } from '../store/account-slice';
+import { accountSlice, fetchAccountSettings, fetchAnalyzerCatalog } from '../store/account-slice';
 import { AdvancedView } from './advanced';
 import { api } from '../lib/api';
-import type { ConfigResponse, GpuDevicesResponse, UserSettings } from '../lib/types';
+import type { AnalyzerCatalog, ConfigResponse, GpuDevicesResponse, UserSettings } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -160,7 +160,7 @@ function makeStore() {
   });
 }
 
-function renderView(analysisEngine: 'local' | 'gemini' = 'local') {
+function renderView(analysisEngine: 'local' | 'gemini' = 'local', catalog: AnalyzerCatalog | null = null) {
   const store = makeStore();
   const currentState = store.getState().account;
   store.dispatch(
@@ -170,6 +170,7 @@ function renderView(analysisEngine: 'local' | 'gemini' = 'local') {
       undefined,
     ),
   );
+  if (catalog) store.dispatch(fetchAnalyzerCatalog.fulfilled(catalog, '', undefined));
   return {
     store,
     ...render(
@@ -1127,6 +1128,52 @@ describe('Advanced Settings — scroll-and-highlight (#3084 wave 2b, F7)', () =>
     await screen.findByText('Gemini max input tokens per request');
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
     expect(screen.getByLabelText(/Gemini max input tokens per request/i).closest('[data-highlighted="true"]')).toBeTruthy();
+  });
+});
+
+/* ── Analyzer fallback picker (#3084 P30, D4/D5) ──────────────────────────── */
+/* D4/D5 adaptation: the view reads the catalog from account.analyzerCatalog
+   (loaded by Layout at boot via fetchAnalyzerCatalog), so these tests seed the
+   store rather than mocking a per-view api.getAnalyzerModels() call. */
+
+describe('AdvancedView — analyzer-engine picker', () => {
+  const FALLBACK_CONFIG: ConfigResponse = {
+    ...FIXTURE_CONFIG,
+    groups: [{ id: 'analyzer-models', label: 'Analyzer models & endpoints', help: 'Models.', risk: 'medium', collapsedByDefault: false }],
+    descriptors: [
+      { key: 'analyzer.fallback.target', group: 'analyzer-models', label: 'Analyzer fallback', help: 'Where analysis goes when the primary is unreachable.', type: 'analyzer-engine', options: ['off', 'local', 'gemini'], apply: 'live', risk: 'medium', isPrompt: false, default: 'gemini' },
+    ],
+    values: {
+      'analyzer.fallback.target': { key: 'analyzer.fallback.target', effective: 'gemini', source: 'default', locked: false, overridden: false },
+    },
+  };
+
+  it('lists endpoint models from the analyzer catalog in the Analyzer fallback row', async () => {
+    mockGetConfig.mockResolvedValue(FALLBACK_CONFIG);
+    renderView('local', { groups: [{ kind: 'endpoint', id: 'lab', label: 'Lab box', status: 'ok', models: [{ id: 'openai:lab::qwen3-30b', label: 'qwen3-30b' }] }] } as unknown as AnalyzerCatalog);
+    const select = (await screen.findByRole('combobox', { name: 'Analyzer fallback' })) as HTMLSelectElement;
+    await waitFor(() => expect([...select.options].map((o) => o.value)).toEqual(['off', 'local', 'gemini', 'openai:lab::qwen3-30b']));
+  });
+
+  it('still offers off, local and gemini when the catalog is unavailable', async () => {
+    mockGetConfig.mockResolvedValue(FALLBACK_CONFIG);
+    renderView();
+    const select = (await screen.findByRole('combobox', { name: 'Analyzer fallback' })) as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['off', 'local', 'gemini']);
+  });
+
+  it('warns in the row when the saved local target is not in the Ollama catalog', async () => {
+    mockGetConfig.mockResolvedValue({
+      ...FALLBACK_CONFIG,
+      values: {
+        'analyzer.fallback.target': {
+          key: 'analyzer.fallback.target', effective: 'local', source: 'override', locked: false, overridden: true,
+          analyzerEngine: { localModel: 'qwen3.5:4b', optionLabels: { off: 'Off', local: 'Local Ollama — qwen3.5:4b', gemini: 'Gemini — gemini-3.5-flash-lite' } },
+        },
+      },
+    });
+    renderView('local', { groups: [{ kind: 'ollama', id: 'ollama', label: 'Local Ollama', status: 'ok', models: [{ id: 'llama3.1:8b', label: 'llama3.1:8b' }] }] } as unknown as AnalyzerCatalog);
+    expect(await screen.findByTestId('analyzer-engine-local-warning')).toHaveTextContent('ollama pull qwen3.5:4b');
   });
 });
 

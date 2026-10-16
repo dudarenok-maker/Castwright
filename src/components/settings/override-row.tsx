@@ -4,6 +4,7 @@
 
 import { useEffect, useRef, useState, type MutableRefObject, type RefObject } from 'react';
 import { Checkbox } from '../primitives';
+import { analyzerEngineOptions, type AnalyzerEngineOption } from '../../lib/analyzer-engine-options';
 import type { GpuDevice, KnobDescriptor, KnobValue, StaleReason } from '../../lib/types';
 
 // Peak VRAM footprint per device-typed engine (MB) — first-cut estimates per
@@ -203,6 +204,15 @@ interface ControlProps {
   onChange: (raw: number | boolean | string) => void | Promise<unknown>;
   disabled: boolean;
   gpuDevices?: GpuDevice[];
+  /** #3084 P30 — every type: 'analyzer-engine' row renders a <select> whose
+      options are the knob's static entries plus these endpoint models
+      (`<endpoint> · <model>`), from `api.getAnalyzerModels()`. Empty/undefined
+      leaves just the static entries (a failed or absent catalog read). */
+  analyzerEndpointModels?: AnalyzerEngineOption[];
+  /** #3084 P30 — installed Ollama tags, or null when unknown. Only used by an
+      analyzer-engine row to warn, never refuse, when `local` names a model the
+      local catalog didn't list. */
+  ollamaModels?: readonly string[] | null;
   /** Exposes the number/string input's DOM node to OverrideRow's Revert
       button, so a click can scope its abandon-on-blur to THIS row's own
       input rather than whatever happens to be globally focused. Left
@@ -242,6 +252,8 @@ function KnobControl({
   generationRef,
   describedBy,
   invalid,
+  analyzerEndpointModels,
+  ollamaModels,
 }: ControlProps) {
   const [footprintWarning, setFootprintWarning] = useState<string | null>(null);
 
@@ -436,6 +448,57 @@ function KnobControl({
     );
   }
 
+  if (descriptor.type === 'analyzer-engine') {
+    /* #3084 P30 — a fallback-target picker. The selected value is the server's
+       effective target (Task 3d.4b), which already reflects env/legacy
+       resolution, so the row never shows a choice other than the one in
+       effect. Static entries are labelled from analyzerEngine.optionLabels when
+       the server provided them (Task 3d.4b), else raw; endpoint models and a
+       missing-but-saved target are appended by analyzerEngineOptions. */
+    const engineState = value.analyzerEngine;
+    const options = analyzerEngineOptions(
+      descriptor.options ?? [],
+      analyzerEndpointModels ?? [],
+      String(value.effective),
+      engineState?.optionLabels,
+    );
+    const localNotInstalled =
+      value.effective === 'local' &&
+      engineState !== undefined &&
+      Array.isArray(ollamaModels) &&
+      engineState.localModel != null &&
+      !ollamaModels.includes(engineState.localModel);
+    return (
+      <div className="w-full">
+        <select
+          aria-label={descriptor.label}
+          aria-describedby={describedBy}
+          aria-invalid={invalid || undefined}
+          value={String(value.effective)}
+          disabled={disabled}
+          onChange={(e) => commitSimple(e.target.value)}
+          className={`w-full ${base}`}
+        >
+          {options.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label}
+            </option>
+          ))}
+        </select>
+        {engineState?.sourceNote && (
+          <p data-testid="analyzer-engine-source-note" className="mt-1.5 text-xs text-ink/55">
+            {engineState.sourceNote}
+          </p>
+        )}
+        {localNotInstalled && (
+          <p data-testid="analyzer-engine-local-warning" className="mt-1.5 text-xs text-amber-800">
+            {`${engineState!.localModel} is not installed in Ollama, so this fallback would fail. Pull it with ollama pull ${engineState!.localModel}, or pick another target.`}
+          </p>
+        )}
+      </div>
+    );
+  }
+
   if (descriptor.type === 'device') {
     const current = String(value.effective);
     // idx:-1 is the synthetic "unindexed (cpu / ORT / CT2)" entry the server
@@ -555,6 +618,12 @@ export interface OverrideRowProps {
   onRevert: () => void | Promise<unknown>;
   /** GPU cards detected via GET /api/gpu/devices — only consumed by type: 'device' knobs. */
   gpuDevices?: GpuDevice[];
+  /** #3084 P30 — endpoint models passed to every type: 'analyzer-engine' row's
+      picker (see ControlProps.analyzerEndpointModels). */
+  analyzerEndpointModels?: AnalyzerEngineOption[];
+  /** #3084 P30 — installed Ollama tags, or null when unknown (see
+      ControlProps.ollamaModels). */
+  ollamaModels?: readonly string[] | null;
   /** #3084 F7 — the row is the target of an `#/advanced?focus=<key>` deep
       link: AdvancedView scrolls it into view on mount and highlights it for
       ~2 s so the user can see WHICH knob a run-error's "How to fix" entry
@@ -567,7 +636,7 @@ export interface OverrideRowProps {
   rowRef?: RefObject<HTMLDivElement | null>;
 }
 
-export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices, focused, rowRef }: OverrideRowProps) {
+export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices, focused, rowRef, analyzerEndpointModels, ollamaModels }: OverrideRowProps) {
   const locked = value.locked;
   const inputRef = useRef<HTMLInputElement | null>(null);
   // #2209 — per-ROW error state: this is a fresh useState per rendered
@@ -661,6 +730,8 @@ export function OverrideRow({ descriptor, value, onChange, onRevert, gpuDevices,
           generationRef={generationRef}
           describedBy={saveError ? errorId : undefined}
           invalid={Boolean(saveError)}
+          analyzerEndpointModels={analyzerEndpointModels}
+          ollamaModels={ollamaModels}
         />
 
         {/* Env-locked indicator */}
