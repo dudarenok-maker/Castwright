@@ -154,7 +154,7 @@ import {
 import { reconcileRejectEdges } from '../store/reject-edge-reconcile.js';
 import { clearNotLinkedEdgesForDroppedRejections } from '../store/not-linked-edges.js';
 import { remapFreshToPriorIds } from '../store/remap-fresh-to-prior.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import type { BookStateJson, AnalysisProvenanceReport } from '../workspace/scan.js';
 import { findBookByManuscriptId, requireBookStateLanguage, BookLanguageUnsetError } from '../workspace/scan.js';
 import { markAnalysisBusy, clearAnalysisBusy, isDesignBusy, isAnyAnalyzerRunBusy } from '../tts/design-lock.js';
@@ -4546,7 +4546,7 @@ export async function runMainAnalyzerJob(
                timeout propagates to the run's top-level catch, which classifies
                it as `lock-contention` via classifyAnalysisFailure. */
             await withStateLock(freshBookDir, async () => {
-              const freshState = await readJson<BookStateJson>(freshStatePath);
+              const freshState = await readStateJsonWithRecovery(freshStatePath);
               if (freshState?.castConfirmed) {
                 await writeStateJsonAtomic(freshStatePath, {
                   ...freshState,
@@ -7173,7 +7173,7 @@ export async function runMainAnalyzerJob(
           try {
             await withStateLock(writeDir, async () => {
               const statePath = stateJsonPath(writeDir);
-              const prev = await readJson<BookStateJson>(statePath);
+              const prev = await readStateJsonWithRecovery(statePath);
               if (prev) {
                 /* Preserve the user-owned flags — analysis owns chapter titles/
                    durations, the user owns `excluded` and `held`. Match on id so a
@@ -9131,7 +9131,7 @@ export async function runSubsetAnalyzerJob(
           try {
             await withStateLock(writeDir, async () => {
               const statePath = stateJsonPath(writeDir);
-              const prev = await readJson<BookStateJson>(statePath);
+              const prev = await readStateJsonWithRecovery(statePath);
               if (prev) {
                 /* Preserve the user-owned `excluded` + `held` flags across the
                    subset re-attribution — `held` (the "Not queued" intent) isn't

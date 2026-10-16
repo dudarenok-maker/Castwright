@@ -360,6 +360,7 @@ async function runJob(
   label: string,
   kind: 'main' | 'subset' = 'main',
   seedUuids = false,
+  tornState = false,
 ): Promise<{
   events: Array<{ kind?: string; code?: string; message?: string }>;
   state: StateJsonOnDisk;
@@ -397,6 +398,13 @@ async function runJob(
       updatedAt: STALE_UPDATED_AT,
     }),
   );
+
+  if (tornState) {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const full = readFileSync(statePath, 'utf8');
+    writeFileSync(`${statePath}.bak.1`, full);
+    writeFileSync(statePath, full.slice(0, 40));
+  }
 
   const chapterHints: ChapterHint[] = [
     { id: 1, title: 'Chapter One', body: CHAPTER_BODY },
@@ -1194,6 +1202,36 @@ describe.each([
           'seed-uuid-1',
           'seed-uuid-2',
           'seed-uuid-3',
+        ]);
+      } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+});
+
+/* #3625 sweep - both persist blocks read state.json INSIDE the lock; that read
+ * must recover a torn main file from .bak.1, or the persist's state.json write
+ * is lost (swallowed as a disk fault) and the file stays corrupt.
+ */
+describe.each([
+  ['runMainAnalyzerJob', 'main' as const],
+  ['runSubsetAnalyzerJob', 'subset' as const],
+])('%s persist block - a torn state.json is recovered (#3625)', (_name, kind) => {
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  });
+
+  it(
+    'the persist lands and the main file is whole again',
+    async () => {
+      const run = await runJob(`torn-${kind}`, kind, false, true);
+      try {
+        expect(run.state.chapters.map((c) => c.title)).toEqual([
+          'Chapter One',
+          'Chapter Two',
+          'Chapter Three',
         ]);
       } finally {
         await run.cleanup();

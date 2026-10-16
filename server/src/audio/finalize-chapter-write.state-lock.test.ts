@@ -38,6 +38,15 @@ vi.mock('../workspace/state-io.js', async (orig) => {
       }
       return real.readJson(path);
     }) as typeof real.readJson,
+    /* state.json is read through the recovering reader (#3625 sweep); count it
+       the same way so the forced-overlap gate still sees the second reader. */
+    readJsonWithRecovery: (async (path: string, opts: { keep: number }) => {
+      if (path.endsWith('state.json')) {
+        gate.stateReads += 1;
+        if (gate.stateReads >= 2) gate.secondReadSeen?.();
+      }
+      return real.readJsonWithRecovery(path, opts);
+    }) as typeof real.readJsonWithRecovery,
   };
 });
 
@@ -151,5 +160,20 @@ describe('finalizeChapterAudioWrite state.json lock (#3625)', () => {
       expect(c.audioRenderedAt, `chapter ${id} audioRenderedAt`).toBeTruthy();
       expect(c.audioModelKey, `chapter ${id} audioModelKey`).toBe('kokoro-v1');
     }
+  }, 30_000);
+
+  it('recovers a torn state.json from .bak.1 and still stamps (#3625 sweep)', async () => {
+    gate.secondReadPromise = null; // one finalize: nothing to overlap with
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const full = readFileSync(statePath, 'utf8');
+    writeFileSync(`${statePath}.bak.1`, full);
+    writeFileSync(statePath, full.slice(0, 40));
+
+    await finalizeChapterAudioWrite(inputFor(1, 'chapter-one', 'Chapter 1', 1.0));
+
+    const state = JSON.parse(readFileSync(statePath, 'utf8'));
+    const c = state.chapters.find((x: { id: number }) => x.id === 1);
+    expect(c.duration).not.toBe('0:00');
+    expect(c.audioModelKey).toBe('kokoro-v1');
   }, 30_000);
 });

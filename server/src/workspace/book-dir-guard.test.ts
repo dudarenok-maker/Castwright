@@ -34,6 +34,17 @@ vi.mock('./state-io.js', async (importOriginal) => {
       }
       return (actual as unknown as { readJson: (...a: unknown[]) => Promise<unknown> }).readJson(...args);
     },
+    /* The guard now reads state.json through the recovering reader (#3625
+       sweep), so the transient failure is injected there too. */
+    readJsonWithRecovery: async (...args: unknown[]) => {
+      if (readJsonTransientFailsRemaining.n > 0) {
+        readJsonTransientFailsRemaining.n -= 1;
+        throw new Error('transient .audiobook/state.json read failure');
+      }
+      return (
+        actual as unknown as { readJsonWithRecovery: (...a: unknown[]) => Promise<unknown> }
+      ).readJsonWithRecovery(...args);
+    },
   };
 });
 

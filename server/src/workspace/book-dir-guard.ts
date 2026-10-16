@@ -19,7 +19,7 @@
    job's copy when the record is gone). */
 
 import { existsSync } from 'node:fs';
-import { readJson } from './state-io.js';
+import { readStateJsonWithRecovery } from './state-migrate.js';
 import { stateJsonPath } from './paths.js';
 import { getOrHydrateManuscript, removeManuscript } from '../store/manuscripts.js';
 import type { BookStateJson } from './scan.js';
@@ -38,7 +38,7 @@ const STATE_READ_RETRY_DELAY_MS = 50;
 
 async function readStateWithRetry(candidateBookDir: string): Promise<BookStateJson | null> {
   for (let attempt = 0; attempt < STATE_READ_MAX_ATTEMPTS; attempt++) {
-    const state = await readJson<BookStateJson>(stateJsonPath(candidateBookDir)).catch(() => null);
+    const state = await readStateJsonWithRecovery(stateJsonPath(candidateBookDir)).catch(() => null);
     if (state) return state;
     if (attempt < STATE_READ_MAX_ATTEMPTS - 1) {
       await new Promise((r) => setTimeout(r, STATE_READ_RETRY_DELAY_MS));

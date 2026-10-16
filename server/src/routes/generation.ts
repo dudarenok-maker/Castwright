@@ -40,7 +40,7 @@ import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen
 import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
 import { readJson } from '../workspace/state-io.js';
 import { withStateLock } from '../workspace/state-lock.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import {
   bookStateAudioFormat,
   requireBookStateLanguage,
@@ -2268,7 +2268,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
            read inside it, so a sibling chapter's finalize stamp can't be dropped
            by this write (or this one by theirs). */
         await withStateLock(bookDir, async () => {
-          const prev = await readJson<BookStateJson>(statePath);
+          const prev = await readStateJsonWithRecovery(statePath);
           if (prev) {
             const next: BookStateJson = {
               ...prev,

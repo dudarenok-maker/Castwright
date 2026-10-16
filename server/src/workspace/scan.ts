@@ -689,7 +689,7 @@ async function scanBook(
   let unreadable = false;
   if (hasState) {
     try {
-      state = await readJson<BookStateJson>(stateJson);
+      state = await readStateJsonWithRecovery(stateJson);
     } catch {
       unreadable = true;
     }

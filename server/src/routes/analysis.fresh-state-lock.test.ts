@@ -334,3 +334,27 @@ describe('#3625 — "Start fresh" un-confirm fails loud on a state-lock timeout'
     60_000,
   );
 });
+
+/* #3625 sweep - the un-confirm's in-lock read recovers a torn state.json from
+   .bak.1 instead of throwing (which, fail-loud, would end the job). */
+describe('#3625 - "Start fresh" un-confirm recovers a torn state.json', () => {
+  it(
+    'un-confirms and rewrites the main file whole',
+    async () => {
+      const fx = await buildFixture('torn');
+      const full = readFileSync(fx.statePath, 'utf8');
+      writeFileSync(`${fx.statePath}.bak.1`, full);
+      writeFileSync(fx.statePath, full.slice(0, 40));
+      try {
+        await fx.runFresh();
+        await vi.waitFor(() => expect(readConfirmed(fx.statePath)).toBe(false), {
+          timeout: 5_000,
+          interval: 20,
+        });
+      } finally {
+        await fx.cleanup();
+      }
+    },
+    30_000,
+  );
+});

@@ -17,11 +17,9 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import sharp from 'sharp';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { readJson } from '../workspace/state-io.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { withStateLock } from '../workspace/state-lock.js';
 import { stateJsonPath } from '../workspace/paths.js';
-import type { BookStateJson } from '../workspace/scan.js';
 
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -130,7 +128,7 @@ export async function patchStateLocalCover(
 ): Promise<void> {
   const path = stateJsonPath(bookDir);
   await withStateLock(bookDir, async () => {
-    const state = await readJson<BookStateJson>(path);
+    const state = await readStateJsonWithRecovery(path);
     if (!state) return;
     state.coverImage = {
       source: 'local',
@@ -153,7 +151,7 @@ export function clampFraming(framing: CoverFraming): CoverFraming {
 export async function patchStateFraming(bookDir: string, framing: CoverFraming): Promise<boolean> {
   const path = stateJsonPath(bookDir);
   return withStateLock(bookDir, async () => {
-    const state = await readJson<BookStateJson>(path);
+    const state = await readStateJsonWithRecovery(path);
     if (!state) return false;
     if (!state.coverImage) return false;
     state.coverImage.framing = clampFraming(framing);

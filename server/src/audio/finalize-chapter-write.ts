@@ -15,7 +15,7 @@ import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { withStateLock } from '../workspace/state-lock.js';
 import { type BookStateJson } from '../workspace/scan.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
@@ -730,7 +730,7 @@ export async function finalizeChapterAudioWrite(
      generation) can overlap, and a stale snapshot would drop its stamp. A lock
      timeout propagates like a write failure: this stamp is authoritative. */
   const prev = await withStateLock(bookDir, async () => {
-    const current = await readJson<BookStateJson>(statePath);
+    const current = await readStateJsonWithRecovery(statePath);
     if (current) {
       const formatted = formatDuration(durationSec);
       const next: BookStateJson = {

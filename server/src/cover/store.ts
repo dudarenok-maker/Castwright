@@ -7,12 +7,10 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { readJson } from '../workspace/state-io.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { withStateLock } from '../workspace/state-lock.js';
 import { coverImagePath, stateJsonPath, WORKSPACE_ROOT } from '../workspace/paths.js';
 import { assertContained } from '../util/safe-path.js';
-import type { BookStateJson } from '../workspace/scan.js';
 import type { CoverCandidate } from './sources/types.js';
 import { firstAvailableCover } from './search.js';
 
@@ -87,7 +85,7 @@ export async function patchStateCover(
 ): Promise<void> {
   const path = stateJsonPath(bookDir);
   await withStateLock(bookDir, async () => {
-    const state = await readJson<BookStateJson>(path);
+    const state = await readStateJsonWithRecovery(path);
     if (!state) return;
     state.coverImage = {
       source: candidate.source,
@@ -104,7 +102,7 @@ export async function patchStateCover(
 export async function clearStateCover(bookDir: string): Promise<void> {
   const path = stateJsonPath(bookDir);
   await withStateLock(bookDir, async () => {
-    const state = await readJson<BookStateJson>(path);
+    const state = await readStateJsonWithRecovery(path);
     if (!state) return;
     delete state.coverImage;
     state.updatedAt = new Date().toISOString();
