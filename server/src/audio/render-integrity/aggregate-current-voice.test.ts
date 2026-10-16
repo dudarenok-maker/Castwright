@@ -39,6 +39,12 @@ const { auditionSpy, audition } = vi.hoisted(() => {
     })),
   };
 });
+// The book's CURRENT default engine is read at scoring time (#3524); pin it per test.
+const { defaultModelKey } = vi.hoisted(() => ({ defaultModelKey: { value: 'qwen3-tts-0.6b' } }));
+vi.mock('../../workspace/user-settings.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../workspace/user-settings.js')>()),
+  getResolvedTtsModelKey: () => defaultModelKey.value,
+}));
 vi.mock('./audition-centroid.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./audition-centroid.js')>()),
   auditionCentroid: auditionSpy,
@@ -348,7 +354,7 @@ describe('scoreBook — old-voice lines score inconclusive (#3524)', () => {
 /** Per-line stamped chapter: each line carries its own `voiceName`/`baseVoiceName`
  *  (as a real render stamps them) and the chapter snapshot names `snapshotVoice`. */
 type Line = { sid: number; axis: number; jitter: number; voice: string; fallback?: string | null };
-async function writeChapterLines(dir: string, slug: string, chapterId: number, lines: Line[], snapshotVoice: string, charId = 'thurid') {
+async function writeChapterLines(dir: string, slug: string, chapterId: number, lines: Line[], snapshotVoice: string, charId = 'thurid', engine = 'qwen') {
   mkdirSync(join(dir, 'audio'), { recursive: true });
   const rows = lines.map((l) => ({ characterId: charId, sentenceIds: [l.sid], vec: vec(l.axis, l.jitter) }));
   await writeEmbeddings(join(dir, 'audio', `${slug}.embeddings.json`), rows, EMBEDDINGS_VERSION);
@@ -365,7 +371,7 @@ async function writeChapterLines(dir: string, slug: string, chapterId: number, l
         baseVoiceName: l.voice,
       })),
       characterSnapshots: {
-        [charId]: { voiceEngine: 'qwen', modelKey: 'qwen3-tts-1.7b', resolvedVoiceName: snapshotVoice },
+        [charId]: { voiceEngine: engine, modelKey: engine === 'qwen' ? 'qwen3-tts-1.7b' : 'coqui-xtts-v2', resolvedVoiceName: snapshotVoice },
       },
     }),
   );
@@ -499,5 +505,84 @@ describe('scoreBook — a character with no current-voice line is not pending fo
     const report = await buildAudioQaReport(dir, CH1);
     expect(report.voiceDrift.charactersPending).toEqual([]);
     expect(auditionSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("scoreBook — the current voice's engine is the book's CURRENT default, not the first chapter's (#3524)", () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 0;
+    defaultModelKey.value = 'qwen3-tts-0.6b';
+  });
+
+  it('after a default switch Coqui → Qwen, a character with no ttsEngine is referenced from its Qwen voice', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-engine-switch-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(dir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'thurid',
+            name: 'Thurid',
+            overrideTtsVoices: { qwen: { name: 'Thurid voice', libraryUuid: 'hq' }, coqui: { name: 'Ana Florence' } },
+          },
+        ],
+      }),
+    );
+    // ch1 rendered while the book default was Coqui; ch2 after it switched to Qwen.
+    const coqui: Line[] = Array.from({ length: 12 }, (_, i) => ({ sid: i, axis: 3, jitter: i, voice: 'Ana Florence' }));
+    const qwen: Line[] = Array.from({ length: 12 }, (_, i) => ({ sid: i, axis: 0, jitter: i, voice: 'qwen-hq' }));
+    await writeChapterLines(dir, 'ch1', 1, coqui, 'Ana Florence', 'thurid', 'coqui');
+    await writeChapterLines(dir, 'ch2', 2, qwen, 'qwen-hq', 'thurid', 'qwen');
+
+    await scoreBook(dir, CHAPTERS);
+
+    const row = (await readCentroids(dir))!['thurid'];
+    expect(row.referenceKind).toBe('in-book');
+    expect(row.inBookVoiceName).toBe('qwen-hq');
+    const ch2 = await readVerdicts(join(dir, 'audio', 'ch2.render-integrity.json'));
+    expect(ch2!.some((r) => r.verdict !== 'inconclusive')).toBe(true);
+    const ch1 = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(ch1!.every((r) => r.verdict === 'inconclusive')).toBe(true);
+  });
+
+  it('a partial re-record under the new engine builds the audition in the current voice\'s engine and tier, not the old snapshot\'s', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-engine-override-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(dir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'thurid',
+            name: 'Thurid',
+            overrideTtsVoices: { qwen: { name: 'Thurid voice', libraryUuid: 'hq' }, coqui: { name: 'Ana Florence' } },
+          },
+        ],
+      }),
+    );
+    // The chapter snapshot is stale (last-wins over an untouched Coqui line); two lines were re-recorded on Qwen.
+    await writeChapterLines(
+      dir,
+      'ch1',
+      1,
+      [
+        { sid: 0, axis: 1, jitter: 0, voice: 'qwen-hq' },
+        { sid: 1, axis: 1, jitter: 1, voice: 'qwen-hq' },
+        { sid: 2, axis: 3, jitter: 2, voice: 'Ana Florence' },
+      ],
+      'Ana Florence',
+      'thurid',
+      'coqui',
+    );
+    audition.axis = 1;
+    await scoreBook(dir, [CHAPTERS[0]]);
+
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    expect((auditionSpy.mock.calls[0] as unknown[])[0]).toMatchObject({
+      voiceName: 'qwen-hq',
+      modelKey: 'qwen3-tts-0.6b',
+    });
   });
 });

@@ -50,9 +50,8 @@ import {
 import { auditionCentroid, type AuditionCharacter, type AuditionCentroidOpts } from './audition-centroid.js';
 import { readPendingAttempts, writePendingAttempts } from './pending-attempts-io.js';
 import { canonicalModelKeyForEngine, type TtsModelKey } from '../../tts/model-keys.js';
-import { buildHintFromCast, toVoiceLike, type CastCharacter } from '../../tts/synthesise-chapter.js';
-import { pickVoiceForEngine } from '../../tts/voice-mapping.js';
-import { resolveCharacterEngine } from '../../tts/per-character-engine.js';
+import { buildHintFromCast, type CastCharacter } from '../../tts/synthesise-chapter.js';
+import { currentCastVoiceName, currentCharacterEngine, currentDefaultEngine } from './current-voice.js';
 import { hasClonedProvenance } from '../../tts/clone-engines.js';
 import { buildCastResolver } from '../../store/cast-resolve.js';
 import { loadCastIdHistory } from '../../store/cast-id-history.js';
@@ -702,21 +701,16 @@ export async function scoreBook(
   // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
   const voiceInfoByChar = new Map<string, AuditionCharacter>();
   /* #3524 — the character's CURRENT cast.json voice for a snapshot key: the
-     live row through castResolver, then the same expression as
-     chapter-qa-repair.ts (#3449) / revisions.ts, with the character's
-     book-wide configured engine as the fallback engine. `undefined` = no
+     live row through castResolver, then the helper shared with
+     chapter-qa-repair.ts (#3449), with the book's CURRENT default engine (read
+     now — never a chapter snapshot's engine) as the fallback engine. `undefined` = no
      current voice known (no live cast row, or an undesigned voice → ''), and
      that character keeps first-chapter-wins with no filtering. */
+  const defaultEngine = currentDefaultEngine();
   const currentVoiceNameFor = (charId: string): string | undefined => {
     const current = castResolver.resolve(charId)?.character;
     if (!current) return undefined;
-    const fallbackEngine = (configuredEngineByChar.get(charId) ?? 'qwen') as import('../../tts/model-keys.js').TtsEngine;
-    const name = pickVoiceForEngine(
-      resolveCharacterEngine(current, fallbackEngine),
-      toVoiceLike(current),
-      buildHintFromCast(current),
-    );
-    return name || undefined;
+    return currentCastVoiceName(current, defaultEngine);
   };
   const currentVoiceByChar = new Map<string, string | undefined>();
   const currentVoiceFor = (charId: string): string | undefined => {
@@ -846,12 +840,22 @@ export async function scoreBook(
      a partial re-record leaves its chapter's last-wins snapshot on the OLD voice
      while the re-recorded lines are stamped NEW, so when any rendered line carries
      the current voice, the audition (and the #3676 re-audition's identity match)
-     is built for it. Engine / tier still come from the snapshot that supplied them. */
+     is built for it — in the current voice's engine and tier (the character's own
+     engine, else the book's current default), not the old snapshot's. */
   for (const charId of hasCurrentVoiceLine) {
     const info = voiceInfoByChar.get(charId);
     const currentVoice = currentVoiceFor(charId);
-    if (info && currentVoice !== undefined && info.voiceName !== currentVoice) {
-      voiceInfoByChar.set(charId, { ...info, voiceName: currentVoice });
+    const castChar = castResolver.resolve(charId)?.character;
+    if (!info || currentVoice === undefined || !castChar) continue;
+    const engine = currentCharacterEngine(castChar, defaultEngine);
+    const modelKey = canonicalModelKeyForEngine(engine, info.modelKey);
+    if (info.voiceName !== currentVoice || info.modelKey !== modelKey) {
+      voiceInfoByChar.set(charId, {
+        ...info,
+        voiceName: currentVoice,
+        modelKey,
+        cloned: hasClonedProvenance(castChar, engine),
+      });
     }
   }
 

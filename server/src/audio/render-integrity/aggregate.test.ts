@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,12 @@ import { readPendingAttempts } from './pending-attempts-io.js';
 import { writeEmbeddings, EMBEDDINGS_VERSION } from './embeddings-io.js';
 import { dotAudiobook, castJsonPath } from '../../workspace/paths.js';
 import { castIdHistoryPath } from '../../store/cast-id-history.js';
+
+// #3524 — scoreBook reads the book's CURRENT default engine; these fixtures assume Qwen.
+vi.mock('../../workspace/user-settings.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../workspace/user-settings.js')>()),
+  getResolvedTtsModelKey: () => 'qwen3-tts-0.6b',
+}));
 
 // helper: a 2-d unit vector at angle θ, padded to length 8 (test vectors are small)
 const vec = (θ: number) => Float32Array.from([Math.cos(θ), Math.sin(θ), 0, 0, 0, 0, 0, 0]);

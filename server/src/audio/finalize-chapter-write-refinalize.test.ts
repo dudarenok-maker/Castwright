@@ -19,13 +19,19 @@
    synth/embed calls are stubbed (never a live sidecar) via scoreBook's own
    `__testSynthFn`/`__testEmbedFn` injection seam. */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ChapterSegmentsFile } from './finalize-chapter-write.js';
 import type { EmbeddingRow } from './render-integrity/embeddings-io.js';
+
+// #3524 — scoreBook reads the book's CURRENT default engine; these fixtures assume Qwen.
+vi.mock('../workspace/user-settings.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../workspace/user-settings.js')>()),
+  getResolvedTtsModelKey: () => 'qwen3-tts-0.6b',
+}));
 
 const AUTHOR = 'Refinalize Author';
 const SERIES = 'Standalones';

@@ -37,12 +37,10 @@ import { decodeAudioToPcm } from '../tts/mp3.js';
 import { hydrateCastReusedVoices } from '../tts/hydrate-reused-voice-workspace.js';
 import {
   synthesiseChapter,
-  toVoiceLike,
-  buildHintFromCast,
   type CastCharacter,
   type ChapterSegment,
 } from '../tts/synthesise-chapter.js';
-import { pickVoiceForEngine } from '../tts/voice-mapping.js';
+import { currentCastVoiceName } from '../audio/render-integrity/current-voice.js';
 import { evaluateSegmentPcm, type SegmentQaVerdict } from '../tts/segment-qa.js';
 import {
   verifySegmentTranscript,
@@ -432,8 +430,8 @@ chapterQaRepairRouter.post(
          `synthesiseChapter` routes a character (the centroid key, a render-time
          id, is resolved through `castResolver` — #2040 — never a raw cast-id
          lookup) —
-         pickVoiceForEngine(resolveCharacterEngine(c, engine), toVoiceLike(c),
-         buildHintFromCast(c)) — NOT from the previous render's snapshot. The
+         currentCastVoiceName(c, engine) (render-integrity/current-voice.ts, the same
+         helper scoreBook uses) — NOT from the previous render's snapshot. The
          snapshot's `resolvedVoiceName` is deliberately the voice ACTUALLY SENT on
          the last render (#1972 — not re-derived from the cast), so after a voice
          reassignment with no re-render in between it still names the OLD voice and
@@ -456,13 +454,7 @@ chapterQaRepairRouter.post(
         Object.fromEntries(
           Object.entries(readCentroidsMap).filter(([charId, row]) => {
             const current = castResolver.resolve(charId)?.character;
-            const currentVoiceName = current
-              ? pickVoiceForEngine(
-                  resolveCharacterEngine(current, engine),
-                  toVoiceLike(current),
-                  buildHintFromCast(current),
-                )
-              : undefined;
+            const currentVoiceName = current ? currentCastVoiceName(current, engine) : undefined;
             const snap = segFile.characterSnapshots?.[charId];
             return auditionCentroidUsableForCurrent(
               row,
