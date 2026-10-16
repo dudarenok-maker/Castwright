@@ -59,11 +59,12 @@ export interface CharacterCentroid {
    *  - 'audition': from the character's audition sample (Task 10 Option-B)
    *  - 'too-short': not enough clean segments; segments scored inconclusive */
   referenceKind: 'in-book' | 'audition' | 'too-short';
-  /** #1969 — the voice this centroid was built from, recorded only on 'audition' rows so
-   *  resolveCharacterReference can tell when a voice reassignment has made the persisted
-   *  reference stale. Absent on a legacy row written before this field existed (and on any
-   *  non-audition row) — an 'audition' row with no recorded voice is treated as unknown and
-   *  rebuilt rather than trusted. */
+  /** #1969 / #3676 — the voice this centroid was computed under, recorded on 'audition' rows and
+   *  on 'too-short' rows that had voice info, so resolveCharacterReference can tell when a voice
+   *  reassignment has made the persisted reference stale. Absent on 'in-book' rows, on a legacy
+   *  row written before this field existed, and on a 'too-short' row computed with no voice
+   *  info. An 'audition' row with no recorded voice is treated as unknown and rebuilt; a
+   *  'too-short' row with none is reused only while there is still no voice info. */
   auditionVoice?: AuditionVoiceRef;
   /** #3524 — the cast.json voice an 'in-book' row's anchors were pooled from (only lines
    *  rendered in the character's then-current voice count). Recorded only when the character

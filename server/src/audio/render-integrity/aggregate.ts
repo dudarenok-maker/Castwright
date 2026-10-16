@@ -279,6 +279,25 @@ type ReferenceOutcome =
 
 const TOO_SHORT_REF: CharacterReference = { centroid: [], cleanMean: 0, pSevere: 0, pBand: 0, referenceKind: 'too-short' };
 
+/** #3676 — a 'too-short' ref that records the voice it was computed under, so the persisted
+ *  row can be told apart from one computed under a since-reassigned voice. With no voice info
+ *  it stays voiceless (TOO_SHORT_REF). */
+function tooShortRefFor(voiceInfo: AuditionCharacter | undefined): CharacterReference {
+  return voiceInfo ? { ...TOO_SHORT_REF, auditionVoice: auditionVoiceOf(voiceInfo) } : TOO_SHORT_REF;
+}
+
+function auditionVoiceOf(voiceInfo: AuditionCharacter): AuditionVoiceRef {
+  return { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned };
+}
+
+/** Whether a recorded voice identity equals the character's CURRENT render identity
+ *  (voiceName / modelKey / cloned / strict language). Shared by the audition and too-short
+ *  reuse gates. language is compared STRICTLY: a recorded language — or the absence of one —
+ *  must equal the current voice's language. */
+function sameVoiceIdentity(recorded: AuditionVoiceRef | undefined, voiceInfo: AuditionCharacter): boolean {
+  return recorded != null && recorded.voiceName === voiceInfo.voiceName && recorded.modelKey === voiceInfo.modelKey && recorded.cloned === voiceInfo.cloned && recorded.language === voiceInfo.language;
+}
+
 function persistedAsRef(row: CharacterCentroid): CharacterReference {
   return { centroid: row.centroid, cleanMean: row.cleanMean, pSevere: row.pSevere, pBand: row.pBand, referenceKind: row.referenceKind, auditionVoice: row.auditionVoice, inBookVoiceName: row.inBookVoiceName, bandMethod: row.bandMethod };
 }
@@ -298,12 +317,9 @@ function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacte
   // percentile-derived to sigma-derived bands. Once rebuilt, rows carry bandMethod
   // and can be reused on subsequent passes.
   if (row.bandMethod === undefined) return false;
-  // language is compared STRICTLY: a recorded language — or the absence of one —
-  // must equal the current voice's language. A legacy row that recorded no language
-  // while the book now has one is a mismatch -> rebuild once, then it records the
-  // language and stabilises.
-  const langMatch = r.language === voiceInfo.language;
-  return r.voiceName === voiceInfo.voiceName && r.modelKey === voiceInfo.modelKey && r.cloned === voiceInfo.cloned && langMatch;
+  // A legacy row that recorded no language while the book now has one is a mismatch
+  // -> rebuild once, then it records the language and stabilises.
+  return sameVoiceIdentity(r, voiceInfo);
 }
 
 /**
@@ -315,9 +331,11 @@ function matchesCurrentVoice(row: CharacterCentroid, voiceInfo: AuditionCharacte
  * a prior audition/too-short result the moment enough real anchors exist
  * (srv-36 hardening, spec §2).
  *
- * Too-thin/bimodal path: if `persisted` is already a terminal `'too-short'`
- * row, that state is ABSORBING — return it verbatim, never call
- * `auditionCentroid` again. If `persisted` is a successful `'audition'` row
+ * Too-thin/bimodal path: if `persisted` is a `'too-short'` row computed under
+ * the character's CURRENT voice (or there is no current voice info at all), it is
+ * returned verbatim — `auditionCentroid` is not called again. A too-short row
+ * recorded under a DIFFERENT voice, or a legacy one recording none while voice info
+ * now exists, is re-auditioned (#3676). If `persisted` is a successful `'audition'` row
  * whose recorded identity still matches the character's current voice, reuse
  * it verbatim — no new renders; a recorded identity that DIFFERS means the
  * voice (or language/clone context) was reassigned and the stale reference
@@ -354,7 +372,7 @@ async function resolveCharacterReference(
     return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'in-book', ...(inBookVoiceName !== undefined ? { inBookVoiceName } : {}) } };
   }
 
-  if (persisted?.referenceKind === 'too-short') {
+  if (persisted?.referenceKind === 'too-short' && (!voiceInfo || sameVoiceIdentity(persisted.auditionVoice, voiceInfo))) {
     return { status: 'too-short', ref: persistedAsRef(persisted) };
   }
   if (
@@ -366,9 +384,9 @@ async function resolveCharacterReference(
   }
   // A character with NO current voice info (no resolvedVoiceName in any snapshot →
   // voiceInfo undefined) is NOT trusted — neither a persisted audition row nor a
-  // stale in-book reference is reused. It falls to too-short (inconclusive), and
-  // that too-short state is absorbing from here on, until the in-book path supplies
-  // anchors or a reassignment provides snapshot voice info.
+  // stale in-book reference is reused. It falls to too-short (inconclusive); that
+  // voiceless row is reused until the in-book path supplies anchors or a reassignment
+  // provides snapshot voice info, at which point the audition runs (#3676).
   if (!voiceInfo) {
     return { status: 'too-short', ref: TOO_SHORT_REF };
   }
@@ -380,7 +398,7 @@ async function resolveCharacterReference(
   });
 
   if (audition === null) return { status: 'transient-failure' };
-  if (audition.kind === 'too-short') return { status: 'too-short', ref: TOO_SHORT_REF };
+  if (audition.kind === 'too-short') return { status: 'too-short', ref: tooShortRefFor(voiceInfo) };
 
   const centroidArr = Array.from(audition.centroid);
   const cosines = audition.embeddings
@@ -413,7 +431,7 @@ async function resolveCharacterReference(
   // pools that matched the tight-pool condition, percentile for the fallback or
   // non-synthetic cases). Pre-fix rows lack this field entirely, allowing us to
   // detect and rebuild them with the current band-computation logic.
-  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', bandMethod, auditionVoice: { voiceName: voiceInfo.voiceName, modelKey: voiceInfo.modelKey, ...(voiceInfo.language != null ? { language: voiceInfo.language } : {}), cloned: voiceInfo.cloned } } };
+  return { status: 'resolved', ref: { centroid: centroidArr, cleanMean, pSevere, pBand, referenceKind: 'audition', bandMethod, auditionVoice: auditionVoiceOf(voiceInfo) } };
 }
 
 // ── Per-chapter segment lookup ─────────────────────────────────────────────
@@ -941,9 +959,10 @@ export async function scoreBook(
         continue; // genuinely unresolved this run — nothing written, retried next trigger
       }
       delete pendingMap[charId];
-      centroidsMap[charId] = { characterId: charId, ...TOO_SHORT_REF };
+      const cappedRef = tooShortRefFor(voiceInfoByChar.get(charId));
+      centroidsMap[charId] = { characterId: charId, ...cappedRef };
       await writeCentroids(bookDir, Object.values(centroidsMap));
-      totalMismatches += await scoreAndMergeCharacter(charId, TOO_SHORT_REF);
+      totalMismatches += await scoreAndMergeCharacter(charId, cappedRef);
       scoredCount++;
       opts?.onCharacterScored?.(charId, scoredCount, orderedChars.length);
       continue;
