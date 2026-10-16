@@ -744,8 +744,12 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > voice the character no longer has is now dropped too (a legacy in-book row
 > with no recorded voice is still kept). A character reassigned but not yet
 > re-rendered now gets a marker row from the scoring pass (it leaves the QA
-> card's "pending" state), and the "current voice" engine is the character's own
-> engine else the book's current default. Behaviour proven by mocked unit
+> card's "pending" state), and the "current voice" engine is the engine actually rendered (the
+> character's own engine, else the scoring run's model key, else the engine
+> stamped on its most recently rendered lines). The Reassign step now says not to
+> run Resume scoring before the repair (a scoring pass rewrites the character's
+> rows `inconclusive`, leaving nothing to observe) and checks the marker row as a
+> separate step afterwards. Behaviour proven by mocked unit
 > tests; A112 still owns the real-ECAPA hardware check.
 >
 > **Prior change: 2026-10-16 (#3587), 64 → 64.** Allocate-once IDs assigned to the
@@ -6085,10 +6089,17 @@ Network tab (that request → EventStream/Response) when the button was used.
   in-book centroid row that recorded a voice the character no longer has is
   dropped too, just like an audition one; a legacy in-book row with no
   recorded voice is still kept until a line is re-rendered in the new voice and
-  a scoring pass rebuilds it, so do not expect that one to switch. A scoring
-  pass in this state writes a marker row for the character ("no current-voice
-  reference"); the repair treats it as no centroid, and the QA card no longer
-  shows Resume scoring for that character.
+  a scoring pass rebuilds it, so do not expect that one to switch. Do
+  NOT run Resume scoring, or render anything, between the reassign and this
+  repair: a scoring pass in this state rewrites every row of the character
+  `inconclusive`, so Y's line would no longer be `fixable` and `qa_scan`
+  would flag nothing to observe.
+- **Marker row, after the repair.** Only now run **Resume scoring** from the QA
+  card (still no re-render). **Pass:** the character's row in
+  `render-integrity.centroids.json` has `noCurrentVoiceReference: true`, every
+  one of its lines is `inconclusive` in the `<slug>.render-integrity.json`
+  files, and the QA card no longer counts the character as pending (no Resume
+  scoring button for it). The repair treats that row as no centroid.
 
 *Needs:* a real GPU box with the speech sidecar and a real ECAPA
 speaker-embedding model running (the mocked unit tests cover the logic branch
