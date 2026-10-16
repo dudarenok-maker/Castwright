@@ -1498,11 +1498,18 @@ test('runStepProcess: a non-retriable step always records 1 attempt, even given 
 
 // --- Part 2 (ops-72) time budgets ----------------------------------------
 
+// The kill-path bound absorbs slow taskkill/census on CI Windows runners (a
+// 30s bound flaked at 60553ms there, #3682). The fixture's self-exit must
+// outlive that bound, or a kill that never lands is rescued by the fixture's
+// own exit inside the bound and the bound can no longer fail.
+const KILL_PATH_BOUND_MS = 120_000;
+const HANG_FIXTURE_SELF_EXIT_MS = 300_000;
+
 function writeHangingFixture(dir, npmScriptName) {
   // Deliberately never exits on its own — simulates a genuinely wedged
   // process (the 4h34m incident this feature exists to bound), so a real
   // timeout kill is exercised rather than a step that would have finished by
-  // itself. The 60s self-exit is a safety net, not the mechanism under test:
+  // itself. The 300s self-exit is a safety net, not the mechanism under test:
   // if the kill path being tested is itself broken (the exact class of bug
   // this fixture caught on Linux CI — killTree() was a no-op there), this
   // process must not become an unreapable orphan that outlives the test run
@@ -1513,7 +1520,7 @@ function writeHangingFixture(dir, npmScriptName) {
   const fixtureFile = 'hang.mjs';
   writeFileSync(
     join(dir, fixtureFile),
-    'setInterval(() => {}, 1000);\nsetTimeout(() => process.exit(0), 60_000);\n',
+    `setInterval(() => {}, 1000);\nsetTimeout(() => process.exit(0), ${HANG_FIXTURE_SELF_EXIT_MS});\n`,
     'utf8',
   );
   const packageJsonPath = join(dir, 'package.json');
@@ -1552,8 +1559,8 @@ test('runStepProcess: a step exceeding its budget is classified TIMEOUT, not a c
       'not climb to MAX_POOL_ATTEMPTS (3) the way a real fork-pool crash would',
   );
   assert.ok(
-    elapsed < 30000,
-    `the taskkill /T /F path should land well under a real multi-hour wedge — took ${elapsed}ms`,
+    elapsed < KILL_PATH_BOUND_MS,
+    `the taskkill /T /F path should land well under a real multi-hour wedge (bound ${KILL_PATH_BOUND_MS}ms, fixture self-exit ${HANG_FIXTURE_SELF_EXIT_MS}ms) — took ${elapsed}ms`,
   );
 });
 
@@ -2736,16 +2743,17 @@ test('runPipeline: a step exceeding CASTWRIGHT_STEP_TIMEOUT_MIN reports [timeout
     });
     const elapsed = Date.now() - start;
     // Without this, a genuinely broken kill (killStepChildTree() a no-op) is
-    // indistinguishable from a real one: the hanging fixture's own 60s
+    // indistinguishable from a real one: the hanging fixture's own 300s
     // self-exit (added for B1, PR #3260 review pass 1 — an orphan-prevention
     // safety net, not the mechanism under test) supplies a clean exit that
     // satisfies every assertion below just as well as a fast kill would,
-    // taking ~61s instead of ~1s to do it (PR #3260 review pass 2, B4 — this
+    // taking ~300s instead of ~1s to do it (PR #3260 review pass 2, B4 — this
     // guard mirrors the one runStepProcess's own equivalent test already has
-    // a few lines up).
+    // a few lines up). The bound sits below the self-exit so it stays
+    // falsifiable (#3682).
     assert.ok(
-      elapsed < 30000,
-      `the kill path should land well under the fixture's own 60s self-exit safety net — took ${elapsed}ms`,
+      elapsed < KILL_PATH_BOUND_MS,
+      `the kill path should land well under the fixture's own ${HANG_FIXTURE_SELF_EXIT_MS}ms self-exit safety net (bound ${KILL_PATH_BOUND_MS}ms) — took ${elapsed}ms`,
     );
     assert.notEqual(result, 0, 'a timed-out step must fail the pipeline');
     const timeoutLine = logs.find((l) => l.includes('[timeout]') && l.includes('test:server'));
