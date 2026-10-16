@@ -25,6 +25,7 @@ import {
   runModelsAllResident,
 } from '../lib/models';
 import type { AnalysisEngine } from '../lib/model-id';
+import { snapshotGpuFor } from '../lib/analyzer-endpoints';
 import { ModelControlPill, type ModelControlState } from '../components/ModelControlPill';
 import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-override-badge';
 import { PhaseCard, NeedsActionLine, type ConnState } from '../components/analysing/phase-card';
@@ -480,14 +481,16 @@ export function AnalysingView({
     model,
   ]);
   const isLocalAnalyzer = effectiveModelIds.some((id) => engineForModelId(id) === 'local');
-  /* Engine tag captured into the cross-navigation snapshot (read by the
-     reverse-local-analyzer guard). Mirror the effective-local derivation so a
-     cloud run is never mis-tagged 'local' and made to nag the TTS-start path.
-     Uses the shared id grammar so an endpoint run is tagged 'openai', not
-     the stale 'gemini' default. */
+  /* #3084 — engine + card captured into the cross-navigation snapshot (read by the
+     reverse guard). Ollama beats endpoints beats Gemini, so a mixed run is never
+     under-reported; isLocalAnalyzer above still gates only Ollama probing. */
+  const analyzerEndpoints = useAppSelector((s) => s.account?.analyzerEndpoints);
   const effectiveEngine: AnalysisEngine = isLocalAnalyzer
     ? 'local'
-    : engineForModelId(effectiveModelIds[0] ?? '');
+    : effectiveModelIds.some((id) => engineForModelId(id) === 'openai')
+      ? 'openai'
+      : 'gemini';
+  const effectiveGpu = snapshotGpuFor(effectiveModelIds, { analyzerEndpoints: analyzerEndpoints ?? [] });
   const [ollamaHealth, setOllamaHealth] = useState<OllamaHealth | null>(null);
   const [pendingAnalyzerPill, setPendingAnalyzerPill] = useState<ModelControlState | null>(null);
   const [analyzerProbeKey, setAnalyzerProbeKey] = useState(0);
@@ -612,6 +615,7 @@ export function AnalysingView({
          running analysis from the reverse-direction guard's
          perspective (see use-reverse-local-analyzer-guard.tsx). */
         engine: effectiveEngine,
+        gpu: effectiveGpu,
         phaseId: 0,
         phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
         phaseProgress: 0,
@@ -1048,6 +1052,7 @@ export function AnalysingView({
         manuscriptId,
         bookTitle: title ?? undefined,
         engine: effectiveEngine,
+        gpu: effectiveGpu,
         phaseId: 0,
         phaseLabel: ANALYSIS_PHASES[0]?.label ?? 'Detecting characters',
         phaseProgress: 0,

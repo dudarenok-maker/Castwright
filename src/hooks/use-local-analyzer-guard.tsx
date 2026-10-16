@@ -38,6 +38,8 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { selectAnyActiveStream } from '../store/chapters-slice';
 import { haltActiveGeneration } from '../store/queue-thunks';
 import { engineForModelId } from '../lib/models';
+import { analyzerSharesTtsDevice, endpointForModelId, ttsDeviceKeyFor } from '../lib/analyzer-endpoints';
+import type { TtsModelKey } from '../lib/types';
 import { ConfirmDialog } from '../modals/confirm-dialog';
 import { IconWarning } from '../lib/icons';
 
@@ -70,18 +72,43 @@ export function useLocalAnalyzerGuard({ generatingBookTitle, modelId }: GuardOpt
      string read so this hook doesn't re-render on every progress tick. */
   const activeBookId = useAppSelector((s) => Object.keys(s.chapters.activeStreams)[0] ?? null);
   const libraryBooks = useAppSelector((s) => s.library.books);
+  const analyzerEndpoints = useAppSelector((s) => s.account?.analyzerEndpoints);
+  const configValues = useAppSelector((s) => s.config?.values);
+  const reportedTtsDevices = useAppSelector((s) => s.config?.ttsReportedDevices ?? null);
+  /* N8 — every live generation, not just the first: two books can generate on two cards, and
+     the endpoint has to be compared with each. A joined string keeps the selector's result
+     stable across progress ticks (the same reason the book-title selector reads a string). */
+  const generatingModelKeysKey = useAppSelector((s) =>
+    Object.values(s.chapters.activeStreams)
+      .map((stream) => stream.modelKey)
+      .join('|'),
+  );
 
   /* Stash the proceed callback in state — the modal needs to call it on
      confirm, after dispatching the halt. Null while closed. */
   const [pending, setPending] = useState<(() => void) | null>(null);
 
-  /* Engine lookup — Ollama shares the card with the Voice engine. Gemini is a remote
-     API and safe alongside TTS. An OpenAI-compatible endpoint fails closed here until
-     the card comparison lands (#3084 W3d). */
-  const engine = engineForModelId(modelId ?? selectedModel);
+  /* Ollama shares the card with the Voice engine; Gemini is a remote API and safe alongside
+     TTS; an OpenAI-compatible endpoint shares when it sits on 'any' or the TTS card (#3084). */
+  const targetModel = modelId ?? selectedModel;
+  const engine = engineForModelId(targetModel);
+  const endpointGpu = endpointForModelId({ analyzerEndpoints: analyzerEndpoints ?? [] }, targetModel)?.gpu;
+  const generatingModelKeys = generatingModelKeysKey.length > 0 ? generatingModelKeysKey.split('|') : [];
+  /* Shares if it shares with ANY live generation (N8). With none live the card is unknown, so
+     the rule falls back to its fail-closed answer; `anyActiveStream` below still gates. */
+  const shares =
+    generatingModelKeys.length === 0
+      ? analyzerSharesTtsDevice({ engine, endpointGpu, ttsDeviceKey: undefined })
+      : generatingModelKeys.some((key) =>
+          analyzerSharesTtsDevice({
+            engine,
+            endpointGpu,
+            ttsDeviceKey: ttsDeviceKeyFor(key as TtsModelKey, configValues, reportedTtsDevices),
+          }),
+        );
 
   const guard: GuardResult['guard'] = (proceed) => {
-    if (engine === 'gemini' || !anyActiveStream) {
+    if (!shares || !anyActiveStream) {
       proceed();
       return;
     }

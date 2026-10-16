@@ -206,6 +206,26 @@ describe('generationStreamMiddleware — enqueue-on-work (explicit-start intent)
     expect(enqueueCalls()).toHaveLength(0);
   });
 
+  it('#3084 — holds on explicit start while an endpoint analysis on a GPU is alive on the same book', async () => {
+    const { store } = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(analysisActions.setActiveStream({ bookId: 'b1', engine: 'openai', gpu: 'any', state: 'running', model: 'openai:lab::m', phase: 'phase1', done: 1, total: 5, lastTickAt: Date.now() } as never));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
+    store.dispatch(uiSlice.actions.requestStartGeneration());
+    await Promise.resolve();
+    expect(enqueueCalls()).toHaveLength(0);
+  });
+
+  it('#3084 — enqueues when the endpoint analysis runs on gpu none', async () => {
+    const { store } = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    store.dispatch(analysisActions.setActiveStream({ bookId: 'b1', engine: 'openai', gpu: 'none', state: 'running', model: 'openai:lab::m', phase: 'phase1', done: 1, total: 5, lastTickAt: Date.now() } as never));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
+    store.dispatch(uiSlice.actions.requestStartGeneration());
+    await Promise.resolve();
+    expect(enqueueCalls().length).toBeGreaterThanOrEqual(1);
+  });
+
   it('DOES enqueue on explicit start when the analysis is remote (gemini — no GPU contention)', async () => {
     const { store } = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));

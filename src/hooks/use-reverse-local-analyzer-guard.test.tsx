@@ -15,6 +15,8 @@ import { Provider } from 'react-redux';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { analysisSlice, type AnalysisStreamSnapshot } from '../store/analysis-slice';
 import { librarySlice } from '../store/library-slice';
+import { accountSlice } from '../store/account-slice';
+import { configSlice } from '../store/config-slice';
 import { useReverseLocalAnalyzerGuard } from './use-reverse-local-analyzer-guard';
 import type { LibraryBook } from '../lib/types';
 
@@ -23,6 +25,8 @@ function makeStore(opts: { activeStream: AnalysisStreamSnapshot | null; books?: 
     reducer: {
       analysis: analysisSlice.reducer,
       library: librarySlice.reducer,
+      account: accountSlice.reducer,
+      config: configSlice.reducer,
     },
   });
   if (opts.activeStream) {
@@ -189,5 +193,29 @@ describe('useReverseLocalAnalyzerGuard', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
     expect(screen.getByText(/b_marlow/)).toBeInTheDocument();
+  });
+
+  const endpointSnapshot = (gpu?: string): AnalysisStreamSnapshot => ({ ...liveLocalSnapshot, engine: 'openai', ...(gpu ? { gpu } : {}) });
+
+  it('#3084 — an endpoint run on gpu none never prompts', () => {
+    const store = makeStore({ activeStream: endpointSnapshot('none') });
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it('#3084 — an endpoint run on a GPU prompts (TTS card unknown → fail closed)', () => {
+    const store = makeStore({ activeStream: endpointSnapshot('cuda:1') });
+    render(<Provider store={store}><Harness onProceed={vi.fn()} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
+  });
+
+  it('#3084 — a cold-boot endpoint snapshot without gpu prompts', () => {
+    const store = makeStore({ activeStream: endpointSnapshot() });
+    render(<Provider store={store}><Harness onProceed={vi.fn()} /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause analysis to generate?')).toBeInTheDocument();
   });
 });

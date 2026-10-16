@@ -14,6 +14,9 @@ import { chaptersSlice, type ActiveStreamSnapshot } from '../store/chapters-slic
 import { librarySlice } from '../store/library-slice';
 import { useLocalAnalyzerGuard } from './use-local-analyzer-guard';
 import { haltActiveGeneration } from '../store/queue-thunks';
+import { accountSlice } from '../store/account-slice';
+import { configSlice, fetchConfig } from '../store/config-slice';
+import type { TtsReportedDevices } from '../lib/analyzer-endpoints';
 
 /* The guard's confirm dispatches haltActiveGeneration (requestStreamHalt +
    setQueuePaused) — its end-to-end behaviour is unit-tested in
@@ -28,18 +31,33 @@ beforeEach(() => {
   vi.mocked(haltActiveGeneration).mockClear();
 });
 
-function makeStore(opts: { selectedModel: string; activeStream: ActiveStreamSnapshot | null }) {
+function makeStore(opts: {
+  selectedModel: string;
+  activeStream: ActiveStreamSnapshot | null;
+  /** N8 — further live generations, each able to sit on its own card. */
+  extraStreams?: ActiveStreamSnapshot[];
+  endpoints?: unknown[];
+  ttsDevice?: string;
+  /** N5 — what the sidecar's last /health reported. */
+  reported?: TtsReportedDevices;
+}) {
   const store = configureStore({
-    reducer: {
-      ui: uiSlice.reducer,
-      chapters: chaptersSlice.reducer,
-      library: librarySlice.reducer,
-    },
+    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, library: librarySlice.reducer, account: accountSlice.reducer, config: configSlice.reducer },
   });
   store.dispatch(uiSlice.actions.setSelectedModel(opts.selectedModel));
-  if (opts.activeStream) {
-    store.dispatch(chaptersSlice.actions.setActiveStream(opts.activeStream));
+  if (opts.activeStream) store.dispatch(chaptersSlice.actions.setActiveStream(opts.activeStream));
+  for (const extra of opts.extraStreams ?? []) store.dispatch(chaptersSlice.actions.setActiveStream(extra));
+  if (opts.endpoints) store.dispatch({ type: 'account/fetch/fulfilled', payload: { analyzerEndpoints: opts.endpoints } });
+  if (opts.ttsDevice) {
+    store.dispatch(
+      fetchConfig.fulfilled(
+        { groups: [], descriptors: [], values: { 'tts.coqui.device': { key: 'tts.coqui.device', effective: opts.ttsDevice, source: 'override', locked: false, overridden: true } }, restartPending: false, cudaEnvShadow: false, envCleanupCandidates: [] },
+        '',
+        undefined,
+      ),
+    );
   }
+  if (opts.reported) store.dispatch(configSlice.actions.ttsDevicesReported(opts.reported));
   return store;
 }
 
@@ -204,14 +222,78 @@ describe('useLocalAnalyzerGuard', () => {
     expect(proceed).toHaveBeenCalledTimes(1);
   });
 
-  it('an OpenAI-compatible endpoint model fails closed (prompts) while a stream is active', () => {
-    const store = makeStore({ selectedModel: 'gemini-2.5-flash', activeStream: liveSnapshot });
+  const lab = (gpu: string) => [{ id: 'lab', name: 'Lab', baseUrl: 'http://127.0.0.1:8080/v1', gpu, concurrency: 1, requestCeilingMs: 1_800_000, structuredOutput: 'schema', reasoningStyle: 'not_controllable', reasoning: 'model-default', maxOutputTokens: 0, contextTokens: 8192 }];
+
+  it('prompts for an endpoint on the TTS card', () => {
+    const store = makeStore({ selectedModel: 'gemini-2.5-flash', activeStream: liveSnapshot, endpoints: lab('cuda:0'), ttsDevice: 'cuda:0' });
     const proceed = vi.fn();
-    render(
-      <Provider store={store}>
-        <Harness onProceed={proceed} modelId="openai:lab::qwen3-30b" />
-      </Provider>,
-    );
+    render(<Provider store={store}><Harness onProceed={proceed} modelId="openai:lab::m" /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
+  });
+
+  it('passes through for an endpoint on another card', () => {
+    const store = makeStore({ selectedModel: 'gemini-2.5-flash', activeStream: liveSnapshot, endpoints: lab('cuda:1'), ttsDevice: 'cuda:0' });
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} modelId="openai:lab::m" /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it('passes through for an endpoint with gpu none', () => {
+    const store = makeStore({ selectedModel: 'gemini-2.5-flash', activeStream: liveSnapshot, endpoints: lab('none') });
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} modelId="openai:lab::m" /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed for an endpoint id missing from settings', () => {
+    const store = makeStore({ selectedModel: 'gemini-2.5-flash', activeStream: liveSnapshot, endpoints: [], ttsDevice: 'cuda:0' });
+    render(<Provider store={store}><Harness onProceed={vi.fn()} modelId="openai:gone::m" /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
+  });
+
+  it('#3084 N5 — an auto TTS engine uses the card the sidecar reported: an endpoint on the other card passes through', () => {
+    /* No tts.qwen.device override at all; the sidecar says the resident Qwen is on cuda:1. */
+    const store = makeStore({
+      selectedModel: 'gemini-2.5-flash',
+      activeStream: { ...liveSnapshot, modelKey: 'qwen3-tts-0.6b' },
+      endpoints: lab('cuda:0'),
+      reported: { qwenDeviceKey: 'cuda:1', families: { qwen: 'cuda' } },
+    });
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} modelId="openai:lab::m" /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it('#3084 N5 — a TTS engine the sidecar runs on CPU shares no card, so even an any endpoint passes through', () => {
+    const store = makeStore({
+      selectedModel: 'gemini-2.5-flash',
+      activeStream: { ...liveSnapshot, modelKey: 'kokoro-v1' },
+      endpoints: lab('any'),
+      reported: { qwenDeviceKey: null, families: { kokoro: 'cpu' } },
+    });
+    const proceed = vi.fn();
+    render(<Provider store={store}><Harness onProceed={proceed} modelId="openai:lab::m" /></Provider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
+    expect(proceed).toHaveBeenCalledTimes(1);
+  });
+
+  it("#3084 N8 — compares every live generation, not only the first: a second book on the endpoint's card prompts", () => {
+    /* Stream 1: Kokoro, reported on CPU. Stream 2: Coqui, pinned to cuda:0 — the card this
+       endpoint shares. Reading only the first stream would let the analysis start. */
+    const store = makeStore({
+      selectedModel: 'gemini-2.5-flash',
+      activeStream: { ...liveSnapshot, streamKey: 'b1::1', bookId: 'b1', modelKey: 'kokoro-v1' },
+      extraStreams: [{ ...liveSnapshot, streamKey: 'b2::1', bookId: 'b2', modelKey: 'coqui-xtts-v2' }],
+      endpoints: lab('cuda:0'),
+      ttsDevice: 'cuda:0', // tts.coqui.device
+      reported: { qwenDeviceKey: null, families: { kokoro: 'cpu' } },
+    });
+    render(<Provider store={store}><Harness onProceed={vi.fn()} modelId="openai:lab::m" /></Provider>);
     fireEvent.click(screen.getByRole('button', { name: 'Trigger' }));
     expect(screen.getByText('Pause audio generation to analyse?')).toBeInTheDocument();
   });
