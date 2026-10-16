@@ -31,6 +31,7 @@ import { isPrivateHostUrl } from '../lib/sidecar-url';
 import { OllamaInstall } from './ollama-install';
 import type { AnalysisEngine } from '../lib/model-id';
 import { ModelPullStatus } from './model-pull-status';
+import { AnalyzerEndpointsSection } from './settings/analyzer-endpoints-section';
 
 /* #3141 step 3 — read-only display for a field whose editing moved to
    Advanced Settings (ollamaUrl, the two per-phase analyzer models, the
@@ -87,6 +88,13 @@ const GROUP_SERVER_CONFIG: ConfigGroup = {
   risk: 'low',
   collapsedByDefault: false,
 };
+const GROUP_ANALYZER_ENDPOINTS: ConfigGroup = {
+  id: 'model-analyzer-endpoints',
+  label: 'Analyzer endpoints (OpenAI-compatible)',
+  help: 'Your own OpenAI Chat Completions-compatible servers — llama.cpp / llama-swap, LM Studio, vLLM, LiteLLM, OpenRouter — used for analysis. Their models appear in every analysis-model picker once listed.',
+  risk: 'low',
+  collapsedByDefault: false,
+};
 const GROUP_MODELS_INSTALL: ConfigGroup = {
   id: 'model-install',
   label: 'Install / update analyzer (Ollama)',
@@ -106,6 +114,11 @@ export const MODEL_SETTINGS_SECTIONS: SectionNavItem[] = [
   },
   { id: GROUP_VOICE_ENGINE.id, label: GROUP_VOICE_ENGINE.label, risk: GROUP_VOICE_ENGINE.risk },
   { id: GROUP_SERVER_CONFIG.id, label: GROUP_SERVER_CONFIG.label, risk: GROUP_SERVER_CONFIG.risk },
+  {
+    id: GROUP_ANALYZER_ENDPOINTS.id,
+    label: GROUP_ANALYZER_ENDPOINTS.label,
+    risk: GROUP_ANALYZER_ENDPOINTS.risk,
+  },
   {
     id: GROUP_MODELS_INSTALL.id,
     label: GROUP_MODELS_INSTALL.label,
@@ -477,6 +490,10 @@ export function ModelSettingsForm({ embedded = false }: { embedded?: boolean } =
           status={account.apiKeyStatus}
           onSave={(key) => dispatch(saveGeminiApiKey(key))}
         />
+      </SettingsSection>
+
+      <SettingsSection group={GROUP_ANALYZER_ENDPOINTS} overriddenCount={0}>
+        <AnalyzerEndpointsSection />
       </SettingsSection>
 
       <SettingsSection group={GROUP_MODELS_INSTALL} overriddenCount={0}>

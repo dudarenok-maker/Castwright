@@ -18,6 +18,8 @@ vi.mock('../lib/api', () => ({
     getSetupReadiness: vi.fn(),
     putUserSettings: vi.fn(),
     putGeminiKey: vi.fn(),
+    getGpuDevices: vi.fn().mockResolvedValue({ devices: [], cpu: true }),
+    previewAnalyzerEndpointModels: vi.fn(),
   },
 }));
 
