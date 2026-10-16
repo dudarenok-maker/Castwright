@@ -686,7 +686,7 @@ $EDITOR docs/release-notes-next.md
 
 # 3. Bump versions, GATE on a green cross-OS run, then create the chore commit
 #    + annotated tag. Same command on Windows, macOS, Linux. This fires
-#    cross-os.yml on main and BLOCKS (~15–20 min); if it fails the tag is NOT
+#    cross-os.yml on main and BLOCKS (~20–30 min); if it fails the tag is NOT
 #    created — fix main and re-run. --skip-cross-os bypasses the gate.
 #    The bump REFUSES if the notes are missing or their version marker is stale
 #    (a release can't ship a placeholder body); --allow-placeholder overrides.

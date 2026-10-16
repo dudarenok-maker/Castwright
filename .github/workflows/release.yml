@@ -83,7 +83,10 @@ jobs:
   cross-os-verify:
     name: Verify (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    # 30 (not 25): same battery as cross-os.yml, whose Windows leg grew from
+    # ~11 to ~19.4 min and hit the old cap; keeps both at verify.yml's
+    # windows-tests cap (#3696).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

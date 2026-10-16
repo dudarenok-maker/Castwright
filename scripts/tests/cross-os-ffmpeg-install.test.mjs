@@ -600,3 +600,29 @@ for (const path of WORKFLOWS) {
     );
   });
 }
+
+// #3696: the macOS + Windows cross-os-verify matrix runs the full
+// verify:quick (test:all) + audit + build. Windows grew from ~11 min to
+// ~19.4 min (run 38498989695 was cancelled at 20m07s by the old 20-min cap),
+// so a cap below 30 (verify.yml's windows-tests cap) cancels a healthy run.
+const CROSS_OS_VERIFY_MIN_TIMEOUT = 30;
+
+for (const path of WORKFLOWS) {
+  const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
+
+  test(`${rel}: cross-os-verify job timeout-minutes is >= ${CROSS_OS_VERIFY_MIN_TIMEOUT} (#3696)`, () => {
+    const source = readNormalized(path);
+    const start = source.indexOf('\n  cross-os-verify:');
+    assert.ok(start !== -1, 'no cross-os-verify job found -- did it get renamed?');
+    // The job ends at the next job key (2-space indent) or end of file.
+    const rest = source.slice(start + 1);
+    const next = rest.slice(1).search(/\n {2}[A-Za-z][\w-]*:\n/);
+    const job = next === -1 ? rest : rest.slice(0, next + 1);
+    const m = job.match(/\n {4}timeout-minutes:\s*(\d+)\b/);
+    assert.ok(m, 'cross-os-verify job has no timeout-minutes');
+    assert.ok(
+      Number(m[1]) >= CROSS_OS_VERIFY_MIN_TIMEOUT,
+      `cross-os-verify timeout-minutes is ${m[1]}, below the measured battery's ${CROSS_OS_VERIFY_MIN_TIMEOUT}-min floor (#3696)`,
+    );
+  });
+}

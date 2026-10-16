@@ -42,7 +42,11 @@ jobs:
   cross-os-verify:
     name: Verify (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # 30 (not 20): the matrix runs the full verify:quick (test:all) + audit +
+    # build. Windows grew from ~11 min (09-27) to ~19.4 min, so run 38498989695
+    # was cancelled at 20m07s; macOS also hung once (10-07). Matches verify.yml's
+    # windows-tests cap (#3696).
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
