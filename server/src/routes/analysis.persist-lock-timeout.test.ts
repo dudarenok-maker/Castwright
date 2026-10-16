@@ -347,7 +347,7 @@ function buildSelection(analyzer: Analyzer, model: string): AnalyzerSelection {
 }
 
 interface StateJsonOnDisk {
-  chapters: Array<{ id: number; title: string; duration?: number }>;
+  chapters: Array<{ id: number; title: string; duration?: number; uuid?: string }>;
   analysisProvenance?: { engine?: string; model?: string; at?: string };
   updatedAt?: string;
 }
@@ -359,6 +359,7 @@ interface StateJsonOnDisk {
 async function runJob(
   label: string,
   kind: 'main' | 'subset' = 'main',
+  seedUuids = false,
 ): Promise<{
   events: Array<{ kind?: string; code?: string; message?: string }>;
   state: StateJsonOnDisk;
@@ -387,9 +388,9 @@ async function runJob(
       manuscriptFile: 'manuscript.md',
       castConfirmed: false,
       chapters: [
-        { id: 1, title: STALE_CHAPTER_TITLE, slug: '01-stale' },
-        { id: 2, title: STALE_CHAPTER_TITLE, slug: '02-stale' },
-        { id: 3, title: STALE_CHAPTER_TITLE, slug: '03-stale' },
+        { id: 1, title: STALE_CHAPTER_TITLE, slug: '01-stale', ...(seedUuids ? { uuid: 'seed-uuid-1' } : {}) },
+        { id: 2, title: STALE_CHAPTER_TITLE, slug: '02-stale', ...(seedUuids ? { uuid: 'seed-uuid-2' } : {}) },
+        { id: 3, title: STALE_CHAPTER_TITLE, slug: '03-stale', ...(seedUuids ? { uuid: 'seed-uuid-3' } : {}) },
       ],
       coverGradient: ['#000', '#fff'],
       createdAt: STALE_UPDATED_AT,
@@ -1158,6 +1159,42 @@ describe.each([
         expect(terminal?.kind).toBe('result');
         expect(run.events.some((e) => e.kind === 'error')).toBe(false);
         expect(run.errors.some((e) => e.includes('failed to persist .audiobook/*'))).toBe(true);
+      } finally {
+        await run.cleanup();
+      }
+    },
+    60_000,
+  );
+});
+
+/* #3625 pass-1 review — both persist blocks rebuild the chapter list from
+ * scratch; a chapter's stable `uuid` (srv-35, invariant 1: no path regenerates
+ * an existing one) must ride through by id like `excluded` / `held` do, or the
+ * next scan mints a new random uuid for every chapter.
+ */
+describe.each([
+  ['runMainAnalyzerJob', 'main' as const],
+  ['runSubsetAnalyzerJob', 'subset' as const],
+])('%s persist block — chapter uuids survive (#3625)', (_name, kind) => {
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__analyzer_device_test_phase1_selection;
+  });
+
+  it(
+    'a seeded uuid is carried across the rewrite by chapter id',
+    async () => {
+      const run = await runJob(`uuid-${kind}`, kind, true);
+      try {
+        expect(run.state.chapters.map((c) => c.title)).toEqual([
+          'Chapter One',
+          'Chapter Two',
+          'Chapter Three',
+        ]);
+        expect(run.state.chapters.map((c) => c.uuid)).toEqual([
+          'seed-uuid-1',
+          'seed-uuid-2',
+          'seed-uuid-3',
+        ]);
       } finally {
         await run.cleanup();
       }

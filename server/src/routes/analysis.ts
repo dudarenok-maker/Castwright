@@ -7184,9 +7184,15 @@ export async function runMainAnalyzerJob(
                    workspace/scan.ts. */
                 const prevExcludedById = new Map<number, boolean>();
                 const prevHeldById = new Map<number, boolean>();
+                /* srv-35 — `uuid` is the chapter's stable identity (invariant 1:
+                   no path regenerates one), so it rides through by id too; the
+                   rebuild below would otherwise drop it and the next scan would
+                   mint a fresh random uuid for every chapter. */
+                const prevUuidById = new Map<number, string>();
                 for (const c of prev.chapters) {
                   if (c.excluded) prevExcludedById.set(c.id, true);
                   if (c.held) prevHeldById.set(c.id, true);
+                  if (c.uuid) prevUuidById.set(c.id, c.uuid);
                 }
                 const next: BookStateJson = {
                   ...prev,
@@ -7197,6 +7203,7 @@ export async function runMainAnalyzerJob(
                     duration: c.duration,
                     excluded: prevExcludedById.get(c.id) || undefined,
                     held: prevHeldById.get(c.id) || undefined,
+                    uuid: prevUuidById.get(c.id),
                   })),
                   /* srv-59 Task 11 — record which analyzer produced this cast/
                      sentence set and, when the dialogue-structure engine ran,
@@ -9131,9 +9138,15 @@ export async function runSubsetAnalyzerJob(
                    re-derivable from disk, so it must ride through here. */
                 const prevExcludedById = new Map<number, boolean>();
                 const prevHeldById = new Map<number, boolean>();
+                /* srv-35 — `uuid` is the chapter's stable identity (invariant 1:
+                   no path regenerates one), so it rides through by id too; the
+                   rebuild below would otherwise drop it and the next scan would
+                   mint a fresh random uuid for every chapter. */
+                const prevUuidById = new Map<number, string>();
                 for (const c of prev.chapters) {
                   if (c.excluded) prevExcludedById.set(c.id, true);
                   if (c.held) prevHeldById.set(c.id, true);
+                  if (c.uuid) prevUuidById.set(c.id, c.uuid);
                 }
                 const next: BookStateJson = {
                   ...prev,
@@ -9144,6 +9157,7 @@ export async function runSubsetAnalyzerJob(
                     duration: c.duration,
                     excluded: prevExcludedById.get(c.id) || undefined,
                     held: prevHeldById.get(c.id) || undefined,
+                    uuid: prevUuidById.get(c.id),
                   })),
                   /* srv-59 Task 11 — a subset retry supersedes whatever
                      provenance the last full run left, so this REWRITES the
