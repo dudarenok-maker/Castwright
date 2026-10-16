@@ -6478,3 +6478,26 @@ for (const [label, cellRegex] of [
     assert.match(errors[0], /, body has \d+ rows?\. Update the table or the body\.$/);
   });
 }
+
+test('#3587 review: legacy `—` rows on the live Blocked/Unconfirmed sections raise an advisory warning only when the register carries IDs', () => {
+  const run = (html, register = REAL_REGISTER_TEXT) =>
+    ofPrefix(
+      checkLiveView(register, html, {
+        direction: 'extraOnly',
+        baselineText: register,
+        trackedLiveViewHtml: REAL_LIVE_VIEW_HTML,
+        publishedProvenance: UNMERGED,
+      }),
+      onbox.LEGACY_LIVE_ROW_WARNING_PREFIX,
+    );
+  assert.deepEqual(run(REAL_LIVE_VIEW_HTML), [], 'the tracked page has IDs, so nothing to warn about');
+  const legacy = REAL_LIVE_VIEW_HTML.replace(/<span class="num">(?:BLK|UNC)\d+<\/span>/g, '<span class="num">—</span>');
+  assert.notEqual(legacy, REAL_LIVE_VIEW_HTML);
+  const warnings = run(legacy);
+  assert.equal(warnings.length, 2, JSON.stringify(warnings));
+  assert.match(warnings[0], /Blocked section has 6 legacy rows with no BLK ID/);
+  assert.match(warnings[1], /Unconfirmed section has 2 legacy rows with no UNC ID/);
+  const idless = REAL_REGISTER_TEXT.replace(/^### BLK\d+ · /gm, '### ').replace(/^(- \*\*)UNC\d+ · /gm, '$1').replace(/^<!-- next-id: (?:BLK|UNC)\d+ -->\r?\n/gm, '');
+  assert.notEqual(idless, REAL_REGISTER_TEXT);
+  assert.deepEqual(run(legacy, idless), [], 'a register with no BLK/UNC IDs is the pre-#3587 state: no warning');
+});

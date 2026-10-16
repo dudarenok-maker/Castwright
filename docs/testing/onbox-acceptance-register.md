@@ -241,7 +241,11 @@ comparison, see the edge list above). The merge step that closes this, run
    - **in no history this checkout has**: FAILS as `unknown-provenance`.
 
    Blocked and Unconfirmed rows carry `BLK` / `UNC` IDs, so they are compared,
-   carried and unioned exactly like lettered rows.
+   carried and unioned exactly like lettered rows. A live page published
+   before #3587 still has legacy `—` rows in those two sections; they have no
+   ID, so the comparison cannot see them, and `--against-published` prints an
+   advisory (non-blocking) warning naming the count. Read those sections on
+   the live page by hand until a publish replaces it.
 
    A row ID you share with the live page under a different title FAILS as
    `row-id-collision` (unless the page is your own earlier publish and its

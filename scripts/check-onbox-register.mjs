@@ -1320,6 +1320,11 @@ export const PUBLISHING_FILE_ERROR_PREFIX = 'publishing-file: ';
 // cannot confirm an entry, which is then accepted.
 export const RETIRED_ROW_ERROR_PREFIX = 'retired-carried-row: ';
 export const RETIRED_ROW_WARNING_PREFIX = 'retired-row-warning: ';
+// #3587 review: advisory, non-blocking. The live page's Blocked/Unconfirmed
+// section still has legacy `—` rows (no BLK/UNC ID) while the register's
+// section carries IDs. Those rows cannot be compared, carried or unioned, so
+// the comparison is blind to them until a publish replaces the page.
+export const LEGACY_LIVE_ROW_WARNING_PREFIX = 'legacy-live-row-warning: ';
 
 // Compares the live view against the markdown. Returns human-readable error
 // strings; empty when the two agree.
@@ -1787,6 +1792,21 @@ export function checkLiveView(
     duplicateLetters: duplicateSectionLetters,
     invalidRowIds,
   } = parseLiveViewSections(liveViewHtml);
+  if (direction === 'extraOnly') {
+    for (const { prefix, sectionId, name } of [
+      { prefix: 'BLK', sectionId: 'blocked', name: 'Blocked' },
+      { prefix: 'UNC', sectionId: 'unconfirmed', name: 'Unconfirmed' },
+    ]) {
+      if (!mdBodyGroups.has(prefix)) continue;
+      const block = liveViewHtml.match(new RegExp(`<section\\b[^>]*\\bid="${sectionId}"[^>]*>[\\s\\S]*?</section>`));
+      const legacy = block ? [...block[0].matchAll(/<span class="num">\s*—\s*<\/span>/g)].length : 0;
+      if (legacy > 0) {
+        errors.push(
+          `${LEGACY_LIVE_ROW_WARNING_PREFIX}the live page's ${name} section has ${legacy} legacy row${legacy === 1 ? '' : 's'} with no ${prefix} ID, while this register's ${name} rows carry IDs. Those rows are invisible to this comparison (they cannot be compared, carried or unioned) — read the live ${name} section by hand before you publish.`,
+        );
+      }
+    }
+  }
   if (lvGroups === null) {
     errors.push(
       'Live view: no `<table class="glance">` found — the per-group counts could not be read. If the markup changed, update scripts/check-onbox-register.mjs.',
@@ -3432,6 +3452,9 @@ function runCheckOnboxRegisterCli() {
     const retiredWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(RETIRED_ROW_WARNING_PREFIX));
+    const legacyLiveRowWarnings = cannotVerify
+      ? []
+      : publishedErrors.filter((e) => e.startsWith(LEGACY_LIVE_ROW_WARNING_PREFIX));
     const threeWayWarnings = cannotVerify
       ? []
       : publishedErrors.filter((e) => e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX));
@@ -3446,6 +3469,7 @@ function runCheckOnboxRegisterCli() {
             !e.startsWith(PUBLISHING_FILE_ERROR_PREFIX) &&
             !e.startsWith(RETIRED_ROW_ERROR_PREFIX) &&
             !e.startsWith(RETIRED_ROW_WARNING_PREFIX) &&
+            !e.startsWith(LEGACY_LIVE_ROW_WARNING_PREFIX) &&
             !e.startsWith(ROW_CONTENT_DRIFT_ERROR_PREFIX) &&
             !e.startsWith(EXTRACTION_ERROR_PREFIX) &&
             !e.startsWith(THREE_WAY_CONTENT_WARNING_PREFIX),
@@ -3508,6 +3532,12 @@ function runCheckOnboxRegisterCli() {
       if (retiredWarnings.length > 0) {
         console.warn(`\n${RETIRED_SECTION_TITLE} accepted WITHOUT a gh check (not blocking — confirm each by hand):`);
         for (const warning of retiredWarnings) console.warn(`  ${warning}`);
+      }
+      if (legacyLiveRowWarnings.length > 0) {
+        console.warn('\nLegacy live-page rows (not blocking — check by hand):');
+        for (const warning of legacyLiveRowWarnings) {
+          console.warn(`  ${warning.substring(LEGACY_LIVE_ROW_WARNING_PREFIX.length)}`);
+        }
       }
       if (unknownProvenanceErrors.length > 0) {
         publishedFailed =
