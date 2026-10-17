@@ -898,10 +898,14 @@ export async function scoreBook(
     const engine = currentCharacterEngine(castChar, defaultEngineFor(charId), bookLanguage);
     if (!engine) continue;
     /* Tier: a Qwen audition renders at the tier the render itself stamps — the
-       character's elevate-only pin over the run key (else the old snapshot's key) —
+       character's elevate-only pin over the run key (for a character the run rendered),
+       else the key of the snapshot that supplied the stamped engine, else the old snapshot's —
        via the same resolveCharacterQwenTier buildCharacterSnapshots uses, so a 1.7B
        pin is never auditioned on the 0.6B base (8 GB OOM; non-comparable speaker space). */
-    const baseKey = canonicalModelKeyForEngine(engine, opts?.runModelKey ?? info.modelKey);
+    const baseKey = canonicalModelKeyForEngine(
+      engine,
+      (runRenderedChars.has(charId) ? opts?.runModelKey : undefined) ?? stampedByChar.get(charId)?.modelKey ?? info.modelKey,
+    );
     const modelKey = engine === 'qwen' ? resolveCharacterQwenTier(castChar, baseKey) : baseKey;
     if (info.voiceName !== currentVoice || info.modelKey !== modelKey) {
       voiceInfoByChar.set(charId, {

@@ -842,3 +842,31 @@ describe("scoreBook — the run's model key applies only to characters the run r
     expect((await readCentroids(dir))!['thurid'].inBookVoiceName).toBe('Ana Florence');
   });
 });
+
+describe("scoreBook — Resume auditions at the tier of the snapshot that supplied the stamped engine (#3524 pass 3 P3)", () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 1;
+    defaultModelKey.value = 'qwen3-tts-1.7b';
+  });
+
+  it('an un-pinned character re-recorded on Qwen at a 1.7B run default auditions at 1.7B on Resume', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-resume-tier-'));
+    writeCastRow(dir, BOTH);
+    await writeChapterLines(dir, 'ch1', 1, [0, 1, 2].map((sid) => ({ sid, axis: 3, jitter: sid, voice: 'Ana Florence' })), 'Ana Florence', 'thurid', 'coqui');
+    await writeChapterLines(
+      dir, 'ch2', 2,
+      [
+        { sid: 0, axis: 1, jitter: 0, voice: 'qwen-hq' },
+        { sid: 1, axis: 1, jitter: 1, voice: 'qwen-hq' },
+        { sid: 2, axis: 3, jitter: 2, voice: 'Ana Florence' },
+      ],
+      'Ana Florence', 'thurid', 'qwen', 'qwen3-tts-1.7b',
+    );
+
+    await scoreBook(dir, CHAPTERS);
+
+    expect(auditionSpy).toHaveBeenCalledTimes(1);
+    expect((auditionSpy.mock.calls[0] as unknown[])[0]).toMatchObject({ voiceName: 'qwen-hq', modelKey: 'qwen3-tts-1.7b' });
+  });
+});
