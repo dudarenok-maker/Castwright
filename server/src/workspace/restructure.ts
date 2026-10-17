@@ -542,14 +542,12 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
    re-derive against the new ids. Renumbering also recomputes slugs for
    any title that changed.
 
-   Audio ops referencing a chapter whose generic title got rewritten
-   would technically need their `to` slug updated too — but in practice,
-   when a chapter is auto-titled "Chapter N", its audio file is keyed off
-   the same generic title, so the rename op's `to` already matches. The
-   one edge case is a chapter that was auto-titled at parse time, then
-   manually renamed by the user, then auto-titled-again here — but an
-   explicit title (rename, merge `mergedTitle`) clears `titleSynthesized`,
-   and only flagged chapters are renumbered, so this case can't arise. */
+   Audio ops referencing a chapter whose generic title got rewritten need
+   their `to` slug updated too (re-keyed below). A rendered chapter the
+   renumber re-slugs that has NO op at all — the chapters after a split
+   keep their old app-made titles at shifted ids (split skips this post-
+   pass), so the next merge / reorder / exclude renumbers them without any
+   op of its own — is owed a rename too, or its files stay at the old slug. */
 function postProcessRestructure(result: RestructureResult): RestructureResult {
   const pruned = pruneEmptyChaptersInResult(result);
   const titled = renumberGenericTitlesInChapters(pruned.state.chapters);
@@ -568,6 +566,24 @@ function postProcessRestructure(result: RestructureResult): RestructureResult {
     }
     return op;
   });
+
+  // A rendered chapter the renumber re-slugged that no op moves: emit the rename it is owed,
+  // from the slug its files sit at now (its slug in `pruned.state`).
+  const renamedNewIds = new Set(
+    adjustedAudioOps.flatMap((op) => (op.kind === 'rename' ? [op.newChapterId] : [])),
+  );
+  for (const before of pruned.state.chapters) {
+    const after = renumberedById.get(before.id);
+    if (!before.audioRenderedAt || !after || after.slug === before.slug) continue;
+    if (renamedNewIds.has(before.id)) continue;
+    adjustedAudioOps.push({
+      kind: 'rename',
+      from: before.slug,
+      to: after.slug,
+      newChapterId: after.id,
+      newChapterTitle: after.title,
+    });
+  }
 
   const msg = `Renumbered ${titled.renumbered} auto-generated chapter title${titled.renumbered === 1 ? '' : 's'} against new positions.`;
   console.warn(`[restructure] ${msg}`);

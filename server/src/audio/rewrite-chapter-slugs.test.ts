@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rewriteChapterSlugs } from './rewrite-chapter-slugs.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
-import { applyMerge } from '../workspace/restructure.js';
+import { applyExclude, applyMerge, applySplit } from '../workspace/restructure.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 let workRoot: string;
@@ -340,6 +340,64 @@ describe('rewriteChapterSlugs x applyMerge with an empty chapter (#3524 N2)', ()
     );
   });
 });
+describe('rewriteChapterSlugs x applySplit then applyExclude (#3524 R)', () => {
+  it('the title renumber after a split re-slugs a rendered chapter the later op did not touch, and moves its files with it', async () => {
+    const titles = [1, 2, 3, 4, 5].map((n) => `Chapter ${n}`);
+    const slugOf = (id: number, title: string) =>
+      `${String(id).padStart(2, '0')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const state = {
+      bookId: 'b', manuscriptId: 'm', title: 'T', author: 'A', series: 'Standalones', seriesPosition: null,
+      isStandalone: true, manuscriptFile: 'manuscript.txt', castConfirmed: false,
+      chapters: titles.map((title, i) => ({
+        id: i + 1, title, slug: slugOf(i + 1, title), titleSynthesized: true, audioRenderedAt: '2026-01-01T00:00:00.000Z',
+      })),
+      coverGradient: ['#000', '#fff'], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    } as unknown as BookStateJson;
+    const hints = titles.map((title, i) => ({ id: i + 1, title, body: i === 1 ? 'Alpha one. Beta two.' : `body ${i + 1}` }));
+    const sentences = [
+      { id: 1, chapterId: 1, characterId: 'narrator', text: 's1' },
+      { id: 1, chapterId: 2, characterId: 'narrator', text: 'Alpha one.' },
+      { id: 2, chapterId: 2, characterId: 'narrator', text: 'Beta two.' },
+      { id: 1, chapterId: 3, characterId: 'narrator', text: 's3' },
+      { id: 1, chapterId: 4, characterId: 'narrator', text: 's4' },
+      { id: 1, chapterId: 5, characterId: 'narrator', text: 's5' },
+    ];
+    const suffixes = ['mp3', 'segments.json', 'peaks.json'];
+    for (const c of state.chapters) {
+      for (const s of suffixes) {
+        const tag = `${s}:${c.title}`;
+        writeFileSync(join(audioRoot, `${c.slug}.${s}`), s === 'mp3' ? tag : JSON.stringify({ tag }));
+      }
+    }
+
+    const split = applySplit(state, hints, sentences, { chapterId: 2, afterSentenceId: 1, newTitle: 'Chapter 9' });
+    expect((await rewriteChapterSlugs(audioRoot, split.audioOps)).errors).toEqual([]);
+    // Chapters after the split keep their old app-made titles at shifted ids.
+    const toggled = applyExclude(split.state, split.hints, split.sentences, { chapterIds: [1], excluded: true });
+    expect((await rewriteChapterSlugs(audioRoot, toggled.audioOps)).errors).toEqual([]);
+
+    // Old "Chapter 3/4/5" are rendered survivors at final ids 4/5/6: each owns its content at its final slug.
+    const finalById = new Map(toggled.state.chapters.map((c) => [c.id, c]));
+    const owners: Array<[number, string]> = [[4, 'Chapter 3'], [5, 'Chapter 4'], [6, 'Chapter 5']];
+    for (const [id, originalTitle] of owners) {
+      const ch = finalById.get(id)!;
+      expect(ch.audioRenderedAt, `id ${id}`).toBeTruthy();
+      for (const s of suffixes) {
+        const p = join(audioRoot, `${ch.slug}.${s}`);
+        expect(existsSync(p), `${ch.slug}.${s}`).toBe(true);
+        const body = readFileSync(p, 'utf8');
+        expect(s === 'mp3' ? body : (JSON.parse(body) as { tag: string }).tag).toBe(`${s}:${originalTitle}`);
+      }
+    }
+    // Nothing is stranded at a slug no chapter owns.
+    const ownedSlugs = new Set(toggled.state.chapters.map((c) => c.slug));
+    for (const name of readdirSync(audioRoot)) {
+      const slug = name.slice(0, name.indexOf('.'));
+      expect(ownedSlugs.has(slug), name).toBe(true);
+    }
+  });
+});
+
 function readDirNames(dir: string): string[] {
   return readdirSync(dir);
 }
