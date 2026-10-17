@@ -530,12 +530,16 @@ describe('library-cast override router — AB/BA deadlock (#1981 fix-round Findi
       if (isSecondLookup) {
         arrived += 1;
         if (arrived === 2) releaseBoth();
+        /* A slow runner disk (fsync per write, #3694) stretches this window; the
+           barrier below must tolerate it, so simulate it on every run. */
+        await new Promise((r) => setTimeout(r, 2500));
         await gate; // hold the RESOLUTION open until both requests arrive
       }
       return result;
     });
 
     let results: [{ status: number }, { status: number }];
+    let deadlockTimer: ReturnType<typeof setTimeout> | undefined;
     try {
       results = (await Promise.race([
         Promise.all([
@@ -552,11 +556,15 @@ describe('library-cast override router — AB/BA deadlock (#1981 fix-round Findi
             targetCharacterId: 'x2',
           }),
         ]),
-        new Promise((_resolve, reject) =>
-          setTimeout(() => reject(new Error('DEADLOCK')), 2000),
-        ),
+        /* Wall-clock detector: generous enough for a slow, fsyncing runner disk
+           (#3694: 2 s false-tripped on the Windows leg) yet under the 15 s
+           testTimeout, so a lock that never releases still fails HERE. */
+        new Promise((_resolve, reject) => {
+          deadlockTimer = setTimeout(() => reject(new Error('DEADLOCK')), 12_000);
+        }),
       ])) as [{ status: number }, { status: number }];
     } finally {
+      clearTimeout(deadlockTimer);
       // Not `mockRestore()` — this is a `vi.fn()` wrapper (from the hoisted
       // `vi.mock` factory above), not a `vi.spyOn` spy, so restore its
       // default passthrough behaviour explicitly.

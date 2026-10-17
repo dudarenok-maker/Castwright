@@ -81,7 +81,11 @@ vi.mock('../workspace/book-dir-guard.js', async () => {
     withVerifiedBookDir: async (...args: Parameters<typeof actual.withVerifiedBookDir>) => {
       const gate = (globalThis as G).__rwm_resolve_gate as Promise<void> | undefined;
       if (gate) await gate;
-      return actual.withVerifiedBookDir(...args);
+      const p = actual.withVerifiedBookDir(...args);
+      /* A case can collect every resolution a route starts, to await them as a
+         positive barrier rather than guessing how long a write takes. */
+      ((globalThis as G).__rwm_wvbd_calls as Promise<unknown>[] | undefined)?.push(p);
+      return p;
     },
   };
 });
@@ -922,7 +926,7 @@ describe('writers, draining and busy release (#3435 decision A)', () => {
     /* Bounded by REAL time, not a tick count: the snapshot's write fsyncs, and a
        slow runner disk (the required Windows leg, #3694) can outlast any fixed
        number of setImmediate turns while setTimeout is faked. Date stays real. */
-    for (const deadline = Date.now() + 15_000; Date.now() < deadline && !existsSync(statePath); ) {
+    for (const deadline = Date.now() + 10_000; Date.now() < deadline && !existsSync(statePath); ) {
       await ioTicks(5);
     }
     expect(existsSync(statePath)).toBe(true);
@@ -931,9 +935,16 @@ describe('writers, draining and busy release (#3435 decision A)', () => {
     const app = express();
     app.use(express.json());
     app.use('/api/manuscripts', analysisRouter);
+    const wvbdCalls: Promise<unknown>[] = [];
+    g.__rwm_wvbd_calls = wvbdCalls;
     const res = await supertest(app).post(`/api/manuscripts/${seed.manuscriptId}/analysis/pause`).send({});
     expect(res.body).toEqual({ ok: true, paused: false });
-    await ioTicks(50);
+    /* Positive barrier, not a tick count: any snapshot /pause started has resolved
+       its book dir (recorded above), and the state path's write queue has drained,
+       so a wrong write has landed however slow the fsync is (#3694). */
+    await Promise.allSettled(wvbdCalls);
+    const { enqueuePathOp } = await import('../workspace/state-io.js');
+    await enqueuePathOp(statePath, async () => {});
     expect(existsSync(statePath)).toBe(false);
     expect(seed.job.controller.signal).toBe(abortedSignal);
     /* The deadline was armed by endJob and is not re-armed by /pause: 30 s more drops it. */
