@@ -2006,3 +2006,75 @@ describe('held / exclude POSTs take the book lock a restructure holds (#3400)', 
     }
   });
 });
+
+/* -- per-chapter fields a restructure used to drop (#3400, pass 7) -------- */
+
+describe('restructure carries held / audioEngines / audioQa / failure fields', () => {
+  type Ch = Record<string, unknown> & { id: number };
+  const chapters = () => readState().chapters as unknown as Ch[];
+  function patchChapters(fn: (c: Ch[]) => void): void {
+    const p = join(bookDir, '.audiobook', 'state.json');
+    const s = JSON.parse(readFileSync(p, 'utf8'));
+    fn(s.chapters);
+    writeFileSync(p, JSON.stringify(s));
+  }
+
+  it('hold chapter 1, merge 2+3: chapter 1 stays held (probe 5)', async () => {
+    await request(app).post(`/api/books/${bookId}/chapters/1/held`).send({ held: true });
+    const res = await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    expect(res.status).toBe(200);
+    expect(chapters()[0].held).toBe(true);
+    expect(chapters()[1].held).toBeUndefined();
+  });
+
+  it('merge: the merged chapter is held when ANY source chapter was (the conservative choice)', async () => {
+    await request(app).post(`/api/books/${bookId}/chapters/3/held`).send({ held: true });
+    await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    expect(chapters().map((c) => c.held)).toEqual([undefined, true]);
+  });
+
+  it('untouched chapters keep audioEngines, audioQa and the failure record through a merge', async () => {
+    const qa = { status: 'ok', reasons: [], measuredLufs: -20, truePeakDb: -2, durationSec: 5, expectedSec: 5, checkedAt: 'x' };
+    patchChapters((c) => {
+      c[0].audioEngines = { kokoro: 2 };
+      c[0].audioQa = qa;
+      c[0].generationState = 'failed';
+      c[0].generationError = 'boom';
+      c[0].generationErrorCode = 'E1';
+      c[0].generationRemediation = 'retry';
+    });
+    await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    const c1 = chapters()[0];
+    expect(c1.audioEngines).toEqual({ kokoro: 2 });
+    expect(c1.audioQa).toEqual(qa);
+    expect([c1.generationState, c1.generationError, c1.generationErrorCode, c1.generationRemediation]).toEqual([
+      'failed',
+      'boom',
+      'E1',
+      'retry',
+    ]);
+  });
+
+  it('a merged chapter drops the audio-describing fields (its audio is gone) but keeps no stale failure', async () => {
+    patchChapters((c) => {
+      c[1].audioEngines = { kokoro: 1 };
+      c[1].generationState = 'failed';
+    });
+    await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    const merged = chapters()[1];
+    expect(merged.audioEngines).toBeUndefined();
+    expect(merged.generationState).toBeUndefined();
+  });
+
+  it('reorder: held follows the chapter to its new id', async () => {
+    await request(app).post(`/api/books/${bookId}/chapters/1/held`).send({ held: true });
+    await request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [3, 1, 2] });
+    expect(chapters().map((c) => c.held)).toEqual([undefined, true, undefined]);
+  });
+
+  it('split: both halves of a held chapter are held, the others unchanged', async () => {
+    await request(app).post(`/api/books/${bookId}/chapters/2/held`).send({ held: true });
+    await request(app).post(`/api/books/${bookId}/chapters/split`).send({ chapterId: 2, afterSentenceId: 1 });
+    expect(chapters().map((c) => c.held)).toEqual([undefined, true, true, undefined]);
+  });
+});

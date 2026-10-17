@@ -300,7 +300,15 @@ function remapSentences(
     - content-changed chapters: drop audioModelKey + audioRenderedAt
     - renumbered-only chapters: preserve them (the file will be renamed,
       content still valid)
-    Excluded flag and duration carry through. */
+    Excluded flag and duration carry through. So do the other per-chapter
+    fields (#3400): `audioEngines`, `audioQa` and the last-failure record
+    describe the audio file, so they follow `audioModelKey` (carried only for a
+    renumbered-only chapter); `held` is the user's queue choice, not a property
+    of the audio, so it carries for every chapter that has a source. A chapter
+    built from several sources (merge) or the second half of a split is held
+    when ANY source was held — the conservative choice: a wrongly-held chapter
+    is one click ("Generate this chapter") from queued, while a wrongly-queued
+    one burns a GPU render the user opted out of. */
 function buildNewStateChapters(
   oldState: BookStateJson,
   newHints: readonly ChapterHint[],
@@ -340,12 +348,26 @@ function buildNewStateChapters(
     };
     if (hint.excluded) base.excluded = true;
     if (oldChapter?.duration) base.duration = oldChapter.duration;
+    const anySourceHeld = [...fates.values()].some(
+      (f) =>
+        (f.newId === newId || f.splitSecondHalfNewId === newId) &&
+        oldState.chapters.find((c) => c.id === f.oldId)?.held,
+    );
+    if (anySourceHeld) base.held = true;
 
     const contentChanged = fate?.contentChanged ?? true;
     if (!contentChanged && oldChapter) {
       // Preserve audio metadata — file will be renamed, content valid
       if (oldChapter.audioModelKey) base.audioModelKey = oldChapter.audioModelKey;
       if (oldChapter.audioRenderedAt) base.audioRenderedAt = oldChapter.audioRenderedAt;
+      if (oldChapter.audioEngines) base.audioEngines = oldChapter.audioEngines;
+      if (oldChapter.audioQa) base.audioQa = oldChapter.audioQa;
+      if (oldChapter.generationState) base.generationState = oldChapter.generationState;
+      if (oldChapter.generationError) base.generationError = oldChapter.generationError;
+      if (oldChapter.generationErrorCode) base.generationErrorCode = oldChapter.generationErrorCode;
+      if (oldChapter.generationRemediation) {
+        base.generationRemediation = oldChapter.generationRemediation;
+      }
       // Preserve the user's rename override — title carried verbatim
       // from old chapter via `hint.title` above, so the override is
       // still meaningful and the refresh-titles passes must continue
