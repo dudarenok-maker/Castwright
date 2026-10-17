@@ -593,6 +593,15 @@ export function isUserSettingsFileCorrupt(): boolean {
   return settingsFileCorrupt;
 }
 
+/** True while the last read failed with a NON-parse error (EPERM / EBUSY / EIO:
+    a locked or unreadable file whose content is unknown). Distinct from
+    corruption: nothing is reset, but writes are refused (see readUnverified)
+    and what the UI shows may be defaults. Drives the "can't be read right now"
+    banner (#3625 pass 4). */
+export function isUserSettingsFileUnreadable(): boolean {
+  return readUnverified;
+}
+
 /* #3084 P25 — endpoint entries are parsed one by one BEFORE the whole-file
    safeParse below. That parse falls back to DEFAULT_USER_SETTINGS when any
    field fails, so one malformed endpoint would otherwise reset every setting,
@@ -1061,7 +1070,10 @@ function droppedEntryWarning(d: DroppedEndpointEntry, archive: string): string {
 export async function readUserSettings(): Promise<UserSettings> {
   // If another read is already in flight, await it instead of racing
   if (inFlightRead) return inFlightRead;
-  if (cached && cacheMatchesDisk()) {
+  /* `!readUnverified`: after a read hiccup the cache is unverified, and
+     cacheMatchesDisk() calls an ABSENT file "unchanged" — so without this a
+     file that then vanished never got re-read and every writer stayed refused. */
+  if (cached && !readUnverified && cacheMatchesDisk()) {
     /* #3084 P25 — a failed append left entries unarchived: retry it on this read. The
        stamp check is unchanged; this only adds the retry to the warm path. */
     if (unarchivedDrops.length > 0) await retryUnarchivedDrops();
@@ -1125,11 +1137,13 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       );
       readUnverified = true;
       if (cached) return cached;
-      cached = { ...DEFAULT_USER_SETTINGS };
+      /* Returned, NOT cached: assigning `cached` here made the sync resolvers
+         (and the ANALYZER_ALLOW_CLOUD_FALLBACK=0 pre-cache under-ride) see
+         factory defaults as if they were read from the file. A null cache
+         already forces the next read to go to disk. */
       explicitlySetKeys = new Set();
       settingsFileCorrupt = false;
-      cachedFileStamp = STAMP_FORCE_REREAD;
-      return cached;
+      return { ...DEFAULT_USER_SETTINGS };
     }
     /* Main file AND every backup are unparseable (or no backup exists yet —
        the first corruption ever seen). readJsonWithRecovery already tried
@@ -1327,6 +1341,7 @@ const FORBIDDEN_KEYS = new Set([
   'workspaceRoot',
   'workspaceSource',
   'corruptSettingsFile',
+  'settingsFileUnreadable',
   'geminiApiKey',
   'apiKey',
   'gemini_api_key',

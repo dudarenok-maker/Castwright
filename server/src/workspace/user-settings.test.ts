@@ -1796,4 +1796,55 @@ describe('readUserSettings — a transient read error is never corruption (#3625
     expect(during.allowCloudFallback).toBe(false);
     expect(mod.isUserSettingsFileCorrupt()).toBe(false);
   });
+
+  /* #3625 pass 4 (4a): the refusal flag must not outlive the hiccup just because
+     the file then goes absent — cacheMatchesDisk() calls an absent file
+     "unchanged", so nothing re-read and every writer stayed refused until a
+     restart. A successful read of ANY outcome (ENOENT = "no file") clears it. */
+  it('a later read clears the refusal when the file is then absent (first run / no file)', async () => {
+    seedHealthy();
+    await mod.readUserSettings(); // warm
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Mine2', allowCloudFallback: false }),
+    );
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings(); // hiccup: warm cache kept, readUnverified set
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    for (const p of [mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`]) rmSync(p, { force: true });
+
+    await mod.readUserSettings();
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+    await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).resolves.not.toThrow();
+  });
+
+  /* #3625 pass 4 (4b): a persistent error shows defaults with no explanation, so
+     it is surfaced as its own flag (rendered by the settings banner). */
+  it('isUserSettingsFileUnreadable is true while reads keep failing, at boot and warm, and clears on a good read', async () => {
+    seedHealthy();
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings(); // boot: nothing cached
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    expect(mod.isUserSettingsFileCorrupt()).toBe(false);
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings(); // still failing on the retry
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    await mod.readUserSettings(); // the file reads again
+    expect(mod.isUserSettingsFileUnreadable()).toBe(false);
+  });
+
+  /* #3625 pass 4 (4c): the boot defaults were ASSIGNED to `cached`, so the
+     ANALYZER_ALLOW_CLOUD_FALLBACK=0 pre-cache under-ride stopped applying until
+     the next read. They are returned without being cached. */
+  it('the cloud-fallback env under-ride still applies after a boot read error', async () => {
+    seedHealthy();
+    process.env.ANALYZER_ALLOW_CLOUD_FALLBACK = '0';
+    try {
+      diskRead.spy.mockImplementationOnce(ebusy);
+      await mod.readUserSettings();
+      expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+    } finally {
+      delete process.env.ANALYZER_ALLOW_CLOUD_FALLBACK;
+    }
+  });
 });

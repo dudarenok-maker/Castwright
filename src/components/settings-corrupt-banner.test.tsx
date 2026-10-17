@@ -5,13 +5,14 @@ import { configureStore } from '@reduxjs/toolkit';
 import { SettingsCorruptBanner } from './settings-corrupt-banner';
 import { accountSlice } from '../store/account-slice';
 
-function makeStore(corrupt: boolean) {
+function makeStore(corrupt: boolean, unreadable = false) {
   return configureStore({
     reducer: { account: accountSlice.reducer },
     preloadedState: {
       account: {
         ...accountSlice.getInitialState(),
         corruptSettingsFile: corrupt,
+        settingsFileUnreadable: unreadable,
       },
     },
   });
@@ -54,5 +55,32 @@ describe('SettingsCorruptBanner', () => {
     expect(alert).toHaveTextContent(/when you next save any settings/i);
     expect(alert).toHaveTextContent(/system backups/i);
     expect(alert).not.toHaveTextContent(/\.bak\.\d/);
+  });
+
+  /* #3625 pass 4: a locked / unreadable (not corrupt) settings file is its own
+     state — values may be defaults and saves are refused, but nothing was reset
+     and no .corrupt snapshot is coming, so the corruption copy would be wrong. */
+  it('renders the unreadable-file alert, not the corruption copy, when settingsFileUnreadable is true', () => {
+    const store = makeStore(false, true);
+    const { getByRole } = render(
+      <Provider store={store}>
+        <SettingsCorruptBanner />
+      </Provider>,
+    );
+    const alert = getByRole('alert');
+    expect(alert).toHaveTextContent(/can't be read right now/i);
+    expect(alert).toHaveTextContent(/changes won't be saved/i);
+    expect(alert).toHaveTextContent(/close any program that might be locking it/i);
+    expect(alert).not.toHaveTextContent(/reset to defaults/i);
+  });
+
+  it('shows the corruption copy when both flags are set (the reset is the bigger news)', () => {
+    const store = makeStore(true, true);
+    const { getByRole } = render(
+      <Provider store={store}>
+        <SettingsCorruptBanner />
+      </Provider>,
+    );
+    expect(getByRole('alert')).toHaveTextContent(/reset to defaults/i);
   });
 });
