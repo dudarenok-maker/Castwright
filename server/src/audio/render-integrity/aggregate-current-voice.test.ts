@@ -793,6 +793,17 @@ describe("scoreBook — the stamped engine is the character's most recent RENDER
 
     expect((await readCentroids(dir))!['thurid'].inBookVoiceName).toBe('qwen-hq');
   });
+
+  it('a legacy (unstamped) snapshot sorts OLDEST: a stamped Coqui render beats a later-in-book legacy Qwen one (the upgrade shape)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-recency-legacy-oldest-'));
+    writeCastRow(dir, BOTH);
+    await writeChapterLines(dir, 'ch1', 1, coquiLines(), 'Ana Florence', 'thurid', 'coqui', undefined, T1);
+    await writeChapterLines(dir, 'ch2', 2, qwenLines(), 'qwen-hq', 'thurid', 'qwen');
+
+    await scoreBook(dir, CHAPTERS);
+
+    expect((await readCentroids(dir))!['thurid'].inBookVoiceName).toBe('Ana Florence');
+  });
 });
 
 describe("scoreBook — the run's model key applies only to characters the run rendered (#3524 pass 3 P2)", () => {
@@ -840,6 +851,40 @@ describe("scoreBook — the run's model key applies only to characters the run r
     await scoreBook(dir, CHAPTERS, ['ch2'], { runModelKey: 'coqui-xtts-v2' });
 
     expect((await readCentroids(dir))!['thurid'].inBookVoiceName).toBe('Ana Florence');
+  });
+
+  it("the audition tier honours the run key only for a character the run rendered: a Coqui run of a chapter thurid is not in leaves thurid's audition at its rendered 1.7B", async () => {
+    defaultModelKey.value = 'qwen3-tts-1.7b';
+    audition.axis = 1;
+    const dir = mkdtempSync(join(tmpdir(), 'spk-runkey-tier-scope-'));
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(dir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'thurid', name: 'Thurid', ...BOTH },
+          { id: 'side', name: 'Side', overrideTtsVoices: { coqui: { name: 'Damien Black' } } },
+        ],
+      }),
+    );
+    await writeChapterLines(dir, 'ch1', 1, [0, 1, 2].map((sid) => ({ sid, axis: 3, jitter: sid, voice: 'Ana Florence' })), 'Ana Florence', 'thurid', 'coqui');
+    await writeChapterLines(
+      dir, 'ch2', 2,
+      [
+        { sid: 0, axis: 1, jitter: 0, voice: 'qwen-hq' },
+        { sid: 1, axis: 1, jitter: 1, voice: 'qwen-hq' },
+        { sid: 2, axis: 3, jitter: 2, voice: 'Ana Florence' },
+      ],
+      'Ana Florence', 'thurid', 'qwen', 'qwen3-tts-1.7b',
+    );
+    // ch3 holds only `side`: the run renders it and never touches thurid.
+    await writeChapterLines(dir, 'ch3', 3, [0, 1, 2].map((sid) => ({ sid: 300 + sid, axis: 6, jitter: sid, voice: 'Damien Black' })), 'Damien Black', 'side', 'coqui');
+
+    await scoreBook(dir, [...CHAPTERS, { id: 3, slug: 'ch3' }], ['ch3'], { runModelKey: 'coqui-xtts-v2' });
+
+    const thuridCalls = (auditionSpy.mock.calls as unknown[][]).filter((c) => (c[0] as { voiceName: string }).voiceName === 'qwen-hq');
+    expect(thuridCalls).toHaveLength(1);
+    expect(thuridCalls[0][0]).toMatchObject({ modelKey: 'qwen3-tts-1.7b' });
   });
 });
 
