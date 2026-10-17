@@ -103,7 +103,7 @@ interface SegmentsFileView {
     resolvedVoiceName?: string;
     voiceId?: string;
     attributes?: string[];
-    /** ISO time this character was last freshly rendered (see CharacterSnapshot.renderedAt). */
+    /** ISO time this character was last fully rendered (see CharacterSnapshot.renderedAt). */
     renderedAt?: string;
   }>;
 }
@@ -714,9 +714,10 @@ export async function scoreBook(
      `ttsEngine` of its own: this pass's run model key when scoring follows a render (only for the characters that
      render produced lines for), else (Resume scoring) the engine stamped on the character's most recently rendered
      non-fallback lines (a chapter snapshot's engine is the fresh render's, so it is current
-     for those lines). "Most recent" is the snapshot's own per-character `renderedAt` stamp —
-     never the file's mtime, which a qa-repair/Fix-audio/gain-remix of ANOTHER character
-     refreshes while carrying this character's snapshot forward unchanged; a legacy snapshot
+     for those lines). "Most recent" is the snapshot's own per-character `renderedAt` stamp,
+     which only a FULL chapter render moves (a qa-repair/Fix-audio/refinalize/gain-remix/A-B
+     reject keeps it, even for lines it re-records) —
+     never the file's mtime, which any partial write refreshes; a legacy snapshot
      with no stamp sorts oldest and book order breaks ties (the later chapter wins), else, for
      a character rendered only on a fallback engine, its configured engine.
      The server's saved default plays no part: a session-picker run, a non-English retarget

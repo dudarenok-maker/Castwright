@@ -454,7 +454,10 @@ export async function finalizeChapterAudioWrite(
      fresh: an untouched segment (needs its own prior stamp/snapshot carried
      forward, below) or C1's gap (needs the prior voiceName). Absent on a
      genuine first render, where neither condition holds. */
-  const needsPriorFile = untouchedIndices.length > 0 || voiceNameByChar.size < speakingIds.size;
+  const needsPriorFile =
+    untouchedIndices.length > 0 ||
+    voiceNameByChar.size < speakingIds.size ||
+    input.resynthesizedIndices !== 'all'; // a partial write keeps each character's prior renderedAt
   const priorFile = needsPriorFile ? await readJson<ChapterSegmentsFile>(segPath).catch(() => null) : null;
 
   /* #3362 finding 5 — the prior file's `characterSnapshots` keys were
@@ -505,12 +508,23 @@ export async function finalizeChapterAudioWrite(
     modelKey,
     voiceNameByChar,
   );
-  /* #3524 — stamp WHEN each freshly-built entry was rendered. The carry-forward
-     below keeps an untouched character's old entry (and so its old stamp)
-     verbatim, which is the point: render-integrity orders a character's renders
-     by this, never by the file's mtime (any partial write refreshes that). */
-  const renderedAt = new Date().toISOString();
-  for (const snapshot of Object.values(characterSnapshots)) snapshot.renderedAt = renderedAt;
+  /* #3524 — stamp WHEN each character was last FULLY rendered. Only a full chapter
+     render (`resynthesizedIndices: 'all'`, the generation path) stamps a fresh time;
+     every partial write (qa-repair, splice / Fix audio, refinalize, gain remix) keeps
+     the character's existing stamp, even for the lines it re-records, and a character
+     with no prior stamp keeps none (a legacy snapshot sorts oldest). The carry-forward
+     below keeps an untouched character's old entry (and so its stamp) verbatim as well.
+     render-integrity orders a character's renders by this, never by the file's mtime
+     (any partial write refreshes that). */
+  if (input.resynthesizedIndices === 'all') {
+    const renderedAt = new Date().toISOString();
+    for (const snapshot of Object.values(characterSnapshots)) snapshot.renderedAt = renderedAt;
+  } else {
+    for (const [id, snapshot] of Object.entries(characterSnapshots)) {
+      const prior = priorSnapshotsByCanonicalId.get(id)?.renderedAt;
+      if (prior) snapshot.renderedAt = prior;
+    }
+  }
 
   /* #3362 pass-5 fix (🟠E, owner design (i)) — a character that speaks ONLY
      in untouched segments this write (never in the resynthesized set) gets

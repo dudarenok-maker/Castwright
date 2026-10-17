@@ -137,7 +137,17 @@ describe('finalizeChapterAudioWrite — per-character renderedAt stamp (#3524 pa
     await rerecordSideInCh1();
     const after = readSegs('ch1').characterSnapshots;
     expect(after.hero.renderedAt).toBe(first.hero.renderedAt); // carried verbatim
-    expect(after.side.renderedAt > first.side.renderedAt).toBe(true); // re-recorded, so fresh
+    // Only a full render moves recency: a re-recorded line keeps its character's stamp.
+    expect(after.side.renderedAt).toBe(first.side.renderedAt);
+  });
+
+  it('a partial write never gives a character with no prior stamp one (legacy stays oldest)', async () => {
+    await renderBothChapters();
+    const legacy = readSegs('ch1');
+    delete legacy.characterSnapshots.side.renderedAt;
+    writeFileSync(join(bookDir, 'audio', 'ch1.segments.json'), JSON.stringify(legacy));
+    await rerecordSideInCh1();
+    expect(readSegs('ch1').characterSnapshots.side.renderedAt).toBeUndefined();
   });
 });
 
@@ -160,6 +170,25 @@ describe('scoreBook after a real finalize — a side-only rewrite of an OLDER ch
     await rerecordSideInCh1();
     const { hero, ch2 } = await resume();
     expect(hero.inBookVoiceName).toBe('qwen-hq');
+    expect(ch2.find((r) => r.sentenceIds[0] === 112)!.verdict).toBe('voice-mismatch');
+  });
+
+  it("re-recording one of HERO's own ch1 lines on Coqui (qa-repair / Fix audio) does not move hero's reference off Qwen, and ch2's rows are not inconclusive", async () => {
+    await renderBothChapters();
+    const control = (await resume()).ch2.map((r) => [r.sentenceIds[0], r.verdict]);
+    await wait(30);
+    const back = readSegs('ch1');
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 1, slug: 'ch1', title: 'C1' }, pcm: tone(1.3), sampleRate: SR, durationSec: 1.3,
+      segments: back.segments, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'coqui', modelKey: 'coqui-xtts-v2',
+      audioFormat: 'mp3', resynthesizedIndices: [0],
+      reembeddedRows: [{ characterId: 'hero', sentenceIds: [0], vec: vec(3, 1) }],
+    });
+    const { hero, ch2 } = await resume();
+    expect(hero.inBookVoiceName).toBe('qwen-hq');
+    // ch2's rows score exactly as they did before the repair (none newly inconclusive).
+    expect(ch2.map((r) => [r.sentenceIds[0], r.verdict])).toEqual(control);
+    expect(ch2.filter((r) => r.verdict === 'inconclusive').length).toBeLessThanOrEqual(1);
     expect(ch2.find((r) => r.sentenceIds[0] === 112)!.verdict).toBe('voice-mismatch');
   });
 });

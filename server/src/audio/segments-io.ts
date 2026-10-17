@@ -49,12 +49,12 @@ export interface CharacterSnapshot {
   renderedFallbackEngine?: string;
   /** Attribute list captured at synthesis time, sorted by generation.ts. */
   attributes?: string[];
-  /** ISO time this character's lines were last freshly synthesised (#3524). Stamped
-      on a FRESH snapshot entry only — an untouched character's entry is carried
-      forward verbatim with its old stamp — so render-integrity can order a
-      character's renders by when they happened, which a file mtime cannot (a
-      qa-repair or gain remix of ANOTHER character rewrites the whole file). Absent
-      on legacy snapshots (book order decides). */
+  /** ISO time this character was last FULLY rendered (#3524). Only a full chapter
+      render (generation) stamps a fresh time; qa-repair, splice / Fix audio,
+      refinalize, gain remix and A/B reject keep the character's existing stamp, even
+      for lines they re-record — so render-integrity orders a character's renders by
+      when they happened, which a file mtime cannot (any partial write rewrites the
+      whole file). Absent on legacy snapshots (they sort oldest, book order breaks ties). */
   renderedAt?: string;
 }
 
