@@ -336,6 +336,36 @@ recite:
     write, and whether it writes back its own earlier snapshot or a fresh one
     merged field by field. Test by landing a locked writer between the re-read
     and the write, and assert it survives.
+32. **A lock added to a read path's write makes the caller wait, but the caller
+    keeps its pre-wait snapshot, so its own later write is guaranteed to land
+    last** — `server/src/workspace/scan.ts` (`backfillAudioModelKeysFromSegments`
+    returning `{ state: upgraded }`), PR #3594 gate pass 7: 27c1297c made the
+    segments heal queue on the book lock behind an in-flight restructure and
+    merge correctly once it had the lock, then returned the read from BEFORE the
+    wait plus the fills, discarding the fresh merged state. Every caller that
+    wrote `state.json` from the located state then wrote the pre-restructure
+    chapter list, and wrote it after the restructure by construction: the
+    revert went from 11 of 40 runs to 40 of 40. The lock turned a race into a
+    certainty. Fixed in 07f97a6d (the heal returns the state it merged under the
+    lock and re-locates a book that moved). Checkable: wherever a lock is added
+    to a function that returns state, ask which snapshot it returns, and whether
+    a caller that waited on the lock starts from the post-wait file. Test with
+    the caller's own write after the wait, and assert on the end state.
+33. **A refusal the caller cannot see, so the writes that go with it record an
+    edit that never happened** — `src/store/restructure-guard-middleware.ts`
+    (returned `undefined` for a refused action), PR #3594 gate pass 7: Script
+    Review Apply marked ops resolved in the server ledger that were never
+    applied, Reassign lines logged a `boundary_move` per chapter and closed as
+    done, and re-upload Apply cleared the title overrides and navigated to
+    Listen, all because the manuscript action they dispatched was dropped
+    without a signal. A silent refusal is not safe just because the refused
+    action is harmless: the caller's other writes assume it succeeded. Fixed in
+    bdf0d7d6: the surfaces disable with a reason and check the live flag before
+    any side write, and the guard toasts. Checkable: for every middleware or
+    guard that drops an action, list its dispatch sites and what each does next;
+    a dropped dispatch must be visible to the caller or checked before the
+    caller's side writes. Test against the real store with the guard on, and
+    assert that nothing was resolved, logged, or closed.
 
 ### Keeping the catalogue current
 
