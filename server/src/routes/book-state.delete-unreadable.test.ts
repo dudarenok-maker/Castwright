@@ -86,6 +86,22 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
     expect(existsSync(healthyDir)).toBe(true);
   });
 
+  it('removes a not_analysed book (manuscript, no state) too, instead of a false 204', async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    const fresh = 'Fresh Book';
+    const freshDir = join(workspaceRoot, 'books', AUTHOR, SERIES, fresh);
+    mkdirSync(freshDir, { recursive: true });
+    writeFileSync(join(freshDir, 'manuscript.txt'), 'x');
+    const freshId = makeBookId(AUTHOR, SERIES, fresh);
+    expect((await listed()).find((x) => x.bookId === freshId)?.status).toBe('not_analysed');
+
+    const res = await request(app).delete(`/api/books/${freshId}`);
+    expect(res.status).toBe(204);
+    expect(existsSync(freshDir)).toBe(false);
+    expect((await listed()).some((b) => b.bookId === freshId)).toBe(false);
+    expect(existsSync(tornDir)).toBe(true);
+  });
+
   it('an unknown id is still an idempotent 204 that deletes nothing', async () => {
     const res = await request(app).delete('/api/books/no-such-book');
     expect(res.status).toBe(204);

@@ -42,7 +42,7 @@ import { validateStatsBody, mergeStatsDays, emptyStatsFile, type ListenStatsFile
 import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { pruneByBook } from '../workspace/queue-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { findBookByBookId, findUnreadableBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
+import { findBookByBookId, findStatelessBookDirByBookId, type BookStateJson } from '../workspace/scan.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import {
   ensureChapterUuids,
@@ -1758,9 +1758,9 @@ bookStateRouter.post(
 bookStateRouter.delete('/:bookId', async (req: Request, res: Response) => {
   try {
     const located = await findBookByBookId(req.params.bookId);
-    /* An `unreadable` book (no state parses) has no state to match on; its row id
-       comes from its folder path, so resolve it the same way the scan does. */
-    const unreadableDir = located ? null : await findUnreadableBookDirByBookId(req.params.bookId);
+    /* An `unreadable` or `not_analysed` book has no parseable state to match on; its
+       row id comes from its folder path, so resolve it the same way the scan does. */
+    const unreadableDir = located ? null : await findStatelessBookDirByBookId(req.params.bookId);
     if (!located && !unreadableDir) {
       res.status(204).end();
       return;

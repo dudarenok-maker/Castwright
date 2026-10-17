@@ -964,19 +964,20 @@ export async function findBookByBookId(bookId: string): Promise<{
   return findBookBy((state) => state.bookId === bookId);
 }
 
-/** Locate the folder of an `unreadable` book (state files exist and none parse)
-    by its bookId. Such a row's id is derived from its folder path, not from state,
-    so `findBookByBookId` (which matches parseable state) can never find it. Walks
+/** Locate the folder of a book with no PARSEABLE state - `unreadable` (state files
+    exist, none parse) or `not_analysed` (a manuscript, no state) - by its bookId.
+    Such a row's id is derived from its folder path, not from state, so
+    `findBookByBookId` (which matches parseable state) can never find it. Walks
     the SAME real directory listing the scan does and only compares the derived id
     with the caller's, so the caller's string never becomes a path segment. */
-export async function findUnreadableBookDirByBookId(bookId: string): Promise<string | null> {
+export async function findStatelessBookDirByBookId(bookId: string): Promise<string | null> {
   ensureWorkspace();
   for (const authorName of listDirs(BOOKS_ROOT)) {
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         if (makeBookId(authorName, seriesName, titleName) !== bookId) continue;
         const book = await scanBook(authorName, seriesName, titleName);
-        if (book?.status === 'unreadable') return join(BOOKS_ROOT, authorName, seriesName, titleName);
+        if (book?.status === 'unreadable' || book?.status === 'not_analysed') return join(BOOKS_ROOT, authorName, seriesName, titleName);
       }
     }
   }
