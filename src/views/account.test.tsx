@@ -114,6 +114,23 @@ describe('AccountView â€” rendering', () => {
   });
 });
 
+describe('AccountView — unreadable settings file (#3625)', () => {
+  it('hides the form (no Save, no PUT) while settingsFileUnreadable, and Retry refetches', async () => {
+    (api.getUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...SERVER_FIXTURE,
+      settingsFileUnreadable: false,
+    });
+    const user = userEvent.setup();
+    renderView({ settingsFileUnreadable: true });
+    expect(screen.queryByLabelText('Display name')).toBeNull();
+    expect(screen.queryByRole('button', { name: /save/i })).toBeNull();
+    expect(api.putUserSettings).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByLabelText('Display name')).toBeInTheDocument();
+    expect(api.putUserSettings).not.toHaveBeenCalled();
+  });
+});
+
 describe('AccountView â€” save flow', () => {
   it('dispatches saveAccountSettings with the merged patch on Save', async () => {
     (api.putUserSettings as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
