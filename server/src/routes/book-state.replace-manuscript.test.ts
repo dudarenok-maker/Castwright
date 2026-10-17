@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,17 @@ import request from 'supertest';
 vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../workspace/revisions-store.js')>();
   return { ...real, resetRevisions: vi.fn(real.resetRevisions) };
+});
+
+/* #3400 pass 9 -- passthrough mocks so the tests can fail the state.json write
+   and the post-record record swap. Both default to the real implementation. */
+vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/state-migrate.js')>();
+  return { ...real, writeStateJsonAtomic: vi.fn(real.writeStateJsonAtomic) };
+});
+vi.mock('../store/manuscripts.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../store/manuscripts.js')>();
+  return { ...real, putManuscript: vi.fn(real.putManuscript) };
 });
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -258,5 +269,92 @@ describe('replace-manuscript handler', () => {
     expect(res.status).toBe(200);
     expect(existsSync(join(bookDir, 'manuscript.md'))).toBe(false);
     expect(existsSync(join(bookDir, 'manuscript.txt'))).toBe(true);
+  });
+
+  /* #3400 pass 9 -- the upload lands in a temp file and is renamed into place
+     inside the locked step, so no failure leaves the manuscript on disk
+     disagreeing with state.json's chapter list. */
+  async function failSiblingArm() {
+    seedSiblingSentinels();
+    const { resetRevisions } = await import('../workspace/revisions-store.js');
+    vi.mocked(resetRevisions).mockRejectedValueOnce(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+  }
+  const bookDirFiles = () => readdirSync(bookDir).sort();
+
+  it('#3400 -- a same-extension replace that fails keeps the ORIGINAL manuscript, state, and no temp file', async () => {
+    await failSiblingArm();
+    const stateBefore = readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8');
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
+    await awaitSiblingArms();
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(readFileSync(join(bookDir, 'manuscript.md'), 'utf8')).toBe(ORIGINAL_BODY);
+    expect(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8')).toBe(stateBefore);
+    expect(bookDirFiles().filter((f) => f !== 'audio')).toEqual(['.audiobook', 'manuscript.md']);
+  });
+
+  it('#3400 -- a failed format-change replace keeps the old file, no new file, no temp', async () => {
+    await failSiblingArm();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.txt');
+    await awaitSiblingArms();
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(readFileSync(join(bookDir, 'manuscript.md'), 'utf8')).toBe(ORIGINAL_BODY);
+    expect(bookDirFiles().filter((f) => f !== 'audio')).toEqual(['.audiobook', 'manuscript.md']);
+  });
+
+  it('#3400 -- a successful same-extension replace puts the new content in place with no temp left', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
+    expect(res.status).toBe(200);
+    expect(readFileSync(join(bookDir, 'manuscript.md'), 'utf8')).toBe(REPLACEMENT_BODY);
+    expect(bookDirFiles().filter((f) => f !== 'audio')).toEqual(['.audiobook', 'manuscript.md']);
+  });
+
+  it('#3400 -- a successful format change leaves only the new file, no temp', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.txt');
+    expect(res.status).toBe(200);
+    expect(bookDirFiles().filter((f) => f !== 'audio')).toEqual(['.audiobook', 'manuscript.txt']);
+    expect(readFileSync(join(bookDir, 'manuscript.txt'), 'utf8')).toBe(REPLACEMENT_BODY);
+  });
+
+  it('#3400 -- a state.json write failure restores the original manuscript', async () => {
+    const { writeStateJsonAtomic } = await import('../workspace/state-migrate.js');
+    vi.mocked(writeStateJsonAtomic).mockRejectedValueOnce(new Error('EIO'));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(readFileSync(join(bookDir, 'manuscript.md'), 'utf8')).toBe(ORIGINAL_BODY);
+    expect(bookDirFiles()).toEqual(['.audiobook', 'manuscript.md']);
+  });
+
+  it('#3400 -- a failure AFTER the record lands keeps the new file consistent with state', async () => {
+    const { putManuscript } = await import('../store/manuscripts.js');
+    vi.mocked(putManuscript).mockImplementationOnce(() => {
+      throw new Error('boom');
+    });
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.txt');
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(state.manuscriptFile).toBe('manuscript.txt');
+    expect(state.chapters).toHaveLength(2);
+    expect(readFileSync(join(bookDir, 'manuscript.txt'), 'utf8')).toBe(REPLACEMENT_BODY);
+    expect(bookDirFiles().filter((f) => f.includes('replac') || f.includes('prev'))).toEqual([]);
   });
 });

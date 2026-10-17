@@ -15,6 +15,7 @@ import type { Request, Response } from '../http.js';
 import { mkdir, readFile, readdir, rm, rmdir, writeFile, unlink } from 'node:fs/promises';
 import multer from 'multer';
 import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { safeSegment } from '../util/safe-path.js';
 import {
@@ -1269,8 +1270,10 @@ async function applyReparse(
     changeLogType: string;
     changeLogTitle: string;
     manuscriptFile?: string;
-    /** Called right after the locked step has written state.json. */
-    onStateRecorded?: () => void;
+    /** Called inside the locked step, immediately before state.json is
+        written; puts the new manuscript file in place and returns an undo
+        that restores the previous one if the state write then fails. */
+    installManuscript?: () => Promise<() => Promise<void>>;
   },
 ) {
   const existingEdits = await readJson<{ sentences?: unknown[] }>(
@@ -1435,11 +1438,16 @@ async function applyReparse(
       castConfirmed: false,
       updatedAt: new Date().toISOString(),
     };
-    await writeStateJsonAtomic(stateJsonPath(fresh.bookDir), {
-      ...nextState,
-      language: nextState.language ?? null,
-    });
-    opts.onStateRecorded?.();
+    const undoInstall = await opts.installManuscript?.();
+    try {
+      await writeStateJsonAtomic(stateJsonPath(fresh.bookDir), {
+        ...nextState,
+        language: nextState.language ?? null,
+      });
+    } catch (writeErr) {
+      await undoInstall?.().catch(() => {});
+      throw writeErr;
+    }
 
     const newExcludedById = new Map<number, boolean>();
     for (const c of newChapters) {
@@ -1608,30 +1616,50 @@ bookStateRouter.post(
       const oldFile = state.manuscriptFile;
 
       safeSegment(newFile);
-      await writeFile(join(bookDir, newFile), req.file.buffer);
+      const livePath = join(bookDir, newFile);
 
-      /* #3400 pass 8 -- applyReparse records `manuscriptFile` in its LAST step,
-         after the cast / audio / revisions work, so the old file must outlive
-         that step: deleting it up front left state.json naming a file that was
-         gone whenever an arm in between rejected. It is unlinked only once the
-         record names the new one; on a failure the new file is removed again
-         unless the record already names it (a failure after the record landed). */
-      let recorded = false;
+      /* #3400 pass 9 -- the upload goes to a temp name nothing reads (scan.ts
+         only treats `manuscript.<ext>` as a manuscript), and is renamed over
+         `newFile` INSIDE applyReparse's locked step, immediately before the
+         state.json write that records it. Until then the book dir is untouched,
+         so every failure earlier than that leaves the original file and the old
+         chapter list in agreement. The rename-then-write order is the one whose
+         crash states are consistent: a process death before the rename leaves
+         old file + old state; a death between the rename and the write leaves
+         new file + old state for a same-extension replace (the one window that
+         remains; a thrown write error is rolled back below via the backup),
+         whereas writing state first would also leave a format change naming a
+         file that does not exist. Names are random so concurrent replaces do
+         not share a temp or backup. */
+      const suffix = randomUUID().slice(0, 8);
+      const tmpPath = join(bookDir, `.manuscript-replacing-${suffix}`);
+      const backupPath = join(bookDir, `.manuscript-previous-${suffix}`);
+      await writeFile(tmpPath, req.file.buffer);
+
       let payload: Awaited<ReturnType<typeof applyReparse>>;
       try {
         payload = await applyReparse(bookDir, state, parsed, {
           changeLogType: 'replace-manuscript',
           changeLogTitle: 'Replaced manuscript',
           manuscriptFile: newFile,
-          onStateRecorded: () => {
-            recorded = true;
+          installManuscript: async () => {
+            const hadLive = existsSync(livePath);
+            if (hadLive) await renameWithRetry(livePath, backupPath);
+            try {
+              await renameWithRetry(tmpPath, livePath);
+            } catch (e) {
+              if (hadLive) await renameWithRetry(backupPath, livePath).catch(() => {});
+              throw e;
+            }
+            return async () => {
+              if (hadLive) await renameWithRetry(backupPath, livePath);
+              else await unlink(livePath);
+            };
           },
         });
-      } catch (applyErr) {
-        if (newFile !== oldFile && !recorded) {
-          await unlink(join(bookDir, newFile)).catch(() => {});
-        }
-        throw applyErr;
+      } finally {
+        await unlink(tmpPath).catch(() => {});
+        await unlink(backupPath).catch(() => {});
       }
       if (!payload) return res.status(404).json({ error: 'Book not found.' });
       if (oldFile && oldFile !== newFile && existsSync(join(bookDir, safeSegment(oldFile)))) {
