@@ -977,7 +977,21 @@ export const KILL_TIMEOUT_MS = 15000;
  *  outright and has the exact same blindness: taskkill's `/T` walk is a
  *  point-in-time snapshot of its own, taken independently of the census's.
  *  Closing either needs a second `Win32_Process` query per kill — the same
- *  cost N4 already declined. */
+ *  cost N4 already declined. That still holds for the census / pre-push reap,
+ *  which this function serves unchanged. The STEP-TIMEOUT path in
+ *  verify-cache.mjs (`runStepProcess`, #3695) narrows it, for CAPTURE steps
+ *  only (stderr piped: `test:server`, `test:server-slow`): after a timeout it
+ *  pays that second query, re-walks the pre-kill-recorded tree and re-kills
+ *  survivors until the step's 'close' fires or a bounded number of sweeps
+ *  elapses, so the step's BUDGET is honoured. It does not close the gap in
+ *  general: a non-capture step settles on its root's exit and any survivors
+ *  are left running. A late child of a recorded member is still reached by
+ *  walking from that member, dead or alive. Missed (each fails closed, and the
+ *  budget is still honoured): a process whose whole chain back to a recorded
+ *  pid was born between the pre-kill snapshot and taskkill's own snapshot; a
+ *  survivor under an intermediate that died in the kill when the pre-kill
+ *  snapshot itself failed (only the root was recorded); and the orphan of a
+ *  recorded member whose pid was recycled to an unrelated process. */
 export function killTree(pid, { spawn = spawnSync, windows = isWindows, isAlive = pidIsAlive, descendantPids } = {}) {
   if (!windows) return false;
   const result = spawn('taskkill', ['/PID', String(pid), '/T', '/F'], {
