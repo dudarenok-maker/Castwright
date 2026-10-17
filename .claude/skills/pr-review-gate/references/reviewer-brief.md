@@ -289,6 +289,23 @@ recite:
     timeout or deadline, find the call it is meant to bound and confirm that
     call yields to the event loop; a bound around a `*Sync` call is decorative
     unless it is the call's own `timeout` option.
+29. **A lock keyed by a path resolved BEFORE acquisition** — PR #3706 pass 2
+    (#3700): `state-json:<book dir>/state.json` was keyed by the folder a
+    request had resolved before it queued. Once the holder moves or deletes
+    that folder (a folder-renaming PUT, a DELETE), every waiter acquires a key
+    naming a path that is no longer the book, and queuing makes that certain
+    rather than a race. Waiters then either wrote their stale snapshot back
+    (resurrecting a deleted book, or leaving two folders with one bookId) or
+    answered 200 for a write that never happened (a reparse wiping the moved
+    book's analysis cache by manuscript id). Checkable: for every lock whose
+    key is derived from a path or id resolved earlier, ask what the holder may
+    move or delete while you wait, and what each waiter does when the thing it
+    re-reads is absent; test by holding the key, moving or deleting the
+    target, then releasing, and assert a refusal with nothing written.
+    The same hazard runs the other way, for the lock HOLDER: its steps after
+    the lock is released, against a path it resolved before it (a change-log
+    write, a cast delete, a slug rewrite), land in a folder a queued
+    folder-move has since vacated, recreating the old folder (PR #3706 pass 4).
 
 ### Keeping the catalogue current
 

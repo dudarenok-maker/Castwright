@@ -232,6 +232,30 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     ]);
   });
 
+  it('keeps the target present for the whole rotated write (#3700: no absent window)', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+
+    /* Probe the target at every rename of the third (rotated) write — an
+       unlocked reader landing between the rotation and the tmp -> path
+       rename must still find a file, and a crash there must not leave none. */
+    const { existsSync } = await import('node:fs');
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const presentAtRename: boolean[] = [];
+    setRenameImpl(async (src: string, dest: string) => {
+      presentAtRename.push(existsSync(target));
+      return actual.rename(src, dest);
+    });
+    await writeJsonAtomic(target, { v: 3 }, { rotate: { keep: 3 } });
+
+    expect(presentAtRename.length).toBeGreaterThan(0);
+    expect(presentAtRename.every(Boolean)).toBe(true);
+    expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ v: 3 });
+    expect(JSON.parse(await readFile(`${target}.bak.1`, 'utf8'))).toEqual({ v: 2 });
+    expect(JSON.parse(await readFile(`${target}.bak.2`, 'utf8'))).toEqual({ v: 1 });
+  });
+
   it('rotation is opt-in: no { rotate } option means no backup is created', async () => {
     const target = join(workdir, 'state.json');
     /* Cast/manuscript/revisions writers stay on the single-file shape so the

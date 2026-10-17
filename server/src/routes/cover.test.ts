@@ -100,7 +100,7 @@ function imageResponse(bytes: Uint8Array): Response {
   return new Response(bytes, { status: 200, headers: { 'Content-Type': 'image/jpeg' } });
 }
 
-/* #3640 / #3535: downloadCover now re-encodes every fetched body, so the
+/* #3640 / #3535: the cover download now re-encodes every fetched body, so the
    download fixture must be a real decodable image — the old 11-byte JFIF
    header stub was never decodable. Generated in beforeAll (sharp is async). */
 let SAMPLE_JPEG: Uint8Array;

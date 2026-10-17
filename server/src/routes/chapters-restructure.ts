@@ -50,7 +50,8 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { getOrHydrateManuscript } from '../store/manuscripts.js';
 import { rebuildCacheFromEdits } from '../store/analysis-cache-rebuild.js';
@@ -98,11 +99,14 @@ async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T>
 }
 
 /* Best-effort: any parse failure leaves the state untouched. Skips the parse
-   unless some keyless, non-user-titled chapter has a generic "Chapter N" title. */
-async function backfillLegacyTitleFlags(
+   unless some keyless, non-user-titled chapter has a generic "Chapter N" title.
+   Returns the parsed title/flag lists (or null) WITHOUT touching state: the parse
+   is slow, so it runs outside the state-json lock (#3700) and the caller applies
+   `backfillTitleSynthesized` to the fresh read inside it. */
+async function parseForLegacyTitleFlags(
   state: Parameters<typeof backfillTitleSynthesized>[0],
   bookDir: string,
-): Promise<Parameters<typeof backfillTitleSynthesized>[0]> {
+): Promise<{ titles: string[]; flags: boolean[] } | null> {
   /* Only a keyless, non-overridden chapter whose title looks generic can be
      flagged (renumbering and both refresh passes act on that shape alone), so
      a book without one never needs the parse. */
@@ -114,23 +118,22 @@ async function backfillLegacyTitleFlags(
         GENERIC_TITLE_RE.test(c.title.trim()),
     )
   ) {
-    return state;
+    return null;
   }
   const manuscriptPath = join(bookDir, state.manuscriptFile);
-  if (!existsSync(manuscriptPath)) return state;
+  if (!existsSync(manuscriptPath)) return null;
   try {
     const parsed = await parseManuscript({
       buffer: await readFile(manuscriptPath),
       fileName: state.manuscriptFile,
       sourcePath: manuscriptPath,
     });
-    return backfillTitleSynthesized(
-      state,
-      parsed.chapters.map((c) => c.title),
-      parsed.chapters.map((c) => c.titleSynthesized === true),
-    );
+    return {
+      titles: parsed.chapters.map((c) => c.title),
+      flags: parsed.chapters.map((c) => c.titleSynthesized === true),
+    };
   } catch {
-    return state;
+    return null;
   }
 }
 /** Shared "load → transform → write" prologue. Returns the new result and
@@ -169,50 +172,73 @@ async function applyRestructure(
     };
   }
 
-  // Legacy book: chapters imported before titleSynthesized existed carry no
-  // flag. Recognise the app-made ones against a fresh parse (#3628) so every
-  // operation below renumbers them like a freshly imported book's.
-  state = await backfillLegacyTitleFlags(state, bookDir);
-  // Align hint titles with state.json's user-facing chapter titles.
-  // The parser-derived hint titles can diverge (e.g. when state.json
-  // captures a more refined title from a later parser-version refresh,
-  // or the user has renamed chapters inline). State titles are the
-  // source of truth for slugs and display; hints contribute the body
-  // text only.
-  const alignedHints = record.chapterHints.map((h) => {
-    const sc = state.chapters.find((c) => c.id === h.id);
-    return sc ? { ...h, title: sc.title } : h;
+  /* #3628/#3700 — the legacy-title parse is slow (a full manuscript parse), so
+     it runs BEFORE the lock, off the `located.state` snapshot; only the cheap
+     `backfillTitleSynthesized` application happens inside, on the fresh read. */
+  const legacyParse = await parseForLegacyTitleFlags(state, bookDir);
+
+  /* #3700 — state.json is read, transformed and rewritten as one span under
+     the per-book state-json lock (leaf: nothing inside takes another lock), and
+     the read is FRESH from disk rather than the `located.state` snapshot, so a
+     sibling chapter render's stamp can't be reverted by the renumbered state. */
+  const outcome = await withStateJsonLock(stateJsonPath(bookDir), async () => {
+    // Legacy book: chapters imported before titleSynthesized existed carry no
+    // flag. Recognise the app-made ones against a fresh parse (#3628) so every
+    // operation below renumbers them like a freshly imported book's.
+    const freshState = await readStateJsonWithRecovery(stateJsonPath(bookDir));
+    /* #3700 review pass 2 — absent: the book was deleted or moved after
+       `located` resolved it. Writing the stale snapshot back would resurrect
+       it; refuse and write nothing. */
+    if (!freshState) return { early: { status: 404, body: { error: 'Book not found.' } } };
+    state = legacyParse
+      ? backfillTitleSynthesized(freshState, legacyParse.titles, legacyParse.flags)
+      : freshState;
+    // Align hint titles with state.json's user-facing chapter titles.
+    // The parser-derived hint titles can diverge (e.g. when state.json
+    // captures a more refined title from a later parser-version refresh,
+    // or the user has renamed chapters inline). State titles are the
+    // source of truth for slugs and display; hints contribute the body
+    // text only.
+    const alignedHints = record.chapterHints.map((h) => {
+      const sc = state.chapters.find((c) => c.id === h.id);
+      return sc ? { ...h, title: sc.title } : h;
+    });
+
+    // Read current sentences from manuscript-edits.json (may be empty/missing
+    // for a fresh book — that's fine, transform handles it). Each transform
+    // requires sentences for split when it needs to locate the body offset.
+    const editsPath = manuscriptEditsJsonPath(bookDir);
+    const edits = await readJson<{ sentences?: RestructureSentence[] }>(editsPath);
+    const sentences = edits?.sentences ?? [];
+
+    /* srv-35 — ensure the OLD chapters carry uuids before the transform so
+       buildNewStateChapters can inherit them by identity (a book that has
+       never been written since the upgrade has none yet). The result.state
+       is persisted below, so this also migrates the book. */
+    ensureChapterUuids(state);
+
+    let result: RestructureResult;
+    try {
+      result = transform(state, alignedHints, sentences);
+    } catch (e) {
+      return {
+        early: {
+          status: 400,
+          body: { error: (e as Error).message || 'Invalid restructure operation.' },
+        },
+      };
+    }
+
+    // Write order: state.json (rotating backup) → manuscript-edits.json →
+    // in-memory hints → audio ops → analysis cache. If any step throws past
+    // here, earlier writes are already on disk; partial state is recoverable
+    // via the reconciliation filter in book-state.ts:166-185.
+    await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
+    await writeJsonAtomic(editsPath, { sentences: result.sentences });
+    return { early: null, result, editsPath };
   });
-
-  // Read current sentences from manuscript-edits.json (may be empty/missing
-  // for a fresh book — that's fine, transform handles it). Each transform
-  // requires sentences for split when it needs to locate the body offset.
-  const editsPath = manuscriptEditsJsonPath(bookDir);
-  const edits = await readJson<{ sentences?: RestructureSentence[] }>(editsPath);
-  const sentences = edits?.sentences ?? [];
-
-  /* srv-35 — ensure the OLD chapters carry uuids before the transform so
-     buildNewStateChapters can inherit them by identity (a book that has
-     never been written since the upgrade has none yet). The result.state
-     is persisted below, so this also migrates the book. */
-  ensureChapterUuids(state);
-
-  let result: RestructureResult;
-  try {
-    result = transform(state, alignedHints, sentences);
-  } catch (e) {
-    return {
-      status: 400,
-      body: { error: (e as Error).message || 'Invalid restructure operation.' },
-    };
-  }
-
-  // Write order: state.json (rotating backup) → manuscript-edits.json →
-  // in-memory hints → audio ops → analysis cache. If any step throws past
-  // here, earlier writes are already on disk; partial state is recoverable
-  // via the reconciliation filter in book-state.ts:166-185.
-  await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
-  await writeJsonAtomic(editsPath, { sentences: result.sentences });
+  if (outcome.early) return outcome.early;
+  const { result, editsPath } = outcome;
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
   // pick up the new structure without a server restart.

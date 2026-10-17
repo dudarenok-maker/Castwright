@@ -575,6 +575,18 @@ describe('classifyAnalysisFailure — a lock timeout is curated, everything else
     expect(r.userMessage).not.toContain('gemma-4-31b-it');
   });
 
+  it('the curated error `withStateJsonLock` throws (#3700, e.g. the Start-fresh site) classifies as lock-contention', async () => {
+    const { withKeyLock, withStateJsonLock, LOCK_CONTENTION_REQUEST_ERROR } = await import(
+      '../workspace/file-lock.js'
+    );
+    const statePath = '/w/taxonomy-state-json/.audiobook/state.json';
+    void withKeyLock(`state-json:${statePath}`, () => new Promise<void>(() => {}));
+    const err = await withStateJsonLock(statePath, async () => 'ran', 50).catch((e: unknown) => e);
+    const r = classifyAnalysisFailure(err, 'Gemini (gemma-4-31b-it)');
+    expect(r.code).toBe('lock-contention');
+    expect(r.userMessage).toBe(LOCK_CONTENTION_REQUEST_ERROR);
+  });
+
   it('discriminates on the stable `code` string, not the class or the name', async () => {
     const { LOCK_ACQUISITION_TIMEOUT_CODE, LOCK_CONTENTION_REQUEST_ERROR } = await import(
       '../workspace/file-lock.js'

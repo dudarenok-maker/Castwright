@@ -854,8 +854,10 @@ export function classifyAnalysisFailure(
 
      Scoped to the ANALYSIS classifier, not added to `FAILURE_SIGNATURES` as a
      `source: 'both'` row: the constant cannot live in the signature table's
-     copy map (above), and no generation path takes one of these locks, so a
-     table row would be an untested claim of coverage. */
+     copy map (above), and the one lock a generation path does take
+     (`finalizeChapterAudioWrite`'s per-book state-json lock, #3700) already
+     curates its own message at the lock, so a table row would be an untested
+     claim of coverage. */
   if (isLockAcquisitionTimeout(err)) {
     return withCopy('lock-contention', LOCK_CONTENTION_REQUEST_ERROR);
   }

@@ -39,6 +39,7 @@ import {
 import { computeQwenKokoroFallbackSet, type QwenFallbackChar } from '../tts/qwen-fallback-set.js';
 import { preventSleep, allowSleep } from '../system/prevent-sleep.js';
 import { readJson } from '../workspace/state-io.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import {
   bookStateAudioFormat,
@@ -2271,28 +2272,33 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
          synthesis failure the user needs to see. */
       try {
         const statePath = stateJsonPath(bookDir);
-        const prev = await readJson<BookStateJson>(statePath);
-        if (prev) {
-          const next: BookStateJson = {
-            ...prev,
-            chapters: prev.chapters.map((c) =>
-              c.id === chapter.id
-                ? {
-                    ...c,
-                    generationState: 'failed',
-                    generationError: errorReason,
-                    /* fs-19 — persist the structured class + remediation so a
-                       reloaded failed chapter re-hydrates with its "what to do"
-                       line, not just the reason. */
-                    generationErrorCode: errorCode,
-                    generationRemediation: remediation,
-                  }
-                : c,
-            ),
-            updatedAt: new Date().toISOString(),
-          };
-          await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
-        }
+        /* #3700 — same per-book state.json lock as finalizeChapterAudioWrite's
+           success-path stamp: a failing chapter must not clobber (or be
+           clobbered by) a sibling's concurrent state.json write. */
+        await withStateJsonLock(statePath, async () => {
+          const prev = await readJson<BookStateJson>(statePath);
+          if (prev) {
+            const next: BookStateJson = {
+              ...prev,
+              chapters: prev.chapters.map((c) =>
+                c.id === chapter.id
+                  ? {
+                      ...c,
+                      generationState: 'failed',
+                      generationError: errorReason,
+                      /* fs-19 — persist the structured class + remediation so a
+                         reloaded failed chapter re-hydrates with its "what to do"
+                         line, not just the reason. */
+                      generationErrorCode: errorCode,
+                      generationRemediation: remediation,
+                    }
+                  : c,
+              ),
+              updatedAt: new Date().toISOString(),
+            };
+            await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
+          }
+        });
       } catch (persistErr) {
         console.warn(
           `[generation] failed to persist error state for chapter ${chapter.id}:`,

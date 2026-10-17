@@ -15,6 +15,7 @@ import { rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { type BookStateJson } from '../workspace/scan.js';
 import { preserveExistingAsPrevious } from '../workspace/preserve-previous-audio.js';
@@ -754,34 +755,40 @@ export async function finalizeChapterAudioWrite(
     console.warn(`[splice] failed to write peaks for ${chapter.slug}: ${(err as Error).message}`);
   }
 
-  /* Stamp duration / model / QA into state.json (read-modify-write, keyed by
-     chapter id so concurrent sibling writes can't clobber each other). */
+  /* Stamp duration / model / QA into state.json. A read-modify-write keyed by
+     chapter id is NOT enough on its own: two sibling chapters finalizing
+     together both read the same snapshot and the later write dropped the
+     earlier chapter's stamp (#3700), so the whole read-through-write runs under
+     the per-book state.json lock. */
   const statePath = stateJsonPath(bookDir);
-  const prev = await readJson<BookStateJson>(statePath);
-  if (prev) {
-    const formatted = formatDuration(durationSec);
-    const next: BookStateJson = {
-      ...prev,
-      chapters: prev.chapters.map((c) =>
-        c.id === chapter.id
-          ? {
-              ...c,
-              duration: formatted,
-              audioModelKey: effectiveModelKey,
-              audioEngines,
-              audioRenderedAt: segmentsFile.synthesizedAt,
-              audioQa,
-              generationState: undefined,
-              generationError: undefined,
-              generationErrorCode: undefined,
-              generationRemediation: undefined,
-            }
-          : c,
-      ),
-      updatedAt: new Date().toISOString(),
-    };
-    await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
-  }
+  const prev = await withStateJsonLock(statePath, async () => {
+    const onDisk = await readJson<BookStateJson>(statePath);
+    if (onDisk) {
+      const formatted = formatDuration(durationSec);
+      const next: BookStateJson = {
+        ...onDisk,
+        chapters: onDisk.chapters.map((c) =>
+          c.id === chapter.id
+            ? {
+                ...c,
+                duration: formatted,
+                audioModelKey: effectiveModelKey,
+                audioEngines,
+                audioRenderedAt: segmentsFile.synthesizedAt,
+                audioQa,
+                generationState: undefined,
+                generationError: undefined,
+                generationErrorCode: undefined,
+                generationRemediation: undefined,
+              }
+            : c,
+        ),
+        updatedAt: new Date().toISOString(),
+      };
+      await writeStateJsonAtomic(statePath, { ...next, language: next.language ?? null });
+    }
+    return onDisk;
+  });
 
   /* Plan 285 — AFTER the last disk write (audio rename, peaks, state.json):
      a throw earlier in finalize therefore never leaves an entry for a
