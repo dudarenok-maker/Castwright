@@ -141,6 +141,26 @@ describe('finalizeChapterAudioWrite — per-character renderedAt stamp (#3524 pa
     expect(after.side.renderedAt).toBe(first.side.renderedAt);
   });
 
+  it('a partial write that re-synthesises EVERY line (no untouched segment) still keeps each character\'s prior stamps (the needsPriorFile clause)', async () => {
+    await renderBothChapters();
+    const first = readSegs('ch1').characterSnapshots;
+    expect(first.hero.renderedEngine).toBe('coqui');
+    expect(first.hero.renderedModelKey).toBe('coqui-xtts-v2');
+    await wait(30);
+    const back = readSegs('ch1');
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 1, slug: 'ch1', title: 'C1' }, pcm: tone(1.3), sampleRate: SR, durationSec: 1.3,
+      segments: back.segments, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'qwen', modelKey: 'qwen3-tts-0.6b',
+      audioFormat: 'mp3', resynthesizedIndices: Array.from({ length: 13 }, (_, i) => i),
+    });
+    const after = readSegs('ch1').characterSnapshots;
+    for (const id of ['hero', 'side']) {
+      expect(after[id].renderedAt).toBe(first[id].renderedAt);
+      expect(after[id].renderedEngine).toBe('coqui');
+      expect(after[id].renderedModelKey).toBe('coqui-xtts-v2');
+    }
+    expect(after.hero.voiceEngine).toBe('qwen'); // the write's own engine still lands in the rebuilt snapshot
+  });
   it('a partial write never gives a character with no prior stamp one (legacy stays oldest)', async () => {
     await renderBothChapters();
     const legacy = readSegs('ch1');
@@ -190,5 +210,25 @@ describe('scoreBook after a real finalize — a side-only rewrite of an OLDER ch
     expect(ch2.map((r) => [r.sentenceIds[0], r.verdict])).toEqual(control);
     expect(ch2.filter((r) => r.verdict === 'inconclusive').length).toBeLessThanOrEqual(1);
     expect(ch2.find((r) => r.sentenceIds[0] === 112)!.verdict).toBe('voice-mismatch');
+  });
+
+  it("re-recording one of HERO's lines in her NEWEST chapter (ch2) on Coqui does not move her reference off Qwen either (N1: the engine is frozen with renderedAt)", async () => {
+    await renderBothChapters();
+    const control = (await resume()).ch2.map((r) => [r.sentenceIds[0], r.verdict]);
+    await wait(30);
+    const back = readSegs('ch2');
+    back.segments[0] = { ...back.segments[0], voiceName: 'Ana Florence' };
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 2, slug: 'ch2', title: 'C2' }, pcm: tone(1.3), sampleRate: SR, durationSec: 1.3,
+      segments: back.segments, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'coqui', modelKey: 'coqui-xtts-v2',
+      audioFormat: 'mp3', resynthesizedIndices: [0],
+      reembeddedRows: [{ characterId: 'hero', sentenceIds: [100], vec: vec(0, 1) }],
+    });
+    const snap = readSegs('ch2').characterSnapshots.hero;
+    expect(snap.voiceEngine).toBe('coqui'); // the rebuilt snapshot still reports the write's engine (drift detection reads it)
+    const { hero, ch2 } = await resume();
+    expect(hero.inBookVoiceName).toBe('qwen-hq');
+    expect(ch2.find((r) => r.sentenceIds[0] === 112)!.verdict).toBe('voice-mismatch');
+    expect(ch2.filter((r) => r.verdict === 'inconclusive').length).toBeLessThanOrEqual(control.filter((r) => r[1] === 'inconclusive').length + 1);
   });
 });

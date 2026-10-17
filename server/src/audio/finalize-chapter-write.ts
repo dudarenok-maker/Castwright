@@ -457,7 +457,7 @@ export async function finalizeChapterAudioWrite(
   const needsPriorFile =
     untouchedIndices.length > 0 ||
     voiceNameByChar.size < speakingIds.size ||
-    input.resynthesizedIndices !== 'all'; // a partial write keeps each character's prior renderedAt
+    input.resynthesizedIndices !== 'all'; // a partial write keeps each character's prior renderedAt / renderedEngine / renderedModelKey
   const priorFile = needsPriorFile ? await readJson<ChapterSegmentsFile>(segPath).catch(() => null) : null;
 
   /* #3362 finding 5 — the prior file's `characterSnapshots` keys were
@@ -508,7 +508,9 @@ export async function finalizeChapterAudioWrite(
     modelKey,
     voiceNameByChar,
   );
-  /* #3524 — stamp WHEN each character was last FULLY rendered. Only a full chapter
+  /* #3524 — stamp WHEN each character was last FULLY rendered, and the engine + model key it
+     rendered under (frozen together: a partial write rebuilds `voiceEngine` / `modelKey` from
+     its own engine, so the recency stamp alone would still flip the reference). Only a full chapter
      render (`resynthesizedIndices: 'all'`, the generation path) stamps a fresh time;
      every partial write (qa-repair, splice / Fix audio, refinalize, gain remix) keeps
      the character's existing stamp, even for the lines it re-records, and a character
@@ -518,11 +520,17 @@ export async function finalizeChapterAudioWrite(
      (any partial write refreshes that). */
   if (input.resynthesizedIndices === 'all') {
     const renderedAt = new Date().toISOString();
-    for (const snapshot of Object.values(characterSnapshots)) snapshot.renderedAt = renderedAt;
+    for (const snapshot of Object.values(characterSnapshots)) {
+      snapshot.renderedAt = renderedAt;
+      snapshot.renderedEngine = snapshot.voiceEngine;
+      if (snapshot.modelKey) snapshot.renderedModelKey = snapshot.modelKey;
+    }
   } else {
     for (const [id, snapshot] of Object.entries(characterSnapshots)) {
-      const prior = priorSnapshotsByCanonicalId.get(id)?.renderedAt;
-      if (prior) snapshot.renderedAt = prior;
+      const prior = priorSnapshotsByCanonicalId.get(id);
+      if (prior?.renderedAt) snapshot.renderedAt = prior.renderedAt;
+      if (prior?.renderedEngine) snapshot.renderedEngine = prior.renderedEngine;
+      if (prior?.renderedModelKey) snapshot.renderedModelKey = prior.renderedModelKey;
     }
   }
 

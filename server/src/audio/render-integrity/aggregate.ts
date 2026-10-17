@@ -105,6 +105,9 @@ interface SegmentsFileView {
     attributes?: string[];
     /** ISO time this character was last fully rendered (see CharacterSnapshot.renderedAt). */
     renderedAt?: string;
+    /** Engine / tier of that same full render, frozen with `renderedAt` (see CharacterSnapshot.renderedEngine). */
+    renderedEngine?: string;
+    renderedModelKey?: TtsModelKey;
   }>;
 }
 
@@ -569,6 +572,9 @@ export async function scoreBook(
     modelKey?: TtsModelKey;
     /** ISO time of this character's last fresh render (absent on legacy snapshots). */
     renderedAt?: string;
+    /** Engine / tier of that same full render, frozen with `renderedAt`. */
+    renderedEngine?: string;
+    renderedModelKey?: TtsModelKey;
   };
 
   type ChapterData = {
@@ -713,8 +719,8 @@ export async function scoreBook(
   /* #3524 — "the engine actually rendered", the fallback engine for a character with no
      `ttsEngine` of its own: this pass's run model key when scoring follows a render (only for the characters that
      render produced lines for), else (Resume scoring) the engine stamped on the character's most recently rendered
-     non-fallback lines (a chapter snapshot's engine is the fresh render's, so it is current
-     for those lines). "Most recent" is the snapshot's own per-character `renderedAt` stamp,
+     non-fallback lines (the snapshot's frozen `renderedEngine` / `renderedModelKey`, stamped with `renderedAt` by that
+     full render, so a later partial write's own engine never replaces it). "Most recent" is the snapshot's own per-character `renderedAt` stamp,
      which only a FULL chapter render moves (a qa-repair/Fix-audio/refinalize/gain-remix/A-B
      reject keeps it, even for lines it re-records) —
      never the file's mtime, which any partial write refreshes; a legacy snapshot
@@ -730,11 +736,14 @@ export async function scoreBook(
       if (seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '') continue;
       const id = resolveRowCharId(seg, row.characterId, cd.snapshots);
       const snap = id !== undefined ? cd.snapshots[id] : undefined;
-      if (id === undefined || !snap?.voiceEngine) continue;
+      // The FROZEN engine / tier (a partial write rebuilds voiceEngine / modelKey from its own
+      // engine); a legacy snapshot with no frozen fields falls back to them.
+      const stampedEngine = snap?.renderedEngine ?? snap?.voiceEngine;
+      if (id === undefined || !snap || !stampedEngine) continue;
       const renderedAt = snap.renderedAt ?? '';
       const prior = stampedByChar.get(id);
       if (!prior || renderedAt >= prior.renderedAt) {
-        stampedByChar.set(id, { engine: snap.voiceEngine as TtsEngine, modelKey: snap.modelKey, renderedAt });
+        stampedByChar.set(id, { engine: stampedEngine as TtsEngine, modelKey: snap.renderedModelKey ?? snap.modelKey, renderedAt });
       }
     }
   }
