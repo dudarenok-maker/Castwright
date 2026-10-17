@@ -717,10 +717,12 @@ describe('POST /api/books/:bookId/cast/link-prior', () => {
       const result = await actual.findBookByBookId(id); // real read, now
       if (isSecondLookup) {
         arrived += 1;
-        if (arrived === 2) releaseBoth();
         /* A slow runner disk (fsync per write, #3694) stretches this window; the
-           barrier below must tolerate it, so simulate it on every run. */
-        await new Promise((r) => setTimeout(r, 2500));
+           barrier must tolerate it, so simulate it on every run - but on the SHARED
+           release, never per request: a per-request sleep lets the first request
+           take both cast locks before the second wakes, and the AB/BA interleaving
+           this test exists to force never happens (it then passes without .sort()). */
+        if (arrived === 2) setTimeout(releaseBoth, 2500);
         await gate; // hold the RESOLUTION open until both requests arrive
       }
       return result;

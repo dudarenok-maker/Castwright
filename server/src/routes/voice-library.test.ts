@@ -1462,7 +1462,10 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
         request(app).post(`/api/voice-library/${uuid}/assign`)
           .send({ bookId, characterId: 'alice' }),
       ]).then(() => 'settled'),
-      new Promise((r) => setTimeout(() => r('DEADLOCK'), 2000)),
+      /* Tolerant of an fsyncing runner disk (#3694; 2 s false-tripped), yet under
+         the 10 s lock-acquisition timeout, which would otherwise end a real
+         deadlock as two 500s before this fired. */
+      new Promise((r) => setTimeout(() => r('DEADLOCK'), 8000)),
     ]);
     expect(result).toBe('settled');
   });
