@@ -8,11 +8,13 @@ import {
   writeFileSync,
   existsSync,
   readFileSync,
+  readdirSync,
   rmSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rewriteChapterSlugs } from './rewrite-chapter-slugs.js';
+import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import { applyMerge } from '../workspace/restructure.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
@@ -199,6 +201,35 @@ describe('rewriteChapterSlugs', () => {
   });
 });
 
+describe('rewriteChapterSlugs per-book audio format (#3524 S2)', () => {
+  it.each(['m4a', 'ogg', 'mp3'] as const)(
+    'a renamed %s chapter keeps its audio and lufs.json and findChapterAudio finds it at the new slug',
+    async (ext) => {
+      writeFileSync(join(audioRoot, `03-x.${ext}`), `audio:${ext}`);
+      writeFileSync(join(audioRoot, '03-x.lufs.json'), JSON.stringify({ integrated: -18 }));
+      writeFileSync(join(audioRoot, '03-x.segments.json'), JSON.stringify({ segments: [] }));
+
+      const result = await rewriteChapterSlugs(audioRoot, [
+        { kind: 'rename', from: '03-x', to: '02-x', newChapterId: 2, newChapterTitle: 'X' },
+      ]);
+
+      expect(result.errors).toEqual([]);
+      expect(findChapterAudio(audioRoot, '02-x')?.ext).toBe(ext);
+      expect(readFileSync(join(audioRoot, `02-x.${ext}`), 'utf8')).toBe(`audio:${ext}`);
+      expect(existsSync(join(audioRoot, '02-x.lufs.json'))).toBe(true);
+      expect(readdirSync(audioRoot).filter((n) => n.startsWith('03-x'))).toEqual([]);
+    },
+  );
+
+  it('a delete op removes the m4a/ogg audio and lufs.json too', async () => {
+    for (const f of ['05-gone.m4a', '05-gone.ogg', '05-gone.lufs.json']) {
+      writeFileSync(join(audioRoot, f), 'x');
+    }
+    await rewriteChapterSlugs(audioRoot, [{ kind: 'delete', from: '05-gone' }]);
+    expect(readdirSync(audioRoot)).toEqual([]);
+  });
+});
+
 describe('rewriteChapterSlugs x applyMerge (#3524 S1)', () => {
   it('a merge that renumbers app-made titles never deletes the files a rename just moved into the deleted slug', async () => {
     const titles = [1, 2, 3, 4, 5].map((n) => `Chapter ${n}`);
@@ -256,7 +287,6 @@ describe('rewriteChapterSlugs x applyMerge (#3524 S1)', () => {
   });
 });
 
-import { readdirSync } from 'node:fs';
 function readDirNames(dir: string): string[] {
   return readdirSync(dir);
 }

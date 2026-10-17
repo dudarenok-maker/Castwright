@@ -3,9 +3,10 @@
    content changed.
 
    Files involved per chapter (any subset may exist):
-     <slug>.mp3         the audio itself
+     <slug>.mp3 | .m4a | .ogg  the audio itself (the book's format)
      <slug>.segments.json  per-segment timing + chapter metadata
      <slug>.peaks.json     waveform peaks summary (plan 35-related)
+     <slug>.lufs.json      loudness measurement (Listen loudness card)
      <slug>.embeddings.json, .render-integrity.json, .render-integrity-attempted.json
                            render-integrity speaker-QA sidecars
 
@@ -27,16 +28,21 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
+import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
 
 /** Suffixes of the companion files per chapter audio. Kept in one
-    array so add-a-new-companion changes touch one site. The last three are the
-    render-integrity speaker-QA sidecars (embeddings, verdicts, attempted
-    sentinel): left behind under the old slug, a renamed chapter silently loses
-    its scoring and a new chapter at a reused slug would inherit them. */
+    array so add-a-new-companion changes touch one site. The audio itself is
+    every format `findChapterAudio` probes (mp3/m4a/ogg, plan 72 — a renamed
+    m4a/ogg chapter is otherwise unplayable); `lufs.json` is the loudness card's
+    data; the last three are the render-integrity speaker-QA sidecars
+    (embeddings, verdicts, attempted sentinel): left behind under the old slug,
+    a renamed chapter silently loses its scoring and a new chapter at a reused
+    slug would inherit them. */
 const COMPANION_SUFFIXES = [
-  'mp3',
+  ...CHAPTER_AUDIO_EXTS,
   'segments.json',
   'peaks.json',
+  'lufs.json',
   'embeddings.json',
   'render-integrity.json',
   'render-integrity-attempted.json',
