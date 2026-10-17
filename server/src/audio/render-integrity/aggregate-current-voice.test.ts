@@ -794,3 +794,51 @@ describe("scoreBook — the stamped engine is the character's most recent RENDER
     expect((await readCentroids(dir))!['thurid'].inBookVoiceName).toBe('qwen-hq');
   });
 });
+
+describe("scoreBook — the run's model key applies only to characters the run rendered (#3524 pass 3 P2)", () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 0;
+    defaultModelKey.value = 'qwen3-tts-0.6b';
+  });
+
+  function castTwo(dir: string) {
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(dir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { id: 'villain', name: 'Villain', overrideTtsVoices: { qwen: { name: 'V', libraryUuid: 'hv' } } },
+          { id: 'side', name: 'Side', overrideTtsVoices: { coqui: { name: 'Damien Black' } } },
+        ],
+      }),
+    );
+  }
+
+  it('a Coqui run that renders one chapter without villain leaves villain on its own Qwen reference and keeps its outlier voice-mismatch', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-runkey-scope-'));
+    castTwo(dir);
+    await writeChapterLines(dir, 'ch1', 1, withOutlier('qwen-hv'), 'qwen-hv', 'villain', 'qwen');
+    await writeChapterLines(dir, 'ch2', 2, [0, 1, 2].map((sid) => ({ sid: 200 + sid, axis: 6, jitter: sid, voice: 'Damien Black' })), 'Damien Black', 'side', 'coqui');
+
+    await scoreBook(dir, CHAPTERS, ['ch2'], { runModelKey: 'coqui-xtts-v2' });
+
+    const row = (await readCentroids(dir))!['villain'];
+    expect(row.noCurrentVoiceReference).toBeUndefined();
+    expect(row.inBookVoiceName).toBe('qwen-hv');
+    const ch1 = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(ch1!.find((r) => r.sentenceIds[0] === 99)!.verdict).toBe('voice-mismatch');
+  });
+
+  it('a character the run DID render uses the run key over its other chapters\' stamps', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-runkey-rendered-'));
+    writeCastRow(dir, BOTH);
+    // ch1 (not in this run) carries the NEWER stamp on Qwen; ch2 is the run's chapter, on Coqui.
+    await writeChapterLines(dir, 'ch1', 1, qwenLines(), 'qwen-hq', 'thurid', 'qwen', undefined, T2);
+    await writeChapterLines(dir, 'ch2', 2, coquiLines(), 'Ana Florence', 'thurid', 'coqui', undefined, T1);
+
+    await scoreBook(dir, CHAPTERS, ['ch2'], { runModelKey: 'coqui-xtts-v2' });
+
+    expect((await readCentroids(dir))!['thurid'].inBookVoiceName).toBe('Ana Florence');
+  });
+});

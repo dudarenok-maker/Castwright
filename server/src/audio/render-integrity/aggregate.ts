@@ -711,8 +711,8 @@ export async function scoreBook(
   // Voice info for Option-B audition centroid (Task 10): voiceName + modelKey per char.
   const voiceInfoByChar = new Map<string, AuditionCharacter>();
   /* #3524 — "the engine actually rendered", the fallback engine for a character with no
-     `ttsEngine` of its own: this pass's run model key when scoring follows a render, else
-     (Resume scoring) the engine stamped on the character's most recently rendered
+     `ttsEngine` of its own: this pass's run model key when scoring follows a render (only for the characters that
+     render produced lines for), else (Resume scoring) the engine stamped on the character's most recently rendered
      non-fallback lines (a chapter snapshot's engine is the fresh render's, so it is current
      for those lines). "Most recent" is the snapshot's own per-character `renderedAt` stamp —
      never the file's mtime, which a qa-repair/Fix-audio/gain-remix of ANOTHER character
@@ -737,8 +737,19 @@ export async function scoreBook(
       }
     }
   }
+  /* The run key speaks ONLY for characters with lines in the chapters this run just
+     finalized — every other character resolves from its own stamped lines, so a one-chapter
+     run on another engine cannot replace an un-rendered character's real reference. */
+  const runRenderedChars = new Set<string>();
+  for (const cd of chapterData) {
+    if (!justFinalized.has(cd.slug)) continue;
+    for (const row of cd.embRows) {
+      const id = resolveRowCharId(cd.segsByKey.get(segKey(row.characterId, row.sentenceIds)), row.characterId, cd.snapshots);
+      if (id !== undefined) runRenderedChars.add(id);
+    }
+  }
   const defaultEngineFor = (charId: string): TtsEngine | undefined =>
-    runEngine ?? stampedByChar.get(charId)?.engine ?? (configuredEngineByChar.get(charId) as TtsEngine | undefined);
+    (runRenderedChars.has(charId) ? runEngine : undefined) ?? stampedByChar.get(charId)?.engine ?? (configuredEngineByChar.get(charId) as TtsEngine | undefined);
   /* #3524 — the character's CURRENT cast.json voice for a snapshot key: the
      live row through castResolver, then the helper shared with
      chapter-qa-repair.ts (#3449). `undefined` = no current voice known (no live
