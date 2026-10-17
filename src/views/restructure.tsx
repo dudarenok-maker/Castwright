@@ -20,6 +20,8 @@ import { libraryActions } from '../store/library-slice';
 import { revisionsActions } from '../store/revisions-slice';
 import { activeBookId } from '../store/revisions-thunks';
 import { notificationsActions } from '../store/notifications-slice';
+import { ANALYSIS_RUNNING_REASON } from '../store/restructure-lock';
+import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
 import { flushBookPersistence } from '../store/persistence-middleware';
 import { api, type ChapterRestructureResponse } from '../lib/api';
 import { RestructureChaptersPanel } from '../components/restructure-chapters-panel';
@@ -35,6 +37,8 @@ export function RestructureView({ bookId }: Props) {
   const chapters = useAppSelector((s) => s.chapters.chapters);
   const sentences = useAppSelector((s) => s.manuscript.sentences);
   const [busy, setBusy] = useState(false);
+  /* The server refuses a restructure while an analysis runs for the book. */
+  const analysisRunning = useAppSelector((s) => selectAnalysisRunningForBook(s, bookId));
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
   /* Plan 78 — rename modal hoisted to view level so the per-row pencil
      button just opens it. */
@@ -255,6 +259,11 @@ export function RestructureView({ bookId }: Props) {
           {errorBanner}
         </div>
       )}
+      {analysisRunning && (
+        <p data-testid="restructure-analysis-running" className="mb-4 text-sm text-ink/60">
+          {ANALYSIS_RUNNING_REASON}
+        </p>
+      )}
       <RestructureChaptersPanel
         chapters={chapters}
         sentences={sentences}
@@ -265,7 +274,7 @@ export function RestructureView({ bookId }: Props) {
         onRefreshTitles={handleRefreshTitles}
         onRename={setRenamingChapter}
         onBack={() => dispatch(uiActions.changeView('listen'))}
-        busy={busy}
+        busy={busy || analysisRunning}
       />
       <EditChapterTitleModal
         key={renamingChapter?.id ?? 'closed'}

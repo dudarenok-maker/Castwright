@@ -11,6 +11,8 @@ import { notificationsSlice } from '../store/notifications-slice';
 import { castSlice } from '../store/cast-slice';
 import { revisionsSlice, revisionsActions } from '../store/revisions-slice';
 import { settingsSlice } from '../store/settings-slice';
+import { analysisSlice, analysisActions } from '../store/analysis-slice';
+import { ANALYSIS_RUNNING_REASON } from '../store/restructure-lock';
 import { persistenceMiddleware } from '../store/persistence-middleware';
 import { restructureGuardMiddleware } from '../store/restructure-guard-middleware';
 
@@ -31,7 +33,7 @@ import { RestructureView } from './restructure';
    bypasses the guard (a non-UI writer, or a write queued before the flag went up). */
 function makeStore(guard = false) {
   const store = configureStore({
-    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer },
+    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, analysis: analysisSlice.reducer },
     middleware: (g) => (guard ? g().prepend(restructureGuardMiddleware) : g()),
   });
   holder.store = store;
@@ -481,5 +483,45 @@ describe('RestructureView — #3400 restructure flag', () => {
     expect(store.getState().ui.restructuringBooks).toEqual({ b2: true });
     resolvers[1]({ sentenceRemap: [], warnings: [] });
     await waitFor(() => expect(store.getState().ui.restructuringBooks).toEqual({}));
+  });
+});
+
+describe('RestructureView — analysis running (server refuses a restructure mid-run)', () => {
+  const running = (bookId: string) =>
+    analysisActions.setActiveStream({
+      bookId,
+      manuscriptId: 'm1',
+      phaseId: 1,
+      phaseLabel: 'Parsing',
+      phaseProgress: 0.2,
+      remainingMs: null,
+      lastTickAt: 0,
+      state: 'running',
+    });
+
+  it('disables the restructure controls with a visible reason while this book is being analysed', () => {
+    const store = makeStore();
+    store.dispatch(running('b1'));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    expect(screen.getByTestId('restructure-analysis-running')).toHaveTextContent(ANALYSIS_RUNNING_REASON);
+    expect(screen.getByTestId('restructure-refresh-titles')).toBeDisabled();
+  });
+
+  it('leaves them enabled when the analysis is for another book', () => {
+    const store = makeStore();
+    store.dispatch(running('other'));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    expect(screen.queryByTestId('restructure-analysis-running')).toBeNull();
+    expect(screen.getByTestId('restructure-refresh-titles')).not.toBeDisabled();
+  });
+
+  it("a 409 from the server (a job started in another tab) shows its message and clears the restructuring flag", async () => {
+    const store = makeStore();
+    apiMock.refreshChapterTitles.mockRejectedValue(new Error('Analysis is running on this book. Pause it or wait for it to finish, then change the chapters.'));
+    render(<Provider store={store}><RestructureView bookId="b1" /></Provider>);
+    fireEvent.click(screen.getByTestId('restructure-refresh-titles'));
+    fireEvent.click(await screen.findByTestId('restructure-confirm-apply'));
+    expect(await screen.findByText(/Analysis is running on this book/)).toBeInTheDocument();
+    await waitFor(() => expect(store.getState().ui.restructuringBooks['b1']).toBeFalsy());
   });
 });

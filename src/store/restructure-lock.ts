@@ -11,6 +11,12 @@ import { notificationsActions } from './notifications-slice';
 
 export const RESTRUCTURING_REASON = 'Unavailable while the chapters are being restructured.';
 
+/** The server refuses a chapter restructure while an analysis job runs for the
+    book (an analysis's final write would undo the remap), so every Restructure
+    entry point disables itself with this reason. */
+export const ANALYSIS_RUNNING_REASON =
+  'Unavailable while an analysis is running. Pause it or wait for it to finish.';
+
 export const RESTRUCTURING_TOAST_KEY = 'restructuring-edit-refused';
 
 export const RESTRUCTURING_TOAST_MESSAGE =

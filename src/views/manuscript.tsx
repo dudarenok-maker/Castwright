@@ -30,7 +30,13 @@ import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
-import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
+import {
+  ANALYSIS_RUNNING_REASON,
+  RESTRUCTURING_REASON,
+  refuseIfEditsLocked,
+  selectEditsLocked,
+} from '../store/restructure-lock';
+import { selectAnalysisRunningForBook } from '../store/analysis-substage-selectors';
 import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -156,6 +162,7 @@ export function ManuscriptView({
   const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
   const [reviewLoading, setReviewLoading] = useState(false);
   const analysisBusy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
+  const analysisRunning = useAppSelector((s) => selectAnalysisRunningForBook(s, bookId));
   const reviewSubstage = useAppSelector((s) =>
     bookId ? s.scriptReview?.activeStreams[bookId] : undefined,
   );
@@ -1142,6 +1149,7 @@ export function ManuscriptView({
               )}
               <RestructureChaptersButton
                 onClick={() => dispatch(uiActions.changeView('restructure'))}
+                disabledReason={analysisRunning ? ANALYSIS_RUNNING_REASON : undefined}
               />
               <DetectEmotionsButton disabled={sentences.length === 0} />
               {/* #1676 part c — enters the checkbox multi-select mode (gutter

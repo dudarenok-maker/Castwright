@@ -16,6 +16,12 @@ export const selectReviewRunningForBook = (state: RootState, bookId: string): bo
 export const selectAnalysisBusyForBook = (state: RootState, bookId: string): boolean =>
   selectProsodyRunningForBook(state, bookId) || selectReviewRunningForBook(state, bookId);
 
+/** #3400 — an analysis run (main or subset) of this book is running. The server
+    refuses a chapter restructure while one is, so the Restructure entry points
+    disable on it. */
+export const selectAnalysisRunningForBook = (state: RootState, bookId: string | null | undefined): boolean =>
+  !!bookId && state.analysis?.activeStream?.bookId === bookId && state.analysis.activeStream.state === 'running';
+
 /** #3400 — a chapter restructure of this book is in flight (per-book marker). */
 export const selectBookRestructuring = (state: RootState, bookId: string): boolean =>
   !!state.ui?.restructuringBooks?.[bookId];
