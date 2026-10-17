@@ -1891,3 +1891,77 @@ describe('book-state saves take the book lock a restructure holds (#3400)', () =
     }
   });
 });
+
+/* -- held / exclude POSTs vs a restructure (#3400, pass 7) ---------------- */
+
+describe('held / exclude POSTs take the book lock a restructure holds (#3400)', () => {
+  const RUNS = 24;
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function reset(): Promise<void> {
+    seedState();
+    seedManuscriptEdits();
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+  }
+
+  /* Start the merge at t=0 and the other POST at `offsetMs` (negative = it
+     goes first). Both must answer 200. */
+  async function raceMerge(offsetMs: number, other: () => Promise<{ status: number }>) {
+    const merge = (async () => {
+      if (offsetMs < 0) await sleep(-offsetMs);
+      return request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    })();
+    const o = (async () => {
+      if (offsetMs > 0) await sleep(offsetMs);
+      return other();
+    })();
+    const [m, p] = await Promise.all([merge, o]);
+    expect(m.status).toBe(200);
+    expect(p.status).toBe(200);
+  }
+
+  /* The merged chapter list survives, and manuscript-edits.json agrees with it
+     (pass-7 probe 1: the reverted state kept 3 chapters against edits keyed to 2). */
+  function expectMergedEndState(run: number) {
+    const ids = readState().chapters.map((c) => c.id);
+    expect(ids, `run ${run}`).toEqual([1, 2]);
+    for (const s of readEdits().sentences) expect(ids, `run ${run}`).toContain(s.chapterId);
+  }
+
+  it('a held POST racing a merge of 2+3 never reverts the merged chapter list', async () => {
+    for (let i = 0; i < RUNS; i++) {
+      await reset();
+      await raceMerge((i % 8) - 3, () =>
+        request(app).post(`/api/books/${bookId}/chapters/1/held`).send({ held: true }),
+      );
+      expectMergedEndState(i);
+    }
+  });
+
+  it('an exclude POST racing a merge of 2+3 never reverts the merged chapter list', async () => {
+    for (let i = 0; i < RUNS; i++) {
+      await reset();
+      await raceMerge((i % 8) - 3, () =>
+        request(app).post(`/api/books/${bookId}/chapters/1/exclude`).send({ excluded: true }),
+      );
+      expectMergedEndState(i);
+    }
+  });
+
+  it('three parallel exclude POSTs on one book all land (the reparse dialog shape)', async () => {
+    for (let i = 0; i < 8; i++) {
+      await reset();
+      const res = await Promise.all(
+        [1, 2, 3].map((id) =>
+          request(app).post(`/api/books/${bookId}/chapters/${id}/exclude`).send({ excluded: true }),
+        ),
+      );
+      expect(res.map((r) => r.status)).toEqual([200, 200, 200]);
+      expect(
+        readState().chapters.map((c) => c.excluded),
+        `run ${i}`,
+      ).toEqual([true, true, true]);
+    }
+  });
+});

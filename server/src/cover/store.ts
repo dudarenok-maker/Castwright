@@ -7,11 +7,9 @@
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { readJson } from '../workspace/state-io.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { coverImagePath, stateJsonPath, WORKSPACE_ROOT } from '../workspace/paths.js';
+import { updateStateAtDir } from '../workspace/book-state-update.js';
+import { coverImagePath, WORKSPACE_ROOT } from '../workspace/paths.js';
 import { assertContained } from '../util/safe-path.js';
-import type { BookStateJson } from '../workspace/scan.js';
 import type { CoverCandidate } from './sources/types.js';
 import { firstAvailableCover } from './search.js';
 
@@ -79,32 +77,31 @@ export async function downloadCover(url: string, destPath: string): Promise<{ by
 }
 
 /** Record provenance of the just-downloaded cover onto state.json so a
-    library scan surfaces `coverImageUrl`. */
+    library scan surfaces `coverImageUrl`. Locked read-modify-write (#3400): a
+    chapter restructure holds the same book lock. */
 export async function patchStateCover(
   bookDir: string,
   candidate: Pick<CoverCandidate, 'id' | 'source' | 'coverUrl'>,
 ): Promise<void> {
-  const path = stateJsonPath(bookDir);
-  const state = await readJson<BookStateJson>(path);
-  if (!state) return;
-  state.coverImage = {
-    source: candidate.source,
-    candidateId: candidate.id,
-    originalUrl: candidate.coverUrl,
-    fetchedAt: new Date().toISOString(),
-  };
-  state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+  await updateStateAtDir(bookDir, (state) => {
+    state.coverImage = {
+      source: candidate.source,
+      candidateId: candidate.id,
+      originalUrl: candidate.coverUrl,
+      fetchedAt: new Date().toISOString(),
+    };
+    state.updatedAt = new Date().toISOString();
+    return state;
+  });
 }
 
 /** Inverse of patchStateCover — DELETE reverts to the procedural gradient. */
 export async function clearStateCover(bookDir: string): Promise<void> {
-  const path = stateJsonPath(bookDir);
-  const state = await readJson<BookStateJson>(path);
-  if (!state) return;
-  delete state.coverImage;
-  state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+  await updateStateAtDir(bookDir, (state) => {
+    delete state.coverImage;
+    state.updatedAt = new Date().toISOString();
+    return state;
+  });
 }
 
 /** Fire-and-forget import hook. Priority-order first hit across all

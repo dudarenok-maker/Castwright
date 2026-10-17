@@ -288,13 +288,14 @@ function countRawStateWrites(
    when #3435's Start fresh began un-confirming the book, and to 4 when the
    subset route began reading castConfirmed at load for its result gate —
    a read, not a write; revisions-store.ts joined with 1 read-only site when
-   #3400's readLiveChapters began re-checking an A/B entry against live state). Asserted BOTH
+   #3400's readLiveChapters began re-checking an A/B entry against live state;
+   cover/store.ts + cover/upload.ts dropped out and workspace/book-state-update.ts
+   joined with 3 when #3400 moved the cover patches onto its locked
+   `updateStateAtDir`). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
-  'cover/store.ts': 2,
-  'cover/upload.ts': 2,
   'import/scan-import-folder.ts': 1,
   'routes/analysis.ts': 4,
   'routes/book-state.ts': 9,
@@ -307,6 +308,7 @@ const G3_STATE_SITES: Record<string, number> = {
   'store/attribution-health-io.ts': 2,
   'workspace/active-analyses.ts': 1,
   'workspace/auto-backup.ts': 3,
+  'workspace/book-state-update.ts': 3,
   'workspace/book-dir-guard.ts': 1,
   'workspace/library-cast-scan.ts': 1,
   'workspace/revisions-store.ts': 1,

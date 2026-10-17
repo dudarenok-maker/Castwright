@@ -51,6 +51,7 @@ import { readQueueFile, writeQueueFile } from '../workspace/queue-migrate.js';
 import { pruneByBook } from '../workspace/queue-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
+import { withLocatedBook } from '../workspace/book-state-update.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { ensureChapterUuids, reconcileChapterUuids } from '../workspace/chapter-uuid.js';
 import { CHAPTER_AUDIO_EXTS } from '../workspace/chapter-audio-file.js';
@@ -286,13 +287,30 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
     const located = await findBookByBookId(req.params.bookId);
     if (!located) return res.status(404).json({ error: 'Book not found.' });
 
-    const { bookDir } = located;
-    const state = await refreshChapterTitles(located.state, bookDir);
-    /* srv-35 — lazy-migrate chapter uuids on the canonical book read (the
-       web player's source of truth), persisting once so the Listen view's
-       resume can resolve by uuid. Idempotent. */
-    if (ensureChapterUuids(state)) {
-      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null });
+    let { bookDir, state } = located;
+    /* #3400 — the title refresh and the uuid mint each rewrite the WHOLE
+       state.json from a read, so when either is owed they re-locate and run
+       under the book lock: a chapter restructure that lands in between keeps
+       its chapter list, and the refresh's chapter-count check sees it. */
+    if (
+      (state.chapterTitleParserVersion ?? 1) < CHAPTER_TITLE_PARSER_VERSION ||
+      state.chapters.some((c) => !c.uuid)
+    ) {
+      const settled = await withLocatedBook(req.params.bookId, async (fresh) => {
+        const refreshed = await refreshChapterTitles(fresh.state, fresh.bookDir);
+        /* srv-35 — lazy-migrate chapter uuids on the canonical book read (the
+           web player's source of truth), persisting once so the Listen view's
+           resume can resolve by uuid. Idempotent. */
+        if (ensureChapterUuids(refreshed)) {
+          await writeStateJsonAtomic(stateJsonPath(fresh.bookDir), {
+            ...refreshed,
+            language: refreshed.language ?? null,
+          });
+        }
+        return { bookDir: fresh.bookDir, state: refreshed };
+      });
+      if (!settled) return res.status(404).json({ error: 'Book not found.' });
+      ({ bookDir, state } = settled.value);
     }
     const cast = await readJson<{ characters: unknown[] }>(castJsonPath(bookDir));
     let edits = await readJson<{ sentences?: unknown[]; mergedAwayKeys?: string[] }>(manuscriptEditsJsonPath(bookDir));
@@ -1599,64 +1617,69 @@ bookStateRouter.post(
       }
       const excluded: boolean = rawExcluded;
 
-      const located = await findBookByBookId(req.params.bookId);
-      if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
+      /* #3400 — locate -> decide -> write under the book lock, so a chapter
+         restructure (which holds it) can't be reverted by this write, and the
+         reparse dialog's parallel toggles each build on the previous one. The
+         audio `rm` stays inside, consistent with what was written. */
+      const outcome = await withLocatedBook(req.params.bookId, async (located) => {
+        const { bookDir, state } = located;
 
-      const idx = state.chapters.findIndex((c) => c.id === chapterId);
-      if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
+        const idx = state.chapters.findIndex((c) => c.id === chapterId);
+        if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
 
-      const current = state.chapters[idx];
-      const updated = { ...current, excluded: excluded ? true : undefined };
-      const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
+        const current = state.chapters[idx];
+        const updated = { ...current, excluded: excluded ? true : undefined };
+        const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
 
-      /* Write state.json first so a crash mid-call leaves the user's
-       choice on disk; audio cleanup is best-effort below. */
-      const nextState: BookStateJson = {
-        ...state,
-        chapters: nextChapters,
-        updatedAt: new Date().toISOString(),
-      };
-      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
+        /* Write state.json first so a crash mid-call leaves the user's
+         choice on disk; audio cleanup is best-effort below. */
+        const nextState: BookStateJson = {
+          ...state,
+          chapters: nextChapters,
+          updatedAt: new Date().toISOString(),
+        };
+        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
 
-      /* Propagate to the live ManuscriptRecord if it's loaded. The
-       analysis route reads chapterHints directly from this; without
-       the propagation we'd have to wait for a server restart or a
-       book-state GET to pick up the change. */
-      if (state.manuscriptId) {
-        const rec = getManuscript(state.manuscriptId);
-        if (rec) {
-          rec.chapterHints = rec.chapterHints.map((h) =>
-            h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
-          );
-        }
-      }
-
-      /* When newly excluded, delete the chapter's audio + segments so the
-       library / chapter list don't keep counting it as "done". The user
-       can re-include later; audio regenerates from the (still-cached)
-       sentence attribution. */
-      if (excluded) {
-        const audioRoot = audioDir(bookDir);
-        const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
-        const audioCandidates = CHAPTER_AUDIO_EXTS.map((ext) =>
-          join(audioRoot, `${current.slug}.${ext}`),
-        );
-        for (const p of [segmentsPath, ...audioCandidates]) {
-          if (existsSync(p)) {
-            await rm(p, { force: true }).catch(() => {
-              /* best effort */
-            });
+        /* Propagate to the live ManuscriptRecord if it's loaded. The
+         analysis route reads chapterHints directly from this; without
+         the propagation we'd have to wait for a server restart or a
+         book-state GET to pick up the change. */
+        if (state.manuscriptId) {
+          const rec = getManuscript(state.manuscriptId);
+          if (rec) {
+            rec.chapterHints = rec.chapterHints.map((h) =>
+              h.id === chapterId ? { ...h, excluded: excluded ? true : undefined } : h,
+            );
           }
         }
-      }
 
-      res.json({
-        id: updated.id,
-        title: updated.title,
-        slug: updated.slug,
-        excluded: !!updated.excluded,
+        /* When newly excluded, delete the chapter's audio + segments so the
+         library / chapter list don't keep counting it as "done". The user
+         can re-include later; audio regenerates from the (still-cached)
+         sentence attribution. */
+        if (excluded) {
+          const audioRoot = audioDir(bookDir);
+          const segmentsPath = join(audioRoot, `${current.slug}.segments.json`);
+          const audioCandidates = CHAPTER_AUDIO_EXTS.map((ext) =>
+            join(audioRoot, `${current.slug}.${ext}`),
+          );
+          for (const p of [segmentsPath, ...audioCandidates]) {
+            if (existsSync(p)) {
+              await rm(p, { force: true }).catch(() => {
+                /* best effort */
+              });
+            }
+          }
+        }
+
+        return res.json({
+          id: updated.id,
+          title: updated.title,
+          slug: updated.slug,
+          excluded: !!updated.excluded,
+        });
       });
+      if (!outcome) return res.status(404).json({ error: 'Book not found.' });
     } catch (e) {
       console.error('[book-state] exclude toggle failed', e);
       res.status(500).json({ error: (e as Error).message || 'Failed to toggle exclude.' });
@@ -1689,30 +1712,32 @@ bookStateRouter.post(
       }
       const held: boolean = rawHeld;
 
-      const located = await findBookByBookId(req.params.bookId);
-      if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
+      /* #3400 — locate -> decide -> write under the book lock (see exclude). */
+      const outcome = await withLocatedBook(req.params.bookId, async (located) => {
+        const { bookDir, state } = located;
 
-      const idx = state.chapters.findIndex((c) => c.id === chapterId);
-      if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
+        const idx = state.chapters.findIndex((c) => c.id === chapterId);
+        if (idx === -1) return res.status(404).json({ error: 'Chapter not found.' });
 
-      const current = state.chapters[idx];
-      const updated = { ...current, held: held ? true : undefined };
-      const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
+        const current = state.chapters[idx];
+        const updated = { ...current, held: held ? true : undefined };
+        const nextChapters = state.chapters.map((c, i) => (i === idx ? updated : c));
 
-      const nextState: BookStateJson = {
-        ...state,
-        chapters: nextChapters,
-        updatedAt: new Date().toISOString(),
-      };
-      await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
+        const nextState: BookStateJson = {
+          ...state,
+          chapters: nextChapters,
+          updatedAt: new Date().toISOString(),
+        };
+        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
 
-      res.json({
-        id: updated.id,
-        title: updated.title,
-        slug: updated.slug,
-        held: !!updated.held,
+        return res.json({
+          id: updated.id,
+          title: updated.title,
+          slug: updated.slug,
+          held: !!updated.held,
+        });
       });
+      if (!outcome) return res.status(404).json({ error: 'Book not found.' });
     } catch (e) {
       console.error('[book-state] held toggle failed', e);
       res.status(500).json({ error: (e as Error).message || 'Failed to toggle held.' });

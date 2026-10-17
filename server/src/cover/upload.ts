@@ -17,10 +17,7 @@ import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import sharp from 'sharp';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
-import { readJson } from '../workspace/state-io.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { stateJsonPath } from '../workspace/paths.js';
-import type { BookStateJson } from '../workspace/scan.js';
+import { updateStateAtDir } from '../workspace/book-state-update.js';
 
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -127,16 +124,15 @@ export async function patchStateLocalCover(
   bookDir: string,
   originalFilename: string | null,
 ): Promise<void> {
-  const path = stateJsonPath(bookDir);
-  const state = await readJson<BookStateJson>(path);
-  if (!state) return;
-  state.coverImage = {
-    source: 'local',
-    originalFilename,
-    uploadedAt: new Date().toISOString(),
-  };
-  state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
+  await updateStateAtDir(bookDir, (state) => {
+    state.coverImage = {
+      source: 'local',
+      originalFilename,
+      uploadedAt: new Date().toISOString(),
+    };
+    state.updatedAt = new Date().toISOString();
+    return state;
+  });
 }
 
 export function clampFraming(framing: CoverFraming): CoverFraming {
@@ -148,14 +144,12 @@ export function clampFraming(framing: CoverFraming): CoverFraming {
 }
 
 export async function patchStateFraming(bookDir: string, framing: CoverFraming): Promise<boolean> {
-  const path = stateJsonPath(bookDir);
-  const state = await readJson<BookStateJson>(path);
-  if (!state) return false;
-  if (!state.coverImage) return false;
-  state.coverImage.framing = clampFraming(framing);
-  state.updatedAt = new Date().toISOString();
-  await writeStateJsonAtomic(path, { ...state, language: state.language ?? null });
-  return true;
+  return updateStateAtDir(bookDir, (state) => {
+    if (!state.coverImage) return null;
+    state.coverImage.framing = clampFraming(framing);
+    state.updatedAt = new Date().toISOString();
+    return state;
+  });
 }
 
 function clamp(n: number, min: number, max: number): number {

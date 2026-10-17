@@ -18,6 +18,7 @@ import type { Request, Response } from '../http.js';
 import { collectBooks, findBookByBookId } from '../workspace/scan.js';
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { withLocatedBook } from '../workspace/book-state-update.js';
 import { audioDir, coverImagePath, listenProgressJsonPath, stateJsonPath } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-audio-file.js';
 import {
@@ -49,17 +50,29 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
     const bookId = typeof req.query.bookId === 'string' ? req.query.bookId : undefined;
 
     if (bookId) {
-      const located = await findBookByBookId(bookId);
+      let located = await findBookByBookId(bookId);
       if (!located) return res.status(404).json({ error: 'Book not found.' });
-      const { bookDir, state } = located;
       /* srv-35 — guarantee a stable uuid on every chapter (and persist the
-         migration) so the manifest keys are durable. Idempotent. */
-      if (ensureChapterUuids(state)) {
-        await writeStateJsonAtomic(stateJsonPath(bookDir), { ...state, language: state.language ?? null }).catch(() => {
-          /* best-effort migration write; the in-memory state already has
-             the uuids for this response. */
+         migration) so the manifest keys are durable. Idempotent. #3400: the
+         mint writes the whole state.json, so it re-locates and runs under the
+         book lock (a restructure landing meanwhile keeps its chapter list). */
+      if (located.state.chapters.some((c) => !c.uuid)) {
+        const minted = await withLocatedBook(bookId, async (fresh) => {
+          if (ensureChapterUuids(fresh.state)) {
+            await writeStateJsonAtomic(stateJsonPath(fresh.bookDir), {
+              ...fresh.state,
+              language: fresh.state.language ?? null,
+            }).catch(() => {
+              /* best-effort migration write; the in-memory state already has
+                 the uuids for this response. */
+            });
+          }
+          return fresh;
         });
+        if (!minted) return res.status(404).json({ error: 'Book not found.' });
+        located = minted.value;
       }
+      const { bookDir, state } = located;
       const audioRoot = audioDir(bookDir);
       const audioByChapterId = new Map<number, ChapterAudioFact>();
       for (const c of state.chapters) {
