@@ -1265,7 +1265,7 @@ async function applyReparse(
   bookDir: string,
   state: BookStateJson,
   parsed: Awaited<ReturnType<typeof parseManuscript>>,
-  opts: { changeLogType: string; changeLogTitle: string },
+  opts: { changeLogType: string; changeLogTitle: string; manuscriptFile?: string },
 ) {
   const existingEdits = await readJson<{ sentences?: unknown[] }>(
     manuscriptEditsJsonPath(bookDir),
@@ -1273,34 +1273,6 @@ async function applyReparse(
   const preservedEditCount = Array.isArray(existingEdits?.sentences)
     ? existingEdits!.sentences!.length
     : 0;
-
-  const prevExcludedIds = new Set<number>(
-    state.chapters.filter((c) => c.excluded).map((c) => c.id),
-  );
-  const prevExcludedSlugs = new Set<string>(
-    state.chapters.filter((c) => c.excluded).map((c) => c.slug),
-  );
-  const newChapters: BookStateJson['chapters'] = parsed.chapters.map((c) => {
-    const newSlug = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
-    const carryover = prevExcludedIds.has(c.id) || prevExcludedSlugs.has(newSlug);
-    return {
-      id: c.id,
-      title: c.title,
-      slug: newSlug,
-      duration: '00:00',
-      excluded: carryover ? true : undefined,
-      titleSynthesized: c.titleSynthesized || undefined,
-    };
-  });
-
-  const nextState: BookStateJson = {
-    ...state,
-    chapters: newChapters,
-    chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
-    castConfirmed: false,
-    updatedAt: new Date().toISOString(),
-  };
-  await writeStateJsonAtomic(stateJsonPath(bookDir), { ...nextState, language: nextState.language ?? null });
 
   const carryoverPath = castReuseCarryoverJsonPath(bookDir);
   const ad = audioDir(bookDir);
@@ -1311,10 +1283,9 @@ async function applyReparse(
        the other three arms touches cast.json or the carryover, so there is
        no interleaving hazard, and sequencing this arm first would mean a
        rejection here (e.g. EPERM/EBUSY on the delete) skips the other three
-       — which have already started in the same tick — while state.json above
-       was already rewritten with the new chapter slugs and
-       castConfirmed:false. That is a strictly worse inconsistent state than
-       today. This arm's rm(cast.json) is unguarded (no existsSync check):
+       — which have already started in the same tick. (#3400 pass 8: the
+       state.json rewrite no longer precedes this block; it is the book-locked
+       step after it, so a rejection here leaves state.json untouched.) This arm's rm(cast.json) is unguarded (no existsSync check):
        the read and the delete decision now live inside the lock together, so
        there is no longer an out-of-lock existsSync to desync from the
        in-lock reality — of the three sibling arms below, only the audio arm
@@ -1323,7 +1294,7 @@ async function applyReparse(
        revisions arm resets revisions.json through the store under the
        per-book revisions leaf lock (plan 285), held beside this cast lock,
        never nested in it; clearAnalysisCache's rm is unguarded too, same as
-       this arm's.
+       this arm's (and is repeated inside the book-locked state step below).
 
        Behaviour change vs. main: readJson's bare JSON.parse throws on a
        corrupt (not just missing) cast.json. On main that throw happened
@@ -1413,46 +1384,99 @@ async function applyReparse(
     await writeJsonAtomic(logPath, { events: [newEntry, ...prior] });
   }
 
-  const newExcludedById = new Map<number, boolean>();
-  for (const c of newChapters) {
-    if (c.excluded) newExcludedById.set(c.id, true);
-  }
-  const sourceText = parsed.sourceText;
-  const record: ManuscriptRecord = {
-    manuscriptId: state.manuscriptId,
-    format: parsed.format,
-    title: state.title,
-    wordCount: sourceText.trim().split(/\s+/).filter(Boolean).length,
-    byteSize: Buffer.byteLength(sourceText, 'utf8'),
-    uploadedAt: state.createdAt,
-    sourceText,
-    chapterHints: parsed.chapters.map((c) => ({
-      ...c,
-      excluded: newExcludedById.get(c.id) || undefined,
-    })),
-    bookId: state.bookId,
-    bookDir,
-  };
-  putManuscript(record);
+  /* #3400 pass 8 — the `state.json` write is its OWN book-locked step, taken
+     AFTER the cast / audio / revisions work above (never while holding `cast`:
+     the global order is `cast` -> `book`, see workspace/book-lock.ts). The
+     chapter restructure holds the book lock across its writes; this write used
+     to derive `{ ...state, chapters }` from a read taken before the parse and
+     land unlocked, in the middle of one. Everything the write decides —
+     which chapters carry `excluded`, every other state field — comes from the
+     read taken UNDER the lock, so a concurrent exclude / held / title / cover
+     write is not reverted.
 
-  const wordCountByChapterId = new Map<number, number>();
-  for (const c of parsed.chapters) {
-    const body = (c.body ?? '').trim();
-    wordCountByChapterId.set(c.id, body ? body.split(/\s+/).filter(Boolean).length : 0);
-  }
+     The in-memory ManuscriptRecord swap and a SECOND analysis-cache wipe ride in
+     the same hold (the arm above stays, so a sibling's rejection still leaves
+     the cache wiped): a restructure also mutates the record's hints and rebuilds
+     the cache from manuscript-edits.json, so one landing between the first wipe
+     and this step would leave the cache keyed by its chapter ids. Reparse is
+     last, so this wipe is the final word (the serial outcome).
+     The lock is held for this read -> write only. */
+  const outcome = await withLocatedBook(state.bookId, async (fresh) => {
+    const prevExcludedIds = new Set<number>(
+      fresh.state.chapters.filter((c) => c.excluded).map((c) => c.id),
+    );
+    const prevExcludedSlugs = new Set<string>(
+      fresh.state.chapters.filter((c) => c.excluded).map((c) => c.slug),
+    );
+    const newChapters: BookStateJson['chapters'] = parsed.chapters.map((c) => {
+      const newSlug = `${String(c.id).padStart(2, '0')}-${slug(c.title)}`;
+      const carryover = prevExcludedIds.has(c.id) || prevExcludedSlugs.has(newSlug);
+      return {
+        id: c.id,
+        title: c.title,
+        slug: newSlug,
+        duration: '00:00',
+        excluded: carryover ? true : undefined,
+        titleSynthesized: c.titleSynthesized || undefined,
+      };
+    });
 
-  return {
-    state: nextState,
-    chapterCount: newChapters.length,
-    chapterTitles: newChapters.map((c) => c.title),
-    chapters: newChapters.map((c) => ({
-      id: c.id,
-      title: c.title,
-      slug: c.slug,
-      wordCount: wordCountByChapterId.get(c.id) ?? 0,
-      excluded: !!c.excluded,
-    })),
-  };
+    const nextState: BookStateJson = {
+      ...fresh.state,
+      ...(opts.manuscriptFile ? { manuscriptFile: opts.manuscriptFile } : {}),
+      chapters: newChapters,
+      chapterTitleParserVersion: CHAPTER_TITLE_PARSER_VERSION,
+      castConfirmed: false,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeStateJsonAtomic(stateJsonPath(fresh.bookDir), {
+      ...nextState,
+      language: nextState.language ?? null,
+    });
+
+    const newExcludedById = new Map<number, boolean>();
+    for (const c of newChapters) {
+      if (c.excluded) newExcludedById.set(c.id, true);
+    }
+    const sourceText = parsed.sourceText;
+    const record: ManuscriptRecord = {
+      manuscriptId: nextState.manuscriptId,
+      format: parsed.format,
+      title: nextState.title,
+      wordCount: sourceText.trim().split(/\s+/).filter(Boolean).length,
+      byteSize: Buffer.byteLength(sourceText, 'utf8'),
+      uploadedAt: nextState.createdAt,
+      sourceText,
+      chapterHints: parsed.chapters.map((c) => ({
+        ...c,
+        excluded: newExcludedById.get(c.id) || undefined,
+      })),
+      bookId: nextState.bookId,
+      bookDir: fresh.bookDir,
+    };
+    putManuscript(record);
+    await clearAnalysisCache(nextState.manuscriptId);
+
+    const wordCountByChapterId = new Map<number, number>();
+    for (const c of parsed.chapters) {
+      const body = (c.body ?? '').trim();
+      wordCountByChapterId.set(c.id, body ? body.split(/\s+/).filter(Boolean).length : 0);
+    }
+
+    return {
+      state: nextState,
+      chapterCount: newChapters.length,
+      chapterTitles: newChapters.map((c) => c.title),
+      chapters: newChapters.map((c) => ({
+        id: c.id,
+        title: c.title,
+        slug: c.slug,
+        wordCount: wordCountByChapterId.get(c.id) ?? 0,
+        excluded: !!c.excluded,
+      })),
+    };
+  });
+  return outcome ? outcome.value : null;
 }
 
 /* POST /api/books/:bookId/reparse — re-runs the parser against the on-disk
@@ -1532,6 +1556,7 @@ bookStateRouter.post('/:bookId/reparse', async (req: Request, res: Response) => 
       changeLogType: 'reparse',
       changeLogTitle: 'Re-parsed manuscript',
     });
+    if (!payload) return res.status(404).json({ error: 'Book not found.' });
     res.json(payload);
   } catch (e) {
     console.error('[book-state] reparse failed', e);
@@ -1580,12 +1605,13 @@ bookStateRouter.post(
       if (oldFile && oldFile !== newFile && existsSync(join(bookDir, safeSegment(oldFile)))) {
         await unlink(join(bookDir, oldFile)).catch(() => {});
       }
-      state.manuscriptFile = newFile;
 
       const payload = await applyReparse(bookDir, state, parsed, {
         changeLogType: 'replace-manuscript',
         changeLogTitle: 'Replaced manuscript',
+        manuscriptFile: newFile,
       });
+      if (!payload) return res.status(404).json({ error: 'Book not found.' });
       res.json(payload);
     } catch (e) {
       console.error('[book-state] replace-manuscript failed', e);

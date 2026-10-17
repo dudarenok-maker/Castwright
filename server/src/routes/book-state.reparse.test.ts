@@ -256,11 +256,11 @@ describe('reparse handler — preserves manuscript-edits.json', () => {
 
       expect(res.status).toBe(500);
       expect(res.body.error).toMatch(/schema=2/);
-      /* FIRST, deliberately: applyReparse writes state.json synchronously in
-         sequence (before its Promise.all), so this is the one check that is
-         deterministically red when the preflight is missing. The cast/audio
-         deletions run as Promise.all siblings and may still be in flight when
-         the 500 returns. */
+      /* FIRST, deliberately: applyReparse writes state.json in a book-locked
+         step AFTER its Promise.all has settled (#3400 pass 8), so the state
+         is untouched on a 500 either way. The cast/audio deletions run as
+         Promise.all siblings and may still be in flight when the 500 returns
+         when the preflight is missing. */
       expect(readFileSync(statePath, 'utf8')).toBe(stateBefore);
       expect(existsSync(castPath)).toBe(true);
       expect(readFileSync(audioFile, 'utf8')).toBe('LIVE');

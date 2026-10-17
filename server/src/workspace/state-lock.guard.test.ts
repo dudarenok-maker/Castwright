@@ -69,13 +69,11 @@ const PATH_WRITERS = new Set(['writeJsonAtomic', 'writeJsonAtomicOrdered']);
     lexically-unlocked state.json writes, with why each is acceptable. */
 const ALLOWED: Record<string, { count: number; why: string }> = {
   'routes/book-state.ts': {
-    count: 4,
+    count: 3,
     why:
       'refreshChapterTitles (1) is only called from GET /state inside withLocatedBook; ' +
       "applySlice's `state` slice (2: the rename-then-write pair) only runs inside withBookLock " +
-      '(lockedSlice); applyReparse (1) is reparse / replace-manuscript, NOT locked: it takes the ' +
-      '`cast` lock inside, and `book` is taken while holding `cast`, never the reverse -- a ' +
-      'design pass is owed for the order before it can move under the book lock.',
+      '(lockedSlice).',
   },
   'routes/chapters-restructure.ts': {
     count: 1,
