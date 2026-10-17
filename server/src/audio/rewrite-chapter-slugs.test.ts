@@ -287,6 +287,59 @@ describe('rewriteChapterSlugs x applyMerge (#3524 S1)', () => {
   });
 });
 
+describe('rewriteChapterSlugs x applyMerge with an empty chapter (#3524 N2)', () => {
+  it('every rendered chapter keeps its own files at its final slug when the empty-chapter prune renumbers it', async () => {
+    const titles = [1, 2, 3, 4, 5].map((n) => `Chapter ${n}`);
+    const slugOf = (id: number, title: string) =>
+      `${String(id).padStart(2, '0')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const state = {
+      bookId: 'b', manuscriptId: 'm', title: 'T', author: 'A', series: 'Standalones', seriesPosition: null,
+      isStandalone: true, manuscriptFile: 'manuscript.txt', castConfirmed: false,
+      chapters: titles.map((title, i) => ({
+        id: i + 1, title, slug: slugOf(i + 1, title), titleSynthesized: true, audioRenderedAt: '2026-01-01T00:00:00.000Z',
+      })),
+      coverGradient: ['#000', '#fff'], createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    } as unknown as BookStateJson;
+    const hints = titles.map((title, i) => ({ id: i + 1, title, body: `body ${i + 1}` }));
+    // Chapter 2 has no sentences (a heading-only "Part One"), so the prune pass removes it.
+    const sentences = [1, 3, 4, 5].map((chapterId, i) => ({ id: i + 1, chapterId, characterId: 'narrator', text: `s${chapterId}` }));
+    const suffixes = ['mp3', 'segments.json', 'peaks.json', 'lufs.json', 'embeddings.json'];
+    const tagOf = (s: string, slug: string) => `${s}:${slug}`;
+    for (const c of state.chapters) {
+      for (const s of suffixes) {
+        const tag = tagOf(s, c.slug);
+        writeFileSync(join(audioRoot, `${c.slug}.${s}`), s === 'mp3' ? tag : JSON.stringify({ tag }));
+      }
+    }
+
+    const merged = applyMerge(state, hints, sentences, { chapterIds: [4, 5] });
+    const result = await rewriteChapterSlugs(audioRoot, merged.audioOps);
+    expect(result.errors).toEqual([]);
+
+    const finalChapters = merged.state.chapters;
+    expect(finalChapters.map((c) => c.id)).toEqual([1, 2, 3]);
+    // Rendered, content-unchanged chapters: old 1 -> 1, old 3 -> 2. Each owns its own old content.
+    const ownerOf = new Map([[1, '01-chapter-1'], [2, '03-chapter-3']]);
+    for (const [newId, oldSlug] of ownerOf) {
+      const ch = finalChapters.find((c) => c.id === newId)!;
+      expect(ch.audioRenderedAt).toBeTruthy();
+      for (const s of suffixes) {
+        const p = join(audioRoot, `${ch.slug}.${s}`);
+        expect(existsSync(p), `${ch.slug}.${s}`).toBe(true);
+        const body = readFileSync(p, 'utf8');
+        expect(s === 'mp3' ? body : (JSON.parse(body) as { tag: string }).tag).toBe(tagOf(s, oldSlug));
+      }
+    }
+    // The merged chapter was not rendered: it must not inherit any chapter's audio.
+    const mergedCh = finalChapters.find((c) => c.id === 3)!;
+    expect(mergedCh.audioRenderedAt).toBeFalsy();
+    expect(readdirSync(audioRoot).filter((n) => n.startsWith(`${mergedCh.slug}.`))).toEqual([]);
+    // Nothing is left at the old slugs of the tail.
+    expect(readdirSync(audioRoot).sort()).toEqual(
+      ['01-chapter-1', '02-chapter-2'].flatMap((sl) => suffixes.map((s) => `${sl}.${s}`)).sort(),
+    );
+  });
+});
 function readDirNames(dir: string): string[] {
   return readdirSync(dir);
 }

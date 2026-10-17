@@ -501,6 +501,26 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
     ...additionalDeletes,
   ];
 
+  /* A rendered, content-unchanged survivor the user's op did not rename has NO op yet (its
+     slug was unchanged when `buildAudioOps` ran), but the renumber above just changed its
+     slug — its files would stay behind and a later chapter would inherit them. Emit the
+     rename it is owed, from the slug its files sit at now (`c.slug`, pre-prune). */
+  const renamedNewIds = new Set(
+    result.audioOps.flatMap((op) => (op.kind === 'rename' ? [op.newChapterId] : [])),
+  );
+  for (const c of survivors) {
+    if (!c.audioRenderedAt || renamedNewIds.has(c.id)) continue;
+    const renumbered = renumberedChapters.find((r) => r.id === idRemap.get(c.id));
+    if (!renumbered || renumbered.slug === c.slug) continue;
+    adjustedAudioOps.push({
+      kind: 'rename',
+      from: c.slug,
+      to: renumbered.slug,
+      newChapterId: renumbered.id,
+      newChapterTitle: renumbered.title,
+    });
+  }
+
   const msg = `Removed ${pruned.length} empty chapter${pruned.length === 1 ? '' : 's'} (${pruned
     .map((c) => c.title)
     .slice(0, 3)
