@@ -67,6 +67,21 @@ function makeSandbox() {
   return { cli: join(root, 'scripts', 'check-register-row-citations.mjs'), dispose };
 }
 
+// Positive control for the sandbox mutation tests: run the UNMUTATED CLI copy
+// inside the scratch repo and require it to report the real tree's citation
+// count. A zero-file scan also prints "0 citation(s)", so without this a
+// sandbox that indexed nothing would satisfy every mutant's expectation.
+function assertSandboxScansTheRealTree(sandbox, baselineStdout) {
+  const control = runCli([], sandbox.cli);
+  const count = (stdout) => Number(stdout.match(/(\d+) citation\(s\)/)?.[1] ?? 0);
+  const controlCount = count(control.stdout);
+  const baselineCount = count(baselineStdout);
+  assert.ok(
+    controlCount > 0 && controlCount === baselineCount,
+    `the scratch-repo sandbox must scan the same corpus as the real tree (control ran ${controlCount} citation(s), real tree ${baselineCount}) in:\n${control.stdout}${control.stderr}`,
+  );
+}
+
 // A minimal register carrying two real rows: A1 and E1. Every fixture below
 // checks its own file against exactly this register.
 const REGISTER_TEXT = `# Register
@@ -692,6 +707,7 @@ test('CLI mutation: if scannedFiles() returns empty, the check would find zero c
 
   const sandbox = makeSandbox();
   try {
+    assertSandboxScansTheRealTree(sandbox, baseline.stdout);
     writeFileSync(sandbox.cli, mutated);
     const mutantResult = runCli([], sandbox.cli);
     // With zero files scanned, we should get zero citations reported
@@ -729,6 +745,7 @@ test('CLI mutation: if SCAN_PREFIXES drops docs/features/**, the check would mis
 
   const sandbox = makeSandbox();
   try {
+    assertSandboxScansTheRealTree(sandbox, baseline.stdout);
     writeFileSync(sandbox.cli, mutated);
     const mutantResult = runCli([], sandbox.cli);
     // With docs/features/** excluded, the scan should find fewer citations.
