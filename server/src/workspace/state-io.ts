@@ -1,8 +1,13 @@
 /* Atomic JSON read/write for .audiobook/*.json.
 
    Write strategy: serialise to a temp file alongside the target, fsync, then
-   rename over the target. This avoids partial writes if the process is killed
-   mid-write and preserves the previous file until the rename completes.
+   rename it onto the target. A non-rotating write renames OVER the existing
+   file, so the previous bytes survive until that rename completes. A rotating
+   write (`{ rotate }`) first moves the old file to `.bak.1` and renames the tmp
+   onto the vacated name: a kill between the two renames leaves main absent
+   (the previous state is in `.bak.1`, and `readJsonWithRecovery` with
+   `recoverMissing` reads it from there). Either way a kill mid-write never
+   leaves a partial main file.
 
    Windows + OneDrive caveat: when the destination is in a OneDrive-synced
    folder, OneDrive briefly holds a read handle on the file as part of its
@@ -67,7 +72,11 @@ export async function readJson<T>(path: string): Promise<T | null> {
  *
  *  When the main file is missing entirely (`existsSync === false`) we
  *  return `null` like `readJson` — recovery is only for "file exists
- *  but JSON.parse rejects it". When the main file is corrupt AND every
+ *  but JSON.parse rejects it" — UNLESS the caller opts in with
+ *  `recoverMissing` (state.json only: nothing deletes it on purpose, so an
+ *  absent main with a parseable `.bak.N` is a stranded book), in which case
+ *  the newest parseable backup is returned with a warning, and `null` only
+ *  when there is none. When the main file is corrupt AND every
  *  backup is corrupt / missing, the original parse error is re-thrown
  *  so the caller surfaces the same diagnostic it would have seen from
  *  `readJson` directly.
