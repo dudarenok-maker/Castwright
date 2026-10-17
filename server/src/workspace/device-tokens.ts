@@ -472,9 +472,8 @@ async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   // `.bak.1` and renames the tmp onto the vacated name (#3625 reorder). Two
   // renames apart, `device-tokens.json` does not exist at all — and a crash
   // in that gap leaves it absent. `state.json` pairs that same option with a
-  // reader, `readJsonWithRecovery`, which falls back to `.bak.N` on a
-  // corrupt read — but not on a MISSING main, so even there the gap is
-  // not recoverable from the backups; this file has no such reader at all.
+  // reader, `readJsonWithRecovery` with `recoverMissing`, which falls back to
+  // `.bak.N` on a corrupt OR missing main; this file has no such reader at all.
   // `loadSync` would see a missing file and report `cache = []` with no
   // warning, an authoritative-looking "zero paired devices" — strictly
   // worse than a write with no rotate (which never vacates the live file).

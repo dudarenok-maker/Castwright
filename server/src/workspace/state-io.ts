@@ -187,13 +187,13 @@ export async function writeJsonAtomic(
        reader never finds the book without its main file. */
     if (rotated && !existsSync(path)) {
       await renameWithRetry(`${path}.bak.1`, path).catch((restoreErr) => {
-        /* Not swallowed silently: main is now absent and only the recovering
-           reader (which falls back to `.bak.1`) stands between the book and a
-           hand repair. */
+        /* Not swallowed silently: main is now absent. Only a reader that opts into
+           `recoverMissing` (state.json's) falls back to `.bak.1`; any other
+           rotating file (user-settings.json) reads as absent until repaired. */
         console.warn(
           `[state-io] ${path}: the write failed after rotation and restoring ` +
             `${path}.bak.1 failed too (${(restoreErr as Error).message}); ` +
-            `readers will recover from the backup.`,
+            `only a reader that recovers a missing main (state.json's) will use the backup.`,
         );
       });
     }
