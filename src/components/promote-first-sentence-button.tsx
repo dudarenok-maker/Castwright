@@ -10,7 +10,9 @@
    See docs/superpowers/specs/2026-07-01-promote-first-sentence-to-title-design.md. */
 
 import { useState } from 'react';
-import { useAppDispatch } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -43,6 +45,10 @@ export function PromoteFirstSentenceButton({
   isOnlySentence,
 }: Props) {
   const dispatch = useAppDispatch();
+  // #3400 pass 7 — renameChapter is keyed by chapter id (a restructure renumbers it) and
+  // promoteSentenceToTitle is refused: disable, and bail BEFORE the rename API call.
+  const store = useStore<RootState>();
+  const editsLocked = useAppSelector(selectEditsLocked);
   const [phase, setPhase] = useState<Phase>('idle');
 
   const cleaned = firstSentence ? cleanTitle(firstSentence.text) : '';
@@ -50,6 +56,7 @@ export function PromoteFirstSentenceButton({
 
   async function handleConfirm() {
     if (disabled || !bookId || !firstSentence) return;
+    if (refuseIfEditsLocked(store.getState, dispatch)) return;
     setPhase('busy');
     try {
       await api.renameChapter(bookId, chapterId, cleaned);
@@ -80,12 +87,14 @@ export function PromoteFirstSentenceButton({
       <button
         type="button"
         data-testid="promote-first-sentence-button"
-        disabled={disabled || phase === 'busy'}
+        disabled={disabled || phase === 'busy' || editsLocked}
         onClick={() => setPhase((p) => (p === 'confirm' ? 'idle' : 'confirm'))}
         title={
-          firstSentence
-            ? "Use this chapter's first line as its title, and remove it from narration"
-            : 'This chapter has no sentences to promote'
+          editsLocked
+            ? RESTRUCTURING_REASON
+            : firstSentence
+              ? "Use this chapter's first line as its title, and remove it from narration"
+              : 'This chapter has no sentences to promote'
         }
         className="shrink-0 inline-flex items-center gap-2 px-4 min-h-11 rounded-full border border-ink/15 text-sm font-semibold text-ink hover:bg-ink/5 disabled:opacity-40"
       >

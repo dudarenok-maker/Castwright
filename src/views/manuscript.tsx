@@ -30,6 +30,7 @@ import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { useMarkCharacterStaleIfRendered } from '../lib/stale-chapters';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -135,6 +136,13 @@ export function ManuscriptView({
   onAddFromSeriesRoster,
 }: Props) {
   const dispatch = useAppDispatch();
+  /* #3400 pass 7 — every sentence edit below is refused by the restructure
+     guard while the book restructures. The affordances disable (with a reason)
+     and each handler re-checks the live flag BEFORE its side writes (the
+     boundary_move log, markStale), so a refused edit is never recorded. */
+  const appStore = useStore<RootState>();
+  const editsLocked = useAppSelector(selectEditsLocked);
+  const refuseIfLocked = () => refuseIfEditsLocked(appStore.getState, dispatch);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookId = useAppSelector((s) => ((s as any).ui?.stage as { bookId?: string } | undefined)?.bookId ?? null);
   /* Plan 276 — disables "Approve cast & start generating" while
@@ -620,6 +628,7 @@ export function ManuscriptView({
      viewport edge on a phone without losing the gesture. */
   const onBoundaryPointerDown = (boundaryIdx: number, e: React.PointerEvent) => {
     e.preventDefault();
+    if (refuseIfLocked()) return;
     setDrag({ boundaryIdx, anchorY: e.clientY, candidateSentenceIdx: null });
     document.body.classList.add('dragging-boundary');
     /* Capture the pointer on the source element so subsequent events
@@ -633,6 +642,7 @@ export function ManuscriptView({
   };
 
   function commitBoundaryMove(d: Drag) {
+    if (refuseIfLocked()) return;
     const segAbove = segments[d.boundaryIdx - 1];
     const segBelow = segments[d.boundaryIdx];
     if (!segAbove || !segBelow || d.candidateSentenceIdx == null) return;
@@ -696,6 +706,7 @@ export function ManuscriptView({
   }, [drag?.boundaryIdx]);
 
   function reassignSegment(seg: Segment, newCharId: string) {
+    if (refuseIfLocked()) return;
     /* Segments are built per current chapter (src/views/manuscript.tsx:80-90),
        so every sentence inside one segment shares the same chapterId. */
     const chapterId = seg.sentences[0]?.chapterId;
@@ -712,6 +723,7 @@ export function ManuscriptView({
   }
 
   function assignSelectionTo(newCharacterId: string) {
+    if (refuseIfLocked()) return;
     if (!selection || currentChapterId == null) return;
     /* Scope the lookup to the current chapter — sentence ids restart at 1
        per chapter, so a `s.id === selection.sentenceId` match alone would
@@ -898,6 +910,7 @@ export function ManuscriptView({
         setInspectorOpen(false);
       }}
       onReassignSentence={(chapterId, sentenceId, newCharId) => {
+        if (refuseIfLocked()) return;
         dispatch(
           manuscriptActions.setSentenceCharacter({
             chapterId,
@@ -1119,6 +1132,14 @@ export function ManuscriptView({
               )}
             </h1>
             <div className="flex flex-wrap items-center gap-2">
+              {editsLocked && (
+                <p
+                  data-testid="manuscript-restructuring-banner"
+                  className="basis-full text-xs text-ink/60"
+                >
+                  {RESTRUCTURING_REASON}
+                </p>
+              )}
               <RestructureChaptersButton
                 onClick={() => dispatch(uiActions.changeView('restructure'))}
               />
@@ -1875,6 +1896,8 @@ function SegmentRow({
   const [menuOpen, setMenuOpen] = useState(false);
   const reassignBtnRef = useRef<HTMLButtonElement>(null);
   const dispatch = useAppDispatch();
+  const appStore = useStore<RootState>();
+  const editsLocked = useAppSelector(selectEditsLocked);
   const markStale = useMarkCharacterStaleIfRendered();
   const char = findChar(seg.characterId);
   const c = CHAR_COLORS[char?.color as CharColor] ?? CHAR_COLORS.narrator;
@@ -1944,7 +1967,9 @@ function SegmentRow({
                 e.stopPropagation();
                 setMenuOpen(!menuOpen);
               }}
-              className="px-2 py-1 rounded-md bg-white border border-ink/10 text-[11px] font-medium text-ink/70 hover:text-ink hover:border-ink/30 inline-flex items-center gap-1"
+              disabled={editsLocked}
+              title={editsLocked ? RESTRUCTURING_REASON : undefined}
+              className="disabled:opacity-40 px-2 py-1 rounded-md bg-white border border-ink/10 text-[11px] font-medium text-ink/70 hover:text-ink hover:border-ink/30 inline-flex items-center gap-1"
             >
               Reassign <IconArrowDn className="w-3 h-3" />
             </button>
@@ -2017,8 +2042,11 @@ function SegmentRow({
                 {s.excludeFromSynthesis ? (
                   <button
                     data-testid={`reinclude-toggle-${s.id}`}
+                    disabled={editsLocked}
+                    title={editsLocked ? RESTRUCTURING_REASON : undefined}
                     onClick={(e) => {
                       e.stopPropagation();
+                      if (refuseIfEditsLocked(appStore.getState, dispatch)) return;
                       dispatch(manuscriptActions.setSentenceExcluded({ chapterId: s.chapterId, sentenceId: s.id, excluded: false }));
                       markStale({ id: s.characterId, name: char?.name ?? s.characterId });
                     }}
@@ -2124,6 +2152,8 @@ interface InspectorProps {
 }
 
 interface SentencePickerRowProps {
+  /** Edits unavailable (the book is restructuring). */
+  disabled?: boolean;
   sentence: Sentence;
   characters: Character[];
   priorRoster?: SeriesRosterEntry[];
@@ -2148,6 +2178,7 @@ function SentencePickerRow({
   onClose,
   onPick,
   onAddFromSeriesRoster,
+  disabled,
 }: SentencePickerRowProps) {
   const btnRef = useRef<HTMLButtonElement>(null);
   return (
@@ -2160,7 +2191,9 @@ function SentencePickerRow({
           ref={btnRef}
           type="button"
           onClick={onToggle}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium text-ink/70 bg-white border border-ink/10 hover:border-ink/30"
+          disabled={disabled}
+          title={disabled ? RESTRUCTURING_REASON : undefined}
+          className="disabled:opacity-40 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium text-ink/70 bg-white border border-ink/10 hover:border-ink/30"
         >
           Reassign just this one
           <IconArrowDn className="w-3 h-3" />
@@ -2198,6 +2231,7 @@ function SegmentInspector({
   const [openSentencePicker, setOpenSentencePicker] = useState<number | null>(null);
   const [segmentPickerOpen, setSegmentPickerOpen] = useState(false);
   const segmentBtnRef = useRef<HTMLButtonElement>(null);
+  const editsLocked = useAppSelector(selectEditsLocked);
   if (!seg)
     return (
       <div className="bg-white rounded-3xl border border-dashed border-ink/15 p-6 text-sm text-ink/50">
@@ -2277,7 +2311,9 @@ function SegmentInspector({
             ref={segmentBtnRef}
             type="button"
             onClick={() => setSegmentPickerOpen((v) => !v)}
-            className="w-full flex items-center gap-3 px-3 py-2 min-h-11 rounded-xl text-left bg-canvas/60 border border-ink/10 hover:border-ink/30 transition-colors"
+            disabled={editsLocked}
+            title={editsLocked ? RESTRUCTURING_REASON : undefined}
+            className="disabled:opacity-40 w-full flex items-center gap-3 px-3 py-2 min-h-11 rounded-xl text-left bg-canvas/60 border border-ink/10 hover:border-ink/30 transition-colors"
           >
             <ColorDot color={c.color as CharColor} />
             <span className="text-sm flex-1 truncate" style={{ color: cc.hex }}>
@@ -2311,6 +2347,7 @@ function SegmentInspector({
                   sentence={s}
                   characters={characters}
                   priorRoster={priorRoster}
+                  disabled={editsLocked}
                   isOpen={openSentencePicker === s.id}
                   onToggle={() =>
                     setOpenSentencePicker((curr) => (curr === s.id ? null : s.id))
@@ -2457,6 +2494,7 @@ interface SelectionPopoverProps {
 }
 
 function SelectionPopover({ sel, characters, onAssign }: SelectionPopoverProps) {
+  const editsLocked = useAppSelector(selectEditsLocked);
   if (!sel) return null;
   const top = sel.rect.top - 8;
   const left = sel.rect.left + sel.rect.width / 2;
@@ -2480,11 +2518,13 @@ function SelectionPopover({ sel, characters, onAssign }: SelectionPopoverProps) 
         {characters.map((c) => (
           <button
             key={c.id}
+            disabled={editsLocked}
+            title={editsLocked ? RESTRUCTURING_REASON : undefined}
             onMouseDown={(e) => {
               e.preventDefault();
               onAssign(c.id);
             }}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-ink/4 text-left"
+            className="disabled:opacity-40 flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-ink/4 text-left"
           >
             <ColorDot color={c.color as CharColor} />
             <span className="text-sm text-ink">{c.name}</span>
