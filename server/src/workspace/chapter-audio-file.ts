@@ -40,6 +40,11 @@ const EXT_PROBE_ORDER: readonly FormatDescriptor[] = [
   { ext: 'ogg', mime: 'audio/ogg', urlSuffix: 'audio.ogg' },
 ];
 
+/** Every audio extension a chapter's audio file can carry — the single source
+    for code that must move or delete a chapter's files by slug
+    (`rewriteChapterSlugs`), so a new format here can't be missed there. */
+export const CHAPTER_AUDIO_EXTS: readonly ChapterAudioExt[] = EXT_PROBE_ORDER.map((d) => d.ext);
+
 export function findChapterAudio(audioRoot: string, slug: string): ChapterAudioFile | null {
   /* `slug` is derived from user/import-controlled chapter metadata and reaches
      this join unfiltered from every export builder. sanitizeIdSegment collapses

@@ -45,7 +45,10 @@ export function makeScratchRepo(realRepo, { trackedDirs = [], files = [], parent
       copyFileSync(join(realRepo, rel), join(root, rel));
     }
     execFileSync('git', ['init', '-q'], { cwd: root, env: throwawayGitEnv(), windowsHide: true });
-    execFileSync('git', ['add', '-A'], { cwd: root, env: throwawayGitEnv(), windowsHide: true });
+    // Intent-to-add: `git ls-files` (all a repo-scanning CLI reads) lists the
+    // entries without hashing and compressing every file into the object
+    // store, which dominated the cost of a scratch repo (~7x slower, #3701).
+    execFileSync('git', ['add', '-N', '-A'], { cwd: root, env: throwawayGitEnv(), windowsHide: true });
   } catch (err) {
     rmSync(root, { recursive: true, force: true });
     throw err;

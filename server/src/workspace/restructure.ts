@@ -501,6 +501,26 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
     ...additionalDeletes,
   ];
 
+  /* A rendered, content-unchanged survivor the user's op did not rename has NO op yet (its
+     slug was unchanged when `buildAudioOps` ran), but the renumber above just changed its
+     slug — its files would stay behind and a later chapter would inherit them. Emit the
+     rename it is owed, from the slug its files sit at now (`c.slug`, pre-prune). */
+  const renamedNewIds = new Set(
+    result.audioOps.flatMap((op) => (op.kind === 'rename' ? [op.newChapterId] : [])),
+  );
+  for (const c of survivors) {
+    if (!c.audioRenderedAt || renamedNewIds.has(c.id)) continue;
+    const renumbered = renumberedChapters.find((r) => r.id === idRemap.get(c.id));
+    if (!renumbered || renumbered.slug === c.slug) continue;
+    adjustedAudioOps.push({
+      kind: 'rename',
+      from: c.slug,
+      to: renumbered.slug,
+      newChapterId: renumbered.id,
+      newChapterTitle: renumbered.title,
+    });
+  }
+
   const msg = `Removed ${pruned.length} empty chapter${pruned.length === 1 ? '' : 's'} (${pruned
     .map((c) => c.title)
     .slice(0, 3)
@@ -522,14 +542,12 @@ function pruneEmptyChaptersInResult(result: RestructureResult): RestructureResul
    re-derive against the new ids. Renumbering also recomputes slugs for
    any title that changed.
 
-   Audio ops referencing a chapter whose generic title got rewritten
-   would technically need their `to` slug updated too — but in practice,
-   when a chapter is auto-titled "Chapter N", its audio file is keyed off
-   the same generic title, so the rename op's `to` already matches. The
-   one edge case is a chapter that was auto-titled at parse time, then
-   manually renamed by the user, then auto-titled-again here — but an
-   explicit title (rename, merge `mergedTitle`) clears `titleSynthesized`,
-   and only flagged chapters are renumbered, so this case can't arise. */
+   Audio ops referencing a chapter whose generic title got rewritten need
+   their `to` slug updated too (re-keyed below). A rendered chapter the
+   renumber re-slugs that has NO op at all — the chapters after a split
+   keep their old app-made titles at shifted ids (split skips this post-
+   pass), so the next merge / reorder / exclude renumbers them without any
+   op of its own — is owed a rename too, or its files stay at the old slug. */
 function postProcessRestructure(result: RestructureResult): RestructureResult {
   const pruned = pruneEmptyChaptersInResult(result);
   const titled = renumberGenericTitlesInChapters(pruned.state.chapters);
@@ -548,6 +566,24 @@ function postProcessRestructure(result: RestructureResult): RestructureResult {
     }
     return op;
   });
+
+  // A rendered chapter the renumber re-slugged that no op moves: emit the rename it is owed,
+  // from the slug its files sit at now (its slug in `pruned.state`).
+  const renamedNewIds = new Set(
+    adjustedAudioOps.flatMap((op) => (op.kind === 'rename' ? [op.newChapterId] : [])),
+  );
+  for (const before of pruned.state.chapters) {
+    const after = renumberedById.get(before.id);
+    if (!before.audioRenderedAt || !after || after.slug === before.slug) continue;
+    if (renamedNewIds.has(before.id)) continue;
+    adjustedAudioOps.push({
+      kind: 'rename',
+      from: before.slug,
+      to: after.slug,
+      newChapterId: after.id,
+      newChapterTitle: after.title,
+    });
+  }
 
   const msg = `Renumbered ${titled.renumbered} auto-generated chapter title${titled.renumbered === 1 ? '' : 's'} against new positions.`;
   console.warn(`[restructure] ${msg}`);

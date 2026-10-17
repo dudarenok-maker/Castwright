@@ -126,6 +126,10 @@ export async function triggerScoring(ctx: {
       against scoreBook's own precise usedQwenTiers — safe there because
       resume never runs concurrently with an in-flight sibling render. */
   keep?: { keep06: boolean; keep17: boolean };
+  /** #3524 — the model key of the render run this pass follows; scoring resolves a
+      character's current engine from it (see scoreBook's `runModelKey`). Omitted by the
+      resume route, which has no run. */
+  runModelKey?: TtsModelKey;
 }): Promise<void> {
   if (!configValue('qa.speaker.enabled')) return;
   if (scoringInFlight.has(ctx.bookId)) return;
@@ -158,6 +162,7 @@ export async function triggerScoring(ctx: {
   let finalCharactersOnRoster = 0;
   const run = (async () => {
     const result = await scoreBook(ctx.bookDir, ctx.chapters, ctx.justFinalizedSlugs, {
+      runModelKey: ctx.runModelKey,
       onRosterKnown: (total) => {
         finalCharactersOnRoster = total;
         broadcastToBook(ctx.bookId, { type: 'scoring_started', charactersOnRoster: total });
@@ -234,6 +239,8 @@ export async function afterChapterFinalized(ctx: {
       NOT derived from the finalized-chapters-only score pass, which can't see
       an in-flight sibling chapter's tier (the Finding-2 race). */
   keep: { keep06: boolean; keep17: boolean };
+  /** #3524 — the run's model key, forwarded to `triggerScoring`. */
+  runModelKey?: TtsModelKey;
 }) {
   /* This guard is intentionally DUPLICATED with `triggerScoring`'s own
      `qa.speaker.enabled` check below, rather than relocated there (round-3
@@ -258,7 +265,7 @@ export async function afterChapterFinalized(ctx: {
      own attempted stamp entirely if its trigger is coalesced away. */
   await writeAttempted(attemptedPath(audioDir(ctx.bookDir), ctx.justFinalized.slug));
 
-  await triggerScoring({ ...ctx, justFinalizedSlugs: [ctx.justFinalized.slug], keep: ctx.keep });
+  await triggerScoring({ ...ctx, justFinalizedSlugs: [ctx.justFinalized.slug], keep: ctx.keep, runModelKey: ctx.runModelKey });
 }
 
 /* srv-17c — in-worker recovery for a sidecar that dies mid-synth. A host-RAM
@@ -1970,6 +1977,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         chapters: state.chapters.map((c) => ({ id: c.id, slug: c.slug })),
         justFinalized: { id: chapter.id, slug: chapter.slug },
         keep: usedQwenTiers,
+        runModelKey: modelKey,
       });
 
       /* Chapter finished — clear the per-chapter tracking so a subscriber
