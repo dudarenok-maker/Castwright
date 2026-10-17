@@ -38,7 +38,8 @@
 
 import { manuscriptActions } from './manuscript-slice';
 import { api } from '../lib/api';
-import type { AppDispatch } from './index';
+import type { AppDispatch, RootState } from './index';
+import { selectBookRestructuring } from './analysis-substage-selectors';
 import type { UpdateSubstageProgressPayload } from './analysis-substage-reducers';
 
 /** Structured detail accompanying an onProgress tick — chapterIndex passed
@@ -205,4 +206,23 @@ export async function runProsodyPasses(
   );
 
   return { totalAnnotations, totalChapters, failed, skipped };
+}
+
+/** #3400 — mark the book's emotion pass unfinished (`prosodyAnnotated: false`,
+    not cleared: the layout re-runs only an explicit false), so it is run again
+    the next time the book is open. The mark is a `state.json` write, and a
+    chapter restructure rewrites `state.json`: while the book's restructure is
+    in flight the write is held and sent once it ends (never dropped). */
+export function markProsodyUnfinished(
+  store: { getState: () => RootState; subscribe: (l: () => void) => () => void },
+  bookId: string,
+): void {
+  const send = () =>
+    void api.putBookState(bookId, { slice: 'state', patch: { prosodyAnnotated: false } }).catch(() => {});
+  if (!selectBookRestructuring(store.getState(), bookId)) return send();
+  const unsubscribe = store.subscribe(() => {
+    if (selectBookRestructuring(store.getState(), bookId)) return;
+    unsubscribe();
+    send();
+  });
 }

@@ -757,6 +757,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/chapters/exclude": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Soft-hide or un-hide a set of chapters
+         * @description Sets `Chapter.excluded` on every listed chapter in one atomic
+         *     restructure pass. Sentence remap is identity; audio files are left
+         *     on disk. For a single chapter the Generate-view toggle uses
+         *     `setChapterExcluded` instead.
+         */
+        post: operations["excludeChapters"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/chapters/refresh-titles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-derive chapter titles from the source manuscript
+         * @description Re-parses the source manuscript for authoritative titles and, unless
+         *     `useFirstLine` is false, promotes the first non-dialogue sentence of
+         *     any chapter still carrying a generic "Chapter N" title. Chapters with
+         *     `titleOverridden` are left alone. A failed re-parse downgrades to the
+         *     first-line pass only.
+         */
+        post: operations["refreshChapterTitles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/cover/candidates": {
         parameters: {
             query?: never;
@@ -1616,10 +1663,12 @@ export interface paths {
         put?: never;
         post?: never;
         /**
-         * Accept the new render — discard the preserved prior audio
-         * @description Deletes `audio/<slug>.previous.mp3` and
-         *     `audio/<slug>.previous.segments.json`. Idempotent: missing files
-         *     are skipped. 404 only when no preserved pair existed to begin with.
+         * Moved (plan 286): use POST …/revisions/{revisionId}/accept
+         * @deprecated
+         * @description Plan 286 retired this route in favour of the server-owned revision
+         *     operations. Always answers 410 `moved`; never touches audio or
+         *     revisions.json. Never 404, so an old client's accept — which treats
+         *     404 as success — does not read a retired route as a silent accept.
          */
         delete: operations["acceptChapterRevision"];
         options?: never;
@@ -1637,13 +1686,38 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Reject the new render — restore the preserved prior audio
-         * @description Renames `audio/<slug>.previous.*` over the live names, clobbering
-         *     the freshly-rendered audio. The user has chosen the prior take.
-         *     409 when a generation is in flight for the book (the rename would
-         *     race the write path).
+         * Moved (plan 286): use POST …/revisions/{revisionId}/reject
+         * @deprecated
+         * @description Plan 286 retired this route in favour of the server-owned revision
+         *     operations. Always answers 410 `moved`; never touches audio or
+         *     revisions.json. Never 404, so an old client's accept — which treats
+         *     404 as success — does not read a retired route as a silent accept.
          */
         post: operations["rejectChapterRevision"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/chapters/{chapterId}/audio/previous/restore-unrecorded": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore the preserved take for a preview whose review was never recorded (plan 286)
+         * @description Used only by the A/B preview stub when finalize answered
+         *     `reviewOutcome: 'failed'` (its take was preserved but no entry was recorded). Busy check first, then the chapter lookups.
+         *     409 `has_revision` when revisions.json holds a pending entry for the
+         *     chapter (read lock-free — a guard, not a fence). Never writes
+         *     revisions.json. Serialised per chapter with accept/reject.
+         */
+        post: operations["restorePreviousUnrecorded"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1991,7 +2065,7 @@ export interface paths {
          *     audio step. Idempotent on the revision id. Refuses with 409
          *     `live_audio_missing` when the chapter has no live audio but still has a
          *     `.previous` take (accepting would delete the only copy — retry Reject).
-         *     No client caller until PR 2.
+         *     Called by the client (plan 286).
          */
         post: operations["acceptRevision"];
         delete?: never;
@@ -2014,7 +2088,7 @@ export interface paths {
          * @description One request runs the audio step (promote `.previous.*` over the live
          *     names — today's code) and then records the outcome. The JSON is
          *     untouched when the request is refused as busy, finds no `.previous`, or
-         *     the audio step throws. No client caller until PR 2.
+         *     the audio step throws. Called by the client (plan 286).
          */
         post: operations["rejectRevision"];
         delete?: never;
@@ -2034,7 +2108,7 @@ export interface paths {
         put?: never;
         /**
          * Dismiss a drift event (plan 285)
-         * @description Adds the id to revisions.json's `dismissed`. Idempotent; touches no audio. No client caller until PR 2.
+         * @description Adds the id to revisions.json's `dismissed`. Idempotent; touches no audio. Called by the client (plan 286).
          */
         post: operations["dismissDrift"];
         delete?: never;
@@ -2618,8 +2692,11 @@ export interface paths {
          * Persist one slice of a book's on-disk state
          * @description The generic wholesale write the persistence middleware funnels every
          *     slice through: `cast` (cast.json), `manuscript` (manuscript-edits.json),
-         *     `revisions`, `changeLog`, and `state` (state.json's editorial fields).
-         *     `patch` is the whole slice, not a delta — the named file is replaced.
+         *     `changeLog`, and `state` (state.json's editorial fields). `patch` is
+         *     the whole slice, not a delta — the named file is replaced. Plan 286:
+         *     `revisions` is server-owned; this route always refuses that slice
+         *     with `400 revisions_server_owned` and writes nothing — use the
+         *     revision operations instead.
          *
          *     The `cast` slice is guarded on the way in (fs-38 Wave 3c / #1899): a
          *     character's stored **cloned** voice slot cannot be planted, restamped,
@@ -4554,7 +4631,8 @@ export interface components {
          *     codes (`language_unset`, `cast_incomplete`, `stage1_shrink_refused`,
          *     `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
          *     `design_in_progress`, `bad_request`, `chapter_excluded`,
-         *     `main_analysis_running`, `subset_analysis_running`) carry `code`
+         *     `main_analysis_running`, `subset_analysis_running`,
+         *     `chapters_restructuring`) carry `code`
          *     and `message` only — `main_analysis_running` also carries
          *     `draining` (#3435: the late refusal check, after the stream opened).
          *     `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
@@ -4797,11 +4875,10 @@ export interface components {
              */
             reviewChapter?: boolean;
             /**
-             * @description Plan 285 — only on `chapter_complete` when finalize was asked to
-             *     record A/B review state; false when that record failed (the new take
-             *     is still live).
+             * @description Plan 285/286 — only on `chapter_complete` when finalize was asked to
+             *     record A/B review state.
              */
-            reviewRecorded?: boolean;
+            reviewOutcome?: components["schemas"]["ReviewOutcome"];
             errorReason?: string | null;
             /**
              * @description Only on `chapter_failed` — fs-19 stable machine code for the failure
@@ -4915,7 +4992,7 @@ export interface components {
              *     re-dispatch instead of re-parking it.
              */
             fallbackConfirmed?: boolean;
-            /** @description Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2. */
+            /** @description Plan 285 — the A/B review intent carried from enqueue to the generation request. Set by the client for a profile-regen preview (plan 286). */
             review?: components["schemas"]["ReviewRequest"];
             /**
              * Format: date-time
@@ -4978,7 +5055,7 @@ export interface components {
              *     re-prompt for it.
              */
             fallbackConfirmed?: boolean;
-            /** @description Plan 285 — the A/B review intent carried from enqueue to the generation request. Not set by the client until PR 2. */
+            /** @description Plan 285 — the A/B review intent carried from enqueue to the generation request. Set by the client for a profile-regen preview (plan 286). */
             review?: components["schemas"]["ReviewRequest"];
         };
         QueueReorderRequest: {
@@ -5519,7 +5596,7 @@ export interface components {
         RevisionsResponse: {
             pending?: components["schemas"]["Revision"][];
             drift?: components["schemas"]["DriftEvent"][];
-            /** @description Per-chapter chronological log of accept / reject / rollback events written by the frontend at user-action time. Read-back by the Revision History view (plan 55). Keyed by chapterId; each chapter's value is an append-only list in insertion order (oldest first). Optional — older books without timeline entries omit it. */
+            /** @description Per-chapter chronological log of accept / reject / rollback events recorded by the server when it resolves a revision (plan 286). Read-back by the Revision History view (plan 55). Keyed by chapterId; each chapter's value is an append-only list in insertion order (oldest first). Optional — older books without timeline entries omit it. */
             timeline?: {
                 [key: string]: components["schemas"]["TimelineEntry"][];
             };
@@ -5545,6 +5622,10 @@ export interface components {
             byBookId: {
                 [key: string]: components["schemas"]["RevisionsResponse"];
             };
+            /** @description Plan 286 — bookIds whose computation failed, each with a fixed path-free sentence. Present only when non-empty. */
+            errors?: {
+                [key: string]: string;
+            };
         };
         TimelineEntry: {
             /** @description Stable unique id (the revision id for accept/reject; a generated id for rollback events). */
@@ -5569,7 +5650,7 @@ export interface components {
              * @enum {string}
              */
             status: "active" | "rolled-back-from";
-            /** @description True when this entry's prior audio is still on disk (i.e. plan 20's `.previous.<slug>.mp3` exists for the chapter and this is the most recent reversible accept/reject). The frontend only enables the Rollback button when this is true. Multi-step rollback (snapshot-per-entry) is parked for v1.4.0. */
+            /** @description True when this entry's prior audio is still on disk (i.e. plan 20's `.previous.<slug>.mp3` exists for the chapter and this is the most recent reversible accept/reject). The client has no Rollback action since plan 286. Multi-step rollback (snapshot-per-entry) is parked for v1.4.0. */
             reversible?: boolean;
         };
         Revision: {
@@ -5590,6 +5671,12 @@ export interface components {
              * @enum {string}
              */
             origin?: "server";
+            /** @description #3400 — uuid of the chapter this entry was recorded for (survives renumbering). With `renderedAt`, the server refuses (not-found) an entry whose chapter no longer carries these stamps — e.g. after a restructure whose best-effort drop failed. Absent on legacy entries. */
+            chapterUuid?: string;
+            /** @description #3400 — the chapter's `audioRenderedAt` for the render this entry pairs with. See `chapterUuid`. */
+            renderedAt?: string;
+            /** @description Plan 286 (OD20) — a legacy entry left stuck "Rendering…" by the pre-server client, surfaced because a preserved take exists. The A side is the take kept before the chapter's last render, which may not be the take this entry was recorded against; the player labels it "Recovered from before the update". */
+            recovered?: boolean;
             segments: {
                 id?: number;
                 text?: string;
@@ -5625,9 +5712,11 @@ export interface components {
         RevisionOpError: {
             /**
              * @description A machine-readable code — `invalid_selection`, `book_not_found`,
-             *     `revision_not_found`, `chapter_busy`, `no_previous_audio`,
-             *     `live_audio_missing`, `revision_gone`, `restore_failed` — or, on an
-             *     unexpected 500, the curated failure message.
+             *     `not_found`, `revision_not_found`, `chapter_busy`,
+             *     `no_previous_audio`, `has_revision`, `live_audio_missing`,
+             *     `revision_gone`, `lock_contention`, `restore_failed`, `moved`
+             *     (410, legacy routes only) — or, on an unexpected 500, the
+             *     curated failure message.
              */
             error: string;
             message?: string;
@@ -5637,6 +5726,11 @@ export interface components {
             characterId: string;
             triggeredBy: string;
         };
+        /**
+         * @description Plan 286 (OD29) — what finalize did with A/B review state, on a completion frame only when it was asked to: `recorded` (a pending entry now exists for the chapter), `none` (nothing to review — a first render, or a render without review; any entry for the chapter was dropped), `failed` (the store call failed; the new take is live without its review entry). Replaces plan 285's boolean flag.
+         * @enum {string}
+         */
+        ReviewOutcome: "recorded" | "none" | "failed";
         DriftEvent: {
             id: string;
             /** @description Book the event belongs to. Server stamps this at emit time from the request path; included in the event id for global uniqueness across concurrently-active books. Lets the Drift Report group events by book in a single modal even when the user has multiple books generating in parallel. */
@@ -5985,8 +6079,8 @@ export interface components {
          */
         Emotion: "neutral" | "whisper" | "angry" | "excited" | "sad";
         /**
-         * @description Response envelope shared by `mergeChapters`, `splitChapter`, and
-         *     `reorderChapters`. `chapters` is the new state.json chapter list
+         * @description Response envelope shared by `mergeChapters`, `splitChapter`,
+         *     `reorderChapters`, `excludeChapters` and `refreshChapterTitles`. `chapters` is the new state.json chapter list
          *     (ids re-issued 1..N); `sentenceRemap` is the translation table
          *     the frontend applies to its sentence cache so it can rewrite
          *     `chapterId` + per-chapter `id` without re-fetching the full
@@ -6016,6 +6110,8 @@ export interface components {
                 newChapterId: number;
                 newSentenceId: number;
             }[];
+            /** @description Non-fatal advisories (orphan recovery, empty-chapter prune and generic-title renumber counts). Empty on a clean operation. */
+            warnings?: string[];
         };
         BookExportRequest: {
             /**
@@ -6490,23 +6586,10 @@ export interface components {
             manuscriptEdits: {
                 sentences?: components["schemas"]["Sentence"][];
             } | null;
-            revisions: {
-                pending?: components["schemas"]["Revision"][];
-                drift?: components["schemas"]["DriftEvent"][];
-                dismissed?: string[];
-                /** @description revisionId → { segmentIndex → 'A' | 'B' } captured at accept time. */
-                acceptedSelections?: {
-                    [key: string]: unknown;
-                };
-                timeline?: {
-                    [key: string]: components["schemas"]["TimelineEntry"][];
-                };
-                /** @description Plan 285 — absent on a legacy file (PR 1 returns revisions.json raw). */
-                fileId?: string | null;
-                rev?: number;
-                /** @description Plan 285 — the file's schema stamp; present once the server has rewritten the file (reparse/replace or a store write), absent on a legacy file. */
-                schema?: number;
-            } | null;
+            /** @description Plan 286 — revisions.json read through the server store (normalised). Null when the file is unreadable (then `revisionsError` is set). */
+            revisions: components["schemas"]["RevisionsState"] | null;
+            /** @description Plan 286 — present only when revisions.json could not be read. A fixed, path-free user-facing sentence (or, for a newer-schema file, the server's own "upgrade the server" sentence); the client toasts it verbatim. */
+            revisionsError?: string;
             /** @description Slugs of chapters that already have an audio file on disk. */
             completedSlugs: string[];
             /**
@@ -8009,9 +8092,11 @@ export interface operations {
              *     never is). `main_analysis_running` with `draining: true`
              *     (#3435): a previous analysis run on this book is still stopping
              *     (its in-flight model calls are being aborted); a non-fresh start is refused until
-             *     it has. The same two refusal codes can also arrive as a terminal
-             *     SSE `error` event when the conflict appears after the stream
-             *     opened.
+             *     it has. `chapters_restructuring`: a chapter restructure
+             *     (merge, split, reorder, exclude, rename or refresh-titles) is in
+             *     flight on this book; try again when it finishes. The same refusal
+             *     codes can also arrive as a terminal SSE `error` event when the
+             *     conflict appears after the stream opened.
              */
             409: {
                 headers: {
@@ -8068,7 +8153,9 @@ export interface operations {
              *     to stop), then try again. The same refusal can also arrive as a
              *     terminal SSE `error` event (`code: main_analysis_running`, with
              *     `draining` and `message`) when the main run registered after the
-             *     stream opened.
+             *     stream opened. A chapter restructure in flight on the book
+             *     refuses the same way with `error: chapters_restructuring` and a
+             *     `message` (no `draining`).
              */
             409: {
                 headers: {
@@ -8077,9 +8164,9 @@ export interface operations {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        error: "main_analysis_running";
-                        /** @description false while the main run is live; true while it is finishing after a pause or halt. */
-                        draining: boolean;
+                        error: "main_analysis_running" | "chapters_restructuring";
+                        /** @description Present on `main_analysis_running`: false while the main run is live; true while it is finishing after a pause or halt. */
+                        draining?: boolean;
                         message: string;
                     };
                 };
@@ -8174,6 +8261,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     mergeChapters: {
@@ -8214,6 +8308,13 @@ export interface operations {
             };
             /** @description Book or chapter not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8265,6 +8366,13 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     reorderChapters: {
@@ -8303,6 +8411,106 @@ export interface operations {
             };
             /** @description Book not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    excludeChapters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    chapterIds: number[];
+                    excluded: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description New chapter list + sentence remap table */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChapterRestructureResponse"];
+                };
+            };
+            /** @description Bad request (missing / empty chapterIds, non-boolean excluded) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or chapter not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    refreshChapterTitles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default true */
+                    useFirstLine?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description New chapter list + sentence remap table */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChapterRestructureResponse"];
+                };
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9476,8 +9684,8 @@ export interface operations {
                      *     A request carrying `review` that does not name exactly one
                      *     chapter gets a 400 before any SSE header is sent. The chapter
                      *     actually rendered with it gets `reviewChapter: true` on its
-                     *     `chapter_complete` (never a replayed done chapter). Not sent
-                     *     by the client until PR 2.
+                     *     `chapter_complete` (never a replayed done chapter).
+                     *     Sent by the client for a profile-regen preview (plan 286).
                      */
                     review?: components["schemas"]["ReviewRequest"];
                 };
@@ -9556,8 +9764,7 @@ export interface operations {
                         durationSec?: number;
                         segmentCount?: number;
                         hasPreviousAudio?: boolean;
-                        /** @description Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live). */
-                        reviewRecorded?: boolean;
+                        reviewOutcome?: components["schemas"]["ReviewOutcome"];
                         progress?: number;
                         errorReason?: string;
                         /**
@@ -9650,8 +9857,7 @@ export interface operations {
                         durationSec?: number;
                         segmentCount?: number;
                         hasPreviousAudio?: boolean;
-                        /** @description Plan 285 — on the completion frame only when finalize was asked to record A/B review state; false when that record failed (the new take is still live). */
-                        reviewRecorded?: boolean;
+                        reviewOutcome?: components["schemas"]["ReviewOutcome"];
                         progress?: number;
                         errorReason?: string;
                         /**
@@ -9803,19 +10009,14 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Preserved pair removed */
-            204: {
+            /** @description Moved to `POST /api/books/{bookId}/revisions/{revisionId}/accept` or `/reject`. */
+            410: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
-            };
-            /** @description No preserved audio to delete */
-            404: {
-                headers: {
-                    [name: string]: unknown;
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
                 };
-                content?: never;
             };
         };
     };
@@ -9831,26 +10032,62 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Preserved pair restored over live names */
+            /** @description Moved to `POST /api/books/{bookId}/revisions/{revisionId}/accept` or `/reject`. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+        };
+    };
+    restorePreviousUnrecorded: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+                chapterId: number;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Restored. */
             204: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            /** @description No preserved audio to restore */
+            /** @description `not_found` (book / chapter) or `no_previous_audio`. */
             404: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
             };
-            /** @description Generation is in flight for this book — restore would race the write path */
+            /** @description `chapter_busy` or `has_revision`. */
             409: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
+            };
+            /** @description `restore_failed`, `lock_contention`, or a fixed failure sentence. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RevisionOpError"];
+                };
             };
         };
     };
@@ -11593,8 +11830,9 @@ export interface operations {
                      *     (title, author, series, tags, notes, audioFormat,
                      *     prosodyEnabled, castConfirmed, chapters, and more);
                      *     the same endpoint also serves the `cast`,
-                     *     `manuscript`, `revisions`, and `changeLog` slices
-                     *     with entirely different payloads.
+                     *     `manuscript`, and `changeLog` slices with entirely
+                     *     different payloads. A `revisions` slice is always
+                     *     refused (plan 286) regardless of `patch`.
                      *     #2246 Task 9 — BCP-47 `language` field on the `state`
                      *     slice: string | null. `null` is "stated absence" (a
                      *     book whose language the user has not set), distinct
@@ -11616,7 +11854,11 @@ export interface operations {
                 };
                 content?: never;
             };
-            /** @description Missing/unknown `slice` or `patch`, or a malformed manuscript patch */
+            /**
+             * @description Missing/unknown `slice` or `patch`, a malformed manuscript patch,
+             *     or (plan 286) `revisions_server_owned` — the `revisions` slice is
+             *     server-owned and this route never writes it.
+             */
             400: {
                 headers: {
                     [name: string]: unknown;

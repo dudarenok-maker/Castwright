@@ -14,13 +14,14 @@ vi.mock('../lib/api', () => ({
   api: {
     detectEmotions: vi.fn(),
     detectInstruct: vi.fn(),
+    putBookState: vi.fn(),
   },
 }));
 
 import { api } from '../lib/api';
 import type { DetectEmotionsOpts, DetectInstructOpts } from '../lib/api';
 import { manuscriptActions } from './manuscript-slice';
-import { runProsodyPasses, buildProsodyProgressPayload } from './prosody-thunk';
+import { runProsodyPasses, buildProsodyProgressPayload, markProsodyUnfinished } from './prosody-thunk';
 
 const EMPTY_EMOTIONS = { totalAnnotations: 0, annotatedChapters: 0 };
 const EMPTY_INSTRUCT = { totalAnnotations: 0, annotatedChapters: 0 };
@@ -576,5 +577,51 @@ describe('buildProsodyProgressPayload', () => {
       totalChapters: undefined,
       estRemainingMs: undefined,
     });
+  });
+});
+
+
+/* #3400 pass 6 — the unfinished mark is a state.json write, and a restructure
+   rewrites state.json: nothing else may write it while the restructure runs. */
+describe('markProsodyUnfinished', () => {
+  const fakeStore = (restructuring: Record<string, boolean>) => {
+    const listeners = new Set<() => void>();
+    const s = {
+      ui: { restructuringBooks: restructuring },
+    };
+    return {
+      getState: () => s as never,
+      subscribe: (l: () => void) => {
+        listeners.add(l);
+        return () => listeners.delete(l);
+      },
+      lower: (id: string) => {
+        delete s.ui.restructuringBooks[id];
+        [...listeners].forEach((l) => l());
+      },
+      listenerCount: () => listeners.size,
+    };
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.putBookState).mockResolvedValue({} as never);
+  });
+
+  it('sends the mark at once when the book is not being restructured', () => {
+    markProsodyUnfinished(fakeStore({ other: true }), 'b1');
+    expect(api.putBookState).toHaveBeenCalledWith('b1', { slice: 'state', patch: { prosodyAnnotated: false } });
+  });
+
+  it('holds the mark while the book is being restructured and sends it once, when that ends', () => {
+    const store = fakeStore({ b1: true, b2: true });
+    markProsodyUnfinished(store, 'b1');
+    expect(api.putBookState).not.toHaveBeenCalled();
+    store.lower('b2'); // another book's restructure ending is not this book's
+    expect(api.putBookState).not.toHaveBeenCalled();
+    store.lower('b1');
+    expect(api.putBookState).toHaveBeenCalledTimes(1);
+    expect(api.putBookState).toHaveBeenCalledWith('b1', { slice: 'state', patch: { prosodyAnnotated: false } });
+    expect(store.listenerCount()).toBe(0);
   });
 });

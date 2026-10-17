@@ -51,6 +51,7 @@ import { ConfirmDialog } from '../modals/confirm-dialog';
 import { EditChapterTitleModal } from '../modals/edit-chapter-title';
 import { useAppDispatch, useAppSelector } from '../store';
 import type { RootState } from '../store';
+import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectBookEditsLocked } from '../store/restructure-lock';
 import { notificationsActions } from '../store/notifications-slice';
 import { selectAnalysisBusyForBook, analysisBusyMessage } from '../store/analysis-substage-selectors';
 import { chaptersActions, STALL_THRESHOLD_MS } from '../store/chapters-slice';
@@ -225,6 +226,10 @@ export function GenerationView({
 }: Props) {
   const dispatch = useAppDispatch();
   const store = useStore<RootState>();
+  /* #3400 pass 7 — exclude / include / held writes carry a chapter id that a
+     restructure renumbers, so a call issued mid-restructure lands on the wrong
+     chapter. The row controls disable; the handlers re-check the live flag. */
+  const refuseIfRestructuring = () => refuseIfEditsLocked(store.getState, dispatch, bookId);
   const analysisBusy = useAppSelector((s) =>
     bookId ? selectAnalysisBusyForBook(s, bookId) : false,
   );
@@ -423,6 +428,7 @@ export function GenerationView({
     excluded: boolean,
     opts: { allowStage1Shrink?: boolean } = {},
   ): Promise<void> {
+    if (refuseIfRestructuring()) return;
     /* Exclude direction — flip the flag and walk away. No analysis is
        needed; the server cleans up audio + segments and the slice resets
        transient generation state for the row. */
@@ -751,6 +757,7 @@ export function GenerationView({
     chapterId: number,
     opts: { allowStage1Shrink?: boolean } = {},
   ): Promise<void> {
+    if (refuseIfRestructuring()) return;
     if (!manuscriptId) return;
     if (isSubsetRunning(subsetByChapter[chapterId])) return;
     const controller = new AbortController();
@@ -937,6 +944,7 @@ export function GenerationView({
      skip the reason-prompt RegenerateModal that `onRegenerate` opens because a
      never-rendered chapter has no prior render to "regenerate". */
   function handleGenerateChapter(ch: Chapter): void {
+    if (refuseIfRestructuring()) return;
     if (analysisBusy) {
       const msg =
         analysisBusyMessage(store.getState(), bookId) ??
@@ -1768,6 +1776,7 @@ function ChapterRow({
   subsetProgress,
   activeModelKey,
 }: ChapterRowProps) {
+  const restructuring = useAppSelector((s) => selectBookEditsLocked(s, bookId));
   /* fs-13 — the chapter's live completed sentence-id SET, built once per row
      render and shared by every per-character bar below. Absent (undefined)
      when the server hasn't sent any `completedSentenceIds` yet (older server,
@@ -2165,8 +2174,9 @@ function ChapterRow({
               e.stopPropagation();
               onToggleExcluded(chapter.id, true);
             }}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/45 hover:text-ink/70 transition-colors"
-            title="Skip this chapter — no audio will be generated for it."
+            disabled={restructuring}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/45 hover:text-ink/70 disabled:opacity-40 transition-colors"
+            title={restructuring ? RESTRUCTURING_REASON : 'Skip this chapter — no audio will be generated for it.'}
           >
             <IconClose className="w-3.5 h-3.5" /> Exclude
           </button>
@@ -2177,7 +2187,9 @@ function ChapterRow({
             }}
             data-testid={`chapter-row-${chapter.id}-rename`}
             aria-label={`Rename chapter ${chapter.id}`}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            disabled={restructuring}
+            title={restructuring ? RESTRUCTURING_REASON : undefined}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta disabled:opacity-40 transition-colors"
           >
             <IconPencil className="w-3.5 h-3.5" /> Rename
           </button>
@@ -2231,8 +2243,9 @@ function ChapterRow({
               }}
               data-testid={`chapter-row-${chapter.id}-generate`}
               aria-label={`Generate chapter ${chapter.id}`}
-              className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-magenta hover:text-magenta/80 transition-colors"
-              title="Queue this chapter for synthesis now."
+              disabled={restructuring}
+              className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-semibold text-magenta hover:text-magenta/80 disabled:opacity-40 transition-colors"
+              title={restructuring ? RESTRUCTURING_REASON : 'Queue this chapter for synthesis now.'}
             >
               <IconPlay className="w-3.5 h-3.5" /> Generate this chapter
             </button>
@@ -2244,7 +2257,9 @@ function ChapterRow({
             }}
             data-testid={`chapter-row-${chapter.id}-rename`}
             aria-label={`Rename chapter ${chapter.id}`}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors"
+            disabled={restructuring}
+            title={restructuring ? RESTRUCTURING_REASON : undefined}
+            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta disabled:opacity-40 transition-colors"
           >
             <IconPencil className="w-3.5 h-3.5" /> Rename
           </button>
@@ -2253,10 +2268,12 @@ function ChapterRow({
               e.stopPropagation();
               onToggleExcluded(chapter.id, true);
             }}
-            disabled={chapter.state === 'in_progress'}
+            disabled={chapter.state === 'in_progress' || restructuring}
             className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/45 hover:text-ink/70 disabled:opacity-40 transition-colors"
             title={
-              chapter.state === 'in_progress'
+              restructuring
+                ? RESTRUCTURING_REASON
+                : chapter.state === 'in_progress'
                 ? 'Pause first, then you can exclude this chapter.'
                 : 'Skip this chapter — no audio will be generated for it.'
             }
@@ -2440,6 +2457,7 @@ function ExcludedChapterRow({
   onRetrySubset: (chapterId: number) => void;
   onAcceptShrink: (chapterId: number) => void;
 }) {
+  const restructuring = useAppSelector((s) => selectBookEditsLocked(s, bookId));
   /* Three-state UI: idle (subsetProgress null) → running (entry exists,
      no error) → errored (entry exists with error). Narrowing via direct
      null/error checks rather than aliased booleans so TypeScript's
@@ -2536,8 +2554,8 @@ function ExcludedChapterRow({
           <button
             type="button"
             onClick={() => onIncludeClick(chapter.id)}
-            disabled={mainAnalysisLive}
-            title={mainAnalysisLive ? 'Pause the analysis first' : undefined}
+            disabled={mainAnalysisLive || restructuring}
+            title={restructuring ? RESTRUCTURING_REASON : mainAnalysisLive ? 'Pause the analysis first' : undefined}
             className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta transition-colors disabled:opacity-40 disabled:pointer-events-none"
           >
             + Include in book

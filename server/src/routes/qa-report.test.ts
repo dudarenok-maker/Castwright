@@ -9,6 +9,19 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 
+/* Plan 286 Task 3 (invariant 8, OD26) — a store failure whose message embeds an
+   absolute path. Every path-freedom assertion in this file drives one of
+   these: an `EISDIR` fixture's message carries no path, so asserting its
+   absence would prove nothing. Built with vi.hoisted because the scan.js
+   factory below is hoisted above this declaration. */
+const { pathError } = vi.hoisted(() => ({
+  pathError: () =>
+    Object.assign(
+      new Error("EPERM: operation not permitted, open 'C:\\SECRET-WORKSPACE\\book\\.audiobook\\revisions.json'"),
+      { code: 'EPERM' },
+    ),
+}));
+
 /* Mocks findBookByBookId so a sentinel bookId ('THROW_TRIGGER') exercises the
    route's catch block, proving a thrown error from the disk-read path
    returns a clean 500 instead of an unhandled rejection. Real lookups pass
@@ -20,6 +33,9 @@ vi.mock('../workspace/scan.js', async (importOriginal) => {
     findBookByBookId: async (bookId: string) => {
       if (bookId === 'THROW_TRIGGER') {
         throw new Error('disk read failed');
+      }
+      if (bookId === 'EPERM_TRIGGER') {
+        throw pathError();
       }
       if (bookId === 'LOCK_TRIGGER') {
         const { LockAcquisitionTimeoutError } = await import('../workspace/file-lock.js');
@@ -150,7 +166,7 @@ describe('GET /api/books/:bookId/qa-report', () => {
   it('returns 500 when the underlying lookup throws', async () => {
     const res = await request(app).get('/api/books/THROW_TRIGGER/qa-report');
     expect(res.status).toBe(500);
-    expect(res.body).toEqual({ error: 'disk read failed' });
+    expect(res.body).toEqual({ error: 'Failed to build QA report.' });
   });
 
   it('plan 285 — a lock timeout answers the curated 500 (no lock-key path)', async () => {
@@ -158,6 +174,17 @@ describe('GET /api/books/:bookId/qa-report', () => {
     const res = await request(app).get('/api/books/LOCK_TRIGGER/qa-report');
     expect(res.status).toBe(500);
     expect(res.body).toEqual({ error: LOCK_CONTENTION_REQUEST_ERROR });
+    expect(res.text).not.toContain('SECRET-WORKSPACE');
+  });
+
+  /* Plan 286 Task 3 (OD26) — a thrown error whose own message embeds the
+     absolute workspace path must not reach the body. */
+  it('plan 286 (OD26) — GET: an error naming a path answers a fixed sentence', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).get('/api/books/EPERM_TRIGGER/qa-report');
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to build QA report.' });
     expect(res.text).not.toContain('SECRET-WORKSPACE');
   });
 
@@ -222,9 +249,21 @@ describe('POST /:bookId/resume-scoring', () => {
     expect(res.text).not.toContain('SECRET-WORKSPACE');
   });
 
-  it('a non-lock failure keeps its own message', async () => {
+  /* Plan 286 Task 3 (OD26) — resume-scoring is not a store path, but the same
+     defect class: a thrown error's own message (absolute path included) must
+     not reach the body. Curated in the same round as the GET. */
+  it('plan 286 (OD26) — resume-scoring: an error naming a path answers a fixed sentence', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app).post('/api/books/EPERM_TRIGGER/resume-scoring');
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: 'Failed to resume scoring.' });
+    expect(res.text).not.toContain('SECRET-WORKSPACE');
+  });
+
+  it('a non-lock failure answers a fixed sentence', async () => {
     const res = await request(app).post('/api/books/THROW_TRIGGER/resume-scoring');
     expect(res.status).toBe(500);
-    expect(res.body).toEqual({ error: 'disk read failed' });
+    expect(res.body).toEqual({ error: 'Failed to resume scoring.' });
   });
 });

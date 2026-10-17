@@ -27,6 +27,7 @@ import { api } from '../../lib/api';
 import { parseDuration, formatTime } from '../../lib/time';
 import { stripChapterPrefix } from '../../lib/format-chapter-title';
 import { useAppDispatch, useAppSelector } from '../../store';
+import { RESTRUCTURING_REASON, selectBookEditsLocked } from '../../store/restructure-lock';
 import {
   selectListenProgress,
   selectLivePlaybackFor,
@@ -303,6 +304,8 @@ function ChapterListenRow({
      it while THIS chapter is actively playing — once you're listening past
      the bookmark, "Resume at …" is noise (the live row time covers it). */
   const resume = useAppSelector(selectListenProgress(bookId));
+  /* #3400 pass 7 — rename is keyed by chapter id, which a restructure renumbers. */
+  const restructuring = useAppSelector((s) => selectBookEditsLocked(s, bookId));
   const showResume = !isPlaying && resume?.chapterId === chapter.id && resume.currentSec > 5;
   /* Plan 125 — mirror the mini-player's real playhead. The narrowed
      selector returns null for every row except the one actually playing,
@@ -471,10 +474,11 @@ function ChapterListenRow({
             )}
             <button
               onClick={onRename}
-              title="Rename chapter"
+              disabled={restructuring}
+              title={restructuring ? RESTRUCTURING_REASON : 'Rename chapter'}
               aria-label={`Rename chapter ${chapter.id}`}
               data-testid={`chapter-row-${chapter.id}-rename`}
-              className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full hover:bg-ink/4"
+              className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full hover:bg-ink/4 disabled:opacity-40"
             >
               <IconPencil className="w-4 h-4" />
             </button>

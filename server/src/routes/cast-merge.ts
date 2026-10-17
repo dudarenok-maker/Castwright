@@ -23,6 +23,7 @@ import type { BookStateJson } from '../workspace/scan.js';
 import { castJsonPath, manuscriptEditsJsonPath } from '../workspace/paths.js';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withCastLock } from '../workspace/cast-lock.js';
+import { withBookLock } from '../workspace/book-lock.js';
 import { isLockAcquisitionTimeout, LOCK_CONTENTION_REQUEST_ERROR } from '../workspace/file-lock.js';
 import { loadAnalysisCache, saveAnalysisCache } from '../store/analysis-cache.js';
 import { loadCastMerges, saveCastMerges, appendManualEntry } from '../store/cast-merges.js';
@@ -129,8 +130,8 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
   /* #1981 — the read is inside the lock; every decision below (404s, the
      downgrade-bucket synthesis, the merged fields, the remapped sentences)
      is derived from it. The inner `writeJsonAtomic(manuscriptEditsJsonPath(...))`
-     is a DIFFERENT file — the cast lock doesn't cover it, it's just along
-     for the ride inside this span. */
+     is a DIFFERENT file — the cast lock doesn't cover it; its read -> write
+     takes the per-book lock beneath this one (cast -> book, #3400). */
   return withCastLock(bookDir, async () => {
     const cast = await readJson<CastFile>(castJsonPath(bookDir));
     if (!cast?.characters?.length) {
@@ -207,28 +208,39 @@ export async function performCastMerge(args: CastMergeArgs): Promise<CastMergeRe
        is the authoritative per-sentence record once stage 2 has completed —
        we rewrite it first so the lines/scenes recompute below sees the new
        state. */
-    const edits = await readJson<EditsFile>(manuscriptEditsJsonPath(bookDir));
-    let editsTouched = false;
-    let editsAfter: SentenceOutput[] | null = null;
-    /* srv-1 — chapter-qualified ids of the sentences this merge rewrites
-       source → target. Sentence ids are unique only within a chapter, so we
-       keep the chapterId alongside each id. */
-    const affected: Array<{ chapterId: number; sentenceId: number }> = [];
-    if (edits?.sentences?.length) {
-      let changed = 0;
-      editsAfter = edits.sentences.map((s) => {
-        if (s.characterId === sourceId) {
-          changed += 1;
-          affected.push({ chapterId: s.chapterId, sentenceId: s.id });
-          return { ...s, characterId: targetId };
+    /* #3400 — manuscript-edits.json is also rewritten, whole, by a chapter
+       restructure under the per-book lock. The read, the remap and the write
+       are one locked span (innermost read-through-write; nothing else is taken
+       inside it). Lock order: cast (held here) -> book; no book-lock holder
+       ever takes the cast lock, so this cannot deadlock. */
+    const remapped = await withBookLock(bookId, async () => {
+      let touched = false;
+      let after: SentenceOutput[] | null = null;
+      /* srv-1 — chapter-qualified ids of the sentences this merge rewrites
+         source → target. Sentence ids are unique only within a chapter, so we
+         keep the chapterId alongside each id. */
+      const rewritten: Array<{ chapterId: number; sentenceId: number }> = [];
+      const edits = await readJson<EditsFile>(manuscriptEditsJsonPath(bookDir));
+      if (edits?.sentences?.length) {
+        let changed = 0;
+        after = edits.sentences.map((s) => {
+          if (s.characterId === sourceId) {
+            changed += 1;
+            rewritten.push({ chapterId: s.chapterId, sentenceId: s.id });
+            return { ...s, characterId: targetId };
+          }
+          return s;
+        });
+        if (changed > 0) {
+          touched = true;
+          await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: after });
         }
-        return s;
-      });
-      if (changed > 0) {
-        editsTouched = true;
-        await writeJsonAtomic(manuscriptEditsJsonPath(bookDir), { sentences: editsAfter });
       }
-    }
+      return { touched, after, rewritten };
+    });
+    const editsTouched = remapped.touched;
+    const editsAfter = remapped.after;
+    const affected = remapped.rewritten;
 
     /* Recompute lines / scenes on the merged character from the up-to-date
        sentence list. Avoids the over-count that a naive sum produces when

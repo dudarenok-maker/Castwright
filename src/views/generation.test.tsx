@@ -8,6 +8,7 @@ import { MemoryRouter, Outlet, Routes, Route } from 'react-router';
 import { chaptersSlice } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { uiSlice } from '../store/ui-slice';
+import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import { changeLogSlice } from '../store/change-log-slice';
 import { castSlice } from '../store/cast-slice';
 import { librarySlice } from '../store/library-slice';
@@ -2321,6 +2322,61 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
 
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledTimes(1);
     expect(runAnalysisForChaptersSpy).toHaveBeenCalledWith('m1', [1], expect.anything());
+  });
+
+  it('#3400 pass 7 — Include / Exclude / Generate-this-chapter are disabled while the book restructures (they carry a chapter id a restructure renumbers)', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const store = makeIncludeStore();
+    renderInclude(store);
+    // control: not restructuring → the Include button is enabled
+    const include = screen.getByRole('button', { name: /\+ Include in book/i });
+    expect(include).toBeEnabled();
+
+    act(() => {
+      store.dispatch(uiSlice.actions.setRestructuringBook('b1'));
+    });
+    expect(include).toBeDisabled();
+    expect(include).toHaveAttribute('title', RESTRUCTURING_REASON);
+    fireEvent.click(include);
+
+    // Chapter 2 is queued: its expanded panel carries Generate + Exclude.
+    fireEvent.click(screen.getByText('Chapter 2'));
+    const generate = screen.getByRole('button', { name: /Generate chapter 2/i });
+    expect(generate).toBeDisabled();
+    expect(generate).toHaveAttribute('title', RESTRUCTURING_REASON);
+    fireEvent.click(generate);
+    for (const b of screen.getAllByRole('button', { name: /Exclude/i })) {
+      expect(b).toBeDisabled();
+      fireEvent.click(b);
+    }
+    await Promise.resolve();
+
+    expect(setChapterExcludedSpy).not.toHaveBeenCalled();
+    expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it('#3400 pass 7 — Rename is disabled (with the reason) on both row variants while the book restructures', () => {
+    const store = makeIncludeStore();
+    renderInclude(store);
+    // Chapter 1 (done): Rename sits in the action row; chapter 2 (queued): in the expanded panel.
+    const doneRename = screen.getByTestId('chapter-row-1-rename');
+    expect(doneRename).toBeEnabled();
+    fireEvent.click(screen.getByText('Chapter 2'));
+    const queuedRename = screen.getByTestId('chapter-row-2-rename');
+    expect(queuedRename).toBeEnabled();
+
+    act(() => {
+      store.dispatch(uiSlice.actions.setRestructuringBook('b1'));
+    });
+    for (const b of [doneRename, queuedRename]) {
+      expect(b).toBeDisabled();
+      expect(b).toHaveAttribute('title', RESTRUCTURING_REASON);
+      fireEvent.click(b);
+    }
+    expect(screen.queryByTestId('edit-chapter-title-input')).toBeNull();
   });
 
   it('#3084 a non-story overflow warning on the Re-analyse subset call surfaces as a warn toast', async () => {

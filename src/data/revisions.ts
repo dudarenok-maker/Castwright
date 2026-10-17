@@ -49,5 +49,8 @@ export const PENDING_REVISIONS: Revision[] = [
         changed: true,
       },
     ],
+    playable: true,
+    hasPreviousAudio: true,
+    origin: 'server',
   },
 ];

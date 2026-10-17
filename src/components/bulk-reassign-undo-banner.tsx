@@ -19,12 +19,14 @@ import { useAppDispatch, useAppSelector } from '../store';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { uiSelectors } from '../store/ui-slice';
+import { selectBookRestructuring } from '../store/analysis-substage-selectors';
 import { buildBulkReassignRevertEvent } from '../lib/change-log';
 
 export function BulkReassignUndoBanner() {
   const dispatch = useAppDispatch();
   const slot = useAppSelector((s) => s.manuscript.lastBulkReassign);
   const bookId = useAppSelector(uiSelectors.bookId);
+  const restructuring = useAppSelector((s) => (bookId ? selectBookRestructuring(s, bookId) : false));
   if (!slot || !bookId) return null;
   const n = slot.moves.length;
   return (
@@ -34,11 +36,12 @@ export function BulkReassignUndoBanner() {
           Reassigned {n} line{n === 1 ? '' : 's'} to {slot.targetLabel}.
         </span>
         <button
+          disabled={restructuring}
           onClick={() => {
             dispatch(manuscriptActions.undoBulkReassign());
             dispatch(changeLogActions.appendLogEvent(buildBulkReassignRevertEvent({ count: n })));
           }}
-          className="font-semibold underline shrink-0 min-h-[44px] fine-pointer:min-h-0"
+          className="font-semibold underline shrink-0 min-h-[44px] fine-pointer:min-h-0 disabled:opacity-40"
         >
           Undo
         </button>

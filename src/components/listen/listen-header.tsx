@@ -153,6 +153,8 @@ interface ListenHeaderProps {
   onOpenExportModal: () => void;
   onEnterPreview: () => void;
   onOpenRestructure: () => void;
+  /** Set while an analysis runs for the book: disables Restructure with this reason. */
+  restructureDisabledReason?: string;
   /** Plan 74 — re-upload entry point. Click flips ui-slice into
       re-upload mode and navigates to the upload view; the diff modal
       mounts when the import resolves. Optional so existing test
@@ -189,6 +191,7 @@ export function ListenHeader({
   onOpenExportModal,
   onEnterPreview,
   onOpenRestructure,
+  restructureDisabledReason,
   onReplaceManuscript,
   notes,
   language,
@@ -294,7 +297,7 @@ export function ListenHeader({
           >
             <IconEye className="w-4 h-4" /> Preview as listener
           </button>
-          <RestructureChaptersButton onClick={onOpenRestructure} />
+          <RestructureChaptersButton onClick={onOpenRestructure} disabledReason={restructureDisabledReason} />
           {onReplaceManuscript && (
             <button
               onClick={onReplaceManuscript}

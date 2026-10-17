@@ -12,7 +12,9 @@
    control still lets you tag (it survives an engine switch). */
 
 import { useEffect, useRef, useState } from 'react';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { uiSelectors } from '../store/ui-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
@@ -57,6 +59,10 @@ export function SentenceEmotionControl({
   character?: Character;
 }) {
   const dispatch = useAppDispatch();
+  // #3400 pass 7 — the edit is refused while the book restructures: disable the chip
+  // and re-check the live flag before the edit AND its markStale side write.
+  const store = useStore<RootState>();
+  const editsLocked = useAppSelector(selectEditsLocked);
   const playback = useSamplePlayback();
   const markStale = useMarkCharacterStaleIfRendered();
   /* undefined (not uiSelectors.bookId's `null`) so this degrades to
@@ -80,6 +86,7 @@ export function SentenceEmotionControl({
 
   const current = emotion && emotion !== 'neutral' ? emotion : undefined;
   const choose = (value: Emotion) => {
+    if (refuseIfEditsLocked(store.getState, dispatch)) return;
     dispatch(manuscriptActions.setSentenceEmotion({ chapterId, sentenceId, emotion: value }));
     /* fs-34 — an emotion edit only changes the audio when it actually selects a
        different voice: a Qwen character WITH a designed variant for this emotion.
@@ -134,6 +141,8 @@ export function SentenceEmotionControl({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
+        disabled={editsLocked}
+        title={editsLocked ? RESTRUCTURING_REASON : undefined}
         className={
           current
             ? `mx-0.5 inline-flex items-center min-h-[20px] px-1.5 rounded-full text-[10px] font-semibold uppercase tracking-wide ${EMOTION_CLASS[current]}`

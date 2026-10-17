@@ -3,6 +3,7 @@
    object the backend returns alongside chapters. */
 
 import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { carryMergedAwayKeys } from '../lib/restructure-tombstones';
 import type {
   Sentence,
   UploadResponse,
@@ -21,6 +22,12 @@ export interface ManuscriptState {
       manuscriptId+title guard short-circuited the per-book disk hydrate. */
   bookId: string | null;
   manuscriptId: string | null;
+  /** #3400 — bumped by every hydrateFromBookState. A caller that captured it
+      before an await can tell "the slice was re-read from disk meanwhile"
+      (hydrateSeq moved) from "an in-place edit replaced the array" (it did
+      not): array identity cannot, since every Immer write replaces it.
+      Optional so hand-built test states need not carry it. */
+  hydrateSeq?: number;
   title: string | null;
   format: UploadResponse['format'] | null;
   wordCount: number;
@@ -44,7 +51,8 @@ export interface ManuscriptState {
       reassignment. Holds each moved key's PRIOR characterId so a single Undo
       restores them. NOT persisted (a full reload drops it — "undoable" is
       satisfied by in-session one-level undo). Cleared by any book transition
-      (reset / hydrate*) and by a later edit that touches a moved key. */
+      (reset / hydrate*) and by a later edit that touches a moved key; a chapter
+      restructure (applyChapterRestructure) re-keys it instead. */
   lastBulkReassign:
     | {
         moves: { chapterId: number; sentenceId: number; prevCharacterId: string }[];
@@ -86,6 +94,7 @@ export interface PendingReupload {
 const initialState: ManuscriptState = {
   bookId: null,
   manuscriptId: null,
+  hydrateSeq: 0,
   title: null,
   format: null,
   wordCount: 0,
@@ -216,6 +225,7 @@ export const manuscriptSlice = createSlice({
       }>,
     ) => {
       const { state, sentences, wordCount, format } = a.payload;
+      s.hydrateSeq = (s.hydrateSeq ?? 0) + 1;
       s.bookId = state.bookId;
       s.manuscriptId = state.manuscriptId;
       s.title = state.title;
@@ -598,6 +608,23 @@ export const manuscriptSlice = createSlice({
       }
       next.sort((x, y) => x.chapterId - y.chapterId || x.id - y.id);
       s.sentences = next;
+      /* #3400 — the tombstones follow their chapters under the same rule the
+         server applied to manuscript-edits.json (the save after this is the
+         last write); a chapter the op renumbered loses them. */
+      s.mergedAwayKeys = carryMergedAwayKeys(s.mergedAwayKeys, a.payload.sentenceRemap);
+      /* #3400 — the bulk-undo slot is keyed by (chapterId, sentenceId), so it
+         moves with its lines: re-key each move through the same table, drop a
+         move whose sentence the restructure dropped (nothing left to revert),
+         and null the slot when none survive. */
+      if (s.lastBulkReassign) {
+        const moves = s.lastBulkReassign.moves.flatMap((m) => {
+          const mapped = remapByOld.get(key(m.chapterId, m.sentenceId));
+          return mapped
+            ? [{ ...m, chapterId: mapped.newChapterId, sentenceId: mapped.newSentenceId }]
+            : [];
+        });
+        s.lastBulkReassign = moves.length > 0 ? { ...s.lastBulkReassign, moves } : null;
+      }
     },
 
     /* fs-58 — User edit: merge adjacent sentences into the lowest id.

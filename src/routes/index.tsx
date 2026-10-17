@@ -16,6 +16,7 @@ import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow, store } from '../store';
 import type { RootState } from '../store';
 import { uiActions } from '../store/ui-slice';
+import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectBookEditsLocked } from '../store/restructure-lock';
 import { accountActions } from '../store/account-slice';
 import { startGenerationFlow } from '../store/start-generation-flow';
 import { castActions } from '../store/cast-slice';
@@ -151,9 +152,11 @@ export function BooksRoute() {
           showError(`Couldn't delete "${b.title}"`, (err as Error).message, 'Delete');
           return;
         }
-        /* The book is gone: drop any revisions writes recorded for it before
-           its read landed (#3395 pass 5, N1). */
-        dispatch(revisionsActions.bookWiped(b.bookId));
+        /* The book is gone: forget its revisions cache so a later re-import
+           under the same id reads as a different book (OD31: and drop its
+           preview — the new take stays live, nothing is restored). */
+        dispatch(revisionsActions.forgetBook(b.bookId));
+        dispatch(uiActions.clearPreviewForBook(b.bookId));
         const res = await api.getLibrary().catch(() => null);
         if (res) dispatch(libraryActions.hydrate(res));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
@@ -189,12 +192,14 @@ export function BooksRoute() {
         /* hydrateCharacters, not the persisted setCharacters: the await above may
            have let the user open another book, and a persisted reset would PUT an
            empty cast at it (#3376). Same for the re-parse reset below.
-           `bookWiped` drops revisions writes recorded for this book before
-           its read landed, which would otherwise be replayed onto the wiped
-           book when it is reopened (#3395 pass 5, N1). */
+           The server reset the file to a new fileId; forgetting the cache here
+           means the next read adopts it as a different book, without depending
+           on the `manuscriptActions.reset()` beside it forcing a full reload
+           (OD31: and drop its preview — the new take stays live). */
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
-        dispatch(revisionsActions.bookWiped(b.bookId));
+        dispatch(revisionsActions.forgetBook(b.bookId));
+        dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
         const refreshed = await api.getLibrary().catch(() => null);
         if (refreshed) dispatch(libraryActions.hydrate(refreshed));
@@ -250,7 +255,8 @@ export function BooksRoute() {
            from disk. */
         dispatch(castActions.hydrateCharacters([]));
         dispatch(manuscriptActions.reset());
-        dispatch(revisionsActions.bookWiped(b.bookId));
+        dispatch(revisionsActions.forgetBook(b.bookId));
+        dispatch(uiActions.clearPreviewForBook(b.bookId));
         if (openBookId() === b.bookId) dispatch(uiActions.goHome());
 
         /* Kick off the library rescan in the background — it only feeds
@@ -294,6 +300,7 @@ export function BooksRoute() {
 
         const body = (
           <ReparseResultBody
+            bookId={b.bookId}
             bookTitle={b.title}
             chapters={dialogChapters}
             initialExcludedSlugs={initialExcludedSlugs}
@@ -315,12 +322,17 @@ export function BooksRoute() {
                logged but don't block navigation — the worst case is a
                chapter that should have been excluded gets analyzed and
                the user can re-toggle from the Generate view. */
-            void applyExcludedDeltas(
-              b.bookId,
-              dialogChapters,
-              initialExcludedSlugs,
-              pendingBox.current,
-            );
+            /* #3400 pass 7 — the deltas are keyed by chapter id, which a restructure
+               of this book renumbers: skip them (toast) rather than land on the
+               wrong chapters. The dialog's toggles are disabled for the same book. */
+            if (!refuseIfEditsLocked(reduxStore.getState, dispatch, b.bookId)) {
+              void applyExcludedDeltas(
+                b.bookId,
+                dialogChapters,
+                initialExcludedSlugs,
+                pendingBox.current,
+              );
+            }
             /* Await the background library rescan only at navigation time.
                In practice the user spends >300ms reading the dialog, so
                this is almost always already resolved by the time they
@@ -1048,17 +1060,20 @@ interface ReparseDialogChapter {
    (onChangeExcludedSlugs) so the dialog's onPrimary can apply deltas
    without coupling to dialog state. */
 function ReparseResultBody({
+  bookId,
   bookTitle,
   chapters,
   initialExcludedSlugs,
   onChangeExcludedSlugs,
 }: {
+  bookId: string;
   bookTitle: string;
   chapters: ReparseDialogChapter[];
   initialExcludedSlugs: Set<string>;
   onChangeExcludedSlugs: (s: Set<string>) => void;
 }): ReactNode {
   const dispatch = useAppDispatch();
+  const restructuring = useAppSelector((s) => selectBookEditsLocked(s, bookId));
   const selectedModel = useAppSelector((s) => s.ui.selectedModel);
   /* Dynamic curated ∪ live-Ollama-tag union for the "Analyse with" picker, so
      a pulled-but-uncurated tag is selectable. Populated by fetchAnalyzerModels
@@ -1119,9 +1134,10 @@ function ReparseResultBody({
         onResetSuggestions={() => setExcludedSlugs(new Set(suggestedExcludedSlugs))}
         expanded={showChapterList}
         onToggleExpanded={() => setShowChapterList((v) => !v)}
-        disabled={false}
+        disabled={restructuring}
         heading="Chapters to analyze"
       />
+      {restructuring && <p className="text-xs text-ink/60">{RESTRUCTURING_REASON}</p>}
 
       <label className="flex items-center justify-between gap-3 rounded-2xl bg-canvas border border-ink/10 px-3 py-2.5">
         <span className="text-sm font-medium text-ink">Analyse with</span>

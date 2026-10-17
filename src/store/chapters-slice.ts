@@ -9,8 +9,12 @@
    generation-stream middleware from the regen action and passed straight to
    the runner. */
 
-import { createSlice, type PayloadAction } from '@reduxjs/toolkit';
+import { createSlice, createAction, type PayloadAction } from '@reduxjs/toolkit';
 import { formatDuration } from '../lib/time';
+import type { components as ApiComponents } from '../lib/api-types';
+
+/* Plan 286 (OD29) — what finalize did with A/B review state (Task 7). */
+type ReviewOutcome = ApiComponents['schemas']['ReviewOutcome'];
 /* `initialChapters` (from ../data/chapters) used to seed `chapters` here so
    the design fixture was visible in the demo. That was a footgun: between
    the moment the user clicks a real book and the moment `hydrateFromBookState`
@@ -952,6 +956,16 @@ export const chaptersSlice = createSlice({
 });
 
 export const chaptersActions = chaptersSlice.actions;
+
+/* Plan 286 (OD21) — fired by the generation-stream middleware on every
+   completion of the preview's chapter so previewRegen.completed (ui-slice,
+   Task 13) can be set; no reducer here, chapters-slice itself tracks
+   nothing about previews. */
+export const previewChapterComplete = createAction<{
+  bookId: string;
+  chapterId: number;
+  reviewOutcome?: ReviewOutcome;
+}>('chapters/previewChapterComplete');
 
 /** The set of chapters a 'forward' regen ("this and all subsequent") affects:
     the anchor chapter plus every later one, minus excluded chapters. Excluded

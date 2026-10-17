@@ -656,7 +656,7 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
   // ── Test: runProsodyPasses is called with { dispatch } only (no signal) ──
 
-  it('calls runProsodyPasses with { dispatch } only — no signal (detached path)', async () => {
+  it('calls runProsodyPasses with dispatch, progress, canApply and a signal only a restructure aborts (detached path)', async () => {
     const store = makeStore();
     store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
 
@@ -680,8 +680,8 @@ describe('Layout — prosody auto-trigger (Task 13 / fs-65 Phase 3)', () => {
 
     const [_bookId, opts] = runProsodyPassesMock.mock.calls[0] as [string, Record<string, unknown>];
     /* Task 14: onProgress is now passed for the global prosody pill. */
-    expect(Object.keys(opts).sort()).toEqual(['canApply', 'dispatch', 'onProgress'].sort());
-    expect(opts.signal).toBeUndefined();
+    expect(Object.keys(opts).sort()).toEqual(['canApply', 'dispatch', 'onProgress', 'signal'].sort());
+    expect((opts.signal as AbortSignal).aborted).toBe(false);
     expect(typeof opts.onProgress).toBe('function');
   });
 
@@ -1282,6 +1282,119 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     expect(watermarkPuts('b1')).toEqual([]);
     expect(unfinishedPuts()).toEqual(['b1']);
     expect(detectEmotionsMock).toHaveBeenCalledTimes(1); // not restarted this visit
+  });
+
+  /* #3400 — a chapter restructure re-keys every sentence, so a run that
+     snapshotted the pre-restructure structure must not apply another
+     annotation: it counts as foreground work for the book. */
+  it('restructure: one starting mid-run ends the open re-run at once; nothing keyed to the old structure lands, the book stays marked unfinished', async () => {
+    const { store, release } = await openWithHeldRun();
+    await act(async () => {
+      store.dispatch(uiActions.setRestructuringBook('b1'));
+    });
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+    await act(async () => release());
+    await settle(300);
+    expect(emotionOf(store, 1)).toBeUndefined();
+    expect(watermarkPuts('b1')).toEqual([]);
+    expect(unfinishedPuts()).toEqual(['b1']);
+  });
+
+  it('restructure: the open re-run does not start while a restructure is in flight; it runs when it ends', async () => {
+    libBooks = [makeBook('b1', 'cast_pending')];
+    marks.set('b1', false);
+    const store = makeStore(true);
+    store.dispatch(uiActions.setRestructuringBook('b1'));
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b1'));
+    await settle(200);
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+    await act(async () => {
+      store.dispatch(uiActions.clearRestructuringBook('b1'));
+    });
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('restructure: a library-triggered run is ended by one starting mid-run, nothing more lands, the book stays marked unfinished', async () => {
+    let release!: () => void;
+    detectEmotionsMock.mockImplementation(async (_id: string, opts: Opts) => {
+      await new Promise<void>((r) => (release = r));
+      emit(opts, [ch1, ch2]);
+      return { totalAnnotations: 2, annotatedChapters: 2 };
+    });
+    const store = makeStore(true);
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+    await waitFor(() => expect(store.getState().manuscript.manuscriptId).toBe('mns_b1'));
+    await settle(30);
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+    });
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
+    expect(store.getState().prosody.activeStreams.b1).toBeDefined();
+    await act(async () => {
+      store.dispatch(uiActions.setRestructuringBook('b1'));
+    });
+    await act(async () => release());
+    await settle(300);
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+    expect(emotionOf(store, 1)).toBeUndefined();
+    expect(watermarkPuts('b1')).toEqual([]);
+    expect(unfinishedPuts()).toEqual(['b1']);
+  });
+
+  it('restructure: a library run that would start during one does not start and sends no state write until it ends; then the book is unfinished, and opening it runs it', async () => {
+    const store = makeStore(true);
+    renderAnyPath(store);
+    await settle(30);
+    store.dispatch(uiActions.setRestructuringBook('b1'));
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+    });
+    await settle(300);
+    // pass-6: a state.json write must not overlap the restructure's own
+    expect(unfinishedPuts()).toEqual([]);
+    expect(detectEmotionsMock).not.toHaveBeenCalled();
+    expect(watermarkPuts('b1')).toEqual([]);
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined();
+
+    await act(async () => {
+      store.dispatch(uiActions.clearRestructuringBook('b1'));
+    });
+    expect(unfinishedPuts()).toEqual(['b1']); // held, then sent: the book ends unfinished
+    expect(marks.get('b1')).toBe(false);
+    const before = detectEmotionsMock.mock.calls.length;
+    await act(async () => {
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    });
+    await waitFor(() => expect(detectEmotionsMock.mock.calls.length).toBeGreaterThan(before));
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1));
+    expect(marks.get('b1')).toBe(true);
+  });
+
+  it('restructure: an aborted library-triggered run loses its pill at once, not when its passes return', async () => {
+    let release!: () => void;
+    detectEmotionsMock.mockImplementation(async (_id: string, opts: Opts) => {
+      await new Promise<void>((r) => (release = r));
+      emit(opts, [ch1]);
+      return { totalAnnotations: 1, annotatedChapters: 1 };
+    });
+    const store = makeStore(true);
+    renderAnyPath(store);
+    await settle(30);
+    await act(async () => {
+      store.dispatch(librarySlice.actions.addBook(makeBook('b1', 'cast_pending')));
+    });
+    await waitFor(() => expect(detectEmotionsMock).toHaveBeenCalledTimes(1));
+    expect(store.getState().prosody.activeStreams.b1).toBeDefined();
+    await act(async () => {
+      store.dispatch(uiActions.setRestructuringBook('b1'));
+    });
+    expect(store.getState().prosody.activeStreams.b1).toBeUndefined(); // before release
+    await act(async () => release());
+    await settle(300);
   });
 
   it('yields: a run that yielded is marked unfinished, never done, even when nothing arrived after it yielded', async () => {

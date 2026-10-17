@@ -12,6 +12,7 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { buildAudioQaReport } from '../audio/qa-report.js';
 import { computeRevisionsForBook } from './revisions.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
+import { revisionsFailureText } from '../workspace/revisions-store.js';
 import { triggerScoring, isGenerationActive } from './generation.js';
 
 export const qaReportRouter = Router();
@@ -44,7 +45,7 @@ qaReportRouter.get('/:bookId/qa-report', async (req: Request, res: Response) => 
     });
   } catch (e) {
     console.error('[qa-report] GET failed', e);
-    res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to build QA report.') });
+    res.status(500).json({ error: requestFailureMessage(e, revisionsFailureText(e, 'Failed to build QA report.')) });
   }
 });
 
@@ -70,6 +71,6 @@ qaReportRouter.post('/:bookId/resume-scoring', async (req: Request, res: Respons
     res.status(202).json({ started: true });
   } catch (e) {
     console.error('[qa-report] POST resume-scoring failed', e);
-    res.status(500).json({ error: requestFailureMessage(e, (e as Error).message || 'Failed to resume scoring.') });
+    res.status(500).json({ error: requestFailureMessage(e, 'Failed to resume scoring.') });
   }
 });

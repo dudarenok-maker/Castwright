@@ -35,6 +35,8 @@ import {
   GENERIC_TITLE_RE,
   applyRefreshTitles,
   applyRename,
+  touchedChapterIds,
+  carryMergedAwayKeys,
   type MergeOp,
   type SplitOp,
   type ReorderOp,
@@ -43,6 +45,9 @@ import {
   type RestructureResult,
   type RestructureSentence,
 } from '../workspace/restructure.js';
+import { withBookLock } from '../workspace/book-lock.js';
+import { beginRestructure, endRestructure } from '../workspace/restructure-gate.js';
+import { dropPendingForChapters } from '../workspace/revisions-store.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import {
   audioDir,
@@ -62,40 +67,6 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export const chaptersRestructureRouter = Router();
-
-/* Per-book write lock — serialises concurrent restructure requests on the
-   same book so the three-file write order (state.json → manuscript-edits.json
-   → in-memory hints) can't interleave between requests. Lock is held for
-   the duration of one handler call; releases happen in finally{} so a
-   throw inside the handler doesn't leak. */
-const bookWriteLock = new Map<string, Promise<void>>();
-
-async function withBookLock<T>(bookId: string, fn: () => Promise<T>): Promise<T> {
-  const prev = bookWriteLock.get(bookId) ?? Promise.resolve();
-  let release!: () => void;
-  const next = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  // `mine` is what actually goes in the map. The old code compared the
-  // cleanup below against `prev.then(() => next)` called a second time —
-  // `.then()` always returns a new Promise object, so that comparison was
-  // never equal to what was stored and this delete never ran: the map grew
-  // one entry per bookId for the process lifetime.
-  const mine = prev.then(() => next);
-  bookWriteLock.set(bookId, mine);
-  try {
-    await prev;
-    return await fn();
-  } finally {
-    release();
-    // Best-effort cleanup: if no further requests queued behind us, drop
-    // the entry so the map doesn't grow unboundedly over a long server
-    // lifetime.
-    if (bookWriteLock.get(bookId) === mine) {
-      bookWriteLock.delete(bookId);
-    }
-  }
-}
 
 /* Best-effort: any parse failure leaves the state untouched. Skips the parse
    unless some keyless, non-user-titled chapter has a generic "Chapter N" title. */
@@ -151,17 +122,52 @@ async function applyRestructure(
   const located = await findBookByBookId(bookId);
   if (!located) return { status: 404, body: { error: 'Book not found.' } };
 
-  const { bookDir } = located;
-  let { state } = located;
-  if (!state.manuscriptId) {
+  const manuscriptId = located.state.manuscriptId;
+  if (!manuscriptId) {
     return {
       status: 400,
       body: { error: 'Book has no manuscript id — cannot restructure.' },
     };
   }
 
+  /* An analysis job's terminal persist rewrites manuscript-edits.json from
+     the chapter structure it analysed, which would undo this remap — so a
+     restructure is refused while one is registered for the book. Claimed
+     synchronously with the check, inside the book lock, and held to the end so
+     a job cannot start under it (workspace/restructure-gate.ts). */
+  if (!beginRestructure(manuscriptId)) {
+    return {
+      status: 409,
+      body: {
+        error: 'Analysis is running on this book. Pause it or wait for it to finish, then change the chapters.',
+        code: 'analysis_running',
+      },
+    };
+  }
+  try {
+    return await applyRestructureClaimed(located, manuscriptId, transform);
+  } finally {
+    endRestructure(manuscriptId);
+  }
+}
+
+async function applyRestructureClaimed(
+  located: NonNullable<Awaited<ReturnType<typeof findBookByBookId>>>,
+  manuscriptId: string,
+  transform: (
+    state: Parameters<typeof applyMerge>[0],
+    hints: Parameters<typeof applyMerge>[1],
+    sentences: Parameters<typeof applyMerge>[2],
+  ) => RestructureResult,
+): Promise<{
+  status: number;
+  body: unknown;
+}> {
+  const { bookDir } = located;
+  let { state } = located;
+
   // Hydrate manuscript record so we have current ChapterHint[]
-  const record = await getOrHydrateManuscript(state.manuscriptId);
+  const record = await getOrHydrateManuscript(manuscriptId);
   if (!record) {
     return {
       status: 404,
@@ -188,7 +194,7 @@ async function applyRestructure(
   // for a fresh book — that's fine, transform handles it). Each transform
   // requires sentences for split when it needs to locate the body offset.
   const editsPath = manuscriptEditsJsonPath(bookDir);
-  const edits = await readJson<{ sentences?: RestructureSentence[] }>(editsPath);
+  const edits = await readJson<{ sentences?: RestructureSentence[]; mergedAwayKeys?: string[] }>(editsPath);
   const sentences = edits?.sentences ?? [];
 
   /* srv-35 — ensure the OLD chapters carry uuids before the transform so
@@ -196,6 +202,10 @@ async function applyRestructure(
      never been written since the upgrade has none yet). The result.state
      is persisted below, so this also migrates the book. */
   ensureChapterUuids(state);
+
+  /* Plan 286 — captured before transform(...) in case the transform
+     mutates `state` in place. */
+  const oldChapters = state.chapters.map((c) => ({ ...c }));
 
   let result: RestructureResult;
   try {
@@ -212,7 +222,14 @@ async function applyRestructure(
   // here, earlier writes are already on disk; partial state is recoverable
   // via the reconciliation filter in book-state.ts:166-185.
   await writeStateJsonAtomic(stateJsonPath(bookDir), { ...result.state, language: result.state.language ?? null });
-  await writeJsonAtomic(editsPath, { sentences: result.sentences });
+  /* #3400 — merged-away tombstones ride along (the client's save after the
+     remap applies the same rule), so a restructure no longer wipes them. */
+  await writeJsonAtomic(editsPath, {
+    sentences: result.sentences,
+    ...(edits?.mergedAwayKeys
+      ? { mergedAwayKeys: carryMergedAwayKeys(edits.mergedAwayKeys, result.remap) }
+      : {}),
+  });
 
   // Update in-memory ManuscriptRecord so the next analysis/generation
   // pick up the new structure without a server restart.
@@ -221,13 +238,29 @@ async function applyRestructure(
   // Apply audio ops (best-effort — errors are surfaced in the response).
   const audioSummary = await rewriteChapterSlugs(audioDir(bookDir), result.audioOps);
 
+  /* Plan 286 — entries for chapters this op touched no longer pair with the
+     live take. Best-effort: logged, never in a response (the six handlers
+     return raw messages, so a lock-key path must not reach them). A deliberate
+     swallow of LockAcquisitionTimeoutError (CLAUDE.md swallow list). An entry
+     that survives a failed drop is NOT left to act on whichever chapter now
+     holds its id: a server-recorded entry carries the chapter's uuid +
+     audioRenderedAt and revisions-store's entryMatchesChapter refuses it
+     (revision_not_found) once the chapter at that id differs (#3400). A legacy
+     client-written entry has no stamps and is not covered. */
+  try {
+    const touched = touchedChapterIds(oldChapters, result.state.chapters, result.audioOps);
+    if (touched.length > 0) await dropPendingForChapters(bookDir, oldChapters, touched);
+  } catch (e) {
+    console.error('[chapters-restructure] could not drop stale A/B review entries', e);
+  }
+
   // Plan 70c — re-derive the analysis cache from the freshly-written
   // manuscript-edits.json so subsequent generation runs still find
   // sentences keyed by the new chapter ids. Earlier code wiped the
   // cache outright, which made every post-restructure Generate halt
   // with "No analysed sentences cached for this book."
-  // Plan 286 — 'replace': ids are renumbered, so prior keys cannot be kept.
-  await rebuildCacheFromEdits(state.manuscriptId, editsPath, { mode: 'replace' }).catch((e) => {
+  // Plan 287 — 'replace': ids are renumbered, so prior keys cannot be kept.
+  await rebuildCacheFromEdits(manuscriptId, editsPath, { mode: 'replace' }).catch((e) => {
     console.error('[chapters-restructure] cache rebuild failed', e);
   });
 
