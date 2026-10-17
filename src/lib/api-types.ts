@@ -757,6 +757,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/books/{bookId}/chapters/exclude": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Soft-hide or un-hide a set of chapters
+         * @description Sets `Chapter.excluded` on every listed chapter in one atomic
+         *     restructure pass. Sentence remap is identity; audio files are left
+         *     on disk. For a single chapter the Generate-view toggle uses
+         *     `setChapterExcluded` instead.
+         */
+        post: operations["excludeChapters"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/books/{bookId}/chapters/refresh-titles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-derive chapter titles from the source manuscript
+         * @description Re-parses the source manuscript for authoritative titles and, unless
+         *     `useFirstLine` is false, promotes the first non-dialogue sentence of
+         *     any chapter still carrying a generic "Chapter N" title. Chapters with
+         *     `titleOverridden` are left alone. A failed re-parse downgrades to the
+         *     first-line pass only.
+         */
+        post: operations["refreshChapterTitles"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/books/{bookId}/cover/candidates": {
         parameters: {
             query?: never;
@@ -4584,7 +4631,8 @@ export interface components {
          *     codes (`language_unset`, `cast_incomplete`, `stage1_shrink_refused`,
          *     `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
          *     `design_in_progress`, `bad_request`, `chapter_excluded`,
-         *     `main_analysis_running`, `subset_analysis_running`) carry `code`
+         *     `main_analysis_running`, `subset_analysis_running`,
+         *     `chapters_restructuring`) carry `code`
          *     and `message` only — `main_analysis_running` also carries
          *     `draining` (#3435: the late refusal check, after the stream opened).
          *     `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
@@ -6031,8 +6079,8 @@ export interface components {
          */
         Emotion: "neutral" | "whisper" | "angry" | "excited" | "sad";
         /**
-         * @description Response envelope shared by `mergeChapters`, `splitChapter`, and
-         *     `reorderChapters`. `chapters` is the new state.json chapter list
+         * @description Response envelope shared by `mergeChapters`, `splitChapter`,
+         *     `reorderChapters`, `excludeChapters` and `refreshChapterTitles`. `chapters` is the new state.json chapter list
          *     (ids re-issued 1..N); `sentenceRemap` is the translation table
          *     the frontend applies to its sentence cache so it can rewrite
          *     `chapterId` + per-chapter `id` without re-fetching the full
@@ -6062,6 +6110,8 @@ export interface components {
                 newChapterId: number;
                 newSentenceId: number;
             }[];
+            /** @description Non-fatal advisories (orphan recovery, empty-chapter prune and generic-title renumber counts). Empty on a clean operation. */
+            warnings?: string[];
         };
         BookExportRequest: {
             /**
@@ -8042,9 +8092,11 @@ export interface operations {
              *     never is). `main_analysis_running` with `draining: true`
              *     (#3435): a previous analysis run on this book is still stopping
              *     (its in-flight model calls are being aborted); a non-fresh start is refused until
-             *     it has. The same two refusal codes can also arrive as a terminal
-             *     SSE `error` event when the conflict appears after the stream
-             *     opened.
+             *     it has. `chapters_restructuring`: a chapter restructure
+             *     (merge, split, reorder, exclude, rename or refresh-titles) is in
+             *     flight on this book; try again when it finishes. The same refusal
+             *     codes can also arrive as a terminal SSE `error` event when the
+             *     conflict appears after the stream opened.
              */
             409: {
                 headers: {
@@ -8101,7 +8153,9 @@ export interface operations {
              *     to stop), then try again. The same refusal can also arrive as a
              *     terminal SSE `error` event (`code: main_analysis_running`, with
              *     `draining` and `message`) when the main run registered after the
-             *     stream opened.
+             *     stream opened. A chapter restructure in flight on the book
+             *     refuses the same way with `error: chapters_restructuring` and a
+             *     `message` (no `draining`).
              */
             409: {
                 headers: {
@@ -8110,9 +8164,9 @@ export interface operations {
                 content: {
                     "application/json": {
                         /** @enum {string} */
-                        error: "main_analysis_running";
-                        /** @description false while the main run is live; true while it is finishing after a pause or halt. */
-                        draining: boolean;
+                        error: "main_analysis_running" | "chapters_restructuring";
+                        /** @description Present on `main_analysis_running`: false while the main run is live; true while it is finishing after a pause or halt. */
+                        draining?: boolean;
                         message: string;
                     };
                 };
@@ -8153,13 +8207,6 @@ export interface operations {
             };
             /** @description Book or chapter not found */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
-            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8361,6 +8408,99 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Book not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    excludeChapters: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    chapterIds: number[];
+                    excluded: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description New chapter list + sentence remap table */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChapterRestructureResponse"];
+                };
+            };
+            /** @description Bad request (missing / empty chapterIds, non-boolean excluded) */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Book or chapter not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    refreshChapterTitles: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bookId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @default true */
+                    useFirstLine?: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description New chapter list + sentence remap table */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChapterRestructureResponse"];
+                };
             };
             /** @description Book not found */
             404: {

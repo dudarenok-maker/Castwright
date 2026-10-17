@@ -874,9 +874,11 @@ paths:
             never is). `main_analysis_running` with `draining: true`
             (#3435): a previous analysis run on this book is still stopping
             (its in-flight model calls are being aborted); a non-fresh start is refused until
-            it has. The same two refusal codes can also arrive as a terminal
-            SSE `error` event when the conflict appears after the stream
-            opened.
+            it has. `chapters_restructuring`: a chapter restructure
+            (merge, split, reorder, exclude, rename or refresh-titles) is in
+            flight on this book; try again when it finishes. The same refusal
+            codes can also arrive as a terminal SSE `error` event when the
+            conflict appears after the stream opened.
           content:
             application/json:
               schema:
@@ -945,17 +947,19 @@ paths:
             to stop), then try again. The same refusal can also arrive as a
             terminal SSE `error` event (`code: main_analysis_running`, with
             `draining` and `message`) when the main run registered after the
-            stream opened.
+            stream opened. A chapter restructure in flight on the book
+            refuses the same way with `error: chapters_restructuring` and a
+            `message` (no `draining`).
           content:
             application/json:
               schema:
                 type: object
-                required: [error, draining, message]
+                required: [error, message]
                 properties:
-                  error: { type: string, enum: [main_analysis_running] }
+                  error: { type: string, enum: [main_analysis_running, chapters_restructuring] }
                   draining:
                     type: boolean
-                    description: 'false while the main run is live; true while it is finishing after a pause or halt.'
+                    description: 'Present on `main_analysis_running`: false while the main run is live; true while it is finishing after a pause or halt.'
                   message: { type: string }
 
   /api/books/{bookId}/chapters/{chapterId}/exclude:
@@ -996,8 +1000,6 @@ paths:
                   excluded: { type: boolean }
         '404':
           description: Book or chapter not found
-        '409':
-          description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.'
 
   /api/books/{bookId}/chapters/{chapterId}/rename:
     post:
@@ -1162,6 +1164,71 @@ paths:
             application/json:
               schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '400': { description: 'Bad request (e.g. order length mismatch, duplicate or unknown ids)' }
+        '404': { description: Book not found }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+
+  /api/books/{bookId}/chapters/exclude:
+    post:
+      summary: Soft-hide or un-hide a set of chapters
+      operationId: excludeChapters
+      description: |
+        Sets `Chapter.excluded` on every listed chapter in one atomic
+        restructure pass. Sentence remap is identity; audio files are left
+        on disk. For a single chapter the Generate-view toggle uses
+        `setChapterExcluded` instead.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chapterIds, excluded]
+              properties:
+                chapterIds:
+                  type: array
+                  items: { type: integer }
+                  minItems: 1
+                excluded: { type: boolean }
+      responses:
+        '200':
+          description: New chapter list + sentence remap table
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
+        '400': { description: 'Bad request (missing / empty chapterIds, non-boolean excluded)' }
+        '404': { description: Book or chapter not found }
+        '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
+
+  /api/books/{bookId}/chapters/refresh-titles:
+    post:
+      summary: Re-derive chapter titles from the source manuscript
+      operationId: refreshChapterTitles
+      description: |
+        Re-parses the source manuscript for authoritative titles and, unless
+        `useFirstLine` is false, promotes the first non-dialogue sentence of
+        any chapter still carrying a generic "Chapter N" title. Chapters with
+        `titleOverridden` are left alone. A failed re-parse downgrades to the
+        first-line pass only.
+      parameters:
+        - { in: path, name: bookId, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                useFirstLine:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: New chapter list + sentence remap table
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ChapterRestructureResponse' }
         '404': { description: Book not found }
         '409': { description: 'Analysis is running on this book (full or subset, or a main run still stopping). Body `{ error, code: analysis_running }` is a curated sentence; nothing was written.' }
 
@@ -6391,7 +6458,8 @@ components:
         codes (`language_unset`, `cast_incomplete`, `stage1_shrink_refused`,
         `resume_required`, `aborted`, `STALE_BOOK_DIR`, `unknown_manuscript`,
         `design_in_progress`, `bad_request`, `chapter_excluded`,
-        `main_analysis_running`, `subset_analysis_running`) carry `code`
+        `main_analysis_running`, `subset_analysis_running`,
+        `chapters_restructuring`) carry `code`
         and `message` only — `main_analysis_running` also carries
         `draining` (#3435: the late refusal check, after the stream opened).
         `resume_required` (#3435, `/analysis/chapters` only) is a soft stop:
@@ -8342,8 +8410,8 @@ components:
       type: object
       required: [chapters, sentenceRemap]
       description: |
-        Response envelope shared by `mergeChapters`, `splitChapter`, and
-        `reorderChapters`. `chapters` is the new state.json chapter list
+        Response envelope shared by `mergeChapters`, `splitChapter`,
+        `reorderChapters`, `excludeChapters` and `refreshChapterTitles`. `chapters` is the new state.json chapter list
         (ids re-issued 1..N); `sentenceRemap` is the translation table
         the frontend applies to its sentence cache so it can rewrite
         `chapterId` + per-chapter `id` without re-fetching the full
@@ -8379,6 +8447,10 @@ components:
               oldSentenceId: { type: integer }
               newChapterId: { type: integer }
               newSentenceId: { type: integer }
+        warnings:
+          type: array
+          items: { type: string }
+          description: 'Non-fatal advisories (orphan recovery, empty-chapter prune and generic-title renumber counts). Empty on a clean operation.'
 
     # --- Audiobook export ------------------------------------------
     BookExportRequest:
