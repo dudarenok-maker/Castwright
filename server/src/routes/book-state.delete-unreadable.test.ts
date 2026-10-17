@@ -102,6 +102,61 @@ describe('DELETE /api/books/:bookId on an unreadable book', () => {
     expect(existsSync(tornDir)).toBe(true);
   });
 
+  /* #3625 delta review 3 (M13): the status filter is the only thing that stops
+     this fallback deleting an analysed book by its folder-derived id. */
+  it('leaves a parseable book alone when deleted by its folder-derived id (its state bookId differs)', async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    const title = 'Renamed Id Book';
+    const dir = join(workspaceRoot, 'books', AUTHOR, SERIES, title);
+    mkdirSync(join(dir, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(dir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'some-other-id',
+        manuscriptId: 'm_other',
+        title,
+        author: AUTHOR,
+        series: SERIES,
+        updatedAt: '2026-05-23T00:00:00.000Z',
+        schema: 1,
+        chapters: [],
+      }),
+    );
+    const res = await request(app).delete(`/api/books/${makeBookId(AUTHOR, SERIES, title)}`);
+    expect(res.status).toBe(204);
+    expect(existsSync(dir)).toBe(true);
+  });
+
+  /* Probe D1 (🟠3): `Vol..1` sanitises to `Vol_1`, so the scan judged the
+     manuscript-only `Vol_1` and the route removed the analysed `Vol..1`. */
+  it('judges and removes the same folder: an analysed `Vol..1` survives a delete of the id it shares with `Vol_1`', async () => {
+    const { makeBookId } = await import('../workspace/paths.js');
+    const odd = join(workspaceRoot, 'books', 'Auth', SERIES, 'Vol..1');
+    const plain = join(workspaceRoot, 'books', 'Auth', SERIES, 'Vol_1');
+    mkdirSync(join(odd, '.audiobook'), { recursive: true });
+    writeFileSync(
+      join(odd, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: 'odd-book-id',
+        manuscriptId: 'm_odd',
+        title: 'Vol..1',
+        author: 'Auth',
+        series: SERIES,
+        updatedAt: '2026-05-23T00:00:00.000Z',
+        schema: 1,
+        chapters: [],
+      }),
+    );
+    mkdirSync(plain, { recursive: true });
+    writeFileSync(join(plain, 'manuscript.txt'), 'x');
+    const id = makeBookId('Auth', SERIES, 'Vol_1');
+    expect(makeBookId('Auth', SERIES, 'Vol..1')).toBe(id);
+
+    const res = await request(app).delete(`/api/books/${id}`);
+    expect(res.status).toBe(204);
+    expect(existsSync(odd)).toBe(true);
+  });
+
   it('an unknown id is still an idempotent 204 that deletes nothing', async () => {
     const res = await request(app).delete('/api/books/no-such-book');
     expect(res.status).toBe(204);

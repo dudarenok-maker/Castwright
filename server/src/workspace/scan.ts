@@ -981,8 +981,13 @@ export async function findStatelessBookDirByBookId(bookId: string): Promise<stri
     for (const seriesName of listDirs(join(BOOKS_ROOT, authorName))) {
       for (const titleName of listDirs(join(BOOKS_ROOT, authorName, seriesName))) {
         if (makeBookId(authorName, seriesName, titleName) !== bookId) continue;
+        /* scanBook inspects the SANITISED folder (bookDirByDisplay); judge and
+           remove the same one, so skip a listed name that sanitises to another
+           folder (`Vol..1` -> `Vol_1`, #3625 delta review 3). */
+        const listed = join(BOOKS_ROOT, authorName, seriesName, titleName);
+        if (bookDirByDisplay(authorName, seriesName, titleName) !== listed) continue;
         const book = await scanBook(authorName, seriesName, titleName);
-        if (book?.status === 'unreadable' || book?.status === 'not_analysed') return join(BOOKS_ROOT, authorName, seriesName, titleName);
+        if (book?.status === 'unreadable' || book?.status === 'not_analysed') return listed;
       }
     }
   }
