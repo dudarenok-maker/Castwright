@@ -85,7 +85,12 @@ export async function parsePdf(
   const outlineTitles = extractOutlineTitles(outline);
   let chapters = parsed.chapters;
   if (outlineTitles && outlineTitles.length === chapters.length) {
-    chapters = chapters.map((c, i) => ({ ...c, title: outlineTitles[i] }));
+    /* Outline titles come from the manuscript, so the parseText
+       `titleSynthesized` flag no longer applies. */
+    chapters = chapters.map((c, i) => {
+      const { titleSynthesized: _drop, ...rest } = c;
+      return { ...rest, title: outlineTitles[i] };
+    });
   }
 
   /* If PDF metadata Title beats the parseText-derived one AND parseText

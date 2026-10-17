@@ -24,7 +24,7 @@ owner: null
 
 - **New seams.**
   - `RestructureResult.warnings: string[]` — surfaced through the route handler to the response body.
-  - `postProcessRestructure(result)` — a private chain of `pruneEmptyChaptersInResult` → `renumberGenericTitlesInChapters` invoked at the end of `applyMerge` and `applyReorder`. `applySplit` intentionally bypasses it (split's "(cont.)" title would be misread as generic, and split's invariant already forbids empty halves).
+  - `postProcessRestructure(result)` — a private chain of `pruneEmptyChaptersInResult` → `renumberGenericTitlesInChapters` (since #3628 it renumbers only chapters flagged `titleSynthesized`, i.e. titles the app itself made up) invoked at the end of `applyMerge` and `applyReorder`. `applySplit` intentionally bypasses it (split's "(cont.)" title would be misread as generic, and split's invariant already forbids empty halves).
   - Detector regex `GENERIC_TITLE_RE = /^Chapter\s+\d+(\s*[—\-:]\s*(.+))?$/` is the gate for "this title was auto-generated and should re-derive." User-customised titles ("The Verdict", "Day One", word-form "Chapter Two") are non-matching by design.
 - **Invariants preserved.**
   - Excluded chapters are never pruned, even when empty (soft-hide invariant from `src/store/chapters-slice.ts:545–549` / `src/views/generation.tsx:360`).
@@ -36,7 +36,7 @@ owner: null
 ## Invariants to preserve
 
 1. `RestructureResult.warnings` is always an array (never `undefined`). Empty array on clean ops — see `applySplit` returning `warnings` straight from `remapSentences`, and `postProcessRestructure` accumulating into the chain.
-2. `GENERIC_TITLE_RE` matches `"Chapter 1"`, `"Chapter 12 — Subtitle"`, `"Chapter 3: Foo"` (digit form, optional subtitle separated by em-dash / hyphen / colon). It does NOT match `"Chapter One"`, `"The Verdict"`, `"Day Two"`, `"Prologue"`. Cited at `server/src/workspace/restructure.ts` near `/^Chapter\\s+\\d+/`.
+2. `GENERIC_TITLE_RE` matches `"Chapter 1"`, `"Chapter 12 — Subtitle"`, `"Chapter 3: Foo"` (digit form, optional subtitle separated by em-dash / hyphen / colon). It does NOT match `"Chapter One"`, `"The Verdict"`, `"Day Two"`, `"Prologue"`. Cited at `server/src/workspace/restructure.ts` near `/^Chapter\\s+\\d+/`. Since #3628 this is only the shape check: the renumber pass also requires the chapter to be flagged `titleSynthesized`, so a manuscript heading that reads "Chapter 1" is left alone.
 3. Orphan-recovery attachment policy: nearest preceding surviving chapter (lowest known id ≤ orphan's chapterId); falls back to smallest known id if no preceding survivor exists. Cited at the `for (const knownId of sortedKnownIds)` loop in `remapSentences`.
 4. Prune-pass is skipped when `result.sentences.length === 0`. Cited at the early return in `pruneEmptyChaptersInResult`.
 
