@@ -1872,22 +1872,63 @@ describe('book-state saves take the book lock a restructure holds (#3400)', () =
     }
   });
 
-  it('a manuscript PUT racing a merge is never lost', async () => {
+  /* What the lock can and cannot guarantee for a manuscript PUT (pass-7 1).
+     The PUT replaces manuscript-edits.json WHOLESALE, so serialising it only
+     decides who writes last: a PUT built BEFORE the restructure that lands
+     AFTER it puts the pre-restructure chapter ids back, lock or no lock. In the
+     app the client guard (no edits while a restructure is in flight) prevents
+     that; the server cannot. So the claim pinned here is serial equivalence,
+     not "never lost". */
+  const putBody = (i: number) =>
+    readEdits().sentences.map((s) =>
+      s.chapterId === 1 && s.id === 1 ? { ...s, text: `Edited ${i}.` } : s,
+    );
+
+  it('a manuscript PUT that lands BEFORE a merge is re-keyed by it: edits and state agree', async () => {
+    await reset();
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .send({ slice: 'manuscript', patch: { sentences: putBody(0) } });
+    expect(put.status).toBe(204);
+    const merge = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [2, 3] });
+    expect(merge.status).toBe(200);
+    const stateIds = readState().chapters.map((c) => c.id);
+    const edits = readEdits().sentences;
+    expect(stateIds).toEqual([1, 2]);
+    for (const s of edits) expect(stateIds).toContain(s.chapterId);
+    expect(edits.find((s) => s.chapterId === 1 && s.id === 1)?.text).toBe('Edited 0.');
+  });
+
+  it('a stale manuscript PUT that lands AFTER a merge replaces the file wholesale (the limit the client guard covers)', async () => {
+    await reset();
+    const stale = putBody(0);
+    await request(app).post(`/api/books/${bookId}/chapters/merge`).send({ chapterIds: [2, 3] });
+    await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .send({ slice: 'manuscript', patch: { sentences: stale } });
+    expect(readState().chapters).toHaveLength(2);
+    expect(readEdits().sentences.map((s) => s.chapterId)).toContain(3);
+  });
+
+  it('a manuscript PUT racing a merge ends in one of the two serial states, never a mix', async () => {
     for (let i = 0; i < RUNS; i++) {
       await reset();
-      const base = readEdits().sentences.map((s) =>
-        s.chapterId === 1 && s.id === 1 ? { ...s, text: `Edited ${i}.` } : s,
-      );
+      const body = putBody(i);
       await race((i % 8) - 3, () =>
         request(app)
           .put(`/api/books/${bookId}/state`)
-          .send({ slice: 'manuscript', patch: { sentences: base } }),
+          .send({ slice: 'manuscript', patch: { sentences: body } }),
       );
-      const edits = readEdits();
-      expect(edits.sentences.find((s) => s.chapterId === 1 && s.id === 1)?.text, `run ${i}`).toBe(
-        `Edited ${i}.`,
-      );
-      expect(readState().chapters, `run ${i}`).toHaveLength(2);
+      const stateIds = readState().chapters.map((c) => c.id);
+      const edits = readEdits().sentences;
+      expect(stateIds, `run ${i}`).toEqual([1, 2]);
+      const putThenMerge =
+        edits.every((s) => stateIds.includes(s.chapterId)) &&
+        edits.find((s) => s.chapterId === 1 && s.id === 1)?.text === `Edited ${i}.`;
+      const mergeThenPut = JSON.stringify(edits) === JSON.stringify(body);
+      expect(putThenMerge || mergeThenPut, `run ${i}: ${JSON.stringify(edits)}`).toBe(true);
     }
   });
 });
