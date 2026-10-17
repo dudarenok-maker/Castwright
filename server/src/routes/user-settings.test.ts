@@ -17,6 +17,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -236,6 +237,31 @@ describe('user-settings router', () => {
     }
     const after = await request(app).get('/api/user/settings');
     expect(after.body.settingsFileUnreadable).toBe(false);
+  });
+
+  /* #3625 review 2 (🟠3): a whole-map editor (rate limits, keep-alive) seeded from the
+     boot defaults must not be able to save them over a file nobody could read. */
+  it('PUT of a whole map is refused (and writes nothing) while the file cannot be read', async () => {
+    const dir = dirname(userSettingsPath);
+    const base = basename(userSettingsPath);
+    for (const name of readdirSync(dir)) {
+      if (name === base || name.startsWith(`${base}.bak.`)) rmSync(join(dir, name), { recursive: true, force: true });
+    }
+    mkdirSync(userSettingsPath);
+    resetCache();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await request(app)
+        .put('/api/user/settings')
+        .send({ analyzerRateLimitsByModel: { 'gemini-3.6-flash': { rpm: 3 } } });
+      expect(res.status).toBe(500);
+      expect(res.body.error).toBe('Failed to write user settings.');
+      expect(statSync(userSettingsPath).isDirectory()).toBe(true); // nothing replaced it
+    } finally {
+      rmSync(userSettingsPath, { recursive: true, force: true });
+      resetCache();
+    }
   });
 
   it('PUT ignores read-only fields submitted in the body', async () => {
