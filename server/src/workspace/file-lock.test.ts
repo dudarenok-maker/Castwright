@@ -396,6 +396,14 @@ describe('withStateJsonLock timeout keeps the lock-timeout class (#3700)', { ret
     expect((err as Error).message).toBe(LOCK_CONTENTION_REQUEST_ERROR);
     expect((err as Error).message).not.toContain(statePath);
   });
+
+  it('a timed-out acquisition leaves no stale waiter count behind', async () => {
+    const statePath = '/w/state-json-timeout-waiters/.audiobook/state.json';
+    void withKeyLock(`state-json:${statePath}`, () => new Promise<void>(() => {}));
+    await new Promise((r) => setTimeout(r, 0));
+    await withStateJsonLock(statePath, async () => 'ran', 20).catch(() => undefined);
+    expect(__stateJsonWaitersForTest(statePath)).toBe(0);
+  });
 });
 
 describe('__stateJsonWaitersForTest (#3700)', { retry: 0 }, () => {

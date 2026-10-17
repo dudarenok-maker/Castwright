@@ -3,11 +3,12 @@
    - validateUpload(buffer, mimeType): throws UploadError on size/MIME unless
      the magic bytes are a PNG or JPEG; returns the sniffed type (the label
      only gates the allowlist, so a real JPEG named .png still uploads).
-   - writeUploadedCover(buffer, mimeType, destPath): re-encodes every upload
-     (PNG and JPEG) to a clean sharp-written JPEG (q=85, EXIF orientation
-     applied) so trailing bytes never survive into cover.jpg (#3535), writes
-     atomically (tmp + rename) — same pattern as `downloadCover` in
-     openlibrary.ts.
+   - encodeUploadedCover(buffer, mimeType): re-encodes every upload (PNG and
+     JPEG) to a clean sharp-written JPEG (q=85, EXIF orientation applied) so
+     trailing bytes never survive into cover.jpg (#3535). It writes nothing:
+     the route hands the bytes to `writeCoverFile` (store.ts, atomic tmp +
+     rename) from inside the state-json lock, once state.json is confirmed
+     present (#3700).
    - patchStateLocalCover(bookDir, originalFilename, beforeWrite?): replaces
      state.json.coverImage with the `source: 'local'` shape, dropping
      any prior OpenLibrary fields. Resets framing — a fresh image
@@ -21,7 +22,6 @@ import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { stateJsonPath } from '../workspace/paths.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import { reencodeToJpeg } from './reencode.js';
-import { writeCoverFile } from './store.js';
 
 export const ACCEPTED_MIME_TYPES = ['image/jpeg', 'image/png'] as const;
 export const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -79,16 +79,6 @@ function sniffMime(buffer: Buffer): UploadMimeType | undefined {
   if (buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) return 'image/png';
   if (buffer.subarray(0, JPEG_SIGNATURE.length).equals(JPEG_SIGNATURE)) return 'image/jpeg';
   return undefined;
-}
-
-export async function writeUploadedCover(
-  buffer: Buffer,
-  mimeType: UploadMimeType,
-  destPath: string,
-): Promise<{ bytes: number }> {
-  const jpegBytes = await encodeUploadedCover(buffer, mimeType);
-  await writeCoverFile(destPath, jpegBytes);
-  return { bytes: jpegBytes.length };
 }
 
 /** Re-encode an upload to a clean JPEG with NO disk write, so the caller can

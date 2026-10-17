@@ -302,6 +302,10 @@ recite:
     move or delete while you wait, and what each waiter does when the thing it
     re-reads is absent; test by holding the key, moving or deleting the
     target, then releasing, and assert a refusal with nothing written.
+    The same hazard runs the other way, for the lock HOLDER: its steps after
+    the lock is released, against a path it resolved before it (a change-log
+    write, a cast delete, a slug rewrite), land in a folder a queued
+    folder-move has since vacated, recreating the old folder (PR #3706 pass 4).
 
 ### Keeping the catalogue current
 

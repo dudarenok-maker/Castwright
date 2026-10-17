@@ -42,6 +42,7 @@ import {
   stateJsonPath,
 } from '../workspace/paths.js';
 import { reencodeToJpeg } from '../cover/reencode.js';
+import { withStateJsonLock } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
 import {
   PORTABLE_SCHEMA_VERSION,
@@ -215,6 +216,9 @@ export async function importPortableBundle(
   let resolvedTitle = baseTitle;
   let resolvedBookId = state.bookId || makeBookId(author, series, baseTitle);
   let renamedTo: string | undefined;
+  /* #3700: an 'overwrite' into an existing book replaces its live state.json,
+     which a concurrent render/rename read-modify-write also owns. */
+  let overwritingExisting = false;
 
   if (existsSync(bookDir)) {
     if (strategy === 'fail') {
@@ -227,8 +231,10 @@ export async function importPortableBundle(
       resolvedBookId = renamed.bookId;
       renamedTo = bookDir;
       state = { ...state, title: resolvedTitle, bookId: resolvedBookId };
+    } else {
+      /* 'overwrite' falls through — bookDir stays as the existing path. */
+      overwritingExisting = true;
     }
-    /* 'overwrite' falls through — bookDir stays as the existing path. */
   }
 
   /* Stage every entry into a tmp file alongside its eventual home, then
@@ -256,7 +262,8 @@ export async function importPortableBundle(
     staged.push({ dest, tmp: `${dest}${tmpSuffix}`, buf, sourceEntry });
   }
 
-  planEntry(stateJsonPath(bookDir), finalStateBuf, 'state.json');
+  const liveStatePath = stateJsonPath(bookDir);
+  planEntry(liveStatePath, finalStateBuf, 'state.json');
   const manuscriptBuf = entries.get(state.manuscriptFile);
   if (!manuscriptBuf) {
     throw new InvalidBundleError(
@@ -333,10 +340,16 @@ export async function importPortableBundle(
 
   /* Phase 2: rename each tmp file over its final destination. Failure
      mid-rename is the half-imported case called out in the header. */
-  try {
+  const commit = async (): Promise<void> => {
     for (const s of staged) {
       await rename(s.tmp, s.dest);
     }
+  };
+  try {
+    /* #3700: leaf lock, nothing else is taken inside it. A fresh folder has no
+       other writer yet, so only the overwrite path needs it. */
+    if (overwritingExisting) await withStateJsonLock(liveStatePath, commit);
+    else await commit();
   } catch (e) {
     /* Best-effort cleanup of remaining tmp files (the ones we hadn't
        renamed yet); already-renamed live files are left in place because

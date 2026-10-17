@@ -24,8 +24,7 @@ import multer from 'multer';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { findBookByBookId } from '../workspace/scan.js';
-import { coverImagePath, WORKSPACE_ROOT } from '../workspace/paths.js';
-import { assertContained } from '../util/safe-path.js';
+import { coverImagePath } from '../workspace/paths.js';
 import { CoverSourceError } from '../cover/sources/types.js';
 import { findCandidateById, aggregateCovers } from '../cover/search.js';
 import {
@@ -87,7 +86,6 @@ coverRouter.post('/:bookId/cover', async (req: Request, res: Response) => {
        while this request queued answers 404 with nothing written. */
     const jpeg = await fetchCoverJpeg(candidate.coverUrl);
     const dest = coverImagePath(bookDir);
-    assertContained(WORKSPACE_ROOT, dest);
     if (!(await patchStateCover(bookDir, candidate, () => writeCoverFile(dest, jpeg)))) {
       return res.status(404).json({ error: 'Book not found.' });
     }

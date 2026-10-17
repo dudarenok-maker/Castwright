@@ -23,10 +23,14 @@
    FALSE NEGATIVES (unlocked writes this does NOT catch):
      - A hand-built path or extracted variable feeding a bare writer:
        `const p = stateJsonPath(d); writeJsonAtomic(p, ...)` — only the
-       literal `writeJsonAtomic(stateJsonPath(` shape is seen. The ONE bare
-       state.json writer that exists today is `writeStateJsonAtomic`'s own
-       body in `state-migrate.ts` (`writeJsonAtomic(path, ...)`), which is the
-       primitive every locked site calls through.
+       literal `writeJsonAtomic(stateJsonPath(` shape is seen. The bare
+       writers that exist today are `writeStateJsonAtomic`'s own body in
+       `state-migrate.ts` (`writeJsonAtomic(path, ...)`), the primitive every
+       locked site calls through, and `import/scan-import-folder.ts`'s phase-2
+       `rename(s.tmp, s.dest)` of a staged state.json, which this scan cannot
+       see (no `stateJsonPath(` argument at the rename) and which is locked by
+       hand under `withStateJsonLock` when an 'overwrite' import replaces an
+       existing book (pinned by scan-import-folder.test.ts, not by this guard).
      - An aliased import (`import { writeStateJsonAtomic as w }`).
      - Lock IDENTITY is never checked, only PRESENCE: a write inside
        `withStateJsonLock(otherBook, ...)` passes.

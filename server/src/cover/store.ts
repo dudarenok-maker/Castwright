@@ -1,10 +1,12 @@
 /* Cover byte download + state.json provenance patching. Source-agnostic:
-   downloadCover fetches any candidate URL (always re-derived server-side
+   fetchCoverJpeg fetches any candidate URL (always re-derived server-side
    via findCandidateById — never a client-supplied URL, preserving the
-   no-SSRF property), checks it against the size caps, re-encodes it to a
+   no-SSRF property), checks it against the size caps, and re-encodes it to a
    clean sharp-written JPEG (so every provider body — GIF, WebP, PNG, JPEG
-   with trailing junk — lands as a decodable cover.jpg), and writes
-   atomically. backgroundFetchCover is the fire-and-forget import hook. */
+   with trailing junk — lands as a decodable cover.jpg). It writes nothing:
+   callers pass the bytes to writeCoverFile (atomic tmp + rename) from inside
+   patchStateCover's state-json lock (#3700). backgroundFetchCover is the
+   fire-and-forget import hook. */
 
 import { mkdir, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -34,8 +36,10 @@ export class CoverDownloadError extends Error {
   }
 }
 
-/** Atomically write already-encoded cover JPEG bytes to `destPath`. */
+/** Atomically write already-encoded cover JPEG bytes to `destPath`. The single
+    cover-write chokepoint, so it owns the workspace-containment guard. */
 export async function writeCoverFile(destPath: string, jpegBytes: Buffer): Promise<void> {
+  assertContained(WORKSPACE_ROOT, destPath);
   await mkdir(dirname(destPath), { recursive: true });
   const tmp = `${destPath}.tmp-${process.pid}-${Date.now()}`;
   await writeFile(tmp, jpegBytes);
@@ -47,13 +51,6 @@ export async function writeCoverFile(destPath: string, jpegBytes: Buffer): Promi
     });
     throw e;
   }
-}
-
-export async function downloadCover(url: string, destPath: string): Promise<{ bytes: number }> {
-  assertContained(WORKSPACE_ROOT, destPath);
-  const reencoded = await fetchCoverJpeg(url);
-  await writeCoverFile(destPath, reencoded);
-  return { bytes: reencoded.length };
 }
 
 /** Fetch a candidate URL and return it as a clean JPEG - NO disk write, so a
@@ -172,7 +169,6 @@ export async function backgroundFetchCover(
     }
     const jpeg = await fetchCoverJpeg(top.coverUrl);
     const dest = coverImagePath(bookDir);
-    assertContained(WORKSPACE_ROOT, dest);
     if (!(await patchStateCover(bookDir, top, () => writeCoverFile(dest, jpeg)))) return;
     console.log(`[cover] fetched ${top.id} (${top.source}) for ${bookId}`);
   } catch (e) {

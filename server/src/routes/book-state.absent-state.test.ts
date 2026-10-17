@@ -7,13 +7,20 @@
    happen. The interleave is forced: the test holds the old key itself, fires
    the request, waits (on the lock's own waiter count) until it is queued, changes the filesystem, then releases. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, renameSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { CHAPTER_TITLE_PARSER_VERSION } from '../parsers/version.js';
+
+/* Cover select re-locates the candidate over the network; stub just that lookup. */
+vi.mock('../cover/search.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../cover/search.js')>()),
+  findCandidateById: vi.fn(),
+  firstAvailableCover: vi.fn(),
+}));
 
 const AUTHOR = 'Absent Test';
 const SERIES = 'Standalones';
@@ -93,6 +100,10 @@ beforeEach(() => {
       updatedAt: new Date().toISOString(),
     }),
   );
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 afterAll(() => {
@@ -275,6 +286,57 @@ describe('absent state.json after queueing on the old-path lock (#3700)', () => 
     expect(res.status).toBe(404);
     expect(existsSync(join(movedDir(), '.audiobook', 'cover.jpg'))).toBe(false);
     expect(existsSync(bookDir)).toBe(false);
+  });
+
+  /* A real, decodable image body for the stubbed cover-source fetch. */
+  async function stubCoverFetch(): Promise<void> {
+    const sharp = (await import('sharp')).default;
+    const jpeg = await sharp({ create: { width: 8, height: 8, channels: 3, background: '#336699' } })
+      .jpeg()
+      .toBuffer();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(new Uint8Array(jpeg), { status: 200, headers: { 'Content-Type': 'image/jpeg' } })),
+    );
+  }
+
+  it('cover select queued behind a folder move -> 404, no cover.jpg written into either folder', async () => {
+    const search = await import('../cover/search.js');
+    vi.mocked(search.findCandidateById).mockResolvedValue({
+      id: 'openlibrary:1',
+      source: 'openlibrary',
+      coverUrl: 'https://x/c.jpg',
+    } as Awaited<ReturnType<typeof search.findCandidateById>>);
+    await stubCoverFetch();
+    const res = await queueBehind(
+      () => request(app).post(`/api/books/${bookId}/cover`).send({ candidateId: 'openlibrary:1' }),
+      moveBook,
+    );
+    expect(res.status).toBe(404);
+    expect(existsSync(join(movedDir(), '.audiobook', 'cover.jpg'))).toBe(false);
+    expect(existsSync(bookDir)).toBe(false);
+  });
+
+  it('backgroundFetchCover for a book moved while the fetch was in flight writes nothing and leaves state.json untouched', async () => {
+    const search = await import('../cover/search.js');
+    vi.mocked(search.firstAvailableCover).mockResolvedValue({
+      id: 'apple:1',
+      source: 'apple',
+      coverUrl: 'https://x/c.jpg',
+    } as Awaited<ReturnType<typeof search.firstAvailableCover>>);
+    await stubCoverFetch();
+    const { backgroundFetchCover } = await import('../cover/store.js');
+    const before = readFileSync(statePath, 'utf8');
+    let done!: Promise<void>;
+    await withStateJsonLock(statePath, async () => {
+      done = backgroundFetchCover(bookDir, TITLE, AUTHOR, bookId);
+      await waitUntilQueued(statePath);
+      moveBook();
+    });
+    await done;
+    expect(existsSync(bookDir)).toBe(false);
+    expect(existsSync(join(movedDir(), '.audiobook', 'cover.jpg'))).toBe(false);
+    expect(readFileSync(join(movedDir(), '.audiobook', 'state.json'), 'utf8')).toBe(before);
   });
 
   it('cover DELETE queued behind a folder move -> 404, the moved book keeps its cover file', async () => {
