@@ -291,13 +291,15 @@ function countRawStateWrites(
    #3400's readLiveChapters began re-checking an A/B entry against live state;
    cover/store.ts + cover/upload.ts dropped out and workspace/book-state-update.ts
    joined with 3 when #3400 moved the cover patches onto its locked
-   `updateStateAtDir`). Asserted BOTH
+   `updateStateAtDir`; analysis.ts dropped from 4 to 1 when #3400 pass 8 moved
+   its Start-fresh un-confirm and both terminal persists onto `updateStateAtDir`
+   too, leaving only the castConfirmed read at load). Asserted BOTH
    ways; aliasing one file's import reddens that exact file (M5). */
 const G3_STATE_SITES: Record<string, number> = {
   'audio/finalize-chapter-write.ts': 1,
   'audio/render-integrity/aggregate.ts': 1,
   'import/scan-import-folder.ts': 1,
-  'routes/analysis.ts': 4,
+  'routes/analysis.ts': 1,
   'routes/book-state.ts': 9,
   'routes/chapters-restructure.ts': 1,
   'routes/generation.ts': 1,
