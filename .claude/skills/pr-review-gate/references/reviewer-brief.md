@@ -269,7 +269,27 @@ recite:
     detached job, name the condition it may run under; ask what stops it when
     that condition ends; and ask what a second concurrent instance does to the
     first's registration.
-27. **An op list computed before a later pass changes its keys, then patched
+27. **A sync-to-async conversion that drops error handling the sync API did
+    implicitly** — `scripts/lib/bounded-spawn.mjs`, PR #3705 gate pass 2:
+    `spawnSync` with `input` absorbed a stdin write failure (EPIPE/EOF, a
+    child that exits without draining) into `r.error` and still returned the
+    child's own status; the async `child.stdin.end(input)` raised it as an
+    unhandled `'error'` event that crashed the host (`write EOF`). Fixed with
+    a stdin `'error'` handler that ignores the benign codes and rejects on
+    the rest. Checkable: for every sync call replaced by an async one, list
+    what the sync version returned or swallowed instead of throwing (`r.error`,
+    a status, a buffered result) and confirm the async path handles each, with
+    a test where the child exits before reading its input.
+28. **A timeout that cannot fire because the wait it bounds blocks the event
+    loop** — PR #3705 gate pass 1: the e2e test's bound was a node:test
+    `{ timeout }` and then an async spawn bound, both wrapped around a
+    blocking `spawnSync` git call, so no timer could run until the call
+    returned and a hang produced silence, not the named failure; fixed by
+    making the spawn itself async (`boundedSpawn`). Checkable: for every
+    timeout or deadline, find the call it is meant to bound and confirm that
+    call yields to the event loop; a bound around a `*Sync` call is decorative
+    unless it is the call's own `timeout` option.
+29. **An op list computed before a later pass changes its keys, then patched
     only for the entries it already has** — `server/src/workspace/restructure.ts` (`postProcessRestructure`),
     PR #3594 gate pass 3: the audio rename ops were computed from the first
     slug transform, then the prune renumber and the generic-title retitle
@@ -280,7 +300,7 @@ recite:
     Checkable: list every later pass that changes a key the op list is keyed
     on, and for each ask whether an entry renamed ONLY by that pass gets an
     op; test with a fixture where the later pass is the sole renamer.
-28. **A reference-identity check used to mean "unchanged since X" in a store
+30. **A reference-identity check used to mean "unchanged since X" in a store
     where every write replaces the reference** — `src/views/restructure.tsx`
     (`applyResponse`), PR #3594 gate pass 4: the sentence remap skipped when
     the book's sentences were no longer the same array as at click time, but
@@ -291,7 +311,7 @@ recite:
     `Object.is` guard on store state, ask what ELSE replaces that reference;
     then ask whether the work the guard drops is retried. Test by making an
     unrelated write between capture and use.
-29. **A debounced save that captures its payload when the action fires, racing
+31. **A debounced save that captures its payload when the action fires, racing
     a server-side rewrite of the same file, where the client's in-memory
     correction is never itself saved** — `src/views/restructure.tsx` and the
     persistence middleware, PR #3594 gate pass 5: a manuscript edit queued
@@ -305,7 +325,7 @@ recite:
     save queued before the rewrite does when it lands after it, and whether the
     client re-saves its corrected state. Test with a slow or debounced PUT
     queued around the rewrite and assert on the final disk state.
-30. **A cancellation that sends a cleanup write at the same moment as the
+32. **A cancellation that sends a cleanup write at the same moment as the
     operation that caused it, through a route whose read-modify-write of the
     same file is not under the operation's lock** —
     `src/components/detect-emotions-button.tsx` (`markUnfinished`), PR #3594
@@ -322,7 +342,7 @@ recite:
     write it can overlap and whether both routes take the same lock. Test with
     both requests against the real routes, started in the same tick, and assert
     on the files.
-31. **A read path that "heals" by rewriting a whole file from an unlocked
+33. **A read path that "heals" by rewriting a whole file from an unlocked
     earlier read, so every reader is a potential writer** —
     `server/src/workspace/scan.ts` (segments backfill, srv-35 uuid mint), PR
     #3594 gate pass 6: `findBookByBookId` and `scanLibrary` read `state.json`,
@@ -336,7 +356,7 @@ recite:
     write, and whether it writes back its own earlier snapshot or a fresh one
     merged field by field. Test by landing a locked writer between the re-read
     and the write, and assert it survives.
-32. **A lock added to a read path's write makes the caller wait, but the caller
+34. **A lock added to a read path's write makes the caller wait, but the caller
     keeps its pre-wait snapshot, so its own later write is guaranteed to land
     last** — `server/src/workspace/scan.ts` (`backfillAudioModelKeysFromSegments`
     returning `{ state: upgraded }`), PR #3594 gate pass 7: 27c1297c made the
@@ -351,7 +371,7 @@ recite:
     to a function that returns state, ask which snapshot it returns, and whether
     a caller that waited on the lock starts from the post-wait file. Test with
     the caller's own write after the wait, and assert on the end state.
-33. **A refusal the caller cannot see, so the writes that go with it record an
+35. **A refusal the caller cannot see, so the writes that go with it record an
     edit that never happened** — `src/store/restructure-guard-middleware.ts`
     (returned `undefined` for a refused action), PR #3594 gate pass 7: Script
     Review Apply marked ops resolved in the server ledger that were never
