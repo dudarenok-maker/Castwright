@@ -1265,7 +1265,13 @@ async function applyReparse(
   bookDir: string,
   state: BookStateJson,
   parsed: Awaited<ReturnType<typeof parseManuscript>>,
-  opts: { changeLogType: string; changeLogTitle: string; manuscriptFile?: string },
+  opts: {
+    changeLogType: string;
+    changeLogTitle: string;
+    manuscriptFile?: string;
+    /** Called right after the locked step has written state.json. */
+    onStateRecorded?: () => void;
+  },
 ) {
   const existingEdits = await readJson<{ sentences?: unknown[] }>(
     manuscriptEditsJsonPath(bookDir),
@@ -1433,6 +1439,7 @@ async function applyReparse(
       ...nextState,
       language: nextState.language ?? null,
     });
+    opts.onStateRecorded?.();
 
     const newExcludedById = new Map<number, boolean>();
     for (const c of newChapters) {
@@ -1609,21 +1616,20 @@ bookStateRouter.post(
          gone whenever an arm in between rejected. It is unlinked only once the
          record names the new one; on a failure the new file is removed again
          unless the record already names it (a failure after the record landed). */
+      let recorded = false;
       let payload: Awaited<ReturnType<typeof applyReparse>>;
       try {
         payload = await applyReparse(bookDir, state, parsed, {
           changeLogType: 'replace-manuscript',
           changeLogTitle: 'Replaced manuscript',
           manuscriptFile: newFile,
+          onStateRecorded: () => {
+            recorded = true;
+          },
         });
       } catch (applyErr) {
-        if (newFile !== oldFile) {
-          const recorded = await readJson<{ manuscriptFile?: string }>(
-            stateJsonPath(bookDir),
-          ).catch(() => null);
-          if (recorded?.manuscriptFile !== newFile) {
-            await unlink(join(bookDir, newFile)).catch(() => {});
-          }
+        if (newFile !== oldFile && !recorded) {
+          await unlink(join(bookDir, newFile)).catch(() => {});
         }
         throw applyErr;
       }
