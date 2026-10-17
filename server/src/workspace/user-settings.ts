@@ -576,7 +576,9 @@ function statFileStamp(): FileStamp | null {
     which can carry an older mtime — still counts as a change. A file that
     is absent NOW but existed at population is treated as unchanged: the
     only known way for it to vanish out from under a warm cache is the
-    rotate-then-rename window of a sibling process's own atomic write, and
+    rename-away-then-rename-in window of a sibling process's own rotating
+    atomic write (writeJsonAtomic moves the old file to `.bak.1`, then renames
+    the already-written tmp onto the vacated name), and
     serving the last-known settings across that window beats resetting
     every resolver to factory defaults for one read. */
 function cacheMatchesDisk(): boolean {
