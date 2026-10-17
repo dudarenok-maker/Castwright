@@ -71,6 +71,26 @@ describe('rewriteChapterSlugs', () => {
     );
   });
 
+  it('moves the render-integrity sidecars (embeddings, verdicts, attempted sentinel) with a renamed chapter and deletes them with a deleted one (#3524)', async () => {
+    const sidecars = ['embeddings.json', 'render-integrity.json', 'render-integrity-attempted.json'];
+    for (const slug of ['02-old-title', '05-gone']) {
+      seed(slug);
+      for (const s of sidecars) writeFileSync(join(audioRoot, `${slug}.${s}`), `${s}:${slug}`);
+    }
+
+    const result = await rewriteChapterSlugs(audioRoot, [
+      { kind: 'rename', from: '02-old-title', to: '03-new-title', newChapterId: 3, newChapterTitle: 'new' },
+      { kind: 'delete', from: '05-gone' },
+    ]);
+
+    expect(result.errors).toEqual([]);
+    for (const s of sidecars) {
+      expect(existsSync(join(audioRoot, `02-old-title.${s}`))).toBe(false);
+      expect(readFileSync(join(audioRoot, `03-new-title.${s}`), 'utf8')).toBe(`${s}:02-old-title`);
+      expect(existsSync(join(audioRoot, `05-gone.${s}`))).toBe(false);
+    }
+  });
+
   it('rotates three chapters without clobbering (two-pass via temp slug)', async () => {
     seed('01-a');
     seed('02-b');

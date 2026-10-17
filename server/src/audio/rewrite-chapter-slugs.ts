@@ -6,6 +6,8 @@
      <slug>.mp3         the audio itself
      <slug>.segments.json  per-segment timing + chapter metadata
      <slug>.peaks.json     waveform peaks summary (plan 35-related)
+     <slug>.embeddings.json, .render-integrity.json, .render-integrity-attempted.json
+                           render-integrity speaker-QA sidecars
 
    Rename strategy is two-pass via a temp slug to avoid collisions on
    permutations (chapter 3 → 1, chapter 1 → 3 would otherwise clobber
@@ -26,9 +28,19 @@ import { randomUUID } from 'node:crypto';
 import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 
-/** Suffixes of the three companion files per chapter audio. Kept in one
-    array so add-a-new-companion changes touch one site. */
-const COMPANION_SUFFIXES = ['mp3', 'segments.json', 'peaks.json'] as const;
+/** Suffixes of the companion files per chapter audio. Kept in one
+    array so add-a-new-companion changes touch one site. The last three are the
+    render-integrity speaker-QA sidecars (embeddings, verdicts, attempted
+    sentinel): left behind under the old slug, a renamed chapter silently loses
+    its scoring and a new chapter at a reused slug would inherit them. */
+const COMPANION_SUFFIXES = [
+  'mp3',
+  'segments.json',
+  'peaks.json',
+  'embeddings.json',
+  'render-integrity.json',
+  'render-integrity-attempted.json',
+] as const;
 type CompanionSuffix = (typeof COMPANION_SUFFIXES)[number];
 
 export type ChapterAudioOp =
