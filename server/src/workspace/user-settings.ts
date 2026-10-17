@@ -1118,9 +1118,30 @@ async function performUserSettingsRead(): Promise<UserSettings> {
     to: USER_SETTINGS_PATH,
     overridden: SETTINGS_PATH_OVERRIDDEN,
   });
+  /* An absent main with a `.bak.N` beside it is NOT a first run: it is a sibling
+     server's rotating write between its two renames (or a stranded file). Only
+     main AND every backup absent means "no file". With a warm cache, keep it and
+     stay unverified (writers refuse) — swapping factory defaults in would re-enable
+     allowCloudFallback. Cold, recover from the newest parseable backup. */
+  const mainAbsentWithBackup =
+    !existsSync(USER_SETTINGS_PATH) &&
+    Array.from({ length: USER_SETTINGS_BACKUP_KEEP }, (_, i) => `${USER_SETTINGS_PATH}.bak.${i + 1}`).some(
+      (p) => existsSync(p),
+    );
+  if (mainAbsentWithBackup && cached) {
+    console.warn(
+      `[user-settings] ${USER_SETTINGS_PATH} is absent but a backup exists (a sibling's write in flight?); ` +
+        'keeping the last-known settings and retrying on the next read.',
+    );
+    readUnverified = true;
+    return cached;
+  }
   let raw: unknown;
   try {
-    raw = await readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, { keep: USER_SETTINGS_BACKUP_KEEP });
+    raw = await readJsonWithRecovery<unknown>(USER_SETTINGS_PATH, {
+      keep: USER_SETTINGS_BACKUP_KEEP,
+      recoverMissing: mainAbsentWithBackup,
+    });
   } catch (err) {
     if (!(err instanceof SyntaxError)) {
       /* #3625 review — a read error that is NOT a parse failure (EBUSY / EPERM /
@@ -1160,6 +1181,16 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       explicitKeys: new Set(),
       corrupt: true,
       stamp: statFileStamp(),
+    });
+  }
+  if (!raw && mainAbsentWithBackup) {
+    /* Main absent and no backup parses: the same total loss as a corrupt main. */
+    console.warn(`[user-settings] ${USER_SETTINGS_PATH} is absent and its backups are unreadable; using in-memory defaults.`);
+    return commitRead({
+      settings: { ...DEFAULT_USER_SETTINGS },
+      explicitKeys: new Set(),
+      corrupt: true,
+      stamp: null,
     });
   }
   if (!raw) {

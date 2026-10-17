@@ -3,7 +3,7 @@
    and legacy-file back-compat. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync, renameSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 
@@ -1742,6 +1742,7 @@ describe('readUserSettings — a transient read error is never corruption (#3625
   };
   let mod: typeof import('./user-settings.js');
   const seedHealthy = () => {
+    for (const n of [1, 2, 3]) rmSync(`${mod.USER_SETTINGS_PATH}.bak.${n}`, { force: true });
     const healthy = JSON.stringify({
       ...DEFAULT_USER_SETTINGS,
       displayName: 'Mine',
@@ -1811,11 +1812,44 @@ describe('readUserSettings — a transient read error is never corruption (#3625
     diskRead.spy.mockImplementationOnce(ebusy);
     await mod.readUserSettings(); // hiccup: warm cache kept, readUnverified set
     expect(mod.isUserSettingsFileUnreadable()).toBe(true);
-    for (const p of [mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`]) rmSync(p, { force: true });
+    for (const p of [mod.USER_SETTINGS_PATH, ...[1, 2, 3].map((n) => `${mod.USER_SETTINGS_PATH}.bak.${n}`)]) {
+      rmSync(p, { force: true }); // first run: main AND every backup absent
+    }
 
     await mod.readUserSettings();
     expect(mod.isUserSettingsFileUnreadable()).toBe(false);
     await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).resolves.not.toThrow();
+  });
+
+  /* #3625 delta review (3): the same absent main, but a `.bak.N` still exists —
+     a sibling server's rotating write is between its two renames. That is NOT a
+     first run: serving factory defaults would re-enable allowCloudFallback and
+     let a writer persist them. Keep the warm cache and keep refusing writes. */
+  it('a read during a sibling rotation gap (main absent, a backup present) keeps the warm cache and refuses writers', async () => {
+    seedHealthy();
+    await mod.readUserSettings(); // warm
+    writeFileSync(
+      mod.USER_SETTINGS_PATH,
+      JSON.stringify({ ...DEFAULT_USER_SETTINGS, displayName: 'Mine2', allowCloudFallback: false }),
+    );
+    diskRead.spy.mockImplementationOnce(ebusy);
+    await mod.readUserSettings(); // hiccup: warm cache kept, readUnverified set
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.1`); // the gap
+
+    const during = await mod.readUserSettings();
+    expect(during.displayName).toBe('Mine');
+    expect(mod.getResolvedAllowCloudFallback()).toBe(false);
+    expect(mod.isUserSettingsFileUnreadable()).toBe(true);
+    await expect(mod.writeUpgradeMeta({ showWhatsNew: false })).rejects.toThrow();
+    expect(existsSync(mod.USER_SETTINGS_PATH)).toBe(false);
+  });
+
+  it('a cold boot with main absent and a good backup recovers from the backup, not defaults', async () => {
+    seedHealthy();
+    renameSync(mod.USER_SETTINGS_PATH, `${mod.USER_SETTINGS_PATH}.bak.2`);
+    const s = await mod.readUserSettings();
+    expect(s.displayName).toBe('Mine');
+    expect(mod.getResolvedAllowCloudFallback()).toBe(false);
   });
 
   /* #3625 pass 4 (4b): a persistent error shows defaults with no explanation, so
