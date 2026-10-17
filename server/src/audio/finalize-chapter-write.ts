@@ -529,8 +529,13 @@ export async function finalizeChapterAudioWrite(
     for (const [id, snapshot] of Object.entries(characterSnapshots)) {
       const prior = priorSnapshotsByCanonicalId.get(id);
       if (prior?.renderedAt) snapshot.renderedAt = prior.renderedAt;
-      if (prior?.renderedEngine) snapshot.renderedEngine = prior.renderedEngine;
-      if (prior?.renderedModelKey) snapshot.renderedModelKey = prior.renderedModelKey;
+      /* A pre-upgrade snapshot has no frozen fields: its own `voiceEngine` / `modelKey` is the
+         best record of what it rendered under, so seed the freeze from it (a repair never moves
+         the reference). Still no `renderedAt` — it keeps sorting oldest. */
+      const frozenEngine = prior?.renderedEngine ?? prior?.voiceEngine;
+      const frozenModelKey = prior?.renderedModelKey ?? prior?.modelKey;
+      if (frozenEngine) snapshot.renderedEngine = frozenEngine;
+      if (frozenModelKey) snapshot.renderedModelKey = frozenModelKey;
     }
   }
 

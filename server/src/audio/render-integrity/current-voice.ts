@@ -6,7 +6,7 @@
  * request re-records in; `scoreBook` resolves "the engine actually rendered" — the
  * character's own `ttsEngine`, else the scoring run's model key (only for a character that
  * run rendered lines for), else the engine frozen with the stamp of its most recently
- * FULLY rendered lines (a repair of a line, in any chapter, never moves that; what Resume scoring uses, and what every
+ * FULLY rendered lines (a repair of a line, in any chapter, never moves that, and a pre-upgrade snapshot's own engine seeds the freeze on its first repair; what Resume scoring uses, and what every
  * character the run did not render keeps). They agree whenever the
  * book was last rendered on the engine the repair request names, and may differ otherwise
  * (a default switched after the last render): qa-repair then gates against the voice it is

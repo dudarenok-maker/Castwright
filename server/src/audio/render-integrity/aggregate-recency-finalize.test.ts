@@ -117,7 +117,18 @@ async function renderBothChapters() {
   });
 }
 
-/** Re-record ONLY side's line in ch1 (qa-repair / Fix audio on another character). */
+/** Make a chapter look pre-upgrade: no recency / frozen engine / frozen model key on any snapshot. */
+function stripFrozenFields(slug: string) {
+  const f = readSegs(slug);
+  for (const s of Object.values(f.characterSnapshots) as Record<string, unknown>[]) {
+    delete s.renderedAt;
+    delete s.renderedEngine;
+    delete s.renderedModelKey;
+  }
+  writeFileSync(join(bookDir, 'audio', `${slug}.segments.json`), JSON.stringify(f));
+}
+
+/** Re-record ONLY side's line in ch1(qa-repair / Fix audio on another character). */
 async function rerecordSideInCh1() {
   await wait(30);
   const back = readSegs('ch1');
@@ -230,5 +241,30 @@ describe('scoreBook after a real finalize — a side-only rewrite of an OLDER ch
     expect(hero.inBookVoiceName).toBe('qwen-hq');
     expect(ch2.find((r) => r.sentenceIds[0] === 112)!.verdict).toBe('voice-mismatch');
     expect(ch2.filter((r) => r.verdict === 'inconclusive').length).toBeLessThanOrEqual(control.filter((r) => r[1] === 'inconclusive').length + 1);
+  });
+
+  it("a PRE-UPGRADE book (no frozen fields anywhere): a Fix on Coqui in hero's newest chapter still does not move her reference (L: the prior voiceEngine/modelKey seed the freeze)", async () => {
+    await renderBothChapters();
+    stripFrozenFields('ch1');
+    stripFrozenFields('ch2');
+    const control = await resume();
+    expect(control.hero.inBookVoiceName).toBe('qwen-hq');
+    expect(control.ch2.find((r) => r.sentenceIds[0] === 112)!.verdict).toBe('voice-mismatch');
+    await wait(30);
+    const back = readSegs('ch2');
+    back.segments[0] = { ...back.segments[0], voiceName: 'Ana Florence' };
+    await finalizeChapterAudioWrite({
+      bookId, bookDir, chapter: { id: 2, slug: 'ch2', title: 'C2' }, pcm: tone(1.3), sampleRate: SR, durationSec: 1.3,
+      segments: back.segments, cast: [HERO, SIDE] as never, castIdHistory: hist, defaultEngine: 'coqui', modelKey: 'coqui-xtts-v2',
+      audioFormat: 'mp3', resynthesizedIndices: [0],
+      reembeddedRows: [{ characterId: 'hero', sentenceIds: [100], vec: vec(0, 1) }],
+    });
+    const snap = readSegs('ch2').characterSnapshots.hero;
+    expect(snap.renderedEngine).toBe('qwen'); // seeded from the prior voiceEngine
+    expect(snap.renderedModelKey).toBe('qwen3-tts-0.6b');
+    expect(snap.renderedAt).toBeUndefined(); // and still sorts oldest
+    const { hero, ch2 } = await resume();
+    expect(hero.inBookVoiceName).toBe('qwen-hq');
+    expect(ch2.find((r) => r.sentenceIds[0] === 112)!.verdict).toBe('voice-mismatch');
   });
 });
