@@ -2,12 +2,18 @@
    book-state PUT (#3400). A leaf module: imports nothing, so any route can
    take it without closing an import cycle.
 
-   Lock order: this is the OUTERMOST per-book lock. Restructure takes the
-   per-book `revisions` lock (a leaf) beneath it; the state PUT takes it only
-   around its `state` / `manuscript` slices, which take no other lock. Never
-   acquire it while holding `cast`, `design`, `library-voice` or `revisions`,
-   and never call a function that takes it from inside `fn` from a DIFFERENT
-   async context — but see "held-lock awareness" below.
+   Lock order (global): `design` -> `library-voice` -> `cast` -> `book` ->
+   `revisions` (a leaf). This is the INNERMOST lock before the revisions leaf:
+   it is taken while holding `cast` (the cast merge's manuscript-edits.json
+   rewrite, and the scan heal reached from a cast-lock holder) and NEVER the
+   other way round — no holder of this lock may take `cast`, `design` or
+   `library-voice` (the chapter restructure, the state PUT's `state` /
+   `manuscript` slices and every `book-state-update.ts` writer take nothing
+   but `revisions` beneath it). Never acquire it while holding `revisions`, and
+   never call a function that takes it from inside `fn` from a DIFFERENT async
+   context — but see "held-lock awareness" below.
+   Every `state.json` read-modify-write goes through it (`book-state-update.ts`,
+   enforced by `state-lock.guard.test.ts`).
 
    Held-lock awareness (scan self-heal): the workspace scan's self-heal writes
    (`backfillAudioModelKeysFromSegments`, the uuid mint) take this lock too, and

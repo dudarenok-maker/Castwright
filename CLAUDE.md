@@ -586,7 +586,13 @@ Design rationale:
   class while holding a later one, or two requests deadlock. The per-book
   `revisions` lock (`workspace/revisions-store.ts`, plan 285) is a **leaf**
   outside that order: nothing but revisions.json is written under it and no
-  other lock is taken while it is held. Accept/reject and `restore-unrecorded`
+  other lock is taken while it is held. The per-book `book` lock
+  (`workspace/book-lock.ts`, #3400) sits between them — the full order is
+  **`design` → `library-voice` → `cast` → `book` → `revisions`**: it may be taken
+  while holding `cast` (the cast merge's `manuscript-edits.json` rewrite), but no
+  holder of it may take `cast`, `design` or `library-voice`; every `state.json`
+  read-modify-write goes through it (`workspace/book-state-update.ts`, enforced
+  by `workspace/state-lock.guard.test.ts`). Accept/reject and `restore-unrecorded`
   additionally serialise per chapter on a
   `revision-op:<bookDir>:<chapterId>` key held across the whole audio step;
   its order is **`revision-op` → `revisions`** — never take `revision-op`
