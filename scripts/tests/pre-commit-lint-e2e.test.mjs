@@ -50,11 +50,12 @@
 
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { BUDGET_MS } from '../hooks/pre-commit-lint.mjs';
+import { boundedSpawn, createHangBreaker } from '../lib/bounded-spawn.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..');
@@ -80,19 +81,29 @@ after(() => {
   rmSync(scratchDir, { recursive: true, force: true });
 });
 
+/** Hard bound on one harness git call. These are plumbing calls (hash-object,
+ *  update-index, diff --cached) that finish in well under a second on a healthy
+ *  box; 60s is two orders of magnitude of headroom. A blocking `spawnSync` here
+ *  would freeze the event loop, so neither this bound nor node:test's timeout
+ *  could fire — the silent stall #3699 recorded (the stalled job's orphan
+ *  cleanup killed one `git` and one `node`). */
+const GIT_SPAWN_TIMEOUT_MS = 60_000;
+
 /** Run git in the repo with every repository-discovery var stripped, so an
- *  ambient `GIT_DIR`/`GIT_WORK_TREE` can't redirect these calls. */
-function git(args, { indexFile, input } = {}) {
+ *  ambient `GIT_DIR`/`GIT_WORK_TREE` can't redirect these calls. `label` names
+ *  the test case in the failure if git hangs. */
+async function git(label, args, { indexFile, input } = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) {
     if (/^GIT_(DIR|WORK_TREE|OBJECT_DIRECTORY|COMMON_DIR|INDEX_FILE)$/i.test(key)) delete env[key];
   }
   if (indexFile) env.GIT_INDEX_FILE = indexFile;
-  const r = spawnSync('git', args, {
-    cwd: repoRoot, encoding: 'utf8', windowsHide: true, env, input,
-  });
-  if (r.error) throw r.error;
-  if (r.status !== 0) throw new Error(`git ${args.join(' ')} exited ${r.status}\n${r.stderr}`);
+  const r = await hangBreaker.run(`${label}: git ${args[0]}`, () => boundedSpawn(
+    `${label}: git ${args[0]}`, 'git', args,
+    { cwd: repoRoot, env, input, timeoutMs: GIT_SPAWN_TIMEOUT_MS },
+  ));
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')} exited ${r.status}
+${r.stderr}`);
   return r.stdout.trim();
 }
 
@@ -101,11 +112,11 @@ let indexCounter = 0;
 /** Build a throwaway index containing exactly `entries` ([repoPath, content]).
  *  The blob is written to the object store (unreferenced, collectable); the
  *  real index and the working tree are untouched. */
-function scratchIndexWith(entries) {
+async function scratchIndexWith(label, entries) {
   const indexFile = join(scratchDir, `index-${indexCounter++}`);
   for (const [repoPath, content] of entries) {
-    const blob = git(['hash-object', '-w', '--stdin'], { input: content });
-    git(['update-index', '--add', '--cacheinfo', `100644,${blob},${repoPath}`], { indexFile });
+    const blob = await git(label, ['hash-object', '-w', '--stdin'], { input: content });
+    await git(label, ['update-index', '--add', '--cacheinfo', `100644,${blob},${repoPath}`], { indexFile });
   }
   return indexFile;
 }
@@ -139,30 +150,39 @@ writeFileSync(
   "if (String(process.argv[1] || '').includes('eslint')) { process.exit(99); }\n",
 );
 
+/** Hard bound on one hook spawn. Must exceed the hook's OWN per-batch budget
+ *  (BUDGET_MS) with room for its git call and node startup — otherwise this
+ *  harness kills the hook before its budget path can run and the tolerance
+ *  below is untested. The hook caps its eslint child at BUDGET_MS (a cold
+ *  single-file run has been measured at ~77s), so a hook still alive 60s past
+ *  that is hung, not slow. A healthy macOS CI run did all 7 spawns in ~11s
+ *  (#3699). */
+const HOOK_SPAWN_TIMEOUT_MS = BUDGET_MS + 60_000;
+
+/** node:test's own per-test ceiling: above the spawn bound so a hang surfaces
+ *  as the NAMED spawn failure, not an anonymous test timeout. */
+const TEST_TIMEOUT_MS = HOOK_SPAWN_TIMEOUT_MS + 30_000;
+
+/** Once one spawn (hook OR harness git) has hung, the rest are refused instead
+ *  of each burning its own full bound — one hang costs one bound, not seven
+ *  (#3699: 7 x 300s silently outran the 20-min job cap). */
+const hangBreaker = createHangBreaker();
+
 /** Spawn the hook exactly as `.husky/pre-commit` does, but pointed at a
- *  scratch index. `detectEslintSpawn` additionally injects the preload above. */
-function runHook(indexFile, { detectEslintSpawn = false } = {}) {
+ *  scratch index. `detectEslintSpawn` additionally injects the preload above.
+ *  `label` names the case in the failure if the hook hangs. The harness reads
+ *  the child's output itself (no `maxBuffer`), which also covers the >1 MB-of-
+ *  findings case below printing >1 MB of reason to stderr. */
+async function runHook(label, indexFile, { detectEslintSpawn = false } = {}) {
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };
   if (detectEslintSpawn) {
     env.NODE_OPTIONS = `${process.env.NODE_OPTIONS ?? ''} --require="${spawnDetector.replace(/\\/g, '/')}"`.trim();
   }
-  const r = spawnSync(process.execPath, [HOOK], {
+  return hangBreaker.run(label, () => boundedSpawn(label, process.execPath, [HOOK], {
     cwd: repoRoot,
-    encoding: 'utf8',
-    windowsHide: true,
-    // Must exceed the hook's OWN per-batch budget (BUDGET_MS, 120s) with room
-    // for its git call and node startup — otherwise this harness kills the
-    // hook before its budget path can run and the tolerance below is untested.
-    timeout: 300_000,
-    // The HARNESS needs its own ceiling for the same reason the hook does: the
-    // >1 MB-of-findings case below makes the hook print >1 MB of reason to
-    // stderr, and at `spawnSync`'s 1 MB default this call ENOBUFS-es before any
-    // assertion runs. (Observed the first time that test was written.)
-    maxBuffer: 64 * 1024 * 1024,
+    timeoutMs: HOOK_SPAWN_TIMEOUT_MS,
     env,
-  });
-  if (r.error) throw r.error;
-  return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  }));
 }
 
 const SPAWNED_MARKER = /did not produce valid JSON output/;
@@ -215,8 +235,8 @@ function assertQuietStderr(stderr) {
 
 /** The scratch-index machinery is itself an instrument, so prove it reports
  *  what we think before trusting any verdict built on it. */
-function assertStagedSetIs(indexFile, expected) {
-  const out = git(['diff', '--cached', '--name-only', '--diff-filter=ACMR'], { indexFile });
+async function assertStagedSetIs(label, indexFile, expected) {
+  const out = await git(label, ['diff', '--cached', '--name-only', '--diff-filter=ACMR'], { indexFile });
   assert.deepEqual(out.split(/\r?\n/).filter(Boolean), expected);
 }
 
@@ -224,12 +244,12 @@ function assertStagedSetIs(indexFile, expected) {
 
 // Pairs with `--format json`: without it eslint's stylish text fails
 // JSON.parse and the hook returns blocked:false, so this must be exit 1.
-test('e2e: a staged file with real lint errors blocks the commit (exit 1)', () => {
+test('e2e: a staged file with real lint errors blocks the commit (exit 1)', { timeout: TEST_TIMEOUT_MS }, async () => {
   const dirty = 'const unusedVariable = 1;\n\nsomeUndefinedGlobalThing();\n';
-  const index = scratchIndexWith([fixture('dirty.mjs', dirty)]);
-  assertStagedSetIs(index, [`${fixtureDirName}/dirty.mjs`]);
+  const index = await scratchIndexWith('real lint errors block', [fixture('dirty.mjs', dirty)]);
+  await assertStagedSetIs('real lint errors block', index, [`${fixtureDirName}/dirty.mjs`]);
 
-  const result = runHook(index);
+  const result = await runHook('real lint errors block', index);
   if (!assertVerdict(result, 1, 'expected the hook to block')) return;
   assert.match(result.stderr, /dirty\.mjs/);
   assert.match(result.stderr, /is not defined/);
@@ -237,12 +257,12 @@ test('e2e: a staged file with real lint errors blocks the commit (exit 1)', () =
 
 // Pairs with `--max-warnings 0`: this file's only finding is severity 1, so
 // without that flag eslint exits 0 and the commit sails through.
-test('e2e: a staged file whose only findings are WARNINGS still blocks (exit 1) — --max-warnings 0', () => {
+test('e2e: a staged file whose only findings are WARNINGS still blocks (exit 1) — --max-warnings 0', { timeout: TEST_TIMEOUT_MS }, async () => {
   const warnOnly = 'const unusedVariable = 1;\n';
-  const index = scratchIndexWith([fixture('warn-only.mjs', warnOnly)]);
-  assertStagedSetIs(index, [`${fixtureDirName}/warn-only.mjs`]);
+  const index = await scratchIndexWith('warnings-only file blocks', [fixture('warn-only.mjs', warnOnly)]);
+  await assertStagedSetIs('warnings-only file blocks', index, [`${fixtureDirName}/warn-only.mjs`]);
 
-  const result = runHook(index);
+  const result = await runHook('warnings-only file blocks', index);
   if (!assertVerdict(result, 1, 'expected a warnings-only file to block')) return;
   assert.match(result.stderr, /warn-only\.mjs/);
   assert.doesNotMatch(result.stderr, /is not defined/, 'fixture must carry NO error-severity finding');
@@ -250,11 +270,11 @@ test('e2e: a staged file whose only findings are WARNINGS still blocks (exit 1) 
 
 // The healthy path. Also the control for the two tests above: it proves a
 // non-zero exit there came from findings, not from the harness.
-test('e2e: a clean staged JS file passes (exit 0, no output)', () => {
-  const index = scratchIndexWith([fixture('clean.mjs', 'export const ok = 1;\n')]);
-  assertStagedSetIs(index, [`${fixtureDirName}/clean.mjs`]);
+test('e2e: a clean staged JS file passes (exit 0, no output)', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const index = await scratchIndexWith('clean file passes', [fixture('clean.mjs', 'export const ok = 1;\n')]);
+  await assertStagedSetIs('clean file passes', index, [`${fixtureDirName}/clean.mjs`]);
 
-  const { status, stdout, stderr } = runHook(index);
+  const { status, stdout, stderr } = await runHook('clean file passes', index);
   assert.equal(status, 0, `expected a clean file to pass; stderr was:\n${stderr}`);
   assertQuietStderr(stderr);
   assert.equal(stdout, '');
@@ -264,14 +284,16 @@ test('e2e: a clean staged JS file passes (exit 0, no output)', () => {
 // under `--no-warn-ignored` ALSO exits 0 silently — so the no-spawn half is
 // asserted with the preload detector, and the control below proves that
 // detector can actually fire.
-test('e2e: staging only non-JS/TS files exits 0 without ever spawning eslint', () => {
-  const index = scratchIndexWith([
+test('e2e: staging only non-JS/TS files exits 0 without ever spawning eslint', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const index = await scratchIndexWith('non-lintable set never spawns eslint', [
     fixture('notes.md', '# notes\n'),
     fixture('data.json', '{"a":1}\n'),
   ]);
-  assertStagedSetIs(index, [`${fixtureDirName}/data.json`, `${fixtureDirName}/notes.md`]);
+  await assertStagedSetIs('non-lintable set never spawns eslint', index, [`${fixtureDirName}/data.json`, `${fixtureDirName}/notes.md`]);
 
-  const { status, stdout, stderr } = runHook(index, { detectEslintSpawn: true });
+  const { status, stdout, stderr } = await runHook('non-lintable set never spawns eslint', index, {
+    detectEslintSpawn: true,
+  });
   assert.equal(status, 0);
   assert.doesNotMatch(
     stderr,
@@ -283,11 +305,11 @@ test('e2e: staging only non-JS/TS files exits 0 without ever spawning eslint', (
 
 // CONTROL for the test above. Without this, `doesNotMatch` would pass just as
 // happily against a detector that never fires under any circumstances.
-test('e2e control: the spawn detector DOES fire when eslint really is spawned', () => {
-  const index = scratchIndexWith([fixture('control-clean.mjs', 'export const ok = 2;\n')]);
-  assertStagedSetIs(index, [`${fixtureDirName}/control-clean.mjs`]);
+test('e2e control: the spawn detector DOES fire when eslint really is spawned', { timeout: TEST_TIMEOUT_MS }, async () => {
+  const index = await scratchIndexWith('spawn detector control', [fixture('control-clean.mjs', 'export const ok = 2;\n')]);
+  await assertStagedSetIs('spawn detector control', index, [`${fixtureDirName}/control-clean.mjs`]);
 
-  const { stderr } = runHook(index, { detectEslintSpawn: true });
+  const { stderr } = await runHook('spawn detector control', index, { detectEslintSpawn: true });
   assert.match(stderr, SPAWNED_MARKER, 'the detector cannot fire — the test above proves nothing');
 });
 
@@ -295,17 +317,17 @@ test('e2e control: the spawn detector DOES fire when eslint really is spawned', 
 // ignored by eslint.config.mjs. Passed to eslint WITHOUT that flag it yields
 // "File ignored because of a matching ignore pattern" as a WARNING, which
 // --max-warnings 0 escalates into a blocked commit. This is pass-1 finding 2.
-test('e2e: an eslint-ignored but tracked staged file passes (exit 0) — --no-warn-ignored', () => {
+test('e2e: an eslint-ignored but tracked staged file passes (exit 0) — --no-warn-ignored', { timeout: TEST_TIMEOUT_MS }, async () => {
   assert.ok(
     existsSync(join(repoRoot, ESLINT_IGNORED_TRACKED_FILE)),
     `${ESLINT_IGNORED_TRACKED_FILE} must exist for this test to mean anything`,
   );
   // Staged content must DIFFER from HEAD, or the file shows as unmodified and
   // never reaches the staged set at all — a test that could not fail.
-  const index = scratchIndexWith([[ESLINT_IGNORED_TRACKED_FILE, '// scratch modification\n']]);
-  assertStagedSetIs(index, [ESLINT_IGNORED_TRACKED_FILE]);
+  const index = await scratchIndexWith('eslint-ignored tracked file passes', [[ESLINT_IGNORED_TRACKED_FILE, '// scratch modification\n']]);
+  await assertStagedSetIs('eslint-ignored tracked file passes', index, [ESLINT_IGNORED_TRACKED_FILE]);
 
-  const { status, stdout, stderr } = runHook(index);
+  const { status, stdout, stderr } = await runHook('eslint-ignored tracked file passes', index);
   assert.equal(status, 0, `an eslint-ignored file must not block; stderr was:\n${stderr}`);
   assertQuietStderr(stderr);
   assert.equal(stdout, '');
@@ -318,14 +340,14 @@ test('e2e: an eslint-ignored but tracked staged file passes (exit 0) — --no-wa
 // ceiling this commit sailed through UNLINTED — silently, and exactly when the
 // staged file carried the most findings. Verified RED by deleting `maxBuffer`
 // from `eslintSpawnOptions` (see the mutation log below).
-test('e2e: a staged file with MORE THAN 1 MB of findings still blocks — maxBuffer', () => {
+test('e2e: a staged file with MORE THAN 1 MB of findings still blocks — maxBuffer', { timeout: TEST_TIMEOUT_MS }, async () => {
   // ~180 bytes of `--format json` per no-undef finding; 12,000 lines is ~2 MB,
   // comfortably over the 1 MB default and far under the explicit 64 MB one.
   const huge = 'someUndefinedGlobalThing();\n'.repeat(12_000);
-  const index = scratchIndexWith([fixture('huge.mjs', huge)]);
-  assertStagedSetIs(index, [`${fixtureDirName}/huge.mjs`]);
+  const index = await scratchIndexWith('>1 MB of findings blocks', [fixture('huge.mjs', huge)]);
+  await assertStagedSetIs('>1 MB of findings blocks', index, [`${fixtureDirName}/huge.mjs`]);
 
-  const result = runHook(index);
+  const result = await runHook('>1 MB of findings blocks', index);
   assert.doesNotMatch(
     result.stderr,
     /output budget/,
