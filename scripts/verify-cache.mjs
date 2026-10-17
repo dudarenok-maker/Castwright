@@ -18,7 +18,13 @@ import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 // taskkill /PID <pid> /T /F wrapper (Windows-only, no-op elsewhere) and
 // runCensus is the classify+kill sweep. Both are called from the timeout-kill
 // path below — see Part 2's design doc section, "Tree-kill on Windows".
-import { killTree, runCensus } from './reap-stale-batteries.mjs';
+import {
+  killTree,
+  runCensus,
+  collectProcessSnapshot,
+  ownAncestryPids,
+} from './reap-stale-batteries.mjs';
+import { pidIsAlive } from './lib/pid-alive.mjs';
 
 const SCHEMA_VERSION = 1;
 const CACHE_FILENAME = '.verify-cache.json';
@@ -1569,10 +1575,16 @@ let activeStepChild = null;
  *  (killTree, reap-stale-batteries.mjs). POSIX: SIGKILL the whole process
  *  GROUP via a negative pid — requires the child to have been spawned with
  *  `detached: true` (see runOnce below); `child.kill()` alone only reaps the
- *  immediate shell, exactly as this function's callers already document. */
-function killStepChildTree(child) {
-  if (process.platform === 'win32') {
-    killTree(child.pid);
+ *  immediate shell, exactly as this function's callers already document.
+ *  Windows, once Node has seen the child exit (`exitCode`/`signalCode` set):
+ *  no-op. Node released the process handle at that point, so `child.pid` may
+ *  already belong to an unrelated process, and `/T` on a dead pid would reach
+ *  none of the step's orphans anyway (#3695). POSIX keeps the group kill: a
+ *  pgid cannot be reused while any member of the group is alive. */
+function killStepChildTree(child, { windows = process.platform === 'win32', treeKill = killTree } = {}) {
+  if (windows) {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    treeKill(child.pid);
     return;
   }
   try {
@@ -1584,6 +1596,152 @@ function killStepChildTree(child) {
       // Already gone — nothing left to kill.
     }
   }
+}
+
+// Timeout re-sweep (#3695). After a step-timeout kill, if the child's 'close'
+// has not fired within TIMEOUT_RESWEEP_GRACE_MS, re-walk the original tree and
+// taskkill survivors; up to TIMEOUT_RESWEEP_MAX sweeps, then settle without
+// 'close'. 2s: a clean kill closes in milliseconds, so 2s separates "straggler"
+// from "normal" without making a hung step linger. 3 sweeps: the first catches
+// the late-spawn race, the next two cover a survivor that itself spawns again.
+// Worst case past the budget: the pre-kill snapshot runs BEFORE the kill, so it
+// also delays the kill itself (~0.9s local / ~2.5s on CI typically; a wedged WMI
+// makes one collectProcessSnapshot up to ~30.25s: a 15s timeout, one retry, a
+// 250ms gap). Then killTreeFn (up to KILL_TIMEOUT_MS = 15s), the census's own
+// snapshot, 4 graces (8s) and up to TIMEOUT_RESWEEP_MAX re-sweep snapshots (each
+// up to ~30.25s) plus a killTree spawn (up to 15s) per target. Typical is a few
+// seconds; the wedged worst case is minutes, not the grace arithmetic alone.
+export const TIMEOUT_RESWEEP_GRACE_MS = 2000;
+export const TIMEOUT_RESWEEP_MAX = 3;
+// Whether the step root's pid can be trusted comes from Node itself, not from
+// a time window: until Node has processed the root's exit it holds the root's
+// process handle, so the pid cannot be reused and a live row under it IS the
+// root. From the 'exit' event on (`exitedAt`, taken in the listener) the handle
+// is released, so a live holder of that pid is NEVER the root. libuv closes the
+// handle only after the listener has run, so a recycled holder, and anything it
+// spawns, starts no earlier than `exitedAt`; a genuine child of the root was
+// created while the root lived, so before it. The walk therefore follows a
+// root -> child edge after the exit only for a child started strictly before
+// `exitedAt` (a same-ms genuine child is lost: fails closed).
+
+/** The start-ordered walk shared by snapshotTree and resweepTree, so the
+ *  pre-kill closure and the re-sweep's cannot drift apart (#3695). Breadth-first
+ *  from `seeds` over `rows`, following a parent -> child edge only when the
+ *  child started no earlier than the parent (`>=`: `taskkill /T`'s own
+ *  ordering, ties included). An orphan keeps its dead parent's pid as its
+ *  ppid, so without this an unrelated process that merely names a recycled pid
+ *  would be followed. `parentStart(pid)` gives the bound for `pid`'s children
+ *  (null: follow none, so an unknown start fails closed); the root's edges also
+ *  take the `exitedAt` cap above. Returns the reached pids, seeds excluded. */
+function startOrderedDescendants(seeds, rows, { parentStart, rootPid, exitedAt }) {
+  const childrenByPpid = new Map();
+  for (const r of rows) {
+    if (!childrenByPpid.has(r.ppid)) childrenByPpid.set(r.ppid, []);
+    childrenByPpid.get(r.ppid).push(r);
+  }
+  const reached = new Set();
+  const visited = new Set(seeds);
+  const queue = [...seeds];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const min = parentStart(current);
+    if (min == null) continue;
+    const before = current === rootPid ? exitedAt : null;
+    for (const child of childrenByPpid.get(current) ?? []) {
+      if (visited.has(child.pid)) continue;
+      if (child.startedAt == null || child.startedAt < min) continue;
+      if (before != null && child.startedAt >= before) continue;
+      visited.add(child.pid);
+      reached.add(child.pid);
+      queue.push(child.pid);
+    }
+  }
+  return reached;
+}
+
+/** Pre-kill record of `rootPid`'s descendant closure: pid -> { startedAt,
+ *  approx }, so the re-sweep can tell a surviving member from a recycled pid
+ *  and seed its walk from intermediates that die in the kill. Built with the
+ *  same start-ordered walk as the re-sweep. The root's start is its live row's
+ *  only while `exitedAt` is null (see above; the snapshot is synchronous, so
+ *  the 'exit' cannot be processed mid-snapshot); otherwise, or when the
+ *  snapshot fails, it is `spawnedAt` (taken just before spawn, so <= the real
+ *  creation time), a lower bound flagged `approx` that keeps the ordering
+ *  check armed. Best-effort, never throws. */
+function snapshotTree(snapshotFn, rootPid, spawnedAt, exitedAt) {
+  const known = new Map();
+  let rootStart = null;
+  try {
+    const rows = snapshotFn(rootPid);
+    const byPid = new Map(rows.map((r) => [r.pid, r]));
+    const liveRootStart = exitedAt == null ? byPid.get(rootPid)?.startedAt : null;
+    if (liveRootStart != null) rootStart = liveRootStart;
+    const rootBound = rootStart ?? spawnedAt;
+    const reached = startOrderedDescendants([rootPid], rows, {
+      parentStart: (pid) => (pid === rootPid ? rootBound : (byPid.get(pid)?.startedAt ?? null)),
+      rootPid,
+      exitedAt,
+    });
+    for (const pid of reached) known.set(pid, { startedAt: byPid.get(pid).startedAt, approx: false });
+  } catch {
+    // Best-effort — the root alone still seeds the walk.
+  }
+  known.set(rootPid, rootStart != null ? { startedAt: rootStart, approx: false } : { startedAt: spawnedAt, approx: true });
+  return known;
+}
+
+/** One re-sweep: snapshot now, expand the closure from every pre-kill pid
+ *  (a dead intermediate's orphaned children keep their ParentProcessId on
+ *  Windows, so they are found by walking FROM the dead pid), drop pids that
+ *  were recycled to an unrelated process (alive with a different start), never
+ *  touch pid 0 / this process / its ancestors, and taskkill the rest. Returns
+ *  the pids it targeted.
+ *
+ *  The root is a live seed only while `exitedAt` is null, and then its live
+ *  start replaces a `spawnedAt` bound (a failed pre-kill snapshot) since that
+ *  row is provably the root; an exact recorded start must still match. After
+ *  the exit it is a dead seed whose edges `exitedAt` caps. Every target is
+ *  reached through start-ordered edges from a seed the start-ordered pre-kill
+ *  walk recorded, so none can predate the root. */
+function resweepTree({ known, rootPid, snapshotFn, sweepKillFn, exitedAt }) {
+  let rows;
+  try {
+    rows = snapshotFn(rootPid);
+  } catch {
+    return [];
+  }
+  const byPid = new Map(rows.map((r) => [r.pid, r]));
+  const protectedPids = new Set([0, process.pid, ...ownAncestryPids(rows)]);
+  const seeds = [];
+  const closure = new Set();
+  for (const [seed, rec] of known) {
+    const live = seed === rootPid && exitedAt != null ? null : byPid.get(seed);
+    if (live) {
+      const genuine =
+        rec.approx
+          ? live.startedAt != null && live.startedAt >= rec.startedAt
+          : live.startedAt === rec.startedAt;
+      if (!genuine) continue; // alive under the same pid with a different start => recycled
+      closure.add(seed);
+    }
+    seeds.push(seed);
+  }
+  const reached = startOrderedDescendants(seeds, rows, {
+    parentStart: (pid) =>
+      (pid === rootPid && exitedAt != null ? null : byPid.get(pid)?.startedAt) ?? known.get(pid)?.startedAt ?? null,
+    rootPid,
+    exitedAt,
+  });
+  for (const pid of reached) closure.add(pid);
+  const targets = [...closure].filter((pid) => !protectedPids.has(pid));
+  for (const pid of targets) {
+    try {
+      sweepKillFn(pid);
+    } catch {
+      // Best-effort — a kill that throws must not stop the remaining ones.
+    }
+  }
+  return targets;
 }
 
 /** Run one pipeline step (`npm run <npmScript>`) and return
@@ -1607,12 +1765,30 @@ function killStepChildTree(child) {
     different underlying script. */
 export async function runStepProcess(
   npmScript,
-  { cwd, env, retryKey = npmScript, timeoutMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000 },
+  {
+    cwd,
+    env,
+    retryKey = npmScript,
+    timeoutMs = DEFAULT_STEP_TIMEOUT_MIN * 60 * 1000,
+    // Injectable purely so the timeout re-sweep (#3695) is testable without a
+    // real race; nothing in production passes them. `snapshotFn` is called with
+    // the step root's pid so a test can build rows relative to it (the real
+    // collectProcessSnapshot destructures its first arg and ignores a number).
+    killTreeFn = killStepChildTree,
+    snapshotFn = collectProcessSnapshot,
+    sweepKillFn = killTree,
+    censusFn = runCensus,
+    logFn = (m) => process.stderr.write(m),
+    windows = process.platform === 'win32',
+    resweepGraceMs = TIMEOUT_RESWEEP_GRACE_MS,
+    resweepMax = TIMEOUT_RESWEEP_MAX,
+  } = {},
 ) {
   const deadline = Date.now() + timeoutMs;
 
   const runOnce = (capture) =>
     new Promise((settlePromise) => {
+      const spawnedAt = Date.now();
       const child = spawn('npm', ['run', npmScript], {
         cwd,
         shell: true,
@@ -1635,6 +1811,13 @@ export async function runStepProcess(
         ...(capture ? { stdio: ['inherit', 'inherit', 'pipe'] } : { stdio: 'inherit' }),
       });
       activeStepChild = child;
+      // When Node saw the root exit: from then on child.pid may be reused (see
+      // the comment above startOrderedDescendants), so the timeout path stops
+      // trusting it.
+      let exitedAt = null;
+      child.on('exit', () => {
+        exitedAt = Date.now();
+      });
 
       const stderrAcc = capture ? makeTailAccumulator(MAX_STDERR_BUFFER) : null;
       if (capture && child.stderr) {
@@ -1644,18 +1827,57 @@ export async function runStepProcess(
       let settled = false;
       let timedOut = false;
       const remainingMs = Math.max(0, deadline - Date.now());
+      let resweepTimer = null;
       const timer = setTimeout(() => {
         if (settled) return; // the step closed right at the deadline — nothing left to kill or reclassify
         timedOut = true;
-        killStepChildTree(child);
+        // Timeout path only (#3695): record the tree BEFORE the kill. `taskkill
+        // /T` is a one-instant snapshot, and once the root dies a survivor's
+        // chain back to it is cut (its parent pid is a dead process no later
+        // snapshot lists), so a walk from the root pid alone cannot reach it.
+        // The pre-kill closure supplies the intermediate pids to seed the
+        // re-sweep's walk. The normal path never reaches this timer's body.
+        const known = windows ? snapshotTree(snapshotFn, child.pid, spawnedAt, exitedAt) : null;
+        // Windows: once the root has exited its pid may be an unrelated
+        // process's, and `/T` from a dead pid reaches none of its orphans; the
+        // re-sweep walks them from the dead root instead. POSIX: the group kill.
+        if (!(windows && exitedAt != null)) killTreeFn(child);
         try {
           // Provably-orphaned only (dead parent) — mirrors the pre-push
           // reap's own narrow scope; a merely-slow-but-live subtree is not
           // this sweep's job.
-          runCensus({ kill: true, killReasons: ['orphaned-unreachable'] });
+          censusFn({ kill: true, killReasons: ['orphaned-unreachable'] });
         } catch {
           // Best-effort — never let the reaper sweep mask the timeout outcome.
         }
+        // 'close' normally fires within milliseconds of the kill. If it has
+        // not after a grace, a descendant spawned after the kill's snapshot is
+        // still holding the inherited stderr pipe: re-walk and kill it, a
+        // bounded number of times, then settle as a timeout anyway so the
+        // budget is honoured. POSIX has no re-sweep (the process-group SIGKILL
+        // already covers late children), but keeps the final settle bound for a
+        // descendant that escaped the group (setsid) while holding the pipe.
+        const sweepsAllowed = windows ? resweepMax : 0;
+        let lastTargets = [];
+        const step = (k) => {
+          resweepTimer = setTimeout(() => {
+            if (settled) return;
+            if (k >= sweepsAllowed) {
+              const alive = lastTargets.filter((p) => pidIsAlive(p));
+              logFn(
+                `[timeout] ${npmScript}: 'close' not seen after the kill and ${k} re-sweep(s); ` +
+                  `settling as a timeout without it. Surviving pids still holding the step's pipe: ` +
+                  `${alive.length > 0 ? alive.join(', ') : 'none identified'}\n`,
+              );
+              child.stderr?.destroy();
+              finish(1);
+              return;
+            }
+            lastTargets = resweepTree({ known, rootPid: child.pid, snapshotFn, sweepKillFn, exitedAt });
+            step(k + 1);
+          }, resweepGraceMs);
+        };
+        step(0);
       }, remainingMs);
       if (typeof timer.unref === 'function') timer.unref();
 
@@ -1663,6 +1885,7 @@ export async function runStepProcess(
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        clearTimeout(resweepTimer);
         if (activeStepChild === child) activeStepChild = null;
         const stderr = stderrAcc ? stderrAcc.toString() : '';
         if (stderr) process.stderr.write(stderr); // captured stderr isn't echoed live — surface it
