@@ -26,7 +26,7 @@
    they're cheaper to re-derive on loss and not worth the disk-multiplier. */
 
 import { mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
-import { existsSync, readdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
+import { existsSync, readdirSync, openSync, closeSync, unlinkSync, statSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { renameWithRetry } from './atomic-rename.js';
@@ -50,12 +50,53 @@ function writeMarkerPrefix(path: string): string {
  *  there. With `path` absent that is a STRANDED file, as opposed to a deliberate
  *  delete, which leaves no marker. Synchronous so callers can decide after a read. */
 export function hasWriteInFlightMarker(path: string): boolean {
+  return listWriteMarkers(path).length > 0;
+}
+
+/* The marker files for `path`. A missing directory is "none"; any other readdir
+   error is THROWN (#3625 delta review 3, I4): "could not look" must never read
+   as "no write in flight", which is the deliberate-delete answer. */
+function listWriteMarkers(path: string): string[] {
+  const prefix = writeMarkerPrefix(path);
   try {
-    const prefix = writeMarkerPrefix(path);
-    return readdirSync(dirname(path)).some((n) => n.startsWith(prefix));
-  } catch {
-    return false;
+    return readdirSync(dirname(path)).filter((n) => n.startsWith(prefix));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw err;
   }
+}
+
+/** Markers older than this cannot belong to a live write: a rotation is at most
+ *  four `renameWithRetry` calls (~3.6 s each at worst), so 30 s is a wide margin. */
+const STALE_MARKER_MS = 30_000;
+
+/** Markers this process created for writes that are still running. */
+const liveMarkers = new Set<string>();
+
+/** Remove every marker for `path` that cannot belong to a live write - this
+ *  process's own whose write has returned, or anyone's older than
+ *  STALE_MARKER_MS - and report whether any (possibly live) marker remains.
+ *  A marker outliving its write turns every later deliberate delete into a
+ *  recovery (#3625 delta review 3, I2), so writes and stranded reads sweep.
+ *  `remove: false` only reports. Throws like `hasWriteInFlightMarker` when the
+ *  directory cannot be listed. */
+export function sweepDeadWriteMarkers(path: string, remove = true): boolean {
+  const ownPrefix = `${writeMarkerPrefix(path)}${process.pid}-`;
+  let remaining = 0;
+  for (const name of listWriteMarkers(path)) {
+    const full = join(dirname(path), name);
+    let dead = name.startsWith(ownPrefix) && !liveMarkers.has(full);
+    if (!dead) {
+      try {
+        dead = Date.now() - statSync(full).mtimeMs > STALE_MARKER_MS;
+      } catch {
+        continue; // already gone
+      }
+    }
+    if (!dead) remaining += 1;
+    else if (remove) removeMarker(full);
+  }
+  return remaining > 0;
 }
 
 export interface WriteJsonOpts {
@@ -225,11 +266,24 @@ export async function writeJsonAtomic(
     if (opts?.rotate && existsSync(path)) {
       /* Sync create: no `writeFile` seam, no await between marker and rotation. */
       marker = join(dirname(path), `${writeMarkerPrefix(path)}${process.pid}-${seq}`);
+      liveMarkers.add(marker);
       closeSync(openSync(marker, 'w'));
       rotated = await rotateBackups(path, opts.rotate.keep);
     }
     await renameWithRetry(tmp, path);
-    if (marker) removeMarker(marker);
+    if (marker) {
+      liveMarkers.delete(marker);
+      removeMarker(marker);
+    }
+    /* Best-effort: clear markers older writes left (a kept restore-failure
+       marker, a killed process's) now that main is whole again. */
+    if (opts?.rotate) {
+      try {
+        sweepDeadWriteMarkers(path);
+      } catch {
+        /* Could not list the directory: the next write or stranded read retries. */
+      }
+    }
   } catch (e) {
     /* Cleanup the temp file on terminal failure so we don't leak
        .tmp-<pid>-<ts> droppings into the workspace. */
@@ -249,6 +303,7 @@ export async function writeJsonAtomic(
     }
     /* Main is back (or was never moved): the marker has nothing left to prove.
        Main still absent: leave it - it is the evidence of a stranded write. */
+    if (marker) liveMarkers.delete(marker);
     if (marker && existsSync(path)) removeMarker(marker);
     throw e;
   }

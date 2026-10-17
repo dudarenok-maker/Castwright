@@ -342,6 +342,32 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
     expect(JSON.parse(await readFile(`${target}.bak.2`, 'utf8'))).toEqual({ v: 1 });
   });
 
+  /* #3625 delta review 3 (M8): the marker exists to cover the moment main is
+     RENAMED AWAY, so it must already be on disk at that rename, not only at the
+     rename-in. */
+  it('the write-in-flight marker is on disk when main is renamed to .bak.1', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const markerAtRenameAway: boolean[] = [];
+    setRenameImpl(async (src: string, dest: string) => {
+      if (src === target) markerAtRenameAway.push(hasWriteInFlightMarker(target));
+      return actual.rename(src, dest);
+    });
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+    expect(markerAtRenameAway).toEqual([true]);
+  });
+
+  /* M7: a successful write removes its marker (a leftover turns every later
+     deliberate delete into a recovery). */
+  it('a successful rotating write leaves no write-in-flight marker behind', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+    expect((await readdir(workdir)).filter((n) => n.includes('.writing-'))).toEqual([]);
+    expect(hasWriteInFlightMarker(target)).toBe(false);
+  });
+
   it('rotation is opt-in: no { rotate } option means no backup is created', async () => {
     const target = join(workdir, 'state.json');
     /* Cast/manuscript/revisions writers stay on the single-file shape so the

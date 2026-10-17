@@ -14,7 +14,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { existsSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { appendFile, copyFile, mkdir } from 'node:fs/promises';
-import { hasWriteInFlightMarker, readJsonWithRecovery, writeJsonAtomic } from './state-io.js';
+import { hasWriteInFlightMarker, readJsonWithRecovery, sweepDeadWriteMarkers, writeJsonAtomic } from './state-io.js';
 import { isPrivateHostUrl } from './sidecar-url.js';
 import { resolveSidecarPort } from '../tts/sidecar-owner.js';
 import {
@@ -1134,6 +1134,13 @@ function commitRead(generation: number, outcome: ReadOutcome): UserSettings {
   return cached;
 }
 
+function anyBackupExists(): boolean {
+  for (let i = 1; i <= USER_SETTINGS_BACKUP_KEEP; i += 1) {
+    if (existsSync(`${USER_SETTINGS_PATH}.bak.${i}`)) return true;
+  }
+  return false;
+}
+
 /** The disk read proper. Touches no module global until commitRead — every
     `await` in here runs with the previous `cached` still fully in place. */
 async function performUserSettingsRead(): Promise<UserSettings> {
@@ -1163,10 +1170,36 @@ async function performUserSettingsRead(): Promise<UserSettings> {
       if (existsSync(USER_SETTINGS_PATH)) {
         readStamp = statFileStamp();
         raw = await readFromDisk(false); // a rename-in landed after our read
-      } else if (marker) {
+      } else if (marker && anyBackupExists()) {
+        /* A marker with no backup at all cannot be a rotation in its rename
+           window (that always leaves `.bak.1`): it is a dead marker beside a
+           deliberate delete of main AND every backup, so it falls through to
+           the reset below (I2). */
         stranded = true;
         readStamp = null;
         raw = await readFromDisk(true);
+        /* I3: every marker is dead (no live writer can rename-in over us), so
+           write the recovered settings back to main - the recovery happens
+           once - and that write sweeps the dead markers. A live marker is a
+           sibling mid-write: serve the backup, write nothing under it. Main
+           reappearing, or a write of ours completing, while the backup was read
+           means a writer finished: never write the backup over it (I1). */
+        if (
+          raw &&
+          generation === writeGeneration &&
+          !existsSync(USER_SETTINGS_PATH) &&
+          !sweepDeadWriteMarkers(USER_SETTINGS_PATH, false)
+        ) {
+          try {
+            await writeJsonAtomic(USER_SETTINGS_PATH, raw, { rotate: { keep: USER_SETTINGS_BACKUP_KEEP } });
+            readStamp = statFileStamp();
+          } catch (writeErr) {
+            console.warn(
+              `[user-settings] recovered ${USER_SETTINGS_PATH} from its backup but could not write it back ` +
+                `(${(writeErr as Error).message}); the next read recovers again.`,
+            );
+          }
+        }
       }
     }
   } catch (err) {
