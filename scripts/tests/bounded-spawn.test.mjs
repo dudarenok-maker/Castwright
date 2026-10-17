@@ -64,6 +64,9 @@ test('boundedSpawn: a hung child rejects within the bound, names the case, shows
       (err) => {
         assert.match(err.message, /HUNG: "case: the hung one"/);
         assert.match(err.message, new RegExp(`${BOUND_MS}ms`));
+        // Pins killTree's return value: a kill reporting failure reads "did NOT
+        // reach", so a dead return (`&& false`) turns this red.
+        assert.match(err.message, new RegExp(`process ${process.platform === 'win32' ? 'tree' : 'group'} was killed`));
         assert.match(err.message, /before-the-hang/);
         assert.match(err.message, /stderr-before-the-hang/);
         return true;

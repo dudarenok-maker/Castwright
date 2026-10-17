@@ -45,7 +45,9 @@ const BENIGN_STDIN_ERRORS = new Set(['EPIPE', 'EOF', 'ERR_STREAM_DESTROYED']);
  *
  *  Rejects with an Error naming `label`, the bound, and the stdout/stderr
  *  captured so far if the run outlives `timeoutMs`. If the root is still alive
- *  its whole tree has been killed by the time the rejection is observed; if the
+ *  the kill has been attempted by the time the rejection is observed and the
+ *  message reports its outcome — the whole process tree on Windows, only the
+ *  root's process group on POSIX (a `detached` descendant has left it); if the
  *  root already exited but a descendant kept the output pipes open, the message
  *  says so (on Windows the dead root's pid is NOT signalled — it may have been
  *  reused). A spawn error (ENOENT etc.) rejects with that error unchanged.
@@ -92,12 +94,14 @@ export function boundedSpawn(label, command, args, { timeoutMs, input, ...option
       // outcome — not an assumption — is what the message reports.
       const canKill = !rootExited || !isWindows;
       const killed = canKill && killTree(child.pid);
+      const scope = isWindows ? 'tree' : 'group';
       const what = rootExited
         ? 'the root exited, but its output pipes stayed open — a descendant escaped'
           + (killed ? ' (its process group was killed)'
             : canKill ? ' (its process group was already empty — nothing was killed)'
               : ' and could NOT be killed')
-        : 'its process tree was killed';
+        : killed ? `its process ${scope} was killed`
+          : `the kill did NOT reach its process ${scope}`;
       // Release the parent's pipe ends so the host can exit while an escaped
       // descendant still holds the far ends.
       child.stdout.destroy();
