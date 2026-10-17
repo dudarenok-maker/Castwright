@@ -1602,16 +1602,35 @@ bookStateRouter.post(
 
       safeSegment(newFile);
       await writeFile(join(bookDir, newFile), req.file.buffer);
+
+      /* #3400 pass 8 -- applyReparse records `manuscriptFile` in its LAST step,
+         after the cast / audio / revisions work, so the old file must outlive
+         that step: deleting it up front left state.json naming a file that was
+         gone whenever an arm in between rejected. It is unlinked only once the
+         record names the new one; on a failure the new file is removed again
+         unless the record already names it (a failure after the record landed). */
+      let payload: Awaited<ReturnType<typeof applyReparse>>;
+      try {
+        payload = await applyReparse(bookDir, state, parsed, {
+          changeLogType: 'replace-manuscript',
+          changeLogTitle: 'Replaced manuscript',
+          manuscriptFile: newFile,
+        });
+      } catch (applyErr) {
+        if (newFile !== oldFile) {
+          const recorded = await readJson<{ manuscriptFile?: string }>(
+            stateJsonPath(bookDir),
+          ).catch(() => null);
+          if (recorded?.manuscriptFile !== newFile) {
+            await unlink(join(bookDir, newFile)).catch(() => {});
+          }
+        }
+        throw applyErr;
+      }
+      if (!payload) return res.status(404).json({ error: 'Book not found.' });
       if (oldFile && oldFile !== newFile && existsSync(join(bookDir, safeSegment(oldFile)))) {
         await unlink(join(bookDir, oldFile)).catch(() => {});
       }
-
-      const payload = await applyReparse(bookDir, state, parsed, {
-        changeLogType: 'replace-manuscript',
-        changeLogTitle: 'Replaced manuscript',
-        manuscriptFile: newFile,
-      });
-      if (!payload) return res.status(404).json({ error: 'Book not found.' });
       res.json(payload);
     } catch (e) {
       console.error('[book-state] replace-manuscript failed', e);

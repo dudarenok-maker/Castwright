@@ -227,4 +227,36 @@ describe('replace-manuscript handler', () => {
     expect(res.body).toEqual({ error: "Couldn't reset this book's A/B review history." });
     expect(res.text).not.toContain('SECRET-WORKSPACE');
   });
+
+  /* #3400 pass 8 -- the state.json record lands LAST (after the sibling arms),
+     so a rejection between the file swap and that record must not leave
+     state.json naming a manuscript the route already deleted. */
+  it('#3400 -- a sibling-arm failure on a format change leaves state.json naming a file that exists', async () => {
+    seedSiblingSentinels();
+    const { resetRevisions } = await import('../workspace/revisions-store.js');
+    vi.mocked(resetRevisions).mockRejectedValueOnce(Object.assign(new Error('EBUSY'), { code: 'EBUSY' }));
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.txt');
+    await awaitSiblingArms();
+    err.mockRestore();
+    expect(res.status).toBe(500);
+    const state = JSON.parse(readFileSync(join(bookDir, '.audiobook', 'state.json'), 'utf8'));
+    expect(existsSync(join(bookDir, state.manuscriptFile))).toBe(true);
+    /* and the book still reparses (a restart evicts the record) */
+    const { removeManuscript } = await import('../store/manuscripts.js');
+    removeManuscript(MANUSCRIPT_ID);
+    const rp = await request(app).post(`/api/books/${bookId}/reparse`);
+    expect(rp.status).toBe(200);
+  });
+
+  it('#3400 -- a successful format change still removes the old file', async () => {
+    const res = await request(app)
+      .post(`/api/books/${bookId}/replace-manuscript`)
+      .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.txt');
+    expect(res.status).toBe(200);
+    expect(existsSync(join(bookDir, 'manuscript.md'))).toBe(false);
+    expect(existsSync(join(bookDir, 'manuscript.txt'))).toBe(true);
+  });
 });
