@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, cpSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, cpSync, mkdirSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -81,6 +81,26 @@ describe('samples router', () => {
     expect(a.status).toBe(200);
     expect(b.status).toBe(200);
     expect(b.body.alreadyLoaded).toBe(true);
+  });
+
+  it('a STRANDED copy (main missing, good .bak.1) is already loaded: edits and manuscriptId survive a re-load (#3625)', async () => {
+    if (!bundleReady()) return;
+    const dir = join(workspaceRoot, 'books', 'Castwright', 'Standalones', 'The Coalfall Commission');
+    const first = await request(app).post(`/api/samples/${SLUG}/load`);
+    expect(first.status).toBe(200);
+    const statePath = join(dir, '.audiobook', 'state.json');
+    const castPath = join(dir, '.audiobook', 'cast.json');
+    const manuscriptId = JSON.parse(readFileSync(statePath, 'utf8')).manuscriptId;
+    const cast = JSON.parse(readFileSync(castPath, 'utf8'));
+    cast.userEdited = 'keep me';
+    writeFileSync(castPath, JSON.stringify(cast));
+    renameSync(statePath, `${statePath}.bak.1`); // the crash-gap shape
+    const res = await request(app).post(`/api/samples/${SLUG}/load`);
+    expect(res.status).toBe(200);
+    expect(res.body.alreadyLoaded).toBe(true);
+    expect(JSON.parse(readFileSync(castPath, 'utf8')).userEdited).toBe('keep me');
+    expect(JSON.parse(readFileSync(`${statePath}.bak.1`, 'utf8')).manuscriptId).toBe(manuscriptId);
+    expect(existsSync(statePath)).toBe(false);
   });
 });
 

@@ -21,7 +21,7 @@ import {
   makeBookId,
   stateJsonPath,
 } from '../workspace/paths.js';
-import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
+import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { withStateLock } from '../workspace/state-lock.js';
 import { requestFailureMessage } from '../workspace/file-lock.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -99,7 +99,14 @@ samplesRouter.post('/:slug/load', async (req: Request, res: Response) => {
        and both write (#3625). Only small local copies sit inside the lock. */
     const alreadyLoaded = await withStateLock(bookDir, async () => {
       // Idempotent: already present → no-op (never clobber a user's edited copy).
-      if (existsSync(stateJsonPath(bookDir))) return true;
+      /* "Present" is the recovering reader's verdict, not main's existence: a
+         stranded copy (main missing, a good .bak.N) is present too, and a
+         read that throws (torn, nothing to recover from) is not ours to clobber. */
+      try {
+        if (await readStateJsonWithRecovery(stateJsonPath(bookDir))) return true;
+      } catch {
+        return true;
+      }
 
       await mkdir(dotAudiobook(bookDir), { recursive: true });
 
