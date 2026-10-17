@@ -505,6 +505,12 @@ export async function finalizeChapterAudioWrite(
     modelKey,
     voiceNameByChar,
   );
+  /* #3524 — stamp WHEN each freshly-built entry was rendered. The carry-forward
+     below keeps an untouched character's old entry (and so its old stamp)
+     verbatim, which is the point: render-integrity orders a character's renders
+     by this, never by the file's mtime (any partial write refreshes that). */
+  const renderedAt = new Date().toISOString();
+  for (const snapshot of Object.values(characterSnapshots)) snapshot.renderedAt = renderedAt;
 
   /* #3362 pass-5 fix (🟠E, owner design (i)) — a character that speaks ONLY
      in untouched segments this write (never in the resynthesized set) gets

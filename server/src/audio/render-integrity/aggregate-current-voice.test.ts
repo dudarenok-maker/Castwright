@@ -355,7 +355,7 @@ describe('scoreBook — old-voice lines score inconclusive (#3524)', () => {
 /** Per-line stamped chapter: each line carries its own `voiceName`/`baseVoiceName`
  *  (as a real render stamps them) and the chapter snapshot names `snapshotVoice`. */
 type Line = { sid: number; axis: number; jitter: number; voice: string; fallback?: string | null };
-async function writeChapterLines(dir: string, slug: string, chapterId: number, lines: Line[], snapshotVoice: string, charId = 'thurid', engine = 'qwen', snapModelKey = engine === 'qwen' ? 'qwen3-tts-1.7b' : 'coqui-xtts-v2') {
+async function writeChapterLines(dir: string, slug: string, chapterId: number, lines: Line[], snapshotVoice: string, charId = 'thurid', engine = 'qwen', snapModelKey = engine === 'qwen' ? 'qwen3-tts-1.7b' : 'coqui-xtts-v2', renderedAt?: string) {
   mkdirSync(join(dir, 'audio'), { recursive: true });
   const rows = lines.map((l) => ({ characterId: charId, sentenceIds: [l.sid], vec: vec(l.axis, l.jitter) }));
   await writeEmbeddings(join(dir, 'audio', `${slug}.embeddings.json`), rows, EMBEDDINGS_VERSION);
@@ -372,7 +372,7 @@ async function writeChapterLines(dir: string, slug: string, chapterId: number, l
         baseVoiceName: l.voice,
       })),
       characterSnapshots: {
-        [charId]: { voiceEngine: engine, modelKey: snapModelKey, resolvedVoiceName: snapshotVoice },
+        [charId]: { voiceEngine: engine, modelKey: snapModelKey, resolvedVoiceName: snapshotVoice, ...(renderedAt ? { renderedAt } : {}) },
       },
     }),
   );
@@ -509,7 +509,7 @@ describe('scoreBook — a character with no current-voice line is not pending fo
   });
 });
 
-describe("scoreBook — the current voice's engine is the book's CURRENT default, not the first chapter's (#3524)", () => {
+describe("scoreBook — the current voice's engine is the one the character last rendered on, not the first chapter's (#3524)", () => {
   beforeEach(() => {
     auditionSpy.mockClear();
     audition.axis = 0;
@@ -617,7 +617,8 @@ describe('scoreBook — a non-English book scores against the engine generation 
     writeFileSync(join(dir, '.audiobook', 'state.json'), JSON.stringify({ language: 'ru' }));
     await writeChapterLines(dir, 'ch1', 1, withOutlier('qwen-h'), 'qwen-h');
 
-    await scoreBook(dir, [CHAPTERS[0]]);
+    // A run keyed to Coqui: only the non-English retarget points the engine back at Qwen.
+    await scoreBook(dir, [CHAPTERS[0]], undefined, { runModelKey: 'coqui-xtts-v2' });
 
     const row = (await readCentroids(dir))!['thurid'];
     expect(row.noCurrentVoiceReference).toBeUndefined();
@@ -749,5 +750,47 @@ describe('scoreBook — a transient audition failure keeps a marked character pe
     const rebuilt = (await readCentroids(dir))!['thurid'];
     expect(rebuilt.noCurrentVoiceReference).toBeUndefined();
     expect(rebuilt.referenceKind).toBe('audition');
+  });
+});
+
+/* #3524 pass 3 — "most recent" is a per-character render stamp (`renderedAt`), not a file mtime;
+   the run key applies only to characters the run rendered; the audition tier comes from the
+   snapshot that supplied the stamped engine. */
+const T1 = '2026-01-01T00:00:00.000Z';
+const T2 = '2026-01-02T00:00:00.000Z';
+const BOTH = { overrideTtsVoices: { qwen: { name: 'Thurid voice', libraryUuid: 'hq' }, coqui: { name: 'Ana Florence' } } };
+const coquiLines = (): Line[] => withOutlier('Ana Florence');
+const qwenLines = (): Line[] => withOutlier('qwen-hq').map((l) => ({ ...l, axis: l.axis === 0 ? 3 : l.axis }));
+
+describe("scoreBook — the stamped engine is the character's most recent RENDER, not the newest file (#3524 pass 3 P1)", () => {
+  beforeEach(() => {
+    auditionSpy.mockClear();
+    audition.axis = 0;
+    defaultModelKey.value = 'qwen3-tts-0.6b';
+  });
+
+  it("orders by the per-character renderedAt stamp: ch1's Coqui render is newer than ch2's Qwen one even though ch2 is later in book order and newer on disk", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-recency-stamp-'));
+    writeCastRow(dir, BOTH);
+    await writeChapterLines(dir, 'ch1', 1, coquiLines(), 'Ana Florence', 'thurid', 'coqui', undefined, T2);
+    await writeChapterLines(dir, 'ch2', 2, qwenLines(), 'qwen-hq', 'thurid', 'qwen', undefined, T1);
+
+    await scoreBook(dir, CHAPTERS);
+
+    const row = (await readCentroids(dir))!['thurid'];
+    expect(row.inBookVoiceName).toBe('Ana Florence');
+    const ch1 = await readVerdicts(join(dir, 'audio', 'ch1.render-integrity.json'));
+    expect(ch1!.find((r) => r.sentenceIds[0] === 99)!.verdict).toBe('voice-mismatch');
+  });
+
+  it('a legacy snapshot with no stamp falls back to book order (the later chapter wins)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'spk-recency-legacy-'));
+    writeCastRow(dir, BOTH);
+    await writeChapterLines(dir, 'ch1', 1, coquiLines(), 'Ana Florence', 'thurid', 'coqui');
+    await writeChapterLines(dir, 'ch2', 2, qwenLines(), 'qwen-hq', 'thurid', 'qwen');
+
+    await scoreBook(dir, CHAPTERS);
+
+    expect((await readCentroids(dir))!['thurid'].inBookVoiceName).toBe('qwen-hq');
   });
 });

@@ -26,7 +26,7 @@
  */
 
 import { join } from 'node:path';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { audioDir, castJsonPath, stateJsonPath } from '../../workspace/paths.js';
 import { readJson } from '../../workspace/state-io.js';
 import { bookStateLanguage, type BookStateJson } from '../../workspace/scan.js';
@@ -103,6 +103,8 @@ interface SegmentsFileView {
     resolvedVoiceName?: string;
     voiceId?: string;
     attributes?: string[];
+    /** ISO time this character was last freshly rendered (see CharacterSnapshot.renderedAt). */
+    renderedAt?: string;
   }>;
 }
 
@@ -565,6 +567,8 @@ export async function scoreBook(
     attributes?: string[];
     /** Per-character render tier — the audition renders under this. */
     modelKey?: TtsModelKey;
+    /** ISO time of this character's last fresh render (absent on legacy snapshots). */
+    renderedAt?: string;
   };
 
   type ChapterData = {
@@ -576,8 +580,6 @@ export async function scoreBook(
     /** Render tier this chapter's audio was synthesised under (segments.json
      *  `modelKey`), used to render the Option-B audition on the SAME tier. */
     modelKey?: TtsModelKey;
-    /** segments.json mtime — orders chapters by how recently they were rendered. */
-    mtimeMs: number;
   };
 
   const chapterData: ChapterData[] = [];
@@ -645,7 +647,6 @@ export async function scoreBook(
       segsByKey,
       snapshots: segFile.characterSnapshots ?? {},
       modelKey: segFile.modelKey,
-      mtimeMs: await stat(segPath).then((s) => s.mtimeMs, () => 0),
     });
   }
 
@@ -712,24 +713,32 @@ export async function scoreBook(
   /* #3524 — "the engine actually rendered", the fallback engine for a character with no
      `ttsEngine` of its own: this pass's run model key when scoring follows a render, else
      (Resume scoring) the engine stamped on the character's most recently rendered
-     non-fallback lines (chapters ordered by segments.json mtime, ties by book order — a
-     chapter snapshot's engine is the fresh render's, so it is current for those lines),
-     else, for a character rendered only on a fallback engine, its configured engine.
+     non-fallback lines (a chapter snapshot's engine is the fresh render's, so it is current
+     for those lines). "Most recent" is the snapshot's own per-character `renderedAt` stamp —
+     never the file's mtime, which a qa-repair/Fix-audio/gain-remix of ANOTHER character
+     refreshes while carrying this character's snapshot forward unchanged; a legacy snapshot
+     with no stamp sorts oldest and book order breaks ties (the later chapter wins), else, for
+     a character rendered only on a fallback engine, its configured engine.
      The server's saved default plays no part: a session-picker run, a non-English retarget
      and a remote sidecar's boot-time install state all make it diverge from what rendered. */
   const runEngine: TtsEngine | undefined = opts?.runModelKey ? engineForModelKey(opts.runModelKey) : undefined;
-  const stampedEngineByChar = new Map<string, TtsEngine>();
-  for (const cd of [...chapterData].sort((a, b) => a.mtimeMs - b.mtimeMs)) {
+  const stampedByChar = new Map<string, { engine: TtsEngine; modelKey?: TtsModelKey; renderedAt: string }>();
+  for (const cd of chapterData) {
     for (const row of cd.embRows) {
       const seg = cd.segsByKey.get(segKey(row.characterId, row.sentenceIds));
       if (seg?.renderedFallbackEngine != null && seg.renderedFallbackEngine !== '') continue;
       const id = resolveRowCharId(seg, row.characterId, cd.snapshots);
-      const stamped = id !== undefined ? cd.snapshots[id]?.voiceEngine : undefined;
-      if (id !== undefined && stamped) stampedEngineByChar.set(id, stamped as TtsEngine);
+      const snap = id !== undefined ? cd.snapshots[id] : undefined;
+      if (id === undefined || !snap?.voiceEngine) continue;
+      const renderedAt = snap.renderedAt ?? '';
+      const prior = stampedByChar.get(id);
+      if (!prior || renderedAt >= prior.renderedAt) {
+        stampedByChar.set(id, { engine: snap.voiceEngine as TtsEngine, modelKey: snap.modelKey, renderedAt });
+      }
     }
   }
   const defaultEngineFor = (charId: string): TtsEngine | undefined =>
-    runEngine ?? stampedEngineByChar.get(charId) ?? (configuredEngineByChar.get(charId) as TtsEngine | undefined);
+    runEngine ?? stampedByChar.get(charId)?.engine ?? (configuredEngineByChar.get(charId) as TtsEngine | undefined);
   /* #3524 — the character's CURRENT cast.json voice for a snapshot key: the
      live row through castResolver, then the helper shared with
      chapter-qa-repair.ts (#3449). `undefined` = no current voice known (no live
