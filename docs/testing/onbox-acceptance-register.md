@@ -6106,7 +6106,7 @@ outcome matches what the model does.
 - Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` §6 "Live structured output"
 (items 8–10 added in W3d).
 
-**Extended by PR #NNNN (#3084 W3d — endpoints selectable).** Also run a real chapter in
+**Extended by PR #3710 (#3084 W3d — endpoints selectable).** Also run a real chapter in
 `schema` mode on the llama-swap endpoint (thinking on, then off), on a `gemma-*` and on a
 `gemini-*` model, and record:
 - conformance of each response against the Test record: `enforced` runs must never need the
@@ -6118,7 +6118,7 @@ outcome matches what the model does.
 
 This row gates Gemini's `schema` default.
 
-### A114 · Long silent prefill completes on an endpoint ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #NNNN) · **slower card of a 2-card box, llama-swap with a ≥64k-context model**
+### A114 · Long silent prefill completes on an endpoint ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **slower card of a 2-card box, llama-swap with a ≥64k-context model**
 
 The OpenAI transport starts its idle watchdog only after the first delta and bounds the
 call with the endpoint's request ceiling (default 30 min). Automated tests use a fake
@@ -6131,7 +6131,7 @@ fallback fires before the first token.
   the chapter completes. Record time to first token and total time.
 - Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Long silent prefill".
 
-### A115 · Same-card eviction of an endpoint for a Qwen load ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #NNNN) · **2-card boot (8 GB + 16 GB), llama-swap with a per-model unload URL, Qwen TTS**
+### A115 · Same-card eviction of an endpoint for a Qwen load ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **2-card boot (8 GB + 16 GB), llama-swap with a per-model unload URL, Qwen TTS**
 
 `withCapacityRetry` POSTs the unload URL of every idle endpoint on the denied card (or
 `any`): once per model whose request was sent to the endpoint and not unloaded since, with
@@ -6189,7 +6189,7 @@ is never unloaded under a live run.
   the total time lost, because this is the per-synth-op multiplication the unit bound hides.
 - Criteria: `docs/testing/3084-openai-analyzer-onbox-acceptance.md` § "Same-card eviction".
 
-### A116 · Fallback to a smaller context leaves room to answer ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #NNNN) · **one GPU box: a llama.cpp `llama-server` endpoint with a ≥64k context, and Ollama with `analyzer.ollama.numCtx` ≤ 16k**
+### A116 · Fallback to a smaller context leaves room to answer ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), PR #3710) · **one GPU box: a llama.cpp `llama-server` endpoint with a ≥64k context, and Ollama with `analyzer.ollama.numCtx` ≤ 16k**
 
 After a fallback switch, chunks sized for the primary's larger context reach a smaller one. The
 pre-send guard (Task 3d.4b) measures each body against the target pass's budget, so every prompt
