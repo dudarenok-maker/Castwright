@@ -5376,6 +5376,26 @@ function p4Other(repo, date, msg) {
   assert.equal(r.status, 0, r.stderr);
   return provGit(repo, 'rev-parse', 'HEAD');
 }
+// `count` p4Other-shaped commits (each rewrites other.txt) in ONE
+// `git fast-import` instead of three git spawns apiece (#3701: 100 commits was
+// ~300 spawns, the bulk of the #3529 pass 5 tests' 30-50 s on Windows).
+// Returns their oids oldest first, with the work tree synced to the new tip.
+function p4OtherMany(repo, count, dateOf, msgOf) {
+  const ref = provGit(repo, 'symbolic-ref', 'HEAD');
+  const base = provGit(repo, 'rev-parse', 'HEAD');
+  let stream = '';
+  for (let i = 0; i < count; i++) {
+    const msg = msgOf(i);
+    const when = `${Date.parse(dateOf(i)) / 1000} +0000`;
+    stream += `commit ${ref}\ncommitter Test <test@example.com> ${when}\ndata ${Buffer.byteLength(msg)}\n${msg}\n`;
+    if (i === 0) stream += `from ${base}\n`;
+    stream += `M 100644 inline other.txt\ndata ${Buffer.byteLength(msg)}\n${msg}\n\n`;
+  }
+  const r = spawnSync('git', ['fast-import', '--quiet'], { cwd: repo, input: stream, env: provEnv(), windowsHide: true, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  provGit(repo, 'reset', '-q', '--hard', ref);
+  return provGit(repo, 'rev-list', '--reverse', `${base}..HEAD`).split('\n');
+}
 const p4States = (entries) => ({
   available: true,
   states: new Map(entries.map(([pr, state, commits]) => [pr, { state, mergedAt: state === 'MERGED' ? '2030-01-04T00:00:00Z' : null, commits }])),
@@ -6035,10 +6055,7 @@ test('#3529 pass 4 CLI: a retirement is honoured only for the closed PR whose co
 // through paginated GraphQL.
 function p5BigLane(repo) {
   provGit(repo, 'switch', '-q', '-c', 'fix/server-big');
-  const oids = [];
-  for (let i = 0; i < 100; i++) {
-    oids.push(p4Other(repo, `2030-01-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`, `work ${i}`));
-  }
+  const oids = p4OtherMany(repo, 100, (i) => `2030-01-01T00:${String(Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}Z`, (i) => `work ${i}`);
   oids.push(p4Commit(repo, '2030-01-01T02:00:00Z', 'bbbb0001', [101, 102, 103], 104, 'big lane adds B103 late', { 103: 'X row' }));
   const page = uView('bbbb0001', [101, 102, 103], { 103: 'X row' });
   provGit(repo, 'switch', '-q', 'main');

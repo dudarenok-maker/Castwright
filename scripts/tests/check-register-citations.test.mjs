@@ -33,7 +33,18 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-register-citations.mjs');
 
+// The real-tree run is a pure function of an unchanged checkout (these tests
+// never write a real tracked file; no-inplace-tracked-rewrite pins it), so
+// identical args share one spawn (#3701). Sandbox (mutated) runs are never cached.
+const realRunCache = new Map();
 function runCli(args, cliPath = CLI_PATH) {
+  if (cliPath !== CLI_PATH) return spawnCli(args, cliPath);
+  const key = args.join('\0');
+  if (!realRunCache.has(key)) realRunCache.set(key, spawnCli(args, cliPath));
+  return realRunCache.get(key);
+}
+
+function spawnCli(args, cliPath) {
   // The real CLI scans the real repo (ambient git env honoured); any other
   // cliPath is a scratch-repo copy, where an inherited GIT_INDEX_FILE would be
   // the real index.
