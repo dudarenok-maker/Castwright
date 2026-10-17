@@ -13,6 +13,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { rewriteChapterSlugs } from './rewrite-chapter-slugs.js';
+import { applyMerge } from '../workspace/restructure.js';
+import type { BookStateJson } from '../workspace/scan.js';
 
 let workRoot: string;
 let audioRoot: string;
@@ -194,6 +196,63 @@ describe('rewriteChapterSlugs', () => {
     expect(seg.segments).toEqual([
       { groupIndex: 0, characterId: 'narr', sentenceIds: [1, 2], startSec: 0, endSec: 5 },
     ]);
+  });
+});
+
+describe('rewriteChapterSlugs x applyMerge (#3524 S1)', () => {
+  it('a merge that renumbers app-made titles never deletes the files a rename just moved into the deleted slug', async () => {
+    const titles = [1, 2, 3, 4, 5].map((n) => `Chapter ${n}`);
+    const slugOf = (id: number, title: string) =>
+      `${String(id).padStart(2, '0')}-${title.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
+    const state = {
+      bookId: 'b',
+      manuscriptId: 'm',
+      title: 'T',
+      author: 'A',
+      series: 'Standalones',
+      seriesPosition: null,
+      isStandalone: true,
+      manuscriptFile: 'manuscript.txt',
+      castConfirmed: false,
+      chapters: titles.map((title, i) => ({
+        id: i + 1,
+        title,
+        slug: slugOf(i + 1, title),
+        titleSynthesized: true,
+        audioRenderedAt: '2026-01-01T00:00:00.000Z',
+      })),
+      coverGradient: ['#000', '#fff'],
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    } as unknown as BookStateJson;
+    const hints = titles.map((title, i) => ({ id: i + 1, title, body: `body ${i + 1}` }));
+    const suffixes = [
+      'mp3',
+      'segments.json',
+      'peaks.json',
+      'embeddings.json',
+      'render-integrity.json',
+      'render-integrity-attempted.json',
+    ];
+    for (const c of state.chapters) {
+      for (const s of suffixes) {
+        const tag = `${s}:${c.slug}`;
+        writeFileSync(join(audioRoot, `${c.slug}.${s}`), s === 'mp3' ? tag : JSON.stringify({ tag }));
+      }
+    }
+
+    const merged = applyMerge(state, hints, [], { chapterIds: [3, 4] });
+    const result = await rewriteChapterSlugs(audioRoot, merged.audioOps);
+
+    expect(result.errors).toEqual([]);
+    // Old chapter 5 is now chapter 4: all of its files must have survived the move.
+    const newFour = merged.state.chapters.find((c) => c.id === 4)!;
+    for (const s of suffixes) {
+      const p = join(audioRoot, `${newFour.slug}.${s}`);
+      expect(existsSync(p), `${newFour.slug}.${s}`).toBe(true);
+      const tag = `${s}:05-chapter-5`;
+      expect(readFileSync(p, 'utf8')).toContain(tag);
+    }
   });
 });
 
