@@ -46,21 +46,16 @@ vi.mock('./state-io.js', async (importOriginal) => {
       }
       return out;
     }) as typeof orig.readJson,
-  };
-});
-
-/* The heal's fresh re-read is `readStateJsonWithRecovery` (state-io's own
-   internal read, not interceptable there). Fire once, AFTER it has read and
-   before the heal merges and writes — the window the book lock must cover. */
-vi.mock('./state-migrate.js', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('./state-migrate.js')>();
-  return {
-    ...orig,
-    readStateJsonWithRecovery: (async (path: string) => {
-      const out = await orig.readStateJsonWithRecovery(path);
+    /* The heal's fresh re-read is `readStateJsonWithRecovery`, reached through
+       `updateStateJsonLocked` (state-migrate's own module binding, so its export
+       cannot be mocked); the primitive under it, `readJsonWithRecovery`, can.
+       Fire once, AFTER it has read and before the heal merges and writes -- the
+       window the book lock must cover. */
+    readJsonWithRecovery: (async (path: string, ...rest: unknown[]) => {
+      const out = await (orig.readJsonWithRecovery as (...a: unknown[]) => Promise<unknown>)(path, ...rest);
+      if (!path.endsWith('state.json')) return out;
       const first = hooks.afterFirstStateRead;
-      const norm = (p: string) => p.replace(/\\/g, '/');
-      if (first && norm(path).startsWith(norm(first.dir))) {
+      if (first && hooks.norm(path).startsWith(hooks.norm(first.dir))) {
         hooks.afterFirstStateRead = undefined;
         await first.fn();
       }
@@ -70,7 +65,7 @@ vi.mock('./state-migrate.js', async (importOriginal) => {
         await fire();
       }
       return out;
-    }) as typeof orig.readStateJsonWithRecovery,
+    }) as typeof orig.readJsonWithRecovery,
   };
 });
 

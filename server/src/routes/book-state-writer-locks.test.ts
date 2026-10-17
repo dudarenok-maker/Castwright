@@ -28,18 +28,22 @@ const hooks = vi.hoisted(() => ({
   beforeNextWrite: undefined as undefined | (() => Promise<void>),
 }));
 
-vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
-  const orig = await importOriginal<typeof import('../workspace/state-migrate.js')>();
+/* Hooked at `writeJsonAtomic` (the primitive `writeStateJsonAtomic` ends in), for
+   state.json paths only: `updateStateJsonLocked` (the leaf-locked primitive the
+   writers now share) calls `writeStateJsonAtomic` through its own module
+   binding, so a mock of that export would never see the layered writers' write. */
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../workspace/state-io.js')>();
   return {
     ...orig,
-    writeStateJsonAtomic: (async (...args: Parameters<typeof orig.writeStateJsonAtomic>) => {
+    writeJsonAtomic: (async (...args: Parameters<typeof orig.writeJsonAtomic>) => {
       const fire = hooks.beforeNextWrite;
-      if (fire) {
+      if (fire && String(args[0]).endsWith('state.json')) {
         hooks.beforeNextWrite = undefined;
         await fire();
       }
-      return orig.writeStateJsonAtomic(...args);
-    }) as typeof orig.writeStateJsonAtomic,
+      return orig.writeJsonAtomic(...args);
+    }) as typeof orig.writeJsonAtomic,
   };
 });
 

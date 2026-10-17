@@ -16,9 +16,9 @@ vi.mock('../workspace/revisions-store.js', async (importOriginal) => {
 
 /* #3400 pass 9 -- passthrough mocks so the tests can fail the state.json write
    and the post-record record swap. Both default to the real implementation. */
-vi.mock('../workspace/state-migrate.js', async (importOriginal) => {
-  const real = await importOriginal<typeof import('../workspace/state-migrate.js')>();
-  return { ...real, writeStateJsonAtomic: vi.fn(real.writeStateJsonAtomic) };
+vi.mock('../workspace/state-io.js', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../workspace/state-io.js')>();
+  return { ...real, writeJsonAtomic: vi.fn(real.writeJsonAtomic) };
 });
 vi.mock('../store/manuscripts.js', async (importOriginal) => {
   const real = await importOriginal<typeof import('../store/manuscripts.js')>();
@@ -328,13 +328,22 @@ describe('replace-manuscript handler', () => {
   });
 
   it('#3400 -- a state.json write failure restores the original manuscript', async () => {
-    const { writeStateJsonAtomic } = await import('../workspace/state-migrate.js');
-    vi.mocked(writeStateJsonAtomic).mockRejectedValueOnce(new Error('EIO'));
+    /* Failed at `writeJsonAtomic` for state.json: `writeStateJsonAtomic` is
+       reached through `updateStateJsonLocked`'s own module binding, so its
+       export cannot be mocked, but the primitive under it can. */
+    const { writeJsonAtomic } = await import('../workspace/state-io.js');
+    const real = (await vi.importActual<typeof import('../workspace/state-io.js')>('../workspace/state-io.js'))
+      .writeJsonAtomic;
+    vi.mocked(writeJsonAtomic).mockImplementation(((p: string, ...rest: unknown[]) =>
+      String(p).endsWith('state.json')
+        ? Promise.reject(new Error('EIO'))
+        : (real as (...a: unknown[]) => Promise<void>)(p, ...rest)) as typeof writeJsonAtomic);
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     const res = await request(app)
       .post(`/api/books/${bookId}/replace-manuscript`)
       .attach('file', Buffer.from(REPLACEMENT_BODY), 'revised.md');
     err.mockRestore();
+    vi.mocked(writeJsonAtomic).mockImplementation(real);
     expect(res.status).toBe(500);
     expect(readFileSync(join(bookDir, 'manuscript.md'), 'utf8')).toBe(ORIGINAL_BODY);
     expect(bookDirFiles()).toEqual(['.audiobook', 'manuscript.md']);

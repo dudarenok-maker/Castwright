@@ -79,7 +79,12 @@ describe('rewriteChapterSlugs', () => {
     const sidecars = ['embeddings.json', 'render-integrity.json', 'render-integrity-attempted.json'];
     for (const slug of ['02-old-title', '05-gone']) {
       seed(slug);
-      for (const s of sidecars) writeFileSync(join(audioRoot, `${slug}.${s}`), `${s}:${slug}`);
+      /* render-integrity.json is a JSON array whose rows are re-stamped with the
+         new chapter id (a non-JSON body is reported as an error, see the corrupt
+         test below), so it is seeded as an empty array and compared parsed. */
+      for (const s of sidecars) {
+        writeFileSync(join(audioRoot, `${slug}.${s}`), s === 'render-integrity.json' ? '[]' : `${s}:${slug}`);
+      }
     }
 
     const result = await rewriteChapterSlugs(audioRoot, [
@@ -90,7 +95,9 @@ describe('rewriteChapterSlugs', () => {
     expect(result.errors).toEqual([]);
     for (const s of sidecars) {
       expect(existsSync(join(audioRoot, `02-old-title.${s}`))).toBe(false);
-      expect(readFileSync(join(audioRoot, `03-new-title.${s}`), 'utf8')).toBe(`${s}:02-old-title`);
+      const moved = readFileSync(join(audioRoot, `03-new-title.${s}`), 'utf8');
+      if (s === 'render-integrity.json') expect(JSON.parse(moved)).toEqual([]);
+      else expect(moved).toBe(`${s}:02-old-title`);
       expect(existsSync(join(audioRoot, `05-gone.${s}`))).toBe(false);
     }
   });

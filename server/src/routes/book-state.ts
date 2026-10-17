@@ -1337,6 +1337,20 @@ async function applyReparse(
     installManuscript?: () => Promise<() => Promise<void>>;
   },
 ) {
+  /* #3700 review pass 2 -- the destructive arms below (cache wipe by manuscript
+     id, cast / audio / revisions removal) must not run for a book that was
+     moved or deleted after the caller resolved `bookDir`: they would wipe the
+     MOVED book's analysis cache and recreate the old path. The state-json lock
+     is acquired just to read presence AFTER any in-flight holder (a
+     folder-renaming PUT, a DELETE) has finished; the state step at the end
+     checks again under the book + state-json locks. The destructive arms cannot
+     run inside those locks (they take `cast`, which is ordered before `book`),
+     so this is a gate, not an exclusion. Absent => null (the callers answer 404). */
+  const present = await withStateJsonLock(stateJsonPath(bookDir), async () =>
+    existsSync(stateJsonPath(bookDir)),
+  );
+  if (!present) return null;
+
   const existingEdits = await readJson<{ sentences?: unknown[] }>(
     manuscriptEditsJsonPath(bookDir),
   );
@@ -1708,7 +1722,6 @@ bookStateRouter.post(
       const suffix = randomUUID().slice(0, 8);
       const tmpPath = join(bookDir, `.manuscript-replacing-${suffix}`);
       const backupPath = join(bookDir, `.manuscript-previous-${suffix}`);
-      await writeFile(tmpPath, req.file.buffer);
 
       let payload: Awaited<ReturnType<typeof applyReparse>>;
       try {
@@ -1717,6 +1730,11 @@ bookStateRouter.post(
           changeLogTitle: 'Replaced manuscript',
           manuscriptFile: newFile,
           installManuscript: async () => {
+            /* The upload is written here -- inside the state-json lock, once
+               state.json is confirmed present -- so a book moved or deleted
+               while the request queued gets NOTHING written (no orphan temp
+               file travelling with the moved folder). */
+            await writeFile(tmpPath, req.file!.buffer);
             const hadLive = existsSync(livePath);
             if (hadLive) await renameWithRetry(livePath, backupPath);
             try {
