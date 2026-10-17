@@ -269,6 +269,19 @@ recite:
     detached job, name the condition it may run under; ask what stops it when
     that condition ends; and ask what a second concurrent instance does to the
     first's registration.
+29. **A lock keyed by a path resolved BEFORE acquisition** — PR #3706 pass 2
+    (#3700): `state-json:<book dir>/state.json` was keyed by the folder a
+    request had resolved before it queued. Once the holder moves or deletes
+    that folder (a folder-renaming PUT, a DELETE), every waiter acquires a key
+    naming a path that is no longer the book, and queuing makes that certain
+    rather than a race. Waiters then either wrote their stale snapshot back
+    (resurrecting a deleted book, or leaving two folders with one bookId) or
+    answered 200 for a write that never happened (a reparse wiping the moved
+    book's analysis cache by manuscript id). Checkable: for every lock whose
+    key is derived from a path or id resolved earlier, ask what the holder may
+    move or delete while you wait, and what each waiter does when the thing it
+    re-reads is absent; test by holding the key, moving or deleting the
+    target, then releasing, and assert a refusal with nothing written.
 
 ### Keeping the catalogue current
 

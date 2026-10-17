@@ -57,12 +57,12 @@ syncManifestRouter.get('/sync-manifest', async (req: Request, res: Response) => 
       if (ensureChapterUuids(state)) {
         /* #3700 — persisted under the per-book state-json lock against a fresh
            read; the uuids that reached disk are adopted below. */
-        await updateStateJsonLocked(stateJsonPath(bookDir), state, (fresh) =>
+        await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) =>
           ensureChapterUuids(fresh) ? fresh : null,
         )
           .then((persisted) => {
             for (const ch of state.chapters) {
-              const onDisk = persisted.chapters.find((c) => c.id === ch.id);
+              const onDisk = persisted?.chapters.find((c) => c.id === ch.id);
               if (onDisk?.uuid) ch.uuid = onDisk.uuid;
             }
           })

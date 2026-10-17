@@ -776,11 +776,11 @@ async function scanBook(
            state-json lock (ensureChapterUuids is idempotent and mutates in
            place), then adopt the uuids that reached disk so this caller's
            in-memory state matches it. */
-        const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), state, (fresh) =>
+        const persisted = await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) =>
           ensureChapterUuids(fresh) ? fresh : null,
         );
         for (const ch of state.chapters) {
-          const onDisk = persisted.chapters.find((c) => c.id === ch.id);
+          const onDisk = persisted?.chapters.find((c) => c.id === ch.id);
           if (onDisk?.uuid) ch.uuid = onDisk.uuid;
         }
       } catch {
@@ -1160,7 +1160,7 @@ export async function backfillAudioModelKeysFromSegments(
       /* #3700 — read-modify-write under the per-book state-json lock: re-read,
          then fill in each backfilled field only where the fresh chapter still
          lacks it (a render that landed meanwhile has stamped its own). */
-      await updateStateJsonLocked(stateJsonPath(bookDir), upgraded, (fresh) => {
+      await updateStateJsonLocked(stateJsonPath(bookDir), (fresh) => {
         let changed = false;
         const chapters = fresh.chapters.map((c) => {
           const entry = patches.get(c.id);

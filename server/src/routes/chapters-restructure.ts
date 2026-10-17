@@ -185,7 +185,11 @@ async function applyRestructure(
     // Legacy book: chapters imported before titleSynthesized existed carry no
     // flag. Recognise the app-made ones against a fresh parse (#3628) so every
     // operation below renumbers them like a freshly imported book's.
-    const freshState = (await readStateJsonWithRecovery(stateJsonPath(bookDir))) ?? state;
+    const freshState = await readStateJsonWithRecovery(stateJsonPath(bookDir));
+    /* #3700 review pass 2 — absent: the book was deleted or moved after
+       `located` resolved it. Writing the stale snapshot back would resurrect
+       it; refuse and write nothing. */
+    if (!freshState) return { early: { status: 404, body: { error: 'Book not found.' } } };
     state = legacyParse
       ? backfillTitleSynthesized(freshState, legacyParse.titles, legacyParse.flags)
       : freshState;

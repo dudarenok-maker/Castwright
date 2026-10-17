@@ -142,22 +142,23 @@ export async function writeStateJsonAtomic(path: string, state: BookStateJsonWri
  *  earlier snapshot, which a sibling chapter render may have stamped past),
  *  hands that fresh document to `mutate`, and writes the result. `mutate`
  *  returning `null` means "nothing to change" and skips the write. When the
- *  file is absent nothing is written (a delete/move raced us) and `fallback`
- *  is returned as-is. Leaf lock: `mutate` must not take
+ *  file is absent nothing is written (a delete/move raced us) and the result is
+ *  `null` — "absent" is its own outcome, so a mutating caller must refuse
+ *  (404) rather than answer success for a write that did not happen, while a
+ *  read-path caller may fall back to its own snapshot. Leaf lock: `mutate` must not take
  *  another lock or call something that does. Returns the document that is on
- *  disk afterwards (the mutated one, or the fresh read when `mutate` declined). */
+ *  disk afterwards (the mutated one, or the fresh read when `mutate` declined),
+ *  or `null` when state.json is absent. */
 export async function updateStateJsonLocked(
   path: string,
-  fallback: BookStateJson,
   mutate: (fresh: BookStateJson) => BookStateJson | null,
-): Promise<BookStateJson> {
+): Promise<BookStateJson | null> {
   return withStateJsonLock(path, async () => {
     const onDisk = await readStateJsonWithRecovery(path);
     /* Absent means the book was deleted or moved after the caller resolved it:
        writing would recreate `.audiobook/` (writeJsonAtomic mkdirs) and bring
-       a deleted book back. Skip the write; the caller still gets its own
-       snapshot back as the (unpersisted) result. */
-    if (!onDisk) return fallback;
+       a deleted book back. Skip the write and report absence as `null`. */
+    if (!onDisk) return null;
     const fresh = onDisk;
     const next = mutate(fresh);
     if (!next) return fresh;

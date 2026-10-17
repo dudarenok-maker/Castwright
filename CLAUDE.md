@@ -640,7 +640,7 @@ Design rationale:
   timeout's own message** — not an escalating body, not a per-item reason, and
   not an SSE `error` event: a `LockAcquisitionTimeoutError` names the lock key,
   which embeds the absolute workspace path, and this app is served over LAN
-  HTTPS. Three curation seams, all in `workspace/file-lock.ts`, and a route
+  HTTPS. Three route-level curation seams, all in `workspace/file-lock.ts`, and a route
   needs exactly one of them: **per-item** failures inside a 200/207 use
   `itemFailureReason` (the five batch routes); a handler that fails the
   **whole request** uses `requestFailureMessage`, which curates this one class
@@ -654,8 +654,8 @@ Design rationale:
   `chapter-audio.ts` (`DELETE` and `…/restore`); and
   both **analysis jobs** go through `classifyAnalysisFailure`, which maps the
   class to `code: 'lock-contention'` with the same curated sentence and no
-  `detail` blob (that blob renders in the UI's collapsible). A fourth seam
-  curates at the lock itself: `withStateJsonLock` (the per-book `state.json`
+  `detail` blob (that blob renders in the UI's collapsible). A separate,
+  lock-level seam (not one a route picks) curates at the lock itself: `withStateJsonLock` (the per-book `state.json`
   leaf lock, #3700) rethrows the curated sentence but keeps the timeout `code`,
   so the seams above still recognise it. The raw error goes
   to the log at every one of them. A new handler downstream of any lock is
