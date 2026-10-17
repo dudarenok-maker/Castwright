@@ -4,9 +4,9 @@
       propagate, not fall back to `.bak.1`. `.bak.1` is the state before the last
       write, so substituting it and then writing back silently reverts that write
       (a lost sibling stamp). Only an unparseable main file recovers.
-   2. A failed tmp write must not leave the main file absent. Rotation copies
-      main to `.bak.1` (instead of renaming it away) so main stays in place until
-      the atomic tmp -> main rename. */
+   2. A failed tmp write must neither leave the main file absent nor rotate the
+      backup chain: the tmp is written FIRST, rotation (rename-away) and the
+      tmp -> main rename follow, so main and `.bak.1-3` are untouched on failure. */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
@@ -136,5 +136,37 @@ describe('a failed write leaves the main file in place (#3625)', () => {
     expect(readFileSync(statePath, 'utf8')).toBe(before);
     const found = await findBookByBookId(bookId);
     expect(found).not.toBeNull();
+  });
+});
+
+describe('a failed tmp write does not rotate the backup chain (#3625 review)', () => {
+  it('three failed writes over a torn main leave .bak.1-3 good and recovery working', async () => {
+    const { writeJsonAtomic, readJsonWithRecovery } = await import('./state-io.js');
+    writeFileSync(statePath, '{"v":'); // torn main
+    writeFileSync(`${statePath}.bak.1`, JSON.stringify({ v: 1 }));
+    writeFileSync(`${statePath}.bak.2`, JSON.stringify({ v: 2 }));
+    writeFileSync(`${statePath}.bak.3`, JSON.stringify({ v: 3 }));
+
+    inject.writeFailSubstr = '.tmp-';
+    for (let i = 0; i < 3; i += 1) {
+      await expect(writeJsonAtomic(statePath, { v: 9 }, { rotate: { keep: 3 } })).rejects.toThrow(/ENOSPC/);
+    }
+    inject.writeFailSubstr = null;
+
+    expect(JSON.parse(readFileSync(`${statePath}.bak.1`, 'utf8'))).toEqual({ v: 1 });
+    expect(JSON.parse(readFileSync(`${statePath}.bak.2`, 'utf8'))).toEqual({ v: 2 });
+    expect(JSON.parse(readFileSync(`${statePath}.bak.3`, 'utf8'))).toEqual({ v: 3 });
+    expect(readFileSync(statePath, 'utf8')).toBe('{"v":');
+    await expect(readJsonWithRecovery(statePath, { keep: 3 })).resolves.toEqual({ v: 1 });
+  });
+
+  it('leaves no tmp droppings after a failed write', async () => {
+    const { writeJsonAtomic } = await import('./state-io.js');
+    const { readdirSync } = await import('node:fs');
+    writeFileSync(statePath, JSON.stringify({ v: 1 }));
+    inject.writeFailSubstr = '.tmp-';
+    await expect(writeJsonAtomic(statePath, { v: 2 }, { rotate: { keep: 3 } })).rejects.toThrow(/ENOSPC/);
+    inject.writeFailSubstr = null;
+    expect(readdirSync(join(bookDir, '.audiobook')).filter((n) => n.includes('.tmp-'))).toEqual([]);
   });
 });

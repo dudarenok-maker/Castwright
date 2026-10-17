@@ -17,7 +17,7 @@
    (cast.json, revisions.json, ...) keep the single-file atomic write —
    they're cheaper to re-derive on loss and not worth the disk-multiplier. */
 
-import { copyFile, mkdir, readFile, writeFile, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, writeFile, unlink } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname } from 'node:path';
@@ -33,7 +33,8 @@ import { renameWithRetry } from './atomic-rename.js';
 let tmpSeq = 0;
 
 export interface WriteJsonOpts {
-  /** Copy `path` -> `path.bak.1` (main stays in place), shift `path.bak.{i}` -> `path.bak.{i+1}`,
+  /** Rename `path` -> `path.bak.1` (after the new bytes are safely in a tmp
+   *  file), shift `path.bak.{i}` -> `path.bak.{i+1}`,
    *  keep the newest `keep` backups (oldest is dropped). Skipped on first
    *  write (no existing file to rotate). Each rename uses `renameWithRetry`,
    *  so the rotation chain is self-healing across OneDrive/AV races —
@@ -115,9 +116,6 @@ export async function writeJsonAtomic(
   opts?: WriteJsonOpts,
 ): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  if (opts?.rotate && existsSync(path)) {
-    await rotateBackups(path, opts.rotate.keep);
-  }
   /* Unique per call: pid + monotonic in-process counter + a 4-byte random
      suffix. The counter alone defeats same-millisecond collisions inside
      one process; the random tail defends against a hypothetical second
@@ -127,13 +125,39 @@ export async function writeJsonAtomic(
   const seq = (tmpSeq = (tmpSeq + 1) >>> 0);
   const rnd = randomBytes(4).toString('hex');
   const tmp = `${path}.tmp-${process.pid}-${Date.now()}-${seq}-${rnd}`;
-  await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
+  /* Order matters (#3625 review): write the tmp FIRST, then rotate, then
+     rename tmp onto the vacated name. A failed tmp write (ENOSPC) must not
+     have shifted the backup chain — N failed writes over a torn main would
+     otherwise propagate the torn bytes through every `.bak.N` — and the main
+     file is never COPIED while another handle holds it (an AV/indexer scan
+     makes CopyFile fail on Windows). Rotation moves main away by rename,
+     which an open handle does not block, so the final rename lands on a
+     vacant name instead of replacing a held file. */
+  let rotated = false;
   try {
+    await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
+    /* fsync before the rename: the header's durability claim. Reopened rather
+       than written through a handle so the `writeFile` call stays the one seam
+       the failure-injection tests across the suite hook. */
+    const fh = await open(tmp, 'r+');
+    try {
+      await fh.sync();
+    } finally {
+      await fh.close();
+    }
+    if (opts?.rotate && existsSync(path)) {
+      rotated = await rotateBackups(path, opts.rotate.keep);
+    }
     await renameWithRetry(tmp, path);
   } catch (e) {
     /* Cleanup the temp file on terminal failure so we don't leak
        .tmp-<pid>-<ts> droppings into the workspace. */
     await unlink(tmp).catch(() => {});
+    /* The rename-in failed after main was moved to `.bak.1`: put it back so a
+       reader never finds the book without its main file. */
+    if (rotated && !existsSync(path)) {
+      await renameWithRetry(`${path}.bak.1`, path).catch(() => {});
+    }
     throw e;
   }
 }
@@ -167,17 +191,19 @@ export async function enqueuePathOp(path: string, op: () => Promise<void>): Prom
 /** Shift the backup chain up by one slot before a new write lands.
  *  `path.bak.{keep-1}` → `path.bak.{keep}` first (drops what was in
  *  `bak.{keep}`), then `bak.{keep-2}` → `bak.{keep-1}`, …, finally
- *  `path` is COPIED to `path.bak.1` (main stays in place). Walking top-down
- *  means each destination is vacant by the time we rename to it.
+ *  `path` is RENAMED to `path.bak.1`, vacating the main name for the caller's
+ *  tmp -> main rename. Walking top-down means each destination is vacant by
+ *  the time we rename to it.
  *
- *  Each step is `renameWithRetry`, so a partial failure (e.g. EPERM mid-
- *  rotation) aborts but leaves the chain in a state the next call can
- *  resume: the `existsSync` gates skip already-moved slots, and the next
- *  rotation completes the chain. No data loss path — every previous
+ *  Returns true when main was moved away (so the caller can restore it if the
+ *  rename-in then fails). Each step is `renameWithRetry`, so a partial failure
+ *  (e.g. EPERM mid-rotation) aborts but leaves the chain in a state the next
+ *  call can resume: the `existsSync` gates skip already-moved slots, and the
+ *  next rotation completes the chain. No data loss path — every previous
  *  version of `path` lives in some `bak.i` slot until intentionally
  *  shifted off the end. */
-async function rotateBackups(path: string, keep: number): Promise<void> {
-  if (keep < 1) return;
+async function rotateBackups(path: string, keep: number): Promise<boolean> {
+  if (keep < 1) return false;
   for (let i = keep - 1; i >= 1; i -= 1) {
     const src = `${path}.bak.${i}`;
     const dest = `${path}.bak.${i + 1}`;
@@ -185,9 +211,6 @@ async function rotateBackups(path: string, keep: number): Promise<void> {
       await renameWithRetry(src, dest);
     }
   }
-  /* COPY, not rename: the caller's tmp write comes next, and if it fails
-     (ENOSPC) a renamed-away main would leave NO state.json at all — readers
-     treat a missing main as "no file" and never consult the backups. With a
-     copy, main stays in place until the atomic tmp -> main rename. */
-  await copyFile(path, `${path}.bak.1`);
+  await renameWithRetry(path, `${path}.bak.1`);
+  return true;
 }

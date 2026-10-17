@@ -4,7 +4,7 @@
    to the retry list; this file pins that contract. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, readFile, rm, stat, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, readdir, writeFile, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,8 @@ import { join } from 'node:path';
    intercept is a module-scoped swap so each test can install its own
    failure pattern via setRenameImpl(). */
 let renameImpl: ((src: string, dest: string) => Promise<void>) | null = null;
+/* tmp files whose handle was fsync'd — see the fsync test below. */
+const syncedTmp: string[] = [];
 
 vi.mock('node:fs/promises', async () => {
   const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
@@ -20,6 +22,17 @@ vi.mock('node:fs/promises', async () => {
     ...actual,
     /* Default: pass-through. Tests override via setRenameImpl(). */
     rename: (src: string, dest: string): Promise<void> => (renameImpl ?? actual.rename)(src, dest),
+    open: (async (...args: Parameters<typeof actual.open>) => {
+      const fh = await actual.open(...args);
+      if (String(args[0]).includes('.tmp-')) {
+        const sync = fh.sync.bind(fh);
+        fh.sync = async () => {
+          syncedTmp.push(String(args[0]));
+          return sync();
+        };
+      }
+      return fh;
+    }) as typeof actual.open,
   };
 });
 
@@ -230,6 +243,29 @@ describe('writeJsonAtomic with rotating backups (opt-in)', () => {
       'state.json.bak.2',
       'state.json.bak.3',
     ]);
+  });
+
+  it('fsyncs the tmp file before the rename (the header contract)', async () => {
+    syncedTmp.length = 0;
+    await writeJsonAtomic(join(workdir, 'state.json'), { v: 1 });
+    expect(syncedTmp).toHaveLength(1);
+  });
+
+  it('writes while another handle holds main open for write (no copy of a locked file, #3625 review)', async () => {
+    const target = join(workdir, 'state.json');
+    await writeJsonAtomic(target, { v: 1 }, { rotate: { keep: 3 } });
+    /* A read-write handle on main is what an antivirus / indexer scan looks
+       like to Windows: CopyFile of a file another handle holds for write fails
+       with EBUSY/EPERM, a rename-away does not (Node opens with
+       FILE_SHARE_DELETE). The write must go through and keep the old bytes. */
+    const held = await open(target, 'r+');
+    try {
+      await writeJsonAtomic(target, { v: 2 }, { rotate: { keep: 3 } });
+    } finally {
+      await held.close();
+    }
+    expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ v: 2 });
+    expect(JSON.parse(await readFile(`${target}.bak.1`, 'utf8'))).toEqual({ v: 1 });
   });
 
   it('rotation is opt-in: no { rotate } option means no backup is created', async () => {
