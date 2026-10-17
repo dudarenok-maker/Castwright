@@ -4,7 +4,8 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
-import { parseEpub, UnusableEpubError, decodeEntities } from './epub.js';
+import { ZipFile } from 'yazl';
+import { parseEpub, UnusableEpubError, decodeEntities, mergeChapterTitle } from './epub.js';
 
 const { mkdtempSpy } = vi.hoisted(() => ({ mkdtempSpy: vi.fn() }));
 
@@ -314,4 +315,78 @@ describe('parseEpub — unusable-EPUB diagnostics', () => {
       /image-only/i,
     );
   });
+});
+
+describe('mergeChapterTitle — titleSynthesized (#3628)', () => {
+  it('flags the made-up "Chapter N" when there is no NCX label and no body heading', () => {
+    expect(mergeChapterTitle('', null, 3)).toEqual({ title: 'Chapter 3', synthesized: true });
+  });
+
+  it('does not flag a generic NCX label such as "Chapter 1"', () => {
+    expect(mergeChapterTitle('Chapter 1', null, 1)).toEqual({
+      title: 'Chapter 1',
+      synthesized: false,
+    });
+  });
+
+  it('does not flag an empty NCX label that falls back to a body heading', () => {
+    expect(mergeChapterTitle('', 'The Berth', 2)).toEqual({
+      title: 'The Berth',
+      synthesized: false,
+    });
+  });
+
+  it('does not flag a generic NCX label merged with a descriptive body heading', () => {
+    expect(mergeChapterTitle('Chapter 1', 'The Berth', 1)).toEqual({
+      title: 'Chapter 1 — The Berth',
+      synthesized: false,
+    });
+  });
+});
+
+/* #3628 — call-site wiring: parseEpub must put `titleSynthesized` on the chapters
+   it makes up a title for, on both parse paths (epub2 and the raw-zip fallback).
+   The pure mergeChapterTitle tests above cannot see a dropped spread. */
+describe('parseEpub — titleSynthesized wiring (#3628)', () => {
+  function buildEpub(prefixed: boolean): Promise<Buffer> {
+    return new Promise((resolveBuf, reject) => {
+      const zip = new ZipFile();
+      const p = prefixed ? 'opf:' : '';
+      zip.addBuffer(Buffer.from('application/epub+zip'), 'mimetype', { compress: false });
+      zip.addBuffer(
+        Buffer.from(
+          '<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>',
+        ),
+        'META-INF/container.xml',
+      );
+      zip.addBuffer(
+        Buffer.from(
+          `<?xml version="1.0"?><${p}package xmlns${prefixed ? ':opf' : ''}="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><${p}metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:creator>A</dc:creator><dc:identifier id="id">x</dc:identifier><dc:language>en</dc:language></${p}metadata><${p}manifest><${p}item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><${p}item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></${p}manifest><${p}spine><${p}itemref idref="c1"/><${p}itemref idref="c2"/></${p}spine></${p}package>`,
+        ),
+        'content.opf',
+      );
+      const doc = (inner: string) =>
+        `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>x</title></head><body>${inner}</body></html>`;
+      zip.addBuffer(Buffer.from(doc('<p>Just some prose here.</p>')), 'c1.xhtml');
+      zip.addBuffer(Buffer.from(doc('<h1>Real Heading</h1><p>More prose here.</p>')), 'c2.xhtml');
+      zip.end();
+      const chunks: Buffer[] = [];
+      zip.outputStream
+        .on('data', (c: Buffer) => chunks.push(c))
+        .on('end', () => resolveBuf(Buffer.concat(chunks)))
+        .on('error', reject);
+    });
+  }
+
+  for (const [label, prefixed] of [
+    ['epub2 path', false],
+    ['raw-zip path (namespace-prefixed OPF)', true],
+  ] as const) {
+    it(`${label}: flags the chapter with no heading, not the one with a heading`, async () => {
+      const out = await parseEpub(await buildEpub(prefixed), { fileName: 'x.epub' });
+      expect(out.chapters.map((c) => c.title)).toEqual(['Chapter 1', 'Real Heading']);
+      expect(out.chapters[0].titleSynthesized).toBe(true);
+      expect('titleSynthesized' in out.chapters[1]).toBe(false);
+    });
+  }
 });

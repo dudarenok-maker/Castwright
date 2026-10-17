@@ -16,7 +16,7 @@
  * imports so paths.ts picks up WORKSPACE_DIR, supertest against the real
  * router. */
 
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import {
   rmSync,
   mkdirSync,
@@ -31,6 +31,15 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type Express } from 'express';
 import request from 'supertest';
+
+/* #3628 — a passthrough spy so a test can assert the legacy-title backfill
+   does not parse the manuscript when no chapter could need it. */
+const parseManuscriptSpy = vi.hoisted(() => vi.fn());
+vi.mock('../parsers/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../parsers/index.js')>();
+  parseManuscriptSpy.mockImplementation(actual.parseManuscript);
+  return { ...actual, parseManuscript: parseManuscriptSpy };
+});
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = resolve(__dirname, '..', '..');
@@ -785,11 +794,11 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
         manuscriptFile: 'manuscript.md',
         castConfirmed: true,
         chapters: [
-          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
-          { id: 4, title: 'Chapter 4', slug: '04-chapter-4' },
-          { id: 5, title: 'Chapter 5', slug: '05-chapter-5' },
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
+          { id: 4, title: 'Chapter 4', slug: '04-chapter-4', titleSynthesized: true },
+          { id: 5, title: 'Chapter 5', slug: '05-chapter-5', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -854,10 +863,10 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
         manuscriptFile: 'manuscript.md',
         castConfirmed: true,
         chapters: [
-          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
           { id: 2, title: 'The Verdict', slug: '02-the-verdict' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
-          { id: 4, title: 'Chapter 4', slug: '04-chapter-4' },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
+          { id: 4, title: 'Chapter 4', slug: '04-chapter-4', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -965,9 +974,9 @@ describe('plan 70a — renumber generic titles (Part E)', () => {
         manuscriptFile: 'manuscript.md',
         castConfirmed: true,
         chapters: [
-          { id: 1, title: 'Chapter 1 — The Beginning', slug: '01-chapter-1' },
-          { id: 2, title: 'Chapter 2 — The Middle', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3 — The End', slug: '03-chapter-3' },
+          { id: 1, title: 'Chapter 1 — The Beginning', slug: '01-chapter-1', titleSynthesized: true },
+          { id: 2, title: 'Chapter 2 — The Middle', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3 — The End', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1086,8 +1095,8 @@ describe('POST /:bookId/chapters/exclude (plan 70b)', () => {
         chapters: [
           // Chapter 1 has a non-generic title — should be preserved.
           { id: 1, title: 'The Verdict', slug: '01-the-verdict' },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1140,9 +1149,9 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
         manuscriptFile: 'manuscript.md',
         castConfirmed: true,
         chapters: [
-          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleSynthesized: true },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1208,8 +1217,8 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
         castConfirmed: true,
         chapters: [
           { id: 1, title: 'The Verdict', slug: '01-the-verdict' },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1316,9 +1325,9 @@ describe('POST /:bookId/chapters/refresh-titles (plan 70b)', () => {
         castConfirmed: true,
         chapters: [
           // titleOverridden looks generic but is sticky.
-          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleOverridden: true },
-          { id: 2, title: 'Chapter 2', slug: '02-chapter-2' },
-          { id: 3, title: 'Chapter 3', slug: '03-chapter-3' },
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1', titleOverridden: true, titleSynthesized: true },
+          { id: 2, title: 'Chapter 2', slug: '02-chapter-2', titleSynthesized: true },
+          { id: 3, title: 'Chapter 3', slug: '03-chapter-3', titleSynthesized: true },
         ],
         coverGradient: ['#000', '#fff'],
         createdAt: new Date().toISOString(),
@@ -1507,5 +1516,177 @@ describe('merge/split propagate titleOverridden (plan 78)', () => {
     const sticky = after.chapters.find((c) => c.title === 'Sticky One');
     expect(sticky?.id).toBe(3);
     expect(sticky?.titleOverridden).toBe(true);
+  });
+});
+
+describe('#3628 — titleSynthesized does not outlive the title it describes', () => {
+  it('a chapter retitled through PUT /state is no longer renumbered by a later restructure', async () => {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const seeded = JSON.parse(readFileSync(statePath, 'utf8'));
+    seeded.chapters[1] = { ...seeded.chapters[1], title: 'Chapter 2', titleSynthesized: true };
+    seeded.chapters[2] = { ...seeded.chapters[2], title: 'Chapter 3', titleSynthesized: true };
+    writeFileSync(statePath, JSON.stringify(seeded));
+
+    const put = await request(app)
+      .put(`/api/books/${bookId}/state`)
+      .set('Content-Type', 'application/json')
+      .send({
+        slice: 'state',
+        patch: {
+          chapters: readState().chapters.map((c) => (c.id === 3 ? { ...c, title: 'Chapter 9' } : c)),
+        },
+      });
+    expect(put.status).toBe(204);
+    expect(
+      (JSON.parse(readFileSync(statePath, 'utf8')).chapters[2] as { titleSynthesized?: boolean })
+        .titleSynthesized,
+    ).toBeUndefined();
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [1], excluded: true });
+    expect(res.status).toBe(200);
+    const titles = readState().chapters.map((c) => c.title);
+    expect(titles[1]).toBe('Chapter 2'); // still app-made: kept (and renumbered to its own id)
+    expect(titles[2]).toBe('Chapter 9'); // user-retitled: left alone
+  });
+});
+
+describe('#3628 — refresh-titles hands the parser\'s app-made flags to the transform', () => {
+  it('a re-derived title the parser itself made up stays flagged', async () => {
+    // No heading in the manuscript: the parser titles the lone chapter "Chapter 1" (app-made).
+    writeFileSync(join(bookDir, 'manuscript.md'), 'Just some opening prose here.\nAnd more of it.\n');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: [{ id: 1, title: 'Chapter 7', slug: '01-chapter-7', titleSynthesized: true }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [{ id: 1, chapterId: 1, characterId: 'narr', text: 'Just some opening prose here.' }],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/refresh-titles`)
+      .send({ useFirstLine: false });
+    expect(res.status).toBe(200);
+
+    const ch = readState().chapters[0] as { title: string; titleSynthesized?: boolean };
+    expect(ch.title).toBe('Chapter 1');
+    expect(ch.titleSynthesized).toBe(true);
+  });
+});
+
+describe('#3628 — a legacy book (no titleSynthesized key) is backfilled before a restructure', () => {
+  // Parses to [Chapter 1 (app-made: prose before any heading), Prologue, Epilogue].
+  const LEGACY_MANUSCRIPT =
+    'Opening prose here.\n\nPrologue\n\nProse two.\n\nEpilogue\n\nProse three.\n';
+
+  function seedLegacy(titles: string[], extra: Record<number, object> = {}): void {
+    writeFileSync(join(bookDir, 'manuscript.md'), LEGACY_MANUSCRIPT);
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId,
+        manuscriptId: MANUSCRIPT_ID,
+        title: TITLE,
+        author: AUTHOR,
+        series: SERIES,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.md',
+        castConfirmed: true,
+        chapters: titles.map((t, i) => ({
+          id: i + 1,
+          title: t,
+          slug: `0${i + 1}-x`,
+          ...(extra[i + 1] ?? {}),
+        })),
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [1, 2, 3].map((c) => ({ id: 1, chapterId: c, characterId: 'narr', text: `S${c}.` })),
+      }),
+    );
+  }
+
+  const reorder = () =>
+    request(app).post(`/api/books/${bookId}/chapters/reorder`).send({ order: [2, 1, 3] });
+
+  it('a title that still matches the import is recognised as app-made and renumbered', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue']);
+    expect((await reorder()).status).toBe(200);
+    // Old chapter 1 is now id 2: renumbered because the backfill flagged it.
+    expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 2', 'Epilogue']);
+  });
+
+  it('a user-edited title is not backfilled', async () => {
+    seedLegacy(['Chapter 1 — My Own Subtitle', 'Prologue', 'Epilogue']);
+    expect((await reorder()).status).toBe(200);
+    expect(readState().chapters.map((c) => c.title)).toEqual([
+      'Prologue',
+      'Chapter 1 — My Own Subtitle',
+      'Epilogue',
+    ]);
+  });
+
+  it('a chapter-count mismatch causes no backfill', async () => {
+    seedLegacy(['Chapter 1', 'Prologue']);
+    writeFileSync(
+      join(bookDir, '.audiobook', 'manuscript-edits.json'),
+      JSON.stringify({
+        sentences: [1, 2].map((c) => ({ id: 1, chapterId: c, characterId: 'narr', text: `S${c}.` })),
+      }),
+    );
+    // The manuscript parses to 3 chapters, the book has 2: no backfill.
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/exclude`)
+      .send({ chapterIds: [2], excluded: true });
+    expect(res.status).toBe(200);
+    expect(readState().chapters.some((c) => 'titleSynthesized' in c)).toBe(false);
+  });
+
+  // The backfill is the only caller that passes `sourcePath` (the hydrate path doesn't).
+  const backfillParses = () =>
+    parseManuscriptSpy.mock.calls.filter(([arg]) => (arg as { sourcePath?: string }).sourcePath).length;
+
+  it('a book with no generic-looking titles does not parse the manuscript', async () => {
+    seedLegacy(['Opening', 'Prologue', 'Epilogue']);
+    parseManuscriptSpy.mockClear();
+    expect((await reorder()).status).toBe(200);
+    expect(backfillParses()).toBe(0);
+  });
+
+  it('control: a generic-looking keyless title still triggers the parse', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue']);
+    parseManuscriptSpy.mockClear();
+    expect((await reorder()).status).toBe(200);
+    expect(backfillParses()).toBe(1);
+  });
+
+  it('an explicit titleSynthesized: false is preserved', async () => {
+    seedLegacy(['Chapter 1', 'Prologue', 'Epilogue'], { 1: { titleSynthesized: false } });
+    expect((await reorder()).status).toBe(200);
+    expect(readState().chapters.map((c) => c.title)).toEqual(['Prologue', 'Chapter 1', 'Epilogue']);
   });
 });

@@ -43,7 +43,11 @@ import { pruneByBook } from '../workspace/queue-io.js';
 import { renameWithRetry } from '../workspace/atomic-rename.js';
 import { findBookByBookId, type BookStateJson } from '../workspace/scan.js';
 import { writeStateJsonAtomic } from '../workspace/state-migrate.js';
-import { ensureChapterUuids, reconcileChapterUuids } from '../workspace/chapter-uuid.js';
+import {
+  ensureChapterUuids,
+  reconcileChapterUuids,
+  carryTitleSynthesized,
+} from '../workspace/chapter-uuid.js';
 import {
   putManuscript,
   getManuscript,
@@ -253,9 +257,15 @@ async function refreshChapterTitles(state: BookStateJson, bookDir: string): Prom
        has manually renamed them and the heuristic refresh MUST NOT
        clobber their work. The chapterTitleParserVersion bump below
        still happens so the refresh isn't re-attempted on every GET. */
-    const newChapters = state.chapters.map((c, i) =>
-      c.titleOverridden ? c : { ...c, title: parsed.chapters[i].title },
-    );
+    const newChapters = state.chapters.map((c, i) => {
+      if (c.titleOverridden) return c;
+      const { titleSynthesized: _stale, ...rest } = c;
+      return {
+        ...rest,
+        title: parsed.chapters[i].title,
+        titleSynthesized: parsed.chapters[i].titleSynthesized || undefined,
+      };
+    });
     const titlesChanged = newChapters.some((c, i) => c.title !== state.chapters[i].title);
     const nextState: BookStateJson = {
       ...state,
@@ -1010,11 +1020,16 @@ bookStateRouter.put('/:bookId/state', async (req: Request, res: Response) => {
           ...state,
           castConfirmed: patch.castConfirmed ?? state.castConfirmed,
           /* srv-35 — the frontend round-trips state.chapters but doesn't
-             track the server-only `uuid`, so a wholesale replace would
-             strip it. reconcileChapterUuids carries each uuid across by id
-             (and mints for a genuinely-new chapter). */
+             track the server-only `uuid` or `titleSynthesized`, so a
+             wholesale replace would strip them. reconcileChapterUuids
+             carries each uuid across by id (and mints for a genuinely-new
+             chapter); carryTitleSynthesized does the same for the
+             app-made-title flag, ignoring whatever the client sent. */
           chapters: patch.chapters
-            ? reconcileChapterUuids(patch.chapters, state.chapters)
+            ? carryTitleSynthesized(
+                reconcileChapterUuids(patch.chapters, state.chapters),
+                state.chapters,
+              )
             : state.chapters,
           title: pickString(patch.title, state.title),
           author: pickString(patch.author, state.author),
@@ -1210,6 +1225,7 @@ async function applyReparse(
       slug: newSlug,
       duration: '00:00',
       excluded: carryover ? true : undefined,
+      titleSynthesized: c.titleSynthesized || undefined,
     };
   });
 

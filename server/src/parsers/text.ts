@@ -287,6 +287,9 @@ export function parseText(
   const chapters: ChapterHint[] = [];
   let buf: string[] = [];
   let currentTitle = '';
+  /* True when `currentTitle` is the app-made `Chapter N` fallback rather than
+     text read from the manuscript. Reset on every new heading. */
+  let currentTitleSynthesized = false;
 
   function flush() {
     const rawBody = buf.join('\n').trim();
@@ -294,10 +297,12 @@ export function parseText(
       const body = tagHesitantDialog(
         tagExcitedDialog(tagShoutingDialog(tagMarkdownEmphasis(rawBody))),
       );
+      const synthesized = !currentTitle || currentTitleSynthesized;
       chapters.push({
         id: chapters.length + 1,
         title: currentTitle || `Chapter ${chapters.length + 1}`,
         body,
+        ...(synthesized ? { titleSynthesized: true } : {}),
       });
     }
     buf = [];
@@ -324,7 +329,9 @@ export function parseText(
          so `+ DAY ONE +` displays as `DAY ONE`, and `## Day One` as
          `Day One`. Falls back to `Chapter N` only when normalisation left
          nothing meaningful behind. */
-      const headingText = norm.replace(/^#{1,2}\s+/, '').trim() || `Chapter ${chapters.length + 1}`;
+      const strippedHeading = norm.replace(/^#{1,2}\s+/, '').trim();
+      const headingText = strippedHeading || `Chapter ${chapters.length + 1}`;
+      currentTitleSynthesized = !strippedHeading;
       /* Subtitle merge: when the heading is a "bare" numbered or
          standalone form (just `Chapter 3` or `Prologue` with nothing
          after), look at the next non-empty line. If it passes the
@@ -357,7 +364,13 @@ export function parseText(
     const body = tagHesitantDialog(
       tagExcitedDialog(tagShoutingDialog(tagMarkdownEmphasis(text.trim()))),
     );
-    chapters.push({ id: 1, title: title || (opts.fileName ?? 'Chapter 1'), body });
+    const fallbackTitle = title || opts.fileName;
+    chapters.push({
+      id: 1,
+      title: fallbackTitle ?? 'Chapter 1',
+      body,
+      ...(fallbackTitle ? {} : { titleSynthesized: true }),
+    });
   }
 
   const fileMeta = parseFilenameMetadata(opts.fileName);
